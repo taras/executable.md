@@ -7,11 +7,6 @@
  * before the first `install()`, so a refused selection installs nothing and
  * reads no document. And the whole list has the command's lifetime, so a
  * failure part-way through unwinds what came before it.
- *
- * The review Plugin's own rows are here too, because which commands reserve its
- * forty-one names is a property of this assembly rather than of the package —
- * and because nothing installs it until a selection names it. The graph itself
- * is `scripts/tests/review-infrastructure.test.ts`.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -19,10 +14,8 @@ import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { activePlugins, Plugin } from "@executablemd/core/api";
 import type { PluginInstallation } from "@executablemd/core/api";
-import { inspectComponent } from "@executablemd/core";
 import { Markdown, sourceDigest, Structural } from "@executablemd/core/host";
 import { Config, verbose } from "@executablemd/runtime/api";
-import reviewPlugin from "@executablemd/code-review-agent";
 import { admitPlugins, installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
 import { syntaxSymbols } from "../src/syntax.ts";
 import { structuralValidation } from "../src/plan-component.ts";
@@ -407,79 +400,7 @@ describe("PH5 — a Plugin reads the command's typed configuration", () => {
   });
 });
 
-describe("PH6 — the selected review Plugin claims the commands that run a review", () => {
-  /** The declared names this command contributes when the Plugin is selected. */
-  function* declaredFor(command: string, args: readonly string[]): Operation<string[]> {
-    return yield* scoped(function* () {
-      const assembly = yield* installPlugins([reviewPlugin], { command, args });
-      return assembly.declarations.map((declaration) => declaration.name);
-    });
-  }
-
-  it("declares the thirty-five Markdown components for run, syntax and plan", function* () {
-    for (const command of ["run", "syntax", "plan"]) {
-      const declared = yield* declaredFor(command, [command]);
-      expect(`${command}: ${declared.length}`).toBe(`${command}: 35`);
-      expect(declared).toContain("Finding");
-    }
-  });
-
-  it("declares them for a workflow action that executes a document", function* () {
-    for (const action of ["start", "resume", "fork"]) {
-      const declared = yield* declaredFor("workflow", ["workflow", action, "flow.md"]);
-      expect(`${action}: ${declared.length}`).toBe(`${action}: 35`);
-    }
-  });
-
-  it("declares none for the test root, upgrade, or a workflow management action", function* () {
-    expect(yield* declaredFor("test", ["test"])).toEqual([]);
-    expect(yield* declaredFor("upgrade", ["upgrade"])).toEqual([]);
-    for (const action of ["list", "status", "history", "cancel", "delete", "export", "answer"]) {
-      expect(`${action}: ${(yield* declaredFor("workflow", ["workflow", action])).length}`).toBe(
-        `${action}: 0`,
-      );
-    }
-  });
-
-  it("reads an option's value as a value, never as the action", function* () {
-    // Every option the command defines that takes a separated value, each with
-    // an executing action's own name as that value and a management action
-    // after it. Reading the first recognized word would have installed the
-    // review graph for a command that executes no document.
-    const valued: readonly (readonly [string, string, readonly string[]])[] = [
-      ["--plugin", "start", ["workflow", "--plugin", "start", "list"]],
-      ["--output", "start", ["workflow", "--output", "start", "export", "run-1"]],
-      ["--status", "resume", ["workflow", "--status", "resume", "list"]],
-      ["--id", "fork", ["workflow", "--id", "fork", "list"]],
-      ["--at", "start", ["workflow", "--at", "start", "history", "run-1"]],
-      ["--artifact", "start", ["workflow", "--artifact", "start", "status"]],
-      ["--props", "start", ["workflow", "--props", "start", "list"]],
-      ["--props-name", "start", ["workflow", "--props-name", "start", "list"]],
-    ];
-    for (const [option, value, args] of valued) {
-      const declared = yield* declaredFor("workflow", args);
-      expect(`${option}=${value}: ${declared.length}`).toBe(`${option}=${value}: 0`);
-    }
-
-    // The assigned spelling is one token and was never a hazard, but a scan
-    // that special-cased the separated form would have found this one.
-    expect(
-      yield* declaredFor("workflow", ["workflow", "--output=start.xmd", "export", "r"]),
-    ).toEqual([]);
-
-    // And the same reading still finds a real action written after an option.
-    const executing: readonly (readonly string[])[] = [
-      ["workflow", "--plugin", "list", "start", "flow.md"],
-      ["workflow", "--id", "release-1", "start", "flow.md"],
-      ["workflow", "--at", "event-4", "fork", "run-1", "flow.md"],
-      ["workflow", "--verbose", "resume", "run-1"],
-    ];
-    for (const args of executing) {
-      const declared = yield* declaredFor("workflow", args);
-      expect(`${args.join(" ")}: ${declared.length}`).toBe(`${args.join(" ")}: 35`);
-    }
-  });
-
+describe("PH6 — an empty selection contributes nothing", () => {
   it("contributes nothing at all when it is not in the list", function* () {
     // A claim about this primitive, not about the product. `installPlugins()`
     // installs the list it is handed and nothing else, so an empty list
@@ -494,50 +415,6 @@ describe("PH6 — the selected review Plugin claims the commands that run a revi
       expect(`${command}: ${assembly.declarations.length}`).toBe(`${command}: 0`);
       expect(`${command}: ${assembly.installations.length}`).toBe(`${command}: 0`);
     }
-  });
-
-  it("registers the six reserved names where it claims the graph", function* () {
-    const reserved = [
-      "CommentReviewData",
-      "CommentReviewState",
-      "Doctor",
-      "OxlintDiagnostics",
-      "RepositoryInventory",
-      "ReviewContext",
-    ];
-    const described = yield* scoped(function* () {
-      yield* installPlugins([reviewPlugin], { command: "run", args: ["run"] });
-      const found: string[] = [];
-      for (const name of reserved) {
-        const info = yield* inspectComponent({ name, includes: [] });
-        if (
-          info.kind === "registered" &&
-          info.origin.kind === "registered" &&
-          info.origin.origin === "@executablemd/code-review-agent" &&
-          info.origin.reserved
-        ) {
-          found.push(name);
-        }
-      }
-      return found;
-    });
-    expect(described).toEqual(reserved);
-  });
-
-  it("registers none of them where no Plugin was selected", function* () {
-    const kind = yield* scoped(function* () {
-      yield* installPlugins([], { command: "run", args: ["run"] });
-      return (yield* inspectComponent({ name: "ReviewContext", includes: [] })).kind;
-    });
-    expect(kind).not.toBe("registered");
-  });
-
-  it("registers none of them for the test root", function* () {
-    const kind = yield* scoped(function* () {
-      yield* installPlugins([reviewPlugin], { command: "test", args: ["test"] });
-      return (yield* inspectComponent({ name: "ReviewContext", includes: [] })).kind;
-    });
-    expect(kind).not.toBe("registered");
   });
 });
 

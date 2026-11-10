@@ -37,7 +37,6 @@ import { useDenoService } from "../../src/deno-service.ts";
 import { useNodeService } from "../../src/node-service.ts";
 import { BUNDLED_PLUGIN } from "../../src/run-profile.ts";
 
-import reviewPlugin from "@executablemd/code-review-agent";
 /** The native service adapter the entrypoint for this runtime installs. */
 const SERVICES = {
   bun: useBunService,
@@ -79,12 +78,9 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
     const installService = SERVICES[cliRuntime()];
     const testingHost = testingExecutionHost({
       includes: ["components", "."],
-      // The Plugin a run would have selected, because a `host="run"` child gets
-      // what `xmd run` gets: the child installs it again in its own scope, with
-      // command `run`. XMD bundles only Git, so this harness names the rest
-      // exactly as an
-      // operator does.
-      plugins: [reviewPlugin],
+      // What `xmd test <document>` selects with no `--plugin`: a `host="run"`
+      // child gets the bundled Git Plugin and nothing else.
+      plugins: [],
       pluginArgs: [],
       secretDetection: true,
       installService,

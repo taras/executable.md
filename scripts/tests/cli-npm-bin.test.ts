@@ -321,15 +321,6 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
         yield* readTextFile(path.join(root, PKG_DIR, "src/documents", asset)),
       );
     }
-
-    // The review graph is not part of this package any more. It is a Plugin an
-    // operator selects, so its assets ship with *it* — and the emitted CLI
-    // neither depends on it nor carries a byte of it. A build that quietly put
-    // it back would be a distribution deciding what a run installs.
-    const manifest = yield* readEmittedManifest(root);
-    expect(Object.keys(manifest.dependencies ?? {})).not.toContain(
-      "@executablemd/code-review-agent",
-    );
   });
 
   /**

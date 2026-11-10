@@ -138,10 +138,11 @@ describe("PC2 — a Plugin declares components, and a checkout cannot answer for
   it("resolves a declared component, and leaves the checkout's own components alone", function* () {
     yield* useWorkspace(
       {
-        "doc.md": "<Greeting />\n\n<Shadowed />\n\n<Local />\n",
-        // A repository component of the same name as one the Plugin declares,
-        // and one of a name nothing declares.
+        "doc.md": "<Greeting />\n\n<Shadowed />\n\n<Stamp />\n\n<Local />\n",
+        // Repository components of the names the Plugin declares and reserves,
+        // and one of a name nothing claims.
         "components/Shadowed.md": "the checkout's own component\n",
+        "components/Stamp.md": "the checkout's own stamp\n",
         "components/Local.md": "an unrelated checkout component\n",
       },
       function* (dir) {
@@ -151,8 +152,10 @@ describe("PC2 — a Plugin declares components, and a checkout cannot answer for
         expect(run.stdout).toContain("hello from the selected Plugin");
         expect(run.stdout).toContain("the selected declaration, not the checkout's");
         expect(run.stdout).not.toContain("the checkout's own component");
-        // Declaring two names claims exactly those two: everything else in the
-        // checkout resolves as it always did.
+        expect(run.stdout).toContain("stamped by the selected Plugin");
+        expect(run.stdout).not.toContain("the checkout's own stamp");
+        // Three names belong to the Plugin and no others: everything else in
+        // the checkout resolves as it always did.
         expect(run.stdout).toContain("an unrelated checkout component");
       },
     );
@@ -365,6 +368,7 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
         cwd: dir,
       }).expect();
       expect(run.stdout).toContain("Greeting");
+      expect(run.stdout).toContain("Stamp");
     });
   });
 
@@ -373,6 +377,7 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
       const run = yield* runCli(["syntax"], { cwd: dir }).expect();
       // Nothing an operator did not select.
       expect(run.stdout).not.toContain("Greeting");
+      expect(run.stdout).not.toContain("Stamp");
       // And everything the one bundled Plugin brings, because every syntax
       // catalog is built from the profile the command runs with.
       for (const name of ["Repository", "Worktree", "Dir", "PullRequest", "Issue"]) {
@@ -405,47 +410,6 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
     yield* useWorkspace({}, function* (dir) {
       const run = yield* runCli(["syntax"], { cwd: dir }).expect();
       expect(run.stdout).not.toContain("<Banner>");
-    });
-  });
-});
-
-describe("PC9 — the review graph arrives only when it is selected", () => {
-  const REVIEW = "@executablemd/code-review-agent";
-  const PACKAGE = fileURLToPath(new URL("../../code-review-agent/mod.ts", import.meta.url));
-  const FINDING = '<Finding when={true} severity="error" message="probe" />\n';
-
-  it("is absent from every command that would run it, until it is named", function* () {
-    yield* useWorkspace({ "doc.md": FINDING }, function* (dir) {
-      // `xmd syntax` describes the language a run has, so it is where an absent
-      // vocabulary shows without running anything.
-      const described = yield* runCli(["syntax"], { cwd: dir }).expect();
-      expect(described.stdout).not.toContain("Finding");
-      expect(described.stdout).not.toContain("ReviewContext");
-
-      // And a document that writes one of the forty-one names resolves nothing.
-      const run = yield* runCli(["run", "doc.md"], { cwd: dir }).join();
-      expect(run.stdout).not.toContain("probe");
-    });
-  });
-
-  it("arrives for run and syntax when it is named", function* () {
-    yield* useWorkspace({ "doc.md": FINDING }, function* (dir) {
-      const described = yield* runCli(["syntax", `--plugin=${PACKAGE}`], { cwd: dir }).expect();
-      expect(described.stdout).toContain("Finding");
-      expect(described.stdout).toContain("ReviewContext");
-
-      const run = yield* runCli(["run", `--plugin=${PACKAGE}`, "doc.md"], { cwd: dir }).expect();
-      expect(run.stdout).toContain("probe");
-    });
-  });
-
-  it("names itself by its own name, however it was reached", function* () {
-    yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
-      const run = yield* runCli(
-        ["run", `--plugin=${PACKAGE}`, `--plugin=${fixture("active.mjs")}`, "doc.md"],
-        { cwd: dir },
-      ).expect();
-      expect(run.stdout).toContain(`active: ${GIT}, ${REVIEW}, active`);
     });
   });
 });

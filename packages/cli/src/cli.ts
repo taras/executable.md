@@ -1389,10 +1389,10 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
     yield* useVerboseComponent();
     yield* installTestingComponents({ verbose });
     // No package-specific vocabulary is bootstrapped here. A Plugin registers
-    // what it claims in the command scope this assembly runs inside, which is
-    // what lets `xmd test` claim none of the review graph's names while the
-    // nested `host="run"` child it can launch installs the same Plugins again
-    // and claims all of them.
+    // its names in the command scope this assembly runs inside, which is what
+    // lets a Plugin contribute nothing to `xmd test` while the nested
+    // `host="run"` child it can launch installs the same Plugins again with
+    // command `run`.
   }
 
   // `<WebForm>` for both commands. Registered rather than reserved, so a

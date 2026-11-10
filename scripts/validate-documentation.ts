@@ -14,11 +14,8 @@
  * exactly the reason they would fail a run.
  *
  * XMD bundles one Plugin — `@executablemd/git` — so this assembles the run
- * profile: the bundled value, then the review graph named explicitly. A
- * distribution carries the first, which makes its documentation this gate's
- * business; the second is an operator's selection, and this script is a build
- * tool rather than the product, which is why it may name the package that
- * ships it. Nothing in the CLI does.
+ * profile a command gets with no `--plugin`: the bundled value. A distribution
+ * carries it, which makes its documentation this gate's business.
  */
 
 import { main, scoped } from "effection";
@@ -28,7 +25,6 @@ import type { ComponentOrigin, DocumentationIndex } from "@executablemd/core";
 import { useCommandComponents } from "../packages/cli/src/syntax.ts";
 import { BUNDLED_PLUGIN } from "../packages/cli/src/run-profile.ts";
 import { installPlugins } from "../packages/cli/src/plugin-host.ts";
-import reviewPlugin from "../packages/code-review-agent/mod.ts";
 
 /** Assemble the complete index, throwing whatever it refuses with. */
 export function* validateDocumentation(): Operation<number> {
@@ -36,13 +32,11 @@ export function* validateDocumentation(): Operation<number> {
   // that installed it: collecting outside would find core's terminal alone and
   // pass every rule vacuously.
   const index = yield* scoped(function* () {
-    // The run profile as a command assembles it: the bundled Git Plugin first,
-    // then the first-party review Plugin exactly as `--plugin` installs one. A
-    // Plugin's registrations and the documentation describing them arrive
-    // together, so a build that shipped one without the other fails here — and
-    // the bundled one is in this list because a distribution carries it, which
-    // makes its documentation this gate's business too.
-    yield* installPlugins([BUNDLED_PLUGIN, reviewPlugin], { command: "run", args: ["run"] });
+    // The run profile as a command assembles it, with the bundled Git Plugin
+    // installed exactly as a Plugin is. Its registrations and the
+    // documentation describing them arrive together, so a build that shipped
+    // one without the other fails here.
+    yield* installPlugins([BUNDLED_PLUGIN], { command: "run", args: ["run"] });
     yield* useCommandComponents();
     return documentationIndexFor(yield* capturedDocumentation());
   });
@@ -57,12 +51,12 @@ export function* validateDocumentation(): Operation<number> {
     origin: "@executablemd/web",
     reserved: false,
   });
-  // And one from the selected Plugin, so an index assembled without it cannot
+  // And one from the bundled Plugin, so an index assembled without it cannot
   // pass this check either.
-  read(index, "ReviewContext", {
+  read(index, "Repository", {
     kind: "registered",
-    origin: "@executablemd/code-review-agent",
-    reserved: true,
+    origin: "@executablemd/workflow/composition",
+    reserved: false,
   });
   return 1;
 }

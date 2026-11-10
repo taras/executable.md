@@ -5,7 +5,7 @@
  *   deno run -A scripts/build-npm.ts <package-dir> [version]
  *
  * <package-dir> is a workspace member directory (e.g. "packages/core" or
- * "packages/code-review-agent"). [version] defaults to 0.0.0-dev. Output lands
+ * "packages/cli"). [version] defaults to 0.0.0-dev. Output lands
  * in <package-dir>/npm.
  *
  * Everything published is derived from the member's own deno.json (name,
@@ -96,10 +96,8 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
   const found: string[] = [];
   for (const name of names) {
     // A recursive listing names the directories as well as what is in them, and
-    // each entry here becomes a `copyFile`. Packages whose documents sit flat in
-    // `src/documents/` never noticed; the review graph keeps its documents under
-    // `components/` and `policies/`, and copying a directory as a file fails the
-    // whole npm build with `EINVAL`.
+    // each entry here becomes a `copyFile`. Copying a nested directory as a file
+    // fails the whole npm build with `EINVAL`.
     const info = yield* stat(join(root, name));
     if (info.isFile()) {
       found.push(`src/documents/${name.split(sep).join("/")}`);

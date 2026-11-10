@@ -63,11 +63,9 @@ const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork
 /**
  * The workflow options whose value is the token after them.
  *
- * The same list the review Plugin's own scan carries, for the same reason and
- * written out for the same reason: it is every non-boolean field of the
- * command's grammar (`workflowConfig` in `packages/cli/src/workflow.ts`) plus
- * the aggregate and generated root properties, which are read out of argv
- * before that grammar exists. The boolean switches take no value and are
+ * It is every non-boolean field of the command's grammar (`workflowConfig` in
+ * `packages/cli/src/workflow.ts`) plus the aggregate and generated root
+ * properties, which are read out of argv before that grammar exists. The boolean switches take no value and are
  * skipped as the options they are. `--plugin` is not here: the host has already
  * taken it out of the argv this scans.
  *
