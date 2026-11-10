@@ -2999,16 +2999,11 @@ parent relationship and body context. Their declaration metadata is their usage
 reference; they receive no component package-documentation fallback, return
 schema or invented binding contract. Mixed structural/component requests render
 once each in symbol order and refuse whole if any name is unknown. Inspection
-invokes no structural expansion handler. Availability compares the full engine
-or installed origin identity against effective symbols and grants no execution
-authority. In generated evaluation, a named read includes the engine language
-supported at a valid placement: fragments exclude Content, Return and Output;
-roots additionally support Output. Installed constructs are unavailable because
-generated expansion declares none. Parent and loop constraints still apply.
-Bare generated reads retain their component-only presentation and empty
-structural category; named language availability does not change admission.
-Bare `<Syntax />`, bare `xmd syntax` and version-1 JSON retain their
-existing presentation.
+invokes no structural expansion handler. Named lookup compares the full engine
+or installed origin identity against its effective availability symbols. In
+generated evaluation the default availability reflects
+[the generated composition rules](#533-ordinary-generated-composition).
+Describing a construct grants no execution authority.
 
 The documentation is read from the owning package through the direct filesystem,
 not through `API.Fs` or the document-facing `Files` provider. Both of those are
@@ -3085,19 +3080,20 @@ A host-maintained list of every package's documentation, kept beside a
 host-maintained list of every package's registrations, is two lists that drift;
 this is one.
 
-**Reference and availability are separate.** The reference carries two inputs.
-Default bare `<Syntax />` reports the effective contextual symbols at this
-site. The named form selects from the **enclosing authoring symbols** and
-states, per entry,
-`**Available in this evaluation:** yes` or `no`. Uncustomized at a root the two
-are one set of symbols and everything selected is available; a trusted
-evaluation boundary that narrows execution keeps the enclosing reference, so a
-nested author can be told how a component works where they may not run one —
-and is told which it is. Descriptive middleware that filters the effective
-symbols separates the two at a root as well, and the per-entry label is what
-says so.
-Neither input carries definitions, import witnesses, invocation capabilities,
-providers, registrations or any other execution capability.
+**Reference and availability are separate.** The named form selects from the
+**enclosing authoring symbols**. It compares each selection with the effective
+symbols for that lookup and reports `**Available in this evaluation:** yes` or
+`no`. In an ordinary root with no customization these inputs are the same.
+A narrowing boundary retains the enclosing reference so a nested author can
+read about forms that are unavailable there.
+
+Default bare `<Syntax />` renders the effective symbols for bare presentation.
+A generated boundary supplies its admitted components, with empty structural
+and built-in categories. For named availability, its default symbols also
+include the engine identities supported by
+[generated composition](#533-ordinary-generated-composition). The difference is
+local to the named read. Symbol data carries no definitions, registrations or
+invocation capabilities.
 
 Availability compares each entry's **identity** rather than its spelling: one
 name may hold a different component on each side, and an author shown one of
@@ -3164,15 +3160,16 @@ snapshots the documentation contributions already in its calling scope and
 installs its lazy symbols and documentation providers at minimum priority,
 without reading the source.
 
-Default text renders the effective contextual symbols, and text middleware may
-transform or replace that answer. Default named lookup retains its enclosing
-catalog for metadata and long-form text and reads effective symbols once for
-availability, so filtering symbols affects bare text and named availability
-while an omitted enclosing component remains documentable; text-only
-customization changes neither symbols nor named lookup, and a synthetic answer
-that does not delegate skips the default work entirely. Generated producer and
-body scopes narrow symbols only, retaining the enclosing named-documentation
-owner, and their descriptive bindings end with those scopes. Standalone Plan
+Default text renders the effective bare symbols. Default named lookup retains
+its enclosing catalog for metadata and long-form text and reads contextual
+symbols once for availability. Symbols middleware can filter or replace the
+symbols returned for either read, including the generated engine entries
+supplied for a named read. An entry filtered from availability remains
+documentable from the enclosing catalog. Text middleware can transform or
+replace bare text without changing symbols or named lookup. A synthetic answer
+that does not delegate skips the corresponding default work. Generated producer
+and body scopes keep the enclosing named-documentation owner and release their
+descriptive bindings at scope exit. Standalone Plan
 and CLI inspection bind the target run's declarative profile through
 `useSyntax`; embedded Plan inherits its enclosing profile. CLI inspection
 starts no execution initialization or operational provider merely to print.
@@ -4884,14 +4881,16 @@ binding (§4.5) — a consequence of which environment the write landed in, not 
 channel of the fragment's own. A generated **root** is the separate case: it
 begins with an environment of its own, so its bindings stay in it.
 
-**Every built-in structural construct is available, with its ordinary
-semantics.** `Content`, `Output`, `Return`, `Let`, `Each`, `If`, `Else`,
-`Switch`, `Case`, `Loop`, `Break`, `PrintErrors`, `Answers`, `Answer`, `Try`, `Catch` and `Finally` are
-engine-owned language rather than component permission. A generated fragment
-composes admitted reads with branching, binding and bounded iteration, and the
-source rules deciding each construct are the same ones ordinary validation and
-expansion read — one construct means one thing whether a person or an Agent
-wrote it.
+**Generated placement.** Engine constructs use their ordinary source rules,
+including parent, loop and body constraints. Fragments support constructs such
+as `If` and `Loop` where their placement is valid. Fragments have no independent
+`Output` context. A generated root also supports `Output` under the
+[ordinary declaration and selection rules](#generated-roots-and-preview).
+Neither has the caller context for `Content` or the value-body context for
+`Return`. Generated evaluation declares no installed structural constructs or
+regions. These rules supply the default engine identities for
+[named Syntax availability](#531-syntax--the-protected-symbols-component).
+Every component reached through a construct still requires its own admission.
 
 Preflight dispatches a reserved structural name to those rules **before** it
 consults the admitted table, so a construct is never reported as a component the
@@ -13645,7 +13644,8 @@ component that observes one at an authored site.
 | SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike reference change nothing |
 | SYN16–SYN18 | The site described | An ordinary run reports its own includes and registry; a workflow root reports its bundle without importing or running a member; a declared Markdown component's body reports the site it inherited |
 | SYN20–SYN22 | The record kept | Continuation restores the retained symbols after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled read completes teardown and commits nothing |
-| SYN23, SYN25b | Never permission | Symbols naming a component neither register, resolve nor authorize it; a fixed narrower reference answers with exactly the symbols it was handed and adds nothing — the seam `<Evaluate>` installs through |
+| SYN23, SYN25b | Never permission | Symbols naming a component neither register, resolve nor authorize it. A fixed narrower reference without a generated availability input returns exactly its supplied symbols |
+| SYN47 | Generated presentation and availability | Bare reads keep the admitted component listing and empty structural and built-in categories before and after a named read. A fragment reports named `If` and `Loop` available and `Output` unavailable. A root reports named `If` and `Output` available. Both report `Content`, `Return`, and enclosing installed constructs and their regions unavailable by default |
 | SYN24 | One description | Inspection and validation describe the component identically, from one declaration |
 | SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
 | SYN27 | Protected provenance | The symbols report the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
