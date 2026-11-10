@@ -112,8 +112,10 @@ Prepared assignment:
 
 Submission guide:
 The frozen UTF-8 file at {props.submission.path} contains the submission schema,
-field limits and next-role routing. You may defer reading it until preparing a
-result, including an early blocker, source conflict or unanswered decision. Read
-it and return the result within this native call; no formatting turn is scheduled.
+field limits and next-role routing. Read it when you begin preparing the phase
+result. Open it earlier only if a reporting requirement blocks a concrete
+decision in the assigned work. Read the complete guide before any result,
+including an early blocker, source conflict or unanswered decision, and return
+within this native call; no formatting turn is scheduled.
 Leave the guide and its receipt unchanged.
 </Output>

@@ -384,8 +384,10 @@ lacks matching creation settings refuses before another prompt. Each role joins
 its owned processes and returns its result in the same call. The upfront brief
 contains work, evidence and lifetime rules. Identical role instructions selected
 as input are delivered once; a different captured version retains the current
-role brief too. The frozen submission guide contains
-response schema, limits and routing and may wait until a result is being prepared.
+role brief too. The frozen submission guide contains response schema, limits and
+routing. Reading defaults to result preparation; an earlier read must resolve a
+concrete reporting requirement that blocks a work decision. Every result,
+including an early blocker, requires the complete guide within the same call.
 
 These rules apply to separate phase requests and Ticket role calls. Codex authors
 prose committed to workflow documents, including guides, component instructions
