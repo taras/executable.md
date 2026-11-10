@@ -1838,7 +1838,7 @@ function* useAcpxProviderState(
         );
         if (!denialsMatch || !environmentMatches) {
           throw new AcpxSessionPolicyError(
-            "The launchOptionsRecord session was not created with this provider's tool and environment controls. " +
+            "The retained session was not created with this provider's tool and environment controls. " +
               "Preserve it; this profile does not retrofit existing conversations.",
           );
         }
