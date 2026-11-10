@@ -471,8 +471,8 @@ const testConfig = object({
 const syntaxConfig = object({
   component: {
     description:
-      "component to describe in full — `xmd syntax Elicit` renders its catalog metadata " +
-      "and long-form documentation instead of the compact catalog",
+      "component or structural name to describe in full — `xmd syntax If` renders its owner reference " +
+      "instead of the default catalog",
     ...field(z.string().optional(), cli.argument()),
   },
   include: {

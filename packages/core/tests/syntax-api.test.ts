@@ -17,7 +17,9 @@ import {
   renderSyntaxMarkdown,
   UnknownComponentError,
 } from "../mod.ts";
-import { executeInstalled, useSyntax } from "../host.ts";
+import { executeInstalled, useSyntax, Structural } from "../host.ts";
+import { inspectSyntax } from "../src/inspect.ts";
+import { syntaxReference } from "../src/syntax-reference.ts";
 import { selecting } from "./support/generated-selection.ts";
 
 function symbolsOf(...names: string[]): SyntaxSymbols {
@@ -70,6 +72,44 @@ function* run(text: string, stream = new InMemoryStream()): Operation<string> {
 }
 
 describe("Tier SA — contextual Syntax", () => {
+  it("SA: structural availability compares complete installed identity and keeps enclosing references", function* () {
+    const declaration = Structural({
+      name: "Banner",
+      origin: "test://first",
+      forms: ["paired"],
+      props: { type: "object", properties: {}, additionalProperties: false },
+      syntax: ["<Banner>…</Banner>"],
+      description: "Frame content.",
+      context: "Content.",
+      parent: null,
+    });
+    const region = Structural({
+      ...declaration,
+      name: "BannerLine",
+      parent: "Banner",
+      syntax: ["<BannerLine>…</BannerLine>"],
+    });
+    const authoring = yield* inspectSyntax({ includes: [], declarations: [declaration, region] });
+    const different = yield* inspectSyntax({
+      includes: [],
+      declarations: [declaration, region].map((one) => ({ ...one, origin: "test://other" })),
+    });
+    const absent = yield* inspectSyntax({ includes: [] });
+    for (const admitted of [absent, different]) {
+      yield* scoped(function* () {
+        const reference = syntaxReference(admitted, authoring);
+        yield* Syntax.around({ symbols: () => reference.symbols() });
+        const text = yield* reference.documentation(["Banner", "If"]);
+        expect(text).toContain("### `<Banner>`");
+        expect(text).toContain("**Available in this evaluation:** no");
+        expect(text).toContain("### `<If>`");
+        expect(text).toContain("**Available in this evaluation:** yes");
+        expect(text).toContain("test://first");
+        expect(text).not.toContain("test://other");
+      });
+    }
+  });
+
   it("SA1: exact public property types, reusable lazy defaults and a suspending transform", function* () {
     const descriptor: Api<SyntaxApi> = Syntax;
     expect(descriptor).toBe(RootSyntax);

@@ -64,8 +64,8 @@ import { fatalFailure } from "./testing.ts";
  * in an entry and unavailable in a reply, and a reply that tried to run one
  * would be refused for a reason it had no way to anticipate. The compact
  * surface below is the *reply's* vocabulary. The entry vocabulary is a read —
- * `<REPL.Syntax />` — because it is large, it changes with the profile and
- * plugins in play, and a reply needs it only when it is about to write one.
+ * `<REPL.Syntax />` returns its compact index; named reads return complete
+ * references. Both follow the current profile and selected Plugins.
  */
 
 import { Component, Execution, SYNTAX_COMPONENT } from "@executablemd/core";

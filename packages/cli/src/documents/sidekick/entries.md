@@ -11,8 +11,9 @@ Sidekick responses that write an entry, and the REPL entry program they write.
 
 - Your response and the entry you prepare are two different XMD documents. A
   component admitted in an entry is not thereby admitted in your response. List
-  the entry vocabulary with `<REPL.Syntax />` and read a named component with
-  `<REPL.Syntax names={["Elicit"]} />`. Availability means the component resolves
+  the entry vocabulary with `<REPL.Syntax />` for an index of names and short
+  purposes, then read complete structural or component references with
+  `<REPL.Syntax names={["If", "File"]} />`. Availability means the symbol resolves
   in an ordinary entry; each effect still requires permission and can fail.
   Fresh asks read current session components and this command's selected Plugins.
 - Use existing assertions such as `<Assert>`, `<AssertEquals>` and `<AssertThrows>`

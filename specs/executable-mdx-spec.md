@@ -2958,9 +2958,9 @@ engine-owned `as` captures the same text and emits nothing.
 ```
 
 It is **self-closing only** and declares one optional prop, `names`: a non-empty
-array of unique component-name strings. A paired spelling, any other prop, an
+array of unique symbol-name strings. A paired spelling, any other prop, an
 empty list, a duplicate, a non-string member and a name this site has no
-component for are each refused before the symbols are read, so a refusal
+symbol for are each refused before the symbols are read, so a refusal
 produces no partial text and no successful retained result.
 
 **The named form renders documentation.** `<Syntax names={["Elicit", "File"]} />`
@@ -2992,9 +2992,17 @@ component — a repository file, a bundle member, a host's declared Markdown —
 takes its long-form documentation from its own document's body, read through the
 canonical frontmatter split; an empty body uses the sentence.
 
-Named lookup selects **component entries**. A structural construct is not a
-component, so `<Syntax names={["If"]} />` refuses as an unknown component while
-the bare form continues to list structural syntax alongside components.
+Named lookup also selects **structural entries**. `<Syntax names={["If", "All"]} />`
+renders the engine owner's authored forms, purpose and structural constraints.
+Installed constructs and their regions retain their declared forms, props,
+parent relationship and body context. Their declaration metadata is their usage
+reference; they receive no component package-documentation fallback, return
+schema or invented binding contract. Mixed structural/component requests render
+once each in symbol order and refuse whole if any name is unknown. Inspection
+invokes no structural expansion handler. Availability compares the full engine
+or installed origin identity against effective symbols and grants no execution
+authority. Bare `<Syntax />`, bare `xmd syntax` and version-1 JSON retain their
+existing presentation.
 
 The documentation is read from the owning package through the direct filesystem,
 not through `API.Fs` or the document-facing `Files` provider. Both of those are
@@ -13636,8 +13644,8 @@ component that observes one at an authored site.
 | SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
 | SYN27 | Protected provenance | The symbols report the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
 | SYN28 | Pinned provenance | A workflow-bundle component is reported at its canonical logical retained-source path *and* the retained source's own content hash, under the `workflow` origin kind, and stays in the user-provided category |
-| SYN29 | The named form | Selected entries render their metadata and documentation once each in symbol order, not request order, with nothing else of the symbols; `as` binds identical text |
-| SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
+| SYN29 | The named form | Selected component and structural entries render their complete owner references once each in symbol order, not request order; installed regions state their parent and props; `as` binds identical text |
+| SYN30 | Availability and absence | Each entry states availability by full identity; custom components without authored documentation say so; structural references use owner metadata without a component fallback or handler invocation |
 | SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
 | SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the symbols, and a corrupted record refuses |
 | SYN25c | The narrowing seam | A narrowed reference reports the narrowed vocabulary bare, documents the enclosing symbols by name, and marks each entry's availability truthfully in both directions |
@@ -13728,7 +13736,7 @@ would bind differently — belongs to `EP`, where profile capture is tested.
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no symbols |
 | SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the symbols are inspection, and `xmd plan` is the command that writes with the same structured value |
-| SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact symbols are unchanged and an unknown name refuses whole |
+| SX16 | Named lookup | `xmd syntax Elicit` and `xmd syntax If` render complete component and structural references through the same selection, index and renderer `<Syntax names={…}>` uses; the compact symbols are unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 | SX13–SX15 | Delivery | A real pipeline reading symbols larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
 | SX18–SX19 | Run delivery | A real pipeline reading a run's output larger than one pipe buffer receives the bytes a regular-file redirect receives; a consumer that closes early is reported rather than raised, and on the runtimes that surface a refused write the run exits 1 |
