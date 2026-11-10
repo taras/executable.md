@@ -34,7 +34,7 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession, ReplSessionOptions } from "../src/repl/session.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
-import type { FakeAcp } from "./support/fake-acp.ts";
+import type { FakeAcp, FakeStore } from "./support/fake-acp.ts";
 import { AGENT_SOURCE, world } from "../../acp/tests/released-peer.ts";
 import PhaseSession, {
   props as phaseSessionProps,
@@ -381,6 +381,7 @@ const captured = z.strictObject({
 
 interface ReviewWorld {
   root: string;
+  store: FakeStore;
   delivery: Record<string, Json>;
   asked: unknown[];
   run(source: string, props: Record<string, Json>): Operation<{ ok: boolean; text: string }>;
@@ -391,6 +392,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
   yield* ensureDir(join(root, "repository"));
   yield* ensureDir(join(root, "delivery"));
   const asked: unknown[] = [];
+  const store = makeStore();
   const delivery = {
     work: "production-review",
     repository: join(root, "repository"),
@@ -418,7 +420,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
         },
         {
           createRuntime: create,
-          sessionStore: makeStore(),
+          sessionStore: store,
           advertiseNativeLaunch: [],
           advertiseClientNativeAttachment: [],
         },
@@ -451,7 +453,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
       }
     });
   }
-  return { root, delivery, asked, run };
+  return { root, store, delivery, asked, run };
 }
 
 const roleSource =
@@ -459,6 +461,124 @@ const roleSource =
   "<Delivery.Role delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} choices={props.choices} position={0} attempt={props.attempt} />";
 const reviewSource =
   '<Delivery.Review delivery={props.delivery} revision={props.revision} as="result" /><Json value={result} />';
+
+const workflowControls = {
+  env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+  disallowedTools: ["ScheduleWakeup"],
+};
+
+const scopedRoleSource =
+  '<Phase.SubmissionGuide repository={props.assignment.repository} directory={props.assignment.artifactDirectory}><Phase.SubmissionInstructions role="implementor" assignment={props.assignment} /></Phase.SubmissionGuide>' +
+  '<Phase.Role role="implementor" session="controlled-owner" assignment={props.assignment} />';
+const continuedRoleSource =
+  '<Phase.Role role="implementor" session="controlled-owner" assignment={{...props.assignment,sessionEstablished:true}} />';
+
+describe("production workflow provider scope", () => {
+  it("applies controls through each actual Claude role and retains them across cold reentry", function* () {
+    for (const role of ["phase", "foundation", "preparation", "delivery"]) {
+      const fake = createFakeAcp();
+      fake.configuration(catalog(["fixture-default", "opus", "fable"], ["medium", "high"]));
+      const harness = yield* reviewWorld(fake);
+      const assignment = {
+        repository: harness.delivery.repository,
+        artifactDirectory: join(harness.root, "submission"),
+        identityDirectory: join(harness.root, "sessions"),
+        phase: "implementation",
+        work: "provider-scope",
+        revision,
+        request: "Use the saved evidence.",
+        assessment: {
+          mechanical: false,
+          architecture: false,
+          acceptance: true,
+          risk: null,
+          reason: "Inspect the accepted behavior.",
+          evidence: ["accepted.md"],
+        },
+      };
+      yield* ensureDir(assignment.artifactDirectory);
+      const props = { assignment };
+      let source = scopedRoleSource;
+      let continued = continuedRoleSource;
+      if (role === "foundation") {
+        source =
+          '<Adversarial.PlannerRole assignment={{...props.assignment,session:"controlled-owner",plannerProvider:"claude",initialize:false}} guide="Use the saved evidence." />';
+        continued =
+          '<Adversarial.PlannerRole assignment={{...props.assignment,session:"controlled-owner",plannerProvider:"claude",initialize:false,sessionEstablished:true}} guide="Use the saved evidence." />';
+      } else if (role === "preparation") {
+        fake.script({ reply: "Seeded the original owner." });
+        expect(
+          yield* harness.run(`<Dir path={props.assignment.repository}>${source}</Dir>`, props),
+        ).toMatchObject({ ok: true });
+        source =
+          '<Ticket.PreparationPrompt owner={{profile:{provider:"claude",model:"opus",effort:"high"},session:"controlled-owner",identityDirectory:props.assignment.identityDirectory}} stage="compare" assignment={props.assignment} material={{observations:[],inputs:[]}} schema={{type:"object"}} allowance={1000} />';
+        continued = source;
+      } else if (role === "delivery") {
+        source = roleSource;
+        continued = source;
+      }
+      const selected = role === "delivery" ? "fable" : "opus";
+      const callProps =
+        role === "delivery"
+          ? {
+              delivery: harness.delivery,
+              revision,
+              reviewer: {
+                provider: "claude",
+                model: selected,
+                effort: "high",
+                session: "controlled-owner",
+              },
+              choices: [selected],
+              attempt: join(harness.root, "delivery", "attempt"),
+            }
+          : props;
+      for (const text of [source, continued]) {
+        fake.script({ reply: role === "delivery" ? review : "Completed the assigned work." });
+        const ran = yield* harness.run(
+          `<Dir path={props.assignment?.repository ?? props.delivery.repository}>${text}</Dir>`,
+          callProps,
+        );
+        if (!ran.ok) {
+          throw new Error(`${role}: ${ran.text}`);
+        }
+        const ensured = fake.ensured.at(-1)!;
+        expect(ensured.sessionOptions).toEqual(workflowControls);
+        expect(ensured.requestedModel).toBe(selected);
+        expect(harness.store.records.get(ensured.sessionKey)?.acpx?.session_options).toEqual({
+          model: selected,
+          env: workflowControls.env,
+          disallowed_tools: workflowControls.disallowedTools,
+        });
+        expect(fake.running(ensured.sessionKey)).toEqual({ model: selected, effort: "high" });
+      }
+      expect(fake.turns).toHaveLength(role === "preparation" ? 3 : 2);
+      expect(new Set(fake.turns.map((entry) => entry.handle.sessionKey)).size).toBe(1);
+    }
+  });
+
+  it("keeps ordinary acpx unchanged and refuses to retrofit its retained owner", function* () {
+    const fake = createFakeAcp();
+    fake.configuration(catalog(["opus"], ["high"]));
+    const harness = yield* reviewWorld(fake);
+    fake.script({ reply: "Original ordinary owner." });
+    const ordinary =
+      '<Agent name="claude"><Session name="ordinary-owner" model="opus" effort="high"><Prompt throwOnError={true}>Use the original ordinary provider.</Prompt></Session></Agent>';
+    expect(yield* harness.run(ordinary, {})).toMatchObject({ ok: true });
+    expect(fake.ensured[0]?.sessionOptions).toBeUndefined();
+    const before = JSON.stringify([...harness.store.records]);
+    const controlled =
+      '<Phase.ProviderName agent="claude" as="provider" /><AgentProvider name={provider} defaultAgent="claude">' +
+      ordinary +
+      "</AgentProvider>";
+    const refused = yield* harness.run(controlled, {});
+    expect(refused).toMatchObject({ ok: false });
+    expect(refused.text).toContain("does not retrofit existing conversations");
+    expect(fake.prompts).toHaveLength(1);
+    expect(fake.ensured).toHaveLength(1);
+    expect(JSON.stringify([...harness.store.records])).toBe(before);
+  });
+});
 
 function catalog(models: string[], efforts: string[] = ["low", "high"]) {
   return {

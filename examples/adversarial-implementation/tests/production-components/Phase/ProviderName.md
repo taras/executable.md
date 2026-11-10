@@ -5,6 +5,7 @@ props:
     agent: {type: string}
   required: [agent]
   additionalProperties: false
+returns: {type: string}
 ---
 
-<Content />
+<Return value={props.agent === "claude" ? "test-agent" : "acpx"} />

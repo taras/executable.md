@@ -35,7 +35,8 @@ Return exactly one JSON object satisfying this schema. acceptance lists every cl
 <If condition={instructions.length > 64000}><Fail message="The complete independent-review request exceeds 64000 characters. Prepare concise accepted inputs before dispatch." /></If>
 <Delivery.Continuation directory={props.delivery.directory} session={props.reviewer.session} own={props.attempt.slice(props.delivery.directory.length + 1) + "/assignment.json"} as="established" />
 <Let as="continuation" value={props.delivery.sessionEstablished === true || established} />
-<AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Phase.Provider agent={props.reviewer.provider}><Dir path={props.delivery.repository}>
+<Phase.ProviderName agent={props.reviewer.provider} as="provider" />
+<AgentProvider name={provider} defaultAgent={props.reviewer.provider}><Dir path={props.delivery.repository}>
 <Delivery.Inspect agent={props.reviewer.provider} choices={props.choices} as="catalog" />
 <Let as="turn" value={null} />
 <Try>
@@ -46,4 +47,4 @@ Return exactly one JSON object satisfying this schema. acceptance lists every cl
 <Dir path={props.attempt}><File path="raw.txt">{turn.reply}</File></Dir>
 <Delivery.Response delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} attempt={props.attempt} raw={turn.reply} dispatch={true} as="response" />
 </If>
-</Dir></Phase.Provider></AgentProvider>
+</Dir></AgentProvider>
