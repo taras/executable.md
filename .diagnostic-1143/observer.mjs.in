@@ -1,0 +1,73 @@
+import { Plugin, Component } from __CORE__;
+import { API } from __RUNTIME__;
+import { GitQuery } from __GIT__;
+import { ensure, spawn, withResolvers } from "effection";
+import { once } from "@effectionx/node/events";
+import { Socket } from "node:net";
+let ordinal = 0;
+export default Plugin({name:"1143-socket-attribution", *install() {
+  const instance = ++ordinal;
+  let socket;
+  let closed = false;
+  let failure;
+  const onClose = () => { closed = true; };
+  const onError = (error) => { failure = error; };
+  yield* ensure(function* () {
+    if (socket) {
+      try {
+        if (!closed) {
+          const closing = yield* spawn(() => once(socket, "close"));
+          socket.destroy();
+          yield* closing;
+        }
+      } finally {
+        socket.off("close", onClose);
+        socket.off("error", onError);
+      }
+    }
+  });
+  socket = new Socket();
+  socket.on("close", onClose);
+  socket.on("error", onError);
+  const connecting = yield* spawn(() => once(socket, "connect"));
+  socket.connect({host:"127.0.0.1", port:Number(Deno.env.get("XMD_DIAG_PORT"))});
+  yield* connecting;
+  let sequence = 0;
+  function* emit(kind, data = {}) {
+    if (failure || closed) { throw new Error("diagnostic channel unavailable"); }
+    const sent = withResolvers();
+    const line = JSON.stringify({pid:Deno.pid, instance, at:Date.now(), kind, ...data}) + "\n";
+    socket.write(line, (error) => error ? sent.reject(error) : sent.resolve());
+    yield* sent.operation;
+  }
+  yield* emit("install");
+  yield* Component.around({*expand([request], next) {
+    const {name,position} = request.expansion;
+    const id = ++sequence;
+    yield* emit("enter", {id, name, location:{path:position?.path, line:position?.line, column:position?.column}});
+    let state = "cancelled";
+    try { yield* next(request); state="returned"; }
+    catch (error) { state="failed"; throw error; }
+    finally { yield* emit("exit", {id,state}); }
+  }});
+  yield* GitQuery.around({*changes([invocation], next) {
+    const id=++sequence;
+    yield* emit("query-start", {id,compare:invocation.request.comparison.compare});
+    let state="cancelled";
+    try { const value=yield* next(invocation); state="returned"; return value; }
+    catch (error) { state="failed"; throw error; }
+    finally { yield* emit("query-end", {id,state}); }
+  }});
+  yield* API.Process.around({*exec([options], next) {
+    const id=++sequence;
+    yield* emit("exec-start", {id});
+    let state="cancelled";
+    try {
+      const value=yield* next(options);
+      state="returned";
+      yield* emit("exec-status", {id,exitCode:value.exitCode});
+      return value;
+    } catch (error) { state="failed"; throw error; }
+    finally { yield* emit("exec-end", {id,state}); }
+  }});
+}});
