@@ -4396,13 +4396,13 @@ describe("REPL syntax matches ordinary entry execution (#1053)", () => {
 <REPL.Syntax names={["Testing"]} />`,
     );
     const listing = documented(discovery);
-    expect(listing).toContain("### `<Json>`");
-    expect(listing).toContain("### `<File>`");
+    expect(listing).toContain("- `<Json>` —");
+    expect(listing).toContain("- `<File>` —");
     for (const name of ["Assert", "AssertEquals"]) {
-      expect(listing).toContain(`### \`<${name}>\``);
+      expect(listing).toContain(`- \`<${name}>\` —`);
     }
     for (const name of ["Testing", "Verbose", "WebForm"]) {
-      expect(listing).not.toContain(`### \`<${name}>\``);
+      expect(listing).not.toContain(`- \`<${name}>\` —`);
     }
     expect(documented(discovery, 1)).toContain("**Available in this evaluation:** yes");
     expect(documented(discovery, 4)).toContain("**Available in this evaluation:** yes");
@@ -4479,7 +4479,7 @@ Session body ${version}.`,
         `<REPL.Syntax />
 <REPL.Syntax names={["Assert"]} />`,
       );
-      expect(documented(changed)).toContain("### `<Assert>`");
+      expect(documented(changed)).toContain("- `<Assert>` —");
       const named = documented(changed, 1);
       expect(named).toContain(path);
       expect(named).toContain(`Session assertion ${version}.`);
@@ -4495,7 +4495,7 @@ Session body ${version}.`,
       `<REPL.Syntax />
 <REPL.Syntax names={["Assert"]} />`,
     );
-    expect(documented(removed)).toContain("### `<Assert>`");
+    expect(documented(removed)).toContain("- `<Assert>` —");
     expect(documented(removed, 1)).toContain("**Available in this evaluation:** yes");
     expect(documented(removed, 1)).not.toContain("Session assertion");
     yield* exchange(held, submission("<Assert expr={true} />"));
@@ -4536,7 +4536,7 @@ Session body ${version}.`,
 <REPL.Syntax names={["Selected1053"]} />`,
         );
         if (selected) {
-          expect(documented(discovery)).toContain("### `<Selected1053>`");
+          expect(documented(discovery)).toContain("- `<Selected1053>` —");
           expect(documented(discovery, 1)).toContain("syntax-1053");
           yield* exchange(held, submission("<Selected1053 />"));
           expect(held.session.model.entries).toHaveLength(1);
@@ -4544,7 +4544,7 @@ Session body ${version}.`,
             "Selected plugin body.",
           );
         } else {
-          expect(documented(discovery)).not.toContain("### `<Selected1053>`");
+          expect(documented(discovery)).not.toContain("- `<Selected1053>` —");
           refused(discovery, "Selected1053");
           refused(
             yield* exchange(held, submission("<Selected1053 />")),

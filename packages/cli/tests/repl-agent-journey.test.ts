@@ -559,8 +559,9 @@ describe("A2–A5 — the selected REPL component environment", () => {
     expect(Object.isFrozen(profile.includes)).toBe(true);
     const symbols = yield* profile.vocabulary.symbols();
     const documentation = yield* profile.vocabulary.documentation(["Greeting"]);
+    expect(documentation).toContain(`${fixture.first}/Greeting.md`);
+    expect(symbols).not.toContain("**Origin:**");
     for (const text of [symbols, documentation]) {
-      expect(text).toContain(`${fixture.first}/Greeting.md`);
       expect(text).toContain("First greeting contract.");
       expect(text).not.toContain("Second greeting contract.");
       expect(text).not.toContain("<Local>");
@@ -570,7 +571,7 @@ describe("A2–A5 — the selected REPL component environment", () => {
     const protectedNames = ["Syntax", "Evaluate", "File", "File.Delete", "Dir"];
     const protectedDocs = yield* profile.vocabulary.documentation(protectedNames);
     for (const name of protectedNames) {
-      expect(symbols.split(`### \`<${name}>\``)).toHaveLength(2);
+      expect(symbols.split(`- \`<${name}>\` —`)).toHaveLength(2);
       expect(protectedDocs.split(`### \`<${name}>\``)).toHaveLength(2);
     }
     expect(protectedDocs.match(/\(protected component\)/g)).toHaveLength(5);
