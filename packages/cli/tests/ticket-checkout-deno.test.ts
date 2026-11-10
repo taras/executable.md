@@ -14,7 +14,6 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ensure, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -88,7 +87,6 @@ function runChecked(source: string, checkout: Checkout, options: RunOptions = {}
       { at: "min" },
     );
     yield* useHostFiles();
-    yield* useComponentModuleLoader();
     yield* useCompositionComponents();
     const managed = yield* until(realpath(yield* useTempDirectory("xmd-checkout-managed-")));
     yield* useRunComposition({
@@ -213,6 +211,13 @@ describe("Ticket.Checkout — staged and unstaged reads", () => {
     checkout.run("add", "--", "tracked.txt");
     yield* checkout.write("tracked.txt", "staged\n");
     yield* observe([change("tracked.txt", "M")], [change("tracked.txt", "M")]);
+
+    // Each read reaches the result as rendered JSON text, so a path full of
+    // Markdown, MDX and HTML syntax must come back unchanged.
+    const odd = "odd *_[x](y)<b>{z}&`q`\\é.txt";
+    yield* checkout.write(odd, "odd\n");
+    checkout.run("add", "--", odd);
+    yield* observe([change(odd, "A"), change("tracked.txt", "M")], [change("tracked.txt", "M")]);
   });
 
   it("reads again after HEAD and the working tree move within one execution", function* () {
