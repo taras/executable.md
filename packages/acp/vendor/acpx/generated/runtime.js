@@ -1387,7 +1387,8 @@ var AcpRuntimeManager = class {
 			terminal: this.options.terminal
 		};
 	}
-	async withRuntimeControlSession(record, sessionMode, run, replayOptions, authority) {
+	// XMD requested model: this control call supplies its own selection.
+	async withRuntimeControlSession(record, sessionMode, run, replayOptions, authority, requestedModel) {
 		await this.retrySessionCleanup(record.acpxRecordId);
 		assertControlAuthority(authority);
 		const owner = await this.readRetainedSessionOwner(record, { consume: false });
@@ -1424,6 +1425,8 @@ var AcpRuntimeManager = class {
 				saveRecord: async () => checkpoint.checkpoint(),
 				createClient: (options) => controlClient = this.createClient({
 					...options,
+					// XMD requested model: only this cold control client receives it.
+					requestedModel,
 					processLifecycle: this.options.processLifecycle,
 					processLaunchScope: {
 						kind: "runtime-session",
@@ -1611,7 +1614,9 @@ var AcpRuntimeManager = class {
 				sessionKey: input.sessionKey
 			},
 			verbose: this.options.verbose,
-			sessionOptions: input.sessionOptions
+			sessionOptions: input.sessionOptions,
+			// XMD requested model: the call, not the session record.
+			requestedModel: input.requestedModel
 		});
 		const owner = this.createSessionOwner({
 			client,
@@ -1857,7 +1862,8 @@ var AcpRuntimeManager = class {
 	async prepareRuntimeTurnWithOwnership(task) {
 		const { record, retainedOwner, conversation, acpxState, promptMessageId } = await this.prepareRuntimeTurnState(task);
 		try {
-			const client = retainedOwner?.client ?? this.createTurnClient(record);
+			// XMD requested model: a retained live client is not reinitialized for a later use.
+			const client = retainedOwner?.client ?? this.createTurnClient(record, task.input.requestedModel);
 			const owner = this.resolveRuntimeTurnOwner(task, record, client, retainedOwner);
 			const turn = this.createRunningRuntimeTurn({
 				record,
@@ -1965,7 +1971,8 @@ var AcpRuntimeManager = class {
 		owner.bufferSessionUpdates = false;
 		this.drainPendingSessionUpdates(owner);
 	}
-	createTurnClient(record) {
+	// XMD requested model: a cold turn uses its own request.
+	createTurnClient(record, requestedModel) {
 		return this.createClient({
 			agentCommand: record.agentCommand,
 			agentArgv: record.agentArgv,
@@ -1986,7 +1993,9 @@ var AcpRuntimeManager = class {
 				sessionKey: record.name ?? record.acpxRecordId
 			},
 			verbose: this.options.verbose,
-			sessionOptions: sessionOptionsFromRecord(record)
+			sessionOptions: sessionOptionsFromRecord(record),
+			// XMD requested model: consumed only by this attaching client.
+			requestedModel
 		});
 	}
 	buildRuntimeTurnController(task, turn) {
@@ -2253,11 +2262,12 @@ var AcpRuntimeManager = class {
 			connectedRecord.acpx = applyModelSelection(connectedRecord.acpx, model, response, resolvedModelId);
 		}, { replacingConfigOption: { key: "model" } }, authority);
 	}
-	async setConfigOption(handle, key, value, sessionMode = "persistent", authority) {
+	// XMD requested model: ordinary and restoring writes carry the same request.
+	async setConfigOption(handle, key, value, sessionMode = "persistent", authority, requestedModel) {
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
-		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.setConfigOptionWithOwnership(handle, key, value, sessionMode, authority), authority);
+		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, requestedModel), authority);
 	}
-	async setConfigOptionWithOwnership(handle, key, value, sessionMode, authority) {
+	async setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, requestedModel) {
 		const record = await this.requireRecord(handle.acpxRecordId ?? handle.sessionKey);
 		assertControlAuthority(authority);
 		const controller = this.activeControllers.get(record.acpxRecordId);
@@ -2280,7 +2290,8 @@ var AcpRuntimeManager = class {
 		}, { replacingConfigOption: {
 			key,
 			resolve: (connectedRecord) => resolveSupportedConfigOptionId(connectedRecord, key)
-		} }, authority);
+		// XMD requested model: this control may construct the attaching client.
+		} }, authority, requestedModel);
 	}
 	async cancel(handle) {
 		await this.activeControllers.get(handle.acpxRecordId ?? handle.sessionKey)?.requestCancelActivePrompt();
@@ -2504,6 +2515,16 @@ const SHARED_BACKEND = "acpx-shared";
 function invalidOption(message) {
 	throw new AcpRuntimeError("ACP_INVALID_RUNTIME_OPTION", message);
 }
+/** XMD requested model: this call's exact requested model; omission names none. */
+function requestedModelOf(input) {
+	const requestedModel = input?.requestedModel;
+	if (requestedModel !== void 0 && (typeof requestedModel !== "string" || requestedModel.trim().length === 0)) invalidOption("requestedModel must be a non-empty string when supplied.");
+	return requestedModel;
+}
+/** XMD requested model: reaches only in-process Claude reconnects; shared sessions refuse it before any effect. */
+function refuseSharedRequestedModel(input) {
+	if (requestedModelOf(input) !== void 0) invalidOption("requestedModel belongs to the in-process runtime and is not supported by shared sessions.");
+}
 function sharedHandle(record) {
 	return {
 		backend: SHARED_BACKEND,
@@ -2599,6 +2620,8 @@ var SharedAcpRuntime = class {
 	}
 	ensureSession(input) {
 		this.assertOpen();
+		// XMD requested model: shared sessions refuse this in-process input.
+		refuseSharedRequestedModel(input);
 		if (input.mode !== "persistent") invalidOption("Shared sessions require persistent mode; use the in-process runtime for oneshot sessions.");
 		const session = this.sessionOptions(input);
 		return this.track(ensureSession({
@@ -2616,6 +2639,8 @@ var SharedAcpRuntime = class {
 	}
 	startTurn(input) {
 		this.assertOpen();
+		// XMD requested model: shared sessions refuse this in-process input.
+		refuseSharedRequestedModel(input);
 		if (input.mode !== "prompt" || input.assertActive || input.onPermissionRequest || input.onElicitation) invalidOption("Shared turns support prompt mode and the client's static permission policy; in-process callbacks and steering are unsupported.");
 		if (!input.requestId.trim()) invalidOption("A shared turn requires a requestId.");
 		const sessionId = sharedRecordId(input.handle);
@@ -2763,6 +2788,8 @@ var SharedAcpRuntime = class {
 		}));
 	}
 	async setConfigOption(input) {
+		// XMD requested model: shared sessions refuse this in-process input.
+		refuseSharedRequestedModel(input);
 		return (await this.dispatchControl(input, "session/set_config_option", async (sessionId, assertAuthority) => {
 			const configId = resolveSupportedConfigOptionId(await resolveSessionRecord(sessionId), input.key);
 			assertAuthority();
@@ -2864,6 +2891,8 @@ var AcpxRuntime = class {
 	}
 	async ensureSession(input) {
 		const { sessionName, agent } = this.resolveSessionIdentity(input);
+		// XMD requested model: validate before manager work begins.
+		const requestedModel = requestedModelOf(input);
 		const record = await (await this.getManager()).ensureSession({
 			sessionKey: sessionName,
 			agent,
@@ -2871,7 +2900,9 @@ var AcpxRuntime = class {
 			cwd: input.cwd ?? this.options.cwd,
 			resumeSessionId: input.resumeSessionId,
 			sessionOptions: input.sessionOptions,
-			materialization: input.materialization
+			materialization: input.materialization,
+			// XMD requested model: consumed only by this attaching client.
+			requestedModel
 		});
 		return this.createSessionHandle({
 			...input,
@@ -2901,6 +2932,8 @@ var AcpxRuntime = class {
 	}
 	startTurn(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
+		// XMD requested model: validate before manager work begins.
+		const requestedModel = requestedModelOf(input);
 		const turnPromise = this.getManager().then((manager) => manager.startTurn({
 			handle,
 			text: input.text,
@@ -2912,7 +2945,9 @@ var AcpxRuntime = class {
 			signal: input.signal,
 			assertActive: input.assertActive,
 			onElicitation: input.onElicitation,
-			onPermissionRequest: input.onPermissionRequest
+			onPermissionRequest: input.onPermissionRequest,
+			// XMD requested model: consumed only by this attaching client.
+			requestedModel
 		}));
 		turnPromise.catch(() => {});
 		const sessionMaterialization = turnPromise.then((turn) => turn.materialized);
@@ -2939,6 +2974,8 @@ var AcpxRuntime = class {
 	}
 	async *runTurn(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
+		// XMD requested model: validate before manager work begins.
+		const requestedModel = requestedModelOf(input);
 		yield* (await this.getManager()).runTurn({
 			handle,
 			text: input.text,
@@ -2950,7 +2987,9 @@ var AcpxRuntime = class {
 			signal: input.signal,
 			assertActive: input.assertActive,
 			onElicitation: input.onElicitation,
-			onPermissionRequest: input.onPermissionRequest
+			onPermissionRequest: input.onPermissionRequest,
+			// XMD requested model: consumed only by this attaching client.
+			requestedModel
 		});
 	}
 	async getCapabilities(input) {
@@ -2972,7 +3011,9 @@ var AcpxRuntime = class {
 	}
 	async setConfigOption(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
-		return await (await this.getManager()).setConfigOption(handle, input.key, input.value, state.mode, input);
+		// XMD requested model: validate before manager work begins.
+		const requestedModel = requestedModelOf(input);
+		return await (await this.getManager()).setConfigOption(handle, input.key, input.value, state.mode, input, requestedModel);
 	}
 	async cancel(input) {
 		const { handle } = this.resolveManagerHandle(input.handle);

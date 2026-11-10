@@ -262,6 +262,32 @@ describe("Tier SP — session setup ownership", () => {
     expect(refusalOf(() => owner.setup(rebuilt))).toContain("not a live session request");
   });
 
+  it("SP12: a setup exposes the exact model from its final request", function* () {
+    const owner = createSessionSetupOwner();
+    const presence = (configuration: SessionConfiguration | undefined, routed = false) => {
+      const issuance = openSessionRequest(`expansion:${String(configuration?.model)}`, "review");
+      issuance.configure(configuration);
+      // A handler's whole-request replacement is the request the provider
+      // receives, so the requested model follows that final request.
+      const request = routed ? issuance.request.with({ name: "elsewhere" }) : issuance.request;
+      const setup = owner.setup(request);
+      return { requestedModel: setup.requestedModel, keys: Object.keys(setup).sort() };
+    };
+    expect(presence({ model: "gpt-5.4" }).requestedModel).toBe("gpt-5.4");
+    expect(presence({ model: "claude-fable-5", effort: "high" }, true).requestedModel).toBe(
+      "claude-fable-5",
+    );
+    expect(presence({ effort: "high" }).requestedModel).toBe(undefined);
+    expect(presence(undefined).requestedModel).toBe(undefined);
+    // The model is visible; configuration still belongs to finish.
+    expect(presence({ model: "gpt-5.4" }).keys).toEqual([
+      "activate",
+      "finish",
+      "requestedModel",
+      "sessionIdentity",
+    ]);
+  });
+
   it("SP11: what a request asks is settled before it routes, and once", function* () {
     // The element says what it asks — or that it asks nothing — before any
     // handler holds the request. What a handler receives is therefore already

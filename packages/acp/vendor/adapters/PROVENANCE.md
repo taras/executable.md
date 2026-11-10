@@ -265,3 +265,20 @@ import reaches it through `dist/claude-sdk.js`. Compiler declarations remain a
 verified build input. They, the pristine SDK and the transform are absent from
 the runtime archive; repository preparation reproduces the shipped bytes from
 pinned public inputs instead.
+
+### Claude resumed model under an explicit use
+
+The readable `claude/adapter.patch` extends producer
+`e3a6ceb7a50e1151fb49322ea83d331a4c8b74ca` with one local change for #1177; no
+upstream commit carries it. A `session/load` or `session/resume` whose `_meta`
+carries `"executablemd.has-explicit-model/v1": true` belongs to a client use
+that names its own model. On that branch only, `createSession` skips
+`getAvailableModels`' environment/settings reassertion and calls
+`observeResumedModel`: the backend's `getContextUsage` model is the current
+model selection verbatim, with the offered catalog and allowlist unchanged. A
+failed or empty report, or one no offered model names exactly, refuses with an
+invalid-request error before any prompt, so a client never reads it as a missing
+conversation to replace. The marker is never passed into SDK options. Fresh,
+unmarked and effort-only initialization keep the existing priority. The recipe
+records the changed patch, `src/acp-agent.ts` postimage, `dist/acp-agent.js`
+runtime and output hashes; source, SDK and compiler pins are unchanged.

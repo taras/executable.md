@@ -17,6 +17,16 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 const LOG = process.env.FAKE_CLAUDE_LOG;
+/**
+ * Where a stateful case keeps each conversation's model and effort.
+ *
+ * Opt-in. Without it every control answers with the fixed `fake-model`
+ * catalog and nothing persists, which is what the existing cases assume. With
+ * it, a resumed process continues the model its conversation last ran — the way
+ * the CLI restores a transcript — and a cold reconnect can be observed against
+ * what the previous process actually ran.
+ */
+const STATE_DIR = process.env.FAKE_CLAUDE_STATE_DIR;
 
 /** The session this CLI was launched for, as the adapter named it. */
 const SESSION =
@@ -28,6 +38,97 @@ const SESSION =
 
 /** What a test expects back, built from that session and nothing else. */
 const UUID = `uuid:${SESSION}`;
+
+const RESUMED = process.argv.some((argument) => argument.startsWith("--resume="));
+
+/** The picker a stateful case offers: aliases resolve, exact ids name themselves. */
+const CATALOG = STATE_DIR
+  ? JSON.parse(
+      process.env.FAKE_CLAUDE_MODELS ??
+        JSON.stringify([
+          {
+            value: "default",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "Default",
+            description: "the account default",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high"],
+          },
+          {
+            value: "fable",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "Fable",
+            description: "the latest Fable",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high"],
+          },
+          {
+            value: "claude-fable-5",
+            resolvedModel: "claude-fable-5",
+            displayName: "Fable 5",
+            description: "an exact model",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high"],
+          },
+          {
+            value: "claude-sonnet-5-5",
+            resolvedModel: "claude-sonnet-5-5",
+            displayName: "Sonnet 5.5",
+            description: "another exact model",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high"],
+          },
+        ]),
+    )
+  : [
+      {
+        value: "fake-model",
+        resolvedModel: "fake-model",
+        displayName: "Fake",
+        description: "a stand-in",
+        isDefault: true,
+      },
+    ];
+
+function statePath() {
+  return require("node:path").join(STATE_DIR, `${encodeURIComponent(SESSION)}.json`);
+}
+
+function argumentAfter(flag) {
+  const index = process.argv.indexOf(flag);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+/**
+ * The selection this process runs under.
+ *
+ * A resumed conversation continues what it last ran, whatever this launch was
+ * asked for; a new one starts from `--model`, or the account default.
+ */
+const state = (() => {
+  if (!STATE_DIR) {
+    return { model: "fake-model", effort: undefined };
+  }
+  if (RESUMED && fs.existsSync(statePath())) {
+    return JSON.parse(fs.readFileSync(statePath(), "utf8"));
+  }
+  return { model: argumentAfter("--model") ?? "default", effort: argumentAfter("--effort") };
+})();
+
+function persist() {
+  if (STATE_DIR) {
+    fs.writeFileSync(statePath(), JSON.stringify(state));
+  }
+}
+
+/** The model a request actually reaches: an alias's resolution, or the exact id. */
+function running() {
+  if (!STATE_DIR) {
+    return "fake-model";
+  }
+  const entry = CATALOG.find((model) => model.value === state.model);
+  return entry?.resolvedModel ?? state.model;
+}
 
 function log(entry) {
   if (LOG) {
@@ -44,6 +145,10 @@ if (process.env.FAKE_CLAUDE_EXIT_STDERR) {
   return;
 }
 log({ executable: process.argv[1], argv: process.argv.slice(2) });
+if (STATE_DIR && !process.argv.includes("--version")) {
+  persist();
+  log({ event: "started", session: SESSION, resumed: RESUMED, model: state.model });
+}
 if (process.argv.includes("--version")) {
   console.log("Fake Claude Code 0.0.0");
   return;
@@ -56,7 +161,7 @@ emit({
   session_id: SESSION,
   tools: [],
   mcp_servers: [],
-  model: "fake-model",
+  model: running(),
   permissionMode: "default",
   slash_commands: [],
   apiKeySource: "none",
@@ -135,6 +240,63 @@ function usage() {
   };
 }
 
+/**
+ * Answer the controls a stateful case observes, or leave the request alone.
+ *
+ * Model and effort writes change this conversation's persisted selection and
+ * are logged by name, so a case can count exactly which ones a reconnect sent.
+ * `get_context_usage` reports what the conversation actually runs.
+ */
+function answerStateful(message) {
+  const request = message.request ?? {};
+  const succeed = (response) =>
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: message.request_id, response },
+    });
+  if (request.subtype === "set_model") {
+    state.model = request.model ?? "default";
+    persist();
+    log({ control: "set_model", session: SESSION, model: state.model });
+    succeed({});
+    return true;
+  }
+  if (request.subtype === "apply_flag_settings") {
+    if (request.settings && Object.hasOwn(request.settings, "effortLevel")) {
+      state.effort = request.settings.effortLevel ?? undefined;
+      persist();
+      log({ control: "effort", session: SESSION, effort: state.effort ?? null });
+    }
+    succeed({});
+    return true;
+  }
+  if (request.subtype === "get_context_usage") {
+    log({ control: "get_context_usage", session: SESSION, model: running() });
+    if (process.env.FAKE_CLAUDE_CONTEXT_USAGE === "fail") {
+      emit({
+        type: "control_response",
+        response: {
+          subtype: "error",
+          request_id: message.request_id,
+          error: "context usage is unavailable",
+        },
+      });
+      return true;
+    }
+    succeed({
+      categories: [],
+      totalTokens: 0,
+      maxTokens: 200000,
+      rawMaxTokens: 200000,
+      percentage: 0,
+      gridRows: [],
+      model: process.env.FAKE_CLAUDE_CONTEXT_USAGE === "absent" ? undefined : running(),
+    });
+    return true;
+  }
+  return false;
+}
+
 let buffer = "";
 process.stdin.on("data", (chunk) => {
   buffer += chunk.toString("utf8");
@@ -180,6 +342,9 @@ process.stdin.on("data", (chunk) => {
         // Only Query failure releases this lookup, so setup cannot outrun the contradiction.
         continue;
       }
+      if (STATE_DIR && answerStateful(message)) {
+        continue;
+      }
       emit({
         type: "control_response",
         response: {
@@ -190,15 +355,7 @@ process.stdin.on("data", (chunk) => {
             agents: [],
             output_style: "default",
             available_output_styles: ["default"],
-            models: [
-              {
-                value: "fake-model",
-                resolvedModel: "fake-model",
-                displayName: "Fake",
-                description: "a stand-in",
-                isDefault: true,
-              },
-            ],
+            models: CATALOG,
             account: { email: "fake@example.test", organization: null, subscription: null },
             hooks_applied: true,
           },
@@ -211,6 +368,10 @@ process.stdin.on("data", (chunk) => {
     }
     if (message.type !== "user") {
       continue;
+    }
+
+    if (STATE_DIR) {
+      log({ event: "prompt", session: SESSION, model: running(), effort: state.effort ?? null });
     }
 
     // Echo the user message back, the way the CLI replays a queued turn.
@@ -227,7 +388,7 @@ process.stdin.on("data", (chunk) => {
         id: "msg_fake",
         type: "message",
         role: "assistant",
-        model: "fake-model",
+        model: running(),
         content: [{ type: "text", text: "answered", citations: null }],
         stop_reason: "end_turn",
         stop_sequence: null,

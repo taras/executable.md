@@ -220,6 +220,7 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
   const activate = Reflect.get(value, "activate");
   const finish = Reflect.get(value, "finish");
   const sessionIdentity = Reflect.get(value, "sessionIdentity");
+  const requestedModel = Reflect.get(value, "requestedModel");
   if (typeof finish !== "function") {
     throw new AgentProviderInstallError(
       "the live agent provider installation answered a session setup that settles nothing",
@@ -236,8 +237,20 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
         "conversation it names",
     );
   }
+  if (
+    !Reflect.has(value, "requestedModel") ||
+    (requestedModel !== undefined && typeof requestedModel !== "string")
+  ) {
+    // No inferred default: a provider that guessed would initialize a resumed
+    // conversation under the wrong model preference.
+    throw new AgentProviderInstallError(
+      "the live agent provider installation answered a session setup without a valid " +
+        "requested model",
+    );
+  }
   return {
     ...(typeof sessionIdentity === "string" ? { sessionIdentity } : {}),
+    requestedModel,
     // Bound to the handle that answered, like `finish`: both are closures over
     // one issuance in the copy of core that opened it, and calling either with
     // any other receiver would reach a different copy's state or none.

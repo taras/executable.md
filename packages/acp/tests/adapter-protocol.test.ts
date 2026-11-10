@@ -1019,3 +1019,157 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     expect(acceptances(adapter)).toEqual([]);
   });
 });
+
+/** The continuation marker a client sends when its use names a model (#1177). */
+const HAS_EXPLICIT_MODEL_META = "executablemd.has-explicit-model/v1";
+
+/**
+ * A Claude adapter over the stateful fake, with a private global model
+ * preference and one conversation already running `running`.
+ */
+function* useResumable(
+  running: string,
+  environment: Record<string, string> = {},
+): Operation<{ adapter: Adapter; sessionId: string; cwd: string }> {
+  const root = yield* until(mkdtemp(join(tmpdir(), "xmd ea model ")));
+  yield* ensure(() => rm(root, { recursive: true, force: true }));
+  const sessionId = "22222222-2222-4222-8222-222222222222";
+  yield* until(
+    import("node:fs/promises").then(async (fs) => {
+      await fs.mkdir(join(root, "state"));
+      await fs.writeFile(join(root, "settings.json"), JSON.stringify({ model: "fable" }));
+      await fs.writeFile(
+        join(root, "state", `${sessionId}.json`),
+        JSON.stringify({ model: running }),
+      );
+    }),
+  );
+  const adapter = yield* useAdapter("claude", {
+    ...CLAUDE_ENV,
+    CLAUDE_CONFIG_DIR: root,
+    ANTHROPIC_MODEL: "",
+    FAKE_CLAUDE_STATE_DIR: join(root, "state"),
+    ...environment,
+  });
+  yield* initialize(adapter);
+  // The conversation's own directory, so no project settings outside this
+  // case decide the global preference.
+  return { adapter, sessionId, cwd: root };
+}
+
+/** What a load/resume reports as the current model selection. */
+function reportedModel(response: Record<string, unknown>): unknown {
+  const options = response["configOptions"];
+  if (!Array.isArray(options)) {
+    return undefined;
+  }
+  return options.find((option) => option?.["id"] === "model")?.["currentValue"];
+}
+
+function* modelWrites(adapter: Adapter): Operation<string[]> {
+  return (yield* readTextFile(adapter.log))
+    .split("\n")
+    .filter((line) => line.includes('"control":"set_model"'))
+    .map((line) => JSON.parse(line).model);
+}
+
+describe("Tier EA — the Claude adapter's resumed model under an explicit use (#1177)", () => {
+  it("EA15: a marked resume reports the exact running model and reasserts nothing", function* () {
+    for (const method of ["session/resume", "session/load"]) {
+      const { adapter, sessionId, cwd } = yield* useResumable("claude-fable-5");
+      const response = yield* adapter.request(method, {
+        sessionId,
+        cwd,
+        mcpServers: [],
+        _meta: { [HAS_EXPLICIT_MODEL_META]: true },
+      });
+      expect(reportedModel(response)).toBe("claude-fable-5");
+      expect(yield* modelWrites(adapter)).toEqual([]);
+    }
+  });
+
+  it("EA16: a different context hint is a different exact id, reported verbatim", function* () {
+    const { adapter, sessionId, cwd } = yield* useResumable("claude-fable-5[1m]", {
+      FAKE_CLAUDE_MODELS: JSON.stringify([
+        {
+          value: "claude-fable-5",
+          resolvedModel: "claude-fable-5",
+          displayName: "A",
+          description: "",
+        },
+        {
+          value: "claude-fable-5[1m]",
+          resolvedModel: "claude-fable-5[1m]",
+          displayName: "B",
+          description: "",
+        },
+      ]),
+    });
+    const response = yield* adapter.request("session/resume", {
+      sessionId,
+      cwd,
+      mcpServers: [],
+      _meta: { [HAS_EXPLICIT_MODEL_META]: true },
+    });
+    expect(reportedModel(response)).toBe("claude-fable-5[1m]");
+  });
+
+  for (const [name, environment, refusal] of [
+    ["absent", { FAKE_CLAUDE_CONTEXT_USAGE: "absent" }, "reported no model"],
+    ["failed", { FAKE_CLAUDE_CONTEXT_USAGE: "fail" }, "could not report the model it runs"],
+    [
+      "unrepresentable",
+      {
+        FAKE_CLAUDE_MODELS: JSON.stringify([
+          {
+            value: "default",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "D",
+            description: "",
+          },
+          { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
+        ]),
+      },
+      "none of its offered models names exactly",
+    ],
+  ] as const) {
+    it(`EA17: a marked resume refuses a ${name} observation as an invalid request`, function* () {
+      const { adapter, sessionId, cwd } = yield* useResumable("fable", environment);
+      let failure = "";
+      try {
+        yield* adapter.request("session/resume", {
+          sessionId,
+          cwd,
+          mcpServers: [],
+          _meta: { [HAS_EXPLICIT_MODEL_META]: true },
+        });
+      } catch (error) {
+        failure = String(error);
+      }
+      expect(failure).toContain(refusal);
+      // Not a missing conversation, which a client could replace.
+      expect(failure).toContain('"code":-32600');
+      expect(yield* modelWrites(adapter)).toEqual([]);
+      expect(yield* readTextFile(adapter.log)).not.toContain('"type":"user"');
+    });
+  }
+
+  it("EA18: without the marker, resume and new keep the existing model choice", function* () {
+    const { adapter, sessionId, cwd } = yield* useResumable("claude-fable-5");
+    const resumed = yield* adapter.request("session/resume", {
+      sessionId,
+      cwd,
+      mcpServers: [],
+    });
+    // The global preference is reasserted, exactly as before.
+    expect(reportedModel(resumed)).toBe("fable");
+    expect(yield* modelWrites(adapter)).toEqual(["fable"]);
+    // A fresh session ignores the marker: there is nothing resumed to observe.
+    const fresh = yield* adapter.request("session/new", {
+      cwd,
+      mcpServers: [],
+      _meta: { [HAS_EXPLICIT_MODEL_META]: true },
+    });
+    expect(reportedModel(fresh)).toBe("fable");
+  });
+});

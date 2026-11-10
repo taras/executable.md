@@ -32,7 +32,7 @@
       "node": ">=14.17"
     }
   },
-  "patchSha256": "873f04c4549c05fcfd1c11d0efbcd3392c9d1e7702e29528c48d75a97316b94b",
+  "patchSha256": "c263bcb53645128b81d8cd1cb4bf2d38b2efdee07546222101e58cdea1dd2cbd",
   "transformSha256": "d20ae1bc7335768bdf417831cdac359cb40cfd786adb6bfd78b3808253d8030b",
   "preimages": {
     "src/acp-agent.ts": "a52b723182828025341f5111109f4b902beaae22589b77d52f9236f279ef2a1c",
@@ -46,7 +46,7 @@
     "src/tools.ts": "7f5affb80dc728e6c6ec6378871a4a67f284382c5b66b9a96fd30f453b7c3905"
   },
   "postimages": {
-    "src/acp-agent.ts": "ac7019cddbd7557ce74a6d93c64b94637162a462ef07a34bfebb7ca625dc9e71",
+    "src/acp-agent.ts": "74727abef9a9f44916ca126bcf2a65f399fea07dbab587df008e440960e83a39",
     "src/claude-sdk.ts": "b80d272dea9583ecae6ca2c86477cae7f7f9186b8cefdbb1ad1fb6c05e3ddc9a",
     "src/file-change-audit.ts": "14a9ad8488c5793cb49172ac86d7fd481cd2b23da6589b2275ff3a429eb9b324",
     "src/index.ts": "c6f3d6074749e0ff466e10cc32e1798be8da0b271e8ba201a6ecb330badf1261",
@@ -57,7 +57,7 @@
     "src/tools.ts": "ff8c9d821ce82462a659bc5d5c85299f9419072daa14c52208fa31fed5945e7c"
   },
   "runtime": {
-    "dist/acp-agent.js": "5890b00c9e0ad1744cb0efe94d08d10469ef7db460c4133bb74a95044c7157be",
+    "dist/acp-agent.js": "1b3831c6f3f96a1548d9a9311c9e50d99478ffd98d5fced1070f11aaa667e241",
     "dist/claude-sdk.js": "b80d272dea9583ecae6ca2c86477cae7f7f9186b8cefdbb1ad1fb6c05e3ddc9a",
     "dist/clear-context-coordinator.js": "854e5fccdbb3343c57ddf158fb8a1dd5d34d7b13483032437c2fed6c898154a6",
     "dist/permissions/effects.js": "f2d2ce76f2012b6062ad565b079c2078ae4dbf9282f505876ff38313c521745b",
@@ -126,9 +126,9 @@
     "package.json"
   ],
   "expected": {
-    "sha256": "773db68c6b94fcf34540d387017247d6893f42359337a167a42baf636eef2685",
-    "byteLength": 2004653,
-    "moduleSha256": "117a2bf6356bb7ec567fa6b3e35266db38dda095ac9f12252bc5ca88b3c39444"
+    "sha256": "7bb5296c72adb4268f8dc9ed484b53fd2aa6b1b16ab30868d7b8dfb63501257e",
+    "byteLength": 2006701,
+    "moduleSha256": "f63fb8d356622bb09750168d4682878fe2126f5b033abdd3c5acfafe5ee06ce9"
   },
   "metadata": {
     "name": "@agentclientprotocol/claude-agent-acp",
@@ -164,5 +164,5 @@
       "zod": "^3.25.0 || ^4.0.0"
     }
   },
-  "inputsSha256": "23cbd3e280c82dadb7b1bdc04f5ed84b9ef65ef6332d49ff84e79b64a61e15ae"
+  "inputsSha256": "00a6a5eaac8b937d546f14ecdc6ae80e6b4ba815abda33c640c4777d93541f0a"
 }

@@ -40,6 +40,8 @@ const SEAMS: readonly string[] = [
   "Strict explicit resume:",
   "XMD prompt diagnostic:",
   "XMD prompt usage:",
+  "XMD requested model:",
+  "XMD exact-model replay:",
 ];
 
 /** How far an introduced line may sit from one that names the seam. */

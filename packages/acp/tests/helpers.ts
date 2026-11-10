@@ -124,6 +124,13 @@ export interface FakeRuntimeHarness {
   doctorCalls: number;
   ensureCalls: AcpRuntimeEnsureInput[];
   turns: FakeTurn[];
+  /**
+   * Whether each ensure, turn and write said its use names a model, in order.
+   *
+   * `<call> <requestedModel>`, with `-` for an omitted member, so a case can
+   * state that the requested model travelled with exactly the calls it belongs to.
+   */
+  modelRequests: string[];
   closeCalls: AcpRuntimeHandle[];
   /**
    * Every close, whole.
@@ -368,6 +375,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     doctorCalls: 0,
     ensureCalls: [],
     turns: [],
+    modelRequests: [],
     handleIds: [],
     startedTurns(count) {
       return {
@@ -407,6 +415,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           }
           harness.activity?.("ensure");
           harness.ensureCalls.push(input);
+          harness.modelRequests.push(`ensure ${input.requestedModel ?? "-"}`);
           const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
           harness.handleIds.push(handleId);
           // Deferred materialization: the record occupies the key and asserts
@@ -461,6 +470,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
         },
         startTurn(input) {
+          harness.modelRequests.push(`turn ${input.requestedModel ?? "-"}`);
           harness.activity?.("turn");
           const script = scripted.shift() ?? {};
           const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
@@ -619,7 +629,13 @@ export function createFakeRuntime(): FakeRuntimeHarness {
                 // Promise boundary, exactly as a manual turn's release does.
                 return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
               },
-              setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }) {
+              setConfigOption(input: {
+                handle: AcpRuntimeHandle;
+                key: string;
+                value: string;
+                requestedModel?: string;
+              }) {
+                harness.modelRequests.push(`set ${input.key} ${input.requestedModel ?? "-"}`);
                 harness.activity?.(`set ${input.key}=${input.value}`);
                 harness.configCalls.push(`set ${input.key}=${input.value}`);
                 const failure = harness.writeFailures?.[input.key];

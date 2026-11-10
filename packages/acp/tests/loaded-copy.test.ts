@@ -161,8 +161,18 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
     throw new Error("the other copy answered a session setup with nothing that could settle it");
   }
   const identity = Reflect.get(value, "sessionIdentity");
+  const requestedModel = Reflect.get(value, "requestedModel");
+  if (
+    !Reflect.has(value, "requestedModel") ||
+    (requestedModel !== undefined && typeof requestedModel !== "string")
+  ) {
+    throw new Error(
+      "the other copy answered a session setup that does not say whether it names a model",
+    );
+  }
   return {
     ...(typeof identity === "string" ? { sessionIdentity: identity } : {}),
+    requestedModel,
     *activate(provider, agentCommand, configuration) {
       // Across the same seam as `finish`, for the same reason: the authority
       // that decides whether this provider may work lives in the copy that
@@ -329,6 +339,7 @@ function foreignCoordinator(owner: ForeignOwner, log: SessionSetupLog): AgentLau
       const setup = owner.setup(request);
       const identity = setup.sessionIdentity;
       const observed: AgentSessionSetup = {
+        requestedModel: setup.requestedModel,
         activate: (provider, agentCommand, configuration) =>
           setup.activate(provider, agentCommand, configuration),
         finish: (session, state) => setup.finish(session, state),
