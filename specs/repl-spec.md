@@ -2954,8 +2954,8 @@ screen without moving selection, focus, Follow or either editable draft.
 Ordinary `xmd run` retains its existing foreground forwarding.
 
 When feedback has no exact completed canonical input and is not the exact
-in-flight request owned by the live exchange, `[review recovery]` shows the
-original request, saved failure, established entries and unfinished controls.
+in-flight automatic-feedback request owned by the live exchange, `[review recovery]`
+shows the original request, saved failure, established entries and unfinished controls.
 Ordinary live feedback alone does not expose the recovery action. Losing the live
 owner leaves the retained uncertainty subject to the existing recovery rules.
 The action sits with the conversation's fixed controls, directly above the tray

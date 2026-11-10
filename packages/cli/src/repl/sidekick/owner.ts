@@ -2519,8 +2519,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             if (sending.kind === "feedback") {
               began = written;
             }
-            asked = { at: written };
-            inFlight = asked;
+            if (sending.kind === "feedback" || sending.finished !== undefined) {
+              asked = { at: written };
+              inFlight = asked;
+            }
             yield* refresh();
           }
         },
