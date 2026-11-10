@@ -2953,11 +2953,11 @@ history position is selected, or while Sidekick is active. Arrival wakes the
 screen without moving selection, focus, Follow or either editable draft.
 Ordinary `xmd run` retains its existing foreground forwarding.
 
-When feedback has no exact completed canonical input and is not the exact
-in-flight automatic-feedback request owned by the live exchange, `[review recovery]`
-shows the original request, saved failure, established entries and unfinished controls.
-Ordinary live feedback alone does not expose the recovery action. Losing the live
-owner leaves the retained uncertainty subject to the existing recovery rules.
+The recovery guard presents `[review recovery]` for unresolved feedback or a
+pending recovery decision, using the same
+[live feedback exception](#live-feedback-exception) as queue admission. The
+review shows the original request, saved failure, established entries and
+unfinished controls.
 The action sits with the conversation's fixed controls, directly above the tray
 and outside the scrolling chat, so neither a long conversation nor its scroll
 position hides it at any supported size. It belongs to the Message keyboard
@@ -3296,23 +3296,36 @@ oversize message refuses before clearing text, with no eviction or truncation.
 Successful composer Send clears only its accepted Message revision. Newer typing
 survives; Retry consumes no composer text and ACP changes neither field.
 
-An otherwise eligible message also enters the queue while this live owner is
-asking the provider for automatic feedback. The exception names only the exact
-pending feedback request owned by that exchange; other unresolved feedback and
-pending recovery decisions keep their existing guard. Queue admission starts no
-additional prompt, evaluation or writer. Before a waiting message starts, the
-owner checks eligibility again. A failed or interrupted feedback exchange retains
-the applicable queue hold and recovery behavior.
+<a id="live-feedback-exception"></a>
+
+The **live feedback exception** sets aside one unresolved feedback record,
+identified by its position in the conversation record. The live owner binds
+that position to the current exchange's exact provider request.
+This can be a feedback-only request or a queued message's request carrying the
+completed round's results. An otherwise eligible message can enter the FIFO
+while either request is live. An earlier record with the same text, a mismatched
+acknowledgement and a pending recovery decision remain subject to the guard.
+The exception ends with the request's ownership and is absent on cold reopen.
+
+Queue admission starts no additional prompt, evaluation or writer. Before a
+waiting head starts, the owner checks eligibility again. A refusal leaves the
+head queued without sending it and shows the reason in the queue hold.
+**Remove message** withdraws that exact item while leaving the feedback guard
+and hold in force. **Resume queue** rechecks the guard, and
+[explicit recovery](#who-owns-what) uses a distinct new instruction to address
+unresolved feedback.
 
 Waiting work has no ordinary saved message record. When it starts, ordinary saved
 acknowledgement releases only matching Draft takeover before response controls
 run. The entire exchange and its cleanup finish before the next starts. Human
 Sidekick Stop holds remaining work until explicit guarded Resume, which passes the
-unknown-feedback guard only for a head bound to a retained human Stop; attachment
-cancellation affects only its exact exchange and adds no hold. Ordinary failure
-holds without automatic retry; fatal failures and unknown-feedback guards retain
-their authority. Pending work must be removed before agent replacement. Waiting
-work ends with this live owner and has no cold recovery or automatic replay.
+unknown-feedback guard only for a head bound to a retained human Stop.
+Attachment cancellation ends only its exact exchange and supplies no Stop
+binding. If acceptance remains unknown, the independent eligibility recheck
+holds the waiting head as described above. Ordinary failure holds without
+automatic retry. Fatal failures retain their authority. Pending work must be
+removed before ordinary agent replacement. Waiting work ends with this live
+owner and has no cold recovery or automatic replay.
 
 A reply may ask a question, and it is answered in the Sidekick's own pane. When
 one is waiting, the pane says so and offers one control that opens its form; the
@@ -3882,9 +3895,11 @@ completed, failed or interrupted, each its own — and its actual output, as two
 separate facts. The Submit answer is still the receipt described above; the
 output comes through the continuation, never through the receipt's wording. With
 Follow on, the next eligible queued message goes first and another autonomous
-round only after it, under the queue's own rules (#964); no origin is preferred
-and no held queue is restarted by it. Turning Follow off ends automatic
-continuation once the current round is over and does not interrupt that round.
+round only after it, under the queue's own rules (#964). That message carries
+the settled round's results and its request uses the
+[live feedback exception](#live-feedback-exception). FIFO applies across
+origins and the handoff leaves a held queue in place. Turning Follow off lets
+the current round finish and ends automatic continuation at that point.
 The receipt and control results remain retained without a delivery marker for
 feedback that was not sent. Ordinary read-only designated feedback still
 receives its answer with Follow off; a refused Submit creates no round.
