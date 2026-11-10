@@ -2199,6 +2199,70 @@ describe("REPL original complete History and cold catalog", () => {
     expect(yield* readTextFile(hot.path)).toBe(bytes);
     released(page.repl.terminal);
   });
+
+  it("EC3: a long cold history opens History at a tall window and reaches every position", function* () {
+    // Sixty settled entries at 316x120 once exhausted the engine's measured
+    // words the moment History was opened, before it could be drawn (#1220).
+    const tall = { columns: 316, rows: 120 };
+    const dataRoot = yield* useTemporary("xmd-cold-long-history-");
+    const hot = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: tall });
+      for (let order = 1; order <= 60; order += 1) {
+        yield* runSource(page, `Public history sample ${order}.\n`);
+        yield* page.until(`entry ${order} settling`, (one) =>
+          one.shows(`Ready for Entry ${order + 1}`),
+        );
+      }
+      const model = yield* retainedModel(page);
+      yield* draftText(page, "kept draft");
+      return {
+        expected: expectedPositions(model),
+        sources: model.entries.map((one) => one.source),
+        location: yield* leaveWithLocation(page),
+        path: yield* executionJournal(page),
+      };
+    });
+    expect(hot.expected.length).toBe(120);
+    const bytes = yield* readTextFile(hot.path);
+    const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+    yield* noNewExecution();
+    const work = yield* performedWork();
+    const page = yield* useReplPage({ host, location: hot.location, size: tall });
+    const kept = (one: ScreenReading): boolean => one.found("kept draft", DRAFT_VALUE) === 1;
+    expect(kept(page.screen())).toBe(true);
+
+    yield* openHistory(page);
+    expect((yield* allPositions(page, hot.expected)).reached).toEqual(hot.expected);
+    // The earliest prefix still in the window paging left it at.
+    const prefix = positionLabels(page.screen())[0] ?? "";
+    expect(hot.expected.indexOf(prefix)).toBeLessThan(hot.expected.length - 1);
+    yield* page.press(prefix);
+    yield* page.until("the earlier prefix", (one) => one.shows("[live]"));
+    yield* closeDrawer(page);
+    yield* page.press("[live]");
+    yield* page.until("the head", (one) => !one.shows("[live]"));
+    expect(kept(page.screen())).toBe(true);
+
+    yield* openHistory(page);
+    yield* closeDrawer(page);
+    for (const size of [NARROW, tall]) {
+      const shown = yield* page.resize(size);
+      expect(shown.rows.filter((row) => row.length > size.columns)).toEqual([]);
+    }
+    expect(kept(page.screen())).toBe(true);
+    // Reopened at the head, the last position is in the window again.
+    yield* openHistory(page);
+    expect(positionLabels(page.screen())).toContain(hot.expected.at(-1));
+    yield* closeDrawer(page);
+
+    expect((yield* retainedModel(page)).entries.map((one) => one.source)).toEqual(hot.sources);
+    expect(route(yield* leaveWithLocation(page)).draft).toBe("kept draft");
+    expect(work.compiles).toBe(0);
+    expect(work.asked).toBe(0);
+    expect(work.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    expect(yield* readTextFile(hot.path)).toBe(bytes);
+    released(page.repl.terminal);
+  });
 });
 function referencePageFor(dataRoot: string): Operation<ReplPage> {
   return useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });

@@ -965,22 +965,40 @@ function written(content: string, box: ReplBox, focused: boolean): Op[] {
   if (style === undefined) {
     return [text(content)];
   }
+  // A History row is padded with blanks to the drawer's width. The engine
+  // measures each text as words and keeps every distinct one for the frame, so
+  // a label carrying its own padding is a long run of empty words per ordinal;
+  // a few dozen rows exhausted that storage before the drawer could be drawn.
+  // Drawn apart, identical padding is one measurement shared by every row.
+  const padded = box.control && style.role === "history";
+  const draw = (piece: string, colour: number, attrs: number): Op[] =>
+    (padded ? apart(piece) : [piece]).map((one) => drawn(one, colour, attrs));
   const { runs } = box;
   const room = roomOf(box.props);
   if (runs === undefined || runs.length === 0 || runText(runs) !== content || room === "unknown") {
     const { colour, attrs } = textStyleOf(style, focused);
-    return [drawn(content, colour, attrs)];
+    return draw(content, colour, attrs);
   }
-  return bounded(runs, room).map((run) => {
+  return bounded(runs, room).flatMap((run) => {
     if (run.token === "caret") {
-      return text(run.text, {
-        color: terminalColour(REPL_PALETTE.composerSurface),
-        bg: terminalColour(REPL_PALETTE.focus),
-      });
+      return [
+        text(run.text, {
+          color: terminalColour(REPL_PALETTE.composerSurface),
+          bg: terminalColour(REPL_PALETTE.focus),
+        }),
+      ];
     }
     const { colour, attrs } = runStyleOf(run.token, style, focused);
-    return drawn(run.text, colour, attrs);
+    return draw(run.text, colour, attrs);
   });
+}
+
+/** A label and the spaces after it, as two texts; a text that is all one or the other stays whole. */
+function apart(content: string): readonly string[] {
+  const label = content.replace(/ +$/, "");
+  return label.length === 0 || label.length === content.length
+    ? [content]
+    : [label, content.slice(label.length)];
 }
 
 /**
