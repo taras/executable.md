@@ -31,7 +31,9 @@ Original captured source text:
 
 Keep summary within {schemas.review.properties.summary.maxLength} characters, including spaces and newlines. Put detailed observations in findings; do not compress the whole report into summary. Check revision against the assigned full SHA and acceptance against the recorded clause IDs before returning.
 
-Return exactly one JSON object satisfying this schema. acceptance lists every clause ID actually examined. pass requires no blocking finding. The workflow supplies work, reviewer, attempt and completion metadata.
+If you must end the turn before the verdict is ready, return exactly {JSON.stringify(schemas.progress.const)} on its own. The workflow can then give this same conversation one chance to finish.
+
+Otherwise, return exactly one JSON object satisfying this schema. acceptance lists every clause ID actually examined. pass requires no blocking finding. The workflow supplies work, reviewer, attempt and completion metadata.
 <Json value={schemas.review} />
 </Let>
 <If condition={instructions.length > 64000}><Fail message="The complete independent-review request exceeds 64000 characters. Prepare concise accepted inputs before dispatch." /></If>

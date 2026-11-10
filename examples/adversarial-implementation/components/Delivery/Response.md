@@ -1,5 +1,5 @@
 ---
-description: 'Shorten only an oversized independent-review summary, or validate its saved correction chain without prompting. Use <Delivery.Response delivery={delivery} revision={revision} reviewer={reviewer} attempt={attempt} raw={raw} dispatch={false} as="response" />.'
+description: 'Finish a review after an explicit progress reply, repair an oversized summary, or validate the saved replies without prompting. Use <Delivery.Response delivery={delivery} revision={revision} reviewer={reviewer} attempt={attempt} raw={raw} dispatch={false} as="response" />.'
 props:
   type: object
   properties:
@@ -14,32 +14,39 @@ props:
 returns: {type: object}
 ---
 
-The original review stays unchanged. Each extra call belongs to the same
-reviewer, model and native conversation, and consumes the recorded response
-allowance before dispatch. Reconciliation reads that chain and sends no prompt.
+A progress reply can use one separate completion turn. Formatting corrections
+start with the completed review and consume only the recorded formatting
+allowance. Reconciliation reads both records and sends no prompt.
 
 <Delivery.Schema as="schemas" />
 <Ticket.Text path={props.attempt + "/assignment.json"} as="assignmentText" />
 <Parse schema={{type:"object"}} as="assignment">{assignmentText}</Parse>
 <Let as="limit" value={assignment.maxResponseCorrections ?? 0} />
 <If condition={!Number.isInteger(limit) || limit < 0 || limit > 3 || limit !== (props.delivery.maxResponseCorrections ?? 0)}><Fail message="The review response allowance differs from its recorded assignment." /></If>
-<Delivery.Validate text={props.raw} revision={props.revision} acceptance={props.delivery.policy.acceptance} as="checked" />
-<Let as="original" value={checked.result ?? null} />
-<Let as="rawPath" value={props.attempt + "/raw.txt"} />
-<Let as="round" value={0} />
-<If condition={!checked.ok && props.dispatch}>
-<Dir path={props.attempt}><File path="response-rejection.json"><Json value={checked} /></File></Dir>
-</If>
 <Ticket.Text path={props.attempt + "/outcome.json"} as="outcomeText" />
 <Parse schema={{type:"object"}} as="originalOutcome">{outcomeText}</Parse>
 <Let as="catalog" value={originalOutcome.catalog} />
 <If condition={originalOutcome.turn?.state !== "reply" || originalOutcome.turn.reply !== props.raw || JSON.stringify(originalOutcome.reviewer) !== JSON.stringify(props.reviewer)}><Fail message="The original review does not match its joined outcome." /></If>
+<Let as="reviewRaw" value={props.raw} />
+<Let as="initialRawPath" value={props.attempt + "/raw.txt"} />
+<SafeParse schema={schemas.progress} as="progress">{props.raw}</SafeParse>
+<If condition={progress.ok}>
+<Delivery.Finish delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} catalog={catalog} attempt={props.attempt} dispatch={props.dispatch} as="reviewRaw" />
+<Let as="initialRawPath" value={props.attempt + "/completion/raw.txt"} />
+</If>
+<Delivery.Validate text={reviewRaw} revision={props.revision} acceptance={props.delivery.policy.acceptance} as="checked" />
+<Let as="original" value={checked.result ?? null} />
+<Let as="rawPath" value={initialRawPath} />
+<Let as="round" value={0} />
+<If condition={!checked.ok && props.dispatch}>
+<Dir path={props.attempt}><File path="response-rejection.json"><Json value={checked} /></File></Dir>
+</If>
 <Loop max={3}>
 <If condition={checked.ok || !checked.repairable || round >= limit}><Break /></If>
 <Let as="round" value={round + 1} />
 <Let as="directory" value={props.attempt + "/response-corrections/" + String(round).padStart(4,"0")} />
 <Let as="repairSchema" value={{...schemas.review,properties:Object.fromEntries(Object.entries(schemas.review.properties).map(([key,value]) => [key,key === "summary" ? value : {const:original[key]}]))}} />
-<Let as="packet" value={{schema:"delivery-summary-correction.v1",revision:props.revision,reviewer:props.reviewer,model:catalog.model,ordinal:round,remaining:limit-round,original:props.attempt + "/raw.txt",result:original,responseSchema:repairSchema}} />
+<Let as="packet" value={{schema:"delivery-summary-correction.v1",revision:props.revision,reviewer:props.reviewer,model:catalog.model,ordinal:round,remaining:limit-round,original:initialRawPath,result:original,responseSchema:repairSchema}} />
 <If condition={JSON.stringify(packet).length > 64000}><Fail message="The review correction packet exceeds 64000 characters; no prompt was sent." /></If>
 <If condition={props.dispatch}>
 <Ticket.Checkout repository={props.delivery.repository} as="before" />

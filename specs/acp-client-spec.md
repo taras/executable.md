@@ -734,9 +734,10 @@ until one is installed as a root provider or by AgentProvider.
 
 The CLI registers `claude-workflow-role` alongside ordinary `acpx`. The
 adversarial workflow selects this provider only around Claude role calls,
-including foundation, document preparation, independent review and response-only
-correction. It uses the same carried adapter, session store and host identity
-coordination as ordinary calls. Interactive Sidekick configuration is unchanged.
+including foundation, document preparation, independent review and its completion
+and response-only correction turns. It uses the same carried adapter, session
+store and host identity coordination as ordinary calls. Interactive Sidekick
+configuration is unchanged.
 
 The profile sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in the child session
 environment and supplies `disallowedTools: ["ScheduleWakeup"]` through ACPX to

@@ -14,7 +14,8 @@ returns: {type: object}
 Only the retained selection's attempt can supply the receipt: the original
 reviewer, or its replacement after a retained transition from an eligible
 failure. A joined reply that was never saved as `raw.txt` is completed from the
-attempt's retained outcome.
+attempt's retained outcome. If it was a progress reply, only the saved
+completion turn can supply the review.
 
 <Delivery.Schema as="schemas" />
 <Delivery.Attempts delivery={props.delivery} revision={props.revision} as="read" />

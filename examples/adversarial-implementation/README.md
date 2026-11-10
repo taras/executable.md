@@ -305,6 +305,19 @@ Independent review summaries allow 1500 characters; detailed observations belong
 in `findings`. The request states this bound alongside the exact revision and
 clause IDs. Ordinary phase and API-foundation summaries retain their own bounds.
 
+A joined reply containing only `{"status":"in_progress"}` gets one completion
+turn in the same native conversation, with the same reviewer, resolved model,
+effort and exact source revision. The workflow saves the original reply, checks
+that the checkout is clean and reserves `completion/` before sending a prompt
+with a five-minute deadline. A second progress reply, unavailable conversation,
+failed turn or changed source holds the review. Unmarked prose and malformed
+verdicts do not authorize a completion turn. Status and reconciliation read the
+saved evidence without prompting; a later invocation never starts an unused or
+interrupted completion turn.
+
+The completion turn has its own allowance. If it returns a review whose only
+defect is summary length, the original formatting allowance still applies.
+
 An otherwise-valid joined review with only an oversized summary can consume the
 work item's recorded `maxResponseCorrections` allowance. Each correction stays
 in the selected reviewer conversation with the same resolved model and effort.
@@ -322,7 +335,7 @@ Use `--props-action reconcile` when the selected joined review has a saved
 execution but no accepted receipt. Only the selection's attempt qualifies: the
 original reviewer, or Astra after a retained transition from an eligible Fable
 failure. It checks that attempt's assignment, joined execution, unchanged raw
-reply, current schema, clauses and source before creating the missing receipt,
+reply, any saved completion, current schema, clauses and source before creating the missing receipt,
 and saves a raw reply the execution joined but never wrote. It never shortens text, changes a verdict, repeats
 a model call or overwrites a contradictory receipt. Missing or uncertain execution
 continues to hold. Status uses this same validation boundary to read receipts.
