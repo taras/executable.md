@@ -6,6 +6,7 @@ import { parseDurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT } from "@executablemd/core/host";
 import { coldReservations, retainResolution } from "../src/repl/sidekick/admission.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
+import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import {
   createSidekickAdmission,
   SidekickOrigin,
@@ -1015,6 +1016,115 @@ describe("1151 — ordinary Send after a joined human Stop", () => {
     expect(effects()).toBe(1);
     expect(held.fake.turns[2]?.handle.sessionKey).toBe(key);
     expect(next.snapshot.message?.conversation).toBe(conversation);
+  });
+
+  it("A1b (1234): a post-Stop instruction that reads gets its own response, and its feedback names it", function* () {
+    const { held, effects } = yield* counted();
+    held.fake.script({ reply: SUBMIT });
+    held.fake.script({ deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 });
+    const dispatch = yield* stopping(held);
+    const first = yield* send(dispatch, "Run the counted effect.");
+    yield* held.fake.streamingTurns(1);
+    dispatch.hold();
+    yield* first.cancel("human");
+    expect((yield* first.completion).ok).toBe(false);
+    const stopped = yield* records(held.execution);
+    const slot = (one: { response: string; order: number }) => `${one.response}\0${one.order}`;
+    const oldSlots = stopped.flatMap((one) => (one.kind === "control" ? [slot(one)] : []));
+    const oldResponses = new Set(
+      stopped.flatMap((one) =>
+        one.kind === "control" || one.kind === "response" ? [one.response] : [],
+      ),
+    );
+    expect(oldSlots.length).toBeGreaterThan(0);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    const conversation = reading.value.active;
+    expect(reading.value.unestablished).toEqual([{ conversation, turn: null }]);
+
+    // The post-Stop instruction reads, and the automatic answer to that read
+    // asks for nothing.
+    const next = yield* send(dispatch, "Read the bindings after the counted result.");
+    expect(next.snapshot.state).toBe("queued");
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: "<Output>Read them.</Output>" });
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    const sent = yield* next.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(held.fake.prompts).toHaveLength(4);
+
+    const after = yield* records(held.execution);
+    // The effect ran once and nothing was submitted again.
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
+
+    // The recovery decision is the existing one, used once, and it selected
+    // only the stopped response's controls.
+    const decisions = after.flatMap((one) => (one.kind === "recovery-decision" ? [one] : []));
+    expect(decisions.map((one) => [one.action, one.basis])).toEqual([
+      ["continue-original", "joined-owned-exchange"],
+    ]);
+    for (const control of decisions[0]?.controls ?? []) {
+      expect(oldSlots).toContain(slot(control));
+    }
+
+    // The read is the new instruction's response's own order-0 control: a name
+    // no stopped response used, at a slot no control already holds.
+    const reads = after.flatMap((one) =>
+      one.kind === "control" && one.component === "REPL.Bindings" ? [one] : [],
+    );
+    expect(reads).toHaveLength(1);
+    const reader = reads[0]!.response;
+    expect(reads[0]!.order).toBe(0);
+    expect(oldResponses.has(reader)).toBe(false);
+    const allSlots = after.flatMap((one) => (one.kind === "control" ? [slot(one)] : []));
+    expect(new Set(allSlots).size).toBe(allSlots.length);
+
+    // The new responses are attributed to the canonical turns they ran in, and
+    // the read's automatic feedback was delivered into the turn after it,
+    // against the response that read.
+    const responses = after.flatMap((one) =>
+      one.kind === "response" ? [{ response: one.response, turn: one.turn }] : [],
+    );
+    const fresh = responses.filter((one) => !oldResponses.has(one.response));
+    expect(fresh).toHaveLength(2);
+    expect(fresh[0]?.response).toBe(reader);
+    expect(fresh[1]?.response).not.toBe(reader);
+    expect(fresh[1]!.turn).toBe(fresh[0]!.turn + 1);
+    const claims = after.flatMap((one) =>
+      one.kind === "feedback" && one.turn !== null ? [[one.response, one.turn]] : [],
+    );
+    expect(claims.at(-1)).toEqual([reader, fresh[1]!.turn]);
+    expect(
+      after.every((one) => !("conversation" in one) || one.conversation === conversation),
+    ).toBe(true);
+
+    // The old delivery stays unknown; the new one is established.
+    const settled = held.owner.reading;
+    if (!settled.ok) {
+      throw settled.error;
+    }
+    expect(settled.value.recoveries.map((one) => one.used)).toEqual([true]);
+    expect(settled.value.unestablished).toEqual([{ conversation, turn: null }]);
+    expect(settled.value.delivered).toEqual([{ conversation, turn: fresh[1]!.turn }]);
+
+    // Read again from the retained records alone, the same operations stand,
+    // and reading admitted nothing and asked the provider nothing.
+    const reopened = projectSidekick(after);
+    if (!reopened.ok) {
+      throw reopened.error;
+    }
+    expect(reopened.value.operations).toEqual(settled.value.operations);
+    expect(yield* records(held.execution)).toEqual(after);
+    expect(held.fake.prompts).toHaveLength(4);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
   });
 
   it("A3: Resume lends no Stop consent to older UI or ACP work and keeps FIFO", function* () {

@@ -2219,7 +2219,15 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         return current;
       }
       const turn = nextTurn(current.value, conversation);
-      const response = `response:${turn}`;
+      // Named for where this response begins in the history rather than for
+      // the message ordinal above or the turn it becomes. Neither number is
+      // unique to a response: an interrupted message keeps its ordinal while
+      // Core never counts its turn, and feedback adds turns and no messages.
+      // Every response that used its name retained a record after this point,
+      // so the next one starts further on — an unfinished one's controls
+      // included — and the `journal:` part keeps it apart from the numbered
+      // names earlier histories hold.
+      const response = `response:journal:${(yield* paired.writer.readAll()).length}`;
       const at: ResponseAt = { conversation, response };
       const written = controlJournal(paired.writer, at);
       /**

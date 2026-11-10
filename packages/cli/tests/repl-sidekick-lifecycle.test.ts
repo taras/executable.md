@@ -438,6 +438,9 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
       throw reading.error;
     }
     expect(reading.value.unfinished.map((one) => one.component)).toEqual(["REPL.EntryInput"]);
+    // The stopped response, as its unanswered intent named it before anything
+    // else ran.
+    const stoppedResponse = reading.value.unfinished[0]?.response;
 
     // And the same conversation answers afterwards.
     const again = yield* held.owner.message("after cleanup");
@@ -458,6 +461,12 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     if (!after.ok) {
       throw after.error;
     }
+    // The successor's own response, as its record attributes it to turn 2.
+    const successor = (yield* records(held.execution)).flatMap((one) =>
+      one.kind === "response" && one.turn === 2 ? [one.response] : [],
+    );
+    expect(successor).toHaveLength(1);
+    expect(successor[0]).not.toBe(stoppedResponse);
     const described = (one: SidekickOperation) => ({
       response: one.response,
       order: one.order,
@@ -467,20 +476,20 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     // The successor's read is the one answered pair, and it belongs to the
     // successor's own response with its own order.
     expect(after.value.operations.map(described)).toEqual([
-      { response: "response:2", order: 0, component: "REPL.Bindings", status: "ok" },
+      { response: successor[0], order: 0, component: "REPL.Bindings", status: "ok" },
     ]);
     // The held fill began under the response that was stopped and never
     // answered, and it stays there: an outcome arriving late is exactly what a
     // response naming cleared before its cleanup had joined would have filed
     // under the successor instead.
     expect(after.value.unfinished.map(described)).toEqual([
-      { response: "response:1", order: 0, component: "REPL.EntryInput", status: "unfinished" },
+      { response: stoppedResponse, order: 0, component: "REPL.EntryInput", status: "unfinished" },
     ]);
     // Said the other way round, because that is the failure that mattered:
     // nothing of the stopped response's control is filed under the successor.
     expect(
       [...after.value.operations, ...after.value.unfinished].filter(
-        (one) => one.response === "response:2" && one.component === "REPL.EntryInput",
+        (one) => one.response === successor[0] && one.component === "REPL.EntryInput",
       ),
     ).toEqual([]);
   });
@@ -1067,12 +1076,11 @@ describe("Tier PV — generation that ended without a reply", () => {
    * interrupted first message.
    *
    * `gap` is the whole distinction. A message whose generation was stopped
-   * before anything was saved stays in the history, so the owner's next
-   * response is named from an ordinal that counts it while Core numbers its own
-   * turns without it — and from then on a response name and a saved turn are
-   * different numbers for the same conversation. An attempt addressed by a
-   * response name reconstructed from its turn would take the earlier reply's
-   * row, which is one row named twice.
+   * before anything was saved stays in the history, so its ordinal is counted
+   * while Core numbers its own turns without it — and from then on a message
+   * ordinal and a saved turn are different numbers for the same conversation.
+   * An attempt addressed by a response name reconstructed from either number
+   * would take the earlier reply's row, which is one row named twice.
    */
   function* failedSuccessor(gap: boolean): Operation<void> {
     const host = yield* useMountedHost();
@@ -1095,13 +1103,18 @@ describe("Tier PV — generation that ended without a reply", () => {
     yield* sendMessage(page, "saved");
     yield* page.until("the successful predecessor", (one) => saidBySidekick(one, "First reply."));
     yield* page.until("the box being ready again", (one) => sidekickIdle(one));
-    // Which response that reply was recorded as, and which turn it actually
-    // ran as — read out of the history the command wrote.
-    const preceding = (yield* settledReading(repl)).chat.flatMap((record) =>
+    // Which turn that reply actually ran as, and the ordinal its message was
+    // saved under — read out of the history the command wrote.
+    const history = (yield* settledReading(repl)).chat;
+    const preceding = history.flatMap((record) =>
       record.kind === "response" ? [{ response: record.response, turn: record.turn }] : [],
     );
     expect(preceding).toHaveLength(1);
-    expect(preceding[0]?.response === `response:${preceding[0]?.turn}`).toBe(!gap);
+    const saved = history.flatMap((record) =>
+      record.kind === "message" && record.text === "saved" ? [record.turn] : [],
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0] === preceding[0]?.turn).toBe(!gap);
 
     repl.fake.script({
       deltas: ["<Output>Second attempt.</Output>\n", "<REPL.Bindings />\n"],
