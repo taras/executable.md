@@ -1205,6 +1205,11 @@ export class SidekickWriter {
     this.records = [...retained];
   }
 
+  /** Records acknowledged so far, including the history loaded on reopen. */
+  get recordCount(): number {
+    return this.records.length;
+  }
+
   /** Every record retained so far, in append order. */
   // deno-lint-ignore require-yield
   *readAll(): Operation<SidekickRecord[]> {

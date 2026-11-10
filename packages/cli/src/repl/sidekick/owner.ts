@@ -2227,7 +2227,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // so the next one starts further on — an unfinished one's controls
       // included — and the `journal:` part keeps it apart from the numbered
       // names earlier histories hold.
-      const response = `response:journal:${(yield* paired.writer.readAll()).length}`;
+      const response = `response:journal:${paired.writer.recordCount}`;
       const at: ResponseAt = { conversation, response };
       const written = controlJournal(paired.writer, at);
       /**
