@@ -719,6 +719,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/cli/tests/ticket-checkout-deno.test.ts",
+    reason:
+      "the same provider answering the adversarial workflow's `<Ticket.Checkout>` reads: an ordinary run discovers the ambient checkout and reads it with real `git` through the Deno runtime, which is the only runtime the provider is installed for",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/run-composition-nested.test.ts",
     reason:
       "a nested execution's own provider instance, which needs the same kernel-released advisory lock the root's does, and real subprocesses to prove where a child stands",
