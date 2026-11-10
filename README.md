@@ -57,8 +57,8 @@ Locate the package that owns the behavior you are about to change:
 - `packages/testing/` and `packages/test-agent/` — `<Test>` and the
   deterministic agent; `packages/test-support/` is the one BDD surface all three
   runtimes share.
-- `packages/acp/`, `packages/web/`, `packages/code-review-agent/` — the coding
-  agent bridge, the web form host, and the review agent.
+- `packages/acp/` and `packages/web/` — the coding agent bridge and the web
+  form host.
 - `scripts/` — this repository's own tooling: setup, builds, release targets,
   and the checks CI runs.
 - `specs/` — the specification each package is held to.

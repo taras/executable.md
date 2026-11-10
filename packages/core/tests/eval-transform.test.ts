@@ -136,14 +136,12 @@ describe("User import extraction", () => {
   // T17: Single-line import → extracted in userImports, removed from code
   it("T17: single-line import extracted", function* () {
     const result = transformBlock(
-      'import { parseDiff } from "@executablemd/code-review-agent";\n\nconst pr = parseDiff();',
+      'import { parseDiff } from "@scope/diff";\n\nconst pr = parseDiff();',
       "block-17",
       [],
     );
     expect(result.userImports).toHaveLength(1);
-    expect(result.userImports[0]).toBe(
-      'import { parseDiff } from "@executablemd/code-review-agent";',
-    );
+    expect(result.userImports[0]).toBe('import { parseDiff } from "@scope/diff";');
     expect(result.code).not.toContain("import");
     expect(result.code).toContain("const pr = parseDiff();");
     expect(result.exports).toContain("pr");
@@ -152,14 +150,12 @@ describe("User import extraction", () => {
   // T18: import type → extracted correctly (TypeScript syntax preserved)
   it("T18: import type preserved in userImports", function* () {
     const result = transformBlock(
-      'import type { PR } from "@executablemd/code-review-agent";\n\nconst x = 1;',
+      'import type { PR } from "@scope/diff";\n\nconst x = 1;',
       "block-18",
       [],
     );
     expect(result.userImports).toHaveLength(1);
-    expect(result.userImports[0]).toBe(
-      'import type { PR } from "@executablemd/code-review-agent";',
-    );
+    expect(result.userImports[0]).toBe('import type { PR } from "@scope/diff";');
     expect(result.code).not.toContain("import");
     expect(result.code).toContain("const x = 1;");
   });

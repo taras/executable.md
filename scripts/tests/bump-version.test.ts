@@ -8,11 +8,11 @@ import { pathToFileURL } from "node:url";
 import { bumpManifests } from "../lib/bump-version.ts";
 
 /**
- * The install step of the review and analysis workflows, which resolve the
- * latest published release. A bump must leave it alone: pinning it to the
- * version being cut points CI at a release that does not exist yet (#160).
+ * A workflow step that resolves the latest published release. A bump must
+ * leave it alone: pinning it to the version being cut points CI at a release
+ * that does not exist yet (#160).
  */
-const REVIEW_WORKFLOW = `      - name: Install xmd release binary
+const WORKFLOW = `      - name: Install xmd release binary
         run: |
           curl -fsSL https://executable.md/install.sh | sh
 `;
@@ -41,7 +41,7 @@ function* workspace(): Operation<URL> {
   }
 
   yield* ensureDir(new URL(".github/workflows/", root));
-  yield* writeTextFile(new URL(".github/workflows/review.yml", root), REVIEW_WORKFLOW);
+  yield* writeTextFile(new URL(".github/workflows/install.yml", root), WORKFLOW);
 
   return root;
 }
@@ -103,8 +103,6 @@ describe("bumpManifests", () => {
 
     yield* bumpManifests("2.0.0", root);
 
-    expect(yield* readTextFile(new URL(".github/workflows/review.yml", root))).toEqual(
-      REVIEW_WORKFLOW,
-    );
+    expect(yield* readTextFile(new URL(".github/workflows/install.yml", root))).toEqual(WORKFLOW);
   });
 });

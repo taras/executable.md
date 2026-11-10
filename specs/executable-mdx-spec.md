@@ -1486,16 +1486,16 @@ acorn parse, then extracting the original source text.
 
 ```typescript
 // Eval block source:
-import { parseDiff } from "@executablemd/code-review-agent";
+import { parseDiff } from "@scope/diff";
 const pr = parseDiff(rawDiff, rawFiles, meta);
 
 // transformBlock produces:
-//   userImports: ['import { parseDiff } from "@executablemd/code-review-agent";']
+//   userImports: ['import { parseDiff } from "@scope/diff";']
 //   code: 'const { rawDiff, rawFiles, meta } = env;\nconst pr = parseDiff(rawDiff, rawFiles, meta); env.pr = pr;'
 
 // compileBlock generates:
 import { sleep, spawn, ... } from "effection";       // STANDARD_IMPORTS
-import { parseDiff } from "@executablemd/code-review-agent";  // userImports
+import { parseDiff } from "@scope/diff";              // userImports
 export default function*(env) {
   const { rawDiff, rawFiles, meta } = env;
   const pr = parseDiff(rawDiff, rawFiles, meta); env.pr = pr;
@@ -3258,52 +3258,6 @@ structural syntax, a name core supplies, nor a name the host reserved: those
 collisions are refused before the root document is imported. Ordinary
 `execute()`, `xmd run` and every inspection resolve without the tier, so nothing
 outside a workflow run learns that a bundle exists.
-
-#### The run profile's review declarations
-
-Forty-one names are the code-review agent's, and an explicitly selected review
-Plugin installs all of them into the `run` profile: thirty-five declared Markdown components — twenty-eight review
-components, five policies and review-owned copies of `Sample` and `Instruction` —
-and six reserved registrations, `CommentReviewData`, `CommentReviewState`,
-`Doctor`, `OxlintDiagnostics`, `RepositoryInventory` and `ReviewContext`.
-
-Regression coverage keeps the review-owned `Sample.md` and `Instruction.md`
-copies byte-identical to core's until an explicit divergence decision in the
-code-review package.
-
-Both tiers mean the same thing here: the host claims the name. A review is the
-one program that must not be answerable by the thing it is reviewing, so a
-checkout that supplies its own `Finding.md` or `ReviewContext.ts` does not have
-it chosen, and a second claim on one of these names is refused at admission
-rather than ordered.
-
-Each Markdown component reports the package and the asset —
-`@executablemd/code-review-agent/components/<Name>.md`, or `/policies/` for a
-policy — with the SHA-256 of the bytes that build ships. The origin names no
-filesystem path, because one component sits at three different absolute paths
-across a source checkout, an installed `node_modules` tree and a compiled binary
-that has no file for it at all, and all three are the same component. The six
-registrations report the package itself.
-
-When the review Plugin is explicitly selected, its graph is installed wherever
-that selected `run` profile is assembled: ordinary non-testing execution, a
-nested `<Execution host="run">`, `xmd syntax` and `<Syntax />`, structural
-validation, and the validation `<Plan>` and `xmd plan` perform on a candidate —
-so a program is checked against the vocabulary the later run actually supplies.
-An unselected review Plugin contributes no names to execution or inspection.
-`xmd test` is a different profile at its root and claims none of these names; a
-run child claims them only when its Plugin selection includes the review Plugin.
-
-`@executablemd/code-review-agent` owns assembly;
-`packages/code-review-agent/src/review-components.ts` is the only assembly boundary. Its component and policy
-Markdown is loaded from `src/documents/components/` and `src/documents/policies/`
-relative to that module's own URL across source, published-package and compiled
-distributions. These reads use the Effection filesystem directly, bypassing
-`API.Fs` and document-facing `Files` middleware.
-
-Claiming a name is not the same as narrowing discovery. A caller's `--include`
-and a repository's own components resolve exactly as they did before, for every
-name outside these forty-one.
 
 #### Declared Markdown
 

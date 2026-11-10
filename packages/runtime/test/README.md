@@ -205,9 +205,8 @@ yield *
 ```
 
 `init.expect` is part of the request, not a check a caller applies afterwards:
-it says the caller treats a non-2xx as a failure, and
-`packages/code-review-agent/src/documents/components/GitHubAuth.md`
-is a real consumer that reads it. A substituted provider that ignores it makes
+it says the caller treats a non-2xx as a failure, and the runtime's own
+provider in `packages/runtime/apis.ts` honors it. A substituted provider that ignores it makes
 an authored `fetch(url).expect()` succeed on a 404.
 
 Count what the provider was asked to perform separately from what a document

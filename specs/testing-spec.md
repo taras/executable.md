@@ -380,9 +380,8 @@ installs the same Plugin **values** again inside that scope, with command `run`
 line. What it reinstalls is the run profile: the bundled Git Plugin, which the test
 root itself does not carry, plus whatever the invocation selected. A child of an
 invocation that named no `--plugin` therefore receives Git's thirteen names and
-nothing else, and one that selected the code-review Plugin receives the review
-graph too — which claims nothing at the test root and claims all forty-one of
-its names in the child.
+nothing else, and one that selected a Plugin also receives whatever that Plugin
+contributes for command `run`.
 
 `host="workflow"`, and the `<WorkflowRun>` scope it requires, are specified in
 issue #454 and are not built: a host that provides no workflow profile refuses
