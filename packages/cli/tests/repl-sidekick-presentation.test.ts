@@ -3135,7 +3135,7 @@ describe("Sidekick original independent readings and streaming rows", () => {
       (one) => one.kind === "response",
     );
     expect(responses).toHaveLength(1);
-    expect(responses[0]).toMatchObject({ response: "response:1", hasOutput: true });
+    expect(responses[0]).toMatchObject({ turn: 1, hasOutput: true });
     expect(chatHas(page.screen(), "TAIL-LAST")).toBe(true);
     expect(page.repl.terminal.fed).toBe(fed);
     expect(composerHolds(page.screen(), "later")).toBe(true);
@@ -3202,9 +3202,8 @@ describe("Sidekick original interrupted identities and native input routes", () 
     yield* sendComposed(page);
     yield* page.until("the later failed turn", (one) => transcriptHas(one, "failed ask · failed"));
     const read = yield* settledReading(page.repl);
-    expect(read.chat.flatMap((one) => (one.kind === "response" ? [one.response] : []))).toEqual([
-      "response:2",
-    ]);
+    const named = read.chat.flatMap((one) => (one.kind === "response" ? [one.response] : []));
+    expect(named).toHaveLength(1);
     const projected = projectSidekick(read.chat);
     if (!projected.ok) {
       throw projected.error;
@@ -3215,7 +3214,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
       [1, "completed"],
       [2, "failed"],
     ]);
-    expect(turns[0]?.key).toContain("response:2");
+    expect(turns[0]?.key).toContain(named[0]);
     expect(turns[1]?.key).toContain(":turn:");
     const chat = sidekickChatRows(projected.value, undefined);
     expect(new Set(chat.map((one) => one.key)).size).toBe(chat.length);

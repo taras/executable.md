@@ -3180,11 +3180,9 @@ export function sidekickChatRows(
           // is the one that attempted it in this chat, and otherwise the saved
           // turn's own identity. A response name is never *recovered* from a
           // turn, and never carried across chats: the
-          // owner names a response from the history's own next ordinal, which
-          // counts saved requests as well as attempted turns, and Core numbers
-          // its turns independently — so an interrupted message is all it takes
-          // for the two to differ, and inferring one from the other hands this
-          // attempt somebody else's row.
+          // owner names a response for where it begins in the history, and Core
+          // numbers its turns independently — so inferring one from the other
+          // hands this attempt somebody else's row.
           key:
             addressed !== undefined &&
             addressed.conversation === item.conversation &&

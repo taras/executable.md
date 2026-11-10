@@ -140,6 +140,15 @@ function olderOrientation(
   };
 }
 
+/** The one response a history attributes to this canonical turn, by its own name. */
+function responseFor(all: readonly SidekickRecord[], turn: number): string {
+  const named = all.flatMap((one) =>
+    one.kind === "response" && one.turn === turn ? [one.response] : [],
+  );
+  expect(named).toHaveLength(1);
+  return named[0]!;
+}
+
 describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
   it("R5: the first turn of a conversation carries the orientation it needs", function* () {
     const held = yield* useHarness();
@@ -1343,9 +1352,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     const after = yield* settledReading(repl);
     // One response record for the turn that was being previewed, and exactly
     // one: the item a person watched arrive is the item they are reading.
-    const answered = after.chat.filter(
-      (record) => record.kind === "response" && record.response === "response:1",
-    );
+    const answered = after.chat.filter((record) => record.kind === "response" && record.turn === 1);
     expect(answered).toHaveLength(1);
     expect(answered[0]).toMatchObject({ output: "Half a thought.", hasOutput: true });
     // The entry really ran, and its feedback went back as the next turn's
@@ -2671,6 +2678,11 @@ describe("Tier R5 — one capture, and each response's own records", () => {
     if (!reading.ok) {
       throw reading.error;
     }
+    // The failing response ran as turn 1, and the next message's as turn 3.
+    const retained = yield* records(held.execution);
+    const failing = responseFor(retained, 1);
+    const following = responseFor(retained, 3);
+    expect(following).not.toBe(failing);
     // Each pair under the response that ran it, in the order that response
     // admitted it — read off the retained history rather than counted from the
     // prompts, because what is under test is which response a record belongs
@@ -2686,12 +2698,12 @@ describe("Tier R5 — one capture, and each response's own records", () => {
       // Both of the failing response's own pairs, in the order it admitted
       // them: the read that happened, then the fill that failed. A failure is
       // recorded as the outcome it was rather than dropped.
-      { response: "response:1", order: 0, component: "REPL.Bindings", status: "ok" },
-      { response: "response:1", order: 1, component: "REPL.EntryInput", status: "failed" },
+      { response: failing, order: 0, component: "REPL.Bindings", status: "ok" },
+      { response: failing, order: 1, component: "REPL.EntryInput", status: "failed" },
       // And the next response's control, independently associated and ordered
       // from zero again — its own response rather than a continuation of the
       // one that failed.
-      { response: "response:3", order: 0, component: "REPL.Environment", status: "ok" },
+      { response: following, order: 0, component: "REPL.Environment", status: "ok" },
     ]);
     // One conversation throughout, so these are three responses of the same
     // chat rather than of two chats.
@@ -2700,7 +2712,7 @@ describe("Tier R5 — one capture, and each response's own records", () => {
     // is filed under the response that came after it.
     expect(
       reading.value.operations.filter(
-        (one) => one.response === "response:3" && one.component !== "REPL.Environment",
+        (one) => one.response === following && one.component !== "REPL.Environment",
       ),
     ).toEqual([]);
 
@@ -2958,15 +2970,18 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
     // conversation nowhere at all.
     const oneRecords = yield* records(one.execution);
     const otherRecords = yield* records(other.execution);
+    const oneReads = responseFor(oneRecords, 2);
+    const otherReads = responseFor(otherRecords, 2);
+    const otherAgain = responseFor(otherRecords, 4);
     expect(controlsIn(oneRecords)).toEqual([
-      ownControl(one.owner, "response:2", 0, "REPL.Entry.Output"),
-      ownControl(one.owner, "response:2", 1, "REPL.EntryInput"),
+      ownControl(one.owner, oneReads, 0, "REPL.Entry.Output"),
+      ownControl(one.owner, oneReads, 1, "REPL.EntryInput"),
     ]);
     expect(controlsIn(otherRecords)).toEqual([
-      ownControl(other.owner, "response:2", 0, "REPL.Entry.Output"),
-      ownControl(other.owner, "response:2", 1, "REPL.EntryInput"),
-      ownControl(other.owner, "response:4", 0, "REPL.Entry.Output"),
-      ownControl(other.owner, "response:4", 1, "REPL.EntryInput"),
+      ownControl(other.owner, otherReads, 0, "REPL.Entry.Output"),
+      ownControl(other.owner, otherReads, 1, "REPL.EntryInput"),
+      ownControl(other.owner, otherAgain, 0, "REPL.Entry.Output"),
+      ownControl(other.owner, otherAgain, 1, "REPL.EntryInput"),
     ]);
     expect(JSON.stringify(oneRecords)).not.toContain(active(other.owner));
     expect(JSON.stringify(otherRecords)).not.toContain(active(one.owner));
@@ -4622,9 +4637,9 @@ describe("993 mounted nested Output journeys", () => {
     );
     yield* page.until("the settled Sidekick", sidekickIdle);
     const saved = yield* settledReading(repl);
-    expect(
-      saved.chat.filter((record) => record.kind === "response" && record.response === "response:1"),
-    ).toEqual([expect.objectContaining({ output: "Review complete.", hasOutput: true })]);
+    expect(saved.chat.filter((record) => record.kind === "response" && record.turn === 1)).toEqual([
+      expect.objectContaining({ output: "Review complete.", hasOutput: true }),
+    ]);
     const known = yield* projected(saved.chat);
     const rows = sidekickChatRows(known, undefined).filter(
       (row) => row.kind === "reply" && row.turn === 1,
@@ -4680,9 +4695,7 @@ describe("993 mounted nested Output journeys", () => {
     yield* savedReplies(page.repl, 1);
     yield* page.until("the failed selected response", (reading) => reading.shows("Before."));
     const saved = yield* settledReading(page.repl);
-    expect(
-      saved.chat.filter((record) => record.kind === "response" && record.response === "response:1"),
-    ).toEqual([
+    expect(saved.chat.filter((record) => record.kind === "response" && record.turn === 1)).toEqual([
       expect.objectContaining({
         hasOutput: true,
         output: "Before.",

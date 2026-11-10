@@ -3985,6 +3985,17 @@ their happening to agree establishes nothing. A reply belongs to the turn its
 own records hold, so the chat stays in the order things were said even where a
 message has no turn beside it and the message after it does.
 
+A response has an identity of its own, which is neither of those numbers. It is
+fixed before the response is shown or anything of it is written, and it is the
+one name the response's live view, controls, root evaluation, outcome, Submit
+and feedback all use. No two responses of a history share it: not an unfinished
+response whose controls never answered, not a response an earlier build named
+by number, and not the automatic turns that follow one message without a message
+of their own. A control therefore holds a position no other response's control
+holds, and a history that records two operations at one position is still
+refused rather than read. A reopened history reads each identity back from the
+records that carry it; nothing derives one from a message ID or a turn.
+
 Which conversation a turn ran in is established by that turn's own record, so a
 conversation whose mapping nothing acknowledged separately is still established
 and a later process continues it where it was. When even that record did not

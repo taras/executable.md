@@ -1151,11 +1151,18 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
       "control",
     ]);
 
+    // The interrupted response, as its own retained intent names it.
+    const sidekick = join(root.repository, PAIRED_DIRECTORY, "chat", SIDEKICK_FILE);
+    const interrupted = (yield* readSidekickRecords(sidekick)).find(
+      (one) => one.kind === "control",
+    )?.response;
+    expect(interrupted).toBeDefined();
+
     const reopened = yield* runPhase("chat-read", root, "chat");
     // The effect that happened is retained as what it was: the fill ran and
     // answered.
     expect(reopened.operations).toEqual([
-      { response: "response:1", order: 0, component: "REPL.EntryInput", status: "ok" },
+      { response: interrupted, order: 0, component: "REPL.EntryInput", status: "ok" },
     ]);
     // The question that was waiting is reported as waiting and is never
     // re-asked: asking again is asking a second question.
@@ -1189,8 +1196,15 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
     expect(continued.output).toContain("Carrying on.");
     expect(continued.unfinished).toEqual([["Elicit", "unfinished"]]);
     expect(continued.operations).toEqual([
-      { response: "response:1", order: 0, component: "REPL.EntryInput", status: "ok" },
+      { response: interrupted, order: 0, component: "REPL.EntryInput", status: "ok" },
     ]);
+    // The fresh response is a name of its own, attributed to the new turn.
+    const fresh = (yield* readSidekickRecords(sidekick)).flatMap((one) =>
+      one.kind === "response" ? [{ response: one.response, turn: one.turn }] : [],
+    );
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]?.turn).toBe(2);
+    expect(fresh[0]?.response).not.toBe(interrupted);
 
     // What that turn was actually sent, read off its canonical record. The reply
     // is told what the interrupted response did and what it left waiting — in
@@ -1209,7 +1223,7 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
     expect(carried).toContain("The shared entry draft is empty.");
     expect(carried.endsWith("The person says:\n\nnever mind that")).toBe(true);
     // Nothing internal crosses with it.
-    expect(carried).not.toContain("response:1");
+    expect(carried).not.toContain(String(interrupted));
     expect(carried).not.toContain("control-outcome");
 
     yield* root.discard();
@@ -1383,6 +1397,342 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
     expect(String(observed)).toContain("the message settled before the laterTurn boundary");
 
     yield* root.discard();
+  });
+});
+
+/**
+ * 1234 — a response is named for itself, not for a message or a turn.
+ *
+ * A saved message's ordinal and the canonical turn its request became are
+ * different numbers once a turn is interrupted before Core retained it: the
+ * message keeps its ordinal and Core never counted the turn. Automatic feedback
+ * adds turns without adding messages. A response named after either number can
+ * therefore share its control slots with another response, and the reader
+ * refuses the history that results. These rows run that interruption across
+ * real process boundaries and read the identities the retained records carry.
+ */
+describe("1234: a response's identity belongs to no message or turn number", () => {
+  const READS = "<REPL.Bindings />\n";
+  const DONE = "<Output>Done.</Output>\n";
+
+  function* recordsAt(root: RepositoryRoot): Operation<SidekickRecord[]> {
+    return yield* readSidekickRecords(
+      join(root.repository, PAIRED_DIRECTORY, "chat", SIDEKICK_FILE),
+    );
+  }
+
+  /** Every canonical turn, read through Core's own Prompt reader. */
+  function canonicalTurns(
+    records: readonly SidekickRecord[],
+  ): { name: string; input: unknown; native: string | undefined }[] {
+    const turns: { name: string; input: unknown; native: string | undefined }[] = [];
+    for (const record of records) {
+      if (record.kind !== "event") {
+        continue;
+      }
+      for (const event of parseEntryRecords(record.event)) {
+        if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
+          continue;
+        }
+        if (event.result.status !== "ok") {
+          continue;
+        }
+        turns.push({
+          name: event.description.name,
+          input: (event.description as { input?: unknown }).input,
+          native: parsePromptRecord(event.result.value)?.agentSessionId,
+        });
+      }
+    }
+    return turns;
+  }
+
+  /** The durable name each generated root evaluation was admitted under. */
+  function admissions(records: readonly SidekickRecord[]): string[] {
+    const names: string[] = [];
+    for (const record of records) {
+      if (record.kind !== "event") {
+        continue;
+      }
+      for (const event of parseEntryRecords(record.event)) {
+        if (event.type === "yield" && event.description.type === "generated_xmd") {
+          names.push(event.description.name);
+        }
+      }
+    }
+    return names;
+  }
+
+  function slots(records: readonly SidekickRecord[], kind: "control" | "control-outcome") {
+    return records.flatMap((one) =>
+      one.kind === kind ? [{ response: one.response, order: one.order }] : [],
+    );
+  }
+
+  it("1234: an interrupted message and automatic feedback leave each response its own slots", function* () {
+    const root = yield* createRepositoryRoot();
+    yield* ensure(() => root.discard());
+    const NATIVE = "native-1234";
+    yield* runPhase("chat-open", root, "chat");
+
+    // The first message is saved as message 1, and the process ends on its
+    // canonical Prompt: Core never retains a turn for it.
+    const stopped = yield* runPhase(
+      "chat-say",
+      root,
+      "chat",
+      JSON.stringify({
+        replies: ["<Output>Interrupted.</Output>\n"],
+        identity: NATIVE,
+        stop: "turn",
+        say: "interrupted request",
+      }),
+    );
+    expect(stopped.stopped).toBe("turn");
+
+    // A distinct instruction in a new process. It is saved as message 2 and
+    // becomes canonical turn 1; each of its three reads earns an automatic
+    // feedback turn, and the last reply asks for nothing.
+    const continued = yield* runPhase(
+      "chat-say",
+      root,
+      "chat",
+      JSON.stringify({
+        replies: [READS, READS, READS, DONE],
+        identity: NATIVE,
+        say: "new instruction",
+      }),
+    );
+    expect(continued.refused).toBeUndefined();
+    expect(continued.readable).toBe(true);
+    expect(continued.sent).toBe(true);
+    expect(continued.output).toContain("Done.");
+
+    const records = yield* recordsAt(root);
+    const turns = canonicalTurns(records);
+    expect(turns.map((one) => one.name)).toEqual(["turn:1", "turn:2", "turn:3", "turn:4"]);
+    // One native conversation throughout.
+    expect(turns.map((one) => one.native)).toEqual([NATIVE, NATIVE, NATIVE, NATIVE]);
+
+    // Four responses, each attributed to the canonical turn it ran in, and no
+    // two sharing a name.
+    const responses = records.flatMap((one) =>
+      one.kind === "response" ? [{ response: one.response, turn: one.turn }] : [],
+    );
+    expect(responses.map((one) => one.turn)).toEqual([1, 2, 3, 4]);
+    const names = responses.map((one) => one.response);
+    expect(new Set(names).size).toBe(4);
+
+    // The three reads, each at order 0 of the response that performed it, each
+    // answered once — three slots rather than two.
+    const reads = names.slice(0, 3).map((response) => ({ response, order: 0 }));
+    expect(slots(records, "control")).toEqual(reads);
+    expect(slots(records, "control-outcome")).toEqual(reads);
+    expect(records.flatMap((one) => (one.kind === "control" ? [one.component] : []))).toEqual([
+      "REPL.Bindings",
+      "REPL.Bindings",
+      "REPL.Bindings",
+    ]);
+
+    // Each evaluation was admitted under its own response's name.
+    expect(admissions(records)).toEqual(names.map((response) => `generated:${response}`));
+
+    // The saved messages keep their own facts: message 1 became no turn, and
+    // message 2 became canonical turn 1.
+    const people = (continued.chat as { kind: string }[]).filter((one) => one.kind === "person");
+    expect(people).toEqual([
+      { kind: "person", message: 1, turn: null, text: "interrupted request" },
+      { kind: "person", message: 2, turn: 1, text: "new instruction" },
+    ]);
+
+    // Each read's results were delivered into the next canonical turn, with
+    // exactly the text that turn was sent, against the response that read.
+    const claims = records.flatMap((one) =>
+      one.kind === "feedback" && one.turn !== null
+        ? [{ response: one.response, turn: one.turn, text: one.text }]
+        : [],
+    );
+    expect(claims).toEqual(
+      names.slice(0, 3).map((response, index) => ({
+        response,
+        turn: index + 2,
+        text: turns[index + 1]?.input,
+      })),
+    );
+    // The reading keeps the latest established delivery per conversation, and
+    // establishes every claim above: none is left unresolved.
+    expect(continued.delivered).toEqual([{ conversation: continued.active, turn: 4 }]);
+    expect(continued.unestablished).toEqual([]);
+
+    // Everything above happened in one conversation.
+    const conversations = new Set(
+      records.flatMap((one) =>
+        one.kind === "response" ||
+        one.kind === "control" ||
+        one.kind === "control-outcome" ||
+        one.kind === "feedback" ||
+        one.kind === "message"
+          ? [one.conversation]
+          : [],
+      ),
+    );
+    expect([...conversations]).toEqual([continued.active]);
+
+    // Reopened cold, the same relationships read back, nothing is asked of the
+    // provider and no byte changes.
+    const before = yield* runPhase("bytes", root, "chat");
+    const reopened = yield* runPhase("chat-read", root, "chat");
+    const after = yield* runPhase("bytes", root, "chat");
+    expect(after.sidekick).toBe(before.sidekick);
+    expect(after.entries).toBe(before.entries);
+    expect(reopened.readable).toBe(true);
+    expect(reopened.sessions).toBe(0);
+    expect(reopened.prompts).toBe(0);
+    expect(reopened.appended).toBe(0);
+    expect(reopened.chat).toEqual(continued.chat);
+    expect(reopened.operations).toEqual(
+      names.slice(0, 3).map((response) => ({
+        response,
+        order: 0,
+        component: "REPL.Bindings",
+        status: "ok",
+      })),
+    );
+    expect(reopened.delivered).toEqual(continued.delivered);
+    expect(reopened.unestablished).toEqual([]);
+    expect(reopened.unfinished).toEqual([]);
+  });
+
+  it("1234: a response after an old writer's orphan takes neither its name nor its slots", function* () {
+    const root = yield* createRepositoryRoot();
+    yield* ensure(() => root.discard());
+    const NATIVE = "native-1234-legacy";
+    const fixture = new URL("./fixtures/repl/issue-1234/legacy-orphan/", import.meta.url);
+    const directory = join(root.repository, PAIRED_DIRECTORY, "chat");
+    yield* until(mkdir(directory, { recursive: true }));
+    const prefix = yield* until(readFile(new URL("sidekick.jsonl", fixture), "utf8"));
+    yield* until(writeFile(join(directory, SIDEKICK_FILE), prefix));
+    yield* until(writeFile(join(directory, ENTRIES_FILE), ""));
+
+    // The fixture's own shape: canonical turn 1 ran as `response:2`, with a
+    // settled fill at order 0 and a question at order 1 nobody answered.
+    const seeded = yield* recordsAt(root);
+    expect(canonicalTurns(seeded).map((one) => one.name)).toEqual(["turn:1"]);
+    expect(slots(seeded, "control")).toEqual([
+      { response: "response:2", order: 0 },
+      { response: "response:2", order: 1 },
+    ]);
+    expect(seeded.some((one) => one.kind === "response")).toBe(false);
+
+    const said = yield* runPhase(
+      "chat-say",
+      root,
+      "chat",
+      JSON.stringify({
+        replies: [READS, DONE],
+        identity: NATIVE,
+        existing: true,
+        say: "new instruction",
+      }),
+    );
+    expect(said.refused).toBeUndefined();
+    expect(said.readable).toBe(true);
+    expect(said.sent).toBe(true);
+    expect(said.output).toContain("Done.");
+
+    // The old history is still there, byte for byte, ahead of what was added.
+    const now = yield* until(readFile(join(directory, SIDEKICK_FILE), "utf8"));
+    expect(now.startsWith(prefix)).toBe(true);
+
+    const records = yield* recordsAt(root);
+    const turns = canonicalTurns(records);
+    expect(turns.map((one) => one.name)).toEqual(["turn:1", "turn:2", "turn:3"]);
+    expect(turns.map((one) => one.native)).toEqual([NATIVE, NATIVE, NATIVE]);
+
+    // Canonical turn 2 is a new response, and neither it nor the feedback turn
+    // after it is called what the orphan is called.
+    const responses = records.flatMap((one) =>
+      one.kind === "response" ? [{ response: one.response, turn: one.turn }] : [],
+    );
+    expect(responses.map((one) => one.turn)).toEqual([2, 3]);
+    const [reader, last] = responses.map((one) => one.response);
+    expect(reader).not.toBe("response:2");
+    expect(last).not.toBe("response:2");
+    expect(reader).not.toBe(last);
+
+    // The new read has its own order-0 slot; the orphan's settled fill keeps its
+    // outcome and its question is still unanswered.
+    expect(slots(records, "control")).toEqual([
+      { response: "response:2", order: 0 },
+      { response: "response:2", order: 1 },
+      { response: reader, order: 0 },
+    ]);
+    expect(said.operations).toEqual([
+      { response: "response:2", order: 0, component: "REPL.EntryInput", status: "ok" },
+      { response: reader, order: 0, component: "REPL.Bindings", status: "ok" },
+    ]);
+    expect(said.unfinished).toEqual([["Elicit", "unfinished"]]);
+    expect(admissions(records)).toEqual([
+      "generated:response:2",
+      `generated:${reader}`,
+      `generated:${last}`,
+    ]);
+
+    // Turn 2 carried the orphan's account once — the fill that happened and
+    // the question left waiting — and restored no old draft.
+    const carried = String(turns[1]?.input ?? "");
+    expect(carried.split("## REPL.EntryInput")).toHaveLength(2);
+    expect(carried.split("## Elicit")).toHaveLength(2);
+    expect(carried).toContain("Which one?");
+    expect(carried).toContain("Do not ask it again");
+    expect(carried).toContain("The shared entry draft is empty.");
+    expect(said.draft).toBe("");
+    expect(
+      records.filter((one) => one.kind === "control" && one.component === "REPL.EntryInput"),
+    ).toHaveLength(1);
+    expect(
+      records.filter((one) => one.kind === "control" && one.component === "Elicit"),
+    ).toHaveLength(1);
+
+    // The orphan's account went with turn 2, and the read's results with turn
+    // 3 against the response that read — not against the orphan.
+    const claims = records.flatMap((one) =>
+      one.kind === "feedback" && one.turn !== null
+        ? [{ response: one.response, turn: one.turn, text: one.text }]
+        : [],
+    );
+    expect(claims).toEqual([
+      { response: "response:2", turn: 2, text: turns[1]?.input },
+      { response: reader, turn: 3, text: turns[2]?.input },
+    ]);
+
+    const before = yield* runPhase("bytes", root, "chat");
+    const reopened = yield* runPhase("chat-read", root, "chat");
+    const after = yield* runPhase("bytes", root, "chat");
+    expect(after.sidekick).toBe(before.sidekick);
+    expect(after.entries).toBe(before.entries);
+    expect(reopened.readable).toBe(true);
+    expect(reopened.sessions).toBe(0);
+    expect(reopened.prompts).toBe(0);
+    expect(reopened.appended).toBe(0);
+    expect(reopened.operations).toEqual(said.operations);
+    expect(reopened.unfinished).toEqual([["Elicit", "unfinished"]]);
+  });
+
+  it("1234: two operations at one position are still refused, whatever the response is called", function* () {
+    for (const response of ["response:2", "response:journal:9"]) {
+      const control: SidekickRecord = {
+        kind: "control",
+        conversation: CHAT,
+        response,
+        order: 0,
+        component: "REPL.Bindings",
+        arguments: {},
+      };
+      expect(refusalOf([...opened(), control, control])).toBe(
+        "this chat history records two operations at one position (record 6).",
+      );
+    }
   });
 });
 
