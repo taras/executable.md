@@ -1899,9 +1899,11 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   native assertion, when the adapter reports one, must equal the one the
   history's Prompt records assert, or — before the host acknowledged one — the
   one the provider's promoted record asserts. A pending record supplies
-  neither. A load that fails or answers another conversation refuses with
-  `identity-unavailable` before any turn, sends no `session/new` and no prompt,
-  and leaves the old record, the history and the route as they were. ACPX
+  neither. A load that fails raises the adapter's own failure, as an ordinary
+  reattachment's does; a load that answers another native conversation refuses
+  with `identity-unavailable`. Either happens before any turn, sends no
+  `session/new` and no prompt, and leaves the old record, the history and the
+  route as they were. ACPX
   saves the arrangement a load answers with before returning it, so after
   giving up a handle whose assertion it refused the provider saves back the
   record it read before the load: the refused assertion never stands as the

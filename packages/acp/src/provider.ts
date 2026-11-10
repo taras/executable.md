@@ -1974,7 +1974,10 @@ function* useAcpxProviderState(
         },
       );
     } catch (error) {
-      if (resumeSessionId === undefined) {
+      // A held reopening loads this provider's own record, so its failure is
+      // reported as an ordinary reattachment's is: the adapter's account,
+      // with nothing created in its place.
+      if (attachment === undefined) {
         throw sessionResumeFailure(error, prepared.details.sessionKey);
       }
       // An exact resume that the provider could not perform: it has no such
@@ -2015,7 +2018,7 @@ function* useAcpxProviderState(
       throw new AttachmentRefused({
         class: "identity-unavailable",
         message:
-          `session "${prepared.details.sessionKey}" reopened a different conversation from the ` +
+          `session "${prepared.details.sessionKey}" reopened a different native conversation from the ` +
           `one its history names, so a turn taken here would not belong to it`,
       });
     }

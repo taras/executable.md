@@ -780,7 +780,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
 
     // The reopening is an exact resume held to the conversation the history
     // names, so the provider refuses it before any turn could run there.
-    expect(answer(diverged)).toContain("reopened a different conversation");
+    expect(answer(diverged)).toContain("reopened a different native conversation");
     expect(asked(target)).toEqual(["first"]);
     const retained = turns(yield* stream.readAll());
     expect(retained).toHaveLength(1);
@@ -1580,8 +1580,9 @@ describe(
           throw reopened.error;
         }
         expect(reopened.value.refused.ok).toBe(false);
+        // The adapter's own account of the failed load crosses unchanged.
         expect(!reopened.value.refused.ok && reopened.value.refused.error.message).toContain(
-          "could not open",
+          "missing controlled history",
         );
         expect(reopened.value.later).toEqual(Ok("remembered"));
         expect(
@@ -1689,7 +1690,7 @@ describe(
         }
         expect(refused.value.ok).toBe(false);
         expect(!refused.value.ok && refused.value.error.message).toContain(
-          "reopened a different conversation",
+          "reopened a different native conversation",
         );
         const attempt = (yield* f.calls()).slice(called.length).map((call) => call.method);
         expect(attempt).toContain("session/load");
