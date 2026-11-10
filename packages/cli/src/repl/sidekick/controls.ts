@@ -98,8 +98,8 @@ const SYNTAX_NAMES_PROPS = {
       minItems: 1,
       uniqueItems: true,
       description:
-        "Optional. Render these components' metadata and long-form documentation " +
-        "instead of the list of available symbols.",
+        "Optional. Render complete references for these structural or component names " +
+        "instead of the compact entry index.",
     },
   },
   additionalProperties: false,
@@ -131,7 +131,7 @@ export interface SidekickRequests {
   importAsset(source: string, destination: string): Operation<Result<string>>;
   /** The acknowledged published root values, detached. */
   bindings(): Operation<Result<Json>>;
-  /** The active entry vocabulary, or the lookup of particular names. */
+  /** The compact entry index, or complete references for selected symbol names. */
   entrySyntax(names?: readonly string[]): Operation<Result<string>>;
   /** One guide chapter, as the literal Markdown it is. */
   guide(chapter: GuideChapter): Operation<Result<string>>;
@@ -516,6 +516,8 @@ export function sidekickObservations(
       // reply that has learned one spelling has learned both. A
       // comma-separated string would have been a third spelling nothing else
       // in the language uses.
+      description:
+        'Discover entry syntax with `<REPL.Syntax />`, then read complete structural or component references with `<REPL.Syntax names={["If", "File"]} />`.',
       props: SYNTAX_NAMES_PROPS,
       *fn(props: { names?: readonly string[] }): Operation<string> {
         const names = props.names;

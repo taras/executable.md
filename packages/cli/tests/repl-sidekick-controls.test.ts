@@ -49,6 +49,7 @@ import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import {
   Agent,
+  Syntax,
   agentIdentityComponents,
   installAgentComponents,
   useNormalizedOutput,
@@ -57,7 +58,7 @@ import {
   retainedSource,
   useTempFileCompiler,
 } from "@executablemd/core";
-import type { FunctionComponentDefinition } from "@executablemd/core";
+import type { SyntaxSymbols, FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
@@ -75,6 +76,8 @@ import { ReplHost } from "../src/repl/host.ts";
 import type { ReplHostFact } from "../src/repl/host.ts";
 import { assembleReplProfile, entryVocabulary } from "../src/repl-profile.ts";
 import { installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
+import structuralReferencePlugin from "./fixtures/plugins/structural-reference.mjs";
+import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import {
@@ -2049,6 +2052,124 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(asked.settled.map((one) => one.ok)).toEqual([true, true]);
     expect(asked.began.map((one) => one.component)).toEqual(["REPL.Entry.Output", "REPL.Bindings"]);
     expect(asked.requests).toEqual([]);
+  });
+
+  it("1178: entry discovery is a complete compact index and subsequent reads see session edits", function* () {
+    const directory = yield* useTempDirectory("xmd-index-");
+    for (const part of ["first", "second"]) {
+      yield* ensureDir(join(directory, part));
+    }
+    yield* writeTextFile(
+      join(directory, "first/Shared.md"),
+      "---\ndescription: First include wins.\n---\nFirst body.\n",
+    );
+    yield* writeTextFile(
+      join(directory, "second/Shared.md"),
+      "---\ndescription: Second include loses.\n---\nSecond body.\n",
+    );
+    yield* writeTextFile(join(directory, "first/Undescribed.md"), "No metadata body.\n");
+    yield* writeTextFile(
+      join(directory, "first/Opaque.ts"),
+      'throw new Error("must not import");\n',
+    );
+    yield* writeTextFile(
+      join(directory, "first/Explained.md"),
+      `---\ndescription: ${JSON.stringify("Read <something> & [links] | safely " + "long purpose ".repeat(40))}\n---\nComplete authored usage.\n`,
+    );
+    yield* API.Env.around({
+      *cwd() {
+        return directory;
+      },
+    });
+    yield* useHostFiles();
+    const plugins = yield* installPlugins([BUNDLED_PLUGIN, structuralReferencePlugin], {
+      command: "repl",
+      args: [],
+    });
+    const profile = yield* (yield* assembleReplProfile(
+      { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
+      plugins,
+      { includes: ["first", "second"] },
+    )).finalize();
+    let catalog: SyntaxSymbols | undefined;
+    yield* Syntax.around({
+      *symbols(_args, next) {
+        catalog = yield* next();
+        return catalog;
+      },
+    });
+    const session = yield* opened("index", new InMemoryStream());
+    const requests = sidekickRequests(
+      {
+        ...rootReads(session, profile),
+        *fill() {
+          throw new Error("read filled a draft");
+        },
+      },
+      noSubmission,
+    );
+    const index = yield* requests.entrySyntax();
+    if (!index.ok || !catalog) {
+      throw new Error("index must succeed with structured symbols");
+    }
+    const text = index.value;
+    const listed = [...text.matchAll(/^- `<([^>]+)>` — (.+)$/gm)];
+    expect(listed.map((line) => line[1])).toEqual(
+      catalog.categories.flatMap((category) => category.entries.map((entry) => entry.name)),
+    );
+    expect(listed.every((line) => line[2] && line[2].length <= 350)).toBe(true);
+    expect(text).toContain("## Built-in structural syntax");
+    expect(text).toContain("## Built-in components");
+    expect(text).toContain("## User-provided components");
+    expect(text).toContain('<REPL.Syntax names={["If", "File"]} />');
+    expect(text).toContain("- `<Shared>` — First include wins.");
+    expect(text).not.toContain("Second include loses");
+    expect(text).toContain("- `<Undescribed>` — Read the named reference");
+    expect(text).toContain("- `<Opaque>` — Repository TypeScript module");
+    expect(text).toContain("&lt;something&gt; &amp; \\[links\\] \\|");
+    expect(text).toContain("- `<BannerLine>` — One line of a banner.");
+    for (const marker of [
+      "#### Props",
+      "```json",
+      "**Returns:**",
+      "**Syntax:**",
+      "**Origin:**",
+      "- `<Testing>`",
+    ]) {
+      expect(text).not.toContain(marker);
+    }
+    const detail = yield* requests.entrySyntax(["BannerLine", "If", "File"]);
+    if (!detail.ok) {
+      throw detail.error;
+    }
+    expect(detail.value).toContain("written directly inside `<Banner>`, and nowhere else");
+    expect(detail.value).toContain("**Available in this evaluation:** yes");
+    expect(detail.value).toContain("#### Props");
+    expect(detail.value).toContain("**Returns:**");
+    const old = yield* requests.entrySyntax(["Shared"]);
+    if (!old.ok) {
+      throw old.error;
+    }
+    yield* writeTextFile(
+      join(directory, "first/Shared.md"),
+      "---\ndescription: Updated purpose.\n---\nUpdated body.\n",
+    );
+    const updated = yield* requests.entrySyntax();
+    const updatedDetail = yield* requests.entrySyntax(["Shared"]);
+    if (!updated.ok || !updatedDetail.ok) {
+      throw new Error("fresh reads must succeed");
+    }
+    expect(updated.value).toContain("Updated purpose.");
+    expect(updatedDetail.value).toContain("Updated purpose.");
+    expect(text).not.toContain("Updated");
+    expect(old.value).toContain("First include wins.");
+    let refused = false;
+    try {
+      yield* entryVocabulary(profile.includes).documentation(["Banner"]);
+    } catch (error) {
+      refused = error instanceof Error && error.message.includes("Banner");
+    }
+    expect(refused).toBe(true);
   });
 
   it("R3: the vocabulary a reply is told about is the entry's, not its own", function* () {

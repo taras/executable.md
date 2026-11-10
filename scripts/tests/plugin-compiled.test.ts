@@ -15,6 +15,7 @@
  * missing binary is reported as the setup it is rather than as a failed assertion.
  */
 
+import { runCli } from "@executablemd/test-support/launch";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
@@ -94,6 +95,30 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
       // The original argv, with the selection still in it.
       expect(run.stderr).toContain(`"--plugin=${FIXTURE}"`);
       expect(run.stdout).toContain("document body");
+    });
+  });
+
+  it("documents installed structural owners identically from source and binary outside the checkout", function* () {
+    const plugin = path.join(ROOT, "packages/cli/tests/fixtures/plugins/structural-reference.mjs");
+    yield* useElsewhere(function* (dir) {
+      for (const name of ["Banner", "BannerLine"]) {
+        const args = ["syntax", name, `--plugin=${plugin}`, "--include", dir];
+        const binary = yield* runBinary(args, dir);
+        const source = yield* runCli(args, { cwd: dir }).expect();
+        expect(binary.code).toBe(0);
+        expect(binary.stdout).toBe(source.stdout);
+        expect(binary.stdout).toContain(`### \`<${name}>\``);
+        expect(binary.stdout).toContain("**Available in this evaluation:** yes");
+        expect(binary.stdout).toContain("**Body context:**");
+        expect(binary.stdout).not.toContain("**Returns:**");
+        expect(binary.stdout + binary.stderr).not.toContain("handler invoked");
+        if (name === "BannerLine") {
+          expect(binary.stdout).toContain("written directly inside `<Banner>`, and nowhere else");
+        }
+      }
+      const missing = yield* runBinary(["syntax", "Banner", "--include", dir], dir);
+      expect(missing.code).not.toBe(0);
+      expect(missing.stdout).toBe("");
     });
   });
 

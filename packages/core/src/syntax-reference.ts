@@ -60,7 +60,7 @@ export interface SyntaxReference {
   /** The symbols this site describes, structured. */
   symbols(): Operation<SyntaxSymbols>;
   /**
-   * The selected components' metadata and long-form documentation.
+   * The selected component and structural owner references.
    *
    * Two inputs, not one, and this is the reason the reference is an object
    * rather than a value. *What may I write here* and *what may I read about*
@@ -274,17 +274,16 @@ export function select(
   // what makes one occurrence's retained result comparable with another's.
   for (const category of authoring.categories) {
     for (const entry of category.entries) {
-      // Components only. `names` is a component lookup under the current
-      // contract, so a structural construct is not a thing this can select —
-      // and skipping it here leaves the name in `requested`, which refuses
-      // below rather than silently rendering nothing for it.
-      if (!requested.has(entry.name) || entry.kind === "structural") {
+      if (!requested.has(entry.name)) {
         continue;
       }
       requested.delete(entry.name);
       selected.push({
         entry,
-        documentation: index.documentationFor(entry.name, entry.origin),
+        documentation:
+          entry.kind === "structural"
+            ? undefined
+            : index.documentationFor(entry.name, entry.origin),
         available: runnable.has(identityOf(entry)),
       });
     }

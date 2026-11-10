@@ -59,7 +59,7 @@ export interface SyntaxApi {
    * text of its own, so the two are not two views of one value by construction.
    */
   readonly text: Operation<string>;
-  /** These components' metadata and long-form documentation. */
+  /** Complete owner references for selected component or structural names. */
   documentation(names: readonly string[]): Operation<string>;
 }
 

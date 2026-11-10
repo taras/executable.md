@@ -97,7 +97,9 @@ export function renderSelectedDocumentation(selected: readonly SelectedEntry[]):
   const sections = selected.map((one) => {
     const blocks = renderEntry(one.entry);
     blocks.push(`**Available in this evaluation:** ${one.available ? "yes" : "no"}`);
-    blocks.push(one.documentation ?? NO_DOCUMENTATION);
+    if (one.entry.kind !== "structural") {
+      blocks.push(one.documentation ?? NO_DOCUMENTATION);
+    }
     return blocks.join("\n\n");
   });
   return `${sections.join("\n\n")}\n`;

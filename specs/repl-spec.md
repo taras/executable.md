@@ -3210,7 +3210,7 @@ layering those live values over retained head values.
 A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
 What a reply may write is the compact surface derived from what is admitted; what
-an entry may write is a read, using core's selection and renderer over the
+an entry may write is a read, using core's structured symbols and selection over the
 ordinary entry's current registry, finalized includes and host declarations.
 It carries the existing assertion defaults, including Assert, AssertEquals and
 AssertThrows, without entering the broader CLI run profile's testing, Verbose
@@ -3218,7 +3218,15 @@ or web bootstrap. Each ask reads current session component files; Plugin selecti
 captured once per command, and another configured command describes its own
 selection. Earlier saved discovery stays historical feedback.
 
-Bare REPL.Syntax omits testing-package components absent from the ordinary
+Bare `<REPL.Syntax />` returns a compact index: exact names in their existing
+categories, one bounded short purpose per name and a copyable named lookup.
+It projects the current structured symbols without prop tables, JSON or return
+schemas, detailed usage or origin boilerplate. `<REPL.Syntax names={["If", "File"]} />`
+returns complete selected references, including engine and installed structural
+forms, props and parent constraints. Canonical bare `<Syntax />`, CLI syntax and
+version-1 JSON keep their existing formats.
+
+The index omits testing-package components absent from the ordinary
 profile and points to Markdown tests. Named lookup can describe those components
 with availability `no`, their package documentation, a complete test example and
 the supported REPL.Test invocation. Ordinary same-named components keep their

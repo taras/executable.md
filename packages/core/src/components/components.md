@@ -37,6 +37,12 @@ use a few specific components rather than what exists — a prompt that has to
 explain `<Elicit>` does not need the other seventy entries. Entries render once
 each, in symbol order, whatever order they were asked for in.
 
+Structural names use the same lookup: `<Syntax names={["If", "All"]} />`
+returns the engine's forms and structural constraints. Installed constructs and
+regions include their owner's props, parent relationship and body context.
+These references invoke no expansion handler and grant no execution authority.
+A mixed structural/component request refuses whole if any name is unknown.
+
 `as` captures the rendered text instead of emitting it, in either form:
 
 ```mdx

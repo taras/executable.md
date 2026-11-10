@@ -563,6 +563,26 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(unknown.stdout).toBe("");
   });
 
+  it("SX16: engine and selected installed structural names match canonical component references", function* () {
+    const plugin = new URL("./fixtures/plugins/structural-reference.mjs", import.meta.url).pathname;
+    for (const name of ["If", "All", "Banner", "BannerLine"]) {
+      const options = ["--include", ".", `--plugin=${plugin}`];
+      const command = yield* runCli(["syntax", name, ...options], { cwd: "." }).expect();
+      const document = yield* runCli(
+        ["run", "-e", `<Syntax names={[${JSON.stringify(name)}]} />`, ...options],
+        { cwd: "." },
+      ).expect();
+      expect(document.stdout.trimEnd()).toBe(command.stdout.trimEnd());
+      expect(command.stdout).toContain(`### \`<${name}>\``);
+      expect(command.stdout).toContain("**Syntax:**");
+      expect(command.stdout).not.toContain("**Returns:**");
+      expect(command.stdout + command.stderr).not.toContain("handler invoked");
+    }
+    const missing = yield* runCli(["syntax", "Banner", "--include", "."], { cwd: "." }).join();
+    expect(missing.code).not.toBe(0);
+    expect(missing.stdout).toBe("");
+  });
+
   it("SX17: the command and the component read one index, for every package", function* () {
     // `Prompt` is an Agent component: a different registration boundary from
     // core's own file, and the one that exposed this. The command assembled the

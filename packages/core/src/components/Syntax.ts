@@ -77,7 +77,7 @@ export const props: PropsSchema = {
       minItems: 1,
       uniqueItems: true,
       description:
-        "Optional. Render these components' metadata and long-form documentation " +
+        "Optional. Render complete references for these structural or component names " +
         "instead of the list of available symbols. Entries render once each, in symbol order.",
     },
   },

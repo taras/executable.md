@@ -17,6 +17,7 @@
  * missing binary is reported as the setup it is rather than as a failed assertion.
  */
 
+import { runCli } from "@executablemd/test-support/launch";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, until } from "effection";
@@ -160,10 +161,35 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     if (lookup.timeout) {
       throw new Error("the compiled binary timed out documenting one component");
     }
+    const sourceLookup = yield* runCli(["syntax", "Elicit", "--include", elsewhere], {
+      cwd: elsewhere,
+    }).expect();
+    expect(lookup.value.stdout).toBe(sourceLookup.stdout);
     expect(lookup.value.code).toBe(0);
     expect(lookup.value.stdout).toContain("### `<Elicit>`");
     expect(lookup.value.stdout).toContain("Asks a person a structured question");
     expect(lookup.value.stdout).toContain("**Available in this evaluation:** yes");
+
+    for (const name of ["If", "All"]) {
+      const structural = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+        return yield* exec(BINARY, {
+          arguments: ["syntax", name, "--include", elsewhere],
+          cwd: elsewhere,
+        }).join();
+      });
+      if (structural.timeout) {
+        throw new Error("structural lookup timed out");
+      }
+      const source = yield* runCli(["syntax", name, "--include", elsewhere], {
+        cwd: elsewhere,
+      }).expect();
+      expect(structural.value.stdout).toBe(source.stdout);
+      expect(structural.value.code).toBe(0);
+      expect(structural.value.stdout).toContain(`### \`<${name}>\``);
+      expect(structural.value.stdout).toContain("**Syntax:**");
+      expect(structural.value.stdout).toContain("**Body context:**");
+      expect(structural.value.stdout).not.toContain("**Returns:**");
+    }
 
     // A component from a boundary *outside* core's own documentation file, so
     // the probe exercises a second copied asset path rather than proving only

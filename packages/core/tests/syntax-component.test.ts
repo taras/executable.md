@@ -49,7 +49,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
-import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, Structural, sourceDigest } from "../host.ts";
 import type { ComponentAnswerRequest, ExecutionInstallation } from "../host.ts";
 import type { GeneratedSelection } from "../src/component-api.ts";
 import { useSelection } from "./support/generated-selection.ts";
@@ -466,10 +466,76 @@ describe("Tier SYN — the named form", () => {
       expect(undocumented).toContain("No long-form documentation is available for this component.");
     });
 
-    // A structural construct is not a component, and `names` is a component
-    // lookup: it refuses rather than rendering one.
-    const structural = yield* refusal(run('<Syntax names={["If"]} />\n'));
-    expect(structural).toContain("If");
+    const source = '<Syntax names={["File", "If", "All"]} />\n';
+    const structural = String(yield* run(source));
+    expect(
+      String(
+        yield* run('<Syntax names={["File", "If", "All"]} as="reference" />\n{reference}\n'),
+      ).trim(),
+    ).toBe(structural.trim());
+    for (const name of ["All", "If", "File"]) {
+      expect(structural.split(`### \`<${name}>\``)).toHaveLength(2);
+    }
+    expect(structural.indexOf("### `<All>`")).toBeLessThan(structural.indexOf("### `<If>`"));
+    expect(structural.indexOf("### `<If>`")).toBeLessThan(structural.indexOf("### `<File>`"));
+    expect(structural).toContain("two `<Spawn>` children directly inside it");
+    expect(structural).toContain("**Syntax:**");
+    expect(structural).toContain("**Body context:**");
+    expect(structural).toContain("#### Props");
+    expect(structural).toContain("**Returns:**");
+    const engineOnly = String(yield* run('<Syntax names={["If", "All"]} />\n'));
+    expect(engineOnly).not.toContain("**Returns:**");
+    expect(engineOnly).not.toContain("No long-form documentation");
+    const unknown = yield* refusal(run('<Syntax names={["If", "File", "NotHere"]} />\n'));
+    expect(unknown).toContain("NotHere");
+    expect(unknown).not.toContain("###");
+  });
+
+  it("SYN30: installed structural references retain props and parent constraints without expansion", function* () {
+    let expansions = 0;
+    const declarations = [
+      Structural({
+        name: "Banner",
+        origin: "test://banner",
+        forms: ["paired"],
+        props: {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          additionalProperties: false,
+        },
+        syntax: ['<Banner title="heading"><BannerLine>…</BannerLine></Banner>'],
+        description: "Frame lines under a heading.",
+        context: "Direct BannerLine regions.",
+        parent: null,
+      }),
+      Structural({
+        name: "BannerLine",
+        origin: "test://banner",
+        forms: ["paired"],
+        props: { type: "object", properties: {}, additionalProperties: false },
+        syntax: ["<BannerLine>…</BannerLine>"],
+        description: "One line of a banner.",
+        context: "The line's content.",
+        parent: "Banner",
+      }),
+    ];
+    const installation: ExecutionInstallation = {
+      declarations,
+      *expand() {
+        expansions += 1;
+      },
+    };
+    const text = String(yield* run('<Syntax names={["BannerLine", "Banner"]} />', [installation]));
+    expect(text).toContain('"required": [\n    "title"');
+    expect(text).toContain("written directly inside `<Banner>`, and nowhere else");
+    expect(text).toContain("**Forms:** `<BannerLine>…</BannerLine>`");
+    expect(text).toContain("**Body context:** The line's content.");
+    expect(text).not.toContain("**Returns:**");
+    expect(text).not.toContain("**`as`:**");
+    expect(text).not.toContain("No long-form documentation");
+    expect(text.indexOf("### `<Banner>`")).toBeLessThan(text.indexOf("### `<BannerLine>`"));
+    expect(expansions).toBe(0);
   });
 
   it("SYN40: documentation survives planted filesystem middleware", function* () {
@@ -2057,7 +2123,7 @@ describe("Tier SYN — reference never permits", () => {
           minItems: 1,
           uniqueItems: true,
           description:
-            "Optional. Render these components' metadata and long-form documentation " +
+            "Optional. Render complete references for these structural or component names " +
             "instead of the list of available symbols. Entries render once each, in symbol order.",
         },
       },

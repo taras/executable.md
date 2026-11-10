@@ -17,7 +17,7 @@ import type { ReplTesting } from "./repl/sidekick/testing.ts";
 
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { agentIdentityComponents } from "@executablemd/core";
-import type { PermissionMode } from "@executablemd/core";
+import type { PermissionMode, SyntaxSymbols } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { scoped, useScope } from "effection";
@@ -39,7 +39,7 @@ import { runReplProgram } from "./repl/program.ts";
 import type { HeadlessReplRoot, ReplInputPass } from "./repl/program.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
-import { inspectSyntax, renderSyntaxMarkdown } from "@executablemd/core";
+import { inspectSyntax } from "@executablemd/core";
 import { Component, Syntax } from "@executablemd/core/api";
 import { useSyntax } from "@executablemd/core/host";
 import {
@@ -97,7 +97,7 @@ export interface ReplProfileFacts extends ReplProfileSeams {
  * What an entry may write here, described and never run.
  *
  * The same two questions canonical `<Syntax />` answers, over this command's own
- * profile: what the vocabulary holds, and what a named component's contract is.
+ * profile: what the vocabulary holds, and what a named symbol's contract is.
  * It exists because an entry's vocabulary is not a reply's — `<Each>` is
  * ordinary in an entry and unavailable in a response — so a reply about to
  * write one has to be able to ask about the other, and ask the same machinery
@@ -402,7 +402,7 @@ export function entryVocabulary(
         const inputs = yield* ordinary();
         yield* useSyntax(() => inspectSyntax(inputs));
         return (
-          renderSyntaxMarkdown(yield* Syntax.operations.symbols) +
+          renderEntryIndex(yield* Syntax.operations.symbols) +
           "\nAssertions are available in ordinary entries. Markdown test helpers are documented by name with REPL.Syntax and run through REPL.Test.\n" +
           ENTRY_AVAILABILITY
         );
@@ -455,6 +455,36 @@ export function entryVocabulary(
       });
     },
   });
+}
+
+function renderEntryIndex(symbols: SyntaxSymbols): string {
+  const headings = {
+    structural: "Built-in structural syntax",
+    "built-in": "Built-in components",
+    "user-provided": "User-provided components",
+  };
+  const sections = symbols.categories.map((category) => {
+    const lines = category.entries.map((entry) => {
+      const description =
+        entry.kind === "component" && entry.inspectability === "origin-only"
+          ? "Repository TypeScript module; contract unavailable without importing it."
+          : entry.description?.trim() || "Read the named reference for this component's purpose.";
+      const singleLine =
+        description.replace(/\s+/g, " ").split(/(?<=[.!?])\s/, 1)[0] ?? description;
+      const purpose = singleLine.length > 160 ? `${singleLine.slice(0, 159)}…` : singleLine;
+      const escaped = purpose
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/[\\`*_[\]{}()#!|~]/g, "\\$&");
+      return `- \`<${entry.name}>\` — ${escaped}`;
+    });
+    return [`## ${headings[category.kind]}`, "", ...lines].join("\n");
+  });
+  return (
+    `${sections.join("\n\n")}\n\nRead complete references by name:\n\n` +
+    '```mdx\n<REPL.Syntax names={["If", "File"]} />\n```\n'
+  );
 }
 
 const ENTRY_AVAILABILITY =
