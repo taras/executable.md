@@ -33,7 +33,7 @@ import { type Operation, scoped } from "effection";
 import { NamedBasis, Syntax } from "./syntax-api.ts";
 
 import { inspectSyntax } from "./inspect.ts";
-import type { SyntaxSymbols } from "./inspect.ts";
+import type { EngineSyntaxEntry, SyntaxSymbols } from "./inspect.ts";
 import { renderSelectedDocumentation } from "./syntax-markdown.ts";
 import type { SelectedEntry } from "./syntax-markdown.ts";
 import { documentationIndexFor } from "./component-documentation.ts";
@@ -88,13 +88,21 @@ export interface SyntaxReference {
    * reports that vocabulary from `symbols()` and keeps *this* reference's
    * authoring symbols and documentation index for `documentation()`.
    *
+   * Generated boundaries may supply engine entries for named availability at
+   * valid placements. The reference snapshots them; bare component symbols stay
+   * unchanged. Omission keeps effective identity comparison, while an empty
+   * list explicitly supplies no generated engine language.
+   *
    * Deriving it any other way would mean the evaluator recovering the raw
    * contributions and rebuilding an index — which is both a hole (that list is
    * execution-private for a reason) and a way for the two indexes to drift.
    * Narrowing what may run is not narrowing what may be read about, and the
    * reference is the thing that already knows both.
    */
-  available(symbols: SyntaxSymbols): SyntaxReference;
+  available(
+    symbols: SyntaxSymbols,
+    namedStructural?: readonly EngineSyntaxEntry[],
+  ): SyntaxReference;
 }
 
 /** The selection inputs an execution captured, as symbol construction reads them. */
@@ -163,15 +171,35 @@ function referencing(
    */
   admitted: SyntaxSymbols | undefined,
   contributions: readonly DocumentationContribution[],
+  namedStructural?: readonly EngineSyntaxEntry[],
 ): SyntaxReference {
+  const structural = namedStructural?.map((entry) =>
+    Object.freeze({
+      ...entry,
+      origin: Object.freeze({ ...entry.origin }),
+      syntax: Object.freeze([...entry.syntax]),
+    }),
+  );
+  if (structural !== undefined) {
+    Object.freeze(structural);
+  }
   return {
     *symbols(): Operation<SyntaxSymbols> {
-      // A narrowed reference reports its admission and asks the enclosing
-      // symbols for nothing — the bare form is about what runs. Otherwise this
-      // is the default answer, and the basis below is consulted first so that
-      // the one occurrence already resolving a basis gets that same value back
-      // instead of resolving a moving root a second time.
-      return admitted ?? (yield* NamedBasis.get()) ?? (yield* authoring());
+      // A named lookup adds its generated language to the admitted component
+      // presentation. Bare reads keep that presentation unchanged. At a root,
+      // reuse the lookup's basis instead of inspecting a moving source twice.
+      const basis = yield* NamedBasis.get();
+      if (admitted !== undefined && structural !== undefined && basis !== undefined) {
+        return {
+          ...admitted,
+          categories: [
+            { kind: "structural", entries: structural },
+            admitted.categories[1],
+            admitted.categories[2],
+          ],
+        };
+      }
+      return admitted ?? basis ?? (yield* authoring());
     },
     documentation(names: readonly string[]): Operation<string> {
       return scoped(function* () {
@@ -200,12 +228,15 @@ function referencing(
         return renderSelectedDocumentation(selected);
       });
     },
-    available(next: SyntaxSymbols): SyntaxReference {
+    available(
+      next: SyntaxSymbols,
+      namedStructural?: readonly EngineSyntaxEntry[],
+    ): SyntaxReference {
       // The enclosing authoring symbols and the enclosing contributions,
       // unchanged. Only what may execute is replaced, so a nested author keeps
       // the documentation they had and every entry reports its availability
       // against the admission.
-      return referencing(authoring, next, contributions);
+      return referencing(authoring, next, contributions, namedStructural);
     },
   };
 }

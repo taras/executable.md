@@ -43,6 +43,8 @@ import { captureEvaluationProfile, evaluationLifetime } from "../src/evaluation-
 import type { ResolvedAnswer, ResolvedAnswers } from "../src/evaluation-profile.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "../src/components/registry.ts";
 import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
+import baseline1178 from "./fixtures/syntax-generated-base.json" with { type: "json" };
+import { expectAvailability, syntaxInstallation } from "./support/syntax-availability.ts";
 import { admittedSymbols } from "../src/syntax-admitted.ts";
 
 function independentWrapper(answer: FunctionComponentDefinition): FunctionComponentDefinition {
@@ -255,7 +257,7 @@ describe("protected generated component answers", () => {
         },
       ]);
       const output = yield* run(
-        '<Evaluate as="answer">\n<Syntax as="vocabulary" />\n<Producer text={vocabulary} />\n</Evaluate>\n<Json value={answer} />',
+        '<Evaluate as="answer">\n<Syntax as="before" />\n<Syntax names={["If", "Syntax"]} as="vocabulary" />\n<Syntax as="after" />\n<Producer text={vocabulary} />\n</Evaluate>\n<Json value={answer} />',
         [syntaxProfile()],
         stream,
       );
@@ -263,13 +265,19 @@ describe("protected generated component answers", () => {
     });
     expect(told).toHaveLength(1);
     expect(told[0]).toContain("### `<Syntax>`");
+    expectAvailability(told[0], "If", true);
+    expectAvailability(told[0], "Syntax", true);
     expect(told[0]).not.toContain("### `<File>`");
     expect(told[0]).not.toContain("### `<Producer>`");
     const reads = (yield* stream.readAll()).filter(
       (event) => event.type === "yield" && event.description.type === "syntax_symbols",
     );
-    expect(reads).toHaveLength(2);
-    expect(reads[0]).not.toEqual(reads[1]);
+    expect(reads).toHaveLength(4);
+    expect(reads[0].result).toEqual(reads[2].result);
+    expect(reads[0].result).toEqual({
+      status: "ok",
+      value: { symbols: baseline1178["fragment-base.txt"] },
+    });
     for (const text of ["<Producer />", "<Evaluate text='inert' />", "<File path='x' />"]) {
       expect(
         yield* refusal(run(`<Evaluate text={${JSON.stringify(text)}} />`, [syntaxProfile()])),
@@ -3024,5 +3032,43 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(String(replayed)).toBe(String(first));
     // And the retained history is the one it started from.
     expect(yield* replayStream.readAll()).toEqual(complete);
+  });
+});
+
+describe("1178 real fragment references", () => {
+  it("reports engine language, component admission and installed absence without changing bare output", function* () {
+    const calls: string[] = [];
+    const names = [
+      "If",
+      "Syntax",
+      "Banner",
+      "BannerLine",
+      "Content",
+      "Return",
+      "Output",
+      "Loop",
+      "Else",
+      "All",
+    ];
+    const source = `<Syntax as="before" /><Syntax names={${JSON.stringify(names)}} as="reference" /><Syntax as="after" /><Json value={{before, reference, after}} />1178-CUT<If condition={true}>1178-FRAGMENT</If>`;
+    const output = String(
+      yield* run(`<Evaluate text={${JSON.stringify(source)}} />`, [
+        syntaxProfile(),
+        syntaxInstallation(calls),
+      ]),
+    );
+    const [captured, marker] = output.split("1178-CUT");
+    const { before, reference, after } = JSON.parse(captured);
+    for (const name of ["If", "Syntax", "Loop", "Else", "All"]) {
+      expectAvailability(reference, name, true);
+    }
+    for (const name of ["Content", "Return", "Output", "Banner", "BannerLine"]) {
+      expectAvailability(reference, name, false);
+    }
+    expect(marker).toContain("1178-FRAGMENT");
+    expect(before).toBe(baseline1178["fragment-base.txt"]);
+    expect(after).toBe(baseline1178["fragment-base.txt"]);
+    expect(calls).toEqual([]);
+    expect(String(yield* run("<Syntax />", []))).toBe(baseline1178["ordinary-base.txt"]);
   });
 });

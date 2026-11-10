@@ -142,7 +142,8 @@ import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { readsBinding } from "./generated-interpolation.ts";
 import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
-import { RESERVED_STRUCTURAL } from "./structural.ts";
+import { RESERVED_STRUCTURAL, STRUCTURAL_DECLARATIONS, engineSyntaxEntry } from "./structural.ts";
+import type { EngineSyntaxEntry } from "./inspect.ts";
 // The ordinary source rules, read rather than reimplemented: a construct means
 // one thing whether a person wrote it or an Agent did.
 import { InvocationTeardownError } from "./invocation.ts";
@@ -1846,6 +1847,15 @@ const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set([
  */
 const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Return"]);
 
+/** Engine syntax supported at a valid placement in this generated language. */
+export function generatedStructuralEntries(
+  language: "fragment" | "root",
+): readonly EngineSyntaxEntry[] {
+  return STRUCTURAL_DECLARATIONS.filter(
+    ({ name }) => !NO_GENERATED_CONTEXT.has(name) && (language === "root" || name !== "Output"),
+  ).map(({ name }) => engineSyntaxEntry(name));
+}
+
 /**
  * One structural construct, held to the ordinary source rules.
  *
@@ -2535,7 +2545,10 @@ function* evaluateGenerated(
     // `admittedSymbols` already describes an evaluation's vocabulary with — the
     // same call the authored site makes, so one description mechanism answers
     // for both kinds.
-    reference = resolved.reference?.available(admittedSymbols(resolved.describing));
+    reference = resolved.reference?.available(
+      admittedSymbols(resolved.describing),
+      generatedStructuralEntries("root"),
+    );
   }
 
   const stored = yield* persistAdmission(

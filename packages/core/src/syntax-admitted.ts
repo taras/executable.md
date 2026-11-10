@@ -4,16 +4,12 @@
  * An agent asked to write a fragment is told what a fragment may contain. That
  * is not the vocabulary of the site the `<Evaluate>` element was written at:
  * the evaluator admits the trusted composition table and the names the host
- * selected for the selected classes, and nothing else — no executable code
- * block, no interpolation, and none of the structural constructs an ordinary
- * document has.
+ * selected for the selected classes. This bare presentation describes those
+ * components and keeps structural and built-in categories empty.
  *
- * So the symbols built here say exactly that. The structural and built-in
- * categories are empty, because a fragment writes neither, and the components
- * are the composition entries beside the ones the selection resolved to.
- * Anything else would describe a vocabulary the fragment does not have, and an
- * agent told it had `<Loop>` would produce a fragment the evaluator refuses
- * whole.
+ * Generated source also supports engine language such as Loop at valid
+ * placements. Named references describe that support through the boundary's
+ * generated-language specialization, separately from this component listing.
  *
  * What an author may *read about* is a separate question, and this does not
  * answer it: `SyntaxReference.available()` keeps the enclosing documentation
