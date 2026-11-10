@@ -730,6 +730,30 @@ Registering a provider only makes a factory **resolvable**; it does not install
 that provider into the `Agent` Api. Operations still report a missing provider
 until one is installed as a root provider or by AgentProvider.
 
+### Claude workflow-role profile
+
+The CLI registers `claude-workflow-role` alongside ordinary `acpx`. The
+adversarial workflow selects this provider only around Claude role calls,
+including foundation, document preparation, independent review and response-only
+correction. It uses the same carried adapter, session store and host identity
+coordination as ordinary calls. Interactive Sidekick configuration is unchanged.
+
+The profile sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in the child session
+environment and supplies `disallowedTools: ["ScheduleWakeup"]` through ACPX to
+Claude's supported SDK option. ACPX retains the deny list with the session's
+creation options, restores it on reconnect and carries it through IPC. These
+settings remove the native shell/subagent background parameter, automatic shell
+backgrounding and the wakeup tool; they do not claim to disable every possible
+background service or MCP task. The role still owns every process it starts and
+must join it before returning its result. A foreground timeout is a failed
+command, not a promise of a later notification or an accepted role result.
+
+Session creation options do not retrofit an existing conversation. Before ensure
+or prompt, a provider with an explicit deny list compares that list and every
+selected environment value with the retained session options. A missing or
+different value refuses rather than silently reconfiguring, replacing or
+resetting the session. Fresh sessions record these settings on creation.
+
 ### Seeded configuration
 
 `installAgentComponents({ defaultAgent, permissionMode })` seeds the

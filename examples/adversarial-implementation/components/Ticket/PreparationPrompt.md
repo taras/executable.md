@@ -36,4 +36,4 @@ Return exactly one JSON object satisfying:
 <Json value={props.schema} />
 </Let>
 <If condition={request.length > 256000}><Fail message="The complete preparation prompt exceeds 256000 characters; nothing was sent." /></If>
-<Output><Dir path={props.assignment.repository}><Agent name={props.owner.profile.provider}><Session name={props.owner.session} model={props.owner.profile.model} effort={props.owner.profile.effort}><Phase.Session directory={props.owner.identityDirectory} name={props.owner.session} requireExisting={true}><Prompt throwOnError={true}>{request}</Prompt></Phase.Session></Session></Agent></Dir></Output>
+<Output><Phase.Provider agent={props.owner.profile.provider}><Dir path={props.assignment.repository}><Agent name={props.owner.profile.provider}><Session name={props.owner.session} model={props.owner.profile.model} effort={props.owner.profile.effort}><Phase.Session directory={props.owner.identityDirectory} name={props.owner.session} requireExisting={true}><Prompt throwOnError={true}>{request}</Prompt></Phase.Session></Session></Agent></Dir></Phase.Provider></Output>

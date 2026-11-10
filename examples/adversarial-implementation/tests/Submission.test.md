@@ -10,6 +10,10 @@ pwd -P
 <Phase.Request role={selected.role} assignment={assignment} as="request" />
 <AssertEquals actual={request.includes('"$defs"') || request.includes("Return assessment on completed implementation")} expected={false} />
 <AssertStringIncludes actual={request} expected={artifactDirectory + "/submission-guide.md"} />
+<AssertStringIncludes actual={request} expected="Join every process you start before" />
+<AssertStringIncludes actual={request} expected="Preserve first failures" />
+<AssertStringIncludes actual={request} expected="may defer reading it until preparing a" />
+<AssertEquals actual={request.includes("Keep summary to 1200 characters.")} expected={false} />
 <Let as="expected"><Phase.SubmissionInstructions role={selected.role} assignment={assignment} /></Let>
 <Ticket.Text path={artifactDirectory + "/submission-guide.md"} as="saved" />
 <AssertEquals actual={saved.trim()} expected={expected.trim()} />

@@ -81,6 +81,7 @@ export const selectionSchema = z.strictObject({
   policy: z.record(z.string(), z.unknown()),
   inputs: z.array(z.record(z.string(), z.unknown())),
   responseSchema: z.record(z.string(), z.unknown()),
+  maxResponseCorrections: z.number().int().min(0).max(3).optional(),
   chain: z.enum(["fable-astra", "astra-final", "single"]),
   reviewers: z.array(entrySchema).min(1).max(2),
 });

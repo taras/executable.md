@@ -194,6 +194,16 @@ export function* installAgentProviderStack(
 ): Operation<void> {
   const acpx = selectedFactory ?? createAcpxProvider(acp ?? hostAcpDependencies(stack));
   yield* registerAgentProvider("acpx", acpx);
+  yield* registerAgentProvider(
+    "claude-workflow-role",
+    createAcpxProvider({
+      ...(acp ?? hostAcpDependencies(stack)),
+      newSessionOptions: {
+        env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+        disallowedTools: ["ScheduleWakeup"],
+      },
+    }),
+  );
 
   // The trusted host selects its own root provider by name. Document-level
   // selection goes through the installation protocol; this is the host saying

@@ -12,7 +12,7 @@ props:
 
 <Adversarial.Schema as="schemas" />
 <Phase.Profile role="planner" design={true} plannerProvider={props.assignment.plannerProvider} assessment={props.assignment.assessment} as="profile" />
-<Output><Agent name={profile.provider}><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Phase.Session directory={props.assignment.identityDirectory} name={props.assignment.session} requireExisting={props.assignment.sessionEstablished === true || props.correction !== null}><Prompt throwOnError={true}>
+<Output><Phase.Provider agent={profile.provider}><Agent name={profile.provider}><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Phase.Session directory={props.assignment.identityDirectory} name={props.assignment.session} requireExisting={props.assignment.sessionEstablished === true || props.correction !== null}><Prompt throwOnError={true}>
 <If condition={props.correction !== null}>
 You remain the original Planner. This is response-only correction {props.correction.ordinal} with {props.correction.remaining} remaining. Shorten only the rejected summary or handoff to its stated bound. Every other result value is frozen by the supplied schema, including the API, outcome, source revision, artifacts, assessment and command evidence.
 
@@ -48,4 +48,4 @@ Return exactly one JSON object satisfying this contract. Evidence names actual c
 <Json value={schemas.foundation} />
 </Else>
 </If>
-</Prompt></Phase.Session></Session></Agent></Output>
+</Prompt></Phase.Session></Session></Agent></Phase.Provider></Output>

@@ -20,7 +20,7 @@ attempt's retained outcome.
 <Delivery.Attempts delivery={props.delivery} revision={props.revision} as="read" />
 <If condition={read.state.candidate === null}><Fail message={"No selected review attempt can supply a receipt (" + read.state.selection + " selection). Preserve the retained attempts; this reconciliation action starts no provider prompt."} /></If>
 <Let as="attempt" value={read.state.candidate.directory} />
-<Let as="assigned" value={{work:props.delivery.work,revision:props.revision,reviewer:read.state.candidate.reviewer,acceptance:props.delivery.policy.acceptance,responseSchema:schemas.review}} />
+<Let as="assigned" value={{work:props.delivery.work,revision:props.revision,reviewer:read.state.candidate.reviewer,acceptance:props.delivery.policy.acceptance,responseSchema:schemas.review,...(props.delivery.maxResponseCorrections === undefined ? {} : {maxResponseCorrections:props.delivery.maxResponseCorrections})}} />
 <Ticket.Text path={attempt + "/assignment.json"} as="assignmentText" />
 <Parse schema={{type:"object"}} as="assignment">{assignmentText}</Parse>
 <If condition={JSON.stringify(assignment) !== JSON.stringify(assigned)}><Fail message="The original review assignment or response schema differs from the recorded delivery requirement. Preserve the original rejection; schema changes require an explicit applicable amendment decision outside this action. This reconciliation action starts no provider prompt." /></If>
@@ -36,9 +36,8 @@ attempt's retained outcome.
 </If>
 <Ticket.Text path={attempt + "/raw.txt"} as="raw" />
 <If condition={raw !== returned.turn.reply}><Fail message="The saved raw reply differs from the joined execution. Preserve both for reconciliation." /></If>
-<Phase.Extract text={raw} as="extracted" />
-<If condition={!extracted.ok}><Fail message={extracted.rejection.message} /></If>
-<Parse schema={schemas.review} as="result">{extracted.json}</Parse>
+<Delivery.Response delivery={props.delivery} revision={props.revision} reviewer={read.state.candidate.reviewer} attempt={attempt} raw={raw} dispatch={false} as="response" />
+<Let as="result" value={response.result} />
 <If condition={result.revision !== props.revision || result.acceptance.length !== props.delivery.policy.acceptance.length || props.delivery.policy.acceptance.some(clause => !result.acceptance.includes(clause.id)) || result.verdict === "pass" && result.findings.some(finding => finding.blocking)}><Fail message="The joined review must cover every recorded clause on the assigned commit and cannot pass with a blocking finding." /></If>
 <Let as="receipt" value={{...assigned,result,execution:attempt + "/execution.json"}} />
 <If condition={derived.includes("receipt.json")}>

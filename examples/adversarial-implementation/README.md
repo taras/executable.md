@@ -63,7 +63,8 @@ retains the selected providers and all three budgets through continuation.
 consumer-driven API repairs, each from zero through ten. `maxResponseCorrections`
 bounds extra response-format calls per completed assignment, from zero through
 three. Zero admits no extra response call. It applies to ordinary planning,
-implementation, selected feedback reviews and foundation replies, including
+implementation, selected feedback reviews, independent delivery reviews and
+foundation replies, including
 repairs by their original owner. It authorizes no transport retry or repetition
 of uncertain productive work. Continuing a Ticket keeps its consumed source
 correction count and recorded allocation; it does not restart a failed attempt.
@@ -304,6 +305,19 @@ Independent review summaries allow 1500 characters; detailed observations belong
 in `findings`. The request states this bound alongside the exact revision and
 clause IDs. Ordinary phase and API-foundation summaries retain their own bounds.
 
+An otherwise-valid joined review with only an oversized summary can consume the
+work item's recorded `maxResponseCorrections` allowance. Each correction stays
+in the selected reviewer conversation with the same resolved model and effort.
+It shortens only `summary`; every other result field is frozen. Zero permits no
+extra call. The workflow records the original raw reply and rejection, reserves
+each correction before dispatch, and saves its request, native outcome, reply,
+source observations and disposition separately. Exhaustion, changed substance,
+changed source or uncertain work holds explicitly; none selects a fallback
+reviewer or repeats the completed review. Reconciliation validates this saved
+chain without prompting. Historical assignments without a recorded allowance
+have zero; a new workflow does not retroactively accept their rejected replies.
+
+
 Use `--props-action reconcile` when the selected joined review has a saved
 execution but no accepted receipt. Only the selection's attempt qualifies: the
 original reviewer, or Astra after a retained transition from an eligible Fable
@@ -315,8 +329,8 @@ continues to hold. Status uses this same validation boundary to read receipts.
 
 Reconciliation is limited to independent review from a work item launched under
 the same response contract. Its assignment retains the exact response schema; a
-missing or different schema refuses rather than reinterpreting an old reply. It cannot repair or adopt an ordinary rejected role
-verdict, rewrite its raw rejection or partial work, or reset a correction budget.
+missing or different schema refuses rather than reinterpreting an old reply. It validates only corrections recorded under the original review assignment.
+It cannot adopt an ordinary rejected role verdict, rewrite its raw rejection or partial work, or reset a correction budget.
 A current schema accepting older text does not retroactively approve that work.
 Preserve the original rejection and require an explicit applicable
 schema-amendment decision, recording the old bound, amended bound, exact raw
@@ -360,6 +374,14 @@ read them, and this gate does not prevent an arbitrary chat message or a person
 from claiming readiness or merging independently.
 
 ## Prepare requests without metadata repair turns
+
+Claude workflow-role calls use the CLI's scoped `claude-workflow-role` provider.
+It disables native shell/subagent backgrounding and denies `ScheduleWakeup`;
+ordinary interactive Sidekick calls keep their defaults. A retained session that
+lacks matching creation settings refuses before another prompt. Each role joins
+its owned processes and returns its result in the same call. The upfront brief
+contains work, evidence and lifetime rules; the frozen submission guide contains
+response schema, limits and routing and may wait until a result is being prepared.
 
 These rules apply to separate phase requests and Ticket role calls. Codex authors
 prose committed to workflow documents, including guides, component instructions

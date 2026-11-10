@@ -341,6 +341,46 @@ describe(
   "released ACPX production consumers",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    it("workflow role deny lists and environment survive a cold session reopen", function* () {
+      const current = yield* world();
+      const controls = {
+        disallowedTools: ["ScheduleWakeup"],
+        env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+      };
+      for (const reopened of [false, true]) {
+        yield* scoped(function* () {
+          const runtime = createAcpRuntime({
+            cwd: current.dir,
+            sessionStore: current.store,
+            agentRegistry: current.registry,
+            permissionMode: "deny-all",
+          });
+          yield* ensure(() => until(runtime.shutdown()));
+          const handle = yield* until(
+            runtime.ensureSession({
+              sessionKey: "controlled-role",
+              agent: "scribe",
+              mode: "persistent",
+              ...(reopened ? {} : { sessionOptions: controls }),
+            }),
+          );
+          const turn = runtime.startTurn({
+            handle,
+            text: "hello",
+            mode: "prompt",
+            requestId: reopened ? "continued" : "initial",
+          });
+          for (const _event of yield* each(stream(turn.events))) {
+            yield* each.next();
+          }
+          yield* until(turn.result);
+          const record = yield* until(current.store.load("controlled-role"));
+          expect(record?.acpx?.session_options?.disallowed_tools).toEqual(controls.disallowedTools);
+          expect(record?.acpx?.session_options?.env).toEqual(controls.env);
+        });
+      }
+    });
+
     it("released child environments are snapshots, isolated and absent from retained state", function* () {
       const current = yield* world();
       const parent = process.env.CLAUDE_CODE_EXECUTABLE;

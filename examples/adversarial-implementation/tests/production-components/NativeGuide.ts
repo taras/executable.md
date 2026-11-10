@@ -18,7 +18,9 @@ export default function* NativeGuide(input: unknown) {
     *prompt(args, next) {
       calls++;
       const text = args[0];
-      path ??= text.split("Read the frozen UTF-8 file at ")[1]?.split(" before returning")[0];
+      path ??= text
+        .split("The frozen UTF-8 file at ")[1]
+        ?.split(" contains the submission schema")[0];
       if (path === undefined || (calls === 1 && text.includes('"$defs"'))) {
         throw new Error("The native request did not stage its submission guide.");
       }

@@ -1826,6 +1826,24 @@ function* useAcpxProviderState(
     prepared: Prepared,
     intent: EnsureIntent,
   ): Operation<ManagedSession> {
+    if (newSessionOptions?.disallowedTools !== undefined) {
+      const launchOptionsRecord = yield* until(store.load(prepared.sessionKey));
+      if (launchOptionsRecord !== undefined) {
+        const stored = launchOptionsRecord.acpx?.session_options;
+        const denialsMatch =
+          JSON.stringify(stored?.disallowed_tools) ===
+          JSON.stringify(newSessionOptions.disallowedTools);
+        const environmentMatches = Object.entries(newSessionOptions.env ?? {}).every(
+          ([key, value]) => stored?.env?.[key] === value,
+        );
+        if (!denialsMatch || !environmentMatches) {
+          throw new AcpxSessionPolicyError(
+            "The launchOptionsRecord session was not created with this provider's tool and environment controls. " +
+              "Preserve it; this profile does not retrofit existing conversations.",
+          );
+        }
+      }
+    }
     if (prepared.kind === "existing") {
       return prepared.entry;
     }

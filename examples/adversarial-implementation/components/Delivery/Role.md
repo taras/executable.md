@@ -35,11 +35,15 @@ Return exactly one JSON object satisfying this schema. acceptance lists every cl
 <If condition={instructions.length > 64000}><Fail message="The complete independent-review request exceeds 64000 characters. Prepare concise accepted inputs before dispatch." /></If>
 <Delivery.Continuation directory={props.delivery.directory} session={props.reviewer.session} own={props.attempt.slice(props.delivery.directory.length + 1) + "/assignment.json"} as="established" />
 <Let as="continuation" value={props.delivery.sessionEstablished === true || established} />
-<AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Dir path={props.delivery.repository}>
+<AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Phase.Provider agent={props.reviewer.provider}><Dir path={props.delivery.repository}>
 <Delivery.Inspect agent={props.reviewer.provider} choices={props.choices} as="catalog" />
 <Let as="turn" value={null} />
 <Try>
 <If condition={catalog.state === "selected"}><Delivery.Turn as="turn"><Agent name={props.reviewer.provider}><Session name={props.reviewer.session} model={catalog.model} effort={props.reviewer.effort ?? undefined}><Phase.Session directory={props.delivery.directory + "/sessions"} name={props.reviewer.session} requireExisting={continuation}><Prompt throwOnError={true}>{instructions}</Prompt></Phase.Session></Session></Agent></Delivery.Turn></If>
 <Finally><Dir path={props.attempt}><File path="outcome.json"><Json value={{schema:"delivery-review-outcome.v1",reviewer:props.reviewer,catalog,turn}} /></File></Dir></Finally>
 </Try>
-</Dir></AgentProvider>
+<If condition={turn?.state === "reply"}>
+<Dir path={props.attempt}><File path="raw.txt">{turn.reply}</File></Dir>
+<Delivery.Response delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} attempt={props.attempt} raw={turn.reply} dispatch={true} as="response" />
+</If>
+</Dir></Phase.Provider></AgentProvider>
