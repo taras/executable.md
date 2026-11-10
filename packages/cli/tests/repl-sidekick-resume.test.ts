@@ -74,7 +74,7 @@ function conversing<T>(
   });
 }
 
-describe("Sidekick retained resume through a changed adapter command", () => {
+describe("Sidekick resume through a changed adapter command", () => {
   it("keeps the Sidekick's own tools, permissions and configuration under today's adapter", function* () {
     const cwd = yield* useTemporary("xmd-sidekick-resume-");
     const fake = createFakeAcp();

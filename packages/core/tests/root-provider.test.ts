@@ -247,8 +247,8 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
   class DeliveredSetup {
     readonly #asked: Asked[];
     readonly requestedModel = undefined;
-    readonly retainedAgentSessionId: string | undefined = undefined;
-    readonly retainedSession: AgentSessionSetup["retainedSession"] = undefined;
+    readonly agentSessionId: string | undefined = undefined;
+    readonly session: AgentSessionSetup["session"] = undefined;
 
     constructor(asked: Asked[]) {
       this.#asked = asked;
@@ -394,7 +394,7 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
     expect(forwarded).toBe("claude-exact-model");
   });
 
-  it("SC5: a delivered setup carries its retained facts as a detached copy, or is refused", function* () {
+  it("SC5: a delivered setup carries its history facts as a detached copy, or is refused", function* () {
     /** What the adapter made of one handle, or why it refused it. */
     function* delivered(
       answer: () => DeliveredSetup,
@@ -424,20 +424,20 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
     const asked: Asked[] = [];
     const populated = yield* delivered(() => {
       const handle = new DeliveredSetup(asked);
-      Reflect.defineProperty(handle, "retainedAgentSessionId", { value: "native-1" });
-      Reflect.defineProperty(handle, "retainedSession", { value: located });
+      Reflect.defineProperty(handle, "agentSessionId", { value: "native-1" });
+      Reflect.defineProperty(handle, "session", { value: located });
       return handle;
     });
     const setup = populated.setup;
     if (setup === undefined) {
       throw new Error(`the populated setup was refused: ${populated.refusal?.message}`);
     }
-    expect(setup.retainedAgentSessionId).toBe("native-1");
-    expect(setup.retainedSession).toEqual(located);
-    expect(setup.retainedSession).not.toBe(located);
-    expect(Object.isFrozen(setup.retainedSession)).toBe(true);
+    expect(setup.agentSessionId).toBe("native-1");
+    expect(setup.session).toEqual(located);
+    expect(setup.session).not.toBe(located);
+    expect(Object.isFrozen(setup.session)).toBe(true);
     located.sessionKey = "edited";
-    expect(setup.retainedSession?.sessionKey).toBe("held-key");
+    expect(setup.session?.sessionKey).toBe("held-key");
     // Still bound to the handle that answered.
     expect((yield* setup.activate("acpx", "new-cmd", CONFIGURATION)).ok).toBe(true);
     expect(asked.map((one) => one.agentCommand)).toEqual(["new-cmd"]);
@@ -445,29 +445,26 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
     // Absent is two present members holding undefined, and a locator without a
     // placement keeps no placement.
     const ordinary = yield* delivered(() => new DeliveredSetup([]));
-    expect(ordinary.setup !== undefined && Reflect.has(ordinary.setup, "retainedSession")).toBe(
+    expect(ordinary.setup !== undefined && Reflect.has(ordinary.setup, "session")).toBe(true);
+    expect(ordinary.setup !== undefined && Reflect.has(ordinary.setup, "agentSessionId")).toBe(
       true,
     );
-    expect(
-      ordinary.setup !== undefined && Reflect.has(ordinary.setup, "retainedAgentSessionId"),
-    ).toBe(true);
-    expect(ordinary.setup?.retainedSession).toBe(undefined);
-    expect(ordinary.setup?.retainedAgentSessionId).toBe(undefined);
+    expect(ordinary.setup?.session).toBe(undefined);
+    expect(ordinary.setup?.agentSessionId).toBe(undefined);
     const unplaced = yield* delivered(() => {
       const handle = new DeliveredSetup([]);
-      Reflect.defineProperty(handle, "retainedSession", {
+      Reflect.defineProperty(handle, "session", {
         value: { provider: "acpx", agentCommand: "old-cmd" },
       });
       return handle;
     });
-    expect(unplaced.setup?.retainedSession).toEqual({ provider: "acpx", agentCommand: "old-cmd" });
+    expect(unplaced.setup?.session).toEqual({ provider: "acpx", agentCommand: "old-cmd" });
     expect(
-      unplaced.setup !== undefined &&
-        Reflect.has(unplaced.setup.retainedSession ?? {}, "sessionKey"),
+      unplaced.setup !== undefined && Reflect.has(unplaced.setup.session ?? {}, "sessionKey"),
     ).toBe(false);
 
     // A missing member and a malformed locator are refusals, never a default.
-    for (const member of ["retainedAgentSessionId", "retainedSession"]) {
+    for (const member of ["agentSessionId", "session"]) {
       const missing = yield* delivered(() => {
         const handle = new DeliveredSetup([]);
         Reflect.deleteProperty(handle, member);
@@ -478,14 +475,14 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
     }
     const malformed = yield* delivered(() => {
       const handle = new DeliveredSetup([]);
-      Reflect.defineProperty(handle, "retainedSession", {
+      Reflect.defineProperty(handle, "session", {
         value: { provider: "acpx", agentCommand: "old-cmd", sessionKey: 7 },
       });
       return handle;
     });
     expect(malformed.setup).toBe(undefined);
     expect(malformed.refusal).toBeInstanceOf(AgentProviderInstallError);
-    expect(malformed.refusal?.message).toContain("retained session");
+    expect(malformed.refusal?.message).toContain("session locator");
   });
 
   it("SC5: a delivered setup that authorizes nothing is refused", function* () {
@@ -510,8 +507,8 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
         coordinatorAnswering(() => {
           const handle: AgentSessionSetup = {
             requestedModel: undefined,
-            retainedAgentSessionId: undefined,
-            retainedSession: undefined,
+            agentSessionId: undefined,
+            session: undefined,
             // deno-lint-ignore require-yield
             *activate(): Operation<Result<void>> {
               return Ok(undefined);

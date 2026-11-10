@@ -109,10 +109,10 @@ interface Traffic {
   readonly activated: (ProviderSessionConfiguration | undefined)[];
   readonly applied: SessionConfiguration[];
   readonly optionProbes: (string | undefined)[];
-  /** What each session setup said its history retained, as the provider read it. */
-  readonly retained: {
+  /** What each session setup said about its history, as the provider read it. */
+  readonly facts: {
     readonly agentSessionId: string | undefined;
-    readonly session: AgentSessionSetup["retainedSession"];
+    readonly session: AgentSessionSetup["session"];
   }[];
 }
 
@@ -264,9 +264,9 @@ function stub(traffic: Traffic, options: StubOptions = {}): ExecutionInstallatio
               traffic.sessionAgents.push(agentName);
               const setup = coordinator.sessionSetup(routed);
               traffic.setups.push(setup.sessionIdentity ?? "<none>");
-              traffic.retained.push({
-                agentSessionId: setup.retainedAgentSessionId,
-                session: setup.retainedSession,
+              traffic.facts.push({
+                agentSessionId: setup.agentSessionId,
+                session: setup.session,
               });
               // Where the real provider asks: the command is resolved and the
               // construction inputs are settled, and nothing has been
@@ -1318,7 +1318,7 @@ function fresh(): Traffic {
     routed: [],
     settledSessions: [],
     promptSessions: [],
-    retained: [],
+    facts: [],
   };
 }
 
@@ -1485,7 +1485,7 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
     // than today's command.
     expect(today.prompts.map((call) => call.content)).toEqual(["second"]);
     expect(today.activated).toEqual([{ ...CONFIGURATION, systemPrompt: "a different prompt" }]);
-    expect(today.retained).toEqual([
+    expect(today.facts).toEqual([
       {
         agentSessionId: "native-one",
         session: { provider: PROVIDER, agentCommand: COMMAND, sessionKey: "stub:chat-1" },
@@ -1528,7 +1528,7 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
   it("SC2a: each setup is told the latest placement and native identity its history holds", function* () {
     const stream = new InMemoryStream();
     const live = fresh();
-    const seen: AgentSessionSetup["retainedSession"][] = [];
+    const seen: AgentSessionSetup["session"][] = [];
     const answered = yield* withConversation(
       stream,
       stub(live, {
@@ -1540,17 +1540,17 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
         }),
       }),
       function* (chat) {
-        const all = [];
+        const all: Result<string>[] = [];
         for (const turn of ["first", "second", "third", "fourth"]) {
           all.push(yield* chat.prompt(turn));
-          seen.push(live.retained.at(-1)?.session);
+          seen.push(live.facts.at(-1)?.session);
         }
         return all;
       },
     );
     expect(answered.ok).toBe(true);
     const initial = { provider: PROVIDER, agentCommand: COMMAND };
-    expect(live.retained).toEqual([
+    expect(live.facts).toEqual([
       // Before the initial configuration, there is nothing to locate.
       { agentSessionId: undefined, session: undefined },
       { agentSessionId: "native-one", session: { ...initial, sessionKey: "stub:a" } },
@@ -1568,7 +1568,7 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
     yield* withConversation(stream, stub(reopened), function* (chat) {
       return yield* chat.prompt("fifth");
     });
-    expect(reopened.retained).toEqual([
+    expect(reopened.facts).toEqual([
       { agentSessionId: "native-one", session: { ...initial, sessionKey: "stub:c" } },
     ]);
   });
@@ -1594,7 +1594,7 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
     yield* withConversation(stream, stub(next), function* (chat) {
       return yield* chat.prompt("second");
     });
-    expect(next.retained).toEqual([
+    expect(next.facts).toEqual([
       { agentSessionId: undefined, session: { provider: PROVIDER, agentCommand: COMMAND } },
     ]);
     expect(next.prompts.map((call) => call.content)).toEqual(["second"]);

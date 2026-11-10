@@ -293,7 +293,7 @@ conversation.
 
 A held conversation is owned and routed where it began. Its coordinator key
 and its construction route use the provider and resolved command of the
-history's initial configuration record with the retained placement, before a
+history's initial configuration record with the recorded placement, before a
 Prompt records one with the placement the provider resolves, and the first
 setup with no initial record uses today's coordinates. Today's command still
 drives everything that executes: runtime selection, executable observation and
@@ -595,8 +595,8 @@ interface ProviderSessionConfiguration {
 interface AgentSessionSetup {
   readonly sessionIdentity?: string;
   readonly requestedModel: string | undefined;
-  readonly retainedAgentSessionId: string | undefined;
-  readonly retainedSession: {
+  readonly agentSessionId: string | undefined;
+  readonly session: {
     readonly provider: string;
     readonly agentCommand: string;
     readonly sessionKey?: string;
@@ -666,11 +666,11 @@ lets an eager reattachment choose continuation behavior before `finish()`
 a string or `undefined`, and refuses a missing member or another value type;
 public request middleware receives no such member.
 
-Two more members say what a held conversation's history already retains about
+Two more members say what a held conversation's history already holds about
 the provider state it stands on (§A conversation a trusted host holds open).
-`retainedAgentSessionId` is the native conversation the history's own Prompt
+`agentSessionId` is the native conversation the history's own Prompt
 records assert: the identity a provider must reconcile before it sends a new
-prompt, never an ACP loading target. `retainedSession` locates that state: the
+prompt, never an ACP loading target. `session` locates that state: the
 provider and resolved command of the history's initial configuration record —
 historical coordinates, never a command to execute — and the latest nonempty
 `sessionKey` its Prompt records name. Both are `undefined` for an ordinary
@@ -992,7 +992,7 @@ A used history requires an existing provider record on its next explicit turn.
 Use means a retained turn has nonempty agent output, non-failed status, a stop
 reason, or an asserted native identity. If setup would create, it refuses
 before `session/new`, names a new conversation as the remedy, preserves
-retained turns and output, and leaves the conversation usable. A retained
+turns and output, and leaves the conversation usable. A recorded
 placement whose provider record is gone is such a case: no record found by
 today's command elsewhere stands in for it.
 Failed-before-answer history may still create. A turn naming no native identity
@@ -1009,7 +1009,7 @@ standing, and a history whose own turns name two conversations cannot be opened
 at all. The window before any turn has retained one belongs to the provider:
 ACPX's own record asserts an identity before the host's mapping is
 acknowledged, and the next attachment — found through the failed turn's
-retained placement, whichever command runs it — reconciles and commits that
+recorded placement, whichever command runs it — reconciles and commits that
 same assertion rather than creating a replacement (§ACPX provider).
 
 One job runs at a time; an overlapping call refuses rather than queuing, and a
@@ -1791,15 +1791,17 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   names the exact cwd. The resolved `sessionKey` — not the caller cwd — keys
   the session queue.
 
-  A held conversation whose setup retains a placement is not walked for: the
+  A held conversation whose setup records a placement is not walked for: the
   key derived from today's command would name a place the conversation has
-  never been. Its retained `sessionKey` selects that exact record and the
+  never been. Its recorded `sessionKey` selects that exact record and the
   directory the record was created in, existing when it is not pending; with
   no record there it is new, and nothing elsewhere is substituted, so a used
-  history refuses (§A conversation a trusted host holds open). Before a Prompt
-  records a placement, and for every ordinary Session, the walk above is
-  unchanged. A host's `sessions` policy keeps deciding placement for the
-  sessions it answers.
+  history refuses (§A conversation a trusted host holds open). A host's
+  `sessions` policy is still asked first, and its refusal still refuses before
+  ACPX is contacted; when it answers the recorded key its details stand, and
+  a different key it answers — one derived from today's command, say — does
+  not move the conversation there. Before a Prompt records a placement, and for
+  every ordinary Session, the walk and the policy decide placement unchanged.
 
   A session is **new** or **existing**. New says where a session will live and
   nothing more, and `session()` returns it having contacted no backend,
@@ -1886,18 +1888,24 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   downgrades.
 
   Reopening loads/resumes the exact stored ACP id. ACPX reuses a persistent
-  record only for the command that created it, so when a held conversation's
-  non-pending record was created by another command the provider ensures with
+  record in place only for the same command string and argv that created it,
+  and would otherwise create a fresh conversation under the same key, so a
+  held conversation's non-pending record is always ensured with
   `resumeSessionId` equal to that record's ACP loading target, through today's
   command and in the record's own directory, under the conversation's queue
-  and ownership. The loading target is not the native identity: the returned
+  and ownership: a record ACPX can reuse in place is reused, and any other is
+  loaded, whether the adapter changed or the same command changed from an argv
+  array to its string. The loading target is not the native identity: the returned
   native assertion, when the adapter reports one, must equal the one the
   history's Prompt records assert, or — before the host acknowledged one — the
   one the provider's promoted record asserts. A pending record supplies
   neither. A load that fails or answers another conversation refuses with
   `identity-unavailable` before any turn, sends no `session/new` and no prompt,
-  and leaves the old record, the history and the route as they were; the
-  conversation stays usable for a later explicit action. Once reopened, the
+  and leaves the old record, the history and the route as they were. ACPX
+  saves the arrangement a load answers with before returning it, so after
+  giving up a handle whose assertion it refused the provider saves back the
+  record it read before the load: the refused assertion never stands as the
+  record's own. The conversation stays usable for a later explicit action. Once reopened, the
   record names today's command and later turns reuse it in place. No
   load/resume capability refuses even an unused record. Failed loading never replaces a used or
   uncertain record; the released `-32603` fallback remains only for a provably

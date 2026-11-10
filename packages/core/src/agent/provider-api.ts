@@ -248,27 +248,27 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
         "requested model",
     );
   }
-  const retainedAgentSessionId = Reflect.get(value, "retainedAgentSessionId");
+  const agentSessionId = Reflect.get(value, "agentSessionId");
   if (
-    !Reflect.has(value, "retainedAgentSessionId") ||
-    (retainedAgentSessionId !== undefined && typeof retainedAgentSessionId !== "string")
+    !Reflect.has(value, "agentSessionId") ||
+    (agentSessionId !== undefined && typeof agentSessionId !== "string")
   ) {
     throw new AgentProviderInstallError(
       "the live agent provider installation answered a session setup without a valid " +
-        "retained native assertion",
+        "native assertion",
     );
   }
-  if (!Reflect.has(value, "retainedSession")) {
+  if (!Reflect.has(value, "session")) {
     throw new AgentProviderInstallError(
       "the live agent provider installation answered a session setup without saying where " +
-        "its retained session is",
+        "its session is",
     );
   }
   return {
     ...(typeof sessionIdentity === "string" ? { sessionIdentity } : {}),
     requestedModel,
-    retainedAgentSessionId,
-    retainedSession: retainedSessionOf(Reflect.get(value, "retainedSession")),
+    agentSessionId,
+    session: sessionLocatorOf(Reflect.get(value, "session")),
     // Bound to the handle that answered, like `finish`: both are closures over
     // one issuance in the copy of core that opened it, and calling either with
     // any other receiver would reach a different copy's state or none.
@@ -279,18 +279,18 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
 }
 
 /**
- * Where a delivered setup says its retained session is, as a detached copy.
+ * Where a delivered setup says its session is, as a detached copy.
  *
  * Copied member by member and frozen, so a provider reading it reads the
  * snapshot the opening copy issued and nothing that copy can still change.
  */
-function retainedSessionOf(value: unknown): AgentSessionSetup["retainedSession"] {
+function sessionLocatorOf(value: unknown): AgentSessionSetup["session"] {
   if (value === undefined) {
     return undefined;
   }
   const malformed = () =>
     new AgentProviderInstallError(
-      "the live agent provider installation answered a session setup whose retained session " +
+      "the live agent provider installation answered a session setup whose session locator " +
         "is not readable",
     );
   if (typeof value !== "object" || value === null) {

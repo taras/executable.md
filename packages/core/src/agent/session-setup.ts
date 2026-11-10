@@ -78,26 +78,26 @@ export interface AgentSessionSetup {
   /**
    * The native conversation this held history's Prompt records assert.
    *
-   * Undefined for ordinary setups and histories whose retained Prompts
-   * assert no native identity. This is the expected provider assertion,
+   * Undefined for ordinary setups and histories whose Prompts assert no
+   * native identity. This is the expected provider assertion,
    * not an ACP loading target or permission to contact the provider.
    *
    * Core supplies this snapshot for this setup only. The provider must
    * reconcile it before sending a new prompt.
    */
-  readonly retainedAgentSessionId: string | undefined;
+  readonly agentSessionId: string | undefined;
 
   /**
-   * Where this held history's provider state and ownership are retained.
+   * Where this held history's provider state is, and the coordinates it is owned under.
    *
-   * Undefined before an initial provider configuration is retained, and
-   * for ordinary setups. These historical coordinates select existing
+   * Undefined before the history records an initial provider configuration,
+   * and for ordinary setups. These historical coordinates select existing
    * state; they never select today's executable or active configuration.
    *
    * Core supplies a detached, immutable snapshot for this setup only.
    * Possessing it authorizes no provider work.
    */
-  readonly retainedSession:
+  readonly session:
     | {
         /** Provider coordinate from the initial configuration record. */
         readonly provider: string;
@@ -114,11 +114,11 @@ export interface AgentSessionSetup {
     | undefined;
 
   /**
-   * Authorize provider work; a retained conversation requires a configuration.
+   * Authorize provider work; a held conversation requires a configuration.
    *
    * Asked before the provider reattaches, creates or prompts anything, and
    * answered from what the conversation this request belongs to already holds.
-   * The first activation of a retained conversation commits what its sessions
+   * The first activation of a held conversation commits what its sessions
    * are built under; a later one states the current configuration, which must
    * be readable, and continues the same native conversation through the
    * current adapter. A difference from the initial record alone refuses
@@ -126,7 +126,7 @@ export interface AgentSessionSetup {
    *
    * `provider`, `agentCommand` and `configuration` describe what this
    * provider is about to construct under: `configuration` is required for a
-   * retained conversation, and omitted by an ordinary setup, which saves none
+   * held conversation, and omitted by an ordinary setup, which saves none
    * and keeps its existing behavior.
    *
    * One attempt belongs to one setup. A refusal, a cancellation or a closure
@@ -269,8 +269,8 @@ export function createSessionSetupOwner(): SessionSetupOwner {
           ? {}
           : { sessionIdentity: requested.sessionIdentity }),
         requestedModel: requested.configuration?.model,
-        retainedAgentSessionId: requested.retainedAgentSessionId,
-        retainedSession: requested.retainedSession,
+        agentSessionId: requested.agentSessionId,
+        session: requested.session,
         *activate(
           provider: string,
           agentCommand: string,

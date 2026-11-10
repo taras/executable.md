@@ -112,7 +112,7 @@ import type {
   ProviderSessionConfiguration,
 } from "./provider-configuration.ts";
 import { openSessionRequest } from "./session-request.ts";
-import type { RetainedSessionFacts } from "./session-request.ts";
+import type { SessionFacts } from "./session-request.ts";
 import { sessionOf } from "./session-use.ts";
 import type { ComponentInvocation, IdentityClaimant } from "../invocation-identity.ts";
 import type { Json } from "../types.ts";
@@ -301,7 +301,7 @@ interface Observed {
 }
 
 /** What a history already holds about the conversation it belongs to. */
-interface Retained {
+interface ConversationHistory {
   readonly used: boolean;
   /** The durable names of its turns, in the order the history holds them. */
   readonly turns: readonly string[];
@@ -371,15 +371,15 @@ export function useAgentConversation(
     // Read before anything opens, because what it finds decides whether this
     // conversation may be opened at all — and a refusal that had opened the
     // execution would have appended a terminal to the history it refused.
-    const retained = yield* openable(request);
-    if (!retained.ok) {
-      yield* provide(Err(retained.error));
+    const history = yield* openable(request);
+    if (!history.ok) {
+      yield* provide(Err(history.error));
       return;
     }
 
     // Spawned, so the conversation's root is owned by this resource's scope and
     // halted — never completed — when that scope ends.
-    yield* spawn(() => serve(request, retained.value, jobs, ready, live));
+    yield* spawn(() => serve(request, history.value, jobs, ready, live));
 
     const opened = yield* ready.operation;
     if (!opened.ok) {
@@ -584,7 +584,7 @@ function handle(
  */
 function* serve(
   request: AgentConversationRequest,
-  retained: Retained,
+  history: ConversationHistory,
   jobs: Queue<Job, never>,
   ready: Resolvers<Result<void>>,
   live: Live,
@@ -635,7 +635,7 @@ function* serve(
         description: "Hold one agent conversation open for the host that opened it.",
         factory: (claim) =>
           function* (_props, invocation): Operation<Json> {
-            yield* held(request, retained, jobs, announce, bridge, live, claim, invocation);
+            yield* held(request, history, jobs, announce, bridge, live, claim, invocation);
             return "";
           },
       },
@@ -684,7 +684,7 @@ function* serve(
  */
 function* held(
   request: AgentConversationRequest,
-  retained: Retained,
+  history: ConversationHistory,
   jobs: Queue<Job, never>,
   announce: (outcome: Result<void>) => void,
   bridge: Resolvers<BoundRootEvaluator>,
@@ -717,25 +717,25 @@ function* held(
   }
   // What this conversation's sessions were first built under, carried for the
   // whole opening. Only the first activation that finds nothing writes.
-  const active: Active = { known: retained.configuration };
+  const active: Active = { known: history.configuration };
   // Consumed before the turns, because that is where the first activation
   // wrote it: a run that replayed its turns without it would be offering the
   // journal a prompt where the journal holds a configuration.
-  if (retained.configuration !== undefined) {
-    yield* replayConfiguration(retained.configuration);
+  if (history.configuration !== undefined) {
+    yield* replayConfiguration(history.configuration);
   }
   // Every turn the history already holds, offered again in its own order so
   // this run is aligned with the journal it is continuing. A retained turn
   // replays from its own record and reaches no provider.
-  for (const name of retained.turns) {
+  for (const name of history.turns) {
     yield* replayTurn(name);
   }
-  let order = retained.next;
+  let order = history.next;
   // What the history already established, carried forward so a turn in this
   // process is held to it as firmly as one after a reopening is.
-  let established = retained.native;
-  let used = retained.used;
-  let placement = retained.sessionKey;
+  let established = history.native;
+  let used = history.used;
+  let placement = history.sessionKey;
   // The actual method on this execution's own handle, waited for before the
   // conversation is announced: a handle that reported itself ready and then
   // refused to evaluate would be ready for two of the three things it offers.
@@ -766,7 +766,7 @@ function* held(
       order,
       admitting(active),
       used,
-      retainedFacts(active, established, placement),
+      sessionFacts(active, established, placement),
     );
     // Established by the first turn the provider reported one for, and never
     // replaced afterwards: a turn naming a different one was refused before it
@@ -787,7 +787,7 @@ function* held(
  * There is no fallback to the public chain on purpose. Routing is what a
  * handler can redirect, and a conversation resolved that way would reach a
  * provider that answered its turns without ever settling the request that
- * carries what the conversation retains — the refusal this exists to make.
+ * carries what the conversation holds — the refusal this exists to make.
  *
  * It never returns, and the loop is how that is said rather than asserted: an
  * element that returned here would let the conversation's root complete, and a
@@ -835,17 +835,17 @@ interface Active {
  * ones the history holds. Nothing the turn does afterwards changes the
  * snapshot it was handed.
  */
-function retainedFacts(
+function sessionFacts(
   active: Active,
   native: string | undefined,
   sessionKey: string | undefined,
-): RetainedSessionFacts {
+): SessionFacts {
   const known = active.known;
   const provider = isJsonObject(known) ? known.provider : undefined;
   const agentCommand = isJsonObject(known) ? known.agentCommand : undefined;
   return {
-    retainedAgentSessionId: native,
-    retainedSession:
+    agentSessionId: native,
+    session:
       typeof provider === "string" && typeof agentCommand === "string"
         ? { provider, agentCommand, ...(sessionKey === undefined ? {} : { sessionKey }) }
         : undefined,
@@ -879,7 +879,7 @@ function admitting(active: Active): AdmitProviderConfiguration {
       return Err(
         new AgentConversationError(
           `this provider did not state what it is building this conversation's session under: ` +
-            `${parsed.error.message}. A retained conversation's provider states the ` +
+            `${parsed.error.message}. A held conversation's provider states the ` +
             `configuration it builds under before any native work, so this refuses rather ` +
             `than continuing under something unstated.`,
         ),
@@ -1001,7 +1001,7 @@ function deliver(
   order: number,
   admit: AdmitProviderConfiguration,
   used: boolean,
-  retained: RetainedSessionFacts,
+  facts: SessionFacts,
 ): Operation<void> {
   // Scoped, so the turn cannot outlive the call that asked for it however this
   // returns: a turn still running would hold its durable operation open, and
@@ -1026,7 +1026,7 @@ function deliver(
         order,
         admit,
         used,
-        retained,
+        facts,
       ),
     );
     const outcome = yield* race([
@@ -1088,7 +1088,7 @@ function conversationTurn(
   order: number,
   admit: AdmitProviderConfiguration,
   used: boolean,
-  retained: RetainedSessionFacts,
+  facts: SessionFacts,
 ): Operation<void> {
   return (function* (): Operation<void> {
     try {
@@ -1102,7 +1102,7 @@ function conversationTurn(
         // reaches it only through the setup the coordinator delivers. A
         // handler holding the request can neither read it nor put one on a
         // request of its own.
-        const issuance = openSessionRequest(identity, request.id, admit, used, retained);
+        const issuance = openSessionRequest(identity, request.id, admit, used, facts);
         issuance.configure(job.configuration);
         let session: Session;
         let settled: Session | undefined;
@@ -1129,7 +1129,7 @@ function conversationTurn(
             "this provider did not resolve this conversation's own session request: the session " +
               "it answered with is not the one settling that request produced. A retained " +
               "conversation is continued only through the request it opened, because that is " +
-              "what carries what the conversation retains.",
+              "what carries what the conversation's history holds.",
           );
         }
         // Before the turn starts, because this is the one point where refusing
@@ -1330,7 +1330,7 @@ function inspect(
  * canonical record it committed; one that committed none was interrupted, and
  * continuing it is exactly what a continuation must not do.
  */
-function* openable(request: AgentConversationRequest): Operation<Result<Retained>> {
+function* openable(request: AgentConversationRequest): Operation<Result<ConversationHistory>> {
   const events = yield* request.history.readAll();
   if (terminated(events)) {
     return Err(

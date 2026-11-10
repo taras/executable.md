@@ -753,7 +753,7 @@ sessionKey = the resolved xmd:v1 session key
 
 A conversation a trusted host holds open is the one qualification. Its key and
 its construction route keep the provider and resolved command of the history's
-initial configuration record, with the session key its Prompt records retain,
+initial configuration record, with the session key its Prompt records name,
 for as long as the conversation lasts; the command that executes it, and the
 build observed for it, are today's (acp-client-spec.md §Sessions: ownership,
 routes and attachment). One logical conversation therefore keeps one owner when

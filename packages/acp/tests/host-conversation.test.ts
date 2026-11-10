@@ -101,7 +101,9 @@ interface Host {
   /** The ACPX store behind the provider, which outlives each conversation. */
   readonly store: ReturnType<typeof makeStore>;
   /** Every identity this host was asked to retain, in order. */
-  readonly retained: AcpxSessionIdentity[];
+  readonly assertions: AcpxSessionIdentity[];
+  /** Every key this host's policy answered with, in order. */
+  readonly placed: string[];
   /** Refuse the next acknowledgement, as a host interrupted before its commit does. */
   refuseNextRetention(): void;
 }
@@ -131,6 +133,11 @@ interface HostOptions {
   /** Provider state an earlier installation of this host left behind. */
   readonly harness?: FakeRuntimeHarness;
   readonly store?: ReturnType<typeof makeStore>;
+  /**
+   * Place each session under the key its command derives, as a host keying
+   * sessions the way the directory walk does. Default: one fixed chat key.
+   */
+  readonly derived?: true;
 }
 
 /** Who owns this host's sessions and how each was first constructed. */
@@ -165,14 +172,19 @@ const BOUND_SCRIBE: NativeAdapter = {
 function host(options: HostOptions = {}): Host {
   const harness = options.harness ?? createFakeRuntime();
   const store = options.store ?? makeStore();
-  const retained: AcpxSessionIdentity[] = [];
+  const assertions: AcpxSessionIdentity[] = [];
+  const placed: string[] = [];
   let refusing = false;
   const sessions: AcpxSessionPolicy = {
-    // deno-lint-ignore require-yield
-    *requestSession() {
-      const record = yield* until(store.load(CHAT_SESSION_KEY));
+    *requestSession(request) {
+      const sessionKey =
+        options.derived === true
+          ? deriveSessionKey(request.agentCommand, SESSION_DIR, request.session)
+          : CHAT_SESSION_KEY;
+      placed.push(sessionKey);
+      const record = yield* until(store.load(sessionKey));
       return {
-        sessionKey: CHAT_SESSION_KEY,
+        sessionKey,
         cwd: SESSION_DIR,
         state:
           record === undefined || record.sessionMaterialization !== undefined ? "new" : "existing",
@@ -180,7 +192,7 @@ function host(options: HostOptions = {}): Host {
     },
     // deno-lint-ignore require-yield
     *recordSessionIdentity(_details, identity) {
-      retained.push(identity);
+      assertions.push(identity);
       if (refusing) {
         refusing = false;
         throw new Error("the host could not retain this session");
@@ -190,7 +202,8 @@ function host(options: HostOptions = {}): Host {
   return {
     harness,
     store,
-    retained,
+    assertions,
+    placed,
     refuseNextRetention() {
       refusing = true;
     },
@@ -396,7 +409,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     // the host retained nothing about it.
     expect(target.store.records.get(CHAT_SESSION_KEY)?.agentSessionId).toBe(NATIVE);
     expect(target.store.records.get(CHAT_SESSION_KEY)?.sessionMaterialization).toBe(undefined);
-    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
+    expect(target.assertions.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
     // The turn is retained as the fact it is: it ran in no conversation this
     // history can name, so it establishes nothing either way.
     expect(turns(yield* stream.readAll()).map((turn) => turn.name)).toEqual(["turn:1"]);
@@ -410,7 +423,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     expect(answer(continued)).toBe("hello world");
     // Reconciled to that same assertion and committed, with nothing created in
     // its place — and the interrupted turn was not sent a second time.
-    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([
+    expect(target.assertions.map((identity) => identity.agentSessionId)).toEqual([
       NATIVE,
       NATIVE,
       NATIVE,
@@ -426,7 +439,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
    * The same window, met through a different adapter command (#1221).
    *
    * The only native assertion is the provider's own promoted record: the
-   * interrupted turn retained a placement and no identity. Reopening through
+   * interrupted turn recorded a placement and no identity. Reopening through
    * today's command must find that exact record, reopen it by its ACP loading
    * target, hold it to the native conversation the record asserts — a
    * different name — and keep its owner and route where the conversation
@@ -489,12 +502,92 @@ describe("Tier HC — a host conversation across the provider's own commit windo
       undefined,
     );
     // The host's own callbacks still ran, and committed that same assertion.
-    expect(next.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE, NATIVE]);
+    expect(next.assertions.map((identity) => identity.agentSessionId)).toEqual([NATIVE, NATIVE]);
     // The interrupted turn was not sent again, and its evidence is unchanged.
     expect(asked(next)).toEqual(["first", "again"]);
-    const retained = turns(yield* stream.readAll());
-    expect(retained[0]).toEqual(failed[0]);
-    expect(retained.map((turn) => turn.record.agentSessionId)).toEqual([undefined, NATIVE]);
+    const recorded = turns(yield* stream.readAll());
+    expect(recorded[0]).toEqual(failed[0]);
+    expect(recorded.map((turn) => turn.record.agentSessionId)).toEqual([undefined, NATIVE]);
+  });
+
+  /**
+   * The same window, under a host whose policy derives each key from the
+   * command it is asked about (#1221).
+   *
+   * After the adapter changes, that policy answers a key this conversation has
+   * never been placed at. The host is still asked — its answer is where it
+   * would refuse — but the placement the interrupted turn recorded is where the
+   * conversation stays: the provider's promoted assertion is joined there, by
+   * its own ACP target, under the original owner, and nothing is created at
+   * the key the policy answered.
+   */
+  it("HC6: a policy deriving placement from today's command does not move a held conversation", function* () {
+    const ownership = owned();
+    const first = host({ owned: ownership, derived: true });
+    const stream = new InMemoryStream();
+
+    first.refuseNextRetention();
+    const interrupted = yield* withConversation(stream, first.installation, function* (chat) {
+      return yield* chat.prompt("first");
+    });
+    expect(answer(interrupted)).toBe("the host could not retain this session");
+    const [placement] = first.placed;
+    if (placement === undefined) {
+      throw new Error("the host placed nothing for the interrupted turn");
+    }
+    const promoted = first.store.records.get(placement);
+    if (promoted?.agentSessionId === undefined) {
+      throw new Error("the provider promoted no assertion for the interrupted turn");
+    }
+    const failed = turns(yield* stream.readAll());
+    expect(failed.map((turn) => [turn.record.sessionKey, turn.record.agentSessionId])).toEqual([
+      [placement, undefined],
+    ]);
+    const originalTuple = { provider: "acpx", agent: "scribe-cmd", sessionKey: placement };
+
+    const next = host({
+      owned: ownership,
+      derived: true,
+      command: "scribe-cmd-next",
+      harness: first.harness,
+      store: first.store,
+    });
+    next.harness.assertIdentity = promoted.agentSessionId;
+    const ensured = next.harness.ensureCalls.length;
+    const acquired = ownership.coordinator.acquisitions.length;
+    const continued = yield* withConversation(stream, next.installation, function* (chat) {
+      return yield* chat.prompt("again");
+    });
+
+    expect(answer(continued)).toBe("hello world");
+    // The policy was asked, and answered somewhere else.
+    expect(next.placed.length).toBeGreaterThan(0);
+    expect(next.placed.every((key) => key !== placement)).toBe(true);
+    // Every ensure stayed at the recorded placement, the first by its own ACP
+    // target, and nothing stands at the key the policy answered.
+    const calls = next.harness.ensureCalls.slice(ensured);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call.sessionKey === placement)).toBe(true);
+    expect(calls[0]?.resumeSessionId).toBe(promoted.acpSessionId);
+    expect([...next.store.records.keys()]).toEqual([placement]);
+    expect(next.store.records.get(placement)?.agentSessionId).toBe(promoted.agentSessionId);
+    // The original owner, and the host's callbacks committing the same assertion.
+    expect(ownership.coordinator.acquisitions.slice(acquired)).toEqual([
+      { kind: "session", key: originalTuple, outcome: "granted" },
+      { kind: "prompt", key: originalTuple, outcome: "granted" },
+    ]);
+    expect(next.assertions.map((identity) => identity.agentSessionId)).toEqual([
+      promoted.agentSessionId,
+      promoted.agentSessionId,
+    ]);
+    // No replacement work: the interrupted turn was not sent again.
+    expect(asked(next)).toEqual(["first", "again"]);
+    const recorded = turns(yield* stream.readAll());
+    expect(recorded[0]).toEqual(failed[0]);
+    expect(recorded.map((turn) => [turn.record.sessionKey, turn.record.agentSessionId])).toEqual([
+      [placement, undefined],
+      [placement, promoted.agentSessionId],
+    ]);
   });
 
   /**
@@ -606,7 +699,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     expect(invoked).toEqual(["probed"]);
     // One turn asked of the provider, and the evaluation asked it nothing.
     expect(asked(target)).toEqual(["write me a reply"]);
-    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
+    expect(target.assertions.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
     // One journaled turn, and the evaluation on a sequence of its own.
     const events = yield* stream.readAll();
     expect(turns(events).map((turn) => turn.name)).toEqual(["turn:1"]);
@@ -685,7 +778,9 @@ describe("Tier HC — a host conversation across the provider's own commit windo
       return yield* chat.prompt("second");
     });
 
-    expect(answer(diverged)).toContain("different native conversation");
+    // The reopening is an exact resume held to the conversation the history
+    // names, so the provider refuses it before any turn could run there.
+    expect(answer(diverged)).toContain("reopened a different conversation");
     expect(asked(target)).toEqual(["first"]);
     const retained = turns(yield* stream.readAll());
     expect(retained).toHaveLength(1);
@@ -1025,7 +1120,7 @@ describe("Tier DP — a saved conversation reaches its provider directly", () =>
         // conversation through it.
         expect(answer(answered)).toContain("arrived at its own terminal");
         expect(asked(target)).toEqual([]);
-        expect(target.retained).toEqual([]);
+        expect(target.assertions).toEqual([]);
         // The attempt is retained the way every other failure before native
         // work is — as a failed turn carrying its refusal. What it holds is
         // what this turn tried to ask, which is not evidence it was sent.
@@ -1050,7 +1145,7 @@ describe("Tier DP — a saved conversation reaches its provider directly", () =>
       expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
       expect(retained[0]!.record.agent).toBe("editor");
       expect(retained[0]!.record.sessionKey).toBe(CHAT_SESSION_KEY);
-      expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
+      expect(target.assertions.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
       expect(configurations(yield* stream.readAll())).toBe(1);
     }
   });
@@ -1108,7 +1203,7 @@ describe(
               ),
             ),
           ).toBe("READY");
-          const retained = history.snapshot();
+          const kept = history.snapshot();
           const record = yield* until(store.load(key));
           if (record === undefined) {
             throw new Error("missing seeded record");
@@ -1129,7 +1224,7 @@ describe(
                 if (!reply.ok) {
                   expect(reply.error.message).toContain("Start a new conversation");
                 }
-                expect(history.snapshot()).toEqual(retained);
+                expect(history.snapshot()).toEqual(kept);
               } else {
                 expect(reply).toEqual(Ok("remembered"));
               }
@@ -1222,7 +1317,7 @@ interface ChangingHost {
   readonly store: ReturnType<typeof createAcpxSessionStore>;
   readonly ownership: Owned;
   readonly runtime: RuntimeBoundary;
-  installation(command: string): ExecutionInstallation;
+  installation(command: string | string[]): ExecutionInstallation;
 }
 
 function changingHost(f: CertificationFixture): ChangingHost {
@@ -1244,7 +1339,7 @@ function changingHost(f: CertificationFixture): ChangingHost {
               factory: createAcpxProvider({
                 createRuntime: runtime.create,
                 sessionStore: store,
-                agentRegistry: makeRegistry({ scribe: command }),
+                agentRegistry: { resolve: () => command, list: () => [AGENT] },
                 nativeAdapters: { scribe: BOUND_SCRIBE },
                 advertiseNativeLaunch: ["scribe"],
                 advertiseClientNativeAttachment: [],
@@ -1368,7 +1463,8 @@ describe(
         );
 
         // The eager session reopens the exact record by its ACP target and is
-        // released; the turn reacquires that same record in its own directory.
+        // released; the turn reacquires that same record, by that same target,
+        // in its own directory.
         const boundary = target.runtime.log.slice(logged);
         const ensures = boundary.filter((entry) => entry.op === "ensure");
         expect(ensures).toEqual([
@@ -1379,7 +1475,13 @@ describe(
             resumeSessionId: acp,
             requestedModel: "selected",
           },
-          { op: "ensure", sessionKey: original, cwd: record.cwd, requestedModel: "selected" },
+          {
+            op: "ensure",
+            sessionKey: original,
+            cwd: record.cwd,
+            resumeSessionId: acp,
+            requestedModel: "selected",
+          },
         ]);
         const second = boundary.indexOf(ensures[1]!);
         expect(boundary.slice(1, second).map((entry) => entry.op)).toContain("close");
@@ -1446,7 +1548,7 @@ describe(
         const kept = yield* readTextFile(providerHistory);
         yield* rm(providerHistory);
 
-        const retained = history.snapshot();
+        const journal = history.snapshot();
         const called = yield* f.calls();
         const reopened = yield* withConversation(
           history,
@@ -1460,7 +1562,7 @@ describe(
             expect(attempt).toContain("session/load");
             expect(attempt).not.toContain("session/new");
             expect(attempt).not.toContain("session/prompt");
-            expect(history.snapshot()).toEqual(retained);
+            expect(history.snapshot()).toEqual(journal);
             const unchanged = yield* until(target.store.load(original));
             expect([
               unchanged?.acpSessionId,
@@ -1487,10 +1589,136 @@ describe(
             .filter((call) => call.method === "session/prompt")
             .map((call) => call.kind),
         ).toEqual(["seed", "recall"]);
-        // The refused turn recorded nothing; only the seed and the later turn are retained.
+        // The refused turn recorded nothing; only the seed and the later turn are recorded.
         const keptTurns = turns(history.snapshot());
         expect(keptTurns).toHaveLength(2);
         expect(keptTurns.map((turn) => turn.record.status)).toEqual(["completed", "completed"]);
+      });
+    });
+
+    it("HR3: the same command given as a string instead of argv reopens the exact record", function* () {
+      yield* withCertificationFixture(function* (f) {
+        const target = changingHost(f);
+        // One command identity in two supported shapes: ACPX keeps the argv it
+        // was given on its record and reuses that record only for the same argv.
+        const argv = ["node", join(f.dir, "agent.cjs"), "distinct", f.dir];
+        const command = argv.join(" ");
+        const key = deriveSessionKey(command, f.dir, "chat-1");
+
+        const history = new InMemoryStream();
+        expect(
+          answer(
+            yield* withConversation(history, target.installation(argv), (chat) =>
+              chat.prompt("seed:remembered"),
+            ),
+          ),
+        ).toBe("READY");
+        const record = yield* until(target.store.load(key));
+        if (record === undefined) {
+          throw new Error("the seeded conversation left no provider record");
+        }
+        expect(record.agentCommand).toBe(command);
+        expect(record.agentArgv).toEqual(argv);
+        const acp = record.acpSessionId;
+        const native = `native-${acp}`;
+        expect(record.agentSessionId).toBe(native);
+
+        const called = yield* f.calls();
+        const logged = target.runtime.log.length;
+        const continued = yield* withConversation(history, target.installation(command), (chat) =>
+          chat.prompt("recall"),
+        );
+
+        expect(answer(continued)).toBe("remembered");
+        // Loaded by its own ACP target; nothing was created under its key.
+        const delta = (yield* f.calls()).slice(called.length);
+        expect(delta.map((call) => call.method)).not.toContain("session/new");
+        expect(delta.map((call) => call.method)).toContain("session/load");
+        expect(
+          delta
+            .filter((call) => call.sessionId !== undefined)
+            .every((call) => call.sessionId === acp),
+        ).toBe(true);
+        const ensures = target.runtime.log.slice(logged).filter((entry) => entry.op === "ensure");
+        expect(ensures.length).toBeGreaterThan(0);
+        expect(
+          ensures.every((entry) => entry.sessionKey === key && entry.resumeSessionId === acp),
+        ).toBe(true);
+        // The same key, the same ACP target and the same native conversation.
+        const resumed = yield* until(target.store.load(key));
+        expect([resumed?.acpSessionId, resumed?.agentSessionId]).toEqual([acp, native]);
+        expect(turns(history.snapshot()).map((turn) => turn.record.agentSessionId)).toEqual([
+          native,
+          native,
+        ]);
+      });
+    });
+
+    it("HR4: a reopened conversation answering another native identity leaves the record as it was", function* () {
+      yield* withCertificationFixture(function* (f) {
+        const target = changingHost(f);
+        const before = f.command("distinct");
+        const original = deriveSessionKey(before, f.dir, "chat-1");
+        const history = new InMemoryStream();
+        expect(
+          answer(
+            yield* withConversation(history, target.installation(before), (chat) =>
+              chat.prompt("seed:remembered"),
+            ),
+          ),
+        ).toBe("READY");
+        const record = yield* until(target.store.load(original));
+        if (record === undefined) {
+          throw new Error("the seeded conversation left no provider record");
+        }
+        const acp = record.acpSessionId;
+        const native = `native-${acp}`;
+        expect(record.agentSessionId).toBe(native);
+
+        // Today's adapter loads that same ACP target and reports its native
+        // conversation as the target itself: another identity than the history's.
+        const journal = history.snapshot();
+        const called = yield* f.calls();
+        const refused = yield* withConversation(
+          history,
+          target.installation(f.command("normal")),
+          (chat) => chat.prompt("recall"),
+        );
+        if (!refused.ok) {
+          throw refused.error;
+        }
+        expect(refused.value.ok).toBe(false);
+        expect(!refused.value.ok && refused.value.error.message).toContain(
+          "reopened a different conversation",
+        );
+        const attempt = (yield* f.calls()).slice(called.length).map((call) => call.method);
+        expect(attempt).toContain("session/load");
+        expect(attempt).not.toContain("session/new");
+        expect(attempt).not.toContain("session/prompt");
+        expect(history.snapshot()).toEqual(journal);
+        // The refused assertion never stands as the record's own.
+        const kept = yield* until(target.store.load(original));
+        expect([kept?.acpSessionId, kept?.agentSessionId, kept?.agentCommand]).toEqual([
+          acp,
+          native,
+          before,
+        ]);
+
+        // A later explicit turn through an adapter reporting the right
+        // conversation reaches the original target and its history.
+        const later = yield* withConversation(
+          history,
+          target.installation(f.command("distinct-next")),
+          (chat) => chat.prompt("recall"),
+        );
+        expect(answer(later)).toBe("remembered");
+        const resumed = yield* until(target.store.load(original));
+        expect([resumed?.acpSessionId, resumed?.agentSessionId]).toEqual([acp, native]);
+        expect(
+          (yield* f.calls())
+            .filter((call) => call.method === "session/prompt")
+            .map((call) => call.kind),
+        ).toEqual(["seed", "recall"]);
       });
     });
   },
@@ -1559,7 +1787,7 @@ describe(
             yield* rm(join(f.dir, "store", "sessions", written[0]!));
             expect(yield* until(store.load(original))).toBe(undefined);
           }
-          const retained = history.snapshot();
+          const kept = history.snapshot();
           const called = yield* f.calls();
           const reply = yield* withConversation(history, installation(after), (chat) =>
             chat.prompt("recall"),
@@ -1580,7 +1808,7 @@ describe(
               "Start a new conversation",
             );
             expect(delta).toEqual([]);
-            expect(history.snapshot()).toEqual(retained);
+            expect(history.snapshot()).toEqual(kept);
           } else {
             expect(reply.value).toEqual(Ok("remembered"));
             expect(delta.map((call) => call.method)).toEqual([

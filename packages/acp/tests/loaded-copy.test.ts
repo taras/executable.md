@@ -90,17 +90,17 @@ interface ReadSessionUse {
   readonly configuration?: SessionConfiguration;
 }
 
-/** What a held conversation retained, as the other copy's opener states it. */
-interface ForeignRetained {
-  readonly retainedAgentSessionId: string | undefined;
-  readonly retainedSession: AgentSessionSetup["retainedSession"];
+/** What a held conversation's history says, as the other copy's opener states it. */
+interface ForeignFacts {
+  readonly agentSessionId: string | undefined;
+  readonly session: AgentSessionSetup["session"];
 }
 
 interface ForeignCore {
   openSessionRequest(
     sessionIdentity: string | undefined,
     name: string | undefined,
-    retained?: ForeignRetained,
+    facts?: ForeignFacts,
   ): ForeignIssuance;
   createSessionSetupOwner(): ForeignOwner;
 }
@@ -178,21 +178,21 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
       "the other copy answered a session setup that does not say whether it names a model",
     );
   }
-  const retainedAgentSessionId = Reflect.get(value, "retainedAgentSessionId");
+  const agentSessionId = Reflect.get(value, "agentSessionId");
   if (
-    !Reflect.has(value, "retainedAgentSessionId") ||
-    (retainedAgentSessionId !== undefined && typeof retainedAgentSessionId !== "string")
+    !Reflect.has(value, "agentSessionId") ||
+    (agentSessionId !== undefined && typeof agentSessionId !== "string")
   ) {
-    throw new Error("the other copy answered a session setup without a retained native assertion");
+    throw new Error("the other copy answered a session setup without a native assertion");
   }
-  if (!Reflect.has(value, "retainedSession")) {
-    throw new Error("the other copy answered a session setup without a retained session");
+  if (!Reflect.has(value, "session")) {
+    throw new Error("the other copy answered a session setup without a session locator");
   }
   return {
     ...(typeof identity === "string" ? { sessionIdentity: identity } : {}),
     requestedModel,
-    retainedAgentSessionId,
-    retainedSession: retainedLocatorOf(Reflect.get(value, "retainedSession")),
+    agentSessionId,
+    session: locatorOf(Reflect.get(value, "session")),
     *activate(provider, agentCommand, configuration) {
       // Across the same seam as `finish`, for the same reason: the authority
       // that decides whether this provider may work lives in the copy that
@@ -213,12 +213,12 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
 }
 
 /** Where the other copy says a held conversation's session is, copied out. */
-function retainedLocatorOf(value: unknown): AgentSessionSetup["retainedSession"] {
+function locatorOf(value: unknown): AgentSessionSetup["session"] {
   if (value === undefined) {
     return undefined;
   }
   if (typeof value !== "object" || value === null) {
-    throw new Error("the other copy answered with a retained session that is not one");
+    throw new Error("the other copy answered with a session locator that is not one");
   }
   const provider = Reflect.get(value, "provider");
   const agentCommand = Reflect.get(value, "agentCommand");
@@ -228,7 +228,7 @@ function retainedLocatorOf(value: unknown): AgentSessionSetup["retainedSession"]
     typeof agentCommand !== "string" ||
     (sessionKey !== undefined && typeof sessionKey !== "string")
   ) {
-    throw new Error("the other copy answered with a retained session it cannot describe");
+    throw new Error("the other copy answered with a session locator it cannot describe");
   }
   return Object.freeze({
     provider,
@@ -308,8 +308,8 @@ function foreignCore(value: unknown): ForeignCore | undefined {
     return undefined;
   }
   return {
-    openSessionRequest: (identity, name, retained) =>
-      issuanceOf(Reflect.apply(open, value, [identity, name, undefined, false, retained])),
+    openSessionRequest: (identity, name, facts) =>
+      issuanceOf(Reflect.apply(open, value, [identity, name, undefined, false, facts])),
     createSessionSetupOwner: () => ownerOf(Reflect.apply(own, value, [])),
   };
 }
@@ -385,8 +385,8 @@ function foreignCoordinator(owner: ForeignOwner, log: SessionSetupLog): AgentLau
       const identity = setup.sessionIdentity;
       const observed: AgentSessionSetup = {
         requestedModel: setup.requestedModel,
-        retainedAgentSessionId: setup.retainedAgentSessionId,
-        retainedSession: setup.retainedSession,
+        agentSessionId: setup.agentSessionId,
+        session: setup.session,
         activate: (provider, agentCommand, configuration) =>
           setup.activate(provider, agentCommand, configuration),
         finish: (session, state) => setup.finish(session, state),
@@ -718,7 +718,7 @@ describe("Tier LP — a provider and a Core copy that are not the same copy", ()
     });
   });
 
-  it("LP5: a held conversation's retained facts from another copy select its exact record", function* () {
+  it("LP5: a held conversation's history facts from another copy select its exact record", function* () {
     const core = yield* useForeignCore();
     const harness = configured(createFakeRuntime());
     // What the adapter reports on load: the conversation's own native identity,
@@ -736,8 +736,8 @@ describe("Tier LP — a provider and a Core copy that are not the same copy", ()
     yield* scoped(function* () {
       yield* installProvider(harness, foreignCoordinator(owner, newLog()), store);
       const issuance = core.openSessionRequest("expansion:1", "review", {
-        retainedAgentSessionId: "native-1",
-        retainedSession: { provider: "acpx", agentCommand: "old-cmd", sessionKey: "held-key" },
+        agentSessionId: "native-1",
+        session: { provider: "acpx", agentCommand: "old-cmd", sessionKey: "held-key" },
       });
       issuance.configure(undefined);
 

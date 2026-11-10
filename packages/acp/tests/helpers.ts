@@ -433,11 +433,22 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             acpxRecordId: input.sessionKey,
             messages: [],
           };
-          // What the adapter says it opened. An exact resume answers with the
-          // conversation it was told to load, and `assertIdentity` is how a
-          // test makes it answer with another one.
+          // What the adapter says it opened. An exact resume of a record this fake
+          // already wrote answers with the conversation that record asserts, as
+          // ACPX does when it reuses or reloads its own record; any other exact
+          // resume answers with the conversation it was told to load, and
+          // `assertIdentity` is how a test makes it answer with another one.
+          const resumed =
+            input.resumeSessionId === undefined
+              ? undefined
+              : records.get(`record:${input.sessionKey}`);
           const asserted =
-            harness.assertIdentity ?? input.resumeSessionId ?? `agent-session:${input.sessionKey}`;
+            harness.assertIdentity ??
+            (resumed !== undefined && resumed.acpSessionId === input.resumeSessionId
+              ? resumed.agentSessionId
+              : undefined) ??
+            input.resumeSessionId ??
+            `agent-session:${input.sessionKey}`;
           if (input.sessionOptions?.systemPrompt !== undefined) {
             record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
           }
