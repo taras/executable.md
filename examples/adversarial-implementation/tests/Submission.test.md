@@ -23,6 +23,7 @@ pwd -P
 <AssertEquals actual={schema.properties.phase} expected={{const:selected.phase}} />
 <AssertEquals actual={schema.properties.work} expected={{const:assignment.work}} />
 <AssertEquals actual={schema.properties.discoveryRequests.items.properties.role} expected={{const:selected.role}} />
+<AssertEquals actual={Object.hasOwn(schema.properties,"apiConflict")} expected={selected.role === "implementor" && selected.phase === "implementation"} />
 <AssertEquals actual={Object.hasOwn(schema.properties,"contract")} expected={selected.role === "architect" && selected.phase === "discovery"} />
 <AssertEquals actual={schema.required.includes("revision")} expected={selected.phase === "implementation"} />
 <Ticket.Capture as="occupied"><Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role={selected.role} assignment={assignment} /></Phase.SubmissionGuide></Ticket.Capture>
