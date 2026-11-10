@@ -8,6 +8,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import baseline1178 from "./fixtures/syntax-generated-base.json" with { type: "json" };
+import { expectAvailability } from "./support/syntax-availability.ts";
+import { useNarrowedSyntax } from "../src/syntax-api.ts";
+import { engineSyntaxEntry } from "../src/structural.ts";
 import { Syntax } from "../api.ts";
 import type { SyntaxApi, SyntaxSymbols } from "../api.ts";
 import {
@@ -70,6 +74,69 @@ function* run(text: string, stream = new InMemoryStream()): Operation<string> {
     ),
   );
 }
+
+describe("1178 reference specialization", () => {
+  it("snapshots engine entries, distinguishes omission from empty and retains middleware", function* () {
+    const authoring = yield* inspectSyntax({ includes: [] });
+    expect(renderSyntaxMarkdown(authoring)).toBe(baseline1178["canonical-base.txt"]);
+    expect(JSON.stringify(authoring)).toBe(baseline1178["catalog-base.json"]);
+    const entry = {
+      ...engineSyntaxEntry("If"),
+      origin: { kind: "structural" as const, construct: "If" },
+      syntax: ["<If condition={condition}>…</If>"],
+    };
+    const entries = [entry];
+    const root = syntaxReference(authoring);
+    const specialized = root.available(symbolsOf(), entries);
+    entry.syntax[0] = "MUTATED";
+    entry.origin.construct = "MUTATED";
+    entries.splice(0);
+    let reads = 0;
+    yield* scoped(function* () {
+      yield* useNarrowedSyntax(specialized);
+      yield* Syntax.around({
+        *symbols(_args, next) {
+          reads++;
+          const effective = yield* next();
+          expect(effective.categories[0].entries[0]).toEqual(engineSyntaxEntry("If"));
+          return effective;
+        },
+      });
+      const text = yield* root.documentation(["If"]);
+      expectAvailability(text, "If", true);
+      expect(text).not.toContain("MUTATED");
+    });
+    expect(reads).toBe(1);
+    yield* scoped(function* () {
+      yield* useNarrowedSyntax(specialized);
+      yield* Syntax.around({
+        *symbols(_args, next) {
+          const effective = yield* next();
+          return {
+            ...effective,
+            categories: [
+              { kind: "structural", entries: [] },
+              effective.categories[1],
+              effective.categories[2],
+            ],
+          } satisfies SyntaxSymbols;
+        },
+      });
+      expectAvailability(yield* root.documentation(["If"]), "If", false);
+    });
+    expect((yield* specialized.symbols()).categories[0].entries).toEqual([]);
+    for (const [reference, available] of [
+      [root.available(authoring), true],
+      [root.available(authoring, []), false],
+      [specialized.available(symbolsOf(), []), false],
+    ] as const) {
+      yield* scoped(function* () {
+        yield* Syntax.around({ symbols: () => reference.symbols() });
+        expectAvailability(yield* root.documentation(["If"]), "If", available);
+      });
+    }
+  });
+});
 
 describe("Tier SA — contextual Syntax", () => {
   it("SA: structural availability compares complete installed identity and keeps enclosing references", function* () {

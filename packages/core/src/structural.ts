@@ -12,6 +12,8 @@
  * in it.
  */
 
+import type { EngineSyntaxEntry } from "./inspect.ts";
+
 /**
  * One construct the engine owns, as both a reservation and a description of
  * itself.
@@ -250,4 +252,21 @@ const REFERENCE_PROPS: ReadonlyMap<string, string> = new Map([["Let", "value"]])
 /** Whether this prop is authored text a construct evaluates for itself. */
 export function bindsByReference(componentName: string, propName: string): boolean {
   return REFERENCE_PROPS.get(componentName) === propName;
+}
+
+/** The engine declaration projected into its inspected reference entry. */
+export function engineSyntaxEntry(construct: string): EngineSyntaxEntry {
+  const declaration = STRUCTURAL_DECLARATIONS.find((candidate) => candidate.name === construct);
+  if (declaration === undefined) {
+    throw new Error(`structural construct ${construct} has no declaration`);
+  }
+  return {
+    kind: "structural",
+    name: declaration.name,
+    origin: { kind: "structural", construct: declaration.name },
+    syntax: declaration.syntax,
+    description: declaration.description,
+    ...(declaration.as === null ? {} : { as: declaration.as }),
+    ...(declaration.context === null ? {} : { context: declaration.context }),
+  };
 }

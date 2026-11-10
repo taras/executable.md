@@ -29,7 +29,7 @@ import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
 import type { WorkflowComponentCatalog } from "./components/bundle.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
-import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
+import { STRUCTURAL_DECLARATIONS, engineSyntaxEntry } from "./structural.ts";
 import { assertDistinctIdentityNames } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -615,7 +615,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
     if (selected.kind === "structural") {
       structural.push(
         "construct" in selected
-          ? structuralEntry(selected.construct)
+          ? engineSyntaxEntry(selected.construct)
           : { kind: "structural", name, ...installedStructuralContract(name, declarations) },
       );
       continue;
@@ -668,22 +668,6 @@ function byCodePoint(left: string, right: string): number {
     }
   }
   return a.length - b.length;
-}
-
-function structuralEntry(construct: string): EngineSyntaxEntry {
-  const declaration = STRUCTURAL_DECLARATIONS.find((candidate) => candidate.name === construct);
-  if (declaration === undefined) {
-    throw new Error(`structural construct ${construct} has no declaration`);
-  }
-  return {
-    kind: "structural",
-    name: declaration.name,
-    origin: { kind: "structural", construct: declaration.name },
-    syntax: declaration.syntax,
-    description: declaration.description,
-    ...(declaration.as === null ? {} : { as: declaration.as }),
-    ...(declaration.context === null ? {} : { context: declaration.context }),
-  };
 }
 
 /**

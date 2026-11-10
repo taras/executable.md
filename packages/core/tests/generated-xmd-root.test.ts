@@ -40,6 +40,8 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { Component, content } from "../src/component-api.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
+import baseline1178 from "./fixtures/syntax-generated-base.json" with { type: "json" };
+import { expectAvailability, syntaxInstallation } from "./support/syntax-availability.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
@@ -1760,5 +1762,60 @@ describe("993 generated nested roots", () => {
       expect(failed(attempt).partial).toBeUndefined();
       expect(performed).toEqual([]);
     }
+  });
+});
+
+describe("1178 generated root references and scope", () => {
+  beforeAll(() => useTempFileCompiler());
+  it("keeps root engine availability local across sibling roots and restores enclosing installed syntax", function* () {
+    const calls: string[] = [];
+    const names = ["If", "Output", "Content", "Return", "Banner", "BannerLine"];
+    const named = `<Syntax names={${JSON.stringify(names)}} />`;
+    const candidate = request(`<Output>${named}<If condition={true}>1178-ROOT</If></Output>`);
+    const run = yield* withHeldHost(
+      {
+        installations: [candidate.installation, syntaxInstallation(calls)],
+        root: { path: HELD_ROOT_PATH, source: `<Held />${named}` },
+      },
+      function* (held) {
+        const first = yield* held.execution.evaluateGeneratedXmdRoot(candidate.root);
+        if (!first.ok) {
+          throw first.error;
+        }
+        expect(first.value.output).toContain("1178-ROOT");
+        for (const name of ["If", "Output"]) {
+          expectAvailability(first.value.output, name, true);
+        }
+        for (const name of ["Content", "Return", "Banner", "BannerLine"]) {
+          expectAvailability(first.value.output, name, false);
+        }
+        const second = yield* held.execution.evaluateGeneratedXmdRoot({
+          id: "turn-2",
+          source: `<Syntax as="before" /><Syntax names={["If"]} as="reference" /><Syntax as="after" /><Output>{before}1178-CUT{reference}1178-CUT{after}</Output>`,
+        });
+        if (!second.ok) {
+          throw second.error;
+        }
+        const [before, reference, after] = second.value.output.split("1178-CUT");
+        expect(before).toBe(baseline1178["root-base.txt"]);
+        expect(after).toBe(baseline1178["root-base.txt"]);
+        expectAvailability(reference, "If", true);
+        const third = yield* held.execution.evaluateGeneratedXmdRoot({
+          id: "turn-3",
+          source: "<Output><Syntax /></Output>",
+        });
+        if (!third.ok) {
+          throw third.error;
+        }
+        expect(third.value.output).toBe(baseline1178["root-base.txt"]);
+      },
+    );
+    if (!run.completion.ok) {
+      throw run.completion.error;
+    }
+    for (const name of names) {
+      expectAvailability(String(run.completion.value), name, true);
+    }
+    expect(calls).toEqual([]);
   });
 });

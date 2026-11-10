@@ -3001,7 +3001,13 @@ schema or invented binding contract. Mixed structural/component requests render
 once each in symbol order and refuse whole if any name is unknown. Inspection
 invokes no structural expansion handler. Availability compares the full engine
 or installed origin identity against effective symbols and grants no execution
-authority. Bare `<Syntax />`, bare `xmd syntax` and version-1 JSON retain their
+authority. In generated evaluation, a named read includes the engine language
+supported at a valid placement: fragments exclude Content, Return and Output;
+roots additionally support Output. Installed constructs are unavailable because
+generated expansion declares none. Parent and loop constraints still apply.
+Bare generated reads retain their component-only presentation and empty
+structural category; named language availability does not change admission.
+Bare `<Syntax />`, bare `xmd syntax` and version-1 JSON retain their
 existing presentation.
 
 The documentation is read from the owning package through the direct filesystem,

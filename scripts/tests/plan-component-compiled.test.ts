@@ -17,6 +17,8 @@
  * missing binary is reported as the setup it is rather than as a failed assertion.
  */
 
+import baseline1178 from "../../packages/core/tests/fixtures/syntax-generated-base.json" with { type: "json" };
+import { expectAvailability } from "../../packages/core/tests/support/syntax-availability.ts";
 import { runCli } from "@executablemd/test-support/launch";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -508,6 +510,61 @@ describe(
       // one and not the other shows up here.
       expect(rendered.compiled).toBe(rendered.source);
       expect(reported.compiled).toEqual(reported.source);
+    });
+  },
+);
+
+describe(
+  "1178 narrowed structural availability",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("matches source and rebuilt binary through real Evaluate outside the checkout", function* () {
+      const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-1178-availability-")));
+      yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+      const plugin = path.join(
+        ROOT,
+        "packages/cli/tests/fixtures/plugins/structural-reference.mjs",
+      );
+      const names = ["If", "Syntax", "Content", "Return", "Output", "Banner", "BannerLine"];
+      const fragment = `<Syntax as="before" /><Syntax names={${JSON.stringify(names)}} as="reference" /><Syntax as="after" /><Json value={{before, reference, after}} />1178-CUT<If condition={true}>1178-DISTRIBUTED-IF</If>`;
+      yield* writeTextFile(
+        path.join(elsewhere, "availability.md"),
+        `<Evaluate text={${JSON.stringify(fragment)}} />`,
+      );
+      const args = ["run", `--plugin=${plugin}`, "--include", elsewhere, "availability.md"];
+      const source = yield* runCli(args, { cwd: elsewhere }).expect();
+      const compiled = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+        return yield* exec(BINARY, { arguments: args, cwd: elsewhere }).join();
+      });
+      if (compiled.timeout) {
+        throw new Error("1178 compiled availability timed out");
+      }
+      expect(compiled.value.code).toBe(0);
+      expect(compiled.value.stdout).toBe(source.stdout);
+      expect(compiled.value.stdout + compiled.value.stderr).not.toContain("handler invoked");
+      const [captured, marker] = compiled.value.stdout.split("1178-CUT");
+      const { before, reference, after } = JSON.parse(captured);
+      expect(before).toBe(baseline1178["cli-fragment-base.txt"]);
+      expect(after).toBe(baseline1178["cli-fragment-base.txt"]);
+      expect(marker).toContain("1178-DISTRIBUTED-IF");
+      for (const name of ["If", "Syntax"]) {
+        expectAvailability(reference, name, true);
+      }
+      for (const name of ["Content", "Return", "Output", "Banner", "BannerLine"]) {
+        expectAvailability(reference, name, false);
+      }
+      // Empty includes keep these catalog fixtures independent of temporary paths.
+      const empty = path.join(elsewhere, "empty");
+      yield* until(mkdir(empty));
+      for (const [extra, expected] of [
+        [[], baseline1178["cli-bare-base.txt"]],
+        [["--json"], baseline1178["cli-json-base.txt"]],
+      ] as const) {
+        const lookup = yield* runCli(["syntax", "--include", empty, ...extra], {
+          cwd: elsewhere,
+        }).expect();
+        expect(lookup.stdout).toBe(expected);
+      }
     });
   },
 );

@@ -82,7 +82,7 @@ import {
   selectedTables,
 } from "../evaluation-profile.ts";
 import type { CapturedEntry, EvaluationProfile, SelectedTables } from "../evaluation-profile.ts";
-import { evaluateProtectedGeneratedXmd } from "../generated-xmd.ts";
+import { generatedStructuralEntries, evaluateProtectedGeneratedXmd } from "../generated-xmd.ts";
 import type {
   GeneratedEffectClass,
   GeneratedImplementation,
@@ -327,7 +327,10 @@ function narrow(
   enclosing: SyntaxReference | undefined,
   tables: SelectedTables,
 ): SyntaxReference | undefined {
-  return enclosing?.available(admittedSymbols(tables.admitted));
+  return enclosing?.available(
+    admittedSymbols(tables.admitted),
+    generatedStructuralEntries("fragment"),
+  );
 }
 
 /**
