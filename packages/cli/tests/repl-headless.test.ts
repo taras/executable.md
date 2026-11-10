@@ -475,28 +475,35 @@ describe("parent-owned headless REPL", () => {
       throw chatAgain.error;
     }
     expect(host.fake.turns.at(-1)?.handle.sessionKey).toBe(originalSession?.sessionKey);
-    const beforeRefusal = {
+    const beforeChange = {
       ensured: host.fake.ensured.length,
       turns: host.fake.turns.length,
       acquired,
     };
+    // A changed adapter command continues the same held conversation through
+    // today's command (#1221), and still never reaches a headless placement.
+    host.fake.script({ reply: "changed ordinary Sidekick" });
     const chatChanged = yield* chatAttempt("guide-changed");
-    expect(chatChanged.ok).toBe(false);
     if (!chatChanged.ok) {
-      expect(chatChanged.error.message).toContain("different provider configuration");
+      throw chatChanged.error;
     }
-    expect(host.fake.ensured.length).toBe(beforeRefusal.ensured);
-    expect(host.fake.turns.length).toBe(beforeRefusal.turns);
-    expect(acquired).toBe(beforeRefusal.acquired);
+    expect(chatChanged.value).toBe("changed ordinary Sidekick");
+    const changedEnsures = host.fake.ensured.slice(beforeChange.ensured);
+    expect(changedEnsures.length).toBeGreaterThan(0);
+    expect(changedEnsures.every((one) => one.sessionKey === originalSession?.sessionKey)).toBe(
+      true,
+    );
+    expect(host.fake.turns.length).toBe(beforeChange.turns + 1);
+    expect(host.fake.turns.at(-1)?.handle.sessionKey).toBe(originalSession?.sessionKey);
+    expect(acquired).toBe(beforeChange.acquired);
     expect(JSON.stringify(yield* chatHistory.readAll())).not.toContain('"type":"xmd_session"');
     console.log(
       JSON.stringify({
         kind: "actual-sidekick-assembly-held-reopen",
         acquired,
-        refusal: chatChanged.ok ? null : chatChanged.error.message,
-        unchangedSession: originalSession?.sessionKey,
-        newEnsuresOnRefusal: host.fake.ensured.length - beforeRefusal.ensured,
-        newTurnsOnRefusal: host.fake.turns.length - beforeRefusal.turns,
+        continuedSession: originalSession?.sessionKey,
+        newEnsuresOnChange: changedEnsures.length,
+        newTurnsOnChange: host.fake.turns.length - beforeChange.turns,
         retainedRecordCount: (yield* chatHistory.readAll()).length,
       }),
     );
@@ -504,7 +511,7 @@ describe("parent-owned headless REPL", () => {
     const ended = yield* execute();
     expect(ended.result.ok).toBe(false);
     expect(acquired).toBe(1);
-    expect(host.fake.prompts).toHaveLength(2);
+    expect(host.fake.prompts).toHaveLength(3);
     const causes: string[] = [];
     if (!ended.result.ok) {
       let failure: unknown = ended.result.error;

@@ -296,6 +296,8 @@ function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
           ? {}
           : { sessionIdentity: requested.sessionIdentity }),
         requestedModel: requested.configuration?.model,
+        agentSessionId: requested.agentSessionId,
+        session: requested.session,
         // This trace's setups carry no retained conversation, so there is
         // nothing to be held to and activation only records what the provider
         // declared it was about to build under. It is still required: a

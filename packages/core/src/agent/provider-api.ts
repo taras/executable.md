@@ -248,9 +248,27 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
         "requested model",
     );
   }
+  const agentSessionId = Reflect.get(value, "agentSessionId");
+  if (
+    !Reflect.has(value, "agentSessionId") ||
+    (agentSessionId !== undefined && typeof agentSessionId !== "string")
+  ) {
+    throw new AgentProviderInstallError(
+      "the live agent provider installation answered a session setup without a valid " +
+        "native assertion",
+    );
+  }
+  if (!Reflect.has(value, "session")) {
+    throw new AgentProviderInstallError(
+      "the live agent provider installation answered a session setup without saying where " +
+        "its session is",
+    );
+  }
   return {
     ...(typeof sessionIdentity === "string" ? { sessionIdentity } : {}),
     requestedModel,
+    agentSessionId,
+    session: sessionLocatorOf(Reflect.get(value, "session")),
     // Bound to the handle that answered, like `finish`: both are closures over
     // one issuance in the copy of core that opened it, and calling either with
     // any other receiver would reach a different copy's state or none.
@@ -258,6 +276,41 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
       Reflect.apply(activate, value, [provider, agentCommand, configuration]),
     finish: (session, state) => Reflect.apply(finish, value, [session, state]),
   };
+}
+
+/**
+ * Where a delivered setup says its session is, as a detached copy.
+ *
+ * Copied member by member and frozen, so a provider reading it reads the
+ * snapshot the opening copy issued and nothing that copy can still change.
+ */
+function sessionLocatorOf(value: unknown): AgentSessionSetup["session"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  const malformed = () =>
+    new AgentProviderInstallError(
+      "the live agent provider installation answered a session setup whose session locator " +
+        "is not readable",
+    );
+  if (typeof value !== "object" || value === null) {
+    throw malformed();
+  }
+  const provider = Reflect.get(value, "provider");
+  const agentCommand = Reflect.get(value, "agentCommand");
+  const sessionKey = Reflect.get(value, "sessionKey");
+  if (
+    typeof provider !== "string" ||
+    typeof agentCommand !== "string" ||
+    (sessionKey !== undefined && typeof sessionKey !== "string")
+  ) {
+    throw malformed();
+  }
+  return Object.freeze({
+    provider,
+    agentCommand,
+    ...(sessionKey === undefined ? {} : { sessionKey }),
+  });
 }
 
 const PERMISSION_MODES: readonly PermissionMode[] = ["approve-all", "approve-reads", "deny-all"];

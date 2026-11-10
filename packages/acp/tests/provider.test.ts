@@ -898,6 +898,8 @@ function stubCoordinator(): CoordinatorLog {
       return {
         ...(setup.sessionIdentity === undefined ? {} : { sessionIdentity: setup.sessionIdentity }),
         requestedModel: setup.requestedModel,
+        agentSessionId: setup.agentSessionId,
+        session: setup.session,
         // Through the genuine owner, like `finish`: this suite's provider work
         // is authorized by the same operation a conversation's requirement
         // would reach, so a provider that settled a setup it never activated

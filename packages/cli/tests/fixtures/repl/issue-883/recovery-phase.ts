@@ -344,12 +344,36 @@ function* useConversing(
       throw new Error("the historical fixture names no active conversation");
     }
     const directory = yield* cwd();
-    const details = yield* resolveSessionDetails(
+    const natural = yield* resolveSessionDetails(
       store,
       `${AGENT}-cmd`,
       directory,
       active.conversation,
     );
+    // Where the history says its provider state is: the placement its latest
+    // Prompt recorded, which a reopened chat continues from (#1221). The run
+    // that produced the fixture placed it from another directory, so today's
+    // natural key would name somewhere this chat has never been.
+    let recorded: string | undefined;
+    for (const record of chat.records) {
+      if (record.kind !== "event" || record.conversation !== active.conversation) {
+        continue;
+      }
+      const event = parseDurableEvent(record.event);
+      if (
+        !event.ok ||
+        event.value.type !== "yield" ||
+        event.value.description.type !== AGENT_PROMPT ||
+        event.value.result.status !== "ok"
+      ) {
+        continue;
+      }
+      const prompt = parsePromptRecord(event.value.result.value);
+      if (prompt !== undefined && prompt.sessionKey !== "") {
+        recorded = prompt.sessionKey;
+      }
+    }
+    const details = { ...natural, sessionKey: recorded ?? natural.sessionKey };
     const runtime = fake.create({
       cwd: directory,
       sessionStore: store,

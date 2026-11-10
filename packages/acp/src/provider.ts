@@ -462,6 +462,8 @@ interface RuntimeEntry {
 interface DetachedSession {
   agentCommand: string;
   cwd: string;
+  /** What a held conversation's history says about this session, when one opened it. */
+  continuation?: Continuation;
   /**
    * Set when a configuration write may have landed and could not be undone.
    *
@@ -503,6 +505,22 @@ interface ManagedSession extends DetachedSession {
    */
 }
 
+/**
+ * What a held conversation's history says about the session it continues.
+ *
+ * The conversation is owned and routed under the command it was first built
+ * with, whichever adapter command executes it today: one logical conversation
+ * has one owner and one construction route, and an adapter changing between
+ * releases does not make it a different conversation. Execution, executable
+ * observation and usage stay with the current command.
+ */
+interface Continuation {
+  /** The initial command coordinate. Never a command this provider runs. */
+  agentCommand: string;
+  /** The native conversation the history's own Prompt records assert, when they assert one. */
+  agentSessionId?: string;
+}
+
 /** Read-only session resolution; the session-details linearization point. */
 type Prepared =
   | { kind: "existing"; sessionKey: string; entry: ManagedSession }
@@ -513,6 +531,7 @@ type Prepared =
       details: AcpxSessionDetails;
       /** The exact value already issued for these details, when there is one. */
       issued?: Session;
+      continuation?: Continuation;
     };
 
 /** The logical name a routed value carries, when it is one. */
@@ -1139,8 +1158,8 @@ function* useAcpxProviderState(
   // declares to Core before any native work, and the options it actually
   // constructs with afterwards. A host that kept its own array and edited a
   // nested member in between would otherwise have declared one configuration
-  // and built another, which is precisely the difference a continuation is
-  // supposed to be able to compare.
+  // and built another, and the conversation's record of what it was built
+  // under would describe something that never ran.
   const mcpServers =
     dependencies?.mcpServers === undefined
       ? undefined
@@ -1212,8 +1231,8 @@ function* useAcpxProviderState(
    * left to the agent's own default makes the whole configuration unstatable
    * rather than being reported as an empty one: an omitted `allowedTools` is
    * whatever tools that agent has, which is not `[]`, and stating otherwise
-   * would let a continuation compare equal to a session built with every tool
-   * enabled.
+   * would record a session built with every tool enabled as one built with
+   * none.
    *
    * A conversation that requires a configuration therefore refuses against a
    * host that did not supply these, which is the honest outcome — and an
@@ -1400,6 +1419,7 @@ function* useAcpxProviderState(
       session: entry.session,
       state: entry.state,
       ...(entry.unusable === undefined ? {} : { unusable: entry.unusable }),
+      ...(entry.continuation === undefined ? {} : { continuation: entry.continuation }),
     });
   }
 
@@ -1624,6 +1644,7 @@ function* useAcpxProviderState(
     routed: { session?: Session; name?: string },
     callerCwd: string,
     sessionIdentity?: string,
+    facts?: Pick<AgentSessionSetup, "agentSessionId" | "session">,
   ): Operation<Prepared> {
     // The exact value this provider issued, resolved by the installation before
     // it got here. What the conversation runs under travels with the operation
@@ -1664,6 +1685,7 @@ function* useAcpxProviderState(
             state: entry.state,
           },
           issued: entry.session,
+          ...(entry.continuation === undefined ? {} : { continuation: entry.continuation }),
         };
       }
       refuseIfUnusable(named.sessionKey);
@@ -1671,17 +1693,75 @@ function* useAcpxProviderState(
     }
     const option = routed.name;
     const agentCommand = resolveAgentCommand(registry, agentName);
+    const continuation = continuationOf(facts);
+    // A held conversation's own placement, read where it is rather than found
+    // again. A key derived from today's command — by the directory walk or by a
+    // host policy that derives it the same way — would name a place this
+    // conversation has never been after the adapter changes, and any record
+    // standing there is somebody else's.
+    const located = continuation === undefined ? undefined : facts?.session?.sessionKey;
     if (sessions) {
+      // The host is still asked first: its answer is where it refuses a session
+      // it cannot continue, before ACPX is contacted. A placement it names
+      // other than the recorded one does not move the conversation there.
       const details = yield* sessions.requestSession({
         agentName,
         agentCommand,
         session: option,
         ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
       });
-      return prepareSessionDetails(agentCommand, details);
+      if (located === undefined || details.sessionKey === located) {
+        return prepareSessionDetails(agentCommand, details, continuation);
+      }
+    }
+    if (located !== undefined) {
+      return prepareSessionDetails(
+        agentCommand,
+        yield* sessionDetails(located, callerCwd),
+        continuation,
+      );
     }
     const details = yield* resolveSessionDetails(store, agentCommand, callerCwd, option);
-    return prepareSessionDetails(agentCommand, details);
+    return prepareSessionDetails(agentCommand, details, continuation);
+  }
+
+  /**
+   * What a held conversation's history says this provider holds for it.
+   *
+   * Only an ACPX history is this provider's to interpret. Before a history
+   * records its initial configuration there is nothing to continue, and the
+   * session is owned under the command it is about to be built with.
+   */
+  function continuationOf(
+    facts: Pick<AgentSessionSetup, "agentSessionId" | "session"> | undefined,
+  ): Continuation | undefined {
+    const located = facts?.session;
+    if (located === undefined || located.provider !== ACPX_PROVIDER) {
+      return undefined;
+    }
+    return {
+      agentCommand: located.agentCommand,
+      ...(facts?.agentSessionId === undefined ? {} : { agentSessionId: facts.agentSessionId }),
+    };
+  }
+
+  /**
+   * The exact record a held conversation's placement names, wherever it is.
+   *
+   * Its own directory, because ACPX reopens a record only in the directory it
+   * was created in. A placement with no record is new: nothing stands there,
+   * and nothing elsewhere is substituted for it.
+   */
+  function* sessionDetails(sessionKey: string, callerCwd: string): Operation<AcpxSessionDetails> {
+    const record = yield* until(store.load(sessionKey));
+    if (record === undefined) {
+      return { sessionKey, cwd: callerCwd, state: "new" };
+    }
+    return {
+      sessionKey,
+      cwd: record.cwd,
+      state: record.sessionMaterialization?.state === "pending" ? "new" : "existing",
+    };
   }
 
   /**
@@ -1691,14 +1771,20 @@ function* useAcpxProviderState(
    * the exact object is what provenance is, and minting a replacement would
    * leave the first one unusable.
    */
-  function prepareSessionDetails(agentCommand: string, details: AcpxSessionDetails): Prepared {
+  function prepareSessionDetails(
+    agentCommand: string,
+    details: AcpxSessionDetails,
+    continuation?: Continuation,
+  ): Prepared {
     refuseIfUnusable(details.sessionKey);
     const held = managed.get(details.sessionKey);
+    const continued = continuation ?? held?.continuation;
     const prepared: Prepared = {
       kind: "details",
       sessionKey: details.sessionKey,
       agentCommand,
       details,
+      ...(continued === undefined ? {} : { continuation: continued }),
     };
     return held === undefined ? prepared : { ...prepared, issued: held.session };
   }
@@ -1754,7 +1840,7 @@ function* useAcpxProviderState(
       cwd,
       state: exists ? "existing" : "new",
     };
-    return prepareSessionDetails(agentCommand, details);
+    return prepareSessionDetails(agentCommand, details, continuationOfPrepared(prepared));
   }
 
   /**
@@ -1778,6 +1864,7 @@ function* useAcpxProviderState(
       cwd: prepared.details.cwd,
       session,
       state: "new",
+      ...(prepared.continuation === undefined ? {} : { continuation: prepared.continuation }),
     });
     return session;
   }
@@ -1842,6 +1929,11 @@ function* useAcpxProviderState(
     // What this provider already knows about this session, so an ensure that
     // replaces the entry does not drop what its <Session> asked for.
     const held = managed.get(prepared.details.sessionKey);
+    const reopening =
+      attachment === undefined && intent.state === "existing"
+        ? yield* reopeningOf(prepared)
+        : undefined;
+    const resumeSessionId = attachment?.resumeSessionId ?? reopening?.acpSessionId;
     let managedEntry: ManagedSession;
     try {
       managedEntry = yield* ensureThrough(
@@ -1851,7 +1943,7 @@ function* useAcpxProviderState(
           agent: agentName,
           mode: "persistent",
           cwd: prepared.details.cwd,
-          ...(attachment === undefined ? {} : { resumeSessionId: attachment.resumeSessionId }),
+          ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
           ...(newSessionOptions === undefined ? {} : { sessionOptions: newSessionOptions }),
           ...(intent.materialization === true
             ? { materialization: "first-turn-acceptance" as const }
@@ -1877,10 +1969,14 @@ function* useAcpxProviderState(
             session,
             state: intent.state,
             ...(held?.unusable === undefined ? {} : { unusable: held.unusable }),
+            ...(prepared.continuation === undefined ? {} : { continuation: prepared.continuation }),
           };
         },
       );
     } catch (error) {
+      // A held reopening loads this provider's own record, so its failure is
+      // reported as an ordinary reattachment's is: the adapter's account,
+      // with nothing created in its place.
       if (attachment === undefined) {
         throw sessionResumeFailure(error, prepared.details.sessionKey);
       }
@@ -1898,6 +1994,34 @@ function* useAcpxProviderState(
     }
     const handle = managedEntry.handle;
 
+    // The ACP loading target and the native conversation are different names,
+    // so a reopened record is held to the native conversation its history
+    // asserts rather than to the target it was loaded by. An adapter that
+    // reports none on load contradicts nothing.
+    //
+    // ACPX saved the arrangement this load answered with before returning it,
+    // so refusing the handle alone would leave the refused assertion standing
+    // as the record's own. The record read before the load is put back once the
+    // handle is given up: the history, its loading target and its native
+    // assertion stay as they were, and a later explicit turn reopens them.
+    if (
+      reopening?.agentSessionId !== undefined &&
+      handle.agentSessionId !== undefined &&
+      handle.agentSessionId !== reopening.agentSessionId
+    ) {
+      yield* abandonHandle(managedEntry, "reopened identity mismatch");
+      try {
+        yield* until(store.save(reopening.record));
+      } catch (error) {
+        cleanupErrors.push(toError(error));
+      }
+      throw new AttachmentRefused({
+        class: "identity-unavailable",
+        message:
+          `session "${prepared.details.sessionKey}" reopened a different native conversation from the ` +
+          `one its history names, so a turn taken here would not belong to it`,
+      });
+    }
     if (attachment !== undefined && handle.agentSessionId !== attachment.resumeSessionId) {
       // The attachment answers with a different conversation than the one this
       // session was constructed as — or with none at all. Nothing here
@@ -1939,6 +2063,46 @@ function* useAcpxProviderState(
   }
 
   /**
+   * The exact ACP session a held conversation's record names, and the record
+   * as it stood before this ensure.
+   *
+   * ACPX reuses a persistent record in place only when it was built by the
+   * same command string and the same argv. Anything else — another adapter, or
+   * the same command given as a string where it was an array — would create a
+   * fresh conversation under the same key. So a held conversation always names
+   * the record's own ACP loading target: a record ACPX can reuse in place is
+   * reused, and any other is loaded through today's command against the
+   * history that already exists, never replaced. Read here, with the
+   * session's queue and ownership held, so the record this answers from is the
+   * one the ensure acts on.
+   *
+   * A pending record asserts nothing and reopens nothing.
+   */
+  function* reopeningOf(
+    prepared: Extract<Prepared, { kind: "details" }>,
+  ): Operation<
+    { acpSessionId: string; agentSessionId?: string; record: AcpSessionRecord } | undefined
+  > {
+    const continuation = prepared.continuation;
+    if (continuation === undefined) {
+      return undefined;
+    }
+    const record = yield* until(store.load(prepared.details.sessionKey));
+    if (record === undefined || record.sessionMaterialization?.state === "pending") {
+      return undefined;
+    }
+    // The history's own account first. Before the host acknowledged one, the
+    // provider's promoted record is the only assertion there is.
+    const agentSessionId = continuation.agentSessionId ?? record.agentSessionId;
+    return {
+      acpSessionId: record.acpSessionId,
+      ...(agentSessionId === undefined ? {} : { agentSessionId }),
+      // Detached, so nothing the ensure does to the store's own object changes it.
+      record: structuredClone(record),
+    };
+  }
+
+  /**
    * The natural key one logical session is owned under.
    *
    * Takes the command that was already resolved, never re-resolves it. A
@@ -1965,6 +2129,20 @@ function* useAcpxProviderState(
 
   function agentCommandOf(prepared: Prepared): string {
     return prepared.kind === "existing" ? prepared.entry.agentCommand : prepared.agentCommand;
+  }
+
+  function continuationOfPrepared(prepared: Prepared): Continuation | undefined {
+    return prepared.kind === "existing" ? prepared.entry.continuation : prepared.continuation;
+  }
+
+  /**
+   * The command a session is owned and routed under.
+   *
+   * The executing command, except for a held conversation, whose owner and
+   * construction route stay where it was first built.
+   */
+  function ownerCommandOf(prepared: Prepared): string {
+    return continuationOfPrepared(prepared)?.agentCommand ?? agentCommandOf(prepared);
   }
 
   /**
@@ -2281,6 +2459,7 @@ function* useAcpxProviderState(
   function* bindProviderNamed(
     agentName: string,
     agentCommand: string,
+    routeCommand: string,
     adapter: BoundProviderReturnedAdapter,
     sessionKey: string,
     hasProviderState: boolean,
@@ -2289,11 +2468,11 @@ function* useAcpxProviderState(
     let route: AgentSessionRoute;
     try {
       route = yield* reconcileRoute(
-        agentCommand,
+        routeCommand,
         sessionKey,
         // deno-lint-ignore require-yield
         function* () {
-          return boundAcpFirstRoute(agentCommand, sessionKey, build.binding);
+          return boundAcpFirstRoute(routeCommand, sessionKey, build.binding);
         },
         hasProviderState,
       );
@@ -2360,6 +2539,9 @@ function* useAcpxProviderState(
       return undefined;
     }
     const agentCommand = agentCommandOf(prepared);
+    // Where the route lives, which for a held conversation is where it was
+    // first built. The executable is still observed for today's command.
+    const routeCommand = ownerCommandOf(prepared);
     // An existing managed entry, or a durable record ACPX already kept, is
     // provider state — and existing history is never reclassified.
     const constructed =
@@ -2371,6 +2553,7 @@ function* useAcpxProviderState(
       const build = yield* bindProviderNamed(
         agentName,
         agentCommand,
+        routeCommand,
         adapter,
         prepared.sessionKey,
         constructed,
@@ -2378,11 +2561,11 @@ function* useAcpxProviderState(
       return { build };
     }
     const route = yield* reconcileRoute(
-      agentCommand,
+      routeCommand,
       prepared.sessionKey,
       // deno-lint-ignore require-yield
       function* () {
-        return acpFirstRoute(agentCommand, prepared.sessionKey);
+        return acpFirstRoute(routeCommand, prepared.sessionKey);
       },
       constructed,
     );
@@ -2884,7 +3067,7 @@ function* useAcpxProviderState(
         yield* ownWithin(
           yield* useScope(),
           agentName,
-          agentCommandOf(resolved),
+          ownerCommandOf(resolved),
           resolved.sessionKey,
           "prompt",
         );
@@ -2904,7 +3087,7 @@ function* useAcpxProviderState(
           const state =
             prepared.kind === "existing"
               ? prepared.entry.state
-              : yield* sessionCreationState(agentName, prepared.agentCommand, prepared.details);
+              : yield* sessionCreationState(agentName, ownerCommandOf(prepared), prepared.details);
           // Inside ownership, before the runtime exists and before a turn: a
           // first Prompt constructs this session through ACP, so that is what
           // its construction route says — and a session a native process
@@ -3480,6 +3663,7 @@ function* useAcpxProviderState(
       try {
         build = yield* bindProviderNamed(
           agentName,
+          agentCommand,
           agentCommand,
           adapter,
           sessionKey,
@@ -4600,20 +4784,20 @@ function* useAcpxProviderState(
         { ...routed, ...(typeof named === "string" ? { name: named } : {}) },
         callerCwd,
         sessionIdentity,
+        setup,
       ),
     );
     const state =
       prepared.kind === "existing"
         ? prepared.entry.state
-        : yield* sessionCreationState(agentName, prepared.agentCommand, prepared.details);
+        : yield* sessionCreationState(agentName, ownerCommandOf(prepared), prepared.details);
     if (setup !== undefined) {
       // The command is resolved and the construction inputs are settled, and
       // nothing has been reattached or created yet — which is the only place
-      // this can be asked. A conversation that refuses what this provider is
-      // about to build under refuses here, before `constructRoute` can publish
-      // anything and before the ensure below could resume a native session
-      // that was created under something else. After `finish` would be after
-      // the reattachment.
+      // this can be asked. A conversation that cannot read what this provider
+      // is about to build under refuses here, before `constructRoute` can
+      // publish anything and before the ensure below could resume a native
+      // session. After `finish` would be after the reattachment.
       const authorized = yield* setup.activate(
         ACPX_PROVIDER,
         agentCommandOf(prepared),
@@ -4638,7 +4822,7 @@ function* useAcpxProviderState(
     }
     return yield* owning(
       agentName,
-      agentCommandOf(prepared),
+      ownerCommandOf(prepared),
       prepared.sessionKey,
       "session",
       function* (ownership) {
@@ -4754,7 +4938,7 @@ function* useAcpxProviderState(
       // The one thing this refuses that `openSession` does not. A name would
       // resolve some other conversation and say nothing about it — and, because
       // only the genuine request reaches the setup the coordinator delivers, it
-      // would also skip the configuration a retained conversation is held to.
+      // would also skip what that setup says about the conversation's history.
       // So a value that is not a request this build issued is refused here
       // rather than quietly routed as a name.
       if (
@@ -4765,8 +4949,8 @@ function* useAcpxProviderState(
       ) {
         throw new Error(
           "a retained conversation resolves the session request it opened, and this is not one — " +
-            "a name, a session or a look-alike names no conversation this provider could hold to " +
-            "what that conversation was created under",
+            "a name, a session or a look-alike names no conversation this provider could " +
+            "continue",
         );
       }
       return yield* resolveSession(request, launchCoordinator, agentName);

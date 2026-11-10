@@ -13,10 +13,11 @@ import type { ReplPluginExtension } from "../../repl-api.ts";
  *
  * Explicit, because an omitted option is not a constraint. A provider given no
  * tool list leaves the agent whatever tools it has, which is the opposite of
- * what this host means — and it is also unstatable, so a conversation that
- * compares what it was created under would have nothing to compare. Stating
- * them is what makes the configuration a fact the chat can be held to when it
- * is reopened.
+ * what this host means — and it is also unstatable, so a conversation could
+ * not record what its sessions were built under. A reopened chat continues
+ * through whatever adapter this build runs, and these constraints apply to
+ * each of its turns because this assembly states them, not because the chat's
+ * history remembers them.
  *
  * It reuses the command's resolved provider dependencies — the same runtime,
  * session store and registry the entry stack was assembled with — and replaces

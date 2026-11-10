@@ -814,7 +814,7 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
     yield* root.discard();
   });
 
-  it("SC2: a reopening continues under its own configuration, and refuses a changed one", function* () {
+  it("SC2: a reopening continues its native conversation, under its own configuration or a changed one", function* () {
     const root = yield* createRepositoryRoot();
     yield* runPhase("chat-open", root, "chat");
 
@@ -868,11 +868,12 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
     expect(before.prompts).toBe(0);
     expect(before.appended).toBe(0);
 
-    // The incompatible arm. Everything is held fixed — the provider, the
-    // resolved command, the conversation, the native identity, the tools, the
-    // servers and the permissions — and one value differs: this host states a
-    // system prompt where the conversation was created with none.
-    const refused = yield* runPhase(
+    // The changed arm. Everything is held fixed — the provider, the resolved
+    // command, the conversation, the native identity, the tools, the servers and
+    // the permissions — and one value differs: this host states a system prompt
+    // where the conversation was created with none. The same native
+    // conversation continues through what this host builds under today (#1221).
+    const changed = yield* runPhase(
       "chat-say",
       root,
       "chat",
@@ -883,23 +884,25 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
         systemPrompt: "You are a differently configured assistant.",
       }),
     );
-    expect(refused.sent).toBe(true);
-    expect(refused.failure).toContain("created under a different provider configuration");
-    // Refused before any native work: no session was reattached or created and
-    // no turn was sent. An availability probe may have happened; a conversation
-    // may not.
-    expect((refused.sessions as string[]).filter((key) => !key.startsWith("xmd:inspect:"))).toEqual(
-      [],
-    );
-    expect(refused.prompts).toBe(0);
+    expect(changed.sent).toBe(true);
+    expect(changed.failure).toBe(null);
+    expect(changed.output).toContain("Three.");
+    // Exactly the new message was sent, and nothing earlier was sent again.
+    expect(changed.prompts).toBe(1);
+    expect(changed.turns).toEqual([
+      expect.objectContaining({ name: "turn:1", conversation: "native-one" }),
+      expect.objectContaining({ name: "turn:2", conversation: "native-one" }),
+      expect.objectContaining({ name: "turn:3", conversation: "native-one" }),
+    ]);
 
-    // And nothing was replaced. The chat, its turns, its native identity and
-    // the configuration it was created under all stand, and a later process
+    // Nothing was replaced. The chat, its turns, its native identity and the
+    // configuration it was first created under all stand, and a later process
     // with the original assembly still continues it.
     const after = yield* runPhase("chat-read", root, "chat");
     expect(after.turns).toEqual([
       expect.objectContaining({ name: "turn:1", conversation: "native-one" }),
       expect.objectContaining({ name: "turn:2", conversation: "native-one" }),
+      expect.objectContaining({ name: "turn:3", conversation: "native-one" }),
     ]);
     expect(
       (after.durables as string[]).filter((one) => one === "agent_conversation_configuration"),

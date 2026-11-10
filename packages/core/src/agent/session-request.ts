@@ -35,6 +35,19 @@
 
 import type { Session, SessionConfiguration } from "./agent-api.ts";
 import type { AdmitProviderConfiguration } from "./provider-configuration.ts";
+import type { AgentSessionSetup } from "./session-setup.ts";
+
+/**
+ * What a held conversation's history says about the provider state it already
+ * stands on, for one request.
+ *
+ * Both members are snapshots the conversation took when it opened the request:
+ * immutable, and never updated by anything that happens afterwards.
+ */
+export interface SessionFacts {
+  readonly agentSessionId: AgentSessionSetup["agentSessionId"];
+  readonly session: AgentSessionSetup["session"];
+}
 
 /** What public session middleware is handed. The name, and nothing else. */
 export interface AgentSessionRequest {
@@ -75,6 +88,10 @@ export interface SessionRequestData {
    */
   readonly admit?: AdmitProviderConfiguration;
   readonly continuation?: "required";
+  /** The native assertion a held conversation's history holds, when it holds one. */
+  readonly agentSessionId: string | undefined;
+  /** Where a held conversation's provider state is, and who owns it. */
+  readonly session: AgentSessionSetup["session"];
   /**
    * Whether the element that opened this request is still resolving it.
    *
@@ -116,6 +133,8 @@ interface Issuance {
    */
   readonly admit?: AdmitProviderConfiguration;
   readonly continuation?: "required";
+  /** What the history of the conversation that opened this request says, for its provider. */
+  readonly facts: SessionFacts;
   /**
    * What the caller asked this conversation to run under.
    *
@@ -253,11 +272,13 @@ export function openSessionRequest(
   name: string | undefined,
   admit?: AdmitProviderConfiguration,
   used = false,
+  facts: SessionFacts = NO_SESSION_FACTS,
 ): SessionRequestIssuance {
   const issuance: Issuance = {
     ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
     ...(admit === undefined ? {} : { admit }),
     ...(used ? { continuation: "required" } : {}),
+    facts: frozenFacts(facts),
     settled: false,
     live: true,
     accepted: false,
@@ -318,6 +339,34 @@ function settle(issuance: Issuance, configuration: SessionConfiguration | undefi
   }
 }
 
+/** What an ordinary request carries: no held conversation at all. */
+const NO_SESSION_FACTS: SessionFacts = Object.freeze({
+  agentSessionId: undefined,
+  session: undefined,
+});
+
+/**
+ * A detached copy of what a conversation's history says, frozen at every level.
+ *
+ * Copied rather than kept, so the value a provider is handed is the snapshot
+ * taken when the request opened and not a view of the conversation's own
+ * state, which moves on as later turns record their outcomes.
+ */
+function frozenFacts(facts: SessionFacts): SessionFacts {
+  const session = facts.session;
+  return Object.freeze({
+    agentSessionId: facts.agentSessionId,
+    session:
+      session === undefined
+        ? undefined
+        : Object.freeze({
+            provider: session.provider,
+            agentCommand: session.agentCommand,
+            ...(session.sessionKey === undefined ? {} : { sessionKey: session.sessionKey }),
+          }),
+  });
+}
+
 /** A copy of what was asked, frozen, carrying only the two settings. */
 function frozenConfiguration(configuration: SessionConfiguration): SessionConfiguration {
   return Object.freeze({
@@ -365,6 +414,8 @@ export function consumeSessionRequest(routed: unknown): SessionRequestData {
     ...(issuance.configuration === undefined ? {} : { configuration: issuance.configuration }),
     ...(issuance.admit === undefined ? {} : { admit: issuance.admit }),
     ...(issuance.continuation === undefined ? {} : { continuation: issuance.continuation }),
+    agentSessionId: issuance.facts.agentSessionId,
+    session: issuance.facts.session,
     live: () => issuance.live,
     finished: (session: Session) => {
       issuance.completed = session;

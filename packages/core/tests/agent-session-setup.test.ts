@@ -282,10 +282,57 @@ describe("Tier SP — session setup ownership", () => {
     // The model is visible; configuration still belongs to finish.
     expect(presence({ model: "gpt-5.4" }).keys).toEqual([
       "activate",
+      "agentSessionId",
       "finish",
       "requestedModel",
+      "session",
       "sessionIdentity",
     ]);
+  });
+
+  it("SP13: a setup carries the history facts its request was opened with, as a frozen snapshot", function* () {
+    const owner = createSessionSetupOwner();
+    // An ordinary request has no history facts, and both members still say so.
+    const ordinary = owner.setup(openSessionRequest("expansion:1", "review").request);
+    expect(Object.hasOwn(ordinary, "agentSessionId")).toBe(true);
+    expect(Object.hasOwn(ordinary, "session")).toBe(true);
+    expect(ordinary.agentSessionId).toBe(undefined);
+    expect(ordinary.session).toBe(undefined);
+
+    // A held conversation's snapshot, taken when the request opened: what the
+    // opener does with its own value afterwards reaches no setup.
+    const located: { provider: string; agentCommand: string; sessionKey?: string } = {
+      provider: "acpx",
+      agentCommand: "old-cmd",
+      sessionKey: "held-key",
+    };
+    const issuance = openSessionRequest("expansion:2", "review", undefined, true, {
+      agentSessionId: "native-1",
+      session: located,
+    });
+    located.sessionKey = "elsewhere";
+    const held = owner.setup(issuance.request.with({ name: "renamed" }));
+    expect(held.agentSessionId).toBe("native-1");
+    expect(held.session).toEqual({
+      provider: "acpx",
+      agentCommand: "old-cmd",
+      sessionKey: "held-key",
+    });
+    expect(Object.isFrozen(held.session)).toBe(true);
+    expect(held.session).not.toBe(located);
+
+    // A locator without a placement carries no placement member at all.
+    const unplaced = owner.setup(
+      openSessionRequest("expansion:3", "review", undefined, false, {
+        agentSessionId: undefined,
+        session: { provider: "acpx", agentCommand: "old-cmd" },
+      }).request,
+    );
+    expect(unplaced.session).toEqual({ provider: "acpx", agentCommand: "old-cmd" });
+    expect(Object.hasOwn(unplaced.session ?? {}, "sessionKey")).toBe(false);
+    // Nothing public carries the facts: the request a handler holds names
+    // only what it always named.
+    expect(Object.keys(issuance.request).sort()).toEqual(["name"]);
   });
 
   it("SP11: what a request asks is settled before it routes, and once", function* () {

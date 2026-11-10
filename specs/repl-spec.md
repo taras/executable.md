@@ -3418,14 +3418,20 @@ may already have it; neither is one this conversation has moved past, because
 something asked after it has since been answered. Both stay in the chat and
 stay readable — what goes is the offer to send them again.
 
-A conversation is continued only under the configuration it was created with.
-What the Sidekick's provider is building a session under — those tools, servers,
-permission settings and that system prompt — is written into the conversation's
-own history before anything native can be created, and the next explicit message
-is checked against it. Reopening checks nothing, because reopening asks for
-nothing. One unsupported difference refuses before the provider reattaches, and
-the chat, its turns and what it was created under all stand; nothing is created
-in their place, and the person is told why rather than being given a new
+A conversation continues its own native history through the adapter this build
+runs. What the Sidekick's provider first built a session under — those tools,
+servers, permission settings and that system prompt — is written into the
+conversation's own history before anything native can be created, and stays
+there unchanged as the account of how the chat began. A later explicit message
+is sent through today's adapter and today's Sidekick assembly to that same
+native conversation, even when the adapter command or the configuration
+differs; the Sidekick's own controls apply to every turn as it is built — no
+provider tools, no MCP servers, strict permission routing and every native
+permission request denied — and the turn's model and effort are applied and
+read back before it is sent. Reopening asks for nothing. A resume, identity,
+build or configuration the provider cannot actually perform fails that message
+and leaves the chat, its turns and its history standing; nothing is created in
+their place, and the person is told why rather than being given a new
 conversation that looks like the old one.
 
 One message does these things in this order: establish storage, resolve the

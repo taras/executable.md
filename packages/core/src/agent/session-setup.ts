@@ -74,19 +74,60 @@ export interface AgentSessionSetup {
    * applies and verifies the requested settings.
    */
   readonly requestedModel: string | undefined;
+
   /**
-   * Authorize provider work; a retained conversation requires its configuration.
+   * The native conversation this held history's Prompt records assert.
+   *
+   * Undefined for ordinary setups and histories whose Prompts assert no
+   * native identity. This is the expected provider assertion,
+   * not an ACP loading target or permission to contact the provider.
+   *
+   * Core supplies this snapshot for this setup only. The provider must
+   * reconcile it before sending a new prompt.
+   */
+  readonly agentSessionId: string | undefined;
+
+  /**
+   * Where this held history's provider state is, and the coordinates it is owned under.
+   *
+   * Undefined before the history records an initial provider configuration,
+   * and for ordinary setups. These historical coordinates select existing
+   * state; they never select today's executable or active configuration.
+   *
+   * Core supplies a detached, immutable snapshot for this setup only.
+   * Possessing it authorizes no provider work.
+   */
+  readonly session:
+    | {
+        /** Provider coordinate from the initial configuration record. */
+        readonly provider: string;
+        /** Initial resolved command coordinate, never a command to execute. */
+        readonly agentCommand: string;
+        /**
+         * The latest nonempty sessionKey in this history's Prompt records.
+         *
+         * Absent before a Prompt records a placement. Its presence locates
+         * provider state; it does not assert native creation or acceptance.
+         */
+        readonly sessionKey?: string;
+      }
+    | undefined;
+
+  /**
+   * Authorize provider work; a held conversation requires a configuration.
    *
    * Asked before the provider reattaches, creates or prompts anything, and
    * answered from what the conversation this request belongs to already holds.
-   * A retained conversation is continued only under the configuration it was
-   * created with, so this is where a difference is refused — after `finish`
-   * would be after the reattachment it was supposed to prevent.
+   * The first activation of a held conversation commits what its sessions
+   * are built under; a later one states the current configuration, which must
+   * be readable, and continues the same native conversation through the
+   * current adapter. A difference from the initial record alone refuses
+   * nothing: that record is historical evidence, not current authority.
    *
-   * `provider` and `agentCommand` are the compatibility facts the conversation
-   * already compares. `configuration` is what this provider is about to
-   * construct under: required for a retained conversation, and omitted by an
-   * ordinary setup, which saves none and keeps its existing behavior.
+   * `provider`, `agentCommand` and `configuration` describe what this
+   * provider is about to construct under: `configuration` is required for a
+   * held conversation, and omitted by an ordinary setup, which saves none
+   * and keeps its existing behavior.
    *
    * One attempt belongs to one setup. A refusal, a cancellation or a closure
    * leaves that setup unable to retry or to finish; a later explicit action
@@ -228,6 +269,8 @@ export function createSessionSetupOwner(): SessionSetupOwner {
           ? {}
           : { sessionIdentity: requested.sessionIdentity }),
         requestedModel: requested.configuration?.model,
+        agentSessionId: requested.agentSessionId,
+        session: requested.session,
         *activate(
           provider: string,
           agentCommand: string,
