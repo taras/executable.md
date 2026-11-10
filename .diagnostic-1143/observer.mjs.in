@@ -30,7 +30,7 @@ export default Plugin({name:"1143-socket-attribution", *install() {
   socket.on("close", onClose);
   socket.on("error", onError);
   const connecting = yield* spawn(() => once(socket, "connect"));
-  socket.connect({host:"127.0.0.1", port:Number(Deno.env.get("XMD_DIAG_PORT"))});
+  socket.connect({host:"127.0.0.1", port:__PORT__});
   yield* connecting;
   let sequence = 0;
   function* emit(kind, data = {}) {

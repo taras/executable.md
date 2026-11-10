@@ -37,9 +37,10 @@ class Capture:
   out.write_text(json.dumps(data))
   return data
 
-def render(source,out):
+def render(source,out,port):
  text=(HERE/"observer.mjs.in").read_text()
  for token,rel in [("__CORE__","packages/core/api.ts"),("__RUNTIME__","packages/runtime/mod.ts"),("__GIT__","packages/git/api.ts")]:text=text.replace(token,json.dumps(str(source/rel)))
+ text=text.replace("__PORT__",str(port))
  file=out/"observer.mjs";file.write_text(text);return file
 
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -48,13 +49,13 @@ def status(source):return subprocess.check_output(["git","status","--porcelain=v
 def invocation(source,out,smoke=False):
  out.mkdir(parents=True,exist_ok=False)
  channel=Capture(out/"s")
- observer=render(source,out)
+ observer=render(source,out,channel.port)
  real=shutil.which("deno");assert real
  shim=out/"bin";shim.mkdir()
  shimfile=shim/"deno"
  shimfile.write_text("#!/usr/bin/env python3\nimport os,sys\na=sys.argv[1:]\nif any(x.endswith('/packages/cli/src/deno.ts') for x in a): a += ['--plugin',"+repr(str(observer))+"]\nos.execv("+repr(real)+",['deno']+a)\n")
  shimfile.chmod(0o755)
- env=dict(os.environ,PATH=str(shim)+os.pathsep+os.environ["PATH"],XMD_DIAG_PORT=str(channel.port),XMD_TEST_ARTIFACTS=str(out/"failure-journals"))
+ env=dict(os.environ,PATH=str(shim)+os.pathsep+os.environ["PATH"],XMD_TEST_ARTIFACTS=str(out/"failure-journals"))
  argv=["pnpm","exec","tsx","--tsconfig","tsconfig.node.json","--test","--test-concurrency=1","packages/cli/tests/adversarial-implementation.test.ts"]
  if smoke:
   sample='<Testing><Test name="benign diagnostic smoke" timeout="20s">\n```sh exec\nsleep 15\n```\n</Test></Testing>'
@@ -73,6 +74,7 @@ def invocation(source,out,smoke=False):
  receipt={"argv":argv,"cwd":str(source),"head":before,"preStatus":before_status,"postHead":head(source),"postStatus":status(source),"startedEpoch":stamp,"elapsedMs":(time.time()-stamp)*1000,"returnCode":code,"signal":-code if code<0 else None,"smokeForcedKill":killed,"events":len(data["events"]),"captureErrors":data["errors"],"connectionsStillOpen":data["connectionsStillOpen"],"observerSha256":digest(observer),"stdoutSha256":digest(out/"stdout.log"),"stderrSha256":digest(out/"stderr.log")}
  (out/"receipt.json").write_text(json.dumps(receipt,indent=2))
  if data["errors"] or data["connectionsStillOpen"]:raise RuntimeError("incomplete diagnostic channel")
+ if not smoke and not any(e.get("kind")=="enter" and e.get("name")=="Fixture.Implementation" for e in data["events"]):raise RuntimeError("carrier never entered the fixture; preserve this diagnostic preflight failure")
  if before!=receipt["postHead"] or before_status!=receipt["postStatus"]:raise RuntimeError("source changed")
  return receipt,data
 
@@ -96,4 +98,5 @@ def main():
  for label,source in [("baseline",a.baseline),("corrected",a.corrected)]:
   r,_=invocation(source.resolve(),a.output/label);receipts.append(r)
  (a.output/"pair-result.json").write_text(json.dumps({"runs":receipts,"interpretation":"one matched allocation; inspect attributed timeout before any causal conclusion; no retries"},indent=2))
+ print(json.dumps({"runs":[{"head":r["head"],"returnCode":r["returnCode"],"elapsedMs":r["elapsedMs"],"events":r["events"]} for r in receipts]}))
 if __name__=="__main__":main()
