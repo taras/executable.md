@@ -1,7 +1,7 @@
 /**
  * The Sample Api — Effection Api for LLM inference.
  *
- * Provider components (e.g., DeepInfraProvider, OllamaProvider) install
+ * Provider components (e.g., OllamaProvider) install
  * middleware via `yield* Sample.around(...)` to route sample calls to
  * their inference server.
  *
@@ -47,7 +47,7 @@ export const Sample: Api<SampleApi> = createApi<SampleApi>("Sample", {
   *sample(_context: SampleContext): Operation<string> {
     throw new Error(
       "Sample Api requires provider middleware — " +
-        "install a provider (e.g., DeepInfraProvider, OllamaProvider) or " +
+        "install a provider (e.g., OllamaProvider) or " +
         "yield* Sample.around({ *sample([ctx], next) { ... } }) " +
         "before using <Sample> components",
     );

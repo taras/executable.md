@@ -7,12 +7,7 @@ import { parseFrontmatter } from "../src/frontmatter.ts";
 import { compilePropsSchema } from "../src/validate.ts";
 
 const ROOT = new URL("../../../", import.meta.url);
-const COMPONENT_DIRS = [
-  "packages/core/components",
-  "smoke-test",
-  "packages/code-review-agent/src/documents/components",
-  "packages/code-review-agent/src/documents/policies",
-];
+const COMPONENT_DIRS = ["packages/core/components", "smoke-test"];
 
 describe("component schema conformance", () => {
   it("every markdown component's props schema parses and compiles", function* () {

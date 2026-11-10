@@ -27,10 +27,6 @@
         "@executablemd/acp/embedded-adapters": ["packages/acp/embedded-adapters.ts"],
         "@executablemd/cli": ["packages/cli/src/deno.ts"],
         "@executablemd/cli/api": ["packages/cli/api.ts"],
-        "@executablemd/code-review-agent": ["packages/code-review-agent/mod.ts"],
-        "@executablemd/code-review-agent/review-components": [
-          "packages/code-review-agent/src/review-components.ts"
-        ],
         "@executablemd/core": ["packages/core/mod.ts"],
         "@executablemd/core/api": ["packages/core/api.ts"],
         "@executablemd/core/host/deno": ["packages/core/component-modules/deno.ts"],
@@ -72,10 +68,6 @@
         "@executablemd/acp/embedded-adapters": ["../../packages/acp/embedded-adapters.ts"],
         "@executablemd/cli": ["../../packages/cli/src/deno.ts"],
         "@executablemd/cli/api": ["../../packages/cli/api.ts"],
-        "@executablemd/code-review-agent": ["../../packages/code-review-agent/mod.ts"],
-        "@executablemd/code-review-agent/review-components": [
-          "../../packages/code-review-agent/src/review-components.ts"
-        ],
         "@executablemd/core": ["../../packages/core/mod.ts"],
         "@executablemd/core/api": ["../../packages/core/api.ts"],
         "@executablemd/core/host/deno": ["../../packages/core/component-modules/deno.ts"],

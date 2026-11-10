@@ -10,23 +10,12 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 
 import { ROOT, runOxlint } from "./oxlint.ts";
 import { BANNED_WORDS } from "../banned-words.js";
-import {
-  categorizeRule,
-  SENSOR_RULES,
-  TYPE_AWARE_RULES,
-} from "../../packages/code-review-agent/src/categories.ts";
-import { summarizeDoctorProbe } from "../../packages/code-review-agent/src/doctor.ts";
 
 const SHARED = "oxlint.shared.json";
 const GATE = ".oxlintrc.json";
-const SENSOR = ".reviews/.oxlintrc.json";
 
-/** A production module, a test module, and a review component. */
-const SUBJECTS = [
-  "packages/code-review-agent/src/doctor.ts",
-  "packages/code-review-agent/tests/doctor.test.ts",
-  "packages/code-review-agent/src/components/Doctor.ts",
-];
+/** A production module and a test module. */
+const SUBJECTS = ["packages/core/mod.ts", "packages/core/tests/expand.test.ts"];
 
 const PLUGINS = ["typescript", "unicorn", "import"];
 
@@ -167,13 +156,6 @@ function severities(rules: Record<string, unknown>): Map<string, string> {
   return new Map(Object.entries(rules).map(([id, value]) => [bare(id), severity(value)]));
 }
 
-function enabled(rules: Record<string, unknown>): string[] {
-  return Object.entries(rules)
-    .filter(([, value]) => severity(value) !== "off")
-    .map(([id]) => id)
-    .sort();
-}
-
 /** A directory of this test's own. */
 function scratch(prefix: string): Operation<string> {
   return useTempDirectory(`${prefix}-`);
@@ -213,23 +195,16 @@ describe("Oxlint policy", () => {
     expect((yield* runOxlint(".oxlint-prose.json", [file])).code).not.toBe(0);
   });
 
-  it("extends one canonical shared policy from both profiles", function* () {
+  it("extends the one shared policy from the gate", function* () {
     const gate = yield* config(GATE);
-    const sensor = yield* config(SENSOR);
 
     expect(gate.extends).toEqual(["./oxlint.shared.json"]);
-    expect(sensor.extends).toEqual(["../oxlint.shared.json"]);
-
-    const fromGate = path.resolve(ROOT, gate.extends[0]);
-    const fromSensor = path.resolve(ROOT, ".reviews", sensor.extends[0]);
-    expect(fromGate).toBe(path.join(ROOT, SHARED));
-    expect(fromSensor).toBe(fromGate);
+    expect(path.resolve(ROOT, gate.extends[0])).toBe(path.join(ROOT, SHARED));
   });
 
-  it("keeps the built-in catalog in the shared source and out of both profiles", function* () {
+  it("keeps the built-in catalog in the shared source and out of the gate", function* () {
     const shared = yield* config(SHARED);
     const gate = yield* config(GATE);
-    const sensor = yield* config(SENSOR);
 
     expect(shared.plugins).toEqual(PLUGINS);
     expect(shared.categories).toEqual({
@@ -238,9 +213,6 @@ describe("Oxlint policy", () => {
       pedantic: "off",
       style: "off",
     });
-
-    const signals = Object.entries(shared.rules).filter(([, value]) => severity(value) === "warn");
-    expect(signals.map(([id]) => bare(id)).sort()).toEqual([...SENSOR_RULES].sort());
 
     const denials = Object.entries(shared.rules).filter(([, value]) => severity(value) === "off");
     expect(denials.map(([id]) => id).sort()).toEqual([...DENIED].sort());
@@ -253,90 +225,24 @@ describe("Oxlint policy", () => {
     ]);
 
     expect(gate.categories).toEqual({});
-    expect(sensor.categories).toEqual({});
-    expect(
-      Object.keys(gate.rules)
-        .map(bare)
-        .filter((id) => SENSOR_RULES.includes(id)),
-    ).toEqual([]);
-    expect(Object.keys(sensor.rules)).toEqual([]);
+    const builtIn = new Set(Object.keys(shared.rules));
+    expect(Object.keys(gate.rules).filter((id) => builtIn.has(id))).toEqual([]);
   });
 
-  it("keeps the curated signal options the sensor's density model reads", function* () {
-    const shared = yield* config(SHARED);
-
-    expect(shared.rules["eslint/no-unused-vars"]).toEqual([
-      "warn",
-      {
-        args: "all",
-        argsIgnorePattern: "^_",
-        varsIgnorePattern: "^_",
-        caughtErrorsIgnorePattern: "^_",
-        destructuredArrayIgnorePattern: "^_",
-        ignoreRestSiblings: true,
-      },
-    ]);
-    expect(shared.rules["eslint/no-console"]).toEqual(["warn", { allow: ["warn", "error"] }]);
-  });
-
-  it("resolves both inheritance chains for production, test and review-component paths", function* () {
+  it("resolves the inheritance chain for production and test paths", function* () {
     for (const subject of SUBJECTS) {
       const gate = yield* profile(GATE, subject);
-      const sensor = yield* profile(SENSOR, subject);
 
       expect(gate.plugins.sort()).toEqual([...PLUGINS].sort());
-      expect(sensor.plugins.sort()).toEqual([...PLUGINS].sort());
       expect(Object.keys(gate.rules).length).toBeGreaterThan(0);
-      expect(Object.keys(sensor.rules).length).toBeGreaterThan(0);
     }
   });
 
-  it("keeps the sensor's built-in rules a subset of the gate's", function* () {
-    for (const subject of SUBJECTS) {
-      const gate = new Set(enabled((yield* profile(GATE, subject)).rules));
-      const sensor = enabled((yield* profile(SENSOR, subject)).rules);
+  it("keeps the named conflicts and undecided candidates off", function* () {
+    const applied = severities((yield* profile(GATE, SUBJECTS[0])).rules);
 
-      expect(sensor.filter((rule) => !gate.has(rule))).toEqual([]);
-    }
-  });
-
-  it("keeps every curated signal warning-enabled for the sensor", function* () {
-    for (const subject of SUBJECTS) {
-      const applied = severities((yield* profile(SENSOR, subject)).rules);
-
-      for (const rule of SENSOR_RULES) {
-        expect([rule, applied.get(rule)]).toEqual([rule, "warn"]);
-        expect([rule, categorizeRule(rule)]).not.toEqual([rule, ["other"]]);
-      }
-    }
-  });
-
-  it("keeps the named conflicts and undecided candidates off in both profiles", function* () {
-    for (const file of [GATE, SENSOR]) {
-      const applied = severities((yield* profile(file, SUBJECTS[0])).rules);
-
-      for (const rule of DENIED) {
-        expect([file, rule, applied.get(bare(rule))]).toEqual([file, rule, "off"]);
-      }
-    }
-  });
-
-  it("keeps the sensor advisory, with no local plugin, local rule or error severity", function* () {
-    const sensor = yield* config(SENSOR);
-    expect(sensor.jsPlugins).toEqual([]);
-    expect(Object.keys(sensor.rules)).toEqual([]);
-    expect(sensor.overrides).toEqual([]);
-
-    for (const subject of SUBJECTS) {
-      const applied = yield* profile(SENSOR, subject);
-      const rules = [
-        ...Object.entries(applied.rules),
-        ...applied.overrides.flatMap((entry) => Object.entries(entry.rules)),
-      ];
-
-      expect(rules.filter(([, value]) => severity(value) === "error")).toEqual([]);
-      expect(rules.map(([id]) => id).filter((id) => id.startsWith("local/"))).toEqual([]);
-      expect(applied.jsPlugins).toEqual([]);
+    for (const rule of DENIED) {
+      expect([rule, applied.get(bare(rule))]).toEqual([rule, "off"]);
     }
   });
 
@@ -359,7 +265,6 @@ describe("Oxlint policy", () => {
   it("carries both the shared and the gate's test override through inheritance", function* () {
     for (const subject of SUBJECTS) {
       const gate = yield* profile(GATE, subject);
-      const sensor = yield* profile(SENSOR, subject);
 
       expect(gate.overrides.map((entry) => entry.files)).toEqual([TEST_FILES, TEST_FILES]);
       expect(gate.overrides.map((entry) => severities(entry.rules).get("no-console"))).toEqual([
@@ -369,70 +274,37 @@ describe("Oxlint policy", () => {
       expect(
         gate.overrides.map((entry) => severities(entry.rules).get("no-redundant-test-scope")),
       ).toEqual([undefined, "error"]);
-
-      expect(sensor.overrides.map((entry) => entry.files)).toEqual([TEST_FILES]);
-      expect(severities(sensor.overrides[0].rules).get("no-console")).toBe("off");
-      expect(severities(sensor.overrides[0].rules).get("no-empty-function")).toBe("off");
     }
   });
 
-  it("applies the shared test override to the files the sensor lints", function* () {
+  it("applies the shared test override to the files the gate lints", function* () {
     const directory = yield* scratch("oxlint-policy");
     const body = 'export function probe() {\n  console.log("probe");\n}\n';
     yield* ensureDir(path.join(directory, "tests"));
     yield* writeTextFile(path.join(directory, "tests", "probe.ts"), body);
     yield* writeTextFile(path.join(directory, "probe.ts"), body);
 
-    for (const file of [GATE, SENSOR]) {
-      const run = yield* runOxlint(file, [
-        "--format=json",
-        path.join(directory, "tests", "probe.ts"),
-        path.join(directory, "probe.ts"),
-      ]);
-      const report = parseReport(run.stdout, `oxlint -c ${file}`);
-      const consoles = report.diagnostics.filter((entry) => entry.code === "eslint(no-console)");
+    const run = yield* runOxlint(GATE, [
+      "--format=json",
+      path.join(directory, "tests", "probe.ts"),
+      path.join(directory, "probe.ts"),
+    ]);
+    const report = parseReport(run.stdout, `oxlint -c ${GATE}`);
+    const consoles = report.diagnostics.filter((entry) => entry.code === "eslint(no-console)");
 
-      expect(consoles.map((entry) => path.relative(directory, entry.filename))).toEqual([
-        "probe.ts",
-      ]);
-    }
+    expect(consoles.map((entry) => path.relative(directory, entry.filename))).toEqual(["probe.ts"]);
   });
 
-  it("reports Doctor's catalog as the curated signals", function* () {
-    const available = summarizeDoctorProbe({ exitCode: 0, stderr: "", diagnostics: [] });
-    expect(available.bloatRulesAvailable).toEqual([...SENSOR_RULES]);
-    expect(available.bloatRulesMissing).toEqual([]);
-
-    const syntaxOnly = summarizeDoctorProbe({
-      exitCode: 2,
-      stderr: "tsgolint panic",
-      diagnostics: [],
-    });
-    const typeAware = new Set<string>(TYPE_AWARE_RULES);
-    expect(syntaxOnly.bloatRulesMissing).toEqual([...TYPE_AWARE_RULES]);
-    expect(syntaxOnly.bloatRulesAvailable.sort()).toEqual(
-      SENSOR_RULES.filter((rule) => !typeAware.has(rule)).sort(),
-    );
-  });
-
-  it("pins one Oxlint and one tsgolint version across the toolchain", function* () {
-    const provisioning = yield* readTextFile(
-      path.join(ROOT, "packages/code-review-agent/src/documents/components/EnsureOxlint.md"),
-    );
-    const oxlint = /const OXLINT_TAG = "apps_v([\d.]+)";/u.exec(provisioning);
-    const tsgolint = /const TSGOLINT_VERSION = "([\d.]+)";/u.exec(provisioning);
-    if (!oxlint || !tsgolint) {
-      throw new Error("EnsureOxlint.md no longer declares its Oxlint and tsgolint versions");
-    }
+  it("pins one exact Oxlint version across the toolchain", function* () {
+    const nodeManifest = JSON.parse(yield* readTextFile(path.join(ROOT, "package.json")));
+    const version = nodeManifest.devDependencies.oxlint;
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/u);
 
     const denoConfig = yield* readTextFile(path.join(ROOT, "deno.json"));
-    const nodeManifest = yield* readTextFile(path.join(ROOT, "package.json"));
-    expect(denoConfig).toContain(`"oxlint": "npm:oxlint@${oxlint[1]}"`);
-    expect(denoConfig).toContain(`"oxlint-tsgolint": "npm:oxlint-tsgolint@${tsgolint[1]}"`);
-    expect(nodeManifest).toContain(`"oxlint": "${oxlint[1]}"`);
+    expect(denoConfig).toContain(`"oxlint": "npm:oxlint@${version}"`);
 
     const run = yield* runOxlint(GATE, ["--version"]);
-    expect(run.stdout.trim()).toContain(oxlint[1]);
+    expect(run.stdout.trim()).toContain(version);
   });
 
   it("fails rather than reporting an empty policy when inheritance is broken", function* () {

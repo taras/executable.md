@@ -347,86 +347,52 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
  * asked for by name.
  */
 describe(
-  "the trusted review graph, as both installations load it",
+  "a selected Plugin's own names, as both installations load it",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     /**
-     * The review graph belongs to the Plugin an operator selected, in both
-     * installations, and a checkout cannot take a name back from it.
-     *
-     * A review is the one program that must not be answerable by the thing it is
-     * reviewing. While its components lived in `.reviews/` and every entrypoint
-     * reached them with `--include`, a pull request could add its own
-     * `Finding.md` and the review would run the branch's copy while reporting on
-     * it. So the graph moved into the package, and this is the proof that it
-     * actually reaches a person's installation when they select it. XMD bundles
-     * no Plugin: both installations name the package by path, which is also the
-     * route an installation with no checkout has.
+     * The names a selected Plugin declares or reserves belong to it, in both
+     * installations, and a checkout cannot take one back.
      *
      * Everything here is deliberately hostile to the mechanism. The working
      * directory is not the checkout, so a lookup that resolved relative to the
-     * process or to a subject tree finds nothing. No review include is passed, so
-     * a build that still depended on one renders nothing. And the one include
-     * that *is* passed contains a same-named `Finding.md` that accepts exactly the
-     * props the real one accepts — it would succeed and quietly emit its own
-     * marker if selection preferred it, rather than failing in a way that would
-     * pass this case for the wrong reason.
+     * process or to a subject tree finds nothing. The one include that is
+     * passed contains same-named `Shadowed.md` and `Stamp.md` files — one for
+     * the declared Markdown tier, one for the reserved registration — that
+     * would succeed and quietly emit their own markers if selection preferred
+     * them, rather than failing in a way that would pass this case for the
+     * wrong reason.
      *
      * The unrelated `CustomProbe.md` in the same directory is the other half:
-     * reserving forty-one names is not the same as turning discovery off, and a
-     * change that secured the review by disabling `--include` would be a
-     * regression this would catch.
-     *
-     * No agent, no network, no credential and no browser: the components chosen
-     * here render from their own bytes, which is what makes this cheap enough to
-     * be an ordinary case.
+     * reserving names is not the same as turning discovery off, and a change
+     * that secured them by disabling `--include` would be a regression this
+     * would catch.
      */
-    it("supplies the trusted review graph to both installations that select it", function* () {
+    it("supplies the selected Plugin's components to both installations", function* () {
       if (!(yield* exists(BINARY))) {
         throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
       }
 
-      const FINDING = path.join(
-        ROOT,
-        "packages/code-review-agent/src/documents/components/Finding.md",
-      );
-      const trusted = yield* readTextFile(FINDING);
-      const digest = createHash("sha256").update(trusted, "utf8").digest("hex");
+      // The bytes `declaring.mjs` declares for `<Shadowed>`.
+      const shadowed = "the selected declaration, not the checkout's\n";
+      const digest = createHash("sha256").update(shadowed, "utf8").digest("hex");
 
-      const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-trusted-review-")));
+      const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-selected-plugin-")));
       yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
       const custom = path.join(elsewhere, "custom");
       yield* until(mkdir(custom));
 
-      yield* writeTextFile(
-        path.join(custom, "Finding.md"),
-        [
-          "---",
-          "props:",
-          "  type: object",
-          "  properties:",
-          "    when: { type: boolean }",
-          "    severity: { type: string }",
-          "    message: { type: string }",
-          "  required: [when, message]",
-          "  additionalProperties: false",
-          "---",
-          "",
-          "HOSTILE-FINDING {props.message}",
-        ].join("\n"),
-      );
+      yield* writeTextFile(path.join(custom, "Shadowed.md"), "HOSTILE-SHADOWED");
+      yield* writeTextFile(path.join(custom, "Stamp.md"), "HOSTILE-STAMP");
       yield* writeTextFile(path.join(custom, "CustomProbe.md"), "the caller's own component ran");
       yield* writeTextFile(
         path.join(elsewhere, "doc.md"),
-        ['<Finding when={true} severity="error" message="probe" />', "", "<CustomProbe />"].join(
-          "\n",
-        ),
+        ["<Shadowed />", "", "<Stamp />", "", "<CustomProbe />"].join("\n"),
       );
 
-      // The graph is a Plugin an operator selects, so both installations name
-      // it the same way: an explicit path to the package that ships it. XMD
-      // bundles none, and neither of these carries it until it is named.
-      const review = `--plugin=${path.join(ROOT, "packages/code-review-agent/mod.ts")}`;
+      // Both installations name the Plugin the same way: an explicit path, which
+      // is also the route an installation with no checkout has.
+      const plugin = `--plugin=${path.join(ROOT, "packages/cli/tests/fixtures/plugins/declaring.mjs")}`;
       const installations = [
         ["compiled", BINARY, [] as string[]],
         ["source", Deno.execPath(), ["run", "--allow-all", path.join(ROOT, SOURCE_ENTRY)]],
@@ -438,28 +404,27 @@ describe(
       for (const [label, command, args] of installations) {
         const attempt = yield* timebox<ProcessResult>(TIMEOUT, function* () {
           return yield* exec(command, {
-            // One include, and it is the caller's. The Plugin is named, and
-            // nothing names the review components — which is the entire claim:
-            // a selected declaration beats a same-named file in the include.
-            arguments: [...args, "run", review, "doc.md", "--include", "custom"],
+            // One include, and it is the caller's: a selected declaration or
+            // reservation beats a same-named file in it.
+            arguments: [...args, "run", plugin, "doc.md", "--include", "custom"],
             cwd: elsewhere,
           }).join();
         });
         if (attempt.timeout) {
-          throw new Error(`the ${label} installation timed out running the review components`);
+          throw new Error(`the ${label} installation timed out running the Plugin's components`);
         }
         const run = attempt.value;
         expect(`${label}: ${run.code}\n${run.stderr}`).toBe(`${label}: 0\n`);
         rendered[label] = run.stdout;
 
-        // The declared component rendered: its own `ts eval` chose the icon from
-        // the severity it was given, which the caller's plain-prose copy could
-        // not have produced.
-        expect(`${label}: ${run.stdout.includes("🔴 probe")}`).toBe(`${label}: true`);
-        // And the checkout's same-named component never ran.
-        expect(`${label}: ${run.stdout.includes("HOSTILE-FINDING")}`).toBe(`${label}: false`);
+        expect(`${label}: ${run.stdout.includes(shadowed.trim())}`).toBe(`${label}: true`);
+        expect(`${label}: ${run.stdout.includes("stamped by the selected Plugin")}`).toBe(
+          `${label}: true`,
+        );
+        // And the checkout's same-named components never ran.
+        expect(`${label}: ${run.stdout.includes("HOSTILE")}`).toBe(`${label}: false`);
         // While the caller's unrelated component resolved exactly as it always
-        // did. A change that secured the review by disabling inclusion fails here.
+        // did. A change that secured the names by disabling inclusion fails here.
         expect(`${label}: ${run.stdout.includes("the caller's own component ran")}`).toBe(
           `${label}: true`,
         );
@@ -467,9 +432,8 @@ describe(
         const described = yield* timebox<ProcessResult>(TIMEOUT, function* () {
           return yield* exec(command, {
             // The same selection: what an installation describes is what it
-            // would run, and describing it without the Plugin would describe a
-            // vocabulary the run above did not have.
-            arguments: [...args, "syntax", review, "--json", "--include", "custom"],
+            // would run.
+            arguments: [...args, "syntax", plugin, "--json", "--include", "custom"],
             cwd: elsewhere,
           }).join();
         });
@@ -482,48 +446,40 @@ describe(
           (category: { entries: unknown[] }) => category.entries,
         );
 
-        const finding = entries.filter((entry: { name?: string }) => entry?.name === "Finding");
+        const declared = entries.filter((entry: { name?: string }) => entry?.name === "Shadowed");
         // Once. A build listing it twice would be describing the caller's copy
         // beside the declared one, which is a vocabulary no run has.
-        expect(`${label}: ${finding.length}`).toBe(`${label}: 1`);
-        // The identity, whole: the package and the asset rather than a path, and
-        // the digest of the bytes this build actually ships. A build carrying
-        // different bytes under this name answers differently here.
-        expect(finding[0].origin).toEqual({
+        expect(`${label}: ${declared.length}`).toBe(`${label}: 1`);
+        // The identity, whole: the declared origin rather than a path, and the
+        // digest of the bytes the Plugin states.
+        expect(declared[0].origin).toEqual({
           kind: "declared-markdown",
-          origin: "@executablemd/code-review-agent/components/Finding.md",
+          origin: "fixture/declaring/Shadowed.md",
           digest,
         });
-        expect(finding[0].sourceKind).toBe("declared-markdown");
-        reported[label] = finding[0];
+        expect(declared[0].sourceKind).toBe("declared-markdown");
+        reported[label] = declared[0];
 
-        // The TypeScript half of the same graph is equally claimed. Moving only
-        // the Markdown would have left shadowable exactly the six components that
-        // run processes, read credentials and reach the network.
-        const context = entries.filter(
-          (entry: { name?: string }) => entry?.name === "ReviewContext",
-        );
-        expect(`${label}: ${context.length}`).toBe(`${label}: 1`);
-        expect(context[0].origin).toEqual({
+        // The registered tier is reserved as well.
+        const stamp = entries.filter((entry: { name?: string }) => entry?.name === "Stamp");
+        expect(`${label}: ${stamp.length}`).toBe(`${label}: 1`);
+        expect(stamp[0].origin).toEqual({
           kind: "registered",
-          origin: "@executablemd/code-review-agent",
+          origin: "fixture/declaring",
           reserved: true,
         });
 
-        // And the whole graph is present, not just the two probed above. A build
-        // that shipped a partial `src/documents/` would resolve some names and
-        // fail on the rest at a reviewer's first run.
-        const declared = entries.filter(
+        // And every declaration is present, not just the one probed above.
+        const all = entries.filter(
           (entry: { sourceKind?: string; origin?: { origin?: string } }) =>
             entry?.sourceKind === "declared-markdown" &&
-            entry.origin?.origin?.startsWith("@executablemd/code-review-agent/"),
+            entry.origin?.origin?.startsWith("fixture/declaring/"),
         );
-        expect(`${label}: ${declared.length}`).toBe(`${label}: 35`);
+        expect(`${label}: ${all.length}`).toBe(`${label}: 2`);
       }
 
-      // The two installations are one product. A compiled binary has no checkout
-      // to read from and a source run has nothing else, so an asset that reached
-      // one and not the other would show up here rather than at a reviewer's.
+      // The two installations are one product, so a declaration that reached
+      // one and not the other shows up here.
       expect(rendered.compiled).toBe(rendered.source);
       expect(reported.compiled).toEqual(reported.source);
     });

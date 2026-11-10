@@ -442,7 +442,7 @@ describe("local/require-scope-bound-event-registration", () => {
   });
 
   it("finds no configuration entry turning the rule off for a path", function* () {
-    for (const config of [".oxlintrc.json", "oxlint.shared.json", ".reviews/.oxlintrc.json"]) {
+    for (const config of [".oxlintrc.json", "oxlint.shared.json"]) {
       const source = yield* readTextFile(path.join(ROOT, config));
       const off = new RegExp(`"local/${RULE}":\\s*(?:"off"|\\["off")`, "u").test(source);
       expect([config, off]).toEqual([config, false]);

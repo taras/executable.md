@@ -33,7 +33,6 @@
         "@durable-streams/server": "^0.3.8",
         "@executablemd/acp": "workspace:*",
         "@executablemd/cli": "workspace:*",
-        "@executablemd/code-review-agent": "workspace:*",
         "@executablemd/core": "workspace:*",
         "@executablemd/durable-streams": "workspace:*",
         "@executablemd/git": "workspace:*",
@@ -83,10 +82,6 @@
         "effection": "4.1.0",
         "zod": "^4.3.6",
       },
-    },
-    "packages/code-review-agent": {
-      "name": "@executablemd/code-review-agent",
-      "version": "0.14.1",
     },
     "packages/core": {
       "name": "@executablemd/core",
@@ -334,8 +329,6 @@
     "@executablemd/acp": ["@executablemd/acp@workspace:packages/acp"],
 
     "@executablemd/cli": ["@executablemd/cli@workspace:packages/cli"],
-
-    "@executablemd/code-review-agent": ["@executablemd/code-review-agent@workspace:packages/code-review-agent"],
 
     "@executablemd/core": ["@executablemd/core@workspace:packages/core"],
 
