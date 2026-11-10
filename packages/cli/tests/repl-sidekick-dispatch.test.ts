@@ -878,62 +878,63 @@ describe("987 — held recovery admission and queue", () => {
   }
 });
 
+function reconciling(held: Harness): () => Operation<Result<void>> {
+  return function* () {
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    yield* held.execution.stream.settled();
+    const entries = held.session.reading(undefined);
+    if (!entries.ok) {
+      throw entries.error;
+    }
+    const findings = yield* coldReservations(
+      yield* held.execution.chat.writer.readAll(),
+      entries.value.model.entries,
+      held.execution.chat.location.entries,
+    );
+    if (!findings.ok) {
+      return findings;
+    }
+    for (const finding of findings.value) {
+      yield* retainResolution(held.execution.chat.writer, finding);
+    }
+    return Ok(undefined);
+  };
+}
+function stopping(held: Harness): Operation<SidekickDispatch> {
+  return useSidekickDispatch({
+    owner: held.owner,
+    admission: createSidekickAdmission(),
+    execution: held.execution.id,
+    workspace: held.workspace,
+    changed() {},
+    reconcile: reconciling(held),
+  });
+}
+function* counted(): Operation<{ held: Harness; effects(): number }> {
+  let effects = 0;
+  const held = yield* useHarness(undefined, {
+    entryInstallation: {
+      components: [
+        {
+          name: "CountedEffect",
+          origin: "test",
+          props: { type: "object", additionalProperties: false },
+          factory: () =>
+            function* () {
+              effects++;
+              return "counted once";
+            },
+        },
+      ],
+    },
+  });
+  return { held, effects: () => effects };
+}
+const SUBMIT = fills("<CountedEffect />") + "\n<REPL.Submit />\n<Output>Working.</Output>";
+
 describe("1151 — ordinary Send after a joined human Stop", () => {
-  function reconciling(held: Harness): () => Operation<Result<void>> {
-    return function* () {
-      if (held.execution.chat.form !== "paired") {
-        throw new Error("Expected paired history.");
-      }
-      yield* held.execution.stream.settled();
-      const entries = held.session.reading(undefined);
-      if (!entries.ok) {
-        throw entries.error;
-      }
-      const findings = yield* coldReservations(
-        yield* held.execution.chat.writer.readAll(),
-        entries.value.model.entries,
-        held.execution.chat.location.entries,
-      );
-      if (!findings.ok) {
-        return findings;
-      }
-      for (const finding of findings.value) {
-        yield* retainResolution(held.execution.chat.writer, finding);
-      }
-      return Ok(undefined);
-    };
-  }
-  function stopping(held: Harness): Operation<SidekickDispatch> {
-    return useSidekickDispatch({
-      owner: held.owner,
-      admission: createSidekickAdmission(),
-      execution: held.execution.id,
-      workspace: held.workspace,
-      changed() {},
-      reconcile: reconciling(held),
-    });
-  }
-  function* counted(): Operation<{ held: Harness; effects(): number }> {
-    let effects = 0;
-    const held = yield* useHarness(undefined, {
-      entryInstallation: {
-        components: [
-          {
-            name: "CountedEffect",
-            origin: "test",
-            props: { type: "object", additionalProperties: false },
-            factory: () =>
-              function* () {
-                effects++;
-                return "counted once";
-              },
-          },
-        ],
-      },
-    });
-    return { held, effects: () => effects };
-  }
-  const SUBMIT = fills("<CountedEffect />") + "\n<REPL.Submit />\n<Output>Working.</Output>";
   function promptEvents(all: readonly SidekickRecord[]): number {
     return all.filter((one) => {
       if (one.kind !== "event") {
@@ -1068,5 +1069,172 @@ describe("1151 — ordinary Send after a joined human Stop", () => {
       ["Run the counted effect.", "ui"],
       ["The post-Stop instruction.", "ui"],
     ]);
+  });
+});
+
+function conversationOf(held: Harness): string | undefined {
+  const reading = held.owner.reading;
+  if (!reading.ok) {
+    throw reading.error;
+  }
+  return reading.value.active;
+}
+
+describe("1183 — admission behind live automatic feedback", () => {
+  const FOLLOW_UP = "When that finishes, explain the changes.";
+  function* feedbackHeld(held: Harness, dispatch: SidekickDispatch): Operation<SidekickExchange> {
+    const first = yield* send(dispatch, "Run the counted effect.");
+    yield* held.fake.holdingTurns(1);
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(held.fake.prompts[1]).toContain("counted once");
+    return first;
+  }
+
+  it("A5: UI and ACP work wait in FIFO behind the exact live request, and a withdrawn one never starts", function* () {
+    const { held, effects } = yield* counted();
+    held.fake.script({ reply: SUBMIT });
+    held.fake.script({ reply: "<Output>Feedback answer.</Output>", held: true });
+    held.fake.script({ reply: "<Output>UI answer.</Output>" });
+    held.fake.script({ reply: "<Output>ACP answer.</Output>" });
+    const dispatch = yield* stopping(held);
+    const first = yield* feedbackHeld(held, dispatch);
+    const conversation = conversationOf(held);
+    const raw = held.owner.reading;
+    if (!raw.ok) {
+      throw raw.error;
+    }
+    expect(raw.value.unestablished).toEqual([{ conversation, turn: null }]);
+    expect(raw.value.recoveryPending).toBe(true);
+    expect(held.owner.recoveryPending).toBe(false);
+
+    const ui = yield* send(dispatch, FOLLOW_UP);
+    const withdrawn = yield* send(dispatch, "Withdrawn before it starts.");
+    const acp = yield* scoped(function* () {
+      yield* SidekickOrigin.set({ kind: "acp", attachment: "attachment" });
+      return yield* send(dispatch, "ACP follow-up.");
+    });
+    expect([ui, withdrawn, acp].map((one) => one.snapshot.state)).toEqual([
+      "queued",
+      "queued",
+      "queued",
+    ]);
+    expect(dispatch.queue.held).toBe(undefined);
+    yield* withdrawn.cancel();
+    expect((yield* withdrawn.completion).ok).toBe(false);
+    expect(dispatch.queue.pending.map((one) => one.text)).toEqual([FOLLOW_UP, "ACP follow-up."]);
+    expect(dispatch.current).toBe(first);
+    expect(held.fake.prompts).toHaveLength(2);
+
+    held.fake.releaseTurn();
+    for (const exchange of [first, ui, acp]) {
+      const done = yield* exchange.completion;
+      if (!done.ok) {
+        throw done.error;
+      }
+    }
+    expect(held.fake.prompts).toHaveLength(4);
+    expect(held.fake.prompts[2]).toContain(FOLLOW_UP);
+    expect(held.fake.prompts[3]).toContain("ACP follow-up.");
+    expect(held.fake.prompts.some((one) => one.includes("Withdrawn before it starts."))).toBe(
+      false,
+    );
+    const after = yield* records(held.execution);
+    expect(
+      after.flatMap((one) =>
+        one.kind === "message" ? [[one.text, one.origin.kind, one.conversation]] : [],
+      ),
+    ).toEqual([
+      ["Run the counted effect.", "ui", conversation],
+      [FOLLOW_UP, "ui", conversation],
+      ["ACP follow-up.", "acp", conversation],
+    ]);
+    expect(
+      after.flatMap((one) => (one.kind === "feedback" ? [one.turn === null ? null : "named"] : [])),
+    ).toEqual([null, "named"]);
+    const settled = held.owner.reading;
+    if (!settled.ok) {
+      throw settled.error;
+    }
+    expect(settled.value.unestablished).toEqual([]);
+    expect(settled.value.recoveryPending).toBe(false);
+    expect(held.owner.recoveryPending).toBe(false);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
+  });
+
+  it("A3: a failed live request holds the waiting message and keeps its recovery", function* () {
+    const { held, effects } = yield* counted();
+    held.fake.script({ reply: SUBMIT });
+    held.fake.script({
+      reply: "<Output>Unfinished</Output>",
+      held: true,
+      failure: "The provider failed the feedback.",
+    });
+    const dispatch = yield* stopping(held);
+    const first = yield* feedbackHeld(held, dispatch);
+    const next = yield* send(dispatch, FOLLOW_UP);
+    expect(next.snapshot.state).toBe("queued");
+    held.fake.releaseTurn();
+    const failed = yield* first.completion;
+    expect(failed.ok ? "" : failed.error.message).toContain("The provider failed the feedback.");
+    expect(dispatch.queue.held?.kind).toBe("failure");
+    expect(dispatch.queue.pending.map((one) => one.text)).toEqual([FOLLOW_UP]);
+    expect(next.snapshot.state).toBe("queued");
+    expect(held.owner.recoveryPending).toBe(true);
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    expect(reading.value.unestablished).toEqual([
+      { conversation: reading.value.active, turn: null },
+    ]);
+    const resumed = yield* dispatch.resume();
+    expect(resumed.ok ? "" : resumed.error.message).toContain("cannot be established");
+    const another = yield* dispatch.send("Another follow-up.");
+    expect(another.ok ? "" : another.error.message).toContain("cannot be established");
+    expect(dispatch.queue.pending.map((one) => one.text)).toEqual([FOLLOW_UP]);
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
+  });
+
+  it("A3: a human Stop of the live request joins and lends no consent to the waiting message", function* () {
+    const { held, effects } = yield* counted();
+    held.fake.script({ reply: SUBMIT });
+    held.fake.script({ deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 });
+    const dispatch = yield* stopping(held);
+    const first = yield* send(dispatch, "Run the counted effect.");
+    yield* held.fake.streamingTurns(1);
+    const older = yield* send(dispatch, FOLLOW_UP);
+    expect(older.snapshot.state).toBe("queued");
+    expect(held.owner.recoveryPending).toBe(false);
+    dispatch.hold();
+    yield* first.cancel("human");
+    expect((yield* first.completion).ok).toBe(false);
+    const stopped = yield* records(held.execution);
+    expect(stopped.filter((one) => one.kind === "human-stop")).toHaveLength(1);
+    expect(held.owner.recoveryPending).toBe(true);
+    expect(dispatch.queue.held?.kind).toBe("stopped");
+    const refused = yield* dispatch.resume();
+    expect(refused.ok ? "" : refused.error.message).toContain("cannot be established");
+    expect(dispatch.queue.pending.map((one) => one.text)).toEqual([FOLLOW_UP]);
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(yield* records(held.execution)).toEqual(stopped);
+
+    const fresh = yield* send(dispatch, "The post-Stop instruction.");
+    yield* older.cancel();
+    held.fake.script({ reply: "<Output>The post-Stop answer.</Output>" });
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    const sent = yield* fresh.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain("The post-Stop instruction.");
+    expect(held.fake.prompts.some((one) => one.includes(FOLLOW_UP))).toBe(false);
+    const after = yield* records(held.execution);
+    expect(after.filter((one) => one.kind === "recovery-decision")).toHaveLength(1);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
   });
 });

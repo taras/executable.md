@@ -2953,8 +2953,11 @@ history position is selected, or while Sidekick is active. Arrival wakes the
 screen without moving selection, focus, Follow or either editable draft.
 Ordinary `xmd run` retains its existing foreground forwarding.
 
-When feedback has no exact completed canonical input, `[review recovery]` shows
-the original request, saved failure, established entries and unfinished controls.
+When feedback has no exact completed canonical input and is not the exact
+in-flight request owned by the live exchange, `[review recovery]` shows the
+original request, saved failure, established entries and unfinished controls.
+Ordinary live feedback alone does not expose the recovery action. Losing the live
+owner leaves the retained uncertainty subject to the existing recovery rules.
 The action sits with the conversation's fixed controls, directly above the tray
 and outside the scrolling chat, so neither a long conversation nor its scroll
 position hides it at any supported size. It belongs to the Message keyboard
@@ -3292,6 +3295,14 @@ one active exchange. Each message is at most 65536 UTF-8 bytes; a full queue or
 oversize message refuses before clearing text, with no eviction or truncation.
 Successful composer Send clears only its accepted Message revision. Newer typing
 survives; Retry consumes no composer text and ACP changes neither field.
+
+An otherwise eligible message also enters the queue while this live owner is
+asking the provider for automatic feedback. The exception names only the exact
+pending feedback request owned by that exchange; other unresolved feedback and
+pending recovery decisions keep their existing guard. Queue admission starts no
+additional prompt, evaluation or writer. Before a waiting message starts, the
+owner checks eligibility again. A failed or interrupted feedback exchange retains
+the applicable queue hold and recovery behavior.
 
 Waiting work has no ordinary saved message record. When it starts, ordinary saved
 acknowledgement releases only matching Draft takeover before response controls

@@ -95,6 +95,7 @@ import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
+  COMPOSER_VALUE,
   composerHolds,
   draftHolds,
   draftText,
@@ -5127,5 +5128,61 @@ describe("protected Sidekick question feedback", () => {
     expect(JSON.stringify(saved).includes(value)).toBe(false);
     expect(held.fake.prompts.some((prompt) => prompt.includes(value))).toBe(false);
     expect(held.fake.prompts.some((prompt) => prompt.includes("useful"))).toBe(true);
+  });
+});
+
+describe("1183 — a follow-up sent during live automatic feedback", () => {
+  it("A1/A2: queues visibly behind the held feedback and starts once on the same conversation", function* () {
+    const page = yield* useReplPage();
+    const FOLLOW_UP = "When that finishes, explain the changes.";
+    page.repl.fake.script({ reply: followSubmission("<Output>COUNTED-ENTRY</Output>") });
+    page.repl.fake.script({ reply: "<Output>Feedback answer.</Output>", held: true });
+    page.repl.fake.script({ reply: "<Output>Follow-up answer.</Output>" });
+    yield* sendMessage(page, "run the counted entry");
+    yield* page.repl.fake.holdingTurns(1);
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(page.repl.fake.prompts[1]).toContain("Entry entry-1 completed.");
+    const held = yield* settledReading(page.repl);
+    expect(held.model.entries.map((entry) => entry.terminal?.status)).toEqual(["ok"]);
+    expect(held.chat.filter((record) => record.kind === "feedback")).toHaveLength(1);
+
+    yield* page.press("QUEUE");
+    yield* sendMessage(page, FOLLOW_UP);
+    yield* page.until(
+      "the queued follow-up row and the cleared composer",
+      (one) =>
+        one.shows(FOLLOW_UP) &&
+        one.found(FOLLOW_UP, COMPOSER_VALUE) === 0 &&
+        one.shows("QUEUE 1/16"),
+    );
+    yield* intoComposer(page);
+    yield* typed(page, "newer unsent text");
+    const queued = page.screen();
+    expect(queued.shows("[review recovery]")).toBe(false);
+    expect(queued.shows("cannot be established")).toBe(false);
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    const before = yield* settledReading(page.repl);
+    expect(before.chat.filter((record) => record.kind === "message")).toHaveLength(1);
+
+    page.repl.fake.releaseTurn();
+    yield* page.until("the follow-up's answer", (one) => one.shows("Follow-up answer."));
+    yield* savedReplies(page.repl, 3);
+    yield* page.until("the follow-up joined", sidekickIdle);
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.repl.fake.prompts[2]).toContain(FOLLOW_UP);
+    expect(page.screen().found("newer unsent text", COMPOSER_VALUE)).toBe(1);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    const after = yield* settledReading(page.repl);
+    const messages = after.chat.flatMap((record) => (record.kind === "message" ? [record] : []));
+    expect(messages.map((record) => record.text)).toEqual(["run the counted entry", FOLLOW_UP]);
+    expect(new Set(messages.map((record) => record.conversation)).size).toBe(1);
+    expect(
+      after.chat.filter((record) => record.kind === "feedback" && record.turn === null),
+    ).toHaveLength(1);
+    expect(after.model.entries.map((entry) => entry.terminal?.status)).toEqual(["ok"]);
+    expect(after.model.entries[0]?.terminal?.output).toContain("COUNTED-ENTRY");
+    const known = yield* projected(after.chat);
+    expect(known.unestablished).toEqual([]);
+    expect(known.recoveryPending).toBe(false);
   });
 });

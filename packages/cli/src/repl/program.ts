@@ -2922,10 +2922,7 @@ function sidekickReadingOf(
   // current association, which is what a person who has not chosen is reading.
   const reading = selected ?? active;
   return Object.freeze({
-    recovery:
-      read.value.recoveryPending ||
-      (read.value.recoveries.length === 0 &&
-        read.value.unestablished.some((one) => one.conversation === active)),
+    recovery: owner.recoveryPending,
     chat: sidekickChatRows(read.value, owner.previewing),
     // What the replies of this history actually did to this execution's
     // entries, as the coordinates their records hold. Detached from the chat

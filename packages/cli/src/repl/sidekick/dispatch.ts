@@ -204,12 +204,7 @@ export function* useSidekickDispatch(options: {
     if (!reading.ok) {
       return reading;
     }
-    if (
-      !eligible(head) &&
-      (reading.value.recoveryPending ||
-        (reading.value.recoveries.length === 0 &&
-          reading.value.unestablished.some((one) => one.conversation === reading.value.active)))
-    ) {
+    if (!eligible(head) && owner.recoveryPending) {
       return Err(
         new Error("This conversation holds feedback whose acceptance cannot be established."),
       );
