@@ -19,6 +19,8 @@ saved to `outcome.json` before that release, including when the turn fails.
 
 <Delivery.Schema as="schemas" />
 <Let as="instructions">
+Finish this native call with its review JSON result. Run required checks in the foreground and join every process you start before returning. A progress message, monitor or future notification does not complete the review.
+
 Perform one independent correctness review of {props.revision} in {props.delivery.repository}. Read the repository instructions and inspect that exact commit and its affected consumers. Keep source unchanged. Reuse applicable evidence; run only focused evidence that distinguishes a finding. Do not run broad confidence suites or wait for CI. Do not delegate, implement, publish comments, or merge. Report a concrete blocker rather than substituting a provider or repeating an uncertain call.
 
 Review these recorded acceptance clauses against their original selected sources. A derived check cannot strengthen or replace them. Report a material ambiguity as blocked.

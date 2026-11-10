@@ -200,7 +200,7 @@ export function* installAgentProviderStack(
       ...(acp ?? hostAcpDependencies(stack)),
       newSessionOptions: {
         env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-        disallowedTools: ["ScheduleWakeup"],
+        disallowedTools: ["ScheduleWakeup", "Monitor"],
       },
     }),
   );

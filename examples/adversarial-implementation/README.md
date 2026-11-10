@@ -377,7 +377,8 @@ from claiming readiness or merging independently.
 
 Claude workflow-role calls use the CLI's scoped `claude-workflow-role` provider.
 Each role installs it directly around its authored session, covering initial and
-continued prompts. It disables native shell/subagent backgrounding and denies `ScheduleWakeup`;
+continued prompts. It disables native shell/subagent backgrounding and denies
+`ScheduleWakeup` and `Monitor`;
 ordinary interactive Sidekick calls keep their defaults. A retained session that
 lacks matching creation settings refuses before another prompt. Each role joins
 its owned processes and returns its result in the same call. The upfront brief

@@ -464,7 +464,7 @@ const reviewSource =
 
 const workflowControls = {
   env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-  disallowedTools: ["ScheduleWakeup"],
+  disallowedTools: ["ScheduleWakeup", "Monitor"],
 };
 
 const scopedRoleSource =
@@ -676,6 +676,10 @@ describe(
         expect(settled.turn).toEqual({ state: "reply", reply: review });
         expect(fake.prompts).toHaveLength(1);
         expect(fake.prompts[0]).toContain(`independent correctness review of ${revision}`);
+        expect(fake.prompts[0]).toContain("Finish this native call with its review JSON result.");
+        expect(fake.prompts[0]).toContain(
+          "Run required checks in the foreground and join every process you start before returning.",
+        );
         expect(fake.prompts[0]).toContain(
           JSON.stringify(acceptance, null, 2).split("\n")[2]!.trim(),
         );
