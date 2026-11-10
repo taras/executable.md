@@ -3210,18 +3210,26 @@ layering those live values over retained head values.
 A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
 What a reply may write is the compact surface derived from what is admitted; what
-an entry may write is a read, using core's structured symbols and selection over the
-ordinary entry's current registry, finalized includes and host declarations.
+an entry may write is a read over the ordinary entry's current registry,
+finalized includes and host declarations. The index uses core's structured
+symbols. Named lookup uses core's
+[full reference selection and renderer](executable-mdx-spec.md#531-syntax--the-protected-symbols-component).
 It carries the existing assertion defaults, including Assert, AssertEquals and
 AssertThrows, without entering the broader CLI run profile's testing, Verbose
 or web bootstrap. Each ask reads current session component files; Plugin selection is
 captured once per command, and another configured command describes its own
 selection. Earlier saved discovery stays historical feedback.
 
-Bare `<REPL.Syntax />` returns a compact index: exact names in their existing
-categories, one bounded short purpose per name and a copyable named lookup.
-It projects the current structured symbols without prop tables, JSON or return
-schemas, detailed usage or origin boilerplate. `<REPL.Syntax names={["If", "File"]} />`
+Bare `<REPL.Syntax />` returns a compact index with exact names in symbol order
+under their existing categories and a copyable named lookup. Each purpose uses
+the symbol's trimmed description, collapses whitespace to single spaces and
+takes the text through the first period, question mark or exclamation point
+followed by a space, or keeps the whole description if none matches. A missing
+or blank description points to the named reference.
+An origin-only repository TypeScript component instead says its contract is
+unavailable without importing it. A purpose longer than 160 UTF-16 code units
+keeps the first 159 and an ellipsis. Markdown escaping follows truncation.
+The index omits prop tables, schemas, detailed usage and origin boilerplate. `<REPL.Syntax names={["If", "File"]} />`
 returns complete selected references, including engine and installed structural
 forms, props and parent constraints. Canonical bare `<Syntax />`, CLI syntax and
 version-1 JSON keep their existing formats.
