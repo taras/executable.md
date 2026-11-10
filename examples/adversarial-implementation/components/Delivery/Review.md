@@ -44,7 +44,19 @@ mkdir -- {quotedReplacement}
 <Delivery.Reconcile delivery={props.delivery} revision={props.revision} publish={true} as="receipt" />
 <Return value={receipt} />
 <Else>
-<If condition={read.selection.chain === "single"}><Fail message="Independent review did not return a joined result. Preserve this attempt and reconcile the original call; do not launch another reviewer." /></If>
+<If condition={read.selection.chain === "single" && read.state.hold === null}>
+<Let as="unfinished" value={false} />
+<If condition={read.state.attempts[0]?.state === "held"}>
+<Dir path={read.directory}><Glob include={["raw.txt"]} as="replies" /></Dir>
+<If condition={replies.length !== 0}>
+<Delivery.Schema as="schemas" />
+<Ticket.Text path={read.directory + "/raw.txt"} as="raw" />
+<SafeParse schema={schemas.progress} as="progress">{raw}</SafeParse>
+<Let as="unfinished" value={progress.ok} />
+</If>
+</If>
+<If condition={!unfinished}><Fail message="Independent review did not return a joined result. Preserve this attempt and reconcile the original call; do not launch another reviewer." /></If>
+</If>
 <Delivery.Hold delivery={props.delivery} revision={props.revision} as="held" />
 <Return value={held} />
 </Else>

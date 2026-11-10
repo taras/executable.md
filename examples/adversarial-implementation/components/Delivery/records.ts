@@ -99,7 +99,7 @@ export const holdSchema = z.strictObject({
   schema: z.literal("delivery-review-hold.v1"),
   work: z.string().min(1),
   revision: z.string().regex(/^[0-9a-f]{40}$/),
-  chain: z.enum(["fable-astra", "astra-final"]),
+  chain: selectionSchema.shape.chain,
   summary: z.string().min(1),
   unknown: z.string().min(1),
   attempts: z.array(attemptSchema).min(1).max(2),
