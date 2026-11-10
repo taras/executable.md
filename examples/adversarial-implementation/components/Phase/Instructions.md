@@ -39,7 +39,7 @@ You are the repository {props.role}. Perform the assigned phase using the reposi
 Repository instructions:
 <File path="AGENTS.md" />
 
-<Let as="roleInstructions"><If condition={props.role === "architect"}><File path=".agents/architect.md" /></If><If condition={props.role === "planner"}><File path=".agents/planner.md" /></If><If condition={props.role === "implementor"}><File path=".agents/implementor.md" /></If></Let>
+<File path={".agents/" + props.role + ".md"} as="roleInstructions" />
 Role instructions:
 <If condition={props.inputs.some(input => input.path === props.assignment.repository + "/.agents/" + props.role + ".md" && input.content === roleInstructions)}>
 Use the selected role instructions below.

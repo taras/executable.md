@@ -83,13 +83,13 @@ git -C {quoted} rev-parse HEAD
 </Test>
 
 <Test name="initial instructions deliver an identical selected role brief once and retain current authority for older captures">
-<Let as="roleGuide"><File path=".agents/implementor.md" /></Let>
+<File path=".agents/implementor.md" as="roleGuide" />
 <Let as="assignment" value={{repository:location.stdout.trim(),phase:"implementation",work:"role-guide",revision:"a".repeat(40),request:"Implement the accepted behavior.",continuation:{phase:"review",role:"planner"}}} />
-<Each in={["absent","identical","older"]} let="variant">
-<Let as="content" value={variant === "older" ? "# Implementor\nOlder captured role instructions." : roleGuide} />
+<Each in={["absent","identical","older","whitespace"]} let="variant">
+<Let as="content" value={variant === "older" ? "# Implementor\nOlder captured role instructions." : variant === "whitespace" ? roleGuide + " " : roleGuide} />
 <Let as="inputs" value={variant === "absent" ? [] : [{path:assignment.repository + "/.agents/implementor.md",content}]} />
 <Let as="instructions"><Phase.Instructions role="implementor" assignment={assignment} inputs={inputs} initialize={true} submission={{path:"/frozen/submission-guide.md"}} /></Let>
-<AssertEquals actual={instructions.split("# Implementor").length - 1} expected={variant === "older" ? 2 : 1} />
+<AssertEquals actual={instructions.split("# Implementor").length - 1} expected={variant === "older" || variant === "whitespace" ? 2 : 1} />
 <AssertEquals actual={instructions.includes(roleGuide)} expected={variant !== "identical"} />
 <If condition={variant !== "absent"}><AssertStringIncludes actual={instructions} expected={JSON.stringify(content)} /></If>
 </Each>
