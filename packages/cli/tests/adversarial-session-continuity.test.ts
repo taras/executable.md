@@ -455,6 +455,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
 }
 
 const roleSource =
+  '<Delivery.Schema as="schemas" /><Dir path={props.attempt}><File path="assignment.json"><Json value={{work:props.delivery.work,revision:props.revision,reviewer:props.reviewer,acceptance:props.delivery.policy.acceptance,responseSchema:schemas.review,maxResponseCorrections:props.delivery.maxResponseCorrections ?? 0}} /></File></Dir>' +
   "<Delivery.Role delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} choices={props.choices} position={0} attempt={props.attempt} />";
 const reviewSource =
   '<Delivery.Review delivery={props.delivery} revision={props.revision} as="result" /><Json value={result} />';
@@ -543,7 +544,7 @@ describe(
           choices: ["fable", "claude-fable-5-1[1m]"],
           attempt,
         });
-        expect(ran.ok).toBe(true);
+        expect(ran).toMatchObject({ ok: true });
         const settled = outcome.parse(
           JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))),
         );
@@ -763,11 +764,6 @@ describe(
       );
       function* reviewAt(sha: string) {
         const attempt = join(harness.delivery.directory as string, `review-${sha}`);
-        yield* ensureDir(attempt);
-        yield* writeTextFile(
-          join(attempt, "assignment.json"),
-          JSON.stringify({ work: "production-review", revision: sha, reviewer }),
-        );
         const ran = yield* harness.run(roleSource, {
           delivery: harness.delivery,
           revision: sha,
@@ -786,13 +782,14 @@ describe(
       ).toBe("unavailable");
       expect(fake.prompts).toEqual([]);
       fake.configuration(catalog(["fable"]));
-      fake.script({ reply: review });
+      const currentReview = review.replace(revision, "c".repeat(40));
+      fake.script({ reply: currentReview });
       const first = yield* reviewAt("c".repeat(40));
-      expect(first.ran.ok).toBe(true);
+      expect(first.ran).toMatchObject({ ok: true });
       expect(fake.prompts).toHaveLength(1);
       expect(
         outcome.parse(JSON.parse(yield* readTextFile(join(first.attempt, "outcome.json")))).turn,
-      ).toEqual({ state: "reply", reply: review });
+      ).toEqual({ state: "reply", reply: currentReview });
       const established = z
         .object({
           name: z.string(),
