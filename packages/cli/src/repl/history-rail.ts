@@ -34,8 +34,8 @@
  * to reach one of them, which is the whole point of retaining it.
  */
 
-import { close, fit, open, text } from "@bomb.sh/tty";
-import type { Op } from "@bomb.sh/tty";
+import { close, fit, open, text } from "../../generated/tty/mod.js";
+import type { Op } from "../../generated/tty/mod.js";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { tokenRuns } from "./description.ts";

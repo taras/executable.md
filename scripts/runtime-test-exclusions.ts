@@ -102,6 +102,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/tty-preparation.test.ts",
+    reason:
+      "its subject is scripts/lib/prepare-tty.ts, the setup producer that `deno task deps` runs: it selects the pinned compiler by Deno.build and runs the upstream generator through Deno.execPath(), so under Node and Bun the module cannot select a compiler at all. The runtime it produces is exercised under all three by packages/cli/tests/repl-tty-cache.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/tty-distribution.test.ts",
+    reason:
+      "both distributions it inspects are Deno's own build outputs: it runs `deno publish --dry-run` for the JSR selection and `deno compile` for the canonical binary, through Deno.execPath(); the npm artifact is asserted in scripts/tests/cli-npm-bin.test.ts and the runtime itself under all three by packages/cli/tests/repl-tty-cache.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/prepared-state.test.ts",
     reason:
       "fingerprints a prepared tree and a Deno cache through Deno.readDirSync/lstatSync and asks `deno info` where the caches are — Deno-only",

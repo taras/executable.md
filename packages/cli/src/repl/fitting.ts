@@ -36,8 +36,8 @@
 import { boundaries, caretRow } from "./caret.ts";
 import type { ReplCaret, ReplCaretRow } from "./caret.ts";
 
-import { close, fit, open, text } from "@bomb.sh/tty";
-import type { Op } from "@bomb.sh/tty";
+import { close, fit, open, text } from "../../generated/tty/mod.js";
+import type { Op } from "../../generated/tty/mod.js";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import type { ReplRenderer } from "./renderer.ts";

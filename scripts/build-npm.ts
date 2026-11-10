@@ -108,6 +108,9 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
   return [...shipped, ...found];
 }
 
+/** Package-relative notices of prepared runtimes a package's module graph imports. */
+const PREPARED_NOTICES = ["generated/tty/NOTICE.txt"];
+
 const ExportsSchema = z.union([z.string(), z.record(z.string(), z.string())]);
 
 const DenoJsonSchema = z.object({
@@ -447,6 +450,16 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     const target = new URL(`esm/${asset}`, outDir);
     yield* ensureDir(fromFileUrl(new URL(".", target)));
     yield* copyFile(new URL(asset, pkgDir), target);
+  }
+
+  // A prepared runtime's notice is no module, so dnt never emits it beside the
+  // modules it covers.
+  for (const notice of PREPARED_NOTICES) {
+    if (yield* exists(new URL(notice, pkgDir))) {
+      const target = new URL(`esm/${notice}`, outDir);
+      yield* ensureDir(fromFileUrl(new URL(".", target)));
+      yield* copyFile(new URL(notice, pkgDir), target);
+    }
   }
 
   ctx.built.set(denoJson.name, { name: denoJson.name, dir: pkgArg, internal });

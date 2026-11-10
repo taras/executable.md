@@ -44,7 +44,12 @@
  * those passes are one result in the order the terminal sent them.
  */
 
-import { createInput, type Input, type InputEvent, type ScanResult } from "@bomb.sh/tty";
+import {
+  createInput,
+  type Input,
+  type InputEvent,
+  type ScanResult,
+} from "../../generated/tty/mod.js";
 import { type Operation, resource, until } from "effection";
 
 import type { ReplInputEvent, ReplKey } from "./description.ts";

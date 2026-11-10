@@ -588,6 +588,11 @@ describe("prepared Claude preflight", () => {
         yield* copyFile(new URL(input, REPO_ROOT), new URL(relative, root));
       }
     }
+    const tty = "packages/cli/generated/tty/";
+    yield* ensureDir(fileURLToPath(new URL(tty, root)));
+    for (const name of yield* readdir(new URL(tty, REPO_ROOT))) {
+      yield* copyFile(new URL(`${tty}${name}`, REPO_ROOT), new URL(`${tty}${name}`, root));
+    }
     const path = "packages/acp/generated/claude-snapshot.ts";
     expect(unprepared(root)).toContain(`${path} is missing`);
     expect(() => assertPrepared(root)).toThrow("deno task setup");

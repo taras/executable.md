@@ -19,7 +19,7 @@ every `@executablemd/*` package to npm (primary) and JSR (secondary). npm publis
 per package; JSR publishes all workspace packages together. Binaries come
 first: `publish-packages.yml` publishes nothing until `release.yml` succeeds,
 so npm versions never exist without matching binaries. Both workflows build
-from the tag's commit. [Prepared Claude adapter](#11-prepared-claude-adapter) describes the generated input both distributions carry.
+from the tag's commit. [Prepared Claude adapter](#11-prepared-claude-adapter) and [prepared terminal runtime](#12-prepared-terminal-runtime-executablemdcli) describe the generated inputs both distributions carry.
 
 ```mermaid
 sequenceDiagram
@@ -190,7 +190,7 @@ tarballs. Verify it on the emitted manifest: after a `scripts/build-npm.ts` run,
 
 ### Building a package
 
-The checkout includes the verified [prepared Claude adapter](#11-prepared-claude-adapter) before this builder walks its graph.
+The checkout includes the verified [prepared Claude adapter](#11-prepared-claude-adapter) and [prepared terminal runtime](#12-prepared-terminal-runtime-executablemdcli) before this builder walks its graph. A prepared runtime's notice is no module, so the builder copies it beside the emitted modules it covers.
 
 One build serves both purposes, and it runs in two phases.
 
@@ -242,7 +242,7 @@ directory empty. Release workflows never set the variable.
 
 ### JSR publishing
 
-ACP explicitly includes its ignored [prepared Claude module](#11-prepared-claude-adapter) in the selected package files.
+ACP explicitly includes its ignored [prepared Claude module](#11-prepared-claude-adapter) in the selected package files. The CLI explicitly includes its ignored [prepared terminal runtime](#12-prepared-terminal-runtime-executablemdcli) and excludes that runtime's producer inputs.
 
 `deno publish` runs once from the repo root and publishes every workspace member
 together. Members reference each other by bare name (`@executablemd/core`) with
@@ -727,7 +727,7 @@ inputs name it. A package that ships its *first* document adds one entry to
 
 ## 10. Canonical compile inputs
 
-The imported prepared Claude module travels through the canonical graph for every target; no whole producer tree or archive is included (§11).
+The imported prepared Claude module travels through the canonical graph for every target; no whole producer tree or archive is included (§11). The prepared terminal runtime's modules travel the same way, and its notice is one named include (§12).
 
 `deno compile` embeds what `--include` names and nothing else, and reports no
 omission: the binary compiles, runs, and fails at the moment a person asks it
@@ -830,3 +830,15 @@ Exact public source and SDK hashes, patch and compiler pins, deterministic file/
 Codex retains its maintained archive and generated snapshot route. Its adapter launches the selected host-installed Codex CLI and has no bundled Codex CLI dependency or executable fallback. Readable source changes, exact source, lock and compiler inputs, and a repeatable source build and pack procedure reproduce the shipped executable bytes. The archive, manifest and generated snapshot agree on content and digest. Source, JSR, npm and compiled distributions carry that same adapter. Producer preparation precedes builds and checks, which fetch and install no producer inputs. Fresh materialization contains no @openai/codex or Codex platform executable packages. Both adapters use the existing byte-digest identity; repacking does not migrate saved records or equate another snapshot identity.
 
 Reproducibility covers the adapter bytes only. The host supplies the Codex CLI the adapter launches. Updating that CLI can change ordinary availability and the advertised model catalog without changing the adapter digest. Native-bound work remains governed separately by its exact executable build binding. [Decision 004](decisions/004-host-installed-codex-cli.md) records this trade-off.
+
+## 12. Prepared terminal runtime (`@executablemd/cli`)
+
+The CLI's terminal engine is `@bomb.sh/tty` 0.9.0 built from source with one local patch, not the published package. The published engine's text-measurement cache matches entries by hash alone, so two different texts with one hash share one width, and a REPL reading cut for that width refuses or loses characters (#1216). The patch compares the retained text bytes and measurement inputs after a hash match. Each engine instance copies a key into storage of its own only when it publishes the cache entry, so an entry refused for capacity keeps none. That storage is bounded by the wire buffer's nominal budget and reset before a layout that could exceed it. A key that still does not fit, including every key of a layout larger than that budget, which a resized instance can admit, compares against the call's own immutable wire bytes, and the cache resets after presenting. No copy is written outside that storage. The public runtime interface is unchanged.
+
+Repository source carries the recipe (`packages/cli/vendor/tty/recipe.json`), the readable `clay-text-cache.patch` and the combined `NOTICE.txt`. The recipe pins the tty source and npm archives (tty commit and npm `gitHead` agree), the Clay source archive, the upstream debug-mode patch, the patch pre- and postimages, a WASI SDK 27.0 archive for each host, the compiler identity and argument vector, the upstream payload generator, and the expected WASM, generator output and runtime file hashes. Producer archives, compiler trees and generated WASM do not belong in tracked source.
+
+`deno task deps` prepares it after the Claude adapter and before caching any graph: it downloads and verifies the inputs, applies the upstream and local patches, compiles with the pinned compiler and encodes the payload with the upstream generator, all in invocation-private scratch. It then publishes the gitignored `packages/cli/generated/tty/`: the ten published runtime modules with only `wasm.js`'s encoded payload replaced and a Deno self-types directive added, the ten published declarations byte for byte, and the notice. Any input, patch site, compiler identity or output byte that differs refuses, so a host whose compiler yields other bytes refuses rather than producing a different runtime. Publication stages the complete directory beside the old one and swaps it in; failure or cancellation joins its tools and writes and leaves the previous complete output. Readiness is recorded only after the complete preparation succeeds, and the preflight refuses missing, altered, unexpected or stale output, naming `deno task setup`.
+
+CLI modules import the prepared module by relative path, so no distribution declares an external tty dependency. JSR selects `generated/tty/**` and excludes `vendor/tty/**`. The npm builder emits the modules through the CLI's graph, restores the supplied declarations and copies the notice. Canonical compilation embeds the modules through the graph and the notice as an include, without producer trees or archives.
+
+Two fresh preparations reproduce the recipe's runtime. Distribution checks inspect the JSR selection and run its selected runtime, execute and typecheck the emitted npm runtime, and reopen a settled REPL entry through the host binary. `verify:clean` prepares a clone and proves the subsequent builds stay offline and leave dependency state and locks unchanged.

@@ -36,6 +36,11 @@ export const PREPARED_INPUTS = [
   "scripts/lib/claude-recipe.ts",
   "scripts/lib/claude-snapshot-module.ts",
   "packages/acp/src/adapter-snapshot-type.ts",
+  "packages/cli/vendor/tty/recipe.json",
+  "packages/cli/vendor/tty/clay-text-cache.patch",
+  "packages/cli/vendor/tty/NOTICE.txt",
+  "scripts/lib/prepare-tty.ts",
+  "scripts/lib/tty-recipe.ts",
 ];
 
 /** Where the copy of `input` lives inside the marker directory. */

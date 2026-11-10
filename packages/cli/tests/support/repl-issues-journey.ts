@@ -88,7 +88,7 @@ function* holding(path: string, content: string): Operation<void> {
  *
  * The pointer selects the named offered value without submitting the form.
  */
-function* click(pty: Pty, text: string): Operation<void> {
+export function* click(pty: Pty, text: string): Operation<void> {
   const screen = yield* pty.shows();
   const row = screen.findIndex((line) => line.includes(text));
   if (row < 0) {
@@ -104,7 +104,7 @@ function* click(pty: Pty, text: string): Operation<void> {
 }
 
 /** Wait for the command to end, and answer with its status. */
-function* ended(pty: Pty): Operation<number> {
+export function* ended(pty: Pty): Operation<number> {
   const deadline = Date.now() + ACT_MS;
   while (true) {
     const status = yield* pty.status();
@@ -122,7 +122,7 @@ function* ended(pty: Pty): Operation<number> {
 }
 
 /** The one location this command printed for a caller to come back with. */
-function printedLocation(screen: string): string {
+export function printedLocation(screen: string): string {
   const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
   if (found === null || found[1] === undefined) {
     throw new Error(

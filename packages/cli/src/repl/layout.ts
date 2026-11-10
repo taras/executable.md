@@ -35,8 +35,8 @@
  * cannot hit — so every size and inset here is stated as whole cells.
  */
 
-import { close, fixed, fit, grow, open, text } from "@bomb.sh/tty";
-import type { Op, OpenElement, SizingAxis } from "@bomb.sh/tty";
+import { close, fixed, fit, grow, open, text } from "../../generated/tty/mod.js";
+import type { Op, OpenElement, SizingAxis } from "../../generated/tty/mod.js";
 import { runText } from "./description.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
 import type { ReplTokenRun } from "./description.ts";

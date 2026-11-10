@@ -1,0 +1,164 @@
+{
+  "format": 1,
+  "source": {
+    "url": "https://codeload.github.com/bombshell-dev/tty/tar.gz/7fb1097b19282c480092c2653dff3133fc001bcf",
+    "commit": "7fb1097b19282c480092c2653dff3133fc001bcf",
+    "sha256": "dbce8dba65de8dc2de48dea559df549c372966239a760be6448c343b4b2debfc",
+    "bytes": 1876240
+  },
+  "clay": {
+    "url": "https://codeload.github.com/nicbarker/clay/tar.gz/938967ac9a62d3115bc25f8e4827cd46567f4bca",
+    "commit": "938967ac9a62d3115bc25f8e4827cd46567f4bca",
+    "sha256": "67941a8e8d86d25e63f0c72edd465aef91e4d8eb8a708780c124704bca3608e9",
+    "bytes": 4657251,
+    "header": "clay.h",
+    "headerSha256": "9ffc2de6020af50e03924f2e4961558cbbff6c3246b0c326cab784d89f3b6412"
+  },
+  "npm": {
+    "url": "https://registry.npmjs.org/@bomb.sh/tty/-/tty-0.9.0.tgz",
+    "gitHead": "7fb1097b19282c480092c2653dff3133fc001bcf",
+    "integrity": "sha512-1fX9lgwdc+kGRQeVEYwv7cJb5i855ysvB/TMCC3/wnnjMiKLZjWew6LLnsAMq4pLzkweivYw+zwYNZRUVhjoBA==",
+    "sha256": "137cae9964908098378fcac0aed2fe5937f988ae83fb650c913e6beb240123bc",
+    "bytes": 53212
+  },
+  "upstreamPatch": {
+    "path": "patches/clay-debug-mode-enabled.patch",
+    "directory": "clay",
+    "sha256": "4e8b269fe55e3638035451d1878081c723a71edcb6161aca5b680a47dfd50222"
+  },
+  "patchSha256": "f86e9b5687a154dcbef7c22c512bd2b9054fdcb5ae950bbd7188b1e3f1470f9a",
+  "noticeSha256": "a367678cfb5f2097d36746b6ee38d50be97fe6c41cbb52dfecd2f55b879c909b",
+  "preimages": {
+    "clay/clay.h": "31df33f75dcd8a1f9746c0f6d587815e4b299aa00ef1137de851f0cc6b643b59",
+    "src/clayterm.c": "033d1a29b8da1f88d9b31869c93d453f983933fcd68beed45ea2a06c19d7982f"
+  },
+  "postimages": {
+    "clay/clay.h": "a2f91516c78697df0e47e686740e2a5823ea44c30938b6bd9b6a174b2ee429ee",
+    "src/clayterm.c": "0b7e7200011e4af14d730d293e7c9c9f6077b437bfcb96af8a933de15b47b6cf"
+  },
+  "compiler": {
+    "release": "https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-27",
+    "version": "clang version 20.1.8-wasi-sdk (https://github.com/llvm/llvm-project 87f0227cb60147a26a1eeb4fb06e3b505e9c7261)",
+    "archives": {
+      "aarch64-darwin": {
+        "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-arm64-macos.tar.gz",
+        "sha256": "055c3dc2766772c38e71a05d353e35c322c7b2c6458a36a26a836f9808a550f8",
+        "bytes": 113649205,
+        "root": "wasi-sdk-27.0-arm64-macos"
+      },
+      "aarch64-linux": {
+        "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-arm64-linux.tar.gz",
+        "sha256": "4cf4c553c4640e63e780442146f87d83fdff5737f988c06a6e3b2f0228e37665",
+        "bytes": 124841089,
+        "root": "wasi-sdk-27.0-arm64-linux"
+      },
+      "aarch64-windows": {
+        "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-arm64-windows.tar.gz",
+        "sha256": "2eed3c05909e090b4bc04ed6bd3ff476d4a383d1d79c844dff1b047db5974ff2",
+        "bytes": 545862970,
+        "root": "wasi-sdk-27.0-arm64-windows"
+      },
+      "x86_64-darwin": {
+        "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-x86_64-macos.tar.gz",
+        "sha256": "163dfd47f989b1a682744c1ae1f0e09a83ff5c4bbac9dcd8546909ab54cda5a1",
+        "bytes": 115456127,
+        "root": "wasi-sdk-27.0-x86_64-macos"
+      },
+      "x86_64-linux": {
+        "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-x86_64-linux.tar.gz",
+        "sha256": "b7d4d944c88503e4f21d84af07ac293e3440b1b6210bfd7fe78e0afd92c23bc2",
+        "bytes": 124790235,
+        "root": "wasi-sdk-27.0-x86_64-linux"
+      },
+      "x86_64-windows": {
+        "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-x86_64-windows.tar.gz",
+        "sha256": "4a576c13125c91996d8cc3b70b7ea0612c2044598d2795c9be100d15f874adf6",
+        "bytes": 542821292,
+        "root": "wasi-sdk-27.0-x86_64-windows"
+      }
+    },
+    "arguments": [
+      "--target=wasm32",
+      "-nostdlib",
+      "-O2",
+      "-ffunction-sections",
+      "-fdata-sections",
+      "-mbulk-memory",
+      "-DCLAY_IMPLEMENTATION",
+      "-DCLAY_WASM",
+      "-DCLAY_DEBUG_MODE_ENABLED=0",
+      "-Isrc",
+      "-I.",
+      "-Wl,--no-entry",
+      "-Wl,--import-memory",
+      "-Wl,--stack-first",
+      "-Wl,--strip-all",
+      "-Wl,--gc-sections",
+      "-Wl,--undefined=Clay__MeasureText",
+      "-Wl,--undefined=Clay__QueryScrollOffset",
+      "-Wl,--export=__heap_base",
+      "-Wl,--export=clayterm_size",
+      "-Wl,--export=init",
+      "-Wl,--export=reduce",
+      "-Wl,--export=output",
+      "-Wl,--export=length",
+      "-Wl,--export=measure",
+      "-Wl,--export=Clay_SetPointerState",
+      "-Wl,--export=pointer_over_count",
+      "-Wl,--export=pointer_over_id_string_length",
+      "-Wl,--export=pointer_over_id_string_ptr",
+      "-Wl,--export=get_element_bounds",
+      "-Wl,--export=animating",
+      "-Wl,--export=error_count",
+      "-Wl,--export=error_type",
+      "-Wl,--export=error_message_length",
+      "-Wl,--export=error_message_ptr",
+      "-Wl,--export=input_size",
+      "-Wl,--export=input_init",
+      "-Wl,--export=input_scan",
+      "-Wl,--export=input_count",
+      "-Wl,--export=input_event",
+      "-Wl,--export=input_delay",
+      "-o",
+      "clayterm.wasm",
+      "src/module.c"
+    ]
+  },
+  "generator": {
+    "path": "tasks/bundle-wasm.ts",
+    "sha256": "04c10d0aefcad2c208d5ac6311208f8d16f48e50b94d9512f01655ec87e4a544"
+  },
+  "expected": {
+    "wasm": {
+      "sha256": "5b7da7385b70b787260cf7e08a97034eefbc198d79b3c7965b5e3b49bd0ae848",
+      "bytes": 121962
+    },
+    "wasmSource": {
+      "sha256": "130d2161f11e4fc665863a45cc6c05c530e404cf0e04eacec1797e50f7b27e1a",
+      "bytes": 39788
+    },
+    "runtime": {
+      "NOTICE.txt": "a367678cfb5f2097d36746b6ee38d50be97fe6c41cbb52dfecd2f55b879c909b",
+      "input-native.d.ts": "163e20865e8a377e82e02d795c1d12172d59a85f97651f8f92a70b1662d291c9",
+      "input-native.js": "bbf2011bed40b99106d4234f3e457faa8fe48cb37b379d82c5a1252da1e3ffb3",
+      "input.d.ts": "364aaf08f9de611d03802cb76e67fc059cec97fa0ef384f2d19e7da87e7bcfb7",
+      "input.js": "eb57a91fbe72589a8a820f2657f02d99fa1d2d2dce7ae5393b2cca5eb9348b4e",
+      "mod.d.ts": "fd5f1a7b0d61299c110dbc9d90d2c9bc7a718414c319963ce98cc030df2a9601",
+      "mod.js": "33471adf2f7d5b7ad28ad18908882eecf1e617f082589baa0ab3ff8e6c48ee77",
+      "ops.d.ts": "4e50dbb40e73f1f58c7f4ffa80f216a14a9c2c12db96e531f112a7f0e2c24869",
+      "ops.js": "07557c6e7fa8fa7079ef7e0c0f12178a8cd1cd3d2d589b0094f1a4e798baace2",
+      "settings.d.ts": "0a5b250fe54514c4f36899edc424bb61f9a7c1b42dd923fa4595c7a00971aee5",
+      "settings.js": "a6ab1c95060684791283ba05258d51d9292f8547e3cdcc56623aa21448af9750",
+      "term-native.d.ts": "f07c3236ec08aeb6576942ded33a8d6eaf646e3dcf728fdcd14e0cccb7a1d167",
+      "term-native.js": "1e9e835bb967b19882f22328b078c1dafce9dc196c8534d8885a5c60d5533af4",
+      "term.d.ts": "4230534feb6d1312e3ac503043433162952a53918d9e8026572cf22f78d9f353",
+      "term.js": "b153bd8d05512a3dcbde69751d86af41b68f9c57448387758fd41225ccdcf457",
+      "termcodes.d.ts": "35bd9365e5e8f8269a12abbb2e14109e4e011be9ca8b4d06deb5b55c6ddaccbd",
+      "termcodes.js": "012fbb77176d0951cb39210b4d87ca0f022f53cc767ed716aabbe66c8abd6736",
+      "typedef.d.ts": "ced21f084aeaaf685da6686042dc36764fad00a7d18bdac9b0c2749c0134d784",
+      "typedef.js": "d037743e5006cbc0238bfa32e3cf8cde96ae05f058e753b1dcfb68e0d874e371",
+      "wasm.d.ts": "fe89ee751a27033f6334776be6afcbfbf00fe57fcc39b45d53fefeb2d632f093",
+      "wasm.js": "90b125c9254dad4338b5bf37ceb2d907b9ab4fe99db33594ada3224b030a5d7c"
+    }
+  }
+}

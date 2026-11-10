@@ -17,7 +17,7 @@ import { runShell, shellQuote } from "@executablemd/test-support/launch";
 import { ensure, scoped, until } from "effection";
 import { createApi } from "@effectionx/context-api";
 import * as sourceGitApi from "@executablemd/git/api";
-import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
@@ -471,6 +471,112 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * its own stdin. This is the emitted Node entrypoint's answer, exercised the
    * way a caller composes it rather than through argv.
    */
+  /**
+   * The terminal engine is a prepared local runtime (#1216), so dnt emits it
+   * as part of the CLI's own graph rather than naming an external dependency.
+   * The supplied declarations replace dnt's inferred ones, and the notice that
+   * no module imports is copied beside the modules it covers.
+   */
+  it("carries the prepared terminal runtime, its declarations and its notice", function* () {
+    const { root } = builtPackage();
+    const npm = path.join(root, PKG_DIR, "npm");
+    const prepared = path.join(root, PKG_DIR, "generated/tty");
+    const emitted = yield* readEmittedManifest(root);
+    expect(Object.keys(emitted.dependencies ?? {}).filter((name) => name.includes("tty"))).toEqual(
+      [],
+    );
+    const names = (yield* readdir(prepared)).sort();
+    expect(names.length).toBe(21);
+    for (const name of names) {
+      const source = yield* readTextFile(path.join(prepared, name));
+      if (name.endsWith(".d.ts")) {
+        expect(yield* readTextFile(path.join(npm, "types/generated/tty", name))).toBe(source);
+      } else if (name === "NOTICE.txt") {
+        expect(yield* readTextFile(path.join(npm, "esm/generated/tty", name))).toBe(source);
+      } else {
+        expect([name, yield* exists(path.join(npm, "esm/generated/tty", name))]).toEqual([
+          name,
+          true,
+        ]);
+      }
+    }
+
+    const consumer = path.join(root, "tty-consumer");
+    yield* ensureDir(consumer);
+    // Two texts the published engine measured as one width, and one key.
+    yield* writeTextFile(
+      path.join(consumer, "smoke.mjs"),
+      [
+        'import { close, createInput, createTerm, fit, open, text } from "../packages/cli/npm/esm/generated/tty/mod.js";',
+        'const short = "synthetic sample synthetic sample synthetic sample 022aa2";',
+        'const long = "synthetic sample synthetic sample synthetic sample synthetic sample synthetic sample 01fda4";',
+        "const term = await createTerm({ width: 186, height: 40 });",
+        "const natural = { layout: { width: fit(), height: fit() } };",
+        'const result = term.render([open("root", { layout: { width: fit(), height: fit(), direction: "ttb" } }), open("short", natural), text(short), close(), open("long", natural), text(long), close(), close()]);',
+        "const input = await createInput();",
+        'const events = input.scan(new TextEncoder().encode("a")).events;',
+        'console.log(JSON.stringify({ errors: result.errors.length, short: result.info.get("short")?.bounds.width, long: result.info.get("long")?.bounds.width, key: events[0]?.type }));',
+        "",
+      ].join("\n"),
+    );
+    const smoke = yield* exec("node", { arguments: ["smoke.mjs"], cwd: consumer }).join();
+    expect({ code: smoke.code, stderr: smoke.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(smoke.stdout)).toEqual({ errors: 0, short: 57, long: 91, key: "keydown" });
+
+    // A consumer of the supplied declarations typechecks against them, and so
+    // do the CLI's own emitted declarations that import them. These two stay
+    // inside the CLI: the shared node_modules resolves a sibling package to its
+    // workspace source, not to the artifact this build produced.
+    yield* writeTextFile(
+      path.join(consumer, "types.mts"),
+      [
+        'import type * as tty from "../packages/cli/npm/types/generated/tty/mod.js";',
+        'import type { Input, InputEvent, Op, Term } from "../packages/cli/npm/types/generated/tty/mod.js";',
+        "declare const runtime: typeof tty;",
+        "export async function measured(): Promise<readonly number[]> {",
+        "  const term: Term = await runtime.createTerm({ width: 186, height: 40 });",
+        '  const ops: Op[] = [runtime.open("a", { layout: { width: runtime.fit(), height: runtime.fit() } }), runtime.text("a"), runtime.close()];',
+        "  const input: Input = await runtime.createInput();",
+        "  const events: InputEvent[] = input.scan(new Uint8Array([97])).events;",
+        '  return [term.render(ops).info.get("a")?.bounds.width ?? 0, events.length];',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const typecheck = yield* exec("node", {
+      arguments: [
+        path.join(root, "node_modules/typescript/bin/tsc"),
+        "--noEmit",
+        "--strict",
+        "--listFiles",
+        "--module",
+        "NodeNext",
+        "--target",
+        "ES2022",
+        "--types",
+        "node",
+        "--typeRoots",
+        path.join(root, "node_modules/@types"),
+        "types.mts",
+        path.join(npm, "types/src/repl/screen.d.ts"),
+        path.join(npm, "types/src/repl/input.d.ts"),
+      ],
+      cwd: consumer,
+    }).join();
+    const listed = typecheck.stdout.split("\n").filter((line) => line.endsWith(".d.ts"));
+    expect({
+      code: typecheck.code,
+      errors: typecheck.stdout.split("\n").filter((line) => line.includes("error TS")),
+    }).toEqual({ code: 0, errors: [] });
+    // The declarations that state Term, Op, Input and InputEvent.
+    for (const name of ["mod.d.ts", "term.d.ts", "ops.d.ts", "input.d.ts"]) {
+      expect([name, listed.some((line) => line.endsWith(`/types/generated/tty/${name}`))]).toEqual([
+        name,
+        true,
+      ]);
+    }
+  });
+
   it("runs a complete program piped into the emitted bin", function* () {
     const { root } = builtPackage();
 

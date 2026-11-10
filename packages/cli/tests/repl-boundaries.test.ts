@@ -242,9 +242,20 @@ describe("REPL boundaries: what production code cannot reach", () => {
       expect(manifest.includes(rejected)).toBe(false);
       expect(packaged.includes(rejected)).toBe(false);
     }
-    // The one dependency this stack did add, at the exact version it pinned.
-    expect(manifest).toContain('"@bomb.sh/tty": "npm:@bomb.sh/tty@0.9.0"');
-    expect(packaged).toContain('"@bomb.sh/tty": "0.9.0"');
+    // The terminal engine is the prepared local runtime, not an external
+    // dependency: the published 0.9.0 package shares a width between texts with
+    // one cache hash (#1216).
+    expect(manifest.includes("@bomb.sh/tty")).toBe(false);
+    expect(packaged.includes("@bomb.sh/tty")).toBe(false);
+    expect(manifest).toContain('"!generated/tty/**"');
+    expect(yield* read(join(CLI, "vendor", "tty", "recipe.json"))).toContain(
+      '"url": "https://registry.npmjs.org/@bomb.sh/tty/-/tty-0.9.0.tgz"',
+    );
+    for (const path of yield* authored()) {
+      expect([path.slice(CLI.length), (yield* code(path)).includes('from "@bomb.sh/tty"')]).toEqual(
+        [path.slice(CLI.length), false],
+      );
+    }
   });
 
   it("S1: no production REPL module retains a provider's raw request", function* () {
