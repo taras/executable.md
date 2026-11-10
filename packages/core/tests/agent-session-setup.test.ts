@@ -284,8 +284,55 @@ describe("Tier SP — session setup ownership", () => {
       "activate",
       "finish",
       "requestedModel",
+      "retainedAgentSessionId",
+      "retainedSession",
       "sessionIdentity",
     ]);
+  });
+
+  it("SP13: a setup carries the retained facts its request was opened with, as a frozen snapshot", function* () {
+    const owner = createSessionSetupOwner();
+    // An ordinary request retains nothing, and both members still say so.
+    const ordinary = owner.setup(openSessionRequest("expansion:1", "review").request);
+    expect(Object.hasOwn(ordinary, "retainedAgentSessionId")).toBe(true);
+    expect(Object.hasOwn(ordinary, "retainedSession")).toBe(true);
+    expect(ordinary.retainedAgentSessionId).toBe(undefined);
+    expect(ordinary.retainedSession).toBe(undefined);
+
+    // A held conversation's snapshot, taken when the request opened: what the
+    // opener does with its own value afterwards reaches no setup.
+    const located: { provider: string; agentCommand: string; sessionKey?: string } = {
+      provider: "acpx",
+      agentCommand: "old-cmd",
+      sessionKey: "held-key",
+    };
+    const issuance = openSessionRequest("expansion:2", "review", undefined, true, {
+      retainedAgentSessionId: "native-1",
+      retainedSession: located,
+    });
+    located.sessionKey = "elsewhere";
+    const held = owner.setup(issuance.request.with({ name: "renamed" }));
+    expect(held.retainedAgentSessionId).toBe("native-1");
+    expect(held.retainedSession).toEqual({
+      provider: "acpx",
+      agentCommand: "old-cmd",
+      sessionKey: "held-key",
+    });
+    expect(Object.isFrozen(held.retainedSession)).toBe(true);
+    expect(held.retainedSession).not.toBe(located);
+
+    // A locator without a placement carries no placement member at all.
+    const unplaced = owner.setup(
+      openSessionRequest("expansion:3", "review", undefined, false, {
+        retainedAgentSessionId: undefined,
+        retainedSession: { provider: "acpx", agentCommand: "old-cmd" },
+      }).request,
+    );
+    expect(unplaced.retainedSession).toEqual({ provider: "acpx", agentCommand: "old-cmd" });
+    expect(Object.hasOwn(unplaced.retainedSession ?? {}, "sessionKey")).toBe(false);
+    // Nothing public carries the facts: the request a handler holds names
+    // only what it always named.
+    expect(Object.keys(issuance.request).sort()).toEqual(["name"]);
   });
 
   it("SP11: what a request asks is settled before it routes, and once", function* () {

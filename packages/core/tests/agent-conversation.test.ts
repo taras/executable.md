@@ -63,6 +63,7 @@ import type {
 import { installAgentComponents } from "../src/agent/components.ts";
 import { AgentConversationProvider } from "../src/agent/conversation-provider.ts";
 import type { AgentSessionRequest } from "../src/agent/session-request.ts";
+import type { AgentSessionSetup } from "../src/agent/session-setup.ts";
 import { sessionOf } from "../src/agent/session-use.ts";
 import { useAgentPromptPublisher } from "../src/agent/publication.ts";
 import { secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
@@ -108,6 +109,11 @@ interface Traffic {
   readonly activated: (ProviderSessionConfiguration | undefined)[];
   readonly applied: SessionConfiguration[];
   readonly optionProbes: (string | undefined)[];
+  /** What each session setup said its history retained, as the provider read it. */
+  readonly retained: {
+    readonly agentSessionId: string | undefined;
+    readonly session: AgentSessionSetup["retainedSession"];
+  }[];
 }
 
 interface StubOptions {
@@ -199,6 +205,15 @@ interface StubOptions {
    * conversation's own request, and neither is visible in the value itself.
    */
   readonly answersWith?: "unsettled" | "substituted";
+  /** The command this provider says it is building under. Default: `COMMAND`. */
+  readonly command?: string;
+  /**
+   * Where each resolution places its session, in order.
+   *
+   * Consumed one per resolution, so a case can have one turn land somewhere
+   * else, or nowhere a record can name. Exhausted means the ordinary key.
+   */
+  readonly places?: string[];
 }
 
 /** What the stub provider says it is, and what it resolved. */
@@ -249,18 +264,26 @@ function stub(traffic: Traffic, options: StubOptions = {}): ExecutionInstallatio
               traffic.sessionAgents.push(agentName);
               const setup = coordinator.sessionSetup(routed);
               traffic.setups.push(setup.sessionIdentity ?? "<none>");
+              traffic.retained.push({
+                agentSessionId: setup.retainedAgentSessionId,
+                session: setup.retainedSession,
+              });
               // Where the real provider asks: the command is resolved and the
               // construction inputs are settled, and nothing has been
               // reattached or created. A conversation that refuses what this
               // provider would build under refuses here.
               const declared = options.declares === undefined ? CONFIGURATION : options.declares();
-              const authorized = yield* setup.activate(PROVIDER, COMMAND, declared);
+              const authorized = yield* setup.activate(
+                PROVIDER,
+                options.command ?? COMMAND,
+                declared,
+              );
               traffic.activated.push(declared);
               if (!authorized.ok) {
                 throw authorized.error;
               }
               const session: Session = {
-                sessionKey: `stub:${routed.name ?? "default"}`,
+                sessionKey: options.places?.shift() ?? `stub:${routed.name ?? "default"}`,
                 cwd: "/stub",
                 ...(options.assertsAtSetup === undefined
                   ? {}
@@ -1295,6 +1318,7 @@ function fresh(): Traffic {
     routed: [],
     settledSessions: [],
     promptSessions: [],
+    retained: [],
   };
 }
 
@@ -1424,7 +1448,7 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
     expect(configurations(yield* stream.readAll())).toHaveLength(1);
   });
 
-  it("SC2: a reopening is continued under its own configuration, or not at all", function* () {
+  it("SC2: a reopening continues its native conversation through today's adapter", function* () {
     const stream = new InMemoryStream();
     const created = fresh();
     const first = yield* withConversation(
@@ -1435,54 +1459,145 @@ describe("Tier CV — a conversation is an execution the host keeps open", () =>
       },
     );
     expect(first.ok).toBe(true);
-    const established = yield* stream.readAll();
+    const initial = configurations(yield* stream.readAll());
 
-    // The compatible arm: same configuration, same conversation, next answer.
-    const compatible = fresh();
+    // Another adapter command and another configuration, over the same
+    // history: the provider is asked to continue the conversation this history
+    // names, and says it is building under what it builds under today.
+    const today = fresh();
     const continued = yield* withConversation(
       stream,
-      stub(compatible, { asserts: () => "native-one" }),
-      function* (chat) {
-        return yield* chat.prompt("second");
-      },
-    );
-    if (!continued.ok) {
-      throw new Error(`the compatible reopening refused: ${continued.error.message}`);
-    }
-    expect(continued.value.ok && continued.value.value).toBe("[second]");
-
-    // The incompatible arm, on a history of its own so the refusal is read
-    // against the configuration that created it. One value differs — the
-    // system prompt this host customizes — and everything else is fixed.
-    const changed = new InMemoryStream();
-    for (const event of established) {
-      yield* changed.append(event);
-    }
-    const other = fresh();
-    const refused = yield* withConversation(
-      changed,
-      stub(other, {
+      stub(today, {
         asserts: () => "native-one",
+        command: "stub-cmd-next",
         declares: () => ({ ...CONFIGURATION, systemPrompt: "a different prompt" }),
       }),
       function* (chat) {
         return yield* chat.prompt("second");
       },
     );
+    if (!continued.ok) {
+      throw new Error(`the reopening refused: ${continued.error.message}`);
+    }
+    expect(continued.value.ok && continued.value.value).toBe("[second]");
+    // Only the new turn reached the provider, with the history's own native
+    // conversation and placement stated, and the initial coordinates rather
+    // than today's command.
+    expect(today.prompts.map((call) => call.content)).toEqual(["second"]);
+    expect(today.activated).toEqual([{ ...CONFIGURATION, systemPrompt: "a different prompt" }]);
+    expect(today.retained).toEqual([
+      {
+        agentSessionId: "native-one",
+        session: { provider: PROVIDER, agentCommand: COMMAND, sessionKey: "stub:chat-1" },
+      },
+    ]);
+    // The initial configuration record stands exactly as it was, ahead of both
+    // turns, and nothing was appended in its place.
+    const events = yield* stream.readAll();
+    expect(configurations(events)).toEqual(initial);
+    expect(sequence(events)).toEqual([
+      "agent_conversation",
+      "agent_conversation_configuration",
+      "agent_prompt",
+      "agent_prompt",
+    ]);
+    expect(prompts(events)).toHaveLength(2);
+
+    // What the provider actually applies is still verified: a reopening whose
+    // provider reports something other than what was asked still refuses.
+    const misapplied = fresh();
+    const refused = yield* withConversation(
+      stream,
+      stub(misapplied, {
+        asserts: () => "native-one",
+        command: "stub-cmd-next",
+        verify: () => ({ model: "something-else" }),
+      }),
+      function* (chat) {
+        return yield* chat.prompt("third", { model: "asked" });
+      },
+    );
     if (!refused.ok) {
-      throw new Error(`the incompatible reopening did not open: ${refused.error.message}`);
+      throw new Error(`the misapplied reopening did not open: ${refused.error.message}`);
     }
     expect(refused.value.ok).toBe(false);
-    expect(!refused.value.ok && refused.value.error.message).toContain(
-      "created under a different provider configuration",
+    expect(misapplied.prompts).toEqual([]);
+    expect(configurations(yield* stream.readAll())).toEqual(initial);
+  });
+
+  it("SC2a: each setup is told the latest placement and native identity its history holds", function* () {
+    const stream = new InMemoryStream();
+    const live = fresh();
+    const seen: AgentSessionSetup["retainedSession"][] = [];
+    const answered = yield* withConversation(
+      stream,
+      stub(live, {
+        asserts: (content) => (content === "first" ? "native-one" : undefined),
+        // The second turn's record names no placement; the third names another.
+        places: ["stub:a", "", "stub:b", "stub:c"],
+        respond: (content) => ({
+          status: content === "first" || content === "fourth" ? "completed" : "failed",
+        }),
+      }),
+      function* (chat) {
+        const all = [];
+        for (const turn of ["first", "second", "third", "fourth"]) {
+          all.push(yield* chat.prompt(turn));
+          seen.push(live.retained.at(-1)?.session);
+        }
+        return all;
+      },
     );
-    // Refused before the provider resolved anything: no session was settled
-    // and no turn was sent, so nothing was created in place of this chat.
-    expect(other.prompts).toEqual([]);
-    expect(other.applied).toEqual([]);
-    // And the chat, its configuration and its native identity all stand.
-    expect(configurations(yield* changed.readAll())).toHaveLength(1);
-    expect(prompts(yield* changed.readAll())).toHaveLength(1);
+    expect(answered.ok).toBe(true);
+    const initial = { provider: PROVIDER, agentCommand: COMMAND };
+    expect(live.retained).toEqual([
+      // Before the initial configuration, there is nothing to locate.
+      { agentSessionId: undefined, session: undefined },
+      { agentSessionId: "native-one", session: { ...initial, sessionKey: "stub:a" } },
+      // A failed turn whose record names no placement erases nothing.
+      { agentSessionId: "native-one", session: { ...initial, sessionKey: "stub:a" } },
+      // A failed turn that asserted no native identity still locates its state.
+      { agentSessionId: "native-one", session: { ...initial, sessionKey: "stub:b" } },
+    ]);
+    // Snapshots, each taken when its setup opened: later turns moved none.
+    expect(seen[1]).toEqual({ ...initial, sessionKey: "stub:a" });
+    expect(Object.isFrozen(seen[1])).toBe(true);
+
+    // A reopening reads the same facts back from the history alone.
+    const reopened = fresh();
+    yield* withConversation(stream, stub(reopened), function* (chat) {
+      return yield* chat.prompt("fifth");
+    });
+    expect(reopened.retained).toEqual([
+      { agentSessionId: "native-one", session: { ...initial, sessionKey: "stub:c" } },
+    ]);
+  });
+
+  it("SC2b: a history holding only its configuration locates no placement", function* () {
+    const stream = new InMemoryStream();
+    const unsettled = fresh();
+    // Activated, so the configuration is committed — then refused before any
+    // turn could record anything.
+    const refused = yield* withConversation(
+      stream,
+      stub(unsettled, { answersWith: "unsettled" }),
+      function* (chat) {
+        return yield* chat.prompt("first");
+      },
+    );
+    expect(refused.ok && !refused.value.ok).toBe(true);
+    expect(sequence(yield* stream.readAll())).toEqual([
+      "agent_conversation",
+      "agent_conversation_configuration",
+    ]);
+    const next = fresh();
+    yield* withConversation(stream, stub(next), function* (chat) {
+      return yield* chat.prompt("second");
+    });
+    expect(next.retained).toEqual([
+      { agentSessionId: undefined, session: { provider: PROVIDER, agentCommand: COMMAND } },
+    ]);
+    expect(next.prompts.map((call) => call.content)).toEqual(["second"]);
   });
 
   it("SC3: a provider that cannot state its configuration continues nothing", function* () {

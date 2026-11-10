@@ -459,6 +459,8 @@ export function* useHeadlessChildren(
             return {
               sessionIdentity: identity,
               requestedModel: genuine.requestedModel,
+              retainedAgentSessionId: genuine.retainedAgentSessionId,
+              retainedSession: genuine.retainedSession,
               *activate(provider, agent, configuration) {
                 setups.delete(identity);
                 const accepted = yield* genuine.activate(provider, agent, configuration);

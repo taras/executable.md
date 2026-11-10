@@ -751,6 +751,18 @@ agent    = the resolved agent command
 sessionKey = the resolved xmd:v1 session key
 ```
 
+A conversation a trusted host holds open is the one qualification. Its key and
+its construction route keep the provider and resolved command of the history's
+initial configuration record, with the session key its Prompt records retain,
+for as long as the conversation lasts; the command that executes it, and the
+build observed for it, are today's (acp-client-spec.md §Sessions: ownership,
+routes and attachment). One logical conversation therefore keeps one owner when
+its adapter command changes, an earlier owner of the original tuple still
+refuses a changed-command contender, and a tombstone on that tuple still
+requires recovery. The coordinator interface, the ownership record and force
+recovery are unchanged. Every other session and launch uses the natural key
+above.
+
 Every operation that could act on an advertised session enters it first —
 establishing the session, subscribing a prompt stream, attaching to a session a
 native process constructed, launching, and resuming an incomplete launch. Coverage follows the agent's capability, not the

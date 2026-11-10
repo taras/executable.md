@@ -291,6 +291,20 @@ advertised for attachment, build drift, a disagreeing arrangement and a
 differing returned identity each refuse before a turn and create no substitute
 conversation.
 
+A held conversation is owned and routed where it began. Its coordinator key
+and its construction route use the provider and resolved command of the
+history's initial configuration record with the retained placement, before a
+Prompt records one with the placement the provider resolves, and the first
+setup with no initial record uses today's coordinates. Today's command still
+drives everything that executes: runtime selection, executable observation and
+the bound-build comparison, and usage reporting. So a conversation whose adapter
+command changed between releases keeps one owner, one route and its original
+construction provenance, and an earlier owner still holding that original tuple
+refuses the changed-command contender before any ensure, prompt or route
+publication. The coordinator, its locks, tombstones, quiescence and the route
+store are unchanged; nothing is copied, migrated or published under the new
+command.
+
 `withSessionRoute` remains routing only: it selects which partition serves a
 call and carries no permission to construct, own or answer.
 
@@ -581,6 +595,12 @@ interface ProviderSessionConfiguration {
 interface AgentSessionSetup {
   readonly sessionIdentity?: string;
   readonly requestedModel: string | undefined;
+  readonly retainedAgentSessionId: string | undefined;
+  readonly retainedSession: {
+    readonly provider: string;
+    readonly agentCommand: string;
+    readonly sessionKey?: string;
+  } | undefined;
   activate(
     provider: string,
     agentCommand: string,
@@ -644,7 +664,26 @@ to `configure` for application and verification. Exposing the requested model
 lets an eager reattachment choose continuation behavior before `finish()`
 (§Session configuration). The structural adapter requires the member, forwards
 a string or `undefined`, and refuses a missing member or another value type;
-public request middleware receives no such member. For a new Session, `finish()` issues the
+public request middleware receives no such member.
+
+Two more members say what a held conversation's history already retains about
+the provider state it stands on (§A conversation a trusted host holds open).
+`retainedAgentSessionId` is the native conversation the history's own Prompt
+records assert: the identity a provider must reconcile before it sends a new
+prompt, never an ACP loading target. `retainedSession` locates that state: the
+provider and resolved command of the history's initial configuration record —
+historical coordinates, never a command to execute — and the latest nonempty
+`sessionKey` its Prompt records name. Both are `undefined` for an ordinary
+setup and for a history that does not yet hold them; `sessionKey` alone is
+optional, absent until a Prompt records a placement. Its presence locates state
+and asserts neither native creation nor acceptance. Core takes both as
+detached, immutable snapshots when the request opens and delivers them only
+through this setup; they are not request members, Session properties or Context
+state, and possessing them authorizes no provider work. The structural adapter
+requires both members to be present, copies and freezes the locator, and
+refuses a missing member, a non-string assertion or a locator it cannot read.
+
+For a new Session, `finish()` issues the
 configured use without reading or writing provider configuration. For an
 existing Session, it invokes the provider's stable `configure` operation,
 requires the returned canonical value to equal the requested members exactly,
@@ -659,7 +698,7 @@ connection configurations, the permission configuration, and the system-prompt
 replacement, addition or explicit `null`. Every member is required: an input
 this host left to the agent's own default is not an empty one, so a provider
 that cannot state all four states none, and a conversation that requires one
-refuses rather than comparing against a value nobody supplied. Those values are
+refuses rather than continuing under a configuration nobody stated. Those values are
 built from the same inputs construction uses — detached once from the host's
 own containers — so a configuration this provider declared and a session it
 then created cannot differ.
@@ -902,28 +941,42 @@ refuses rather than reconnecting the wrong chat, and one established with
 another agent refuses rather than changing agent in place — an explicit agent
 change is a new conversation with a new `id`.
 
-**A conversation is continued under what it was created under.** The first
-turn's activation commits one canonical record holding the provider, the
-resolved command and the complete active provider configuration, and it commits
-before any native work may begin — so a conversation interrupted after the
-provider asserted an identity but before its turn was acknowledged already
-holds what it was created under rather than having it reconstructed from
-whatever this process's defaults are now. Every later activation compares
-against that record and writes nothing: the values are compared as JSON rather
-than by identity or member order, array order is the provider's own, and a
-difference is an unsupported change that refuses before reattachment. The
-conversation, its turns, its native identity and its configuration all stand
-through that refusal, and nothing is created in its place. A reopening on its
-own performs no activation and no provider work at all; the configuration
-record is re-offered in its own position so the turns written after it replay
-in order.
+**A conversation keeps the configuration it began under, and continues through
+today's adapter.** The first turn's activation commits one canonical record
+holding the provider, the resolved command and the complete active provider
+configuration, and it commits before any native work may begin — so a
+conversation interrupted after the provider asserted an identity but before its
+turn was acknowledged already holds how it began rather than having that
+reconstructed from whatever this process's defaults are now. Later activations
+write nothing. Each states what the provider builds under now, and that
+statement must still be readable; differing from the initial record in
+provider, command or configuration refuses nothing. A release may change the
+adapter a host runs — the bundled Codex adapter became the host-installed one —
+while the conversation it continues is the same native history, so the current
+adapter is attempted on that history. What the provider actually applies is
+verified where it applies it (§Session configuration), and a genuine resume,
+assertion, build or configuration failure still fails the turn without a
+replacement conversation or a new prompt. A reopening on its own performs no
+activation and no provider work at all; the configuration record is re-offered
+in its own position so the turns written after it replay in order, and it is
+never rewritten. The record is configuration, not identity: an absent Prompt
+outcome is never permission to replace it, and the native identity remains the
+canonical assertion a turn records.
 
-These are configuration, not identity. A future supported change applies and
-verifies on the same native conversation and is saved before anything relies on
-it; this build records and compares the initial configuration and has no
-live-update protocol. An absent Prompt outcome is never permission to replace
-an existing configuration, and the configuration is never a native identity:
-that remains the canonical assertion a turn records.
+**Where its provider state is.** Each turn's setup carries two snapshots Core
+takes from the history when that turn opens its request (§The provider-factory
+seam): the native conversation the history's Prompt records assert, and the
+initial record's provider and command with the latest nonempty `sessionKey` a
+Prompt record names — a failed turn's placement included, since the provider
+may already hold state there that no completed turn asserted. A configuration
+held without any Prompt record locates provider and command and no placement.
+A later turn in the same opening receives fresh snapshots that include what
+earlier turns recorded, and a failed or keyless outcome erases neither a prior
+placement nor a prior assertion; a setup already issued never changes. The
+provider reconciles these facts against its own records before it sends a new
+prompt (§ACPX provider). They locate state and own nothing: the conversation is
+owned and routed where it began, while today's command executes it
+(§Sessions: ownership, routes and attachment).
 
 **What a turn ran under is the provider's own account.** A request is made per
 turn, because a request settles what it asks before it is routed and is good
@@ -939,7 +992,9 @@ A used history requires an existing provider record on its next explicit turn.
 Use means a retained turn has nonempty agent output, non-failed status, a stop
 reason, or an asserted native identity. If setup would create, it refuses
 before `session/new`, names a new conversation as the remedy, preserves
-retained turns and output, and leaves the conversation usable.
+retained turns and output, and leaves the conversation usable. A retained
+placement whose provider record is gone is such a case: no record found by
+today's command elsewhere stands in for it.
 Failed-before-answer history may still create. A turn naming no native identity
 establishes none; it does not permit replacing a conversation the history
 already used.
@@ -953,8 +1008,9 @@ turn ran has that turn's outcome refused with the established identity
 standing, and a history whose own turns name two conversations cannot be opened
 at all. The window before any turn has retained one belongs to the provider:
 ACPX's own record asserts an identity before the host's mapping is
-acknowledged, and the next attachment reconciles and commits that same
-assertion rather than creating a replacement (§ACPX provider).
+acknowledged, and the next attachment — found through the failed turn's
+retained placement, whichever command runs it — reconciles and commits that
+same assertion rather than creating a replacement (§ACPX provider).
 
 One job runs at a time; an overlapping call refuses rather than queuing, and a
 handle kept past the scope that opened it refuses because the conversation it
@@ -1735,6 +1791,16 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   names the exact cwd. The resolved `sessionKey` — not the caller cwd — keys
   the session queue.
 
+  A held conversation whose setup retains a placement is not walked for: the
+  key derived from today's command would name a place the conversation has
+  never been. Its retained `sessionKey` selects that exact record and the
+  directory the record was created in, existing when it is not pending; with
+  no record there it is new, and nothing elsewhere is substituted, so a used
+  history refuses (§A conversation a trusted host holds open). Before a Prompt
+  records a placement, and for every ordinary Session, the walk above is
+  unchanged. A host's `sessions` policy keeps deciding placement for the
+  sessions it answers.
+
   A session is **new** or **existing**. New says where a session will live and
   nothing more, and `session()` returns it having contacted no backend,
   published no construction route, built no runtime, written no record and
@@ -1819,8 +1885,21 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   assert native identity. A strong adapter that omits its marker never
   downgrades.
 
-  Reopening loads/resumes the exact stored ACP id. No load/resume capability
-  refuses even an unused record. Failed loading never replaces a used or
+  Reopening loads/resumes the exact stored ACP id. ACPX reuses a persistent
+  record only for the command that created it, so when a held conversation's
+  non-pending record was created by another command the provider ensures with
+  `resumeSessionId` equal to that record's ACP loading target, through today's
+  command and in the record's own directory, under the conversation's queue
+  and ownership. The loading target is not the native identity: the returned
+  native assertion, when the adapter reports one, must equal the one the
+  history's Prompt records assert, or — before the host acknowledged one — the
+  one the provider's promoted record asserts. A pending record supplies
+  neither. A load that fails or answers another conversation refuses with
+  `identity-unavailable` before any turn, sends no `session/new` and no prompt,
+  and leaves the old record, the history and the route as they were; the
+  conversation stays usable for a later explicit action. Once reopened, the
+  record names today's command and later turns reuse it in place. No
+  load/resume capability refuses even an unused record. Failed loading never replaces a used or
   uncertain record; the released `-32603` fallback remains only for a provably
   never-prompted record. Supported resume-required errors become
   `SessionResumeRequiredError`, naming the Session and a different Session

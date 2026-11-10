@@ -106,12 +106,13 @@ import {
   persistPrompt,
   promptFailureFromRecord,
 } from "./journal.ts";
-import { freezeJson, parseProviderConfiguration, sameJson } from "./provider-configuration.ts";
+import { freezeJson, parseProviderConfiguration } from "./provider-configuration.ts";
 import type {
   AdmitProviderConfiguration,
   ProviderSessionConfiguration,
 } from "./provider-configuration.ts";
 import { openSessionRequest } from "./session-request.ts";
+import type { RetainedSessionFacts } from "./session-request.ts";
 import { sessionOf } from "./session-use.ts";
 import type { ComponentInvocation, IdentityClaimant } from "../invocation-identity.ts";
 import type { Json } from "../types.ts";
@@ -174,14 +175,16 @@ const CONVERSATION_ROOT_SOURCE = `<${CONVERSATION_COMPONENT} />\n`;
 const CONVERSATION_IDENTITY = "agent_conversation";
 
 /**
- * The durable effect that holds what this conversation's sessions are built
- * under.
+ * The durable effect that holds what this conversation's sessions were first
+ * built under.
  *
  * One record for the conversation, written by the first turn's activation and
  * never rewritten. It is in the canonical history rather than beside it,
  * because the thing it has to survive is the process: a sidecar nothing
- * admitted would be a file a later run could be missing, be reading someone
- * else's copy of, or be comparing after the turn it was supposed to gate.
+ * admitted would be a file a later run could be missing or be reading someone
+ * else's copy of. Its provider and command are where the conversation's
+ * provider state is owned; a later turn's own configuration is current rather
+ * than this record, and differing from it refuses nothing.
  */
 const CONVERSATION_CONFIGURATION = "agent_conversation_configuration";
 const CONFIGURATION_NAME = "configuration";
@@ -293,6 +296,8 @@ interface Live {
 interface Observed {
   used?: boolean;
   native?: string;
+  /** Where the provider placed the turn, when its record names a placement. */
+  sessionKey?: string;
 }
 
 /** What a history already holds about the conversation it belongs to. */
@@ -322,6 +327,13 @@ interface Retained {
    * the conversation looking unestablished and open to a different one.
    */
   readonly native: string | undefined;
+  /**
+   * The latest nonempty placement its Prompt records name, if any.
+   *
+   * A failed turn's placement counts: the provider may already hold state
+   * there that no completed turn asserted yet.
+   */
+  readonly sessionKey: string | undefined;
 }
 
 /**
@@ -703,9 +715,8 @@ function* held(
     announce(Err(bound.error));
     yield* suspend();
   }
-  // What this conversation's sessions are built under, carried for the whole
-  // opening. Every activation below compares against it; only the first one
-  // that finds nothing writes.
+  // What this conversation's sessions were first built under, carried for the
+  // whole opening. Only the first activation that finds nothing writes.
   const active: Active = { known: retained.configuration };
   // Consumed before the turns, because that is where the first activation
   // wrote it: a run that replayed its turns without it would be offering the
@@ -724,6 +735,7 @@ function* held(
   // process is held to it as firmly as one after a reopening is.
   let established = retained.native;
   let used = retained.used;
+  let placement = retained.sessionKey;
   // The actual method on this execution's own handle, waited for before the
   // conversation is announced: a handle that reported itself ready and then
   // refused to evaluate would be ready for two of the three things it offers.
@@ -754,12 +766,14 @@ function* held(
       order,
       admitting(active),
       used,
+      retainedFacts(active, established, placement),
     );
     // Established by the first turn the provider reported one for, and never
     // replaced afterwards: a turn naming a different one was refused before it
     // could record anything.
     established ??= observed.native;
     used ||= observed.used === true;
+    placement = observed.sessionKey ?? placement;
     order += 1;
   }
   // Nothing closes this queue, and an element that returned would let the root
@@ -772,8 +786,8 @@ function* held(
  *
  * There is no fallback to the public chain on purpose. Routing is what a
  * handler can redirect, and a conversation resolved that way would reach a
- * provider that answered its turns without ever being held to what the
- * conversation was created under — the refusal this exists to make.
+ * provider that answered its turns without ever settling the request that
+ * carries what the conversation retains — the refusal this exists to make.
  *
  * It never returns, and the loop is how that is said rather than asserted: an
  * element that returned here would let the conversation's root complete, and a
@@ -790,9 +804,9 @@ function* unsupported(
       new AgentConversationError(
         `the agent provider installed for the conversation "${request.id}" does not support ` +
           "saved conversations, so there is nothing here that could resolve its sessions or " +
-          "send its turns. A conversation is held to what it was created under, and holding it " +
-          "there is the installed provider's own work — so this refuses rather than routing the " +
-          "turns somewhere that would answer without doing it",
+          "send its turns. Continuing a conversation's own native history is the installed " +
+          "provider's own work — so this refuses rather than routing the turns somewhere that " +
+          "would answer without doing it",
       ),
     ),
   );
@@ -802,30 +816,57 @@ function* unsupported(
 }
 
 /**
- * What this opening knows its sessions are built under.
+ * What this opening knows its sessions were first built under.
  *
  * One value for the conversation, not one per turn: the first turn's
- * activation commits it and every later activation compares against it, so a
- * second turn in this same process is held to it exactly as firmly as a turn
- * after a reopening is.
+ * activation commits it, and every later setup in this same process locates
+ * its provider state from it exactly as a setup after a reopening does.
  */
 interface Active {
   known: DurableJson | undefined;
 }
 
 /**
- * Save what this provider is building under, or refuse what differs from it.
+ * What the next setup is told about the provider state this history stands on.
+ *
+ * A fresh snapshot per setup, taken when the turn opens its request: the
+ * provider and command come from the initial configuration record, never from
+ * today's activation, and the placement and native assertion are the latest
+ * ones the history holds. Nothing the turn does afterwards changes the
+ * snapshot it was handed.
+ */
+function retainedFacts(
+  active: Active,
+  native: string | undefined,
+  sessionKey: string | undefined,
+): RetainedSessionFacts {
+  const known = active.known;
+  const provider = isJsonObject(known) ? known.provider : undefined;
+  const agentCommand = isJsonObject(known) ? known.agentCommand : undefined;
+  return {
+    retainedAgentSessionId: native,
+    retainedSession:
+      typeof provider === "string" && typeof agentCommand === "string"
+        ? { provider, agentCommand, ...(sessionKey === undefined ? {} : { sessionKey }) }
+        : undefined,
+  };
+}
+
+/**
+ * Save what this provider is first building under, and read every later
+ * statement.
  *
  * Bound to the issuance each turn opens, so it is reachable only through the
  * setup the coordinator delivers to the installed provider. Nothing on the
  * public chain carries it, and a request a handler copied carries no
  * requirement at all.
  *
- * The first activation writes; every later one compares. That asymmetry is the
- * whole contract: a conversation that already says what it was created under
- * is not a conversation this run gets to restate, and a difference is refused
- * here — before the provider reattaches — rather than discovered afterwards by
- * a turn that has already landed somewhere.
+ * The first activation writes; a later one is parsed and appends nothing. A
+ * held conversation continues its own native history through whichever
+ * adapter this host has configured today, so the initial record is evidence
+ * of how the conversation began rather than a requirement the current adapter
+ * must restate. What the provider actually applies is still verified where it
+ * applies it, and an unreadable statement still refuses before native work.
  */
 function admitting(active: Active): AdmitProviderConfiguration {
   return function* (
@@ -838,27 +879,17 @@ function admitting(active: Active): AdmitProviderConfiguration {
       return Err(
         new AgentConversationError(
           `this provider did not state what it is building this conversation's session under: ` +
-            `${parsed.error.message}. A retained conversation is continued only under the ` +
-            `configuration it was created with, so there is nothing here to hold it to.`,
+            `${parsed.error.message}. A retained conversation's provider states the ` +
+            `configuration it builds under before any native work, so this refuses rather ` +
+            `than continuing under something unstated.`,
         ),
       );
+    }
+    if (active.known !== undefined) {
+      return Ok(undefined);
     }
     const stated = parseJson({ provider, agentCommand, configuration: parsed.value });
     freezeJson(stated);
-    const known = active.known;
-    if (known !== undefined) {
-      if (sameJson(known, stated)) {
-        return Ok(undefined);
-      }
-      return Err(
-        new AgentConversationError(
-          "this conversation was created under a different provider configuration, and this " +
-            "build cannot apply and verify that change on a conversation that already exists. " +
-            "The conversation and what it was created under both stand, and nothing was " +
-            "replaced.",
-        ),
-      );
-    }
     // Committed before this answers, so a provider that proceeds on `Ok` is
     // proceeding on something the history already holds. An acknowledgement
     // that fails or is cancelled authorizes nothing: it leaves here as the
@@ -970,6 +1001,7 @@ function deliver(
   order: number,
   admit: AdmitProviderConfiguration,
   used: boolean,
+  retained: RetainedSessionFacts,
 ): Operation<void> {
   // Scoped, so the turn cannot outlive the call that asked for it however this
   // returns: a turn still running would hold its durable operation open, and
@@ -984,7 +1016,18 @@ function deliver(
       job.joined.resolve();
     });
     const turn = yield* spawn(() =>
-      conversationTurn(provider, request, identity, established, observed, job, order, admit, used),
+      conversationTurn(
+        provider,
+        request,
+        identity,
+        established,
+        observed,
+        job,
+        order,
+        admit,
+        used,
+        retained,
+      ),
     );
     const outcome = yield* race([
       (function* (): Operation<"finished"> {
@@ -1045,6 +1088,7 @@ function conversationTurn(
   order: number,
   admit: AdmitProviderConfiguration,
   used: boolean,
+  retained: RetainedSessionFacts,
 ): Operation<void> {
   return (function* (): Operation<void> {
     try {
@@ -1058,7 +1102,7 @@ function conversationTurn(
         // reaches it only through the setup the coordinator delivers. A
         // handler holding the request can neither read it nor put one on a
         // request of its own.
-        const issuance = openSessionRequest(identity, request.id, admit, used);
+        const issuance = openSessionRequest(identity, request.id, admit, used, retained);
         issuance.configure(job.configuration);
         let session: Session;
         let settled: Session | undefined;
@@ -1085,7 +1129,7 @@ function conversationTurn(
             "this provider did not resolve this conversation's own session request: the session " +
               "it answered with is not the one settling that request produced. A retained " +
               "conversation is continued only through the request it opened, because that is " +
-              "what carries the configuration it is held to.",
+              "what carries what the conversation retains.",
           );
         }
         // Before the turn starts, because this is the one point where refusing
@@ -1135,6 +1179,9 @@ function conversationTurn(
           record.status !== "failed" ||
           record.stopReason !== undefined ||
           record.agentSessionId !== undefined;
+        if (record.sessionKey !== "") {
+          observed.sessionKey = record.sessionKey;
+        }
         if (record.agentSessionId !== undefined) {
           if (established !== undefined && record.agentSessionId !== established) {
             job.answer.resolve(
@@ -1298,6 +1345,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
   let highest = 0;
   let configuration: DurableJson | undefined;
   let used = false;
+  let sessionKey: string | undefined;
   for (const event of events) {
     if (event.type !== "yield") {
       continue;
@@ -1307,7 +1355,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
         // The acknowledgement that would have said what this conversation's
         // sessions are built under did not finish. It authorized no provider
         // work, so nothing was created under it — but what this conversation
-        // is held to is now unreadable, and continuing would mean choosing a
+        // began under is now unreadable, and continuing would mean choosing a
         // configuration rather than reading one.
         return Err(
           new AgentConversationError(
@@ -1349,6 +1397,9 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
     if (record?.agentSessionId !== undefined) {
       asserted.add(record.agentSessionId);
     }
+    if (record !== undefined && record.sessionKey !== "") {
+      sessionKey = record.sessionKey;
+    }
   }
   if (asserted.size > 1) {
     // Two different identities among one conversation's own turns. There is no
@@ -1369,6 +1420,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
       used,
       next: highest + 1,
       native,
+      sessionKey,
       ...(configuration === undefined ? {} : { configuration }),
     }),
   );

@@ -51,6 +51,7 @@ import { createAcpxProvider } from "../src/provider.ts";
 import { createSessionSetupOwner } from "../../core/src/agent/session-setup.ts";
 import {
   createFakeRuntime,
+  makeRecord,
   makeRegistry,
   makeStore,
   selector,
@@ -89,10 +90,17 @@ interface ReadSessionUse {
   readonly configuration?: SessionConfiguration;
 }
 
+/** What a held conversation retained, as the other copy's opener states it. */
+interface ForeignRetained {
+  readonly retainedAgentSessionId: string | undefined;
+  readonly retainedSession: AgentSessionSetup["retainedSession"];
+}
+
 interface ForeignCore {
   openSessionRequest(
     sessionIdentity: string | undefined,
     name: string | undefined,
+    retained?: ForeignRetained,
   ): ForeignIssuance;
   createSessionSetupOwner(): ForeignOwner;
 }
@@ -170,9 +178,21 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
       "the other copy answered a session setup that does not say whether it names a model",
     );
   }
+  const retainedAgentSessionId = Reflect.get(value, "retainedAgentSessionId");
+  if (
+    !Reflect.has(value, "retainedAgentSessionId") ||
+    (retainedAgentSessionId !== undefined && typeof retainedAgentSessionId !== "string")
+  ) {
+    throw new Error("the other copy answered a session setup without a retained native assertion");
+  }
+  if (!Reflect.has(value, "retainedSession")) {
+    throw new Error("the other copy answered a session setup without a retained session");
+  }
   return {
     ...(typeof identity === "string" ? { sessionIdentity: identity } : {}),
     requestedModel,
+    retainedAgentSessionId,
+    retainedSession: retainedLocatorOf(Reflect.get(value, "retainedSession")),
     *activate(provider, agentCommand, configuration) {
       // Across the same seam as `finish`, for the same reason: the authority
       // that decides whether this provider may work lives in the copy that
@@ -190,6 +210,31 @@ function sessionSetupOf(value: unknown): AgentSessionSetup {
       return settled;
     },
   };
+}
+
+/** Where the other copy says a held conversation's session is, copied out. */
+function retainedLocatorOf(value: unknown): AgentSessionSetup["retainedSession"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null) {
+    throw new Error("the other copy answered with a retained session that is not one");
+  }
+  const provider = Reflect.get(value, "provider");
+  const agentCommand = Reflect.get(value, "agentCommand");
+  const sessionKey = Reflect.get(value, "sessionKey");
+  if (
+    typeof provider !== "string" ||
+    typeof agentCommand !== "string" ||
+    (sessionKey !== undefined && typeof sessionKey !== "string")
+  ) {
+    throw new Error("the other copy answered with a retained session it cannot describe");
+  }
+  return Object.freeze({
+    provider,
+    agentCommand,
+    ...(sessionKey === undefined ? {} : { sessionKey }),
+  });
 }
 
 function readUseOf(value: unknown): ReadSessionUse | undefined {
@@ -263,8 +308,8 @@ function foreignCore(value: unknown): ForeignCore | undefined {
     return undefined;
   }
   return {
-    openSessionRequest: (identity, name) =>
-      issuanceOf(Reflect.apply(open, value, [identity, name])),
+    openSessionRequest: (identity, name, retained) =>
+      issuanceOf(Reflect.apply(open, value, [identity, name, undefined, false, retained])),
     createSessionSetupOwner: () => ownerOf(Reflect.apply(own, value, [])),
   };
 }
@@ -340,6 +385,8 @@ function foreignCoordinator(owner: ForeignOwner, log: SessionSetupLog): AgentLau
       const identity = setup.sessionIdentity;
       const observed: AgentSessionSetup = {
         requestedModel: setup.requestedModel,
+        retainedAgentSessionId: setup.retainedAgentSessionId,
+        retainedSession: setup.retainedSession,
         activate: (provider, agentCommand, configuration) =>
           setup.activate(provider, agentCommand, configuration),
         finish: (session, state) => setup.finish(session, state),
@@ -385,11 +432,12 @@ function configured(harness: FakeRuntimeHarness): FakeRuntimeHarness {
 function* installProvider(
   harness: FakeRuntimeHarness,
   coordinator: AgentLaunchCoordinator,
+  store: ReturnType<typeof makeStore> = makeStore(),
 ): Operation<void> {
   yield* useFlatWorld(CWD);
   const factory = createAcpxProvider({
     createRuntime: harness.create,
-    sessionStore: makeStore(),
+    sessionStore: store,
     agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
   });
   yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, coordinator);
@@ -667,6 +715,42 @@ describe("Tier LP — a provider and a Core copy that are not the same copy", ()
         model: "gpt-5.4-mini",
         effort: "high",
       });
+    });
+  });
+
+  it("LP5: a held conversation's retained facts from another copy select its exact record", function* () {
+    const core = yield* useForeignCore();
+    const harness = configured(createFakeRuntime());
+    // What the adapter reports on load: the conversation's own native identity,
+    // which is not the ACP target it was loaded by.
+    harness.assertIdentity = "native-1";
+    const owner = core.createSessionSetupOwner();
+    // The record an earlier adapter command built, in its own directory, and a
+    // decoy where today's command would place the same name.
+    const held = {
+      ...makeRecord("old-cmd", "/held"),
+      acpxRecordId: "held-key",
+      agentSessionId: "native-1",
+    };
+    const store = makeStore({ "held-key": held });
+    yield* scoped(function* () {
+      yield* installProvider(harness, foreignCoordinator(owner, newLog()), store);
+      const issuance = core.openSessionRequest("expansion:1", "review", {
+        retainedAgentSessionId: "native-1",
+        retainedSession: { provider: "acpx", agentCommand: "old-cmd", sessionKey: "held-key" },
+      });
+      issuance.configure(undefined);
+
+      const session = yield* Agent.operations.session(issuance.request);
+
+      // The exact record and directory, reopened through today's command by its
+      // ACP loading target — and the native conversation is the history's own.
+      expect(
+        harness.ensureCalls.map((call) => [call.sessionKey, call.cwd, call.resumeSessionId]),
+      ).toEqual([["held-key", "/held", held.acpSessionId]]);
+      expect(session.sessionKey).toBe("held-key");
+      expect(session.agentSessionId).toBe("native-1");
+      expect(store.records.get("held-key")?.agentCommand).toBe("scribe-cmd");
     });
   });
 

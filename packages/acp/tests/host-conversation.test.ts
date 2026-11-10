@@ -25,9 +25,13 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import {
+  InMemoryStream,
+  parseDurableEvent,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { Ok, scoped, until } from "effection";
+import { Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { Agent, Component, installAgentComponents } from "@executablemd/core";
 import type { FunctionComponentDefinition, Json, Session } from "@executablemd/core";
@@ -36,13 +40,31 @@ import type { AgentConversation, ExecutionInstallation } from "@executablemd/cor
 
 import { createAcpxSessionStore } from "../src/session-store.ts";
 import { withCertificationFixture } from "./certification-fixture.ts";
-import { rm } from "@effectionx/fs";
+import type { CertificationFixture } from "./certification-fixture.ts";
+import { readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import { createAcpxProvider } from "../src/provider.ts";
-import type { AcpxSessionIdentity, AcpxSessionPolicy } from "../src/provider.ts";
+import type {
+  AcpxSessionIdentity,
+  AcpxSessionPolicy,
+  ProbeCapableRuntime,
+} from "../src/provider.ts";
+import { createAcpRuntime } from "../src/acpx-runtime.ts";
+import type { AcpRuntimeEnsureInput, AcpRuntimeOptions } from "../src/acpx-runtime.ts";
+import type { NativeAdapter } from "../src/native-launch.ts";
+import { createMemorySessionRouteStore } from "../src/session-route.ts";
+import type { AgentSessionRouteStore } from "../src/session-route.ts";
+import { deriveSessionKey } from "../src/session-key.ts";
 import type { AgentSessionRequest } from "@executablemd/core/api";
-import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
-import type { FakeRuntimeHarness } from "./helpers.ts";
+import {
+  createFakeObserver,
+  createFakeRuntime,
+  makeCoordinator,
+  makeRegistry,
+  makeStore,
+  useFlatWorld,
+} from "./helpers.ts";
+import type { CoordinatorHarness, FakeRuntimeHarness } from "./helpers.ts";
 
 const AGENT = "scribe";
 const WORKSPACE = "/workspace";
@@ -99,11 +121,50 @@ interface HostOptions {
   readonly agents?: Record<string, string>;
   /** Whatever else this host installs around the provider's own chain. */
   readonly around?: () => Operation<void>;
+  /** The command `scribe` resolves to. Default: `scribe-cmd`. */
+  readonly command?: string;
+  /**
+   * Own this host's sessions, construct them under routes and bind them to an
+   * observed build, as a host that may hand a session to a native UI does.
+   */
+  readonly owned?: Owned;
+  /** Provider state an earlier installation of this host left behind. */
+  readonly harness?: FakeRuntimeHarness;
+  readonly store?: ReturnType<typeof makeStore>;
 }
 
+/** Who owns this host's sessions and how each was first constructed. */
+interface Owned {
+  readonly coordinator: CoordinatorHarness;
+  readonly routes: AgentSessionRouteStore;
+}
+
+/** One owned assembly, shared by every installation of a host that outlives them. */
+function owned(): Owned {
+  return { coordinator: makeCoordinator(), routes: createMemorySessionRouteStore() };
+}
+
+/**
+ * The scribe adapter, bound to one observed build.
+ *
+ * Provider-returned, so the adapter names the conversation; build-bound, so its
+ * construction route records the build and a later run compares it.
+ */
+const BOUND_SCRIBE: NativeAdapter = {
+  launcher: "scribe",
+  identity: "provider-returned",
+  acceptance: "first-turn-acceptance",
+  resume: () => [],
+  binding: {
+    command: "scribe-native",
+    version: (output) => output.trim() || undefined,
+    environment: () => ({}),
+  },
+};
+
 function host(options: HostOptions = {}): Host {
-  const harness = createFakeRuntime();
-  const store = makeStore();
+  const harness = options.harness ?? createFakeRuntime();
+  const store = options.store ?? makeStore();
   const retained: AcpxSessionIdentity[] = [];
   let refusing = false;
   const sessions: AcpxSessionPolicy = {
@@ -144,18 +205,33 @@ function host(options: HostOptions = {}): Host {
               createRuntime: harness.create,
               sessionStore: store,
               nativeAdapters: {
-                scribe: {
-                  launcher: "scribe",
-                  identity: "provider-returned",
-                  acceptance: "first-turn-acceptance",
-                  resume: () => [],
-                },
+                scribe:
+                  options.owned === undefined
+                    ? {
+                        launcher: "scribe",
+                        identity: "provider-returned",
+                        acceptance: "first-turn-acceptance",
+                        resume: () => [],
+                      }
+                    : BOUND_SCRIBE,
               },
-              agentRegistry: makeRegistry(options.agents ?? { scribe: "scribe-cmd" }),
+              agentRegistry: makeRegistry(
+                options.agents ?? { scribe: options.command ?? "scribe-cmd" },
+              ),
               // deno-lint-ignore require-yield
               agentCwd: function* () {
                 return HOST_DIR;
               },
+              ...(options.owned === undefined
+                ? {}
+                : {
+                    advertiseNativeLaunch: ["scribe"],
+                    advertiseClientNativeAttachment: [],
+                    coordinator: options.owned.coordinator.coordinator,
+                    routeStore: options.owned.routes,
+                    executableObserver: createFakeObserver({ versionOutput: "scribe 1.0.0\n" })
+                      .observer,
+                  }),
               ...(options.states === false
                 ? {}
                 : {
@@ -344,6 +420,150 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     const retained = turns(yield* stream.readAll());
     expect(retained.map((turn) => turn.name)).toEqual(["turn:1", "turn:2"]);
     expect(retained[1]!.record.agentSessionId).toBe(NATIVE);
+  });
+
+  /**
+   * The same window, met through a different adapter command (#1221).
+   *
+   * The only native assertion is the provider's own promoted record: the
+   * interrupted turn retained a placement and no identity. Reopening through
+   * today's command must find that exact record, reopen it by its ACP loading
+   * target, hold it to the native conversation the record asserts — a
+   * different name — and keep its owner and route where the conversation
+   * began, through both the eager session and the turn that follows it.
+   */
+  it("HC1b: a session asserted before its mapping was acknowledged is joined through a changed command", function* () {
+    const ownership = owned();
+    const first = host({ owned: ownership });
+    const stream = new InMemoryStream();
+
+    first.refuseNextRetention();
+    const interrupted = yield* withConversation(stream, first.installation, function* (chat) {
+      return yield* chat.prompt("first");
+    });
+    expect(answer(interrupted)).toBe("the host could not retain this session");
+    const promoted = first.store.records.get(CHAT_SESSION_KEY);
+    if (promoted === undefined) {
+      throw new Error("the provider kept no record of the interrupted turn");
+    }
+    expect(promoted.agentSessionId).toBe(NATIVE);
+    expect(promoted.acpSessionId).not.toBe(NATIVE);
+    const failed = turns(yield* stream.readAll());
+    expect(failed.map((turn) => [turn.record.sessionKey, turn.record.agentSessionId])).toEqual([
+      [CHAT_SESSION_KEY, undefined],
+    ]);
+    const originalTuple = { provider: "acpx", agent: "scribe-cmd", sessionKey: CHAT_SESSION_KEY };
+    expect((yield* ownership.routes.read(originalTuple))?.route).toBe("acp-first");
+
+    // The first owner is gone, and this host now runs another adapter command.
+    // The adapter reports the native conversation it loaded, not its target.
+    const next = host({
+      owned: ownership,
+      command: "scribe-cmd-next",
+      harness: first.harness,
+      store: first.store,
+    });
+    next.harness.assertIdentity = NATIVE;
+    const ensured = next.harness.ensureCalls.length;
+    const acquired = ownership.coordinator.acquisitions.length;
+    const continued = yield* withConversation(stream, next.installation, function* (chat) {
+      return yield* chat.prompt("again");
+    });
+
+    expect(answer(continued)).toBe("hello world");
+    // The exact record and directory, reopened by its own ACP target through
+    // today's command, and then continued in place.
+    const calls = next.harness.ensureCalls.slice(ensured);
+    expect(calls.map((call) => [call.sessionKey, call.cwd])).toEqual([
+      [CHAT_SESSION_KEY, SESSION_DIR],
+      [CHAT_SESSION_KEY, SESSION_DIR],
+    ]);
+    expect(calls[0]?.resumeSessionId).toBe(promoted.acpSessionId);
+    expect(next.store.records.get(CHAT_SESSION_KEY)?.agentCommand).toBe("scribe-cmd-next");
+    // One owner tuple, the original, for the eager session and for the turn.
+    expect(ownership.coordinator.acquisitions.slice(acquired)).toEqual([
+      { kind: "session", key: originalTuple, outcome: "granted" },
+      { kind: "prompt", key: originalTuple, outcome: "granted" },
+    ]);
+    expect(yield* ownership.routes.read({ ...originalTuple, agent: "scribe-cmd-next" })).toBe(
+      undefined,
+    );
+    // The host's own callbacks still ran, and committed that same assertion.
+    expect(next.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE, NATIVE]);
+    // The interrupted turn was not sent again, and its evidence is unchanged.
+    expect(asked(next)).toEqual(["first", "again"]);
+    const retained = turns(yield* stream.readAll());
+    expect(retained[0]).toEqual(failed[0]);
+    expect(retained.map((turn) => turn.record.agentSessionId)).toEqual([undefined, NATIVE]);
+  });
+
+  /**
+   * And who may reopen it: the conversation's original owner tuple.
+   *
+   * An earlier owner still holds the session under the command it was built
+   * with. A contender running today's command would find its own natural tuple
+   * free, so refusing proves it asked for the original one — before any
+   * provider effect, route or record could move.
+   */
+  it("HC5: a changed command is refused while the original owner holds the conversation", function* () {
+    const ownership = owned();
+    const first = host({ owned: ownership });
+    const stream = new InMemoryStream();
+    expect(
+      answer(
+        yield* withConversation(stream, first.installation, function* (chat) {
+          return yield* chat.prompt("first");
+        }),
+      ),
+    ).toBe("hello world");
+    const history = stream.snapshot();
+    const originalTuple = { provider: "acpx", agent: "scribe-cmd", sessionKey: CHAT_SESSION_KEY };
+    const route = yield* ownership.routes.read(originalTuple);
+    const record = first.store.records.get(CHAT_SESSION_KEY);
+
+    const next = host({
+      owned: ownership,
+      command: "scribe-cmd-next",
+      harness: first.harness,
+      store: first.store,
+    });
+    const ensured = next.harness.ensureCalls.length;
+    const refused = yield* scoped(function* () {
+      const holding = withResolvers<void>();
+      yield* spawn(function* () {
+        yield* ownership.coordinator.coordinator.coordinate(
+          originalTuple,
+          { kind: "native-launch", operationId: "earlier-owner" },
+          function* () {
+            holding.resolve();
+            yield* suspend();
+          },
+        );
+      });
+      yield* holding.operation;
+      return yield* withConversation(stream, next.installation, function* (chat) {
+        return yield* chat.prompt("again");
+      });
+    });
+
+    expect(answer(refused)).toContain("is held");
+    expect(ownership.coordinator.acquisitions.at(-1)).toEqual({
+      kind: "session",
+      key: originalTuple,
+      outcome: "busy",
+    });
+    expect(
+      ownership.coordinator.acquisitions.some((one) => one.key.agent === "scribe-cmd-next"),
+    ).toBe(false);
+    // Nothing was ensured, prompted, routed or written, and no recovery forced.
+    expect(next.harness.ensureCalls.length).toBe(ensured);
+    expect(asked(next)).toEqual(["first"]);
+    expect(yield* ownership.routes.read(originalTuple)).toEqual(route);
+    expect(yield* ownership.routes.read({ ...originalTuple, agent: "scribe-cmd-next" })).toBe(
+      undefined,
+    );
+    expect(next.store.records.get(CHAT_SESSION_KEY)).toBe(record);
+    expect(stream.snapshot()).toEqual(history);
   });
 
   /**
@@ -928,6 +1148,450 @@ describe(
           );
           expect(delta.every((call) => call.sessionId === record.acpSessionId)).toBe(true);
           expect(turns(history.snapshot()).length).toBe(missing ? 1 : 2);
+        });
+      });
+    }
+  },
+);
+
+/**
+ * What the provider asked of the real ACPX runtime, in order.
+ *
+ * Recorded at the runtime boundary and delegated unchanged, so what runs is
+ * ACPX itself and what a case reads is what the provider actually asked it.
+ */
+interface RuntimeBoundary {
+  readonly log: {
+    readonly op: "ensure" | "close";
+    readonly sessionKey?: string;
+    readonly cwd?: string;
+    readonly resumeSessionId?: string;
+    readonly requestedModel?: string;
+  }[];
+  create(options: AcpRuntimeOptions): ProbeCapableRuntime;
+}
+
+function runtimeBoundary(): RuntimeBoundary {
+  const log: RuntimeBoundary["log"] = [];
+  return {
+    log,
+    create(options) {
+      const runtime = createAcpRuntime(options);
+      return new Proxy(runtime, {
+        get(target, property) {
+          if (property === "ensureSession") {
+            return (input: AcpRuntimeEnsureInput) => {
+              log.push({
+                op: "ensure",
+                sessionKey: input.sessionKey,
+                ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+                ...(input.resumeSessionId === undefined
+                  ? {}
+                  : { resumeSessionId: input.resumeSessionId }),
+                ...(input.requestedModel === undefined
+                  ? {}
+                  : { requestedModel: input.requestedModel }),
+              });
+              return target.ensureSession(input);
+            };
+          }
+          if (property === "close") {
+            return (input: Parameters<typeof target.close>[0]) => {
+              log.push({ op: "close" });
+              return target.close(input);
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+}
+
+/**
+ * One host over the real ACPX runtime and a controlled subprocess adapter.
+ *
+ * `scribe` is the stable agent alias a conversation is bound to; the command it
+ * resolves to is the host's to change between releases, which is exactly what
+ * happened when the bundled Codex adapter became the host-installed one. The
+ * session store, ownership and construction routes outlive every installation.
+ * Placement is the ordinary command-derived directory walk.
+ */
+interface ChangingHost {
+  readonly store: ReturnType<typeof createAcpxSessionStore>;
+  readonly ownership: Owned;
+  readonly runtime: RuntimeBoundary;
+  installation(command: string): ExecutionInstallation;
+}
+
+function changingHost(f: CertificationFixture): ChangingHost {
+  const store = createAcpxSessionStore(join(f.dir, "store"));
+  const ownership = owned();
+  const runtime = runtimeBoundary();
+  const observer = createFakeObserver({ versionOutput: "scribe 1.0.0\n" });
+  return {
+    store,
+    ownership,
+    runtime,
+    installation(command) {
+      return {
+        *install() {
+          yield* installAgentComponents({
+            defaultAgent: AGENT,
+            rootProvider: {
+              options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+              factory: createAcpxProvider({
+                createRuntime: runtime.create,
+                sessionStore: store,
+                agentRegistry: makeRegistry({ scribe: command }),
+                nativeAdapters: { scribe: BOUND_SCRIBE },
+                advertiseNativeLaunch: ["scribe"],
+                advertiseClientNativeAttachment: [],
+                coordinator: ownership.coordinator.coordinator,
+                routeStore: ownership.routes,
+                executableObserver: observer.observer,
+                mcpServers: [],
+                newSessionOptions: { allowedTools: [] },
+                permissions: "strict",
+                *agentCwd() {
+                  return f.dir;
+                },
+              }),
+            },
+          });
+        },
+      };
+    },
+  };
+}
+
+/** A history's canonical events, written out and read back as a new history. */
+function* reread(history: InMemoryStream): Operation<{ lines: string[]; stream: InMemoryStream }> {
+  const lines = (yield* history.readAll()).map(serializeDurableEvent);
+  const stream = new InMemoryStream();
+  for (const line of lines) {
+    const parsed = parseDurableEvent(line);
+    if (!parsed.ok) {
+      throw parsed.error;
+    }
+    yield* stream.append(parsed.value);
+  }
+  return { lines, stream };
+}
+
+/** The configuration records a history holds, as they were written. */
+function configurationLines(events: readonly DurableEvent[]): string[] {
+  return events
+    .filter(
+      (event) =>
+        event.type === "yield" && event.description.type === "agent_conversation_configuration",
+    )
+    .map(serializeDurableEvent);
+}
+
+describe(
+  "Tier HR — a held conversation resumes through a changed adapter command (#1221)",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("HR1: the exact native history continues through today's command and configuration", function* () {
+      yield* withCertificationFixture(function* (f) {
+        const target = changingHost(f);
+        const before = f.command("distinct");
+        const after = f.command("distinct-next");
+        const original = deriveSessionKey(before, f.dir, "chat-1");
+        const natural = deriveSessionKey(after, f.dir, "chat-1");
+        expect(natural).not.toBe(original);
+
+        const history = new InMemoryStream();
+        expect(
+          answer(
+            yield* withConversation(history, target.installation(before), (chat) =>
+              chat.prompt("seed:remembered"),
+            ),
+          ),
+        ).toBe("READY");
+        const record = yield* until(target.store.load(original));
+        if (record === undefined) {
+          throw new Error("the seeded conversation left no provider record");
+        }
+        // Two different names for one conversation: the ACP loading target and
+        // the native identity the adapter asserts.
+        const acp = record.acpSessionId;
+        const native = `native-${acp}`;
+        expect(record.agentSessionId).toBe(native);
+        // A record standing where today's command would place this name. It is
+        // somebody else's, and nothing may continue it.
+        yield* until(
+          target.store.save({
+            ...record,
+            acpxRecordId: natural,
+            name: natural,
+            agentCommand: after,
+            acpSessionId: "decoy-acp",
+            agentSessionId: "decoy-native",
+          }),
+        );
+
+        const { lines, stream } = yield* reread(history);
+        const called = yield* f.calls();
+        const logged = target.runtime.log.length;
+        const acquired = target.ownership.coordinator.acquisitions.length;
+        const continued = yield* withConversation(
+          stream,
+          target.installation(after),
+          function* (chat) {
+            // Opening and replaying contact no provider.
+            expect(yield* f.calls()).toEqual(called);
+            return yield* chat.prompt("recall", { model: "selected", effort: "high" });
+          },
+        );
+
+        // The original marker, from the conversation's own provider history.
+        expect(answer(continued)).toBe("remembered");
+        const all = yield* f.calls();
+        expect(
+          all.filter((call) => call.method === "session/prompt").map((call) => call.kind),
+        ).toEqual(["seed", "recall"]);
+        // Today's command executes, and only against the original ACP session.
+        const delta = all.slice(called.length);
+        expect(delta.every((call) => call.mode === "distinct-next")).toBe(true);
+        expect(delta.map((call) => call.method)).not.toContain("session/new");
+        const sessionCalls = delta.filter((call) => call.sessionId !== undefined);
+        expect(sessionCalls.length).toBeGreaterThan(0);
+        expect(sessionCalls.every((call) => call.sessionId === acp)).toBe(true);
+        expect(delta.filter((call) => call.method === "session/load").length).toBe(2);
+        // The current requested settings are applied before the new prompt.
+        const methods = delta.map((call) => call.method);
+        expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
+          methods.lastIndexOf("session/prompt"),
+        );
+
+        // The eager session reopens the exact record by its ACP target and is
+        // released; the turn reacquires that same record in its own directory.
+        const boundary = target.runtime.log.slice(logged);
+        const ensures = boundary.filter((entry) => entry.op === "ensure");
+        expect(ensures).toEqual([
+          {
+            op: "ensure",
+            sessionKey: original,
+            cwd: record.cwd,
+            resumeSessionId: acp,
+            requestedModel: "selected",
+          },
+          { op: "ensure", sessionKey: original, cwd: record.cwd, requestedModel: "selected" },
+        ]);
+        const second = boundary.indexOf(ensures[1]!);
+        expect(boundary.slice(1, second).map((entry) => entry.op)).toContain("close");
+
+        // One owner and one route, both where the conversation began.
+        const tuple = { provider: "acpx", agent: before, sessionKey: original };
+        expect(target.ownership.coordinator.acquisitions.slice(acquired)).toEqual([
+          { kind: "session", key: tuple, outcome: "granted" },
+          { kind: "prompt", key: tuple, outcome: "granted" },
+        ]);
+        const route = yield* target.ownership.routes.read(tuple);
+        expect(route?.route).toBe("acp-first");
+        expect(route?.schema).toBe("session-route.v3");
+        expect(yield* target.ownership.routes.read({ ...tuple, agent: after })).toBe(undefined);
+        expect(
+          yield* target.ownership.routes.read({ ...tuple, agent: after, sessionKey: natural }),
+        ).toBe(undefined);
+
+        // The record is the same conversation under today's command; the decoy
+        // was never touched.
+        const resumed = yield* until(target.store.load(original));
+        expect([resumed?.acpSessionId, resumed?.agentSessionId, resumed?.agentCommand]).toEqual([
+          acp,
+          native,
+          after,
+        ]);
+        const decoy = yield* until(target.store.load(natural));
+        expect([decoy?.acpSessionId, decoy?.agentCommand]).toEqual(["decoy-acp", after]);
+
+        // The journal keeps its prefix exactly, with one initial configuration
+        // naming the original command, and both turns name the native identity.
+        const events = yield* stream.readAll();
+        expect(events.slice(0, lines.length).map(serializeDurableEvent)).toEqual(lines);
+        const saved = configurationLines(events);
+        expect(saved).toEqual(configurationLines(yield* history.readAll()));
+        expect(saved).toHaveLength(1);
+        expect(saved[0]).toContain(JSON.stringify(before).slice(1, -1));
+        const held = turns(events);
+        expect(held.map((turn) => turn.name)).toEqual(["turn:1", "turn:2"]);
+        expect(held.map((turn) => turn.record.agentSessionId)).toEqual([native, native]);
+      });
+    });
+
+    it("HR2: a resume the provider cannot perform fails, and nothing replaces the conversation", function* () {
+      yield* withCertificationFixture(function* (f) {
+        const target = changingHost(f);
+        const before = f.command("distinct");
+        const after = f.command("distinct-next");
+        const original = deriveSessionKey(before, f.dir, "chat-1");
+        const history = new InMemoryStream();
+        expect(
+          answer(
+            yield* withConversation(history, target.installation(before), (chat) =>
+              chat.prompt("seed:remembered"),
+            ),
+          ),
+        ).toBe("READY");
+        const record = yield* until(target.store.load(original));
+        if (record === undefined) {
+          throw new Error("the seeded conversation left no provider record");
+        }
+        // The provider's own history for that conversation is gone.
+        const providerHistory = join(f.dir, `fixture-${record.acpSessionId}.json`);
+        const kept = yield* readTextFile(providerHistory);
+        yield* rm(providerHistory);
+
+        const retained = history.snapshot();
+        const called = yield* f.calls();
+        const reopened = yield* withConversation(
+          history,
+          target.installation(after),
+          function* (chat) {
+            const refused = yield* chat.prompt("recall");
+            const failed = yield* f.calls();
+            // The provider's account of what happened, and nothing was created
+            // or prompted in its place.
+            const attempt = failed.slice(called.length).map((call) => call.method);
+            expect(attempt).toContain("session/load");
+            expect(attempt).not.toContain("session/new");
+            expect(attempt).not.toContain("session/prompt");
+            expect(history.snapshot()).toEqual(retained);
+            const unchanged = yield* until(target.store.load(original));
+            expect([
+              unchanged?.acpSessionId,
+              unchanged?.agentSessionId,
+              unchanged?.agentCommand,
+            ]).toEqual([record.acpSessionId, record.agentSessionId, before]);
+            // The failure released what it held: a later explicit action is
+            // free to try again, and nothing retried on its own.
+            yield* writeTextFile(providerHistory, kept);
+            const later = yield* chat.prompt("recall");
+            return { refused, later };
+          },
+        );
+        if (!reopened.ok) {
+          throw reopened.error;
+        }
+        expect(reopened.value.refused.ok).toBe(false);
+        expect(!reopened.value.refused.ok && reopened.value.refused.error.message).toContain(
+          "could not open",
+        );
+        expect(reopened.value.later).toEqual(Ok("remembered"));
+        expect(
+          (yield* f.calls())
+            .filter((call) => call.method === "session/prompt")
+            .map((call) => call.kind),
+        ).toEqual(["seed", "recall"]);
+        // The refused turn recorded nothing; only the seed and the later turn are retained.
+        const keptTurns = turns(history.snapshot());
+        expect(keptTurns).toHaveLength(2);
+        expect(keptTurns.map((turn) => turn.record.status)).toEqual(["completed", "completed"]);
+      });
+    });
+  },
+);
+
+describe(
+  "standard held conversation persistence through a changed command",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const missing of [false, true]) {
+      it(`reopening with ${missing ? "missing" : "intact"} provider storage under another command continues only its own record`, function* () {
+        yield* withCertificationFixture(function* (f) {
+          const history = new InMemoryStream();
+          const store = createAcpxSessionStore(join(f.dir, "store"));
+          const installation = (command: string): ExecutionInstallation => ({
+            *install() {
+              yield* installAgentComponents({
+                defaultAgent: AGENT,
+                rootProvider: {
+                  options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+                  factory: createAcpxProvider({
+                    sessionStore: store,
+                    agentRegistry: makeRegistry({ scribe: command }),
+                    advertiseNativeLaunch: [],
+                    advertiseClientNativeAttachment: [],
+                    mcpServers: [],
+                    newSessionOptions: { allowedTools: [] },
+                    permissions: "strict",
+                    *agentCwd() {
+                      return f.dir;
+                    },
+                  }),
+                },
+              });
+            },
+          });
+          const before = f.command("standard");
+          const after = `${f.command("standard")} --next`;
+          const original = deriveSessionKey(before, f.dir, "chat-1");
+          const natural = deriveSessionKey(after, f.dir, "chat-1");
+          expect(
+            answer(
+              yield* withConversation(history, installation(before), (chat) =>
+                chat.prompt("seed:remembered"),
+              ),
+            ),
+          ).toBe("READY");
+          const record = yield* until(store.load(original));
+          if (record === undefined) {
+            throw new Error("missing seeded record");
+          }
+          // The one record the seed wrote, by the name the store gave its file.
+          const written = yield* readdir(join(f.dir, "store", "sessions"));
+          expect(written).toHaveLength(1);
+          // Where today's command would look, somebody else's conversation.
+          yield* until(
+            store.save({
+              ...record,
+              acpxRecordId: natural,
+              name: natural,
+              agentCommand: after,
+              acpSessionId: "decoy-acp",
+            }),
+          );
+          if (missing) {
+            yield* rm(join(f.dir, "store", "sessions", written[0]!));
+            expect(yield* until(store.load(original))).toBe(undefined);
+          }
+          const retained = history.snapshot();
+          const called = yield* f.calls();
+          const reply = yield* withConversation(history, installation(after), (chat) =>
+            chat.prompt("recall"),
+          );
+          if (!reply.ok) {
+            throw reply.error;
+          }
+          const delta = (yield* f.calls())
+            .slice(called.length)
+            .filter((call) =>
+              ["session/new", "session/load", "session/prompt"].includes(call.method),
+            );
+          if (missing) {
+            // A used history whose own record is gone refuses, and the decoy at
+            // today's natural placement is not a substitute.
+            expect(reply.value.ok).toBe(false);
+            expect(!reply.value.ok && reply.value.error.message).toContain(
+              "Start a new conversation",
+            );
+            expect(delta).toEqual([]);
+            expect(history.snapshot()).toEqual(retained);
+          } else {
+            expect(reply.value).toEqual(Ok("remembered"));
+            expect(delta.map((call) => call.method)).toEqual([
+              "session/load",
+              "session/load",
+              "session/prompt",
+            ]);
+            expect(delta.every((call) => call.sessionId === record.acpSessionId)).toBe(true);
+            expect(delta.every((call) => call.mode === "standard")).toBe(true);
+          }
+          expect((yield* until(store.load(natural)))?.acpSessionId).toBe("decoy-acp");
         });
       });
     }

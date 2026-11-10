@@ -1,10 +1,10 @@
 /**
  * What a provider says it is constructing a session under.
  *
- * Values, not a fingerprint. A conversation reopened a week later has to be
- * continued under the configuration it was created with, and a digest can only
- * say that two things differ — it cannot say what differs, and it cannot be
- * read back by anything that wants to know what a session actually holds.
+ * Values, not a fingerprint. A conversation's history keeps what its first
+ * session was built under, and a digest could only say that two things differ
+ * — it cannot be read back by anything that wants to know what a session was
+ * actually constructed with.
  *
  * It describes what construction will attempt. It asserts nothing about what
  * the backend accepted, what an adapter applied, or what the provider's own
@@ -72,9 +72,9 @@ function unstated(why: string): Result<JsonObject> {
  * Read one configuration into frozen JSON, with every member required.
  *
  * Required all four, and absence is never a default: a configuration missing
- * its tool list would be saved as one that said nothing about tools, and the
- * reopening that compared against it would accept any tool set at all. An
- * empty list is a statement; a missing one is not.
+ * its tool list would be saved as one that said nothing about tools, which is
+ * not the same as stating none. An empty list is a statement; a missing one is
+ * not.
  */
 export function parseProviderConfiguration(
   configuration: ProviderSessionConfiguration | undefined,
@@ -138,44 +138,6 @@ function statedPrompt(value: unknown): boolean {
   }
   const append = Reflect.get(value, "append");
   return typeof append === "string";
-}
-
-/**
- * Whether two saved configurations say the same thing.
- *
- * JSON values, not object identity and not member order: the provider builds
- * this record from its own inputs each time it constructs, so two runs that
- * stated the same configuration must compare equal however their objects were
- * assembled. Array order is kept, because the provider normalized it and a
- * reordered tool or server list is a different list to whoever reads it.
- */
-export function sameJson(left: Json, right: Json): boolean {
-  if (Array.isArray(left)) {
-    return (
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((member, index) => sameJson(member, right[index] ?? null))
-    );
-  }
-  if (Array.isArray(right)) {
-    return false;
-  }
-  if (left === null || right === null) {
-    return left === right;
-  }
-  if (typeof left === "object") {
-    if (typeof right !== "object") {
-      return false;
-    }
-    const keys = Object.keys(left).sort();
-    const others = Object.keys(right).sort();
-    return (
-      keys.length === others.length &&
-      keys.every((key, index) => key === others[index]) &&
-      keys.every((key) => sameJson(left[key] ?? null, right[key] ?? null))
-    );
-  }
-  return left === right;
 }
 
 /**
