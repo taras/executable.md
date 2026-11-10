@@ -39,10 +39,12 @@ You are the repository {props.role}. Perform the assigned phase using the reposi
 Repository instructions:
 <File path="AGENTS.md" />
 
+<Let as="roleInstructions"><If condition={props.role === "architect"}><File path=".agents/architect.md" /></If><If condition={props.role === "planner"}><File path=".agents/planner.md" /></If><If condition={props.role === "implementor"}><File path=".agents/implementor.md" /></If></Let>
 Role instructions:
-<If condition={props.role === "architect"}><File path=".agents/architect.md" /></If>
-<If condition={props.role === "planner"}><File path=".agents/planner.md" /></If>
-<If condition={props.role === "implementor"}><File path=".agents/implementor.md" /></If>
+<If condition={props.inputs.some(input => input.path === props.assignment.repository + "/.agents/" + props.role + ".md" && input.content === roleInstructions)}>
+Use the selected role instructions below.
+<Else>{roleInstructions}</Else>
+</If>
 </If>
 
 Use the provider, model and effort explicitly selected by this workflow; historical role-guide defaults do not replace that allocation.

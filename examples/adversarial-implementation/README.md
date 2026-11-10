@@ -382,7 +382,9 @@ continued prompts. It disables native shell/subagent backgrounding and denies
 ordinary interactive Sidekick calls keep their defaults. A retained session that
 lacks matching creation settings refuses before another prompt. Each role joins
 its owned processes and returns its result in the same call. The upfront brief
-contains work, evidence and lifetime rules; the frozen submission guide contains
+contains work, evidence and lifetime rules. Identical role instructions selected
+as input are delivered once; a different captured version retains the current
+role brief too. The frozen submission guide contains
 response schema, limits and routing and may wait until a result is being prepared.
 
 These rules apply to separate phase requests and Ticket role calls. Codex authors
