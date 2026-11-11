@@ -1,3 +1,4 @@
+import { makeRegistry } from "./support/fake-acp.ts";
 import { initialState, reduceRepl, NO_AGENT } from "../src/repl/application.ts";
 import type { ReplState, ReplLive } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
@@ -700,7 +701,10 @@ function chatLines(reading: ScreenReading, anchor: string): string[] {
     ? reading.locate(COMPOSER).row - 2
     : reading.locate("HISTORY").row;
 
-  return reading.rows.slice(start + 1, end).map((row) => row.slice(column).trim());
+  return reading.rows.slice(start + 1, end).map((row) => {
+    const text = row.slice(column).trim();
+    return text.startsWith("Sidekick total") || /^\d+ turns? unavailable$/.test(text) ? "" : text;
+  });
 }
 
 function* exchange(page: ReplPage, text: string, answer: string): Operation<void> {
@@ -3384,7 +3388,7 @@ function* readSilentAndSpoken(page: ReplPage): Operation<void> {
   yield* reachTurn(page, "run it ", "up");
   yield* page.until("the silent turn's request", (one) => sidekickShows(one, "[U] run it"));
   expect(sidekickShows(page.screen(), "ANSWER-10")).toBe(false);
-  const said = shownChat(page.screen()).filter((row) => row !== "");
+  const said = shownChat(page.screen()).filter((row) => row !== "" && row !== "Usage unavailable");
   const first = said.findIndex((row) => row.includes("[U] run it"));
   expect(first).toBeGreaterThanOrEqual(0);
   expect(said[first + 1]).toContain("[U] say it");
@@ -3818,4 +3822,74 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
       expect(yield* pairBytes(retained.root, retained.execution)).toEqual(before);
     });
   }
+});
+
+describe("Retained Sidekick token usage", () => {
+  it("keeps the round separate and counts a failed feedback turn across reopen", function* () {
+    const dataRoot = yield* useTemporary("xmd-repl-token-usage-");
+    const options = {
+      dataRoot,
+      defaultAgent: "claude",
+      sidekickAgent: "codex",
+      usageAcp: {
+        agentRegistry: makeRegistry({ claude: "claude", codex: "codex" }),
+        advertiseNativeLaunch: [],
+        advertiseClientNativeAttachment: [],
+        promptUsageHost: { host: "deno-source" as const, xmd: {} },
+        adapterBuild: (agent: string) => ({ version: agent === "codex" ? "1.6.2" : "0.70.0" }),
+        *agentProcessEnv() {
+          return {
+            CLAUDE_CODE_EXECUTABLE: new URL(
+              "../../acp/tests/fixtures/fake-claude-cli.cjs",
+              import.meta.url,
+            ).pathname,
+          };
+        },
+      },
+    };
+    const location = yield* scoped(function* () {
+      const host = yield* useMountedHost(options);
+      host.fake.script({
+        reply:
+          "<Output>Running the token example.</Output>\n" +
+          submitting('<Session name="round"><Prompt text="count this entry" /></Session>'),
+        usage: {
+          response: { inputTokens: 1200, outputTokens: 180, cachedReadTokens: 700 },
+          quota: { tokenCount: { inputTokens: 9999, outputTokens: 999 } },
+        },
+      });
+      host.fake.script({
+        reply: "Entry output.",
+        usage: {
+          response: { inputTokens: 600, outputTokens: 90 },
+          quota: { modelUsage: [{ model: "example", tokenCount: { totalTokens: 8000 } }] },
+        },
+      });
+      host.fake.script({
+        failure: "Controlled feedback failure",
+        usage: { response: { inputTokens: 200, outputTokens: 20 } },
+      });
+      const page = yield* useReplPage({ host });
+      yield* sendMessage(page, "Run the token example.");
+      const settled = yield* page.until(
+        "separate Sidekick and round usage",
+        (one) =>
+          one.shows("1,400 in · 200 out") &&
+          one.shows("600 in · 90 out") &&
+          one.shows("Controlled feedback failure"),
+      );
+      expect(settled.shows("1,200 in · 180 out")).toBe(true);
+      expect(host.fake.prompts).toHaveLength(3);
+      expect((yield* settledReading(page.repl)).model.turns).toHaveLength(1);
+      return yield* leaveLocation(page);
+    });
+    const cold = yield* useMountedHost(options);
+    const page = yield* useReplPage({ host: cold, location });
+    yield* page.until(
+      "retained Sidekick and round usage",
+      (one) => one.shows("1,400 in · 200 out") && one.shows("600 in · 90 out"),
+    );
+    expect(cold.fake.prompts).toHaveLength(0);
+    expect((yield* settledReading(page.repl)).model.turns).toHaveLength(1);
+  });
 });

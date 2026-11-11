@@ -1,3 +1,4 @@
+import { turnUsage, usageDetails, usageSummary } from "./usage.ts";
 import { Repl } from "../repl-api.ts";
 import { join } from "node:path";
 import { validateProjectPlacement, canonicalProject } from "./startup.ts";
@@ -2942,6 +2943,8 @@ function sidekickReadingOf(
       ),
     ),
     turns: sidekickTurnRows(read.value, owner.live),
+    usageTotal: usageSummary(read.value.turns, "Sidekick total"),
+    inspectUsage: selected !== undefined,
     busy: owner.busy,
     // The agent of the chat being read, which is that chat's own: a
     // conversation never changes agent in place, so an older one says what
@@ -3049,6 +3052,7 @@ export function sidekickTurnRows(
       turn: turn.turn,
       title: titleOf(turn.asked, turn.title),
       state: savedState(turn),
+      usageLine: turnUsage(turn.usage),
       running: false,
       failed,
       sessionKey: turn.sessionKey,
@@ -3164,11 +3168,23 @@ export function sidekickChatRows(
           response: previewing.response,
         }
       : undefined;
+  const saved = new Map(
+    known.turns.map((turn) => [JSON.stringify([turn.conversation, turn.turn]), turn]),
+  );
   const chat: ReplSidekickChatRow[] = known.chat
     // Every chat, because which of them is drawn is the reading the location
     // selects: an older chat is read-only and still has to be readable, and a
     // list filtered to the active association could not show one.
     .map((item) => {
+      const turn = saved.get(JSON.stringify([item.conversation, item.turn]));
+      const usageLine =
+        item.kind === "person"
+          ? undefined
+          : turn === undefined
+            ? "Usage unavailable · turn not recorded"
+            : turnUsage(turn.usage);
+      const details =
+        turn?.usage === undefined ? undefined : Object.freeze(usageDetails(turn.usage));
       if (item.kind === "incomplete") {
         // What that turn actually streamed, read as a root by the pure preview
         // reader. The record crossed the durable disclosure gate on its way in,
@@ -3192,6 +3208,8 @@ export function sidekickChatRows(
           conversation: item.conversation,
           turn: item.turn,
           kind: item.kind,
+          usageLine,
+          usageDetails: details,
           text: projected.ok ? projected.value.output : "",
           hasOutput: false,
           failure: item.failure,
@@ -3211,6 +3229,8 @@ export function sidekickChatRows(
           conversation: item.conversation,
           turn: item.turn,
           kind: item.kind,
+          usageLine,
+          usageDetails: details,
           text: item.status,
           hasOutput: false,
           failure: undefined,
@@ -3225,7 +3245,9 @@ export function sidekickChatRows(
         conversation: item.conversation,
         turn: item.turn,
         kind: item.kind,
-        ...(item.kind === "person" ? { origin: item.origin } : {}),
+        ...(item.kind === "person"
+          ? { origin: item.origin }
+          : { usageLine, usageDetails: details }),
         text: item.text,
         hasOutput: item.kind === "reply" ? item.hasOutput : false,
         // The reply's own retained failure, carried through rather than
@@ -3259,6 +3281,7 @@ export function sidekickChatRows(
           hasOutput: true,
           failure: undefined,
           incomplete: previewing.incomplete,
+          ...(previewing.incomplete ? { usageLine: "Usage unavailable · turn not recorded" } : {}),
         }),
       );
     }
