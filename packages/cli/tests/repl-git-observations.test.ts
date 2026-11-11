@@ -7,7 +7,10 @@
  * own contribution for the `repl` command, and the per-entry recording core
  * initialization establishes. What that combination has to do is answer a
  * reopened entry from what it recorded, carry those answers to the entry after
- * it, and read the repository again when a new entry asks.
+ * it, and read the repository again when a new entry asks. The last row runs
+ * the adversarial workflow's `<Ticket.Checkout>`, whose two reads run at the
+ * same time, so a reopened entry must answer each from its own record whichever
+ * read asks first.
  *
  * ## Why the counters are on the host
  *
@@ -20,19 +23,21 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
+import { ensure, resource, scoped, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { appendFile, mkdtemp, open, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { fileURLToPath } from "node:url";
+import { API, Permissions, useHostFiles } from "@executablemd/runtime";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import { runGit } from "./support/fixture-git.ts";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
+import { GitQuery } from "@executablemd/git/api";
 import type { GitObservationRequest } from "@executablemd/git/api";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
 import { gitPlugin } from "@executablemd/git";
@@ -568,5 +573,131 @@ describe("RGO5 — the secret gate still decides what reaches the journal", () =
     expect(reported).toContain("secret");
     const records = yield* readRecords(executionPath(fixture.journals, "execution-1"));
     expect(observationCount(records)).toBe(0);
+  });
+});
+
+const WORKFLOW_COMPONENTS = fileURLToPath(
+  new URL("../../../examples/adversarial-implementation/components", import.meta.url),
+);
+
+/**
+ * Hold one changes read at the Git boundary until its sibling has answered, so
+ * the two concurrent reads reach the provider in a chosen order — live, that
+ * decides the order they are journaled; on reopen, the order they ask for
+ * their records.
+ */
+function useLateChanges(late: "staged" | "unstaged"): Operation<void> {
+  return Execution.around({
+    *init(_args, initialize): Operation<void> {
+      const answered = withResolvers<void>();
+      yield* GitQuery.around({
+        *changes(args, next) {
+          if (args[0].request.comparison.compare === late) {
+            yield* answered.operation;
+            return yield* next(...args);
+          }
+          const result = yield* next(...args);
+          answered.resolve();
+          return result;
+        },
+      });
+      yield* initialize();
+    },
+  });
+}
+
+/** Which comparison each observation record holds, and the coroutine that wrote it. */
+function changesRecords(
+  records: readonly DurableEvent[],
+): { compare: string; coroutine: string }[] {
+  return records
+    .filter(
+      (record) =>
+        record.type === "yield" && record.description.type === REPL_REPOSITORY_OBSERVATION,
+    )
+    .map((record) => ({
+      compare: JSON.stringify(record).match(/"compare":"(staged|unstaged)"/)?.[1] ?? "?",
+      coroutine: String(record.coroutineId),
+    }));
+}
+
+describe("RGO6 — concurrent checkout reads replay whichever answers first", () => {
+  it("reopens an unfinished <Ticket.Checkout> entry when the reads arrive in the other order", function* () {
+    const question =
+      '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>';
+    for (const [live, reopen] of [
+      ["staged", "unstaged"],
+      ["unstaged", "staged"],
+    ] as const) {
+      const fixture = yield* useFixture();
+      const source = [
+        `<Ticket.Checkout repository=${JSON.stringify(fixture.checkout)} as="checked" />`,
+        "",
+        question,
+        "",
+        "Head {checked.head}, clean {checked.clean}, answered {answer.decision}.",
+        "",
+      ].join("\n");
+      const opening = function* (counted: Counted, late: "staged" | "unstaged"): Operation<void> {
+        yield* prepare(fixture, counted);
+        yield* Permissions.around(
+          { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+          { at: "min" },
+        );
+        yield* useLateChanges(late);
+      };
+
+      yield* scoped(function* () {
+        yield* opening(counters(), live);
+        const created = yield* createExecutionFile(fixture.journals, "execution-1");
+        const session = opened(
+          yield* submitReplEntry({
+            execution: created,
+            source,
+            includes: [WORKFLOW_COMPONENTS],
+            installations: yield* replInstallations(),
+            generated: ordinaryGeneratedSelection(),
+          }),
+        );
+        yield* waitForQuestion(session);
+      });
+
+      // The late read was journaled second, each read by a coroutine of its own.
+      const prefix = changesRecords(
+        yield* readRecords(executionPath(fixture.journals, "execution-1")),
+      );
+      expect(prefix.map((record) => record.compare)).toEqual([reopen, live]);
+      expect(prefix[0].coroutine).not.toBe(prefix[1].coroutine);
+
+      // Reopened with the other read held back, so the records are asked for
+      // in the opposite order to the one they were written in.
+      const resumed = counters();
+      const settled = yield* scoped(function* (): Operation<string> {
+        yield* opening(resumed, reopen);
+        const file = yield* openExecutionFile(fixture.journals, "execution-1");
+        const session = opened(
+          yield* openReplSession({
+            execution: file,
+            includes: [WORKFLOW_COMPONENTS],
+            installations: yield* replInstallations(),
+            generated: ordinaryGeneratedSelection(),
+          }),
+        );
+        yield* waitForQuestion(session);
+        session.elicitation.pending?.submit({ decision: "go" });
+        const outcome = yield* session.join();
+        if (!outcome.ok) {
+          throw outcome.error;
+        }
+        return session.model.entries[0]?.terminal?.output ?? "";
+      });
+
+      expect(settled).toContain(`Head ${fixture.first}, clean true, answered go.`);
+      expect(reads(resumed)).toEqual([]);
+      const after = changesRecords(
+        yield* readRecords(executionPath(fixture.journals, "execution-1")),
+      );
+      expect(after).toEqual(prefix);
+    }
   });
 });
