@@ -24,7 +24,7 @@ import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promis
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import process from "node:process";
-import { ensure, main, Ok, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, main, Ok, race, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -64,7 +64,11 @@ import { assembleReplProfile } from "../../../../src/repl-profile.ts";
 import { NO_PLUGINS } from "../../../../src/plugin-host.ts";
 import { rootReads } from "../../../../src/repl/sidekick/requests.ts";
 import { useSidekickOwner } from "../../../../src/repl/sidekick/owner.ts";
-import type { SidekickAssembly, SidekickOwner } from "../../../../src/repl/sidekick/owner.ts";
+import type {
+  SidekickAssembly,
+  SidekickOwner,
+  SidekickTurn,
+} from "../../../../src/repl/sidekick/owner.ts";
 import type { SubmitReceipt } from "../../../../src/repl/sidekick/controls.ts";
 import type { PairedChatStorage } from "../../../../src/repl/sidekick/repository.ts";
 import { createFakeAcp, makeRegistry } from "../../../support/fake-acp.ts";
@@ -164,13 +168,6 @@ let holdWhen: ((record: string) => boolean) | undefined;
 /** The exact record the hold is sitting on, so a case can identify it. */
 let holding: string | undefined;
 const reached = withResolvers<void>();
-const tracing = process.env.XMD_RECOVERY_PHASE_TRACE === "1";
-
-function trace(message: string): void {
-  if (tracing) {
-    process.stderr.write(`recovery phase: ${message}\n`);
-  }
-}
 
 function* useHost(dataRoot: string): Operation<void> {
   yield* installReplHost({
@@ -180,7 +177,6 @@ function* useHost(dataRoot: string): Operation<void> {
     appendRecord: async (path, record) => {
       if (holdWhen?.(record) === true) {
         holding = record;
-        trace("target journal append reached");
         reached.resolve();
         await new Promise(() => {});
       }
@@ -335,8 +331,10 @@ function* useConversing(
   yield* ensure(() => until(writes));
   // The scripted fake does not await saves; snapshots keep its pending write
   // from adopting an identity before the queued asserting write publishes it.
+  // A read waits for the saves already queued when it was asked, so a later
+  // session resolution sees the record an earlier turn has already saved.
   const store: typeof disk = {
-    load: (key) => disk.load(key),
+    load: (key) => writes.then(() => disk.load(key)),
     save: (record) => {
       const snapshot = structuredClone(record);
       const saving = writes.then(() => disk.save(snapshot));
@@ -1109,9 +1107,7 @@ function* phases(): Operation<unknown> {
     if (script.stop !== undefined && holdWhen === undefined) {
       throw new Error(`there is no boundary "${script.stop}"`);
     }
-    trace(`chat-say entered with stop ${script.stop}`);
     const held = yield* useConversing(dataRoot, execution, script);
-    trace("owner assembled");
     const said = script.say ?? "do something";
     if (script.stopAtQuestion === true) {
       // The process ends while a question is pending. Nothing is held in the
@@ -1129,17 +1125,27 @@ function* phases(): Operation<unknown> {
       };
     }
     if (holdWhen !== undefined) {
-      yield* spawn(function* (): Operation<void> {
-        trace("owner message started");
-        const result = yield* held.owner.message(said);
-        trace(
-          result.ok ? "owner message returned" : `owner message refused: ${result.error.message}`,
-        );
-      });
+      const sending = yield* spawn(() => held.owner.message(said));
       // The boundary, observed. Returning unwinds the owner, the conversation
-      // and the turn under the write that never happened.
-      yield* reached.operation;
-      trace("journal boundary observed");
+      // and the turn under the write that never happened. A message that
+      // settles first can no longer reach the boundary, so its answer is the
+      // phase's failure. Losing the race halts only the observer, not the
+      // owner still suspended under the held write.
+      const early = yield* race([
+        (function* (): Operation<undefined> {
+          yield* reached.operation;
+          return undefined;
+        })(),
+        (function* (): Operation<Result<SidekickTurn>> {
+          return yield* sending;
+        })(),
+      ]);
+      if (early !== undefined) {
+        const answer = early.ok
+          ? `completed with ${early.value.failure ?? "no failure"}`
+          : `refused: ${early.error.message}`;
+        throw new Error(`the message settled before the ${script.stop} boundary: ${answer}`);
+      }
       // Observed while the acknowledgement is still held: the provider took the
       // turn, and its own store already retains the native conversation it
       // created for it. Both are facts about the world this process is about to
@@ -1150,12 +1156,10 @@ function* phases(): Operation<unknown> {
       // The scripted fake issues saves without waiting; observe its asserting
       // save before reading the disk store.
       yield* held.fake.assertedSessions(1);
-      trace("native identity save acknowledged");
       const asserted: (string | undefined)[] = [];
       for (const key of conversationKeys) {
         asserted.push((yield* held.retained(key))?.agentSessionId);
       }
-      trace("native identity read back");
       return {
         stopped: script.stop,
         held: describeHeld(),
@@ -1225,6 +1229,5 @@ function* phases(): Operation<unknown> {
 
 await main(function* () {
   const answer = yield* phases();
-  trace("phase returning result before scope teardown");
   process.stdout.write(`${JSON.stringify(answer)}\n`);
 });

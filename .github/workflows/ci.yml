@@ -742,16 +742,6 @@ jobs:
       - name: Test
         run: bun run test:bun ${{ matrix.shard }}/10
 
-      - name: Observe repeated Sidekick recovery cuts
-        if: ${{ !cancelled() && matrix.shard == 10 }}
-        timeout-minutes: 8
-        run: |
-          set -euo pipefail
-          for trial in {1..16}; do
-            echo "R2q diagnostic trial $trial of 16"
-            bun test --timeout=300000 -t R2q packages/cli/tests/repl-sidekick-recovery.test.ts
-          done
-
       # test:bun never loads packages/cli/src/bun.ts, so it cannot tell whether
       # the Bun entrypoint's API.Env providers work. This document drives a
       # <TestAgent> scenario, which makes the parent relaunch bun.ts as

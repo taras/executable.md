@@ -12,21 +12,11 @@
  * case brings of its own is the interruption.
  */
 
-import {
-  appendFile,
-  mkdir,
-  mkdtemp,
-  open,
-  readdir,
-  readFile,
-  readlink,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensure, run, sleep, spawn, until } from "effection";
+import { ensure, run, spawn, until } from "effection";
 import type { Stream } from "effection";
 import { exec } from "@effectionx/process";
 import process from "node:process";
@@ -36,11 +26,6 @@ import type { Operation } from "effection";
 
 import { installReplHost } from "../../../../src/repl-assembly.ts";
 import { REPL_DIRECTORY } from "../../../../src/repl/storage.ts";
-import {
-  ENTRIES_FILE,
-  PAIRED_DIRECTORY,
-  SIDEKICK_FILE,
-} from "../../../../src/repl/sidekick/history.ts";
 
 /** How a gate can hold or fail one real append, by the path it is reaching. */
 export interface AppendGate {
@@ -192,19 +177,9 @@ export function* runPhase(
     execution,
     ...(extra === undefined ? [] : [extra]),
   ]);
-  const env = phaseEnv();
-  const artifacts = process.env.XMD_TEST_ARTIFACTS;
-  const diagnose =
-    phase === "chat-say" &&
-    artifacts !== undefined &&
-    extra !== undefined &&
-    ["delivered", "laterTurn"].includes(JSON.parse(extra).stop);
-  if (diagnose) {
-    env.XMD_RECOVERY_PHASE_TRACE = "1";
-  }
   const child = yield* exec(launch.command, {
     arguments: launch.arguments,
-    env,
+    env: phaseEnv(),
   });
   // Collected *while* the child runs, not after it. A subscription taken once
   // the process has already settled never settles itself, so reading the
@@ -212,13 +187,7 @@ export function* runPhase(
   const captured = { stdout: "", stderr: "" };
   yield* spawn(() => accumulate(child.stdout, captured, "stdout"));
   yield* spawn(() => accumulate(child.stderr, captured, "stderr"));
-  const observation = diagnose
-    ? yield* spawn(() => observeSlowPhase(child.pid, root, execution, artifacts, captured))
-    : undefined;
   const status = yield* child.join();
-  if (observation !== undefined) {
-    yield* observation.halt();
-  }
   if (status.code !== 0) {
     throw new Error(
       `the ${phase} phase exited ${status.code ?? "on a signal"}: ${captured.stderr}`,
@@ -229,56 +198,6 @@ export function* runPhase(
     throw new Error(`the ${phase} phase reported nothing: ${captured.stderr}`);
   }
   return JSON.parse(line) as Record<string, unknown>;
-}
-
-function* observeSlowPhase(
-  pid: number,
-  root: RepositoryRoot,
-  execution: string,
-  artifacts: string,
-  captured: { stdout: string; stderr: string },
-): Operation<void> {
-  yield* sleep(12_000);
-  const directory = join(root.repository, PAIRED_DIRECTORY, execution);
-  const proc = `/proc/${pid}`;
-  const sessions = join(root.data, "acpx", "sessions");
-  const sessionNames = yield* until(readdir(sessions).catch(() => []));
-  const sessionFiles: Record<string, unknown> = {};
-  for (const name of sessionNames.slice(0, 8)) {
-    sessionFiles[name] = yield* snapshot(join(sessions, name));
-  }
-  const report = {
-    pid,
-    process: yield* until(readFile(join(proc, "status"), "utf8").catch(String)),
-    waiting: yield* until(readFile(join(proc, "wchan"), "utf8").catch(String)),
-    stdout: yield* until(readlink(join(proc, "fd", "1")).catch(String)),
-    stderr: yield* until(readlink(join(proc, "fd", "2")).catch(String)),
-    stdoutBytes: captured.stdout.length,
-    trace: captured.stderr.slice(-4096),
-    sidekick: yield* snapshot(join(directory, SIDEKICK_FILE)),
-    entries: yield* snapshot(join(directory, ENTRIES_FILE)),
-    sessions: sessionFiles,
-  };
-  yield* until(mkdir(artifacts, { recursive: true }));
-  const target = join(artifacts, `recovery-phase-${pid}.json`);
-  yield* until(writeFile(target, JSON.stringify(report, null, 2)));
-  console.error(`Slow recovery phase ${pid} captured in ${target}\n${report.trace}`);
-}
-
-function* snapshot(path: string): Operation<string> {
-  try {
-    const file = yield* until(open(path, "r"));
-    try {
-      const { size } = yield* until(file.stat());
-      const bytes = new Uint8Array(Math.min(size, 65_536));
-      const { bytesRead } = yield* until(file.read(bytes, 0, bytes.length, size - bytes.length));
-      return new TextDecoder().decode(bytes.subarray(0, bytesRead));
-    } finally {
-      yield* until(file.close());
-    }
-  } catch (error) {
-    return String(error);
-  }
 }
 
 /** How this runtime launches a TypeScript entrypoint of its own. */
