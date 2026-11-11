@@ -890,6 +890,19 @@ function slot(conversation: string, response: string, at: number): string {
  * the nearest readable shape would show somebody a conversation they never had.
  */
 export function projectSidekick(records: readonly SidekickRecord[]): Result<SidekickReading> {
+  const projected = projectHistory(records);
+  return projected.ok ? Ok(projected.value.reading) : projected;
+}
+
+/** A reading, with where each of its unestablished feedback facts was read from. */
+export interface ProjectedHistory {
+  readonly reading: SidekickReading;
+  /** The record position of each `reading.unestablished` entry, index for index. */
+  readonly unestablishedAt: readonly number[];
+}
+
+/** {@link projectSidekick}, keeping the record positions a live owner's exception needs. */
+export function projectHistory(records: readonly SidekickRecord[]): Result<ProjectedHistory> {
   // The request boundaries first, by the same rules the live owner reads them
   // by. Everything below that associates a message, a reply or an orientation
   // with a saved turn asks these rather than comparing numbers.
@@ -1060,7 +1073,7 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
   const observed = new Set<string>();
   let preferences: SidekickPreferences | undefined;
   const delivered = new Map<string, number>();
-  const unestablished: { conversation: string; turn: number | null }[] = [];
+  const unestablished: { conversation: string; turn: number | null; at: number }[] = [];
   /**
    * Feedback text this history retained and never acknowledged, in record order.
    *
@@ -1335,7 +1348,7 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
         if (conversations.get(record.conversation)!.completed.get(record.turn) === record.text) {
           delivered.set(record.conversation, record.turn);
         } else {
-          unestablished.push({ conversation: record.conversation, turn: record.turn });
+          unestablished.push({ conversation: record.conversation, turn: record.turn, at: index });
         }
         break;
     }
@@ -1371,7 +1384,7 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
       }
     }
     if (owner === undefined) {
-      unestablished.push({ conversation: feedback.conversation, turn: null });
+      unestablished.push({ conversation: feedback.conversation, turn: null, at: feedback.at });
       continue;
     }
     delivered.set(feedback.conversation, owner);
@@ -1471,8 +1484,8 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
     });
   });
 
-  return Ok(
-    Object.freeze({
+  return Ok({
+    reading: Object.freeze({
       conversations: Object.freeze(
         order.map((id): SidekickConversation => {
           const held = conversations.get(id)!;
@@ -1529,8 +1542,40 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
       delivered: Object.freeze(
         [...delivered].map(([conversation, turn]) => Object.freeze({ conversation, turn })),
       ),
-      unestablished: Object.freeze(unestablished.map((held) => Object.freeze(held))),
+      unestablished: Object.freeze(
+        unestablished.map((held) =>
+          Object.freeze({ conversation: held.conversation, turn: held.turn }),
+        ),
+      ),
       answers: Object.freeze(answers.map((held) => Object.freeze(held))),
     }),
+    unestablishedAt: Object.freeze(unestablished.map((held) => held.at)),
+  });
+}
+
+/**
+ * Whether the active conversation needs recovery before anything else is sent.
+ *
+ * `live` names the one feedback record a live owner is still asking the
+ * provider about. Only that exact record is set aside, and only by its position:
+ * earlier feedback with identical text, a mismatched acknowledgement and an
+ * unused recovery decision each keep the answer `true`.
+ */
+export function recoveryRequired(
+  records: readonly SidekickRecord[],
+  history: ProjectedHistory,
+  live: number | undefined,
+): boolean {
+  const { reading } = history;
+  const active = reading.active;
+  if (active === undefined) {
+    return false;
+  }
+  return (
+    recoveryBlocked(records, reading.requests, reading.recoveries, active, undefined, live) ||
+    (reading.recoveries.length === 0 &&
+      reading.unestablished.some(
+        (one, index) => one.conversation === active && history.unestablishedAt[index] !== live,
+      ))
   );
 }

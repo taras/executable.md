@@ -126,8 +126,14 @@ import { ReplHost } from "../host.ts";
 import { API } from "@executablemd/runtime";
 import { conversationStream, failedOutcome } from "./history.ts";
 import type { SidekickRecord, SidekickWriter } from "./history.ts";
-import { applicableHumanStop, projectSidekick, requestsFromHistory } from "./model.ts";
-import type { SidekickReading } from "./model.ts";
+import {
+  applicableHumanStop,
+  projectHistory,
+  projectSidekick,
+  recoveryRequired,
+  requestsFromHistory,
+} from "./model.ts";
+import type { ProjectedHistory, SidekickReading } from "./model.ts";
 import { controlJournal } from "./admission.ts";
 import {
   responseSurface,
@@ -505,6 +511,15 @@ export interface SidekickOwner {
    * holds one is the one answer that cannot be corrected later.
    */
   readonly reading: Result<SidekickReading>;
+  /**
+   * Whether the active conversation needs recovery before anything else is sent.
+   *
+   * {@link SidekickOwner.reading} with one exception: the feedback record this
+   * owner's running exchange is still asking the provider about. That record
+   * stays unresolved in the reading, and stops being excepted once its
+   * exchange ends, fails or is stopped. An unreadable history answers `true`.
+   */
+  readonly recoveryPending: boolean;
   /** Whether a cycle is running, so a second one refuses rather than queueing. */
   readonly busy: boolean;
   /**
@@ -797,6 +812,29 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     let reading: Result<SidekickReading> = Ok(EMPTY);
     let applicable: HumanStopFact | undefined;
     /**
+     * The feedback record this owner's running exchange is asking about, by position.
+     *
+     * Set before the refresh that first shows the record and cleared by its
+     * own exchange, by identity. Nothing durable holds it, so a reopened owner
+     * has none.
+     */
+    let inFlight: { readonly at: number } | undefined;
+    let recovering = false;
+    /** What the last refresh read, kept so a change to `inFlight` needs no reread. */
+    let projected: { records: readonly SidekickRecord[]; history: ProjectedHistory } | undefined;
+    function reckon(): void {
+      recovering =
+        projected === undefined ||
+        recoveryRequired(projected.records, projected.history, inFlight?.at);
+    }
+    function relinquish(held: { readonly at: number } | undefined): void {
+      if (held !== undefined && inFlight === held) {
+        inFlight = undefined;
+        reckon();
+        moved();
+      }
+    }
+    /**
      * The response whose generation this process is watching, where one is.
      *
      * One at a time, because one cycle is: a follow-up registers its own and
@@ -1020,7 +1058,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      */
     function* refresh(): Operation<void> {
       const records = storage === undefined ? [] : yield* storage.writer.readAll();
-      reading = projectSidekick(records);
+      const history = projectHistory(records);
+      reading = history.ok ? Ok(history.value.reading) : history;
+      projected = history.ok ? { records, history: history.value } : undefined;
+      reckon();
       applicable = reading.ok ? applicableHumanStop(reading.value, records) : undefined;
       // Every re-read is a change somebody may be looking at: a message landing,
       // a reply, a failed turn and a configuration all come through here.
@@ -2461,6 +2502,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // and a turn that picked up a setting after Core had its request would be
       // running under one thing while the history says another.
       const deliveringInput = sending.kind === "feedback" ? sending.of : carried;
+      let asked: { readonly at: number } | undefined;
       const preparing = {
         at,
         *prepare(text: string): Operation<void> {
@@ -2473,8 +2515,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
               turn: null,
               text,
             });
+            const written = (yield* paired.writer.readAll()).length - 1;
             if (sending.kind === "feedback") {
-              began = (yield* paired.writer.readAll()).length - 1;
+              began = written;
+            }
+            if (sending.kind === "feedback" || sending.finished !== undefined) {
+              asked = { at: written };
+              inFlight = asked;
             }
             yield* refresh();
           }
@@ -2485,6 +2532,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         if (preparingInput === preparing) {
           preparingInput = undefined;
         }
+        relinquish(asked);
       });
       const todo = yield* Todo.get();
       let confirmed = false;
@@ -2513,6 +2561,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // It also ends the exchange. A provider that failed is not a reply to
         // correct, so the next move is a person's.
         yield* refresh();
+        relinquish(asked);
         const attempted = yield* turnForRequest(paired, began, conversation);
         // Kept as an attempt that did not finish, told which turn this
         // request's own records say it became. With none, it claims no turn, no
@@ -2640,6 +2689,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         output,
       });
       yield* refresh();
+      relinquish(asked);
       // The acknowledged reply is the item now. Taken down after the refresh,
       // so the row that replaces this one is already in the reading a screen
       // would draw — there is no frame in between showing neither.
@@ -2676,6 +2726,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     yield* provide({
       get reading(): Result<SidekickReading> {
         return reading;
+      },
+      get recoveryPending(): boolean {
+        return recovering;
       },
       get busy(): boolean {
         return busy;

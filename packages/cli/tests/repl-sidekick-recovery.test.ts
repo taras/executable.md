@@ -51,6 +51,7 @@ import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/di
 import type { SidekickOwner } from "../src/repl/sidekick/owner.ts";
 import type { PairedChatStorage } from "../src/repl/sidekick/repository.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import type { ScriptedTurn } from "./support/fake-acp.ts";
 import { useTempFileCompiler, Elicitation } from "@executablemd/core";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
@@ -68,7 +69,7 @@ import {
 } from "../src/repl/sidekick/history.ts";
 import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { designatedResults } from "../src/repl/sidekick/feedback.ts";
-import { projectSidekick } from "../src/repl/sidekick/model.ts";
+import { projectHistory, projectSidekick, recoveryRequired } from "../src/repl/sidekick/model.ts";
 import { sidekickChatRows } from "../src/repl/program.ts";
 import type { ReplSidekickChatRow } from "../src/repl/application.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
@@ -3709,177 +3710,179 @@ describe("987 correction — cold prepared replacement", () => {
   });
 });
 
-describe("1151 — cold ordinary Send after a retained human Stop", () => {
-  type Administration = "clean" | "active" | "forced" | "missing";
-  function administered(mode: Administration): AgentSessionOwnershipAdministration | undefined {
-    if (mode === "missing") {
-      return undefined;
-    }
-    return {
-      *inspectOwnership(keyDigest) {
-        return Ok({
+type Administration = "clean" | "active" | "forced" | "missing";
+function administered(mode: Administration): AgentSessionOwnershipAdministration | undefined {
+  if (mode === "missing") {
+    return undefined;
+  }
+  return {
+    *inspectOwnership(keyDigest) {
+      return Ok({
+        keyDigest,
+        recordRevision: mode,
+        record: {
           keyDigest,
-          recordRevision: mode,
-          record: {
-            keyDigest,
-            state: mode === "active" ? "active" : "idle",
-            release: mode === "clean" ? "quiesced" : mode === "forced" ? "forced" : "none",
-            ownerKind: "session",
-            operationId: "retained-owner",
-            lastForcedRecovery: null,
-          },
-        });
-      },
-      *forceRecoverOwnership() {
-        throw new Error("Recovery must not force ownership.");
-      },
-    };
-  }
-  function reconciling(
-    chat: PairedChatStorage,
-    stream: { settled(): Operation<void> },
-    session: Harness["session"],
-  ): () => Operation<Result<void>> {
-    return function* () {
-      yield* stream.settled();
-      const entries = session.reading(undefined);
-      if (!entries.ok) {
-        throw entries.error;
-      }
-      const findings = yield* coldReservations(
-        yield* chat.writer.readAll(),
-        entries.value.model.entries,
-        chat.location.entries,
-      );
-      if (!findings.ok) {
-        return findings;
-      }
-      for (const finding of findings.value) {
-        yield* retainResolution(chat.writer, finding);
-      }
-      return Ok(undefined);
-    };
-  }
-  /** Reply 1 submits one counted entry, and its automatic feedback is held streaming. */
-  function* counted(): Operation<{ held: Harness; chat: PairedChatStorage; effects(): number }> {
-    let effects = 0;
-    const held = yield* useHarness(undefined, {
-      entryInstallation: {
-        components: [
-          {
-            name: "CountedEffect",
-            origin: "test",
-            props: { type: "object", additionalProperties: false },
-            factory: () =>
-              function* () {
-                effects++;
-                return "counted once";
-              },
-          },
-        ],
-      },
-    });
-    if (held.execution.chat.form !== "paired") {
-      throw new Error("Expected paired history.");
-    }
-    held.fake.script({
-      reply:
-        '<Let as="code" select="code">\n```xmd\n<CountedEffect />\n```\n</Let>\n' +
-        "<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />\n<Output>Working.</Output>",
-    });
-    held.fake.script({ deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 });
-    return { held, chat: held.execution.chat, effects: () => effects };
-  }
-  function* liveFeedback(
-    held: Harness,
-    chat: PairedChatStorage,
-  ): Operation<{ dispatch: SidekickDispatch; first: SidekickExchange }> {
-    const dispatch = yield* useSidekickDispatch({
-      owner: held.owner,
-      admission: createSidekickAdmission(),
-      execution: held.execution.id,
-      workspace: held.workspace,
-      changed() {},
-      reconcile: reconciling(chat, held.execution.stream, held.session),
-    });
-    const first = yield* dispatch.send("Run the counted effect.");
-    if (!first.ok) {
-      throw first.error;
-    }
-    yield* held.fake.streamingTurns(1);
-    dispatch.hold();
-    return { dispatch, first: first.value };
-  }
-  function* stoppedFeedback(): Operation<{ held: Harness; effects(): number }> {
-    const { held, chat, effects } = yield* counted();
-    yield* scoped(function* () {
-      const { first } = yield* liveFeedback(held, chat);
-      yield* first.cancel("human");
-    });
-    return { held, effects };
-  }
-  function failing(kind: SidekickRecord["kind"], failure: Error, text?: string): Operation<void> {
-    return ReplHost.around(
-      {
-        *appendRecord([path, line], next) {
-          const record = parseSidekickRecord(line.trim());
-          if (
-            record?.kind === kind &&
-            (text === undefined || (record.kind === "message" && record.text === text))
-          ) {
-            throw failure;
-          }
-          yield* next(path, line);
+          state: mode === "active" ? "active" : "idle",
+          release: mode === "clean" ? "quiesced" : mode === "forced" ? "forced" : "none",
+          ownerKind: "session",
+          operationId: "retained-owner",
+          lastForcedRecovery: null,
         },
-      },
-      { at: "max" },
+      });
+    },
+    *forceRecoverOwnership() {
+      throw new Error("Recovery must not force ownership.");
+    },
+  };
+}
+function reconciling(
+  chat: PairedChatStorage,
+  stream: { settled(): Operation<void> },
+  session: Harness["session"],
+): () => Operation<Result<void>> {
+  return function* () {
+    yield* stream.settled();
+    const entries = session.reading(undefined);
+    if (!entries.ok) {
+      throw entries.error;
+    }
+    const findings = yield* coldReservations(
+      yield* chat.writer.readAll(),
+      entries.value.model.entries,
+      chat.location.entries,
     );
-  }
-  function* coldOwner(
-    held: Harness,
-    administration: AgentSessionOwnershipAdministration | undefined,
-  ): Operation<{ owner: SidekickOwner; chat: PairedChatStorage; dispatch: SidekickDispatch }> {
-    const reopened = yield* held.repository.open(held.execution.id);
-    if (reopened.chat.form !== "paired") {
-      throw new Error("Expected paired history.");
+    if (!findings.ok) {
+      return findings;
     }
-    const chat = reopened.chat;
-    const owner = yield* useSidekickOwner({
-      assembly: { ...held.profile.sidekickAssembly, ownershipAdministration: administration },
-      chat,
-      *establish() {
-        return Ok(chat);
-      },
-      root: {
-        ...rootReads(held.session, held.profile),
-        *fill() {
-          return Err(new Error("This witness admits no draft fill."));
+    for (const finding of findings.value) {
+      yield* retainResolution(chat.writer, finding);
+    }
+    return Ok(undefined);
+  };
+}
+/** Reply 1 submits one counted entry, and its automatic feedback is held streaming. */
+function* counted(
+  feedback: ScriptedTurn = { deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 },
+): Operation<{ held: Harness; chat: PairedChatStorage; effects(): number }> {
+  let effects = 0;
+  const held = yield* useHarness(undefined, {
+    entryInstallation: {
+      components: [
+        {
+          name: "CountedEffect",
+          origin: "test",
+          props: { type: "object", additionalProperties: false },
+          factory: () =>
+            function* () {
+              effects++;
+              return "counted once";
+            },
         },
-      },
-      *submit() {
-        return Err(new Error("This witness admits no entry."));
-      },
-      revision: () => 0,
-      *acknowledge() {},
-      draft: () => "",
-    });
-    const dispatch = yield* useSidekickDispatch({
-      owner,
-      admission: createSidekickAdmission(),
-      execution: held.execution.id,
-      workspace: held.workspace,
-      changed() {},
-      reconcile: reconciling(chat, reopened.stream, held.session),
-    });
-    return { owner, chat, dispatch };
+      ],
+    },
+  });
+  if (held.execution.chat.form !== "paired") {
+    throw new Error("Expected paired history.");
   }
-  function* bytes(held: Harness): Operation<string> {
-    if (held.execution.chat.form !== "paired") {
-      throw new Error("Expected paired history.");
-    }
-    return yield* until(readFile(held.execution.chat.location.sidekick, "utf8"));
+  held.fake.script({
+    reply:
+      '<Let as="code" select="code">\n```xmd\n<CountedEffect />\n```\n</Let>\n' +
+      "<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />\n<Output>Working.</Output>",
+  });
+  held.fake.script(feedback);
+  return { held, chat: held.execution.chat, effects: () => effects };
+}
+function* liveFeedback(
+  held: Harness,
+  chat: PairedChatStorage,
+): Operation<{ dispatch: SidekickDispatch; first: SidekickExchange }> {
+  const dispatch = yield* useSidekickDispatch({
+    owner: held.owner,
+    admission: createSidekickAdmission(),
+    execution: held.execution.id,
+    workspace: held.workspace,
+    changed() {},
+    reconcile: reconciling(chat, held.execution.stream, held.session),
+  });
+  const first = yield* dispatch.send("Run the counted effect.");
+  if (!first.ok) {
+    throw first.error;
   }
+  yield* held.fake.streamingTurns(1);
+  dispatch.hold();
+  return { dispatch, first: first.value };
+}
+function* stoppedFeedback(): Operation<{ held: Harness; effects(): number }> {
+  const { held, chat, effects } = yield* counted();
+  yield* scoped(function* () {
+    const { first } = yield* liveFeedback(held, chat);
+    yield* first.cancel("human");
+  });
+  return { held, effects };
+}
+function failing(kind: SidekickRecord["kind"], failure: Error, text?: string): Operation<void> {
+  return ReplHost.around(
+    {
+      *appendRecord([path, line], next) {
+        const record = parseSidekickRecord(line.trim());
+        if (
+          record?.kind === kind &&
+          (text === undefined || (record.kind === "message" && record.text === text))
+        ) {
+          throw failure;
+        }
+        yield* next(path, line);
+      },
+    },
+    { at: "max" },
+  );
+}
+function* coldOwner(
+  held: Harness,
+  administration: AgentSessionOwnershipAdministration | undefined,
+): Operation<{ owner: SidekickOwner; chat: PairedChatStorage; dispatch: SidekickDispatch }> {
+  const reopened = yield* held.repository.open(held.execution.id);
+  if (reopened.chat.form !== "paired") {
+    throw new Error("Expected paired history.");
+  }
+  const chat = reopened.chat;
+  const owner = yield* useSidekickOwner({
+    assembly: { ...held.profile.sidekickAssembly, ownershipAdministration: administration },
+    chat,
+    *establish() {
+      return Ok(chat);
+    },
+    root: {
+      ...rootReads(held.session, held.profile),
+      *fill() {
+        return Err(new Error("This witness admits no draft fill."));
+      },
+    },
+    *submit() {
+      return Err(new Error("This witness admits no entry."));
+    },
+    revision: () => 0,
+    *acknowledge() {},
+    draft: () => "",
+  });
+  const dispatch = yield* useSidekickDispatch({
+    owner,
+    admission: createSidekickAdmission(),
+    execution: held.execution.id,
+    workspace: held.workspace,
+    changed() {},
+    reconcile: reconciling(chat, reopened.stream, held.session),
+  });
+  return { owner, chat, dispatch };
+}
+function* bytes(held: Harness): Operation<string> {
+  if (held.execution.chat.form !== "paired") {
+    throw new Error("Expected paired history.");
+  }
+  return yield* until(readFile(held.execution.chat.location.sidekick, "utf8"));
+}
 
+describe("1151 — cold ordinary Send after a retained human Stop", () => {
   for (const mode of ["clean", "active", "forced", "missing"] as const) {
     it(`A2: a cold eligible Send ${mode === "clean" ? "binds clean retained ownership" : `refuses ${mode} ownership`}`, function* () {
       const { held, effects } = yield* stoppedFeedback();
@@ -4267,5 +4270,111 @@ describe("1151 — cold ordinary Send after a retained human Stop", () => {
     const messages = after.filter((one) => one.kind === "message");
     expect(messages.map((one) => one.text)).toEqual(["Run the counted effect.", text]);
     expect(messages[1]?.id).toBe(decisions[0]?.message);
+  });
+});
+
+function required(records: readonly SidekickRecord[], live: number | undefined): boolean {
+  const projected = projectHistory(records);
+  if (!projected.ok) {
+    throw projected.error;
+  }
+  return recoveryRequired(records, projected.value, live);
+}
+
+describe("1183 — the exact live feedback request is the only exception", () => {
+  function* waiting(held: Harness, chat: PairedChatStorage): Operation<SidekickDispatch> {
+    const dispatch = yield* useSidekickDispatch({
+      owner: held.owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, held.execution.stream, held.session),
+    });
+    const first = yield* dispatch.send("Run the counted effect.");
+    if (!first.ok) {
+      throw first.error;
+    }
+    return dispatch;
+  }
+
+  it("A4: an identical earlier request, a mismatched acknowledgement and no owner keep the guard", function* () {
+    const { held, chat } = yield* counted();
+    yield* waiting(held, chat);
+    yield* held.fake.streamingTurns(1);
+    const prefix = yield* chat.writer.readAll();
+    const live = prefix.findIndex((one) => one.kind === "feedback" && one.turn === null);
+    const pending = prefix[live];
+    if (pending?.kind !== "feedback") {
+      throw new Error("Expected the live feedback record.");
+    }
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    expect(reading.value.unestablished).toEqual([
+      { conversation: pending.conversation, turn: null },
+    ]);
+    expect(reading.value.recoveryPending).toBe(true);
+    expect(held.owner.recoveryPending).toBe(false);
+    expect(required(prefix, live)).toBe(false);
+    expect(required(prefix, undefined)).toBe(true);
+
+    const repeated = [...prefix, pending];
+    expect(required(repeated, repeated.length - 1)).toBe(true);
+    expect(required(repeated, live)).toBe(true);
+    const mismatched: SidekickRecord[] = [
+      ...prefix,
+      {
+        kind: "feedback",
+        conversation: pending.conversation,
+        response: pending.response,
+        turn: 1,
+        text: "Something turn 1 never carried.",
+      },
+    ];
+    expect(required(mismatched, live)).toBe(true);
+    expect(held.fake.prompts).toHaveLength(2);
+  });
+
+  it("A4: a fresh owner of the held and of the failed prefix still requires recovery and sends nothing", function* () {
+    const { held, chat, effects } = yield* counted({
+      reply: "<Output>Unfinished</Output>",
+      held: true,
+      failure: "The provider failed the feedback.",
+    });
+    const dispatch = yield* waiting(held, chat);
+    yield* held.fake.holdingTurns(1);
+    expect(held.owner.recoveryPending).toBe(false);
+    const before = yield* bytes(held);
+    const during = yield* coldOwner(held, administered("clean"));
+    expect(during.owner.recoveryPending).toBe(true);
+    const refused = yield* during.dispatch.send("Explain the counted result.");
+    expect(refused.ok ? "" : refused.error.message).toContain("cannot be established");
+    const queued = yield* dispatch.send("When that finishes, explain the changes.");
+    expect(queued.ok && queued.value.snapshot.state).toBe("queued");
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(yield* bytes(held)).toBe(before);
+
+    held.fake.releaseTurn();
+    yield* awaitedFact("the held failure", function* () {
+      return dispatch.queue.held?.kind === "failure";
+    });
+    expect(held.owner.recoveryPending).toBe(true);
+    const after = yield* coldOwner(held, administered("clean"));
+    expect(after.owner.recoveryPending).toBe(true);
+    const again = yield* after.dispatch.send("Explain the counted result.");
+    expect(again.ok ? "" : again.error.message).toContain("cannot be established");
+    const read = after.owner.reading;
+    if (!read.ok) {
+      throw read.error;
+    }
+    expect(read.value.unestablished).toEqual([{ conversation: read.value.active, turn: null }]);
+    expect(dispatch.queue.pending.map((one) => one.text)).toEqual([
+      "When that finishes, explain the changes.",
+    ]);
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
   });
 });

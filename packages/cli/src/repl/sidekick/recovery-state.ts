@@ -254,6 +254,7 @@ export function recoveryBlocked(
   dispositions: readonly RecoveryDisposition[],
   conversation: string,
   permission?: string,
+  live?: number,
 ): boolean {
   const retired = new Set(
     dispositions
@@ -271,5 +272,7 @@ export function recoveryBlocked(
   ) {
     return true;
   }
-  return uncertainRequests(records, requests, conversation).some((at) => !retired.has(at));
+  return uncertainRequests(records, requests, conversation).some(
+    (at) => at !== live && !retired.has(at),
+  );
 }
