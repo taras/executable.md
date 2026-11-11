@@ -164,6 +164,13 @@ let holdWhen: ((record: string) => boolean) | undefined;
 /** The exact record the hold is sitting on, so a case can identify it. */
 let holding: string | undefined;
 const reached = withResolvers<void>();
+const tracing = process.env.XMD_RECOVERY_PHASE_TRACE === "1";
+
+function trace(message: string): void {
+  if (tracing) {
+    process.stderr.write(`recovery phase: ${message}\n`);
+  }
+}
 
 function* useHost(dataRoot: string): Operation<void> {
   yield* installReplHost({
@@ -173,6 +180,7 @@ function* useHost(dataRoot: string): Operation<void> {
     appendRecord: async (path, record) => {
       if (holdWhen?.(record) === true) {
         holding = record;
+        trace("target journal append reached");
         reached.resolve();
         await new Promise(() => {});
       }
@@ -1101,7 +1109,9 @@ function* phases(): Operation<unknown> {
     if (script.stop !== undefined && holdWhen === undefined) {
       throw new Error(`there is no boundary "${script.stop}"`);
     }
+    trace(`chat-say entered with stop ${script.stop}`);
     const held = yield* useConversing(dataRoot, execution, script);
+    trace("owner assembled");
     const said = script.say ?? "do something";
     if (script.stopAtQuestion === true) {
       // The process ends while a question is pending. Nothing is held in the
@@ -1120,11 +1130,16 @@ function* phases(): Operation<unknown> {
     }
     if (holdWhen !== undefined) {
       yield* spawn(function* (): Operation<void> {
-        yield* held.owner.message(said);
+        trace("owner message started");
+        const result = yield* held.owner.message(said);
+        trace(
+          result.ok ? "owner message returned" : `owner message refused: ${result.error.message}`,
+        );
       });
       // The boundary, observed. Returning unwinds the owner, the conversation
       // and the turn under the write that never happened.
       yield* reached.operation;
+      trace("journal boundary observed");
       // Observed while the acknowledgement is still held: the provider took the
       // turn, and its own store already retains the native conversation it
       // created for it. Both are facts about the world this process is about to
@@ -1135,10 +1150,12 @@ function* phases(): Operation<unknown> {
       // The scripted fake issues saves without waiting; observe its asserting
       // save before reading the disk store.
       yield* held.fake.assertedSessions(1);
+      trace("native identity save acknowledged");
       const asserted: (string | undefined)[] = [];
       for (const key of conversationKeys) {
         asserted.push((yield* held.retained(key))?.agentSessionId);
       }
+      trace("native identity read back");
       return {
         stopped: script.stop,
         held: describeHeld(),
@@ -1208,5 +1225,6 @@ function* phases(): Operation<unknown> {
 
 await main(function* () {
   const answer = yield* phases();
+  trace("phase returning result before scope teardown");
   process.stdout.write(`${JSON.stringify(answer)}\n`);
 });
