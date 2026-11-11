@@ -40,6 +40,7 @@ import type { Result } from "effection";
 import { AGENT_PROMPT, parsePromptRecord, previewGeneratedXmdRoot } from "@executablemd/core/host";
 import type { SessionConfiguration } from "@executablemd/core";
 import type { PromptRecord } from "@executablemd/core/host";
+import { projectUsage, type ReplUsage } from "../usage.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 
 import type {
@@ -272,6 +273,7 @@ export interface SidekickSavedTurn {
   readonly sessionKey: string | undefined;
   /** How the provider turn itself ended, as its record holds it. */
   readonly status: PromptRecord["status"];
+  readonly usage?: ReplUsage;
   /**
    * What this turn was asked on behalf of, where its request establishes it.
    *
@@ -1052,6 +1054,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
     name: string;
     sessionKey: string | undefined;
     status: PromptRecord["status"];
+    usage?: ReplUsage;
     incomplete: { output: string; failure: string } | undefined;
   }[] = [];
   /** Each conversation's evaluated responses, by the turn they belong to. */
@@ -1226,6 +1229,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
           // no membership, and an earlier turn's key is not substituted for it.
           sessionKey: prompt.sessionKey.length === 0 ? undefined : prompt.sessionKey,
           status: prompt.status,
+          usage: projectUsage(prompt.usage),
           incomplete:
             prompt.status === "completed"
               ? undefined
@@ -1463,6 +1467,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       name: one.name,
       sessionKey: one.sessionKey,
       status: one.status,
+      usage: one.usage,
       asked:
         request === undefined
           ? undefined

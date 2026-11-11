@@ -1,3 +1,4 @@
+import { usageSummary } from "./usage.ts";
 import type { RecoveryReview } from "./sidekick/owner.ts";
 import { todoInline } from "./todo/inline.ts";
 import { editTodo, parseTodo } from "./todo/document.ts";
@@ -262,6 +263,8 @@ export interface ReplLive {
  * reader left it on when the next reply arrives.
  */
 export interface ReplSidekickChatRow {
+  readonly usageLine?: string;
+  readonly usageDetails?: readonly string[];
   readonly origin?: MessageOrigin;
   /**
    * The saved request this failed attempt could be asked again, or none.
@@ -362,6 +365,7 @@ export interface ReplSidekickChatRow {
  * the row they had focus on is the same row afterwards.
  */
 export interface ReplSidekickTurnRow {
+  readonly usageLine?: string;
   readonly origin?: MessageOrigin;
   /** The mounted identity: this process's response, or the saved turn's own. */
   readonly key: string;
@@ -454,6 +458,8 @@ export interface ReplSidekickSubmit {
 }
 
 export interface ReplSidekickReading {
+  readonly usageTotal?: string;
+  readonly inspectUsage?: boolean;
   /**
    * Every Submit this history acknowledged, in its own record order.
    *
@@ -1408,6 +1414,7 @@ export interface ReplQueuedMessage {
 
 /** The entry one Sidekick message submitted, shown after that message as work. */
 interface ReplAssociatedWork {
+  readonly usageLine?: string;
   /** The chat row the work follows, by the key the reading gives that row. */
   readonly message: string;
   /** The entry, by its catalog key. Its state and output are read from the model. */
@@ -1562,7 +1569,16 @@ function associatedWork(
     if (found.some((one) => one.message === message && one.entry === admitted.key)) {
       continue;
     }
-    found.push(Object.freeze({ message, entry: admitted.key }));
+    found.push(
+      Object.freeze({
+        message,
+        entry: admitted.key,
+        usageLine:
+          admitted.terminal === undefined
+            ? undefined
+            : usageSummary(admitted.turns, "Entry agents"),
+      }),
+    );
   }
   return Object.freeze(found);
 }
@@ -4030,6 +4046,9 @@ function sidekickComposedRows(
   // The chat this location selected, which is the current one unless it named
   // another. Every chat's rows are composed, so reading an older one is a
   // filter over them rather than a second reading assembled somewhere else.
+  if (reading.usageTotal !== undefined) {
+    items.push(text("sidekick:usage-total", reading.usageTotal, styleOf("metadata")));
+  }
   const shownChat = reading.chat.filter((item) => item.conversation === reading.reading);
   const setup = reading.setup;
   if (setup !== undefined && setup.phase !== "activated") {
@@ -4050,6 +4069,18 @@ function sidekickComposedRows(
     items.push(text("sidekick:empty", "  No messages yet.", styleOf("metadata")));
   }
   for (const item of shownChat) {
+    const metadata = () => {
+      if (item.usageLine !== undefined) {
+        items.push(text(`sidekick:${item.key}:usage`, `  ${item.usageLine}`, styleOf("metadata")));
+      }
+      if (reading.inspectUsage) {
+        for (const [index, detail] of (item.usageDetails ?? []).entries()) {
+          items.push(
+            text(`sidekick:${item.key}:usage:${index}`, `  ${detail}`, styleOf("metadata")),
+          );
+        }
+      }
+    };
     if (item.kind === "person") {
       items.push(
         text(
@@ -4058,6 +4089,7 @@ function sidekickComposedRows(
           styleOf("source"),
         ),
       );
+      metadata();
       continue;
     }
     if (item.kind === "preview") {
@@ -4077,6 +4109,7 @@ function sidekickComposedRows(
           item.incomplete === true ? styleOf("failed-outcome") : styleOf("waiting"),
         ),
       );
+      metadata();
       continue;
     }
     if (item.kind === "saved") {
@@ -4091,6 +4124,7 @@ function sidekickComposedRows(
           styleOf("metadata"),
         ),
       );
+      metadata();
       continue;
     }
     if (item.kind === "incomplete") {
@@ -4124,6 +4158,7 @@ function sidekickComposedRows(
           }),
         );
       }
+      metadata();
       continue;
     }
     if (item.failure !== undefined) {
@@ -4142,6 +4177,7 @@ function sidekickComposedRows(
         // reason is why there is no more of it.
         items.push(text(`sidekick:${item.key}:said`, `  ${item.text}`, styleOf("output")));
       }
+      metadata();
       continue;
     }
     if (!item.hasOutput) {
@@ -4151,9 +4187,11 @@ function sidekickComposedRows(
       // deliberately not shown as any — a response's source, its chapters and
       // its feedback envelope are not what it told somebody, and a sentence
       // about the absence is not something it said either.
+      metadata();
       continue;
     }
     items.push(text(`sidekick:${item.key}`, `  ${reading.agent}: ${item.text}`, styleOf("output")));
+    metadata();
   }
   return items;
 }
@@ -4293,6 +4331,8 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     reading?.busy,
     reading?.current,
     reading?.refusal,
+    reading?.usageTotal,
+    reading?.inspectUsage,
     reading?.setup?.phase,
     reading?.setup?.failure,
     staging !== undefined,
@@ -4310,6 +4350,8 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
       one.hasOutput,
       one.failure,
       one.incomplete,
+      one.usageLine,
+      JSON.stringify(one.usageDetails),
       one.automatic,
       one.request,
       one.retry?.conversation,
@@ -4324,6 +4366,7 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     facts.push(
       one.message,
       one.entry,
+      one.usageLine,
       entry?.key,
       entry?.order,
       entry?.terminal?.status,
@@ -5780,6 +5823,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       }),
     );
   }
+  if (workspace !== undefined && showSidekick && live.sidekick?.usageTotal !== undefined) {
+    items.push(
+      ...usageSessionRows(
+        "sidekick:heading:usage",
+        live.sidekick.usageTotal,
+        context.widths?.body,
+      ).map((one) => line(one.key, one.label, one.style)),
+    );
+  }
   if (!showSessions) {
     // Nothing: this frame is showing the other surface.
   } else if (live.sidekick === undefined && context.sessions?.rows.length === 0) {
@@ -6582,6 +6634,28 @@ function sessionLine(
   return Object.freeze({ key, label, style, runs });
 }
 
+function usageSessionRows(
+  key: string,
+  text: string,
+  width: number | undefined,
+): readonly ReplSessionRow[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const fact of text.split(" · ")) {
+    const next = current === "" ? fact : `${current} · ${fact}`;
+    if (current !== "" && width !== undefined && next.length + CONTROL_ROOM.length > width) {
+      lines.push(current);
+      current = fact;
+    } else {
+      current = next;
+    }
+  }
+  lines.push(current);
+  return lines.map((label, index) =>
+    sessionLine(`${key}:${index}`, `${CONTROL_ROOM}${label}`, styleOf("metadata")),
+  );
+}
+
 function sessionControl(
   key: string,
   label: string,
@@ -6674,7 +6748,12 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
           }
         }
       }
-      facts.push(sidekick !== undefined, sidekick?.refusal, sidekick?.availability.sessions.length);
+      facts.push(
+        sidekick !== undefined,
+        sidekick?.refusal,
+        sidekick?.usageTotal,
+        sidekick?.availability.sessions.length,
+      );
       facts.push(...(sidekick?.availability.sessions ?? []));
       facts.push(sidekick?.turns.length);
       for (const turn of sidekick?.turns ?? []) {
@@ -6687,6 +6766,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
           turn.state,
           turn.running,
           turn.failed,
+          turn.usageLine,
           turn.sessionKey,
           turn.text,
           turn.failure,
@@ -6964,6 +7044,9 @@ function sessionRows(
     );
     return items;
   }
+  if (sidekick.usageTotal !== undefined) {
+    items.push(...usageSessionRows("sessions:sidekick:usage-total", sidekick.usageTotal, width));
+  }
   const chat = sidekick.turns.filter((turn) => filter === undefined || turn.sessionKey === filter);
   if (chat.length === 0) {
     if (compact) {
@@ -7055,6 +7138,9 @@ function sessionRows(
         {},
       ),
     );
+    if (turn.usageLine !== undefined) {
+      items.push(...usageSessionRows(`sessions:${turn.key}:usage`, turn.usageLine, width));
+    }
     // Whose work this was: this section's own owner, then the chat's agent and
     // the chat itself, then the provider conversation where one is known. Never
     // whichever agent happens to be active now — a conversation does not change
@@ -9907,6 +9993,9 @@ function slotOf(key: string): ReplSlot | undefined {
   ) {
     return "bindings";
   }
+  if (key.startsWith("sidekick:heading:usage:")) {
+    return "workspace";
+  }
   if (key.startsWith("binding:") || key.startsWith("sidekick:")) {
     return "inspection";
   }
@@ -11513,6 +11602,16 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
         mark: WORK_MARK,
       }),
     );
+    if (one.usageLine !== undefined) {
+      found.push(
+        Object.freeze({
+          kind: "text" as const,
+          key: `sidekick:work:${entry.key}:usage`,
+          text: `${MARKER_ROOM}${one.usageLine}`,
+          style: styleOf("metadata"),
+        }),
+      );
+    }
     // The record's own final line break ends its last line rather than adding one.
     const recorded = inertCommandText(entry.terminal?.output ?? "");
     const output = recorded.endsWith("\n") ? recorded.slice(0, -1) : recorded;
@@ -11634,7 +11733,25 @@ function workspaceChatComposed(
     } else if (item.hasOutput) {
       items.push(text(key, item.text, styleOf("output"), SIDEKICK_MARK));
     }
+    if (item.usageLine !== undefined) {
+      items.push({
+        kind: "text",
+        key: `${key}:usage`,
+        text: `${MARKER_ROOM}${item.usageLine}`,
+        style: styleOf("metadata"),
+      });
+    }
     items.push(...workComposed(staging, key));
+    if (reading.inspectUsage) {
+      for (const [index, detail] of (item.usageDetails ?? []).entries()) {
+        items.push({
+          kind: "text",
+          key: `${key}:usage:${index}`,
+          text: `${MARKER_ROOM}${detail}`,
+          style: styleOf("metadata"),
+        });
+      }
+    }
   }
   if (reading.busy) {
     const running = staging.model.entries.find(
@@ -11970,6 +12087,9 @@ function compactSidekickTurn(
       { runs: markedRuns(mark, label, style.role) },
     ),
   );
+  if (turn.usageLine !== undefined) {
+    rows.push(...usageSessionRows(`sessions:${turn.key}:usage`, turn.usageLine, width));
+  }
   if (turn.text.length > 0) {
     const said = fitLine(
       [
@@ -13458,6 +13578,7 @@ function workspacePresentation(input: {
         : "fit");
     return [
       ...headerRows("conversation", region, header),
+      ...startingWith("sidekick:heading:usage:").map((one) => rowBox(one, region, room, header)),
       box({
         id: showing ? `${body}:gutter` : "box:inspection:reading:gutter",
         region,

@@ -728,6 +728,15 @@ export function* useMountedHost(
     readonly includes?: readonly string[];
     readonly entryInstallation?: ReplEntryInstallation;
     readonly hostFiles?: boolean;
+    readonly usageAcp?: Pick<
+      AcpxProviderDependencies,
+      | "promptUsageHost"
+      | "adapterBuild"
+      | "agentProcessEnv"
+      | "agentRegistry"
+      | "advertiseNativeLaunch"
+      | "advertiseClientNativeAttachment"
+    >;
     readonly agentCwd?: AcpxProviderDependencies["agentCwd"];
   } = {},
 ): Operation<MountedHost> {
@@ -818,6 +827,7 @@ export function* useMountedHost(
           [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd`,
           [OTHER_MOUNTED_AGENT]: `${OTHER_MOUNTED_AGENT}-cmd`,
         }),
+        ...options.usageAcp,
       },
       // Named to the profile rather than left to the environment: the Sidekick
       // assembly is built with it, and a conversation opened under an agent this
