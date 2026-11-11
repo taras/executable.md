@@ -29,12 +29,17 @@ export function projectUsage(usage: PromptRecord["usage"]): ReplUsage | undefine
 }
 
 function reported(usage: ReplUsage, source: Reading["source"]) {
-  const reading = usage.readings.findLast((one) => one.source === source && one.kind === "tokens");
-  return reading?.kind === "tokens" &&
-    reading.tokens !== null &&
-    Object.values(reading.tokens).some((value) => value !== undefined)
-    ? { reading, tokens: reading.tokens }
-    : undefined;
+  for (let index = usage.readings.length - 1; index >= 0; index -= 1) {
+    const reading = usage.readings[index];
+    if (reading?.kind === "tokens" && reading.source === source) {
+      // An empty latest reading still supersedes older readings from this source.
+      return reading.tokens !== null &&
+        Object.values(reading.tokens).some((value) => value !== undefined)
+        ? { reading, tokens: reading.tokens }
+        : undefined;
+    }
+  }
+  return undefined;
 }
 
 function countable(reading: Reading): boolean {
