@@ -543,6 +543,7 @@ describe("REPL model: the Agent conversations it projects", () => {
         provenance,
         coverage,
         readings: [
+          { ...response, tokens: { inputTokens: 100, outputTokens: 20 } },
           { ...response, tokens: null },
           { ...quota, tokens: { inputTokens: 12, outputTokens: 3 } },
         ] satisfies Json[],
