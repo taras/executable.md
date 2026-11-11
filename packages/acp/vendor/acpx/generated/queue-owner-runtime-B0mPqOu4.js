@@ -1266,6 +1266,9 @@ function resolveClaudeCodeSettingSources(env = process.env) {
 function assignClaudeCodeOptions(target, options) {
 	if (typeof options.model === "string" && options.model.trim().length > 0) target.model = options.model;
 	if (Array.isArray(options.allowedTools)) target.allowedTools = [...options.allowedTools];
+	// XMD role tool denials reach the supported Claude SDK option.
+	// XMD workflow role controls: preserve the explicit tool deny list.
+	if (Array.isArray(options.disallowedTools)) target.disallowedTools = [...options.disallowedTools];
 	if (typeof options.maxTurns === "number") target.maxTurns = options.maxTurns;
 }
 function assignClaudeCodeSystemPrompt(target, systemPrompt) {
@@ -4420,6 +4423,8 @@ function cloneSessionOptions(options) {
 	return {
 		model: options.model,
 		allowed_tools: options.allowed_tools ? [...options.allowed_tools] : void 0,
+		// XMD workflow role controls: keep denials when turn state is cloned.
+		disallowed_tools: options.disallowed_tools ? [...options.disallowed_tools] : void 0,
 		max_turns: options.max_turns,
 		...options.system_prompt !== void 0 ? { system_prompt: cloneSystemPromptOption(options.system_prompt) } : {},
 		...options.env !== void 0 ? { env: { ...options.env } } : {}
@@ -4672,6 +4677,8 @@ function mergeSessionOptions(preferred, fallback) {
 	const merged = { ...fallback };
 	assignDefinedOption(merged, "model", preferred?.model);
 	assignDefinedOption(merged, "allowedTools", preferred?.allowedTools);
+	// XMD workflow role controls: preserve the explicit tool deny list.
+	assignDefinedOption(merged, "disallowedTools", preferred?.disallowedTools);
 	assignDefinedOption(merged, "maxTurns", preferred?.maxTurns);
 	assignDefinedOption(merged, "systemPrompt", preferred?.systemPrompt);
 	assignDefinedOption(merged, "env", mergeEnvRecords(fallback?.env, preferred?.env));
@@ -4710,6 +4717,8 @@ function sessionOptionsFromRecord(record) {
 	const sessionOptions = {};
 	assignDefinedOption(sessionOptions, "model", nonEmptyString(stored.model));
 	assignDefinedOption(sessionOptions, "allowedTools", storedAllowedTools(stored.allowed_tools));
+	// XMD workflow role controls: preserve the explicit tool deny list.
+	assignDefinedOption(sessionOptions, "disallowedTools", storedAllowedTools(stored.disallowed_tools));
 	assignDefinedOption(sessionOptions, "maxTurns", storedMaxTurns(stored.max_turns));
 	assignDefinedOption(sessionOptions, "systemPrompt", normalizeSystemPromptOption(stored.system_prompt));
 	assignDefinedOption(sessionOptions, "env", storedEnvRecord(stored.env));
@@ -4719,6 +4728,8 @@ function persistedSessionOptions(options) {
 	const next = {
 		model: nonEmptyString(options.model),
 		allowed_tools: Array.isArray(options.allowedTools) ? [...options.allowedTools] : void 0,
+		// XMD workflow role controls: preserve the explicit tool deny list.
+		disallowed_tools: Array.isArray(options.disallowedTools) ? [...options.disallowedTools] : void 0,
 		max_turns: typeof options.maxTurns === "number" ? options.maxTurns : void 0,
 		system_prompt: normalizeSystemPromptOption(options.systemPrompt),
 		env: storedEnvRecord(options.env)
@@ -4726,7 +4737,8 @@ function persistedSessionOptions(options) {
 	return hasPersistedSessionOptions(next) ? next : void 0;
 }
 function hasPersistedSessionOptions(options) {
-	return options.model !== void 0 || options.allowed_tools !== void 0 || options.max_turns !== void 0 || options.system_prompt !== void 0 || options.env !== void 0;
+	// XMD workflow role controls: preserve the explicit tool deny list.
+	return options.model !== void 0 || options.allowed_tools !== void 0 || options.disallowed_tools !== void 0 || options.max_turns !== void 0 || options.system_prompt !== void 0 || options.env !== void 0;
 }
 function storedEnvRecord(value) {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return;

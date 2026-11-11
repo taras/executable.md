@@ -246,3 +246,12 @@ Keep the materialization patch and packaging exceptions until a released API
 preserves explicit backend acceptance, non-asserting occupancy and the joined
 asserting-save barrier. Two released seams never authorize deleting that third
 contract or the complete vendor directory.
+
+### Claude workflow-role tool controls
+
+The carried session-option path forwards `disallowedTools` to Claude's existing
+SDK option and retains it as `disallowed_tools` beside the session environment.
+Normalization, record readback and IPC keep that field. This changes launch-option
+plumbing only; the Claude adapter and SDK producer inputs are unchanged. The
+`claude-workflow-role` CLI profile selects these options for workflow roles.
+Ordinary interactive sessions retain their original defaults.

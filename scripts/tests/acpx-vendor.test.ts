@@ -41,6 +41,7 @@ const SEAMS: readonly string[] = [
   "XMD prompt diagnostic:",
   "XMD prompt usage:",
   "XMD requested model:",
+  "XMD workflow role controls:",
   "XMD exact-model replay:",
 ];
 

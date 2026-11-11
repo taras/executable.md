@@ -31,7 +31,7 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "f1b825fc9603337eba9d12d607127892ba0ff33c54a20066f7c72bdaaa300ac2"
+      "sha256": "9766d8f7199310533aabaa970d83c9e6130ec5481312289758995fbccd8cf22b"
     },
     {
       "path": "generated/agent-registry-Cz9fD9H1.js",
@@ -51,12 +51,12 @@
     {
       "path": "generated/ipc-BbYFsKOj.js",
       "kind": "generated",
-      "sha256": "423450379d7f13a5efb4d5e62e2f224e5420a96ea2b1e94efca5aef563a12c31"
+      "sha256": "34d624c639593611bce5849617f846abb4bb784e6228d00d90c523812005f841"
     },
     {
       "path": "generated/queue-owner-runtime-B0mPqOu4.js",
       "kind": "generated",
-      "sha256": "e2bd0fd71b49e51697d42e7f4dae7a97aee525dfe17ddbeab8efae2d93951b6c"
+      "sha256": "86ba2dd9430627db263f1c986b8733f34d37bd06bf6cf6a3ae600d63e3b756a5"
     },
     {
       "path": "generated/runtime.d.ts",
@@ -71,7 +71,7 @@
     {
       "path": "generated/session-options-BlnP3WAc.d.ts",
       "kind": "generated",
-      "sha256": "e4484e22e1549b1297d276370c5542f8ef5cf569cdadff347f0c39111817b7aa"
+      "sha256": "d0df6fcd566d0179151aa7fa4aef04e25dd4042461d2609384b9cf8843ebd854"
     },
     {
       "path": "generated/watch-bQXyUy3z.js",

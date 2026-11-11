@@ -166,6 +166,8 @@ type AcpClientOptions = {
   sessionOptions?: {
     model?: string;
     allowedTools?: string[];
+    // XMD workflow role controls: preserve the explicit tool deny list.
+    disallowedTools?: string[];
     maxTurns?: number;
     systemPrompt?: string | {
       append: string;
@@ -282,6 +284,8 @@ type SessionAcpxState = {
   session_options?: {
     model?: string;
     allowed_tools?: string[];
+    // XMD workflow role controls: preserve the explicit tool deny list.
+    disallowed_tools?: string[];
     max_turns?: number;
     system_prompt?: string | {
       append: string;
@@ -336,6 +340,8 @@ type SystemPromptOption = string | {
 type SessionAgentOptions = {
   model?: string;
   allowedTools?: string[];
+    // XMD workflow role controls: preserve the explicit tool deny list.
+    disallowedTools?: string[];
   maxTurns?: number;
   systemPrompt?: SystemPromptOption;
   /**
