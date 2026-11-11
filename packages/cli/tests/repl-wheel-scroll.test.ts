@@ -1,7 +1,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep } from "effection";
+import { sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage, ScreenCell } from "./support/repl-page.ts";
 
@@ -32,6 +33,46 @@ function firstChatRow(page: ReplPage): number {
 function* typed(page: ReplPage, text: string): Operation<void> {
   yield* page.type(text);
   yield* page.until(`typed ${text}`, (one) => one.shows(text));
+}
+
+function turnLabel(turn: number): string {
+  return `turn-${String(turn).padStart(2, "0")}`;
+}
+
+function* eighteenTurns(page: ReplPage): Operation<void> {
+  for (let at = 0; at < 4; at += 1) {
+    yield* key(page, "Tab");
+  }
+  for (let at = 0; at < 18; at += 1) {
+    page.repl.fake.script({ reply: `<Output>Reply witness ${at}</Output>` });
+    yield* typed(page, turnLabel(at));
+    yield* page.key("Enter");
+    yield* page.until(
+      `turn ${at} completed`,
+      (one) => one.shows(`Reply witness ${at}`) && !one.shows("[stop]"),
+    );
+  }
+  yield* typed(page, "message-kept");
+}
+
+// A later write can be a frame prepared before the key, so only the row the key
+// focuses acknowledges it.
+function* nextTurn(page: ReplPage, turn: number): Operation<void> {
+  yield* page.key("ArrowDown");
+  yield* page.until(`${turnLabel(turn)} focused`, (one) => one.shows(`> [U] ${turnLabel(turn)}`));
+}
+
+// Message -> History -> Transcript; its fixed entry is the selector.
+function* transcriptThrough(page: ReplPage, last: number): Operation<void> {
+  yield* page.key("Tab");
+  yield* page.until("History focused", (one) => one.shows("> [history]"));
+  yield* page.key("Tab");
+  yield* page.until("Transcript selector focused", (one) => one.shows("> All sessions"));
+  yield* page.key("Alt+ArrowDown");
+  yield* page.until("first real turn focused", (one) => one.shows(`> [U] ${turnLabel(0)}`));
+  for (let turn = 1; turn <= last; turn += 1) {
+    yield* nextTurn(page, turn);
+  }
 }
 
 describe("wheel real consumers", () => {
@@ -217,19 +258,7 @@ describe("wheel real consumers", () => {
 
   it("Transcript scrolls independently and keyboard reveals its last real turn", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
-    for (let at = 0; at < 4; at += 1) {
-      yield* key(page, "Tab");
-    }
-    for (let at = 0; at < 18; at += 1) {
-      page.repl.fake.script({ reply: `<Output>Reply witness ${at}</Output>` });
-      yield* typed(page, `turn-${String(at).padStart(2, "0")}`);
-      yield* page.key("Enter");
-      yield* page.until(
-        `turn ${at} completed`,
-        (one) => one.shows(`Reply witness ${at}`) && !one.shows("[stop]"),
-      );
-    }
-    yield* typed(page, "message-kept");
+    yield* eighteenTurns(page);
     const cell = page.screen().locate("turn-00");
     yield* wheel(page, "down", cell);
     expect(page.screen().shows("turn-00")).toBe(false);
@@ -244,14 +273,59 @@ describe("wheel real consumers", () => {
     }
     expect(page.screen().shows("turn-00")).toBe(true);
     expect(page.screen().shows("message-kept")).toBe(true);
-    // Message -> History -> Transcript; its fixed entry is the selector.
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
-    yield* key(page, "Alt+ArrowDown");
-    for (let row = 0; row < 17; row += 1) {
-      yield* key(page, "ArrowDown");
-    }
+    yield* transcriptThrough(page, 17);
     expect(page.screen().shows("> [U] turn-17")).toBe(true);
+    expect(page.screen().shows("message-kept")).toBe(true);
+    expect(page.screen().shows("[Back to current chat]")).toBe(false);
+    expect(page.repl.fake.prompts).toHaveLength(18);
+  });
+
+  it("Transcript acknowledges its last turn only once that turn is presented", function* () {
+    const olderHeld = withResolvers<void>();
+    const releaseOlder = withResolvers<void>();
+    const newerHeld = withResolvers<void>();
+    const releaseNewer = withResolvers<void>();
+    let holdOlder = false;
+    let holdNewer = false;
+    yield* ReplTerminal.around({
+      *write([bytes], next) {
+        if (holdOlder) {
+          holdOlder = false;
+          olderHeld.resolve();
+          yield* releaseOlder.operation;
+        } else if (holdNewer) {
+          holdNewer = false;
+          newerHeld.resolve();
+          yield* releaseNewer.operation;
+        }
+        yield* next(bytes);
+      },
+    });
+    const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
+    yield* eighteenTurns(page);
+    yield* transcriptThrough(page, 16);
+    // A resize frame prepared before the key completes only after the key is sent.
+    holdOlder = true;
+    page.repl.terminal.resized({ columns: 161, rows: 36 });
+    yield* olderHeld.operation;
+    holdNewer = true;
+    const before = page.screen().index;
+    let acknowledged = false;
+    const last = yield* spawn(function* () {
+      yield* nextTurn(page, 17);
+      acknowledged = true;
+    });
+    releaseOlder.resolve();
+    yield* newerHeld.operation;
+    yield* page.until("a write after the last ArrowDown", (one) => one.index > before);
+    yield* sleep(30);
+    expect(acknowledged).toBe(false);
+    expect(page.screen().shows("> [U] turn-16")).toBe(true);
+    releaseNewer.resolve();
+    yield* last;
+    expect(acknowledged).toBe(true);
+    expect(page.screen().shows("> [U] turn-17")).toBe(true);
+    expect(page.screen().shows("message-kept")).toBe(true);
     expect(page.screen().shows("[Back to current chat]")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(18);
   });
