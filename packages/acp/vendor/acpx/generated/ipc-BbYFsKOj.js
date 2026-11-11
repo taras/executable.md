@@ -1696,6 +1696,8 @@ function assignParsedSessionOptions(state, raw) {
 	const parsedSessionOptions = {};
 	if (typeof sessionOptions.model === "string") parsedSessionOptions.model = sessionOptions.model;
 	if (isStringArray(sessionOptions.allowed_tools)) parsedSessionOptions.allowed_tools = [...sessionOptions.allowed_tools];
+	// XMD workflow role controls: preserve the explicit tool deny list.
+	if (isStringArray(sessionOptions.disallowed_tools)) parsedSessionOptions.disallowed_tools = [...sessionOptions.disallowed_tools];
 	if (isPositiveInteger$1(sessionOptions.max_turns)) parsedSessionOptions.max_turns = sessionOptions.max_turns;
 	assignSessionOptionSystemPrompt(parsedSessionOptions, sessionOptions.system_prompt);
 	const env = parseStringMap(sessionOptions.env);
@@ -3935,6 +3937,13 @@ function parseSessionOptions(value) {
 	const sessionOptions = {};
 	if (!assignSessionModel(sessionOptions, record.model)) return null;
 	if (!assignSessionAllowedTools(sessionOptions, record.allowedTools)) return null;
+	// XMD workflow role controls: preserve the explicit tool deny list.
+	if (record.disallowedTools != null) {
+		// XMD workflow role controls: preserve the explicit tool deny list.
+		if (!isStringArray(record.disallowedTools)) return null;
+		// XMD workflow role controls: preserve the explicit tool deny list.
+		sessionOptions.disallowedTools = [...record.disallowedTools];
+	}
 	if (!assignSessionMaxTurns(sessionOptions, record.maxTurns)) return null;
 	if (!assignSessionSystemPrompt(sessionOptions, record.systemPrompt)) return null;
 	if (!assignSessionEnv(sessionOptions, record.env)) return null;

@@ -108,6 +108,46 @@ function* collectPrompt(
 }
 
 describe("Tier AP — ACPX provider", () => {
+  it("workflow-role controls refuse retained sessions that lack their creation settings", function* () {
+    const key = deriveSessionKey("scribe-cmd", CWD);
+    const controls = {
+      env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+      disallowedTools: ["ScheduleWakeup"],
+    };
+    for (const compatible of [false, true]) {
+      yield* scoped(function* () {
+        yield* useFlatWorld(CWD);
+        const harness = createFakeRuntime();
+        const record = makeRecord("scribe-cmd", CWD);
+        if (compatible) {
+          record.acpx = {
+            session_options: { env: controls.env, disallowed_tools: controls.disallowedTools },
+          };
+        }
+        const factory = createAcpxProvider({
+          createRuntime: harness.create,
+          sessionStore: makeStore({ [key]: record }),
+          agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
+          newSessionOptions: controls,
+        });
+        yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubCoordinator());
+        let failure: unknown;
+        try {
+          yield* collectPrompt("continue the original assignment");
+        } catch (error) {
+          failure = error;
+        }
+        expect(harness.turns.length).toBe(compatible ? 1 : 0);
+        if (!compatible) {
+          expect(harness.ensureCalls).toEqual([]);
+          expect(failure).toBeInstanceOf(AcpxSessionPolicyError);
+        } else {
+          expect(failure).toBeUndefined();
+        }
+      });
+    }
+  });
+
   it("1039 A3: a message-only upstream failure supplies no inferred diagnosis", function* () {
     const harness = createFakeRuntime();
     harness.script({ result: { status: "failed", error: { message: "Internal error" } } });
