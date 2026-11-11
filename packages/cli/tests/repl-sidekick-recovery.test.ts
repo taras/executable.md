@@ -1362,6 +1362,28 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
 
     yield* root.discard();
   });
+
+  it("R2q fixture: a message that settles before its cut fails the phase rather than waiting", function* () {
+    const root = yield* createRepositoryRoot();
+    yield* runPhase("chat-open", root, "chat");
+
+    // One reply that reads nothing, so the exchange has one canonical Prompt
+    // and the second one this cut holds is never written.
+    let observed: unknown;
+    try {
+      yield* runPhase(
+        "chat-say",
+        root,
+        "chat",
+        script({ replies: ["<Output>Done.</Output>\n"], stop: "laterTurn" }),
+      );
+    } catch (error) {
+      observed = error;
+    }
+    expect(String(observed)).toContain("the message settled before the laterTurn boundary");
+
+    yield* root.discard();
+  });
 });
 
 describe("Tier R2 — a reservation binds what the writer has acknowledged", () => {
