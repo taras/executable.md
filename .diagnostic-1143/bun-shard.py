@@ -130,9 +130,14 @@ def collect_output(stream, path, channel, markers):
 def run(source, out, smoke):
     out.mkdir(parents=True, exist_ok=False)
     head = command_output(["git", "rev-parse", "HEAD"], source)
-    pre_status = command_output(["git", "status", "--porcelain=v1"], source)
-    if pre_status or (not smoke and head != SOURCE):
-        raise ValueError("diagnostic requires the clean, pinned source")
+    status_argv = ["git", "status", "--porcelain=v1"]
+    pre_status = subprocess.check_output(status_argv, cwd=source, text=True).rstrip("\n")
+    lock_diff_argv = ["git", "diff", "--no-ext-diff", "--", "bun.lock"]
+    pre_lock_diff = subprocess.check_output(lock_diff_argv, cwd=source)
+    (out / "preflight.json").write_text(json.dumps({"head": head, "status": pre_status}) + "\n")
+    (out / "setup-bun-lock.patch").write_bytes(pre_lock_diff)
+    if (smoke and pre_status) or (not smoke and (head != SOURCE or pre_status not in ("", " M bun.lock"))):
+        raise ValueError(f"unexpected source or setup state at {head}: {pre_status!r}")
 
     deno = shutil.which("deno")
     bun = shutil.which("bun")
@@ -186,11 +191,14 @@ def run(source, out, smoke):
             reader.join()
     captured = capture.finish()
     (out / "progress.json").write_text(json.dumps(captured))
-    post_status = command_output(["git", "status", "--porcelain=v1"], source)
+    post_status = subprocess.check_output(status_argv, cwd=source, text=True).rstrip("\n")
+    post_lock_diff = subprocess.check_output(lock_diff_argv, cwd=source)
     receipt = {
         "head": head,
         "postHead": command_output(["git", "rev-parse", "HEAD"], source),
+        "preStatus": pre_status,
         "postStatus": post_status,
+        "setupLockPatchSha256": hashlib.sha256(pre_lock_diff).hexdigest(),
         "argv": argv,
         "versions": versions,
         "worker": list(os.uname()),
@@ -209,7 +217,7 @@ def run(source, out, smoke):
     }
     (out / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt))
-    if captured["errors"] or captured["connectionsStillOpen"] or post_status or receipt["postHead"] != head:
+    if captured["errors"] or captured["connectionsStillOpen"] or post_status != pre_status or post_lock_diff != pre_lock_diff or receipt["postHead"] != head:
         raise ValueError("incomplete capture or source changed")
     if smoke:
         assert code == -signal.SIGKILL
