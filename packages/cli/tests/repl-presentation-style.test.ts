@@ -5503,12 +5503,14 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     const selector = (): string =>
       page.screen().rows.find((row) => row.includes(SELECTOR_MARK.trim())) ?? "";
 
-    // One list. A row from each owner is in it, and there is no heading over
-    // either of them and no per-owner placeholder beneath either.
+    // One list has a row from each owner. The usage total is metadata, not a
+    // separate list heading or placeholder.
     expect(owners()).toEqual({ entry: true, chat: true });
-    expect(page.screen().rows.filter((row) => /^(entries|sidekick)\b/i.test(row.trim()))).toEqual(
-      [],
-    );
+    expect(
+      page
+        .screen()
+        .rows.filter((row) => /^(entries|entry agents|sidekick(?! total\b))\b/i.test(row.trim())),
+    ).toEqual([]);
 
     // The chat row goes where it always did: the Sidekick reads that turn.
     yield* page.press("first request");
@@ -5894,9 +5896,15 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     expect(sessions.shows("TRANSCRIPT")).toBe(true);
     expect(sessions.shows("Sessions")).toBe(true);
 
-    // The Sidekick surface: its chat, its tray and its composer, reached by the
-    // chat row of the list rather than by a tab this size does not draw.
-    yield* page.press("second request");
+    // At this height usage metadata can put the second request below the fold.
+    // Reach its row in the Transcript before opening the associated chat.
+    if (!sessions.shows("second request")) {
+      yield* page.wheel("down", sessions.locate("first request", { after: "TRANSCRIPT" }));
+      yield* page.until("the second request in the Transcript", (reading) =>
+        reading.shows("second request"),
+      );
+    }
+    yield* page.press("second request", { after: "TRANSCRIPT" });
     const talkingNow = yield* page.until("the Sidekick surface", (reading) =>
       reading.shows(COMPOSER),
     );

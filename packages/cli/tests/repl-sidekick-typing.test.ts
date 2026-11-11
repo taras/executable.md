@@ -282,7 +282,7 @@ describe("1048 — generated retained output", () => {
         yield* page.resize(size);
       }
       if (size.columns === 72) {
-        yield* page.press("Sidekick");
+        yield* page.press("Sidekick", { onRow: "Entries" });
         yield* page.until("the routed Sidekick", (one) => one.shows("message the sidekick"));
       }
       const cell = page.screen().locate("Settled TAIL.", { rightOf: "message the sidekick" });
