@@ -19,6 +19,8 @@ saved to `outcome.json` before that release, including when the turn fails.
 
 <Delivery.Schema as="schemas" />
 <Let as="instructions">
+Finish this native call with its review JSON result. Run required checks in the foreground and join every process you start before returning. A progress message, monitor or future notification does not complete the review.
+
 Perform one independent correctness review of {props.revision} in {props.delivery.repository}. Read the repository instructions and inspect that exact commit and its affected consumers. Keep source unchanged. Reuse applicable evidence; run only focused evidence that distinguishes a finding. Do not run broad confidence suites or wait for CI. Do not delegate, implement, publish comments, or merge. Report a concrete blocker rather than substituting a provider or repeating an uncertain call.
 
 Review these recorded acceptance clauses against their original selected sources. A derived check cannot strengthen or replace them. Report a material ambiguity as blocked.
@@ -29,17 +31,24 @@ Original captured source text:
 
 Keep summary within {schemas.review.properties.summary.maxLength} characters, including spaces and newlines. Put detailed observations in findings; do not compress the whole report into summary. Check revision against the assigned full SHA and acceptance against the recorded clause IDs before returning.
 
-Return exactly one JSON object satisfying this schema. acceptance lists every clause ID actually examined. pass requires no blocking finding. The workflow supplies work, reviewer, attempt and completion metadata.
+If you must end the turn before the verdict is ready, return exactly {JSON.stringify(schemas.progress.const)} on its own. The workflow can then give this same conversation one chance to finish.
+
+Otherwise, return exactly one JSON object satisfying this schema. acceptance lists every clause ID actually examined. pass requires no blocking finding. The workflow supplies work, reviewer, attempt and completion metadata.
 <Json value={schemas.review} />
 </Let>
 <If condition={instructions.length > 64000}><Fail message="The complete independent-review request exceeds 64000 characters. Prepare concise accepted inputs before dispatch." /></If>
 <Delivery.Continuation directory={props.delivery.directory} session={props.reviewer.session} own={props.attempt.slice(props.delivery.directory.length + 1) + "/assignment.json"} as="established" />
 <Let as="continuation" value={props.delivery.sessionEstablished === true || established} />
-<AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Dir path={props.delivery.repository}>
+<Phase.ProviderName agent={props.reviewer.provider} as="provider" />
+<AgentProvider name={provider} defaultAgent={props.reviewer.provider}><Dir path={props.delivery.repository}>
 <Delivery.Inspect agent={props.reviewer.provider} choices={props.choices} as="catalog" />
 <Let as="turn" value={null} />
 <Try>
 <If condition={catalog.state === "selected"}><Delivery.Turn as="turn"><Agent name={props.reviewer.provider}><Session name={props.reviewer.session} model={catalog.model} effort={props.reviewer.effort ?? undefined}><Phase.Session directory={props.delivery.directory + "/sessions"} name={props.reviewer.session} requireExisting={continuation}><Prompt throwOnError={true}>{instructions}</Prompt></Phase.Session></Session></Agent></Delivery.Turn></If>
 <Finally><Dir path={props.attempt}><File path="outcome.json"><Json value={{schema:"delivery-review-outcome.v1",reviewer:props.reviewer,catalog,turn}} /></File></Dir></Finally>
 </Try>
+<If condition={turn?.state === "reply"}>
+<Dir path={props.attempt}><File path="raw.txt">{turn.reply}</File></Dir>
+<Delivery.Response delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} attempt={props.attempt} raw={turn.reply} dispatch={true} as="response" />
+</If>
 </Dir></AgentProvider>

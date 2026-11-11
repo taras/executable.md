@@ -1,5 +1,5 @@
 <WhenPrompt as="request" template="{?text}" model="gpt-6.1-sol" effort="medium" />
-<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Return assessment on completed implementation")).trim()} />
+<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Submission guide:")).trim()} />
 <Parse schema={{type:"object"}} as="assignment">{text}</Parse>
 <Parse schema={{type:"object"}} as="reply">{assignment.request}</Parse>
 <Json value={reply} />

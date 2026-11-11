@@ -1,5 +1,5 @@
 <WhenPrompt as="request" template="{?text}" model="gpt-6.1-sol" effort="medium" />
-<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Return assessment on completed implementation")).trim()} />
+<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Submission guide:")).trim()} />
 <Parse schema={{type:"object"}} as="assignment">{text}</Parse>
 <Parse schema={{type:"object"}} as="context">{assignment.request}</Parse>
 <Json value={{schema:"phase-result.v2",phase:"discovery",work:assignment.work,outcome:"complete",revision:assignment.revision,summary:"The architecture discovery is complete.",handoff:assignment.request,artifacts:[context.architecture],evidence:[],findings:[],assessment:assignment.assessment,contract:{work:assignment.work,sourceRevision:assignment.revision,scope:"Keep the selected scope, conditions, exception and unresolved finding.",sections:[]},next:{phase:"discovery",role:"planner"},handoffInputs:[context.plan,context.architecture],discoveryRequests:[],discoveryGaps:[]}} />

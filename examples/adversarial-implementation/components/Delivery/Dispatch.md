@@ -16,7 +16,7 @@ A release that fails ends the run and leaves the attempt reserved, so it holds
 for reconciliation and can never select a replacement.
 
 <Let as="entry" value={props.selection.reviewers[props.position]} />
-<Dir path={props.attempt}><File path="assignment.json"><Json value={{work:props.selection.work,revision:props.selection.revision,reviewer:entry.reviewer,acceptance:props.selection.policy.acceptance,responseSchema:props.selection.responseSchema}} /></File></Dir>
+<Dir path={props.attempt}><File path="assignment.json"><Json value={{work:props.selection.work,revision:props.selection.revision,reviewer:entry.reviewer,acceptance:props.selection.policy.acceptance,responseSchema:props.selection.responseSchema,...(props.selection.maxResponseCorrections === undefined ? {} : {maxResponseCorrections:props.selection.maxResponseCorrections})}} /></File></Dir>
 <Try>
 <Delivery.Role delivery={props.delivery} revision={props.selection.revision} reviewer={entry.reviewer} choices={entry.choices} position={props.position} attempt={props.attempt} />
 <Dir path={props.attempt}><File path="execution.json"><Json value={{status:"completed",failure:null}} /></File></Dir>

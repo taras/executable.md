@@ -216,6 +216,9 @@ function assignmentFor(selection: Selection, reviewer: Reviewer) {
     reviewer,
     acceptance: selection.policy.acceptance,
     responseSchema: selection.responseSchema,
+    ...(selection.maxResponseCorrections === undefined
+      ? {}
+      : { maxResponseCorrections: selection.maxResponseCorrections }),
   };
 }
 
@@ -238,12 +241,27 @@ export default function* ReviewState(value: unknown): Operation<unknown> {
   );
 }
 
-function* observe(directory: string, expected: Selection, replacement: boolean): Operation<unknown> {
+function* observe(
+  directory: string,
+  expected: Selection,
+  replacement: boolean,
+): Operation<unknown> {
   const selectionText = yield* read(directory, "selection.json");
   const recorded = parsed(selectionSchema, selectionText);
   const selection =
-    selectionText === null ? "absent" : recorded !== null && same(recorded, expected) ? "matches" : "mismatch";
-  const empty = { selection, chain: expected.chain, attempts: [], candidate: null, effective: null, transition: null };
+    selectionText === null
+      ? "absent"
+      : recorded !== null && same(recorded, expected)
+        ? "matches"
+        : "mismatch";
+  const empty = {
+    selection,
+    chain: expected.chain,
+    attempts: [],
+    candidate: null,
+    effective: null,
+    transition: null,
+  };
   if (selection !== "matches") {
     return { ...empty, next: "uncertain", hold: null };
   }
@@ -274,7 +292,8 @@ function* observe(directory: string, expected: Selection, replacement: boolean):
       next = "uncertain";
     } else {
       const transitionText = yield* read(replacementDirectory, "transition.json");
-      const proven = transitionText !== null && same(parsed(z.unknown(), transitionText), transition);
+      const proven =
+        transitionText !== null && same(parsed(z.unknown(), transitionText), transition);
       const replaced = yield* attempt(
         replacementDirectory,
         1,
@@ -298,7 +317,9 @@ function* observe(directory: string, expected: Selection, replacement: boolean):
                 : "The replacement transition differs from the primary attempt's eligible failure.",
           };
       attempts.push(settled);
-      candidate = proven ? { position: 1, directory: replacementDirectory, reviewer: second.reviewer } : null;
+      candidate = proven
+        ? { position: 1, directory: replacementDirectory, reviewer: second.reviewer }
+        : null;
       next = !proven
         ? "uncertain"
         : settled.state === "review"
@@ -331,7 +352,8 @@ function* observe(directory: string, expected: Selection, replacement: boolean):
             holdRecord.work === expected.work &&
             holdRecord.revision === expected.revision &&
             holdRecord.chain === expected.chain &&
-            (dispositionText === null || (disposition !== null && same(disposition.hold, holdRecord))),
+            (dispositionText === null ||
+              (disposition !== null && same(disposition.hold, holdRecord))),
           answer: disposition?.answer ?? null,
           evidence: [
             `${directory}/hold.json`,

@@ -81,6 +81,7 @@ export const selectionSchema = z.strictObject({
   policy: z.record(z.string(), z.unknown()),
   inputs: z.array(z.record(z.string(), z.unknown())),
   responseSchema: z.record(z.string(), z.unknown()),
+  maxResponseCorrections: z.number().int().min(0).max(3).optional(),
   chain: z.enum(["fable-astra", "astra-final", "single"]),
   reviewers: z.array(entrySchema).min(1).max(2),
 });
@@ -98,7 +99,7 @@ export const holdSchema = z.strictObject({
   schema: z.literal("delivery-review-hold.v1"),
   work: z.string().min(1),
   revision: z.string().regex(/^[0-9a-f]{40}$/),
-  chain: z.enum(["fable-astra", "astra-final"]),
+  chain: selectionSchema.shape.chain,
   summary: z.string().min(1),
   unknown: z.string().min(1),
   attempts: z.array(attemptSchema).min(1).max(2),

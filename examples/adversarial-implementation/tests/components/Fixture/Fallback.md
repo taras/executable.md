@@ -45,7 +45,7 @@ git symbolic-ref --short HEAD
 
 <If condition={scenario === "reserved"}>
 <Delivery.Selection delivery={delivery} revision={revision} as="selection" />
-<Dir path={attempt}><File path="selection.json"><Json value={selection} /></File><File path="assignment.json"><Json value={{work:delivery.work,revision,reviewer:fable,acceptance:policy.acceptance,responseSchema:selection.responseSchema}} /></File></Dir>
+<Dir path={attempt}><File path="selection.json"><Json value={selection} /></File><File path="assignment.json"><Json value={{work:delivery.work,revision,reviewer:fable,acceptance:policy.acceptance,responseSchema:selection.responseSchema,maxResponseCorrections:0}} /></File></Dir>
 <Dir path={delivery.directory + "/sessions"}><File path="independent.json"><Json value={{schema:"phase-session.v2",agent:"claude",name:"independent",sessionKey:"independent",cwd:fixture.repository,identity:null,attempted:true,started:null}} /></File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="reservedStatus" />
 <AssertEquals actual={[reservedStatus.status,reservedStatus.reviewAttempts.attempts[0].state]} expected={["reconciliation_required","reserved"]} />
@@ -105,7 +105,7 @@ printf '%s' "$reached"
 <AssertEquals actual={[retainedSelection.revision,retainedSelection.policy,retainedSelection.inputs,retainedSelection.chain]} expected={[revision,policy,delivery.inputs,scenario === "astra-final" ? "astra-final" : "fable-astra"]} />
 <Ticket.Text path={attempt + "/assignment.json"} as="primaryText" />
 <Parse schema={{type:"object"}} as="primaryAssignment">{primaryText}</Parse>
-<AssertEquals actual={primaryAssignment} expected={{work:delivery.work,revision,reviewer,acceptance:policy.acceptance,responseSchema:retainedSelection.responseSchema}} />
+<AssertEquals actual={primaryAssignment} expected={{work:delivery.work,revision,reviewer,acceptance:policy.acceptance,responseSchema:retainedSelection.responseSchema,maxResponseCorrections:0}} />
 <If condition={expected.calls === 2}>
 <Ticket.Text path={attempt + "/replacement/assignment.json"} as="replacementText" />
 <Parse schema={{type:"object"}} as="replacementAssignment">{replacementText}</Parse>
@@ -210,7 +210,7 @@ fi
 <Delivery.Schema as="schemas" />
 <Let as="stray" value={{revision,verdict:"pass",summary:"A stray review.",acceptance:["behavior","evidence"],findings:[]}} />
 <Let as="strayOutcome" value={{schema:"delivery-review-outcome.v1",reviewer:astra,catalog:{state:"selected",choices:["gpt-6-astra"],model:"gpt-6-astra",advertised:["gpt-6-astra"],failure:null},turn:{state:"reply",reply:JSON.stringify(stray)}}} />
-<Dir path={attempt + "/replacement"}><File path="assignment.json"><Json value={{work:delivery.work,revision,reviewer:astra,acceptance:policy.acceptance,responseSchema:schemas.review}} /></File><File path="outcome.json"><Json value={strayOutcome} /></File><File path="execution.json"><Json value={{status:"completed",failure:null}} /></File><File path="raw.txt">{JSON.stringify(stray)}</File><File path="receipt.json"><Json value={{work:delivery.work,revision,reviewer:astra,acceptance:policy.acceptance,responseSchema:schemas.review,result:stray,execution:attempt + "/replacement/execution.json"}} /></File></Dir>
+<Dir path={attempt + "/replacement"}><File path="assignment.json"><Json value={{work:delivery.work,revision,reviewer:astra,acceptance:policy.acceptance,responseSchema:schemas.review,maxResponseCorrections:0}} /></File><File path="outcome.json"><Json value={strayOutcome} /></File><File path="execution.json"><Json value={{status:"completed",failure:null}} /></File><File path="raw.txt">{JSON.stringify(stray)}</File><File path="receipt.json"><Json value={{work:delivery.work,revision,reviewer:astra,acceptance:policy.acceptance,responseSchema:schemas.review,maxResponseCorrections:0,result:stray,execution:attempt + "/replacement/execution.json"}} /></File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="strayStatus" />
 <AssertEquals actual={[strayStatus.status,strayStatus.review]} expected={["review_held",null]} />
 <Ticket.Capture as="strayReconcile"><Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="strayReceipt" /></Ticket.Capture>
