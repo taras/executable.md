@@ -10,9 +10,10 @@ props:
 ---
 
 Read the original delivery record and perform only its computed next action.
-A status read starts no agent. Review preserves every attempt and never repeats
-one: an unavailable Fable reviewer is replaced once by Codex Astra, and a review
-nobody could complete is held and asked about. Readiness permits no merge.
+A status read starts no agent. An explicit progress reply gets one continuation
+in the same conversation. An unavailable Fable reviewer is replaced once by
+Codex Astra. The workflow preserves each attempt and asks about a review it
+cannot complete. Readiness permits no merge.
 
 <Ticket.Text path={props.record} as="recordText" />
 <Parse schema={{type:"object",properties:{work:{type:"string"},repository:{type:"string",pattern:"^/"},directory:{type:"string",pattern:"^/"},policy:{type:"object"},required:{const:["independent-review","required-ci","main-health"]}},required:["work","repository","directory","policy","required"]}} as="delivery">{recordText}</Parse>

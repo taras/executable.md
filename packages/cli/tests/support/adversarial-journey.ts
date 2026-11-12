@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { env } from "@executablemd/runtime";
 import { readTextFile } from "@effectionx/fs";
 
-const testedSuites = ["ProductionRole", "Preparation"];
+const testedSuites = ["ProductionRole", "Preparation", "Submission", "Delivery"];
 
 export function* runAdversarialJourney(suite: string) {
   const retainedEvidence = suite.startsWith("ArtifactReturn")
@@ -45,8 +45,8 @@ export function* runAdversarialJourney(suite: string) {
             `<Testing>\n${source}\n</Testing>`,
           ]),
       "--include",
-      testedSuites.includes(suite)
-        ? "examples/adversarial-implementation/components"
+      testedSuites.includes(suite) && suite !== "Delivery"
+        ? "examples/adversarial-implementation/tests/production-components"
         : "examples/adversarial-implementation/tests/components",
       "--include",
       "examples/adversarial-implementation/components",

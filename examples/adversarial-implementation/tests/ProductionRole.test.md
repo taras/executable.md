@@ -18,9 +18,13 @@ pwd -P
 <Test name="the production role dispatches mandatory initialization but refuses an oversized request before prompting" timeout="60s">
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect the agreed behavior.",evidence:["accepted.md"]}} />
 <Let as="assignment" value={{identityDirectory,phase:"implementation",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
-<Phase.Role role="implementor" session="initialized-implementor" assignment={assignment} initialize={true} as="reply" />
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role="implementor" assignment={assignment} /></Phase.SubmissionGuide>
+<Phase.Role role="implementor" session="initialized-implementor" assignment={{...assignment,artifactDirectory}} initialize={true} as="reply" />
 <AssertStringIncludes actual={reply} expected="initialization received" />
-<Ticket.Capture as="oversized"><Phase.Role role="implementor" session="initialized-implementor" assignment={{...assignment,request:"x".repeat(256000)}} initialize={true} as="unexpected" /></Ticket.Capture>
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role="implementor" assignment={assignment} /></Phase.SubmissionGuide>
+<Ticket.Capture as="oversized"><Phase.Role role="implementor" session="initialized-implementor" assignment={{...assignment,artifactDirectory,request:"x".repeat(256000)}} initialize={true} as="unexpected" /></Ticket.Capture>
 <AssertEquals actual={oversized.status} expected="failed" />
 <AssertStringIncludes actual={oversized.failure} expected="complete phase prompt exceeds 256000" />
 </Test>
@@ -37,13 +41,21 @@ pwd -P
 <Let as="assignment" value={{identityDirectory,phase:"discovery",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
 <Phase.Profile role="planner" plannerProvider="codex" assessment={assessment} as="profile" />
 <AssertEquals actual={profile} expected={{provider:"codex",model:"gpt-6.1-sol",effort:"medium"}} />
-<Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={assignment} as="planner" />
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role="planner" assignment={{...assignment,phase:"discovery"}} /></Phase.SubmissionGuide>
+<Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={{...assignment,artifactDirectory}} as="planner" />
 <AssertStringIncludes actual={planner} expected="Sol medium received" />
-<Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={{...assignment,phase:"review"}} as="continued" />
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role="planner" assignment={{...assignment,phase:"review"}} /></Phase.SubmissionGuide>
+<Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={{...assignment,artifactDirectory,phase:"review"}} as="continued" />
 <AssertStringIncludes actual={continued} expected="Sol medium continued" />
-<Phase.Role role="implementor" implementationProvider="codex" session="sol-implementor" assignment={{...assignment,phase:"implementation"}} as="implementor" />
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role="implementor" assignment={{...assignment,phase:"implementation"}} /></Phase.SubmissionGuide>
+<Phase.Role role="implementor" implementationProvider="codex" session="sol-implementor" assignment={{...assignment,artifactDirectory,phase:"implementation"}} as="implementor" />
 <AssertStringIncludes actual={implementor} expected="Sol medium received" />
-<Phase.Role role="planner" plannerProvider="claude" session="opus-planner" assignment={assignment} as="claude" />
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={artifactDirectory}><Phase.SubmissionInstructions role="planner" assignment={{...assignment,phase:"discovery"}} /></Phase.SubmissionGuide>
+<Phase.Role role="planner" plannerProvider="claude" session="opus-planner" assignment={{...assignment,artifactDirectory}} as="claude" />
 <AssertStringIncludes actual={claude} expected="Opus medium received" />
 <Each in={["codex","claude"]} let="provider">
 <Phase.Profile role="planner" plannerProvider={provider} design={true} assessment={assessment} as="foundation" />
@@ -70,9 +82,10 @@ pwd -P
 ```
 <Let as="attempt" value={temporary.stdout.trim() + "/response"} />
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect accepted behavior.",evidence:["accepted.md"]}} />
-<Let as="assignment" value={{identityDirectory:temporary.stdout.trim() + "/sessions",phase:"review",work:"test",repository,revision:head.stdout.trim(),priorRevision:null,request:"Inspect the saved verdict.",assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"ready",role:null}}} />
+<Let as="assignment" value={{artifactDirectory:attempt,identityDirectory:temporary.stdout.trim() + "/sessions",phase:"review",work:"test",repository,revision:head.stdout.trim(),priorRevision:null,request:"Inspect the saved verdict.",assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"ready",role:null}}} />
 <Let as="raw" value={JSON.stringify({schema:"phase-result.v2",phase:"review",work:"test",outcome:"pass",revision:assignment.revision,summary:"x".repeat(1201),handoff:"Inspect the saved verdict.",artifacts:[],evidence:[],findings:[],assessment,next:{phase:"ready",role:null},discoveryRequests:[],discoveryGaps:[]})} />
 <Dir path={attempt}><File path="assignment.json"><Json value={assignment} /></File><File path="raw.txt">{raw}</File></Dir>
+<Phase.SubmissionGuide repository={repository} directory={attempt}><Phase.SubmissionInstructions role="planner" assignment={assignment} /></Phase.SubmissionGuide>
 <TestAgent agent="codex">
 <TestAgent.Scenario session="original-sol-reviewer" src="./agents/sol-correction.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"high",options:["medium","high"]}}]}} />
 <Agent name="codex"><Session name="original-sol-reviewer" model="gpt-6.1-sol" effort="medium"><Phase.Session directory={assignment.identityDirectory} name="original-sol-reviewer" /></Session></Agent>
@@ -155,10 +168,12 @@ false
 
 <Test name="A2 production instructions and schema distinguish actual author from requested successor">
 <Let as="assignment" value={{identityDirectory,phase:"discovery",work:"ordinary",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Ask the original Architect for the missing boundary.",continuation:{phase:"implementation",role:"implementor"}}} />
-<Let as="instructions"><Phase.Instructions role="planner" assignment={assignment} /></Let>
-<AssertStringIncludes actual={instructions} expected="discoveryRequests[].role and discoveryGaps[].request.role equal to planner" />
-<AssertStringIncludes actual={instructions} expected="next.role names the requested successor" />
-<Let as="schemaText" value={instructions.slice(instructions.lastIndexOf('\n{'))} />
+<Let as="instructions"><Phase.Instructions role="planner" assignment={assignment} submission={{path:"/frozen/submission-guide.md"}} /></Let>
+<AssertEquals actual={instructions.includes("next.role names the requested successor")} expected={false} />
+<Let as="submission"><Phase.SubmissionInstructions role="planner" assignment={assignment} /></Let>
+<AssertStringIncludes actual={submission} expected="discoveryRequests[].role and discoveryGaps[].request.role equal to planner" />
+<AssertStringIncludes actual={submission} expected="next.role names the requested successor" />
+<Let as="schemaText" value={submission.slice(submission.lastIndexOf('\n{'))} />
 <Parse schema={{type:"object"}} as="schema">{schemaText}</Parse>
 <AssertEquals actual={schema.properties.discoveryRequests.items.properties.role} expected={{const:"planner"}} />
 <AssertEquals actual={schema.properties.discoveryGaps.items.properties.request.properties.role} expected={{const:"planner"}} />

@@ -3,7 +3,7 @@
 <If condition={!request.text.includes("Unresolved: preserve finding U.")}><Fail message="The production prompt omitted a required preparation instruction or extract." /></If>
 <If condition={!request.text.includes("Review identity: exact-sha-123.")}><Fail message="The production prompt omitted a required preparation instruction or extract." /></If>
 <If condition={!request.text.includes("Preparation receipt:")}><Fail message="The production prompt omitted a required preparation instruction or extract." /></If>
-<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Return assessment on completed implementation")).trim()} />
+<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Submission guide:")).trim()} />
 <Parse schema={{type:"object"}} as="assignment">{text}</Parse>
 <Parse schema={{type:"object"}} as="context">{assignment.request}</Parse>
 <If condition={context.case === "validation"}>

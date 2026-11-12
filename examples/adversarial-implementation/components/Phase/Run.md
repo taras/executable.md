@@ -128,12 +128,14 @@ mkdir -- {quotedAttempt}
 </If>
 <Dir path={attempt}><File path="assignment.json"><Json value={assignment} /></File></Dir>
 <Phase.Event attempt={attempt} stage="started" assignment={assignment} role={props.role} as="started" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={attempt}><Phase.SubmissionInstructions role={props.role} assignment={assignment} /></Phase.SubmissionGuide>
 <Phase.Role inputs={props.inputs} role={props.role} session={props.session} assignment={assignment} initialize={props.initialize} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="raw" />
 <Dir path={attempt}><File path="raw.txt">{raw}</File></Dir>
 <Phase.Profile role={props.role} assessment={assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="deliveredProfile" />
 <Ticket.Fingerprint inputs={props.inputs} as="sentInputs" />
 <Dir path={attempt}><File path="delivery.json"><Json value={{schema:"role-input-delivery.v1",role:props.role,session:props.session,provider:deliveredProfile.provider,profile:deliveredProfile,initialize:props.initialize,inputs:sentInputs,raw:attempt + "/raw.txt"}} /></File></Dir>
 <Phase.Event attempt={attempt} stage="reply-saved" assignment={assignment} role={props.role} as="replied" />
+<Phase.SubmissionGuide repository={assignment.repository} directory={attempt} mode="check"><Phase.SubmissionInstructions role={props.role} assignment={assignment} /></Phase.SubmissionGuide>
 <Phase.Correct assignment={assignment} raw={raw} role={props.role} session={props.session} attempt={attempt} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} inputs={props.inputs} profile={props.responseProfile} maxResponseCorrections={props.maxResponseCorrections} as="accepted" />
 <Let as="result" value={accepted.result} />
 <Dir path={attempt}><File path="result.json"><Json value={result} /></File></Dir>

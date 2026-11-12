@@ -1,10 +1,10 @@
 <WhenPrompt as="request" template="{?text}" model="gpt-6.1-sol" effort="medium" />
-<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Return assessment on completed implementation")).trim()} />
+<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Submission guide:")).trim()} />
 <Parse schema={{type:"object"}} as="assignment">{text}</Parse>
 <Parse schema={{type:"object"}} as="context">{assignment.request}</Parse>
 <Json value={{schema:"phase-result.v2",phase:"discovery",work:assignment.work,outcome:"needs_discovery",revision:assignment.revision,summary:"The first planning call is complete.",handoff:assignment.request,artifacts:[context.plan],evidence:[],findings:[],assessment:assignment.assessment,next:{phase:"discovery",role:"architect"},handoffInputs:[context.plan],discoveryRequests:[{key:"preparation-scope",role:"planner",question:"Confirm the existing scope.",neededFor:"Finish the plan.",evidenceNeeded:"The selected architecture clauses.",origin:context.plan}],discoveryGaps:[]}} />
 <WhenPrompt as="request" template="{?text}" model="gpt-6.1-sol" effort="medium" />
-<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Return assessment on completed implementation")).trim()} />
+<Let as="text" value={request.text.slice(request.text.indexOf("Prepared assignment:") + "Prepared assignment:".length,request.text.indexOf("Submission guide:")).trim()} />
 <Parse schema={{type:"object"}} as="assignment">{text}</Parse>
 <Parse schema={{type:"object"}} as="context">{assignment.request}</Parse>
 <Json value={{schema:"phase-result.v2",phase:"discovery",work:assignment.work,outcome:"complete",revision:assignment.revision,summary:"The final planning call is complete.",handoff:assignment.request,artifacts:[context.matrix],evidence:[],findings:[],assessment:assignment.assessment,next:{phase:"implementation",role:"implementor"},handoffInputs:[context.plan,context.matrix,context.architecture],discoveryRequests:[],discoveryGaps:[]}} />

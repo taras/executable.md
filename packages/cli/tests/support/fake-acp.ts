@@ -779,6 +779,19 @@ export function createFakeAcp(): FakeAcp {
             cumulative_token_usage: {},
             request_token_usage: {},
           };
+          const sessionOptions = input.sessionOptions;
+          if (sessionOptions !== undefined || input.requestedModel !== undefined) {
+            record.acpx = {
+              session_options: {
+                model: input.requestedModel ?? sessionOptions?.model,
+                allowed_tools: sessionOptions?.allowedTools,
+                disallowed_tools: sessionOptions?.disallowedTools,
+                max_turns: sessionOptions?.maxTurns,
+                system_prompt: sessionOptions?.systemPrompt,
+                env: sessionOptions?.env,
+              },
+            };
+          }
           if (deferred) {
             record.sessionMaterialization = {
               state: "pending",
