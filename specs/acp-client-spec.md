@@ -1210,7 +1210,7 @@ second usage journal. A transient history stays transient.
     "provenance": {
       "host": "deno-source",
       "xmd": { "version": "0.14.1" },
-      "runtime": { "version": "0.21.1" },
+      "runtime": { "version": "0.22.0" },
       "adapter": { "version": "1.6.2", "digest": "sha256:…" }
     },
     "readings": [
@@ -1794,7 +1794,7 @@ records why Codex runs the host CLI.
 
 ## ACPX provider
 
-`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.21.1 runtime source closure (the explicit first-turn materialization
+`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.22.0 runtime source closure (the explicit first-turn materialization
 barrier remains a local patch, recorded with what removes it in
 `packages/acp/vendor/acpx/PROVENANCE.md`). The released `promptStarted`
 transport acknowledgement is not backend acceptance. `createAcpxProvider()`
@@ -2131,7 +2131,7 @@ The existing live-turn/root view shows these separately from reply text. Core
 reply and durable Prompt records retain their text and terminal facts only;
 ordinary providers need not emit these notices.
 
-Stock ACPX 0.21.1 provides no form input. It receives complete readable
+Stock ACPX 0.22.0 provides no form input. It receives complete readable
 question content followed by a precise capability refusal, with the child still
 pending. A capable client or attached UI can answer that same original.
 Standard text/JSON notices remain useful without metadata; quiet output

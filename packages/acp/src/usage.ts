@@ -40,7 +40,7 @@ export interface PromptUsageHost {
 }
 
 /** The ACP runtime this package executes; see `../vendor/acpx/PROVENANCE.md`. */
-const RUNTIME_BUILD: UsageBuild = Object.freeze({ version: "0.21.1" });
+const RUNTIME_BUILD: UsageBuild = Object.freeze({ version: "0.22.0" });
 
 /** Fixed categorical limitations a record may carry. */
 export const UsageLimitation = Object.freeze({

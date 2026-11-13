@@ -1,4 +1,4 @@
-import { E as PromptInput, S as PermissionMode, a as AcpElicitationHandler, d as AcpPermissionHandler, r as AcpClientOptions, w as PermissionStats, x as NonInteractivePermissionPolicy } from "./session-options-BlnP3WAc.js";
+import { C as PermissionMode, D as PromptInput, S as NonInteractivePermissionPolicy, T as PermissionStats, a as AcpElicitationHandler, f as AcpPermissionHandler, r as AcpClientOptions } from "./session-options-D9KL7-d8.d.ts";
 import { AnyMessage, InitializeResponse, ListSessionsRequest, ListSessionsResponse, PromptResponse, SessionConfigOption, SetSessionConfigOptionResponse } from "@agentclientprotocol/sdk";
 type AcpControlAuthority = {
   signal?: AbortSignal;
@@ -65,7 +65,6 @@ declare class AcpClient {
   private observedSessionUpdates;
   private processedSessionUpdates;
   private suppressSessionUpdates;
-  private suppressReplaySessionUpdateMessages;
   private activePrompt?;
   private readonly pendingPromptOwners;
   private readonly cancellingSessionIds;
@@ -127,8 +126,6 @@ declare class AcpClient {
   loadSession(sessionId: string, cwd?: string): Promise<SessionLoadResult>;
   loadSessionWithOptions(sessionId: string, cwd?: string, options?: LoadSessionOptions): Promise<SessionLoadResult>;
   resumeSession(sessionId: string, cwd?: string, authority?: AcpControlAuthority): Promise<SessionResumeResult>;
-  private applySessionUpdateSuppression;
-  private restoreSessionUpdateSuppression;
   prompt(sessionId: string, prompt: PromptInput | string, onRequestWritten?: () => Promise<void> | void, onElicitation?: AcpElicitationHandler, onPermissionRequest?: AcpPermissionHandler, authority?: AcpControlAuthority): Promise<PromptResponse>;
   private beginActivePrompt;
   private bindPromptOwner;
@@ -217,4 +214,3 @@ declare class AcpClient {
   }): Promise<void>;
 }
 export { AcpControlAuthority as n, AcpClient as t };
-//# sourceMappingURL=client-D12zqSyN.d.ts.map

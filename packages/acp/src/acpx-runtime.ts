@@ -1,9 +1,8 @@
 /**
  * The ACP runtime this package executes.
  *
- * The released 0.21.1 source closure retains the explicit backend-acceptance
- * barrier used by strong-declared session creation. Its transport acknowledgement does not
- * establish a durable conversation. See `../vendor/acpx/PROVENANCE.md`.
+ * XMD patches the ACPX 0.22.0 source closure with the backend-acceptance barrier
+ * used by strong-declared session creation. See `../vendor/acpx/PROVENANCE.md`.
  */
 // @ts-types="../vendor/acpx/generated/runtime.d.ts"
 export * from "../vendor/acpx/generated/runtime.js";

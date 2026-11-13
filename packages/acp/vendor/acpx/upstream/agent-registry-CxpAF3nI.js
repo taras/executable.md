@@ -2,6 +2,170 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { execFile } from "node:child_process";
+// src/spawn-command-options.ts
+function readWindowsEnvValue(env, key) {
+	const matchedKey = Object.keys(env).find((entry) => entry.toUpperCase() === key);
+	return matchedKey ? env[matchedKey] : void 0;
+}
+function windowsExecutableExtensions(env) {
+	return (readWindowsEnvValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0);
+}
+function commandCandidates(command, env) {
+	if (path.extname(command).length > 0) return [command];
+	return windowsExecutableExtensions(env).map((extension) => `${command}${extension}`);
+}
+function commandHasPath(command) {
+	return command.includes("/") || command.includes("\\") || path.isAbsolute(command);
+}
+function resolveWindowsPathCommand(command, env, cwd) {
+	const candidates = commandCandidates(command, env);
+	const pathValue = readWindowsEnvValue(env, "PATH");
+	if (!pathValue) return;
+	for (const directory of pathValue.split(";")) {
+		const resolved = findExistingCommandInDirectory(directory, candidates, cwd);
+		if (resolved) return resolved;
+	}
+}
+function findExistingCommandInDirectory(directory, candidates, cwd) {
+	const trimmedDirectory = directory.trim();
+	if (trimmedDirectory.length === 0) return;
+	return candidates.map((candidate) => fromWorkingDirectory(path.join(trimmedDirectory, candidate), cwd)).find((resolved) => fs.existsSync(resolved));
+}
+function fromWorkingDirectory(value, cwd) {
+	return cwd !== void 0 && !path.isAbsolute(value) ? path.resolve(cwd, value) : value;
+}
+function resolveWindowsWrapperToken(token, wrapperPath) {
+	const relative = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i)?.[1]?.trim();
+	if (!relative) return;
+	const candidate = path.resolve(path.dirname(wrapperPath), relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, ""));
+	return path.extname(candidate).toLowerCase() === ".exe" && fs.existsSync(candidate) ? candidate : void 0;
+}
+function resolveWindowsWrapperExecutable(wrapperPath) {
+	if (!fs.existsSync(wrapperPath)) return;
+	try {
+		return [...fs.readFileSync(wrapperPath, "utf8").matchAll(/"([^"\r\n]*)"/g)].map((match) => resolveWindowsWrapperToken(match[1] ?? "", wrapperPath)).find((candidate) => candidate !== void 0);
+	} catch {
+		return;
+	}
+}
+function resolveWindowsCommand(command, env = process.env, cwd) {
+	const candidates = commandCandidates(command, env);
+	if (commandHasPath(command)) return candidates.map((candidate) => fromWorkingDirectory(candidate, cwd)).find((candidate) => fs.existsSync(candidate));
+	return resolveWindowsPathCommand(command, env, cwd);
+}
+/**
+* Resolve a Windows command to a native executable suitable for direct spawn.
+*
+* Batch and PowerShell shims are intentionally rejected unless they point at a
+* real `.exe` entrypoint. Callers that need shell execution should use the
+* command-specific shell policy instead.
+*/
+function resolveWindowsExecutablePath(command, env = process.env, cwd) {
+	const resolved = resolveWindowsCommand(command, env, cwd);
+	if (!resolved) return;
+	const absolute = path.resolve(resolved);
+	const extension = path.extname(absolute).toLowerCase();
+	if (extension === ".exe") return absolute;
+	if (extension !== ".cmd" && extension !== ".bat" && extension !== ".ps1") return;
+	const siblingExecutable = `${absolute.slice(0, -extension.length)}.exe`;
+	return fs.existsSync(siblingExecutable) ? siblingExecutable : resolveWindowsWrapperExecutable(absolute);
+}
+function shouldUseWindowsBatchShell(command, platform = process.platform, env = process.env, cwd) {
+	if (platform !== "win32") return false;
+	const resolvedCommand = resolveWindowsCommand(command, env, cwd) ?? command;
+	const ext = path.extname(resolvedCommand).toLowerCase();
+	return ext === ".cmd" || ext === ".bat";
+}
+const CMD_META_CHAR_RE = /([()\][%!^"`<>&|;, *?])/gu;
+const CMD_SHIM_RE = /node_modules[\\/].bin[\\/][^\\/]+\.cmd$/iu;
+function escapeCmdCommand(value) {
+	return value.replace(CMD_META_CHAR_RE, "^$1");
+}
+function escapeCmdArgument(value, doubleEscapeMeta) {
+	const escaped = `"${escapeBackslashesForQuoting(value)}"`.replace(CMD_META_CHAR_RE, "^$1");
+	return doubleEscapeMeta ? escaped.replace(CMD_META_CHAR_RE, "^$1") : escaped;
+}
+function escapeBackslashesForQuoting(value) {
+	let result = "";
+	let backslashes = 0;
+	for (const char of value) {
+		if (char === "\\") {
+			backslashes += 1;
+			continue;
+		}
+		result += "\\".repeat(char === "\"" ? backslashes * 2 + 1 : backslashes) + char;
+		backslashes = 0;
+	}
+	return result + "\\".repeat(backslashes * 2);
+}
+function buildAgentSpawnCommand(command, args, platform = process.platform, env = process.env, cwd) {
+	if (!shouldUseWindowsBatchShell(command, platform, env, cwd)) return {
+		command,
+		args: [...args]
+	};
+	const resolvedCommand = path.win32.normalize(resolveWindowsCommand(command, env, cwd) ?? command);
+	const doubleEscapeMeta = CMD_SHIM_RE.test(resolvedCommand);
+	const shellCommand = [escapeCmdCommand(resolvedCommand), ...args.map((arg) => escapeCmdArgument(arg, doubleEscapeMeta))].join(" ");
+	return {
+		command: readWindowsEnvValue(env, "COMSPEC") ?? "cmd.exe",
+		args: [
+			"/d",
+			"/s",
+			"/c",
+			`"${shellCommand}"`
+		],
+		windowsVerbatimArguments: true
+	};
+}
+function buildSpawnCommandOptions(command, options, platform = process.platform, env = process.env, cwd) {
+	if (!shouldUseWindowsBatchShell(command, platform, env, cwd)) return options;
+	return {
+		...options,
+		shell: true
+	};
+}
+function buildTerminalSpawnCommand(command, args) {
+	return {
+		command,
+		args: args ?? [],
+		killProcessGroup: false
+	};
+}
+function buildTerminalShellSpawnCommand(command, platform = process.platform) {
+	if (platform === "win32") return {
+		command: "cmd.exe",
+		args: [
+			"/d",
+			"/s",
+			"/c",
+			command
+		],
+		killProcessGroup: true
+	};
+	return {
+		command: "/bin/sh",
+		args: ["-c", command],
+		killProcessGroup: true
+	};
+}
+/** Finds an installed entrypoint without executing it. */
+function resolveInstalledExecutable(command, { env, cwd } = {
+	env: process.env,
+	cwd: process.cwd()
+}) {
+	if (process.platform === "win32") {
+		const resolved = resolveWindowsCommand(command, env, cwd);
+		return resolved && fs.statSync(resolved, { throwIfNoEntry: false })?.isFile() ? path.resolve(resolved) : void 0;
+	}
+	return (command.includes("/") ? [path.resolve(cwd, command)] : (env.PATH ?? "").split(path.delimiter).map((directory) => path.resolve(cwd, directory, command))).find((candidate) => {
+		try {
+			fs.accessSync(candidate, fs.constants.X_OK);
+			return fs.statSync(candidate).isFile();
+		} catch {
+			return false;
+		}
+	});
+}
 // src/acp/client-process.ts
 const PROCESS_HELPER_TIMEOUT_MS = 8e3;
 const PROCESS_HELPER_MAX_BUFFER_BYTES = 33554432;
@@ -199,167 +363,6 @@ async function runWslpath(cwd) {
 function basenameToken(value) {
 	return path.basename(value).toLowerCase().replace(/\.(cmd|exe|bat)$/u, "");
 }
-// src/spawn-command-options.ts
-function readWindowsEnvValue(env, key) {
-	const matchedKey = Object.keys(env).find((entry) => entry.toUpperCase() === key);
-	return matchedKey ? env[matchedKey] : void 0;
-}
-function windowsExecutableExtensions(env) {
-	return (readWindowsEnvValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0);
-}
-function commandCandidates(command, env) {
-	if (path.extname(command).length > 0) return [command];
-	return windowsExecutableExtensions(env).map((extension) => `${command}${extension}`);
-}
-function commandHasPath(command) {
-	return command.includes("/") || command.includes("\\") || path.isAbsolute(command);
-}
-function resolveWindowsPathCommand(command, env, cwd) {
-	const candidates = commandCandidates(command, env);
-	const pathValue = readWindowsEnvValue(env, "PATH");
-	if (!pathValue) return;
-	for (const directory of pathValue.split(";")) {
-		const resolved = findExistingCommandInDirectory(directory, candidates, cwd);
-		if (resolved) return resolved;
-	}
-}
-function findExistingCommandInDirectory(directory, candidates, cwd) {
-	const trimmedDirectory = directory.trim();
-	if (trimmedDirectory.length === 0) return;
-	return candidates.map((candidate) => fromWorkingDirectory(path.join(trimmedDirectory, candidate), cwd)).find((resolved) => fs.existsSync(resolved));
-}
-function fromWorkingDirectory(value, cwd) {
-	return cwd !== void 0 && !path.isAbsolute(value) ? path.resolve(cwd, value) : value;
-}
-function resolveWindowsWrapperToken(token, wrapperPath) {
-	const relative = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i)?.[1]?.trim();
-	if (!relative) return;
-	const candidate = path.resolve(path.dirname(wrapperPath), relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, ""));
-	return path.extname(candidate).toLowerCase() === ".exe" && fs.existsSync(candidate) ? candidate : void 0;
-}
-function resolveWindowsWrapperExecutable(wrapperPath) {
-	if (!fs.existsSync(wrapperPath)) return;
-	try {
-		return [...fs.readFileSync(wrapperPath, "utf8").matchAll(/"([^"\r\n]*)"/g)].map((match) => resolveWindowsWrapperToken(match[1] ?? "", wrapperPath)).find((candidate) => candidate !== void 0);
-	} catch {
-		return;
-	}
-}
-function resolveWindowsCommand(command, env = process.env, cwd) {
-	const candidates = commandCandidates(command, env);
-	if (commandHasPath(command)) return candidates.map((candidate) => fromWorkingDirectory(candidate, cwd)).find((candidate) => fs.existsSync(candidate));
-	return resolveWindowsPathCommand(command, env, cwd);
-}
-/**
-* Resolve a Windows command to a native executable suitable for direct spawn.
-*
-* Batch and PowerShell shims are intentionally rejected unless they point at a
-* real `.exe` entrypoint. Callers that need shell execution should use the
-* command-specific shell policy instead.
-*/
-function resolveWindowsExecutablePath(command, env = process.env, cwd) {
-	const resolved = resolveWindowsCommand(command, env, cwd);
-	if (!resolved) return;
-	const absolute = path.resolve(resolved);
-	const extension = path.extname(absolute).toLowerCase();
-	if (extension === ".exe") return absolute;
-	if (extension !== ".cmd" && extension !== ".bat" && extension !== ".ps1") return;
-	const siblingExecutable = `${absolute.slice(0, -extension.length)}.exe`;
-	return fs.existsSync(siblingExecutable) ? siblingExecutable : resolveWindowsWrapperExecutable(absolute);
-}
-function shouldUseWindowsBatchShell(command, platform = process.platform, env = process.env, cwd) {
-	if (platform !== "win32") return false;
-	const resolvedCommand = resolveWindowsCommand(command, env, cwd) ?? command;
-	const ext = path.extname(resolvedCommand).toLowerCase();
-	return ext === ".cmd" || ext === ".bat";
-}
-const CMD_META_CHAR_RE = /([()\][%!^"`<>&|;, *?])/gu;
-const CMD_SHIM_RE = /node_modules[\\/].bin[\\/][^\\/]+\.cmd$/iu;
-function escapeCmdCommand(value) {
-	return value.replace(CMD_META_CHAR_RE, "^$1");
-}
-function escapeCmdArgument(value, doubleEscapeMeta) {
-	const escaped = `"${escapeBackslashesForQuoting(value)}"`.replace(CMD_META_CHAR_RE, "^$1");
-	return doubleEscapeMeta ? escaped.replace(CMD_META_CHAR_RE, "^$1") : escaped;
-}
-function escapeBackslashesForQuoting(value) {
-	let result = "";
-	let backslashes = 0;
-	for (const char of value) {
-		if (char === "\\") {
-			backslashes += 1;
-			continue;
-		}
-		result += "\\".repeat(char === "\"" ? backslashes * 2 + 1 : backslashes) + char;
-		backslashes = 0;
-	}
-	return result + "\\".repeat(backslashes * 2);
-}
-function buildAgentSpawnCommand(command, args, platform = process.platform, env = process.env, cwd) {
-	if (!shouldUseWindowsBatchShell(command, platform, env, cwd)) return {
-		command,
-		args: [...args]
-	};
-	const resolvedCommand = path.win32.normalize(resolveWindowsCommand(command, env, cwd) ?? command);
-	const doubleEscapeMeta = CMD_SHIM_RE.test(resolvedCommand);
-	const shellCommand = [escapeCmdCommand(resolvedCommand), ...args.map((arg) => escapeCmdArgument(arg, doubleEscapeMeta))].join(" ");
-	return {
-		command: readWindowsEnvValue(env, "COMSPEC") ?? "cmd.exe",
-		args: [
-			"/d",
-			"/s",
-			"/c",
-			`"${shellCommand}"`
-		],
-		windowsVerbatimArguments: true
-	};
-}
-function buildSpawnCommandOptions(command, options, platform = process.platform, env = process.env, cwd) {
-	if (!shouldUseWindowsBatchShell(command, platform, env, cwd)) return options;
-	return {
-		...options,
-		shell: true
-	};
-}
-function buildTerminalSpawnCommand(command, args) {
-	return {
-		command,
-		args: args ?? [],
-		killProcessGroup: false
-	};
-}
-function buildTerminalShellSpawnCommand(command, platform = process.platform) {
-	if (platform === "win32") return {
-		command: "cmd.exe",
-		args: [
-			"/d",
-			"/s",
-			"/c",
-			command
-		],
-		killProcessGroup: true
-	};
-	return {
-		command: "/bin/sh",
-		args: ["-c", command],
-		killProcessGroup: true
-	};
-}
-/** Finds an installed entrypoint without executing it. */
-function resolveInstalledExecutable(command) {
-	if (process.platform === "win32") {
-		const resolved = resolveWindowsCommand(command);
-		return resolved && fs.statSync(resolved, { throwIfNoEntry: false })?.isFile() ? path.resolve(resolved) : void 0;
-	}
-	return (command.includes("/") ? [path.resolve(command)] : (process.env.PATH ?? "").split(path.delimiter).map((directory) => path.resolve(directory, command))).find((candidate) => {
-		try {
-			fs.accessSync(candidate, fs.constants.X_OK);
-			return fs.statSync(candidate).isFile();
-		} catch {
-			return false;
-		}
-	});
-}
 // src/agent-registry.ts
 const ACP_ADAPTER_PACKAGE_RANGES = {
 	pi: "^0.0.33",
@@ -370,7 +373,12 @@ const ACP_ADAPTER_PACKAGE_RANGES = {
 const AGENT_DEFINITIONS = {
 	pi: {
 		name: "Pi",
-		argv: ["npx", `pi-acp@${ACP_ADAPTER_PACKAGE_RANGES.pi}`],
+		argv: [
+			"npx",
+			`--package=pi-acp@${ACP_ADAPTER_PACKAGE_RANGES.pi}`,
+			"--",
+			"pi-acp"
+		],
 		installedArgv: ["pi-acp"],
 		requiredCommands: ["pi"],
 		package: {
@@ -388,14 +396,16 @@ const AGENT_DEFINITIONS = {
 		argv: [
 			"npx",
 			"-y",
-			`@agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex}`
+			`--package=@agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex}`,
+			"--",
+			"codex-acp"
 		],
 		installedArgv: ["codex-acp"],
 		package: {
 			packageName: "@agentclientprotocol/codex-acp",
 			packageRange: ACP_ADAPTER_PACKAGE_RANGES.codex,
 			preferredBinName: "codex-acp",
-			legacyFallbackCommands: []
+			legacyFallbackCommands: [`npx -y @agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex}`]
 		},
 		packageExecFallback: true
 	},
@@ -404,14 +414,16 @@ const AGENT_DEFINITIONS = {
 		argv: [
 			"npx",
 			"-y",
-			`@agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`
+			`--package=@agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`,
+			"--",
+			"claude-agent-acp"
 		],
 		installedArgv: ["claude-agent-acp"],
 		package: {
 			packageName: "@agentclientprotocol/claude-agent-acp",
 			packageRange: ACP_ADAPTER_PACKAGE_RANGES.claude,
 			preferredBinName: "claude-agent-acp",
-			legacyFallbackCommands: [`npm exec @agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`]
+			legacyFallbackCommands: [`npx -y @agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`, `npm exec @agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`]
 		},
 		packageExecFallback: true
 	},
@@ -431,9 +443,22 @@ const AGENT_DEFINITIONS = {
 			"--stdio"
 		]
 	},
+	ante: {
+		name: "Ante",
+		argv: ["ante", "acp"],
+		requiredCommands: ["ante-acp"]
+	},
 	antigravity: {
 		name: "Google Antigravity",
 		argv: process.platform === "win32" ? ["agy_acp_server.exe"] : ["agy_acp_server.par", ...process.platform === "linux" ? ["--uid="] : []]
+	},
+	"deepseek-harness": {
+		name: "DeepSeek Harness",
+		argv: [
+			"dsh",
+			"--profile",
+			"acp"
+		]
 	},
 	devin: {
 		name: "Devin",
@@ -460,6 +485,10 @@ const AGENT_DEFINITIONS = {
 		name: "fx",
 		argv: ["fx", "acp"]
 	},
+	goose: {
+		name: "Goose",
+		argv: ["goose", "acp"]
+	},
 	"grok-build": {
 		name: "Grok Build",
 		argv: [
@@ -481,7 +510,9 @@ const AGENT_DEFINITIONS = {
 		argv: [
 			"npx",
 			"-y",
-			"@kilocode/cli",
+			"--package=@kilocode/cli",
+			"--",
+			"kilo",
 			"acp"
 		],
 		installedArgv: ["kilo", "acp"]
@@ -503,7 +534,9 @@ const AGENT_DEFINITIONS = {
 		argv: [
 			"npx",
 			"-y",
-			`mux@${ACP_ADAPTER_PACKAGE_RANGES.mux}`,
+			`--package=mux@${ACP_ADAPTER_PACKAGE_RANGES.mux}`,
+			"--",
+			"mux",
 			"acp"
 		]
 	},
@@ -520,7 +553,9 @@ const AGENT_DEFINITIONS = {
 		argv: [
 			"npx",
 			"-y",
-			"opencode-ai",
+			"--package=opencode-ai",
+			"--",
+			"opencode",
 			"acp"
 		],
 		installedArgv: ["opencode", "acp"]
@@ -804,6 +839,6 @@ function normalizeRegistryOverride(value) {
 	if (typeof value === "string") return value.trim() || void 0;
 	return value.length > 0 && value[0]?.length ? [...value] : void 0;
 }
-export { requireAgentStdio as A, PROCESS_HELPER_TIMEOUT_MS as C, isoNow as D, isChildProcessRunning as E, waitForChildExit as F, waitForSpawn as I, resolveAgentSessionCwd as M, runTimedExecFile as N, normalizeAgentCommandInput as O, splitCommandLine as P, PROCESS_HELPER_MAX_BUFFER_BYTES as S, basenameToken as T, buildSpawnCommandOptions as _, createAgentRegistry as a, readWindowsEnvValue as b, mergeAgentRegistry as c, resolveAgentCommand as d, resolveBuiltInAgentLaunch as f, buildAgentSpawnCommand as g, resolvePackageExecBuiltInAgentLaunch as h, DEFAULT_AGENT_NAME as i, resolveAgentCommandParts as j, renderArgvIdentity as k, normalizeAgentName as l, resolveInstalledBuiltInAgentLaunch as m, AGENT_REGISTRY as n, findBuiltInAgentPackage as o, resolveCanonicalAgentName as p, BUILT_IN_AGENT_PACKAGES as r, listBuiltInAgents as s, AGENT_ARGV_REGISTRY as t, resolveAgentArgv as u, buildTerminalShellSpawnCommand as v, asAbsoluteCwd as w, resolveWindowsExecutablePath as x, buildTerminalSpawnCommand as y };
+export { waitForSpawn as A, renderArgvIdentity as C, runTimedExecFile as D, resolveAgentSessionCwd as E, readWindowsEnvValue as F, resolveInstalledExecutable as I, resolveWindowsExecutablePath as L, buildSpawnCommandOptions as M, buildTerminalShellSpawnCommand as N, splitCommandLine as O, buildTerminalSpawnCommand as P, normalizeAgentCommandInput as S, resolveAgentCommandParts as T, PROCESS_HELPER_TIMEOUT_MS as _, createAgentRegistry as a, isChildProcessRunning as b, mergeAgentRegistry as c, resolveAgentCommand as d, resolveBuiltInAgentLaunch as f, PROCESS_HELPER_MAX_BUFFER_BYTES as g, resolvePackageExecBuiltInAgentLaunch as h, DEFAULT_AGENT_NAME as i, buildAgentSpawnCommand as j, waitForChildExit as k, normalizeAgentName as l, resolveInstalledBuiltInAgentLaunch as m, AGENT_REGISTRY as n, findBuiltInAgentPackage as o, resolveCanonicalAgentName as p, BUILT_IN_AGENT_PACKAGES as r, listBuiltInAgents as s, AGENT_ARGV_REGISTRY as t, resolveAgentArgv as u, asAbsoluteCwd as v, requireAgentStdio as w, isoNow as x, basenameToken as y };
 
-//# sourceMappingURL=agent-registry-Cz9fD9H1.js.map
+//# sourceMappingURL=agent-registry-CxpAF3nI.js.map

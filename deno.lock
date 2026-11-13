@@ -58,7 +58,7 @@
     "npm:@effectionx/timebox@0.4.3": "0.4.3_effection@4.1.0",
     "npm:@fontsource/montserrat@5.3.0": "5.3.0",
     "npm:@fontsource/space-mono@5.3.0": "5.3.0",
-    "npm:@openclaw/fs-safe@0.26.13": "0.26.13",
+    "npm:@openclaw/fs-safe@0.27.0": "0.27.0",
     "npm:@opentelemetry/api@^1.9.0": "1.9.1",
     "npm:@preact/signals@^2.5.1": "2.10.0_preact@10.29.7_preact-render-to-string@6.7.0",
     "npm:@preact/signals@^2.9.0": "2.10.0_preact@10.29.7_preact-render-to-string@6.7.0",
@@ -81,7 +81,7 @@
     "npm:@types/node@^24.5.2": "24.13.3",
     "npm:@types/semver@^7.7.0": "7.7.1",
     "npm:acorn@^8.16.0": "8.16.0",
-    "npm:acpx@0.21.1": "0.21.1",
+    "npm:acpx@0.22.0": "0.22.0",
     "npm:ajv@8.20.0": "8.20.0",
     "npm:ajv@^8.17.1": "8.20.0",
     "npm:configliere@0.4": "0.4.0",
@@ -1392,58 +1392,58 @@
     "@neophi/sieve-cache@1.5.0": {
       "integrity": "sha512-9T3nD5q51X1d4QYW6vouKW9hBSb2Tb/wB/2XoTr4oP5SCGtp3a7aTHHewQFylred1B21/Bhev6gy4x01FPBcbQ=="
     },
-    "@openclaw/fs-safe-darwin-arm64@0.26.13": {
-      "integrity": "sha512-R3mXijsyLrFVRiLjNlpEcmN9SZWMVd7keZWtVngGp19C56lHm/ye5/UJV2rICe5xsuxXM6q0iGKXkcQdUc9uKA==",
+    "@openclaw/fs-safe-darwin-arm64@0.27.0": {
+      "integrity": "sha512-l9smB9vo9v38MDzBWVq8203PxaYq7/7D2GIQVOzk5Y9N3SW7OxPkE7wrOSqBedqpzP3TugZcG8RiDJ1TgORc4w==",
       "os": ["darwin"],
       "cpu": ["arm64"]
     },
-    "@openclaw/fs-safe-darwin-x64@0.26.13": {
-      "integrity": "sha512-s0ZKDbVIQCjUpgwxA3RMmt7UTyGQcWmkicxC7DdOq/hqLwzCRx74nb0zDrbuBHZCW9y6lF6PeqPfppPtwXqjDg==",
+    "@openclaw/fs-safe-darwin-x64@0.27.0": {
+      "integrity": "sha512-YcqA2Xc/adfrEYjKOXKPA9ECxRgvu84QTszt01zJQNhHIs6Bsqwyo/3jtSai6QwAH5kSggzqfsKBZ1H8DqfEMg==",
       "os": ["darwin"],
       "cpu": ["x64"]
     },
-    "@openclaw/fs-safe-freebsd-arm64@0.26.13": {
-      "integrity": "sha512-doLvVPENhF5tUCKSYRctHt5WN27YP/QwQoeCzI88Nfh27r91KrXIsyFWohffou1hHlYX3ucDgDqp129Xz/ccNg==",
+    "@openclaw/fs-safe-freebsd-arm64@0.27.0": {
+      "integrity": "sha512-fpioCi8HyOrHBNbRzsfS+sV2lTZlaGpRI+hkphZ7ukrJ2rLyp83NGMYKCR4ATDhNlB3+61+tYaDY0CcAaMrguA==",
       "os": ["freebsd"],
       "cpu": ["arm64"]
     },
-    "@openclaw/fs-safe-freebsd-x64@0.26.13": {
-      "integrity": "sha512-rYYIKwy7sSQXSVgHUn8gzJrIQU4TFQ5Issjs5LvdhNmCPt9rAa9GYZWZ2HMH+sQCTeeTM4G9Jt39Q3cZkKI0gg==",
+    "@openclaw/fs-safe-freebsd-x64@0.27.0": {
+      "integrity": "sha512-CeMbnAWJUHwVyBrkYM3VsqznQV/WFwafbAMPcgqDUwKHVjYP00wTqAOn+I78Sy1DFBpHdGlgnkLUufICcHVUuw==",
       "os": ["freebsd"],
       "cpu": ["x64"]
     },
-    "@openclaw/fs-safe-linux-arm64-gnu@0.26.13": {
-      "integrity": "sha512-2rWPoeG5f+H7/CbVv+Q2SEW4xOGZfwtLzZ4kZA2xveOb4EhiU7jSZjfCwaf7/jVGIcwiC5SEvL1cHdTyORwULg==",
+    "@openclaw/fs-safe-linux-arm64-gnu@0.27.0": {
+      "integrity": "sha512-Ag1+ntAl0JS9hWEoInQAhbN2WYqvZpnIHbUZIUxdoqvXSrK7IcoO5t6AH470uYY/bSa4MjTj+TCdIF0g0MtazQ==",
       "os": ["linux"],
       "cpu": ["arm64"]
     },
-    "@openclaw/fs-safe-linux-arm64-musl@0.26.13": {
-      "integrity": "sha512-K9bhtXJxH6syGcqJ5bh0+qKn1T1c8p1p+dEFjta3CMy9sHtqpbPjSOw3DfdjpVz5WUtahkQm1nlV623eSRSIOg==",
+    "@openclaw/fs-safe-linux-arm64-musl@0.27.0": {
+      "integrity": "sha512-c9bfMkAfNJLcu0Lgb4xjEDUIqJxa0g715erKQ7AcX7Bk4LdngCqYvpWrgtW52SLc1/IZO5fh7AwMnQRo+zVzNQ==",
       "os": ["linux"],
       "cpu": ["arm64"]
     },
-    "@openclaw/fs-safe-linux-x64-gnu@0.26.13": {
-      "integrity": "sha512-nzZMTHFPaHXHQH9HXX5YoN/OEivPpmBlcWrSErK8O3iB0E05uiOG8IYIHgsZZUzLwsVdYbvrIYc6uVwxRR/Qfw==",
+    "@openclaw/fs-safe-linux-x64-gnu@0.27.0": {
+      "integrity": "sha512-bstOw6XBU6nkCarVs79rXDaZAtroFkeVJZObFHQVWLGgaRJ+h811f/DfBWooxY6n9V0dH2JIik6YQcswY5p5yw==",
       "os": ["linux"],
       "cpu": ["x64"]
     },
-    "@openclaw/fs-safe-linux-x64-musl@0.26.13": {
-      "integrity": "sha512-zoW3n+ovzWItj+KvM7UjN5XNRbNkTIIVVy+wJK1yRpRMd8n12qTTj03+a0hHpgzL47ZORfSO1cCbiPv5231Vgw==",
+    "@openclaw/fs-safe-linux-x64-musl@0.27.0": {
+      "integrity": "sha512-jVrpnsJ6HyZLO9S1012Zis8KV3n5Y4z+1IDsHoDpMTXWvaUuYoHIKQN3gx9bzut+YejLj7gfbzb5QmWY+Cr8Fw==",
       "os": ["linux"],
       "cpu": ["x64"]
     },
-    "@openclaw/fs-safe-win32-arm64-msvc@0.26.13": {
-      "integrity": "sha512-aw9dhWaLuCiqykCONI7o5Suv3v61cuDQYSX/oe3UQlZHlnz4oq6j7JiHr48IdmgmgW5n9/k4wIBX5VYxeoG1PQ==",
+    "@openclaw/fs-safe-win32-arm64-msvc@0.27.0": {
+      "integrity": "sha512-UBhPI9DJKlhSAqS3YJqhb7rAflcvXZ4HS2mNHujAMF3FBliBP+0qTJ8uE3zRu9wRrFDwp7pGeHWXhCDGfWF9vA==",
       "os": ["win32"],
       "cpu": ["arm64"]
     },
-    "@openclaw/fs-safe-win32-x64-msvc@0.26.13": {
-      "integrity": "sha512-JQtn+zWFC74cksnynI/IK4b4jEmk64P4qUrGSlVLrEb2jJOngopHiVGq9gNB1FmvpyG7SttBg6wjvUfXe2aHeQ==",
+    "@openclaw/fs-safe-win32-x64-msvc@0.27.0": {
+      "integrity": "sha512-ffTZwosN0aipK9fUwf8LykC10b75eqZjVTAl1toUO/G6UMF6r8RpnVpnlFrw3k8LtA9lxxUPBEGJAH4TCYHF2w==",
       "os": ["win32"],
       "cpu": ["x64"]
     },
-    "@openclaw/fs-safe@0.26.13": {
-      "integrity": "sha512-wmHGL0pKcYN8oO+RlvisaZibXDUOQVj6mNQ2VVIoicsqTMvpgzZGX2U4zu8yZtb32MmvPLg1Y9bRQCcePMoEyw==",
+    "@openclaw/fs-safe@0.27.0": {
+      "integrity": "sha512-v9RWszhsnswr7kAg/6ZM1fUxtyY1PItj7uBarnQ2UdeTPgDdUZFS5hXIGUdLtNvSty/JEPJvjE3MWqbKbx9dng==",
       "optionalDependencies": [
         "@openclaw/fs-safe-darwin-arm64",
         "@openclaw/fs-safe-darwin-x64",
@@ -2824,8 +2824,8 @@
       "integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
       "bin": true
     },
-    "acpx@0.21.1": {
-      "integrity": "sha512-bLhRh53QgccVWoGZw34RYDDj1l6iT8lBm0cmBi5luQ+LGDjTqe0BwWH5t7/e8v+gYJS7mEWcgy+MwlfZrdssMQ==",
+    "acpx@0.22.0": {
+      "integrity": "sha512-dD+xgRwLFOfwL7/VEdn3zrVNFleFoIA0EUETK35w/e+MeYB5FN5+vKERoV60d4SUirTqX610yb/wN+2OFcjpMQ==",
       "dependencies": [
         "@agentclientprotocol/sdk@1.9.0_zod@4.6.7",
         "@openclaw/fs-safe",
@@ -4876,15 +4876,15 @@
       "packages/acp": {
         "dependencies": [
           "npm:@agentclientprotocol/sdk@1.9.0",
-          "npm:@openclaw/fs-safe@0.26.13",
-          "npm:acpx@0.21.1",
+          "npm:@openclaw/fs-safe@0.27.0",
+          "npm:acpx@0.22.0",
           "npm:zod@4.6.7"
         ],
         "packageJson": {
           "dependencies": [
             "npm:@agentclientprotocol/sdk@1.9.0",
-            "npm:@openclaw/fs-safe@0.26.13",
-            "npm:acpx@0.21.1",
+            "npm:@openclaw/fs-safe@0.27.0",
+            "npm:acpx@0.22.0",
             "npm:effection@4.1.0",
             "npm:zod@4.6.7"
           ]

@@ -1,23 +1,25 @@
 # ACPX vendor provenance
 
 `generated/` is the ACP runtime XMD executes: the runtime closure from npm
-`acpx@0.21.1`, with the existing first-turn materialization contract ported to
-the released session owner and a local strict explicit-resume backport from
-upstream PR #925. The environment and metadata behavior are supplied by the released base.
+`acpx@0.22.0`, with the existing first-turn materialization contract ported to
+the released session owner. Strict explicit resume, the environment and the
+metadata behavior are supplied by the released base.
 
 - Repository: https://github.com/openclaw/acpx
-- Release commit: `e6c782459a18a5b22d06210fde61d75003883ab0`
-- Tag: `v0.21.1`
-- npm tarball SHA-256: `d166c323dc77f02c610a79e34c1989e4f6880c0d61e9eda8cdcf5c5d26fccdda`
-- npm integrity: `sha512-bLhRh53QgccVWoGZw34RYDDj1l6iT8lBm0cmBi5luQ+LGDjTqe0BwWH5t7/e8v+gYJS7mEWcgy+MwlfZrdssMQ==`
-- Retrieved: 2026-10-30
+- Release commit: `1ed28f2842182fdc0526927b8fbe2f5ba906ab2e`
+- Tag: `v0.22.0`
+- npm tarball SHA-256: `655cb70895c3401a592ff6dda16c00891d5c1115ababef7be3044273400d115e`
+- npm integrity: `sha512-dD+xgRwLFOfwL7/VEdn3zrVNFleFoIA0EUETK35w/e+MeYB5FN5+vKERoV60d4SUirTqX610yb/wN+2OFcjpMQ==`
+- Retrieved: 2026-11-12
 - License: MIT, copied as `LICENSE` and in `THIRD_PARTY_NOTICES.md`.
 
-The npm provenance subject matches the tarball SHA-512. Sigstore verifies its
-certificate identity as
-`https://github.com/openclaw/acpx/.github/workflows/release.yml@refs/tags/v0.21.1`,
-issued by `https://token.actions.githubusercontent.com`, and verifies its
-transparency proof. Its SLSA statement names the release commit above.
+The npm provenance and publish attestation subjects match the tarball SHA-512.
+Sigstore verifies the provenance certificate identity as
+`https://github.com/openclaw/acpx/.github/workflows/release.yml@refs/tags/v0.22.0`,
+issued by `https://token.actions.githubusercontent.com`, and verifies both
+transparency proofs. The certificate and SLSA statement name the release commit
+above, which the annotated tag resolves to. The release locks
+`@openclaw/fs-safe@0.27.0`, which `packages/acp` pins for this closure.
 
 `upstream/` holds the exact published bytes of the nine-file runtime closure:
 five JavaScript modules and four declarations. No CLI, flows, source maps or
@@ -72,49 +74,30 @@ accepted promotion's save and finalization; no identity publishes after it ends.
 | Module | Materialization change |
 | --- | --- |
 | `runtime.js` | Deferred ensure, owner-private provisional identity, consumed acceptance, joined promotion and waitable turn barrier. |
-| `queue-owner-runtime-B0mPqOu4.js` | `LiveSessionCheckpoint.runMaterializationExclusive()` excludes checkpoint saves during promotion. |
-| `ipc-BbYFsKOj.js` | Read and write the existing `session_materialization` disk marker. |
-| `runtime.d.ts`, `session-options-BlnP3WAc.d.ts` | Declare the ensure input, barrier and pending record. |
+| `queue-owner-runtime-ucHvXJ33.js` | `LiveSessionCheckpoint.runMaterializationExclusive()` excludes checkpoint saves during promotion. |
+| `ipc-CQUNQ8QQ.js` | Read and write the existing `session_materialization` disk marker. |
+| `runtime.d.ts`, `session-options-D9KL7-d8.d.ts` | Declare the ensure input, barrier and pending record. |
 
-## Strict explicit-resume backport (#925)
+## Released strict explicit resume (#925)
 
-This interim local patch ports the reviewed behavior of
-[upstream PR #925](https://github.com/openclaw/acpx/pull/925), commit
-`12fcca9ffc1417838b20b26e35518f38c8292a0c`, on upstream source base
-`6ce38c34f4e5aef16bf28ca8b1fb1e6650695c60`. It is not part of the integrity-verified
-0.21.1 release recorded above. The pristine `upstream/` closure stays unchanged;
-no unreleased build replaces the published closure.
+0.22.0 ships the strictness XMD previously backported from
+[upstream PR #925](https://github.com/openclaw/acpx/pull/925): the in-process
+manager's `exactSessionRecordIds` constraint, its idle admission check, and the
+`strictResume` flag that both cold reconnect paths pass through and that
+excludes fresh recovery, including the unprompted-record `-32603` fallback.
+The strict-resume cases in `tests/released-runtime.test.ts` exercise the
+released implementation. They cover cold prompt and control refusal through
+aliases, replay of saved settings, independent untargeted fallback, explicit
+fresh preparation and admission during active work.
 
-An explicit `resumeSessionId` constrains the existing record before a handle is
-returned. Later cold prompt and control reconnects refuse a failed load before
-creating a replacement or dispatching the requested operation, including the
-otherwise permitted unprompted-record `-32603` fallback. Compatible attachment
-retains history, creation and event-log association, immutable session options
-and saved model/effort when the caller omits settings.
+## Built-in session command keys
 
-The constraint belongs to the in-process manager, keyed by its existing record
-ID. Older handles, untargeted aliases and ordinary close cannot relax it. A new
-runtime must receive the explicit target again. First adding the constraint
-during unfinished untargeted work returns the existing busy refusal; an already
-strict compatible ensure remains available during active work. Independent
-untargeted records retain fallback. Explicit preparation permits a genuinely
-fresh arrangement, which clears the old constraint only after successful fresh
-creation. No public parameter, persisted field or identity protocol is added.
-
-`runtime.js` holds the record constraint and passes it to both reconnect paths.
-The existing reconnect and connected-session owners are bundled in
-`queue-owner-runtime-B0mPqOu4.js`; that module propagates the private
-`strictResume` flag and excludes fresh recovery. `runtime.d.ts` declares the
-private set and documents the existing ensure field. The generated patch follows
-the reviewed source algorithm; a local comment explains the exceptional fallback
-and a declaration comment names the seam for Tier AV's locality check. The
-materialization, promotion, checkpoint exclusion and joined-close code remains
-unchanged.
-
-Remove this backport only when an integrity-verified published artifact supplies
-the reviewed strictness and passes the same prompt/control, alias, configuration
-and admission regressions. That release qualification is separate from retiring
-the materialization patch or the vendor closure.
+XMD derives session keys and checks retained workflow placement using the
+registry's command string. The `XMD retained command:` patch keeps the ACPX
+0.21.1 command spellings for Pi, Codex, Claude, Kilo Code, Mux and OpenCode in
+the embedded registry. The separately installed ACPX CLI uses its 0.22.0
+defaults. Remove this patch when XMD can find and reopen retained sessions
+across changes to those command spellings.
 
 ## Selected Prompt failure facts (#1039)
 
@@ -125,11 +108,8 @@ code/message/details, and `runtime.d.ts` declares those same fields. It preserve
 an explicit empty details string and excludes arbitrary raw `acp.data`.
 
 The uniquely named `XMD prompt diagnostic:` seam bounds this correction in Tier AV.
-Pristine upstream, exact pins, materialization and strict-resume patches stay
-unchanged. The shared/queue result projection is unchanged. Real adapter-child
-failures pass through this runtime into production Prompt publication and cold
-REPL Journal queries of `promptError`; no runtime log is needed for retained
-selected facts.
+Real adapter-child failures pass through this runtime into production Prompt
+publication and cold REPL Journal queries of `promptError`.
 
 Other arbitrary adapter data remains unavailable through this selected result.
 This correction establishes no cause for the historical `Internal error` incident,
@@ -152,7 +132,7 @@ prompted in, the response's selected token counters and the selected
 numbers under their original names cross; `null` stays `null`, and a missing or
 malformed value stays absent. Timeout-drain recovery carries the recovered
 response's own usage, and a failed finalization keeps the readings already
-observed. `runPromptTurn` in `queue-owner-runtime-B0mPqOu4.js` hands the
+observed. `runPromptTurn` in `queue-owner-runtime-ucHvXJ33.js` hands the
 response's `usage` to the runtime for that selection; `runtime.d.ts` declares
 the member. Persisted session state, reducer behavior and the user-message
 identity ACPX saves are unchanged.
@@ -183,7 +163,7 @@ none of it. A retained live client remains unchanged.
 and `session/resume`. The adapter does not receive the requested string or use
 it as a substitute for the resumed backend observation. `session/new`, other
 adapters and the readable Claude producer patch are unchanged. `runtime.js`
-owns validation and forwarding, `queue-owner-runtime-B0mPqOu4.js` derives the
+owns validation and forwarding, `queue-owner-runtime-ucHvXJ33.js` derives the
 metadata marker, and `runtime.d.ts` declares the inputs.
 
 ## Exact-model replay (#1177)
