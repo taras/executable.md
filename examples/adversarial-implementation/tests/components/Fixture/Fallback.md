@@ -294,10 +294,10 @@ const STATUSES = ["feedback_pending", "source_changed", "reconciliation_required
 const ACTIONS = ["continue_feedback", "review", "request_approved_repair", "reconcile_original_review", "wait_for_checks", "repair_failed_check", "finish_pr_metadata", "await_authorized_merge", "report_delivery", "report_review_blocker", "resolve_review_hold", "report_review_hold", "reconcile_source"];
 const REFUSALS = [["do not start another review", "action-gate-refusal"], ["The review attempt already exists or cannot be reserved", "attempt-reservation-refusal"], ["The replacement review is already reserved", "replacement-reservation-refusal"]];
 const [tokens, shell, called, replacement, firstOut, firstErr, secondOut, secondErr] = Deno.args;
-function read(path) {
+async function read(path) {
   let file;
   try {
-    file = Deno.openSync(path);
+    file = await Deno.open(path);
   } catch {
     return { state: "unavailable" };
   }
@@ -305,7 +305,7 @@ function read(path) {
     const buffer = new Uint8Array(LIMIT + 1);
     let total = 0;
     while (buffer.length > total) {
-      const count = file.readSync(buffer.subarray(total));
+      const count = await file.read(buffer.subarray(total));
       if (count === null) {
         break;
       }
@@ -328,8 +328,8 @@ function parsed(text) {
     return undefined;
   }
 }
-function stdoutSummary(path) {
-  const channel = read(path);
+async function stdoutSummary(path) {
+  const channel = await read(path);
   if (channel.state !== "read") {
     return channel.state;
   }
@@ -339,8 +339,8 @@ function stdoutSummary(path) {
   const value = parsed(channel.text);
   return STATUSES.includes(value?.status) && ACTIONS.includes(value?.nextAction) ? "status " + value.status + "/" + value.nextAction : "other-redacted";
 }
-function stderrSummary(path) {
-  const channel = read(path);
+async function stderrSummary(path) {
+  const channel = await read(path);
   if (channel.state !== "read") {
     return channel.state;
   }
@@ -350,8 +350,8 @@ function stderrSummary(path) {
   const labels = REFUSALS.filter(([text]) => channel.text.includes(text)).map(([, label]) => label);
   return labels.length === 0 ? "other-redacted" : labels.join("+");
 }
-function positions(path) {
-  const file = read(path);
+async function positions(path) {
+  const file = await read(path);
   if (file.state !== "read") {
     return file.state;
   }
@@ -362,9 +362,9 @@ function positions(path) {
   const shown = calls.slice(0, 8).map((call) => Number.isSafeInteger(call?.position) ? String(call.position) : "?");
   return "[" + shown.join(",") + (calls.length > 8 ? ",+" + (calls.length - 8) + " more" : "") + "]";
 }
-function presence(path) {
+async function presence(path) {
   try {
-    Deno.statSync(path);
+    await Deno.stat(path);
     return "yes";
   } catch (error) {
     return error instanceof Deno.errors.NotFound ? "no" : "unavailable";
@@ -372,14 +372,17 @@ function presence(path) {
 }
 const exits = tokens === "" ? "none" : tokens.split(" ").slice(0, 4).map((token) => /^[0-9]{1,3}$/.test(token) ? token : "?").join(" ");
 const waits = /^overlap-waits first=([0-9]{1,10}):([0-9]{1,3}) second=([0-9]{1,10}):([0-9]{1,3})$/m.exec(shell);
-const files = ["transition.json", "execution.json", "outcome.json", "raw.txt", "receipt.json"].map((name) => name + " " + presence(replacement + "/" + name)).join(", ");
+const files = [];
+for (const name of ["transition.json", "execution.json", "outcome.json", "raw.txt", "receipt.json"]) {
+  files.push(name + " " + await presence(replacement + "/" + name));
+}
 console.log([
   "exit tokens " + exits,
   waits === null ? "post-wait record absent" : "first pid " + waits[1] + " wait " + waits[2] + ", second pid " + waits[3] + " wait " + waits[4],
-  "called.json positions " + positions(called),
-  "replacement directory " + presence(replacement) + ": " + files,
-  "first stdout " + stdoutSummary(firstOut) + ", stderr " + stderrSummary(firstErr),
-  "second stdout " + stdoutSummary(secondOut) + ", stderr " + stderrSummary(secondErr),
+  "called.json positions " + await positions(called),
+  "replacement directory " + await presence(replacement) + ": " + files.join(", "),
+  "first stdout " + await stdoutSummary(firstOut) + ", stderr " + await stderrSummary(firstErr),
+  "second stdout " + await stdoutSummary(secondOut) + ", stderr " + await stderrSummary(secondErr),
 ].join("; ").slice(0, 1800));
 COLLECT
 ```
