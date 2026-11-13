@@ -13,7 +13,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
@@ -43,6 +43,7 @@ import { checkpointFromResult } from "../src/checkpoint.ts";
 import { consumeTurn } from "../src/events.ts";
 import { makeRecord } from "./helpers.ts";
 import {
+  J as AcpClient,
   c as LiveSessionCheckpoint,
   l as runPromptTurn,
 } from "../vendor/acpx/generated/queue-owner-runtime-ucHvXJ33.js";
@@ -1304,5 +1305,354 @@ describe(
         expect(recoveredMethods).toEqual(["session/load", "session/prompt"]);
       });
     }
+  },
+);
+
+const configWrite = z.object({
+  pid: z.number(),
+  method: z.string(),
+  configId: z.string().optional(),
+  value: z.string().optional(),
+});
+
+/**
+ * An established persistent conversation whose backend settings outlive each
+ * worker, configured afterwards through the default provider factory.
+ */
+function* coldConfigurationWorld(flags: readonly string[]) {
+  const current = yield* world(true);
+  const mark = (name: string) => writeTextFile(join(current.dir, name), "enabled");
+  for (const flag of ["persist-settings", ...flags]) {
+    yield* mark(flag);
+  }
+  yield* writeTextFile(
+    join(current.dir, "settings.json"),
+    JSON.stringify({ model: "initial", effort: "high" }),
+  );
+  const sessionKey = "configured-" + randomUUID();
+  yield* scoped(function* () {
+    const seed = createAcpRuntime({
+      cwd: current.dir,
+      sessionStore: current.store,
+      agentRegistry: current.registry,
+      permissionMode: "deny-all",
+    });
+    yield* ensure(() => until(seed.shutdown()));
+    const handle = yield* until(
+      seed.ensureSession({ sessionKey, agent: "scribe", mode: "persistent" }),
+    );
+    expect(
+      (yield* drainedResult(
+        seed.startTurn({ handle, text: "seed", mode: "prompt", requestId: "seed" }),
+      )).status,
+    ).toBe("completed");
+  });
+  const methodsAtSeed = (yield* readTextFile(join(current.dir, "methods.jsonl"))).length;
+  const processesAtSeed = (yield* readTextFile(join(current.dir, "processes.jsonl"))).length;
+
+  /** Install the default provider once and run each document through it. */
+  function* provider() {
+    yield* installAgentComponents({
+      defaultAgent: "scribe",
+      rootProvider: {
+        options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+        factory: createAcpxProvider({
+          sessionStore: current.store,
+          agentRegistry: current.registry,
+          advertiseNativeLaunch: [],
+          advertiseClientNativeAttachment: [],
+          *agentCwd() {
+            return current.dir;
+          },
+          sessions: {
+            *requestSession() {
+              return { sessionKey, cwd: current.dir, state: "existing" };
+            },
+            *recordSessionIdentity() {},
+          },
+        }),
+      },
+    });
+    yield* useNormalizedOutput();
+    return function* execute(body: string) {
+      const doc = join(current.dir, `configured-${randomUUID()}.md`);
+      yield* writeTextFile(doc, `<Agent name="scribe">${body}</Agent>`);
+      const journal = new InMemoryStream();
+      const execution = yield* executeInstalled({ path: doc, stream: journal }, [
+        { components: agentIdentityComponents() },
+      ]);
+      const output = yield* execution.output;
+      while (!(yield* output.next()).done) {}
+      return { result: yield* execution, history: JSON.stringify(journal.snapshot()) };
+    };
+  }
+
+  return {
+    ...current,
+    sessionKey,
+    mark,
+    provider,
+    /** Every write and attachment the backend received after seeding. */
+    *methods() {
+      return (yield* readTextFile(join(current.dir, "methods.jsonl")))
+        .slice(methodsAtSeed)
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => configWrite.parse(JSON.parse(line)))
+        .map((report) =>
+          report.method === "session/set_config_option"
+            ? `${report.configId}=${report.value}`
+            : report.method,
+        );
+    },
+    /** Each worker that attached to the conversation, with what it received. */
+    *sessionWorkers() {
+      const workers = new Map<number, string[]>();
+      for (const line of (yield* readTextFile(join(current.dir, "methods.jsonl")))
+        .slice(methodsAtSeed)
+        .trim()
+        .split("\n")
+        .filter(Boolean)) {
+        const report = configWrite.parse(JSON.parse(line));
+        const methods = workers.get(report.pid) ?? [];
+        methods.push(
+          report.method === "session/set_config_option"
+            ? `${report.configId}=${report.value}`
+            : report.method,
+        );
+        workers.set(report.pid, methods);
+      }
+      return [...workers.values()];
+    },
+    /** Worker starts and exits after seeding, availability probes included. */
+    *processes() {
+      const events = (yield* readTextFile(join(current.dir, "processes.jsonl")))
+        .slice(processesAtSeed)
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => z.object({ pid: z.number(), event: z.string() }).parse(JSON.parse(line)));
+      return {
+        started: events.filter((event) => event.event === "start").map((event) => event.pid),
+        exited: events.filter((event) => event.event === "exit").map((event) => event.pid),
+      };
+    },
+    *settings() {
+      return z
+        .object({ model: z.string(), effort: z.string() })
+        .parse(JSON.parse(yield* readTextFile(join(current.dir, "settings.json"))));
+    },
+    *waitFor(name: string) {
+      for (let count = 0; count < 2000; count++) {
+        if (yield* exists(join(current.dir, name))) {
+          return;
+        }
+        yield* sleep(5);
+      }
+      throw new Error(`the backend never reached ${name}`);
+    },
+  };
+}
+
+const CONFIGURED =
+  '<Session name="review" model="selected" effort="xhigh"><Prompt text="after" /></Session>';
+
+describe(
+  "one connection configures a resumed conversation",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("a refused dependent write that applied is restored model-first on the same worker", function* () {
+      const current = yield* coldConfigurationWorld([
+        "model-effort-ids",
+        "hold-config-effort-selected",
+        "refuse-config-effort-selected",
+      ]);
+      const execute = yield* current.provider();
+      const run = yield* spawn(() => execute(CONFIGURED));
+      // Torn down before `run`: a failed assertion must not leave it on the held write.
+      yield* ensure(() => current.mark("release-config-effort-selected"));
+      yield* current.waitFor("mutated-effort-selected");
+      // The model write is durable before its dependent write is dispatched.
+      const saved = yield* until(current.store.load(current.sessionKey));
+      expect(saved?.acpx?.config_options?.find((option) => option.id === "model")).toMatchObject({
+        currentValue: "selected",
+      });
+      expect(yield* current.methods()).toEqual([
+        "session/load",
+        "model=selected",
+        "effort-selected=xhigh",
+      ]);
+      yield* current.mark("release-config-effort-selected");
+      const refused = yield* run;
+      expect(refused.result.ok).toBe(false);
+      expect(refused.history).toContain("Controlled refusal of effort-selected after it applied");
+      expect(refused.history).not.toContain("answer:after");
+      // Model first, then effort through the selector the restored model reports.
+      expect(yield* current.methods()).toEqual([
+        "session/load",
+        "model=selected",
+        "effort-selected=xhigh",
+        "model=initial",
+        "effort-initial=high",
+      ]);
+      expect(yield* current.settings()).toEqual({ model: "initial", effort: "high" });
+      expect(yield* current.sessionWorkers()).toHaveLength(1);
+      const workers = yield* current.processes();
+      expect(workers.exited.toSorted()).toEqual(workers.started.toSorted());
+    });
+
+    it("a cancelled attempt joins the held write before restoring and releasing", function* () {
+      const current = yield* coldConfigurationWorld([
+        "model-effort-ids",
+        "hold-config-effort-selected",
+      ]);
+      const execute = yield* current.provider();
+      const run = yield* spawn(() => execute(CONFIGURED));
+      // Torn down before `run`: a failed assertion must not leave it on the held write.
+      yield* ensure(() => current.mark("release-config-effort-selected"));
+      yield* current.waitFor("mutated-effort-selected");
+      let halted = false;
+      const halting = yield* spawn(function* () {
+        yield* run.halt();
+        halted = true;
+      });
+      yield* sleep(300);
+      // The write that may have landed holds restoration, the next operation and release.
+      expect(halted).toBe(false);
+      expect(yield* current.methods()).toEqual([
+        "session/load",
+        "model=selected",
+        "effort-selected=xhigh",
+      ]);
+      const held = (yield* readTextFile(join(current.dir, "methods.jsonl")))
+        .trim()
+        .split("\n")
+        .map((line) => configWrite.parse(JSON.parse(line)))
+        .at(-1);
+      expect((yield* current.processes()).exited).not.toContain(held?.pid);
+      yield* current.mark("release-config-effort-selected");
+      yield* halting;
+      expect(halted).toBe(true);
+      expect(yield* current.methods()).toEqual([
+        "session/load",
+        "model=selected",
+        "effort-selected=xhigh",
+        "model=initial",
+        "effort-initial=high",
+      ]);
+      expect(yield* current.settings()).toEqual({ model: "initial", effort: "high" });
+      expect(yield* current.sessionWorkers()).toHaveLength(1);
+      const workers = yield* current.processes();
+      expect(workers.exited.toSorted()).toEqual(workers.started.toSorted());
+    });
+
+    it("unverifiable restoration reattaches once and leaves the conversation unusable", function* () {
+      const current = yield* coldConfigurationWorld([
+        "model-effort-ids",
+        "hold-config-effort-selected",
+        "refuse-config-effort-selected",
+      ]);
+      const execute = yield* current.provider();
+      const run = yield* spawn(() =>
+        execute(
+          CONFIGURED.replace(
+            "</Session>",
+            '</Session><Session name="review"><Prompt text="later" /></Session>',
+          ),
+        ),
+      );
+      // Torn down before `run`: a failed assertion must not leave it on the held write.
+      yield* ensure(() => current.mark("release-config-effort-selected"));
+      yield* current.waitFor("mutated-effort-selected");
+      yield* current.mark("refuse-all-config");
+      yield* current.mark("release-config-effort-selected");
+      const refused = yield* run;
+      expect(refused.result.ok).toBe(false);
+      expect(refused.history).toContain("Controlled refusal of effort-selected after it applied");
+      expect(refused.history).toContain(
+        `Session \\"${current.sessionKey}\\" may remain reconfigured and will not be used again during this run.`,
+      );
+      expect(refused.history).not.toContain("answer:");
+      // One in-place attempt, then one exact reattachment with replay suppressed.
+      expect(yield* current.sessionWorkers()).toEqual([
+        ["session/load", "model=selected", "effort-selected=xhigh", "model=initial"],
+        ["session/load", "model=initial"],
+      ]);
+      expect(yield* current.settings()).toEqual({ model: "selected", effort: "xhigh" });
+      const workers = yield* current.processes();
+      expect(workers.exited.toSorted()).toEqual(workers.started.toSorted());
+    });
+
+    it("a failed cold close keeps the worker owned until a later close proves its exit", function* () {
+      const current = yield* coldConfigurationWorld([]);
+      const prototype = AcpClient.prototype;
+      const close = prototype.close;
+      const closes: string[] = [];
+      prototype.close = function (this: {
+        options: { xmdStrictClose?: boolean };
+        agent?: { exitCode: number | null; signalCode: string | null };
+      }) {
+        if (this.options.xmdStrictClose) {
+          if (closes.length === 0) {
+            // The worker is real and still running; only the proof of its exit fails.
+            const running = this.agent?.exitCode === null && this.agent.signalCode === null;
+            closes.push(running ? "refused" : "refused after exit");
+            return Promise.reject(new Error("injected cold close failure"));
+          }
+          closes.push("closed");
+        }
+        return close.call(this);
+      };
+      yield* ensure(() => {
+        prototype.close = close;
+      });
+      const execute = yield* current.provider();
+      const failed = yield* execute(CONFIGURED);
+      expect(failed.result.ok).toBe(false);
+      // The first settlement failure survives the retirement that later succeeds.
+      expect(failed.history).toContain("injected cold close failure");
+      expect(failed.history).not.toContain("answer:after");
+      // Retired through the same owner: the refused client is closed again, not abandoned.
+      expect(closes).toEqual(["refused", "closed"]);
+      expect(yield* current.sessionWorkers()).toEqual([
+        ["session/load", "model=selected", "effort=xhigh"],
+      ]);
+      const workers = yield* current.processes();
+      expect(workers.exited.toSorted()).toEqual(workers.started.toSorted());
+    });
+
+    it("a legacy model acknowledgement settles once and effort continues ordinarily", function* () {
+      const current = yield* coldConfigurationWorld(["legacy-config-model"]);
+      const execute = yield* current.provider();
+      const configured = yield* execute(CONFIGURED);
+      expect(configured.result.ok).toBe(true);
+      expect(configured.history).toContain("answer:after");
+      expect(yield* current.methods()).toEqual([
+        "session/load",
+        "model=selected",
+        "session/load",
+        "effort=xhigh",
+        // The prompt worker's load replays the saved effort, as before.
+        "session/load",
+        "effort=xhigh",
+        "session/prompt",
+      ]);
+      expect(yield* current.settings()).toEqual({ model: "selected", effort: "xhigh" });
+    });
+
+    it("both writes of one change share one worker", function* () {
+      const current = yield* coldConfigurationWorld(["model-effort-ids"]);
+      const execute = yield* current.provider();
+      const configured = yield* execute(CONFIGURED);
+      expect(configured.result.ok).toBe(true);
+      expect(yield* current.sessionWorkers()).toEqual([
+        ["session/load", "model=selected", "effort-selected=xhigh"],
+        // The prompt worker's load replays the saved effort, as before.
+        ["session/load", "effort-selected=xhigh", "session/prompt"],
+      ]);
+      const workers = yield* current.processes();
+      expect(workers.exited.toSorted()).toEqual(workers.started.toSorted());
+    });
   },
 );

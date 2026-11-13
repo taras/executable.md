@@ -3450,6 +3450,11 @@ var AcpClient = class {
 		if (!cleanup) {
 			cleanup = Promise.resolve().then(() => this.cleanupAgentProcess(child));
 			this.agentCleanups.set(child, cleanup);
+			// XMD cold session configuration: a rejected strict cleanup is released for retry;
+			// an in-flight one stays shared.
+			if (this.options.xmdStrictClose) cleanup.catch(() => {
+				if (this.agentCleanups.get(child) === cleanup) this.agentCleanups.delete(child);
+			});
 		}
 		return cleanup;
 	}
@@ -3457,18 +3462,25 @@ var AcpClient = class {
 		const descendants = this.agentDescendants.get(child);
 		const deadline = performance.now() + AGENT_CLEANUP_BUDGET_MS;
 		const stdinCloseGraceMs = resolveAgentCloseAfterStdinEndMs(this.options.agentCommand);
+		// XMD cold session configuration: unproved quiescence keeps the child and its descendants.
+		let quiescent = !this.options.xmdStrictClose;
 		try {
 			if (descendants) await descendants.capture(Math.max(1, deadline - performance.now()));
 			this.endAgentStdin(child);
 			await waitForChildExit(child, Math.min(stdinCloseGraceMs, Math.max(0, deadline - performance.now())));
 			if (!await this.signalAgentAndDescendants(child, "SIGTERM", AGENT_CLOSE_TERM_GRACE_MS, deadline)) {
 				this.log("agent processes did not exit after SIGTERM; forcing SIGKILL");
-				await this.signalAgentAndDescendants(child, "SIGKILL", AGENT_CLOSE_KILL_GRACE_MS, deadline);
-			}
+				if (await this.signalAgentAndDescendants(child, "SIGKILL", AGENT_CLOSE_KILL_GRACE_MS, deadline)) quiescent = true;
+			} else quiescent = true;
 		} finally {
-			descendants?.retire();
-			this.detachAgentHandles(child, isChildProcessRunning(child));
+			// XMD cold session configuration: only proved quiescence retires the accounting.
+			if (quiescent) {
+				descendants?.retire();
+				this.detachAgentHandles(child, isChildProcessRunning(child));
+			}
 		}
+		// XMD cold session configuration: the close reports what it could not settle.
+		if (!quiescent) throw new Error("The ACP agent process did not exit after close.");
 	}
 	endAgentStdin(child) {
 		if (!child.stdin || child.stdin.destroyed) return;
@@ -5435,8 +5447,10 @@ async function withConnectedSession(options) {
 		record,
 		getActiveSessionId: () => activeSessionIdForControl
 	});
+	// XMD cold session configuration: the caller's scope owns interruption and close.
+	const interruptible = options.xmdScopedFinalization ? async (run) => await run() : withInterrupt;
 	try {
-		return await withInterrupt(async () => {
+		return await interruptible(async () => {
 			const { sessionId, resumed, loadError } = await connectAndLoadSession({
 				client,
 				record,
@@ -5495,9 +5509,12 @@ async function withConnectedSession(options) {
 		});
 	} finally {
 		if (notifiedClientAvailable) options.onClientClosed?.();
-		await client.close();
-		applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
-		await options.saveRecord(record).catch(() => {});
+		// XMD cold session configuration: closed once, by the owning manager.
+		if (!options.xmdScopedFinalization) {
+			await client.close();
+			applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
+			await options.saveRecord(record).catch(() => {});
+		}
 	}
 }
 // src/session/execution/prompt-runner.ts
