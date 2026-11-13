@@ -256,35 +256,6 @@ describe("wheel real consumers", () => {
     expect(page.repl.fake.prompts).toHaveLength(1);
   });
 
-  it("Transcript scrolls independently and keyboard reveals its last real turn", function* () {
-    const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
-    yield* eighteenTurns(page);
-    const cell = page.screen().locate("turn-00");
-    const second = page.screen().locate("turn-01");
-    const message = page.screen().locate("message-kept");
-    yield* wheel(page, "down", cell);
-    expect(page.screen().locate("turn-01")).toEqual({ column: second.column, row: second.row - 3 });
-    expect(page.screen().locate("message-kept")).toEqual(message);
-    yield* wheel(page, "up", cell);
-    expect(page.screen().locate("turn-00")).toEqual(cell);
-    expect(page.screen().locate("turn-01")).toEqual(second);
-    expect(page.screen().locate("message-kept")).toEqual(message);
-    for (let tick = 0; tick < 30; tick += 1) {
-      yield* wheel(page, "down", cell);
-    }
-    expect(page.screen().found("turn-17")).toBeGreaterThan(0);
-    for (let tick = 0; tick < 30; tick += 1) {
-      yield* wheel(page, "up", cell);
-    }
-    expect(page.screen().shows("turn-00")).toBe(true);
-    expect(page.screen().shows("message-kept")).toBe(true);
-    yield* transcriptThrough(page, 17);
-    expect(page.screen().shows("> [U] turn-17")).toBe(true);
-    expect(page.screen().shows("message-kept")).toBe(true);
-    expect(page.screen().shows("[Back to current chat]")).toBe(false);
-    expect(page.repl.fake.prompts).toHaveLength(18);
-  });
-
   it("Transcript acknowledges its last turn only once that turn is presented", function* () {
     const olderHeld = withResolvers<void>();
     const releaseOlder = withResolvers<void>();

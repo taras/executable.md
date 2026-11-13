@@ -576,36 +576,6 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(focusedKey(app.presenter)).toBe("transcript:selector");
   });
 
-  it("F1: what was typed, and the way to it, survive every resize and still submit", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* draftText(page, "kept");
-
-    // The same journey the row above measures in frames, as a person makes it:
-    // through every drawable profile, past the refusal, and back. The Draft is
-    // the field taking the keystrokes until refusal clears focus, and it
-    // keeps its text after recovery.
-    for (const size of [MEDIUM, NARROW, TOO_SMALL, WIDE]) {
-      const resized = yield* page.resize(size);
-      if (size === TOO_SMALL) {
-        // Below the minimum there is nothing to keep: the refusal is the screen.
-        expect(resized.rows.join(" ")).toContain("larger");
-        continue;
-      }
-      if (size !== WIDE) {
-        expect(resized.shows(TYPING)).toBe(true);
-      }
-      expect(draftShows(resized, "kept")).toBe(true);
-    }
-
-    // Transcript -> Selected work -> Draft after recovery.
-    yield* page.key("Tab");
-    yield* page.key("Tab");
-    yield* page.until("Draft input after recovery", (one) => one.shows(TYPING));
-    yield* page.key("Enter");
-    yield* entrySettles(page, 1, "ok");
-    expect(page.screen().shows("kept")).toBe(true);
-  });
-
   it("UI5: the History band is placed in the footer, not at the frame's origin", function* () {
     const app = yield* useApplication(yield* emptyModel(), WIDE);
     for (const size of [WIDE, NARROW]) {

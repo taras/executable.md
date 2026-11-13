@@ -12,7 +12,27 @@ export const root = dirname(fileURLToPath(new URL("deno.json", worktree)));
 const entry = fileURLToPath(new URL("packages/cli/src/deno.ts", worktree));
 export const evidence = join(root, ".bench");
 
-export function* prepareRun(cwd: string, size: Size, args: string[], home?: string) {
+export function denoCommand(args: string[]): string[] {
+  return [
+    "deno",
+    "run",
+    "--allow-all",
+    "--cached-only",
+    "--frozen",
+    "--node-modules-dir=none",
+    "--config",
+    join(root, "deno.json"),
+    entry,
+    ...args,
+  ];
+}
+
+export function* prepareRun(
+  cwd: string,
+  size: Size,
+  args: string[],
+  options?: { home?: string; scenario?: string },
+) {
   const id = randomUUID();
   const directory = join(evidence, id);
   yield* ensureDir(directory);
@@ -45,7 +65,8 @@ export function* prepareRun(cwd: string, size: Size, args: string[], home?: stri
     denoDir,
     directory,
     cwd,
-    home: home ?? join(directory, "home"),
+    home: options?.home ?? join(directory, "home"),
+    scenario: options?.scenario,
     args,
   };
   yield* writeTextFile(

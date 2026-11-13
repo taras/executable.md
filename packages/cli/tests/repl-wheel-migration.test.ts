@@ -95,7 +95,7 @@ function absentButtons(page: ReplPage): void {
 }
 
 describe("wheel remaining migration journeys", () => {
-  it("permission pages from a control-only window to its explanation and final choice", function* () {
+  it("keeps permission focus through scrolling and acknowledges a held presentation", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const explanation = Array.from(
       { length: 45 },
@@ -116,50 +116,14 @@ describe("wheel remaining migration journeys", () => {
     yield* page.until("permission pending", (one) => one.shows("asks: Permission prose 00"));
     yield* page.press("asks: Permission prose 00");
     yield* page.until("first option", (one) => one.shows("> [Choice 00]"));
-    expect(page.screen().shows("Permission prose 44")).toBe(false);
     const choice = page.screen().locate("[Choice 00]");
     yield* ticks(page, "down", choice, 8);
     expect(page.screen().shows("> [Choice 00]")).toBe(true);
-    for (let at = 1; at <= 39; at += 1) {
-      // One middle step through the held frame, which is this walk's control.
-      if (at === 20) {
-        yield* heldStepTo(page, "ArrowDown", at);
-        continue;
-      }
+    for (let at = 1; at < 20; at += 1) {
       yield* steppedTo(page, "ArrowDown", at);
     }
-    expect(page.screen().shows("> [Choice 39]")).toBe(true);
+    yield* heldStepTo(page, "ArrowDown", 20);
     expect(page.repl.fake.decisions).toHaveLength(0);
-    for (let at = 38; at >= 0; at -= 1) {
-      yield* steppedTo(page, "ArrowUp", at);
-    }
-    expect(page.screen().shows("> [Choice 00]")).toBe(true);
-    for (let at = 0; at < 8; at += 1) {
-      yield* key(page, "PageUp");
-    }
-    expect(page.screen().shows("Permission prose 00")).toBe(true);
-    const prose = page.screen().locate("Permission prose 01");
-    yield* wheel(page, "down", prose);
-    expect(page.screen().shows("Permission prose 03")).toBe(true);
-    yield* wheel(page, "up", prose);
-    expect(page.screen().shows("Permission prose 00")).toBe(true);
-    for (let at = 0; at < 16; at += 1) {
-      yield* key(page, "PageDown");
-    }
-    expect(page.screen().shows("[Choice 39]")).toBe(true);
-    expect(page.screen().shows("[close]")).toBe(true);
-    expect(page.repl.fake.decisions).toHaveLength(0);
-    for (let at = 0; at < 8; at += 1) {
-      yield* key(page, "PageUp");
-    }
-    expect(page.screen().shows("Permission prose 00")).toBe(true);
-    absentButtons(page);
-    for (let at = 0; at < 16; at += 1) {
-      yield* key(page, "PageDown");
-    }
-    yield* page.press("[Choice 39]");
-    yield* page.until("deliberate permission choice", () => page.repl.fake.decisions.length === 1);
-    expect(page.repl.fake.prompts).toHaveLength(1);
   });
 
   it("narrow catalog reveals nested scopes and its final entry without selecting on wheel", function* () {
@@ -318,86 +282,6 @@ describe("wheel remaining migration journeys", () => {
     absentButtons(page);
     expect(page.repl.fake.prompts).toHaveLength(0);
   });
-  it("History alone scrolls above a held question and restores its caret", function* () {
-    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
-    for (let at = 0; at < 12; at += 1) {
-      yield* page.type(
-        at === 11
-          ? Array.from({ length: 70 }, (_, row) => `Background row ${row}`).join("\n")
-          : `<Let as="history${at}" value={${at}} />`,
-      );
-      yield* page.until("source ready", (one) =>
-        one.shows(at === 11 ? "Background row 69" : `value={${at}}`),
-      );
-      yield* page.key("Enter");
-      yield* page.until("entry settled", (one) => one.shows(`Ready for Entry ${at + 2}`));
-    }
-    const preview = Array.from(
-      { length: 45 },
-      (_, at) => `Held question ${String(at).padStart(2, "0")}`,
-    ).join("\n");
-    page.repl.fake.script({
-      reply: `<Elicit as="answer" schema={{type:"object",properties:{value:{type:"string"}},required:["value"],additionalProperties:false}}>${preview}</Elicit>`,
-    });
-    for (let at = 0; at < 4; at += 1) {
-      yield* key(page, "Tab");
-    }
-    yield* page.type("question");
-    yield* page.until("message", (one) => one.shows("question"));
-    yield* page.key("Enter");
-    yield* page.until("question waiting", (one) => one.shows("[answer sidekick]"));
-    yield* page.press("[answer sidekick]");
-    yield* page.until("form", (one) => one.shows("[submit]"));
-    yield* page.type("held-value");
-    yield* page.until("value", (one) => one.shows("= held-value"));
-    yield* key(page, "ArrowLeft");
-    const uncovered = page.screen().locate("Background row 0");
-    yield* wheel(page, "down", uncovered);
-    expect(page.screen().shows("Background row 0")).toBe(true);
-    expect(page.screen().shows("held-value")).toBe(true);
-    yield* page.press("[history]");
-    yield* page.until(
-      "History covers question",
-      (one) => one.shows("History") && !one.shows("[submit]"),
-    );
-    yield* key(page, "Tab");
-    const marker = page
-      .screen()
-      .rows.flatMap((row) => row.match(/\d+ · Entry \d+ admitted/)?.[0] ?? [])[0];
-    if (marker === undefined) {
-      throw new Error(page.describe());
-    }
-    const cell = page.screen().locate(marker);
-    yield* wheel(page, "down", cell);
-    expect(page.screen().shows(marker)).toBe(false);
-    yield* wheel(page, "up", cell);
-    expect(page.screen().shows(marker)).toBe(true);
-    yield* ticks(page, "down", cell, 25);
-    expect(page.screen().shows("[live]")).toBe(false);
-    yield* ticks(page, "up", cell, 25);
-    yield* page.key("Escape");
-    yield* page.until(
-      "held form returns",
-      (one) => one.shows("= held-value") && one.shows("[submit]"),
-    );
-    yield* key(page, "Tab");
-    yield* key(page, "Backtab");
-    yield* page.type("X");
-    yield* page.until("saved caret", (one) => one.shows("held-valuXe"));
-    expect(page.repl.fake.prompts).toHaveLength(1);
-    yield* page.press("[history]");
-    yield* page.until("History reopened", (one) => one.shows("History") && !one.shows("[submit]"));
-    yield* sleep(30);
-    for (let at = 0; at < 23; at += 1) {
-      yield* key(page, "ArrowDown");
-    }
-    expect(page.screen().shows("> 24 · Entry outcome recorded")).toBe(true);
-    expect(page.screen().shows("[live]")).toBe(false);
-    yield* key(page, "ArrowUp");
-    yield* key(page, "Enter");
-    yield* page.until("explicit historical selection", (one) => one.shows("[live]"));
-  });
-
   it("resize refusal and a terminal burst preserve the independent reading and Draft", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
     yield* page.type(

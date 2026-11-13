@@ -50,6 +50,23 @@ export function viewport(backend: TerminalBackend, size: Size) {
     top: composerLabel.row + 1,
     bottom: bodyBottom,
   };
+  function drawer(title: string): Box | undefined {
+    const heading = [...matches(title)].find(
+      ({ row, column }) =>
+        background(row, column) === REPL_PALETTE.drawerSurface &&
+        cells[row - 1]?.[column] === "─" &&
+        cells[row - 1]?.[column + 1] === "─",
+    );
+    if (heading === undefined) {
+      return undefined;
+    }
+    const topBorder = cells[heading.row - 1] ?? [];
+    let right = heading.column;
+    while (topBorder[right] === "─") {
+      right++;
+    }
+    return { left: heading.column, right, top: heading.row + 1, bottom: bodyBottom };
+  }
   const transcriptDivider = cells[transcriptTitle]?.indexOf("│") ?? -1;
   const transcript =
     transcriptTitle < 0
@@ -64,6 +81,7 @@ export function viewport(backend: TerminalBackend, size: Size) {
   return {
     text: rows.map((row) => row.trimEnd()).join("\n"),
     matches,
+    bold: ({ row, column }: Point) => styled[row]?.[column]?.bold === true,
     composerLabel,
     composerFocused:
       composerLabel !== undefined && cells[composerLabel.row]?.[composerLabel.column - 2] === ">",
@@ -73,6 +91,10 @@ export function viewport(backend: TerminalBackend, size: Size) {
           return composer;
         case "transcript":
           return transcript;
+        case "history":
+          return drawer(" History ");
+        case "recovery":
+          return drawer("Review recovery");
         default:
           return full;
       }

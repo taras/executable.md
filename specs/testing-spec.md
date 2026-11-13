@@ -772,22 +772,50 @@ components in a `<Test>` body:
 | Component | Contract |
 | --- | --- |
 | `ReplBench` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd. Optional `columns` and `rows` override the defaults. |
+| `ReplBench.SidekickPrompt` | Sends `text` over ACP and waits until the exchange joins, including any automatic entry feedback. On completion, `as` binds the exchange with `ending.joined`, `ending.outcome` and `output`. A failed or cancelled exchange fails this step. |
+| `ReplBench.SidekickStatus` | Binds the attachment status with `as`, including its submitted `messages` and `canonical` conversation counts. |
+| `ReplBench.EntryOutput` | Reads the final window of a submitted entry's output over ACP. `entry` is the one-based entry number and `as` binds the page, including its `status` and `text`. |
 | `ReplBench.Focus` | `target="sidekick-composer"` focuses the composer through visible controls and waits for its focus marker. |
 | `ReplBench.Type` | `text` is pasted into the focused field, preserving punctuation and line breaks. |
 | `ReplBench.Key` | `key` sends a named key to the current focus. |
+| `ReplBench.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
 | `ReplBench.Resize` | `columns` and `rows` resize both the PTY and its emulator. |
-| `ReplBench.Region` | The paired `name="sidekick-composer"` or `name="transcript"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
-| `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. `as` binds the unique positive match. `present={false}` requires the selected region to be visible. A `timeout` duration can bound the wait within the test deadline. |
-| `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. |
+| `ReplBench.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, `name="history"`, or `name="recovery"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
+| `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
+| `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
+
+`waitTimeout` sets the default `WaitForText` duration for a `<ReplBench>` body,
+including nested regions. It defaults to five seconds. Each bench supplies its
+own duration, including when it uses `resume`. The enclosing `<Test>` deadline
+can end a wait earlier.
+
+Set `scenario` on a fresh bench to resolve a Markdown Test Agent behavior file
+from the invocation's contextual cwd. The child starts a private scripted
+Sidekick and the bench waits for its ACP attachment before running the body.
+The scenario starts with the attachment initialization prompt and progresses
+through each user prompt and the resulting entry feedback. ACP actions use
+the enclosing bench's attachment. Each scripted bench starts its own
+scenario and session. A scenario cannot be supplied with `resume`.
+
+The optional `include` and `mount` arrays pass repeated `--include` and
+`--mount` values in order. Each mount value uses the CLI's `SOURCE:TARGET`
+syntax. `allowAbsolute={true}` passes `--allow-absolute`. These options belong
+to each launch, so a resumed bench supplies the options its new command uses.
 
 The bench invocation owns the driver. Failure or cancellation closes the
-child and terminal and keeps the captures. The enclosing test owns the private
-home. With `expectExit={true}`, the body triggers a normal exit and `as` binds
-`{ exitCode, location, resume }` after PTY output drains. `location` is `null`
+child, its scripted worker, and the terminal. Failed steps retain their captures.
+The enclosing test owns the private home. With `expectExit={true}`, the body
+triggers a normal exit and `as` binds `{ exitCode, location, resume }` after PTY
+output drains. `location` is `null`
 when no reopen command is printed. `resume` is available after a clean exit
 with a location. Pass it to a later bench in the same test to reuse the home
 and last terminal size. The later invocation supplies its own contextual cwd.
 A bench stopped by teardown has null exit fields.
+
+With `entryPermissionFixture={true}`, the child loads the permission-wheel
+fixture provider for the entry to select as `wheel-permission-fixture`. The
+fixture answers no live agent requests and presents a synthetic permission
+request through the REPL's normal entry permission UI.
 
 ## Repository Runtime Suites
 

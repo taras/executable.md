@@ -187,6 +187,21 @@ jobs:
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
             packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
             scripts/tests/repl-bench.md
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+            scripts/tests/repl-scripted-sidekick.md
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+            scripts/tests/repl-wheel-permission.md
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+            scripts/tests/repl-saved-recovery.md
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+            scripts/tests/repl-command-output.md
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+            scripts/tests/repl-include-mount.md
           bash scripts/tests/repl-bench.sh
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -197,6 +212,7 @@ jobs:
             repl bench checkout/.bench/*/run.json
             repl bench checkout/.bench/*/screen.txt
             repl bench checkout/.bench/*/terminal.ansi
+            repl bench checkout/.bench/*/closed.json
             repl bench checkout/.bench/*/driver.log
           include-hidden-files: "true"
 

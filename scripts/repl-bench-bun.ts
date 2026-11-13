@@ -25,7 +25,7 @@ function dimensions(text: string) {
 
 function* preflight(cwd: string, requested: ReturnType<typeof dimensions>) {
   const { id, revision, launch } = yield* prepareRun(cwd, requested, ["--deny-all"]);
-  const driver = yield* useDriver(root, launch);
+  const driver = yield* useDriver(launch);
   const marker = "repl-bench check;";
   const region = "sidekick-composer";
   yield* driver.execute({ action: "ready" });
@@ -94,7 +94,7 @@ function* followup(action: string, directory: string, args: string[]): Operation
 main(function* ([action, ...args]) {
   if (action === "driver") {
     const options = launchSchema.parse(JSON.parse(args[0] ?? ""));
-    const driver = yield* useDriver(root, options);
+    const driver = yield* useDriver(options);
     if (args[1] === "socket") {
       yield* driver.execute({ action: "ready" });
     }

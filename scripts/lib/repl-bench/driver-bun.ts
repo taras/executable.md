@@ -1,4 +1,4 @@
-import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
 import { keyToAnsi, parseKey } from "@termless/core";
 import { createXtermBackend } from "@termless/xtermjs";
 import {
@@ -17,6 +17,7 @@ import process from "node:process";
 import { join } from "node:path";
 import { decodeLocation } from "../../../packages/cli/src/repl/route.ts";
 import type { Command, Launch, Point, WaitOptions } from "./protocol.ts";
+import { denoCommand } from "./run.ts";
 import { viewport } from "./screen.ts";
 
 interface Pty {
@@ -50,6 +51,8 @@ declare const Bun: {
 
 const START_TIMEOUT = 15_000;
 const ACTION_TIMEOUT = 5_000;
+// Give ACPX's bounded active-turn and agent retirement time to finish before forcing REPL exit.
+const SCRIPTED_STOP_GRACE = 10_000;
 
 function reopenLocation(raw: string): string | null {
   // A terminal wraps at display time. If a host inserts line breaks in the
@@ -62,7 +65,7 @@ function reopenLocation(raw: string): string | null {
   return decodeLocation(location).ok ? location : null;
 }
 
-export function useDriver(root: string, options: Launch) {
+export function useDriver(options: Launch) {
   return resource(function* (
     provide: (value: { execute(command: Command): Operation<unknown> }) => Operation<void>,
   ) {
@@ -121,7 +124,7 @@ export function useDriver(root: string, options: Launch) {
         const timely = yield* race([
           closed,
           (function* () {
-            yield* sleep(2_000);
+            yield* sleep(options.scenario === undefined ? 2_000 : SCRIPTED_STOP_GRACE);
             return null;
           })(),
         ]);
@@ -141,52 +144,38 @@ export function useDriver(root: string, options: Launch) {
     });
     try {
       yield* ensureDir(home);
-      child = Bun.spawn(
-        [
-          "deno",
-          "run",
-          "--allow-all",
-          "--cached-only",
-          "--frozen",
-          "--node-modules-dir=none",
-          "--config",
-          join(root, "deno.json"),
-          options.entry,
-          "repl",
-          ...options.args,
-        ],
-        {
-          cwd,
-          env: {
-            ...process.env,
-            HOME: home,
-            DENO_DIR: options.denoDir,
-            XDG_DATA_HOME: join(home, ".local", "share"),
-            XDG_CONFIG_HOME: join(home, ".config"),
-            XDG_STATE_HOME: join(home, ".local", "state"),
-            XDG_CACHE_HOME: join(home, ".cache"),
-            TERM: "xterm-256color",
+      child = Bun.spawn(denoCommand(["repl", ...options.args]), {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XMD_SIDEKICK_SCENARIO: options.scenario,
+          DENO_DIR: options.denoDir,
+          XDG_DATA_HOME: join(home, ".local", "share"),
+          XDG_CONFIG_HOME: join(home, ".config"),
+          XDG_STATE_HOME: join(home, ".local", "state"),
+          XDG_CACHE_HOME: join(home, ".cache"),
+          TERM: "xterm-256color",
+        },
+        terminal: {
+          cols: size.columns,
+          rows: size.rows,
+          data(_terminal, bytes) {
+            chunks.push(Uint8Array.from(bytes));
+            backend.feed(bytes);
+            if (backend.getMode("altScreen")) {
+              // Keep the last application screen when the child restores the normal buffer.
+              screen = backend.getText();
+            }
+            update();
           },
-          terminal: {
-            cols: size.columns,
-            rows: size.rows,
-            data(_terminal, bytes) {
-              chunks.push(Uint8Array.from(bytes));
-              backend.feed(bytes);
-              if (backend.getMode("altScreen")) {
-                // Keep the last application screen when the child restores the normal buffer.
-                screen = backend.getText();
-              }
-              update();
-            },
-            exit() {
-              ptyEnded = true;
-              eof.resolve();
-              update();
-            },
+          exit() {
+            ptyEnded = true;
+            eof.resolve();
+            update();
           },
         },
-      );
+      });
       yield* writeTextFile(join(directory, "pid"), `${child.pid}\n`);
     } catch (error) {
       throw new Error(`${step} failed. Evidence in ${directory}`, { cause: error });
@@ -230,10 +219,27 @@ export function useDriver(root: string, options: Launch) {
       ]);
     }
     function waitFor(query: WaitOptions) {
-      const { text, region, at, present = true, unique = false, timeout = ACTION_TIMEOUT } = query;
+      const {
+        text,
+        region,
+        at,
+        row,
+        count,
+        present = true,
+        unique = false,
+        bold,
+        timeout = ACTION_TIMEOUT,
+      } = query;
+      const expected = count ?? (present ? (unique ? 1 : undefined) : 0);
+      const quantity =
+        count === undefined ? (present ? "" : "absence of ") : `${count} matches for `;
       const label =
-        `${present ? "" : "absence of "}${JSON.stringify(text)} in ${region ?? "viewport"}` +
-        (at === undefined ? "" : ` at row ${at.row}, column ${at.column}`);
+        `${quantity}${JSON.stringify(text)} in ${region ?? "viewport"}` +
+        (at === undefined
+          ? row === undefined
+            ? ""
+            : ` at row ${row}`
+          : ` at row ${at.row}, column ${at.column}`);
       return wait(
         label,
         (frame) => {
@@ -242,15 +248,15 @@ export function useDriver(root: string, options: Launch) {
             return undefined;
           }
           const hits = [...frame.matches(text, box)].filter(
-            (hit) => at === undefined || (at.row === hit.row && at.column === hit.column),
+            (hit) =>
+              (row === undefined || row === hit.row) &&
+              (at === undefined || (at.row === hit.row && at.column === hit.column)) &&
+              (bold === undefined || frame.bold(hit) === bold),
           );
-          return present
-            ? unique && hits.length !== 1
-              ? undefined
-              : hits[0]
-            : hits.length === 0
-              ? null
-              : undefined;
+          if (expected !== undefined && hits.length !== expected) {
+            return undefined;
+          }
+          return expected === 0 ? null : hits[0];
         },
         timeout,
       );
@@ -275,6 +281,27 @@ export function useDriver(root: string, options: Launch) {
                   frame.matches("XMD REPL").next().value && frame.matches("[exit]").next().value,
                 START_TIMEOUT,
               );
+            case "attachment-ready": {
+              return yield* race([
+                (function* () {
+                  while (!(yield* exists(command.path))) {
+                    yield* sleep(25);
+                  }
+                  return null;
+                })(),
+                (function* () {
+                  const code = yield* until(owned.exited);
+                  yield* eof.operation;
+                  throw new Error(
+                    `REPL exited (${code}) before publishing its Sidekick attachment`,
+                  );
+                })(),
+                (function* () {
+                  yield* sleep(START_TIMEOUT);
+                  throw new Error("Timed out waiting for the Sidekick attachment");
+                })(),
+              ]);
+            }
             case "focus": {
               const current = lastFrame();
               if (current.composerFocused) {
@@ -313,6 +340,12 @@ export function useDriver(root: string, options: Launch) {
               send(input);
               return null;
             }
+            case "click":
+              if (command.at.row >= size.rows || command.at.column >= size.columns) {
+                throw new Error("Click cell is outside the viewport");
+              }
+              click(command.at);
+              return null;
             case "scroll": {
               if (command.delta === 0) {
                 return null;
@@ -320,16 +353,25 @@ export function useDriver(root: string, options: Launch) {
               const box =
                 command.region === undefined ? undefined : lastFrame().box(command.region);
               if (
-                box === undefined ||
-                box.top >= box.bottom ||
-                box.left >= box.right ||
+                (command.region !== undefined && box === undefined) ||
+                (command.at === undefined && box === undefined) ||
                 command.region === "sidekick-composer"
               ) {
                 throw new Error(`No visible scroll target in ${command.region ?? "viewport"}`);
               }
+              const target = box ?? { left: 0, right: size.columns, top: 0, bottom: size.rows };
+              const at = command.at ?? { row: target.top + 1, column: target.left + 1 };
+              if (
+                at.row < target.top ||
+                at.row >= target.bottom ||
+                at.column < target.left ||
+                at.column >= target.right
+              ) {
+                throw new Error(`Wheel cell is outside ${command.region ?? "the viewport"}`);
+              }
               const button = command.delta < 0 ? 64 : 65;
               send(
-                `\x1b[<${button};${box.left + 2};${box.top + 1}M`.repeat(Math.abs(command.delta)),
+                `\x1b[<${button};${at.column + 1};${at.row + 1}M`.repeat(Math.abs(command.delta)),
               );
               return null;
             }

@@ -67,7 +67,7 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("REPL page — two Sends, told apart by what is drawn beside them", () => {
-  it("presses the Draft's Send and leaves the Sidekick's conversation alone", function* () {
+  it("resolves each Send within its scope and refuses an ambiguous Send", function* () {
     const page = yield* useReplPage({ size: WIDE });
 
     // The screen really does draw this label twice, which is what makes the
@@ -86,19 +86,6 @@ describe("REPL page — two Sends, told apart by what is drawn beside them", () 
     // scope says only what it says.
     expect(shown.found(COMPOSER, SIDEKICK_SEND)).toBe(0);
     expect(shown.occurrences(COMPOSER)).toBe(1);
-
-    yield* typed(page, "the first entry");
-    // The text went to the Draft, not to the composer behind the other label.
-    const drafted = page.screen();
-    expect(drafted.found("the first entry", { after: DRAFT })).toBe(1);
-    expect(drafted.found("the first entry", SIDEKICK_SEND)).toBe(0);
-
-    yield* page.press("[send]", { onRow: DRAFT });
-    // The entry the press submitted, as the History rail marks it settled.
-    yield* page.until("entry 1 settling", (one) => one.shows("1 ✓"));
-    // And the other pane was not asked anything: its own emptiness still shows.
-    expect(page.screen().shows("No messages yet")).toBe(true);
-    expect(page.repl.fake.prompts).toHaveLength(0);
   });
 
   it("survives content that echoes a control's label, and refuses one never drawn", function* () {
