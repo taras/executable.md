@@ -35,12 +35,11 @@ import type { ReplSession, ReplSessionOptions } from "../src/repl/session.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./support/fake-acp.ts";
-import { AGENT_SOURCE, world } from "../../acp/tests/released-peer.ts";
+import { AGENT_SOURCE, STANDARD_AGENT_SOURCE, world } from "../../acp/tests/released-peer.ts";
 import PhaseSession, {
   props as phaseSessionProps,
 } from "../../../examples/adversarial-implementation/components/Phase/Session.ts";
 
-const standardPeer = AGENT_SOURCE.replace(', _meta: {agentSessionId: "native-" + sessionId}', "");
 const pair = z.strictObject({ kind: z.string(), value: z.string() });
 const receipt = z.strictObject({
   schema: z.literal("phase-session.v2"),
@@ -60,7 +59,7 @@ const method = z.object({
   sessionId: z.string().optional(),
 });
 
-function* guardPeer(source = standardPeer, cwd?: string) {
+function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
   const current = yield* world(true);
   yield* writeTextFile(current.agent, source);
   const directory = cwd ?? current.dir;
@@ -250,7 +249,7 @@ describe("workflow Session continuity", { sanitizeOps: false, sanitizeResources:
     let firstMismatch: string | undefined;
     for (const source of [
       AGENT_SOURCE.replace('"native-" + sessionId', "sessionId"),
-      standardPeer.replace('"fixed-session"', '"different-session"'),
+      STANDARD_AGENT_SOURCE.replace('"fixed-session"', '"different-session"'),
     ]) {
       const alternate = yield* guardPeer(source, original.dir);
       expect((yield* alternate.run({ guard: false, text: "warm" })).result.ok).toBe(true);

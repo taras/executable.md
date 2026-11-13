@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAcpxSessionStore } from "../src/session-store.ts";
 
-export const AGENT_SOURCE = `
+function agentSource(assertIdentity: boolean): string {
+  return `
 const fs = require("node:fs");
 const path = require("node:path");
 const controlDirectory = process.argv[2];
@@ -65,7 +66,7 @@ function respond(request) {
         const changedIdentity = request.method === "session/load" && controlDirectory &&
           fs.existsSync(path.join(controlDirectory, "different-native-identity"));
         const agentSessionId = changedIdentity ? "another-conversation" : "native-" + sessionId;
-        reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId}});
+        reply(request.id, {sessionId, configOptions: options()${assertIdentity ? ", _meta: {agentSessionId}" : ""}});
       };
       if (controlDirectory && request.method === "session/load") {
         fs.readFile(path.join(controlDirectory, "remembered"), "utf8", (_error, text) => { remembered = text ?? ""; ready(); });
@@ -102,6 +103,10 @@ function respond(request) {
   }
 }
 `;
+}
+
+export const AGENT_SOURCE = agentSource(true);
+export const STANDARD_AGENT_SOURCE = agentSource(false);
 
 export function* world(trace = false) {
   const dir = join(tmpdir(), `xmd-released-${randomUUID()}`);

@@ -47,9 +47,7 @@ import {
   l as runPromptTurn,
 } from "../vendor/acpx/generated/queue-owner-runtime-B0mPqOu4.js";
 
-import { AGENT_SOURCE, world } from "./released-peer.ts";
-
-const STANDARD_AGENT_SOURCE = AGENT_SOURCE.replace(", _meta: {agentSessionId}", "");
+import { STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
 
 function* runtimeWorld() {
   const current = yield* world();
