@@ -46,15 +46,17 @@ Reply with only the JSON object. Start with an opening brace and end with a clos
 <Dir path={assignment.repository}>
 <AgentProvider name="diagnostic-acpx" defaultAgent={solver.provider}>
 <Delivery.Inspect agent={solver.provider} choices={props.previous === null && props.position === 0 ? [solver.model,"claude-fable-5-1[1m]"] : [props.previousModel ?? solver.model]} as="catalog" />
+<Try>
 <If condition={catalog.state === "selected"}>
 <Delivery.Turn as="turn">
 <Agent name={solver.provider}><Session name={solver.session} model={catalog.model} effort={solver.effort}><Phase.Session directory={identities} name={solver.session} requireExisting={props.previous !== null}><Prompt timeout="10m" throwOnError={true}>{prompt}</Prompt></Phase.Session></Session></Agent>
 </Delivery.Turn>
 </If>
+<Finally><Dir path={props.directory}><File path="outcome.json"><Json value={{catalog,turn}} /></File></Dir></Finally>
+</Try>
+<If condition={turn?.state === "reply"}><Dir path={props.directory}><File path="raw.txt">{turn.reply}</File></Dir></If>
 </AgentProvider>
 </Dir>
-<Dir path={props.directory}><File path="outcome.json"><Json value={{catalog,turn}} /></File></Dir>
-<If condition={turn?.state === "reply"}><Dir path={props.directory}><File path="raw.txt">{turn.reply}</File></Dir></If>
 <Ticket.Checkout repository={assignment.repository} as="after" />
 <If condition={after.head !== assignment.revision || !after.clean}><Fail message="The diagnostic checkout changed. Preserve the attempt for reconciliation." /></If>
 <Return value={{record,catalog,turn}} />

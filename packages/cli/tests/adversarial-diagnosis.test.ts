@@ -215,6 +215,31 @@ describe("adversarial problem-solver phase", () => {
     expect(test.fake.prompts).toHaveLength(2);
   });
 
+  it("preserves a reply when the provider fails to close", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const reply = JSON.stringify({
+      outcome: "missing_witness",
+      revision: test.revision,
+      witness: "Worker trace",
+      howToObtain: "Capture it.",
+    });
+    test.fake.script({ reply });
+    test.fake.closeFailure = new Error("the diagnostic provider would not close");
+    const attempt = join(test.root, "failed-close");
+    yield* expectRefusal(test.run(attempt), "agent provider teardown failed");
+    expect(test.fake.prompts).toHaveLength(1);
+    const raw = yield* readTextFile(join(attempt, "fable", "raw.txt"));
+    expect(raw.trim()).toBe(reply);
+    expect(JSON.parse(yield* readTextFile(join(attempt, "fable", "outcome.json"))).turn).toEqual({
+      state: "reply",
+      reply: raw,
+    });
+    expect(yield* API.Fs.operations.stat(join(attempt, "fable", "result.json"))).toMatchObject({
+      exists: false,
+    });
+  });
+
   it("uses Astra once when Fable is absent and records its own identity", function* () {
     const test = yield* fixture();
     const attempt = join(test.root, "fallback");
