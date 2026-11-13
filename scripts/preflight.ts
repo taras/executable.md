@@ -22,6 +22,7 @@
  * diagnostic is the same whichever half is missing.
  */
 
+import { fileURLToPath } from "node:url";
 import { unprepared } from "./lib/preflight-deno.ts";
 
 const repoRoot = new URL("../", import.meta.url);
@@ -49,7 +50,7 @@ const build = new Deno.Command(Deno.execPath(), {
     script,
     ...args,
   ],
-  cwd: new URL(repoRoot).pathname,
+  cwd: fileURLToPath(repoRoot),
   stdin: "inherit",
   stdout: "inherit",
   stderr: "inherit",

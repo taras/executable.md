@@ -90,6 +90,9 @@ deno task test --changed=origin/main                  # affected by branch and w
 deno task test --related=packages/core/src/expand.ts  # tests importing one source file
 ```
 
+For a REPL UI verification handoff, follow the
+[REPL bench guide](.agents/repl-bench.md#ui-handoff) in the assigned worktree.
+
 Selection is transitive through imports only. When behavior crosses a boundary
 the module graph cannot see — a subprocess, fixture, generated file or dynamic
 import — add each known integration and regression test explicitly.

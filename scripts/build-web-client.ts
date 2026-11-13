@@ -66,7 +66,7 @@ import { exec } from "@effectionx/process";
 import { ensureDir, readTextFile, rm } from "@effectionx/fs";
 import { encodeBase64 } from "@std/encoding/base64";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { assertSideEffectFree, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
 import { replaceThroughStaging } from "./lib/staged-write.ts";
@@ -114,7 +114,7 @@ const FONT_FACES: FontFace[] = [
 export const SIDE_EFFECT_FREE_MANIFESTS: URL[] = sideEffectFreeManifests(repoRoot);
 
 function* run(command: string, args: string[]): Operation<void> {
-  yield* exec(command, { arguments: args, cwd: new URL(repoRoot).pathname }).expect();
+  yield* exec(command, { arguments: args, cwd: fileURLToPath(repoRoot) }).expect();
 }
 
 /**
