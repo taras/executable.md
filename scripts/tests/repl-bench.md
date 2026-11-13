@@ -157,10 +157,10 @@
     <ReplBench.WaitForText text="Draft kept through resize" />
 
     <ReplBench.Resize columns={120} rows={30} />
+    <ReplBench.WaitForText text="Type here" row={29} />
     <ReplBench.WaitForText text="> DRAFT" as="medium" />
     <AssertEquals actual={medium.row < beforeResize.row} expected={true} />
     <ReplBench.WaitForText text="Draft kept through resize" row={medium.row+1} />
-    <ReplBench.WaitForText text="Type here" />
 
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="* Entries" />

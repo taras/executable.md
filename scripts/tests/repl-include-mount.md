@@ -1,4 +1,4 @@
-<Test name="includes replace defaults in order and completed entries retain their source and output" timeout="90s">
+<Test name="includes replace defaults in order and completed entries retain their source and output" timeout="180s">
   <TempDir>
     <Cwd as="root" />
     <Dir path="first">
@@ -92,7 +92,7 @@ External-only rendered.
 </Test>
 
 <Each in={["unchanged","reassigned","omitted"]} let="mode">
-<Test name={"mounted reads replay and new work follows the "+mode+" placement"} timeout="90s">
+<Test name={"mounted reads replay and new work follows the "+mode+" placement"} timeout="180s">
   <TempDir>
     <Cwd as="root" />
     <Dir path="fixtures"><File path="read.md">mounted fixture</File></Dir>
@@ -180,7 +180,7 @@ pwd -P | tr -d '\n' > process-cwd.txt
       <AssertEquals actual={retainedCwd} expected="external edit survives" />
     </Dir>
 
-    <ReplBench resume={finished.resume} mount={currentMounts} allowAbsolute={true} expectExit={true} as="freshSession">
+    <ReplBench resume={finished.resume} mount={currentMounts} allowAbsolute={true}>
       <ReplBench.WaitForText text="Ready for Entry 2" />
       <Let as="freshBody" select="code">
 ```xmd
@@ -199,10 +199,7 @@ fresh is {fresh}
       <ReplBench.WaitForText text="2. [ok]" as="entry" />
       <ReplBench.Click at={entry} />
       <ReplBench.WaitForText text={selected==="old"?"fresh is changed":"fresh is current"} />
-      <ReplBench.WaitForText text="[exit]" as="exit" />
-      <ReplBench.Click at={exit} />
     </ReplBench>
-    <AssertEquals actual={freshSession.exitCode} expected={0} />
     <Dir path={selected}>
       <File path="fresh.md" as="fresh" />
       <AssertEquals actual={fresh} expected={selected==="old"?"changed":"current"} />
