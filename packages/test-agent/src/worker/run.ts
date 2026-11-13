@@ -23,7 +23,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, parseControllerMessage, parseRoute, PROBE_INSTANCE } from "../protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "../protocol.ts";
-import { configOptions, configurationSnapshot } from "../configuration.ts";
+import { configOptions, configurationSnapshot, selectConfiguration } from "../configuration.ts";
 import type { ConfigurationSnapshot } from "../configuration.ts";
 import { createTurnBridge, collectTurn } from "./bridge.ts";
 import type { Captures } from "@executablemd/core";
@@ -66,6 +66,9 @@ interface ScenarioRuntime {
   markExhausted(): void;
 }
 
+// deno-lint-ignore require-yield
+function* readyInspection(): Operation<void> {}
+
 export function* runTestAgentWorker(options: { connect: string }): Operation<void> {
   const route = parseRoute(options.connect);
   if (!route.ok) {
@@ -80,6 +83,41 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
   }
   if (config.t !== "config") {
     throw new Error(`unexpected controller message "${config.t}" before config`);
+  }
+
+  if (config.mode === "inspection") {
+    let models = config.models;
+    yield* serveAcp(
+      {
+        ready: readyInspection,
+        identity: () => ({
+          acpSessionId: config.acpSessionId,
+          nativeSessionId: config.nativeSessionId,
+        }),
+        // deno-lint-ignore require-yield
+        *startSession() {
+          if (config.refuseOpen) {
+            throw new RequestError(-32602, "TestAgent inspection refused to open.");
+          }
+        },
+        // deno-lint-ignore require-yield
+        *configuration() {
+          return configOptions(models);
+        },
+        // deno-lint-ignore require-yield
+        *setConfiguration(configId, value) {
+          models = selectConfiguration(models, configId, value);
+          return configOptions(models) ?? [];
+        },
+        // deno-lint-ignore require-yield
+        *runTurn(): Operation<TurnResult> {
+          throw new RequestError(-32602, "TestAgent inspection workers do not serve prompts.");
+        },
+        cancel() {},
+      },
+      yield* useProcessStdio(),
+    );
+    return;
   }
 
   if (instance === PROBE_INSTANCE || config.mode !== "scenario") {

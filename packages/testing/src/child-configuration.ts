@@ -82,11 +82,17 @@ export interface ChildScenario {
   readonly document: { readonly path: string; readonly source: string };
 }
 
+export interface ChildInspection {
+  readonly models?: ScenarioModels | null;
+  readonly refuse?: "open" | "close";
+}
+
 /** Scripted Agent behavior for one child, as `<TestAgent>` declared it. */
 export interface TestAgentChildConfiguration {
   readonly kind: "test-agent";
   readonly defaultAgent: string;
   readonly scenarios: readonly ChildScenario[];
+  readonly inspection?: ChildInspection;
 }
 
 /** Elicitation answers for one child, as `<Answers>` declared them. */
@@ -160,6 +166,14 @@ function detachOne(configuration: ChildConfiguration): ChildConfiguration {
         kind: configuration.kind,
         defaultAgent: configuration.defaultAgent,
         scenarios: frozen(configuration.scenarios.map(detachScenario)),
+        ...(configuration.inspection === undefined
+          ? {}
+          : {
+              inspection: frozen({
+                ...configuration.inspection,
+                ...detachCatalog(configuration.inspection.models),
+              }),
+            }),
       });
     case "answers":
       return frozen({
@@ -176,35 +190,37 @@ function detachScenario(scenario: ChildScenario): ChildScenario {
     session: scenario.session,
     rootDir: scenario.rootDir,
     document: frozen({ path: scenario.document.path, source: scenario.document.source }),
-    ...(scenario.models === undefined
-      ? {}
-      : {
-          models:
-            scenario.models === null
-              ? null
-              : frozen({
-                  selected: scenario.models.selected,
-                  options: frozen(
-                    scenario.models.options.map((model) =>
-                      frozen({
-                        id: model.id,
-                        ...(model.efforts === undefined
-                          ? {}
-                          : {
-                              efforts:
-                                model.efforts === null
-                                  ? null
-                                  : frozen({
-                                      selected: model.efforts.selected,
-                                      options: frozen([...model.efforts.options]),
-                                    }),
-                            }),
-                      }),
-                    ),
-                  ),
-                }),
-        }),
+    ...detachCatalog(scenario.models),
   });
+}
+
+function detachCatalog(models: ScenarioModels | null | undefined): Pick<ChildInspection, "models"> {
+  if (models == null) {
+    return models === undefined ? {} : { models };
+  }
+  return {
+    models: frozen({
+      selected: models.selected,
+      options: frozen(
+        models.options.map(({ id, efforts }) =>
+          frozen({
+            id,
+            ...(efforts === undefined
+              ? {}
+              : {
+                  efforts:
+                    efforts === null
+                      ? null
+                      : frozen({
+                          selected: efforts.selected,
+                          options: frozen([...efforts.options]),
+                        }),
+                }),
+          }),
+        ),
+      ),
+    }),
+  };
 }
 
 function detachMatcher(matcher: AnswerMatcher): AnswerMatcher {

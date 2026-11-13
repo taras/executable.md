@@ -345,6 +345,11 @@ export interface AcpxProviderDependencies {
    * subscriber. The default invokes `op` directly.
    */
   withSessionRoute?: <T>(context: SessionRouteContext, op: () => Operation<T>) => Operation<T>;
+  /** Pins availability and acquisition. The caller owns the handle and release. */
+  withInspectionAcquisition?: (
+    agentName: string,
+    acquire: () => Operation<void>,
+  ) => Operation<void>;
   /**
    * Who owns a logical session right now, across processes.
    *
@@ -1500,6 +1505,7 @@ function* useAcpxProviderState(
     build: BoundBuild | undefined,
     input: AcpRuntimeEnsureInput,
     toSession: (handle: AcpRuntimeHandle, entry: RuntimeEntry) => ManagedSession,
+    acquired?: (session: ManagedSession) => void,
   ): Operation<ManagedSession> {
     return scoped(function* (): Operation<ManagedSession> {
       let claimed: RuntimeEntry | undefined;
@@ -1581,6 +1587,7 @@ function* useAcpxProviderState(
       const session = toSession(handle, entry);
       adoptHandle(session);
       settled = true;
+      acquired?.(session);
       return session;
     });
   }
@@ -1603,7 +1610,7 @@ function* useAcpxProviderState(
     releasedHandle(session);
   }
 
-  function* resolveAgent(name: string | undefined): Operation<string> {
+  function* resolveAgent(name: string | undefined, joinProbe = false): Operation<string> {
     const selected = name ?? providerOptions.defaultAgent;
     // Before the probe, because the probe spawns this agent's command: a host
     // that materializes its own adapter has to have done so by now, and a
@@ -1624,7 +1631,23 @@ function* useAcpxProviderState(
     if (!validatedAgents.has(selected) && !boundSessions(selected)) {
       const base = yield* runtimeOptions(selected);
       const probe = createRuntime({ ...base, probeAgent: selected });
-      const report = yield* until(probe.doctor());
+      const report = joinProbe
+        ? yield* scoped(function* () {
+            let pending: ReturnType<typeof probe.doctor> | undefined;
+            yield* ensure(function* () {
+              if (pending !== undefined) {
+                yield* until(
+                  pending.then(
+                    () => undefined,
+                    () => undefined,
+                  ),
+                );
+              }
+            });
+            pending = probe.doctor();
+            return yield* until(pending);
+          })
+        : yield* until(probe.doctor());
       if (!report.ok) {
         const code = report.code ? ` [${report.code}]` : "";
         const details = report.details?.length ? ` (${report.details.join("; ")})` : "";
@@ -2987,13 +3010,15 @@ function* useAcpxProviderState(
     name?: string,
     request?: AgentOptionsRequest,
   ): Operation<AgentOptions> {
-    const agentName = yield* resolveAgent(name);
-    const agentCommand = resolveAgentCommand(registry, agentName);
-    const inspectionCwd = resolve(yield* agentCwd());
-    // Random, and deliberately not derived from the directory: a key a
-    // session request could also produce would make this inspection the session a
-    // document is holding.
-    const sessionKey = `xmd:inspect:${randomUUID()}`;
+    const hook = dependencies?.withInspectionAcquisition;
+    const agentName = name ?? providerOptions.defaultAgent;
+    function* prepareInspection() {
+      yield* resolveAgent(name, hook !== undefined);
+      const agentCommand = resolveAgentCommand(registry, agentName);
+      const cwd = resolve(yield* agentCwd());
+      return { agentCommand, cwd, sessionKey: `xmd:inspect:${randomUUID()}` };
+    }
+    const direct = hook === undefined ? yield* prepareInspection() : undefined;
     return yield* scoped(function* (): Operation<AgentOptions> {
       // Registered before the session exists, because registering afterwards is
       // itself a suspension: a cancellation delivered in that gap would leave a
@@ -3012,19 +3037,33 @@ function* useAcpxProviderState(
         held.entry = undefined;
         yield* abandonHandle(taken, "agent options inspected");
       });
-      const entry = yield* ensureThrough(
-        undefined,
-        { sessionKey, agent: agentName, mode: "persistent", cwd: inspectionCwd },
-        (handle, runtimeEntry) => ({
-          handle,
-          runtime: runtimeEntry,
-          agentCommand,
-          cwd: inspectionCwd,
-          session: { sessionKey, cwd: inspectionCwd },
-          state: "new",
-        }),
-      );
-      held.entry = entry;
+      function* acquire(): Operation<void> {
+        const { agentCommand, cwd, sessionKey } = direct ?? (yield* prepareInspection());
+        yield* ensureThrough(
+          undefined,
+          { sessionKey, agent: agentName, mode: "persistent", cwd },
+          (handle, runtimeEntry) => ({
+            handle,
+            runtime: runtimeEntry,
+            agentCommand,
+            cwd,
+            session: { sessionKey, cwd },
+            state: "new",
+          }),
+          (entry) => {
+            held.entry = entry;
+          },
+        );
+      }
+      if (hook === undefined) {
+        yield* acquire();
+      } else {
+        yield* hook(agentName, acquire);
+      }
+      const entry = held.entry;
+      if (entry === undefined) {
+        throw new Error("Inspection acquisition did not establish a session.");
+      }
       const advertised = yield* applySessionConfiguration(
         configurationTarget(agentName, entry, request?.model !== undefined),
         request?.model === undefined ? {} : { model: request.model },

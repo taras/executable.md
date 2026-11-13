@@ -25,7 +25,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, formatRoute, parseWorkerMessage, PROBE_INSTANCE } from "./protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "./protocol.ts";
 import { normalizeModels, selectConfiguration } from "./configuration.ts";
-import type { ScenarioModels } from "@executablemd/testing";
+import type { ChildInspection, ScenarioModels } from "@executablemd/testing";
 import { useLineServer } from "./net.ts";
 import type { LineSocket } from "./net.ts";
 
@@ -139,6 +139,7 @@ export interface ScenarioRecord extends ScenarioHandle {
  */
 export interface TestAgentControllerInternals extends TestAgentController {
   probeRoute: string;
+  useInspection(fixture: ChildInspection): Operation<ScenarioHandle>;
   /** The record behind the handle — the journal and diagnostics included. */
   useScenario(options: {
     document: { path: string; source: string };
@@ -178,6 +179,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
     const token = randomUUID();
     const observeSession = yield* NativeSessionObserver.get();
     const scenarios = new Map<string, ScenarioRecord>();
+    const inspections = new Map<string, Extract<ControllerMessage, { mode: "inspection" }>>();
     const active = new Map<string, ActiveConnection>();
     const canonicalRoots = new Map<string, string>();
 
@@ -234,7 +236,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
     }
 
     function* serve(connection: LineSocket, revoke: WithResolvers<void>): Operation<void> {
-      let attached: ScenarioRecord | "probe" | undefined;
+      let attached: ScenarioRecord | "probe" | "inspection" | undefined;
       for (const line of yield* each(connection.lines)) {
         const parsed = parseWorkerMessage(line);
         if (!parsed.ok) {
@@ -254,17 +256,18 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
             send(connection, { t: "config", mode: "probe" });
           } else {
             const scenario = scenarios.get(message.instance);
-            if (!scenario) {
+            const inspection = inspections.get(message.instance);
+            if (!scenario && !inspection) {
               send(connection, { t: "error", message: `unknown scenario "${message.instance}"` });
               connection.end();
               return;
             }
             // One worker per scenario: a second concurrent attach is
             // refused so two workers never mutate the same journal.
-            if (active.has(scenario.id)) {
+            if (active.has(message.instance)) {
               send(connection, {
                 t: "error",
-                message: `scenario "${scenario.id}" already has an active connection`,
+                message: `scenario "${message.instance}" already has an active connection`,
               });
               connection.end();
               return;
@@ -274,23 +277,29 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
               revoke: revoke.resolve,
               closed: ended.operation,
             };
-            active.set(scenario.id, registration);
+            const id = message.instance;
+            active.set(id, registration);
             yield* ensure(() => {
-              if (active.get(scenario.id) === registration) {
-                active.delete(scenario.id);
+              if (active.get(id) === registration) {
+                active.delete(id);
               }
               ended.resolve();
             });
-            attached = scenario;
-            send(connection, {
-              t: "config",
-              mode: "scenario",
-              doc: scenario.document,
-              journal: scenario.journal,
-              nativeSessionId: scenario.nativeSessionId,
-              acpSessionId: scenario.acpSessionId,
-              ...(scenario.models === undefined ? {} : { models: scenario.models }),
-            });
+            if (inspection !== undefined) {
+              attached = "inspection";
+              send(connection, inspection);
+            } else if (scenario !== undefined) {
+              attached = scenario;
+              send(connection, {
+                t: "config",
+                mode: "scenario",
+                doc: scenario.document,
+                journal: scenario.journal,
+                nativeSessionId: scenario.nativeSessionId,
+                acpSessionId: scenario.acpSessionId,
+                ...(scenario.models === undefined ? {} : { models: scenario.models }),
+              });
+            }
           }
           yield* each.next();
           continue;
@@ -302,11 +311,14 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
 
     function* handleMessage(
       connection: LineSocket,
-      attached: ScenarioRecord | "probe",
+      attached: ScenarioRecord | "probe" | "inspection",
       message: WorkerMessage,
     ): Operation<void> {
-      if (attached === "probe") {
-        send(connection, { t: "error", message: `probe workers may not send "${message.t}"` });
+      if (typeof attached === "string") {
+        send(connection, {
+          t: "error",
+          message: `${attached} workers may not send "${message.t}"`,
+        });
         connection.end();
         return;
       }
@@ -455,11 +467,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
           // rejected and no new worker can attach.
           scenarios.delete(id);
           try {
-            const registration = active.get(id);
-            if (registration) {
-              registration.revoke();
-              yield* registration.closed;
-            }
+            yield* revokeWorker(id);
           } finally {
             // Always clear state — even if worker revocation failed.
             scenario.journal.length = 0;
@@ -474,9 +482,40 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
       });
     }
 
+    function* revokeWorker(id: string): Operation<void> {
+      const registration = active.get(id);
+      if (registration !== undefined) {
+        registration.revoke();
+        yield* registration.closed;
+      }
+    }
+
+    function useInspection(fixture: ChildInspection): Operation<ScenarioHandle> {
+      return resource(function* (provide) {
+        const id = randomUUID();
+        const models = normalizeModels(fixture.models);
+        inspections.set(id, {
+          t: "config",
+          mode: "inspection",
+          nativeSessionId: `native-${randomUUID()}`,
+          acpSessionId: randomUUID(),
+          models,
+          refuseOpen: fixture.refuse === "open",
+        });
+        yield* ensure(function* () {
+          inspections.delete(id);
+          yield* revokeWorker(id);
+        });
+        yield* provide({
+          route: formatRoute({ host: "127.0.0.1", port, token, instance: id }),
+        });
+      });
+    }
+
     yield* provide({
       probeRoute: formatRoute({ host: "127.0.0.1", port, token, instance: PROBE_INSTANCE }),
       useScenario,
+      useInspection,
       getScenarioRecord(id) {
         return scenarios.get(id);
       },

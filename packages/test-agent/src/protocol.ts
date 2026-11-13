@@ -46,6 +46,14 @@ export type ControllerMessage =
   | { t: "config"; mode: "probe" }
   | {
       t: "config";
+      mode: "inspection";
+      acpSessionId: string;
+      nativeSessionId: string;
+      models?: ScenarioModels;
+      refuseOpen: boolean;
+    }
+  | {
+      t: "config";
       mode: "scenario";
       doc: { path: string; source: string };
       journal: WireDurableEvent[];
@@ -123,6 +131,14 @@ const workerMessage: z.ZodType<WorkerMessage> = z.discriminatedUnion("t", [
 
 const configMessage: z.ZodType<ControllerMessage> = z.discriminatedUnion("mode", [
   z.object({ t: z.literal("config"), mode: z.literal("probe") }),
+  z.object({
+    t: z.literal("config"),
+    mode: z.literal("inspection"),
+    nativeSessionId: z.string(),
+    acpSessionId: z.string(),
+    models: modelsSchema.optional(),
+    refuseOpen: z.boolean(),
+  }),
   z.object({
     t: z.literal("config"),
     mode: z.literal("scenario"),

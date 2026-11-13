@@ -36,6 +36,7 @@ import type {
   AcpxSessionDetails,
   AcpxSessionPolicy,
 } from "../src/provider.ts";
+import { useRouteSlot } from "../../test-agent/src/route-slot.ts";
 import { useSerialQueues } from "../src/serial-queue.ts";
 import type { AcpxProvider, ProbeCapableRuntime } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
@@ -2913,6 +2914,64 @@ describe("Tier SO — agent option discovery", () => {
       expect(harness.closeInputs[0]?.discardPersistentState).toBe(undefined);
       expect(harness.turns.length).toBe(0);
     });
+  });
+
+  it("SO9: cancellation joins pending ensure before handing off the inspection slot", function* () {
+    const harness = configured(createFakeRuntime());
+    const pending = withResolvers<void>();
+    const answer = withResolvers<void>();
+    const waiting = withResolvers<void>();
+    const slot = yield* useRouteSlot();
+    let pinned = false;
+    let claimed = false;
+    harness.ensureGate = () =>
+      (function* () {
+        pending.resolve();
+        yield* answer.operation;
+        expect(pinned).toBe(true);
+      })();
+    yield* useFlatWorld(CWD);
+    const provider = yield* useAcpxProvider(
+      { defaultAgent: "scribe", permissionMode: "deny-all" },
+      {
+        createRuntime: harness.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
+        withInspectionAcquisition: (_agent, acquire) =>
+          slot.withSlot(function* () {
+            pinned = true;
+            try {
+              yield* acquire();
+            } finally {
+              pinned = false;
+            }
+          }),
+      },
+    );
+
+    const inspecting = yield* spawn(() => provider.options());
+    yield* pending.operation;
+    const halting = yield* spawn(() => inspecting.halt());
+    const waiter = yield* spawn(function* () {
+      waiting.resolve();
+      yield* slot.withSlot(function* () {
+        expect(pinned).toBe(false);
+        expect(harness.closeCalls.map((handle) => handle.runtimeSessionName)).toEqual(
+          harness.handleIds,
+        );
+        claimed = true;
+      });
+    });
+    yield* waiting.operation;
+    expect(pinned).toBe(true);
+    expect(claimed).toBe(false);
+    answer.resolve();
+    yield* halting;
+    yield* waiter;
+    expect(claimed).toBe(true);
+    expect(harness.closeInputs[0]?.discardPersistentState).toBe(undefined);
+    expect(harness.configCalls).toEqual([]);
+    expect(harness.turns).toEqual([]);
   });
 
   it("SO7: an unavailable agent is refused before any session exists", function* () {
