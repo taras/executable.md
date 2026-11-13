@@ -324,6 +324,64 @@ main(function* () {
     );
   });
 
+  const legacyPaused = withResolvers<void>();
+  const legacyBefore = yield* events();
+  const legacy = yield* scoped(function* () {
+    yield* Component.around({
+      *expand([request], next) {
+        if (request.expansion.name === "Entry.CodexAdmission") {
+          legacyPaused.resolve();
+          yield* suspend();
+        }
+        return yield* next(request);
+      },
+    });
+    return yield* withRepl(function* (repl) {
+      const source = `\`\`\`bash exec as="legacyPrefix"\nprintf "%s" legacy\n\`\`\`
+<Entry.CodexAdmission repository={${JSON.stringify(repository)}} model="gpt-6.1-sol" effort="medium" as="legacyVerdict" />
+<Output><Json value={legacyVerdict} /></Output>`;
+      const submitted = value(yield* repl.session.submit(source));
+      yield* within(legacyPaused.operation);
+      expect(repl.session.model.entries.at(-1)).toMatchObject({
+        key: submitted.entry,
+        settled: false,
+      });
+      const journal = yield* entryJournal(repl.workspace);
+      expect(
+        journal.some(
+          (event) => event.type === "yield" && event.description.name === "Entry.CodexAdmission",
+        ),
+      ).toBe(false);
+      expect(yield* events()).toEqual(legacyBefore);
+      return { execution: repl.execution, entry: submitted.entry };
+    });
+  });
+  yield* withRepl(
+    function* (reopened) {
+      expect(reopened.execution).toBe(legacy.execution);
+      value(yield* within(reopened.session.join()));
+      expect(reopened.session.model.entries.at(-1)).toMatchObject({
+        key: legacy.entry,
+        terminal: { status: "ok", output: "true" },
+      });
+      const journal = yield* entryJournal(reopened.workspace);
+      const retained = journal.filter((event) => event.type === "yield");
+      const imported = retained.findIndex(
+        ({ description }) =>
+          description.type === "import_component" && description.name === "Entry.CodexAdmission",
+      );
+      expect(imported).toBeGreaterThanOrEqual(0);
+      expect(retained[imported + 1]).toMatchObject({
+        description: { type: "delivery_review_observation", name: "entry-codex-verdict" },
+        result: { status: "ok", value: true },
+      });
+      const resumed = (yield* events()).slice(legacyBefore.length);
+      expect(resumed.filter(({ method }) => method === "thread/start")).toHaveLength(1);
+      expect(resumed.filter(({ method }) => method === "turn/start")).toEqual([]);
+    },
+    encodeLocation(initialState(legacy.execution).route),
+  );
+
   function* firstLaunch() {
     return yield* withRepl(function* (repl) {
       // The REPL permits its session components directory outside the source checkout.

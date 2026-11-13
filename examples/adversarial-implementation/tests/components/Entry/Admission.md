@@ -3,9 +3,8 @@ props:
   type: object
   properties:
     repository: {type: string, minLength: 1}
-    model: {type: string, minLength: 1}
-    effort: {type: string, minLength: 1}
-  required: [repository, model, effort]
+    recipe: {type: object}
+  required: [repository, recipe]
   additionalProperties: false
 returns: {type: boolean}
 ---
