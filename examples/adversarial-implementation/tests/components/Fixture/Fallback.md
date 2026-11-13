@@ -268,9 +268,9 @@ rm -r -- {quotedReplacement}
 <Delivery.Status delivery={delivery} number={7} as="resumable" />
 <AssertEquals actual={[resumable.status,resumable.nextAction]} expected={["review_pending","review"]} />
 ```bash exec as="overlap"
-{props.runner} {entry} --props-action review > first.out 2> first.err &
+{props.runner} {entry} --props-action review --verbose > first.out 2> first.err &
 first=$!
-{props.runner} {entry} --props-action review > second.out 2> second.err &
+{props.runner} {entry} --props-action review --verbose > second.out 2> second.err &
 second=$!
 wait "$first"
 firstExit=$?
@@ -339,16 +339,174 @@ async function stdoutSummary(path) {
   const value = parsed(channel.text);
   return STATUSES.includes(value?.status) && ACTIONS.includes(value?.nextAction) ? "status " + value.status + "/" + value.nextAction : "other-redacted";
 }
-async function stderrSummary(path) {
-  const channel = await read(path);
-  if (channel.state !== "read") {
-    return channel.state;
+const CEILING = 1048576;
+const LINE = 4096;
+const ESCAPE = /\u001b\[[0-9;]*[A-Za-z]/g;
+const EVENT = /\[(yield|close)\] /;
+const FIXTURE_ROLE = "/tests/components/Delivery/Role.md";
+const PRODUCTION_ROLE = "/components/Delivery/Role.md";
+function exitToken(rest) {
+  const status = /^ → (ok|err)/.exec(rest);
+  if (status === null) {
+    return "?";
   }
-  if (channel.text.trim() === "") {
-    return "empty";
+  if (status[1] === "err") {
+    return "E";
   }
-  const labels = REFUSALS.filter(([text]) => channel.text.includes(text)).map(([, label]) => label);
-  return labels.length === 0 ? "other-redacted" : labels.join("+");
+  const code = /exitCode: (-?[0-9]{1,3})[,} ]/.exec(rest);
+  return code === null ? "?" : code[1];
+}
+function classify(state, text) {
+  const at = text.search(EVENT);
+  const body = at === -1 ? text : text.slice(0, at);
+  if (body.trim() !== "") {
+    state.nonEvent += 1;
+    for (const [phrase, label] of REFUSALS) {
+      if (body.includes(phrase) && !state.refusals.includes(label)) {
+        state.refusals.push(label);
+      }
+    }
+  }
+  if (at === -1) {
+    return;
+  }
+  const event = text.slice(at);
+  state.events += 1;
+  if (event.startsWith("[close] ")) {
+    const close = /^\[close\] root → ([a-z]{1,16})/.exec(event);
+    if (close !== null) {
+      state.rootClose = close[1];
+    }
+    return;
+  }
+  const arrow = event.indexOf(" → ");
+  const name = arrow === -1 ? event.slice(8) : event.slice(8, arrow);
+  const rest = arrow === -1 ? "" : event.slice(arrow);
+  const ok = rest.startsWith(" → ok");
+  const phase = state.mkdirs.length === 0 ? "before" : "after";
+  if (name.startsWith("exec:exec:test -e ")) {
+    state.probeCount += 1;
+    if (state.probes.length < 8) {
+      state.probes.push(exitToken(rest));
+    }
+    if (state.mkdirs.length === 0) {
+      state.lastPair = [state.lastPair[1], exitToken(rest)];
+      state.pairSeen += 1;
+    }
+  } else if (name.startsWith("exec:exec:mkdir -- ")) {
+    state.mkdirCount += 1;
+    if (state.mkdirs.length < 4) {
+      state.mkdirs.push(exitToken(rest));
+    }
+    if (state.mkdirCount === 1) {
+      state.firstMkdir = { preview: name.slice(19), pair: state.lastPair.slice(), pairs: state.pairSeen };
+    }
+  } else if (name === "import_component:Delivery.Dispatch" && ok) {
+    state.dispatch[phase] += 1;
+  } else if (name === "import_component:Delivery.Role" && ok) {
+    const path = /path: '([^']*)'/.exec(rest);
+    const kind = path === null ? "other" : path[1].endsWith(FIXTURE_ROLE) ? "fixture" : path[1].endsWith(PRODUCTION_ROLE) ? "production" : "other";
+    state.role[kind][phase] += 1;
+  } else if (name === "import_component:Fail" && ok) {
+    state.fail[phase] += 1;
+  }
+}
+function attribution(state, replacementPath) {
+  if (state.firstMkdir === null) {
+    return "none";
+  }
+  const preview = state.firstMkdir.preview;
+  const quoted = "'" + replacementPath + "'";
+  const consistent = preview.trimEnd().length > 1 && quoted.startsWith(preview.trimEnd());
+  if (!consistent) {
+    return "ambiguous preview-mismatch";
+  }
+  if (2 > state.firstMkdir.pairs) {
+    return "ambiguous no-preceding-probe-pair";
+  }
+  const [primary, replaced] = state.firstMkdir.pair;
+  if (primary !== "0") {
+    return "ambiguous primary-not-occupied";
+  }
+  if (replaced === "0" || replaced === "?" || replaced === "E") {
+    return "ambiguous replacement-probe-" + (replaced === "0" ? "present" : "unread");
+  }
+  return state.mkdirCount === 1 ? "replacement" : "replacement-first-of-" + Math.min(state.mkdirCount, 99);
+}
+async function trace(path, replacementPath) {
+  const state = { events: 0, nonEvent: 0, clipped: 0, refusals: [], probes: [], probeCount: 0, lastPair: ["-", "-"], pairSeen: 0, mkdirs: [], mkdirCount: 0, firstMkdir: null, dispatch: { before: 0, after: 0 }, role: { fixture: { before: 0, after: 0 }, production: { before: 0, after: 0 }, other: { before: 0, after: 0 } }, fail: { before: 0, after: 0 }, rootClose: null };
+  let file;
+  try {
+    file = await Deno.open(path);
+  } catch {
+    return "unavailable";
+  }
+  let bytes = 0;
+  let ended = false;
+  let undecodable = false;
+  let line = "";
+  let long = false;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const buffer = new Uint8Array(65536);
+  const take = (text) => {
+    const parts = text.split("\n");
+    for (let index = 0; parts.length > index; index += 1) {
+      const part = parts[index];
+      if (!long) {
+        line += part;
+        if (line.length > LINE) {
+          line = line.slice(0, LINE);
+          long = true;
+          state.clipped += 1;
+        }
+      }
+      if (parts.length - 1 > index) {
+        classify(state, line.replace(ESCAPE, ""));
+        line = "";
+        long = false;
+      }
+    }
+  };
+  try {
+    while (CEILING > bytes) {
+      const count = await file.read(buffer.subarray(0, Math.min(buffer.length, CEILING - bytes)));
+      if (count === null) {
+        ended = true;
+        break;
+      }
+      bytes += count;
+      take(decoder.decode(buffer.subarray(0, count), { stream: true }));
+    }
+    if (!ended) {
+      ended = (await file.read(new Uint8Array(1))) === null;
+    }
+    if (ended) {
+      take(decoder.decode());
+      if (line !== "") {
+        classify(state, line.replace(ESCAPE, ""));
+      }
+    }
+  } catch {
+    undecodable = true;
+  } finally {
+    file.close();
+  }
+  const completeness = undecodable ? "unreadable" : !ended ? "truncated at 1 MiB" : state.rootClose === null ? "no root close" : "complete";
+  const mkdir = attribution(state, replacementPath);
+  const first = state.mkdirs[0];
+  const roleAfter = state.role.fixture.after;
+  const reserved = mkdir === "replacement" || mkdir.startsWith("replacement-first");
+  const label = completeness !== "complete" ? "incomplete" : reserved ? (first === "0" ? (roleAfter > 0 ? "reserved-dispatched" : "reserved-not-dispatched") : (roleAfter > 0 ? "refused-reservation-dispatched" : "refused-reservation")) : mkdir === "none" ? (state.fail.before > 0 ? "gate-refused" : "no-reservation") : "ambiguous";
+  const counts = (pair) => pair.before + "/" + pair.after;
+  return [
+    "trace " + completeness + " " + Math.ceil(bytes / 1024) + " KiB, events " + state.events + (state.clipped > 0 ? ", clipped lines " + state.clipped : ""),
+    "class " + label,
+    "probes " + (state.probes.join(",") || "none") + (state.probeCount > 8 ? " +" + (state.probeCount - 8) + " more" : ""),
+    "mkdir " + (state.mkdirs.join(",") || "none") + (state.mkdirCount > 4 ? " +" + (state.mkdirCount - 4) + " more" : "") + " attributed " + mkdir,
+    "before/after reservation: dispatch " + counts(state.dispatch) + ", fixture role " + counts(state.role.fixture) + ", production role " + counts(state.role.production) + ", other role " + counts(state.role.other) + ", fail " + counts(state.fail),
+    "root close " + (state.rootClose ?? "absent"),
+    "non-event lines " + state.nonEvent + " refusals " + (state.refusals.join("+") || "none"),
+  ].join(", ");
 }
 async function positions(path) {
   const file = await read(path);
@@ -381,8 +539,8 @@ console.log([
   waits === null ? "post-wait record absent" : "first pid " + waits[1] + " wait " + waits[2] + ", second pid " + waits[3] + " wait " + waits[4],
   "called.json positions " + await positions(called),
   "replacement directory " + await presence(replacement) + ": " + files.join(", "),
-  "first stdout " + await stdoutSummary(firstOut) + ", stderr " + await stderrSummary(firstErr),
-  "second stdout " + await stdoutSummary(secondOut) + ", stderr " + await stderrSummary(secondErr),
+  "first stdout " + await stdoutSummary(firstOut) + ", " + await trace(firstErr, replacement),
+  "second stdout " + await stdoutSummary(secondOut) + ", " + await trace(secondErr, replacement),
 ].join("; ").slice(0, 1800));
 COLLECT
 ```
