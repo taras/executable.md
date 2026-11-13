@@ -906,7 +906,10 @@ and `XMD_EXAMPLE_TEST_COMMAND`: the prepared Deno CLI above followed by
 `run --allow-absolute` and by `test`, as quoted shell words. Fixture documents
 run their real workflow through those commands under every outer runtime,
 because the run profile they exercise is the Deno host's. The artifact-return
-suites also receive `XMD_ARTIFACT_RETURN_EVIDENCE` when it is set.
+suites also receive `XMD_ARTIFACT_RETURN_EVIDENCE` when it is set. The fixture
+plugin adds `--node-modules-dir=manual --cached-only --frozen` when the Deno
+source host relaunches itself as a TestAgent worker, including workers for
+isolated run-profile children.
 
 Each suite but `Implementation`, whose named groups carry their own deadlines,
 runs under a whole-launch deadline: `Preparation` 420 seconds, `Friction` 180,
