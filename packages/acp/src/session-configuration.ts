@@ -14,6 +14,11 @@
  * failure restores the previous settings in model-first order and preserves the
  * original failure. Unverifiable restoration marks the session unusable for the
  * rest of the run.
+ *
+ * A model change followed by an effort setting can run on one connection the
+ * provider offers for the attempt. There, a selector counts as known only from
+ * a response that listed every selector, so restoration rewrites whatever a
+ * failed write may have moved and verifies it from the answer to that rewrite.
  */
 
 import { ensure, scoped } from "effection";
@@ -279,6 +284,205 @@ export interface ConfigurationTarget {
   readStatus(): Operation<AcpRuntimeStatus>;
   write(optionId: string, value: string): Operation<void>;
   markUnusable(): void;
+  /**
+   * Run `body` on one connection to this conversation, closed before this
+   * settles; `declined` when the provider routes this attempt the ordinary way.
+   * `modelOptionId` is the selector the attempt writes first.
+   */
+  connect?<T>(
+    modelOptionId: string,
+    body: (connection: ConfigurationConnection) => Operation<T>,
+  ): Operation<{ declined: true } | { declined: false; value: T }>;
+}
+
+/** One configuration attempt's connection, as long as `connect` runs its body. */
+export interface ConfigurationConnection {
+  /** The connected conversation's last saved status. */
+  readStatus(): AcpRuntimeStatus;
+  /**
+   * One saved write; `settled` hears whether the response listed every
+   * selector, even when the caller stopped waiting for it.
+   */
+  write(optionId: string, value: string, settled: (complete: boolean) => void): Operation<void>;
+  /** Whether this connection still has the exact conversation it loaded. */
+  usable(): boolean;
+}
+
+type Setting = "model" | "effort";
+
+/**
+ * Put back `prior` on one connection, as far as its own answers can prove.
+ *
+ * `unknown` names the settings no complete response has reported since a write
+ * that may have moved them; each is rewritten rather than trusted, and only a
+ * complete answer to that rewrite clears it.
+ */
+function* restoreConnected(
+  connection: ConfigurationConnection,
+  prior: { readonly model: string; readonly effort: string | undefined },
+  unknown: Set<Setting>,
+): Operation<boolean> {
+  function* rewrite(optionId: string, value: string, setting: Setting): Operation<void> {
+    unknown.add(setting);
+    if (setting === "model") {
+      unknown.add("effort");
+    }
+    yield* connection.write(optionId, value, (complete) => {
+      if (complete) {
+        unknown.clear();
+      }
+    });
+  }
+  try {
+    if (!connection.usable()) {
+      return false;
+    }
+    const current = readAgentOptions(connection.readStatus());
+    if (current.model === null) {
+      return false;
+    }
+    if (unknown.has("model") || current.model.set.selected !== prior.model) {
+      yield* rewrite(current.model.optionId, prior.model, "model");
+    }
+    const refreshed = readAgentOptions(connection.readStatus());
+    if (prior.effort !== undefined) {
+      if (refreshed.effort === null) {
+        return false;
+      }
+      if (unknown.has("effort") || refreshed.effort.set.selected !== prior.effort) {
+        yield* rewrite(refreshed.effort.optionId, prior.effort, "effort");
+      }
+    }
+    const verified = readAgentOptions(connection.readStatus());
+    return (
+      unknown.size === 0 &&
+      verified.model?.set.selected === prior.model &&
+      (prior.effort === undefined || verified.effort?.set.selected === prior.effort)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** How a connected attempt ended without throwing. */
+type ConnectedOutcome =
+  | { readonly kind: "configured"; readonly selectors: AgentOptionSelectors }
+  /** The model write landed and its answer cannot authorize effort; continue ordinarily. */
+  | { readonly kind: "split" };
+
+/**
+ * Change the model and then effort on one connection.
+ *
+ * `owe` records that in-place restoration could not prove the prior settings,
+ * so the caller reattaches once the connection has closed.
+ */
+function* configureConnected(
+  connection: ConfigurationConnection,
+  target: ConfigurationTarget,
+  request: { readonly model: string; readonly effort: string },
+  initial: AgentOptionSelectors & { readonly model: RecognizedSelector },
+  owe: () => void,
+): Operation<ConnectedOutcome> {
+  return yield* scoped(function* (): Operation<ConnectedOutcome> {
+    const prior = { model: initial.model.set.selected, effort: initial.effort?.set.selected };
+    const unknown = new Set<Setting>();
+    let touched = false;
+    let settled = false;
+    let recovered = false;
+    let complete = false;
+
+    function* write(optionId: string, value: string, setting: Setting): Operation<boolean> {
+      touched = true;
+      unknown.add(setting);
+      if (setting === "model") {
+        unknown.add("effort");
+      }
+      complete = false;
+      yield* connection.write(optionId, value, (answered) => {
+        complete = answered;
+        if (answered) {
+          unknown.clear();
+        }
+      });
+      return complete;
+    }
+
+    yield* ensure(function* () {
+      if (settled || recovered || !touched) {
+        return;
+      }
+      if (!(yield* restoreConnected(connection, prior, unknown))) {
+        owe();
+      }
+    });
+
+    try {
+      const answered = yield* write(initial.model.optionId, request.model, "model");
+      if (!answered || !connection.usable()) {
+        settled = true;
+        return { kind: "split" };
+      }
+      const refreshed = readAgentOptions(connection.readStatus());
+      if (refreshed.model?.set.selected !== request.model) {
+        throw configurationFailure(
+          `this agent did not apply the model "${request.model}" to session ` +
+            `"${target.sessionKey}", and reports "${refreshed.model?.set.selected ?? "nothing"}"`,
+          "configuration-mismatch",
+          "model",
+        );
+      }
+      const model = refreshed.model.set.selected;
+      if (refreshed.effort === null) {
+        throw configurationFailure(effortUnavailable(model), "selector-unavailable", "effort");
+      }
+      if (!refreshed.effort.set.options.some((entry) => entry.id === request.effort)) {
+        throw new AcpConfigurationError(invalidEffort(model, request.effort, refreshed.effort.set));
+      }
+      if (refreshed.effort.set.selected !== request.effort) {
+        yield* write(refreshed.effort.optionId, request.effort, "effort");
+      }
+      const verified = readAgentOptions(connection.readStatus());
+      if (verified.effort?.set.selected !== request.effort) {
+        throw configurationFailure(
+          `this agent did not apply the effort level "${request.effort}" to session ` +
+            `"${target.sessionKey}", and reports "${verified.effort?.set.selected ?? "nothing"}"`,
+          "configuration-mismatch",
+          "effort",
+        );
+      }
+      if (verified.model?.set.selected !== request.model) {
+        throw configurationFailure(
+          `this agent stopped reporting the model "${request.model}" for session ` +
+            `"${target.sessionKey}" while its effort level was applied`,
+          "configuration-mismatch",
+          "model",
+        );
+      }
+      settled = true;
+      return { kind: "configured", selectors: verified };
+    } catch (error) {
+      if (!touched) {
+        recovered = true;
+        throw error;
+      }
+      const restored = yield* restoreConnected(connection, prior, unknown);
+      recovered = true;
+      if (!restored) {
+        owe();
+      }
+      throw error;
+    }
+  });
+}
+
+function unusableAfter(error: unknown, sessionKey: string): AcpConfigurationError {
+  const original = error instanceof Error ? error : new Error(String(error));
+  const refused = new AcpConfigurationError(
+    `${original.message}\n${restorationFailed(sessionKey)}`,
+    { cause: original },
+  );
+  refused.sessionUnusable = true;
+  return refused;
 }
 
 function* read(target: ConfigurationTarget): Operation<AgentOptionSelectors> {
@@ -304,12 +508,118 @@ export function* applySessionConfiguration(
 ): Operation<AgentOptionSelectors> {
   return yield* scoped(function* (): Operation<AgentOptionSelectors> {
     const initial = yield* read(target);
+    const model = request.model;
+    const effort = request.effort;
+    const connect = target.connect;
+    if (model === undefined || effort === undefined || connect === undefined) {
+      return yield* configureOrdinary(target, request, initial, false);
+    }
+    const selector = validModel(target, model, initial);
+    if (selector.set.selected === model) {
+      return yield* configureOrdinary(target, request, initial, false);
+    }
+    const connected = { ...initial, model: selector };
+    let owed = false;
+    let reattached = false;
+
+    /** One exact reattachment that rewrites both settings and reads the answers. */
+    const reattach = function* (): Operation<boolean> {
+      reattached = true;
+      const prior = { model: selector.set.selected, effort: initial.effort?.set.selected };
+      try {
+        const outcome = yield* connect(selector.optionId, (connection) =>
+          restoreConnected(connection, prior, new Set<Setting>(["model", "effort"])),
+        );
+        return !outcome.declined && outcome.value;
+      } catch {
+        return false;
+      }
+    };
+
+    // Registered before the connection opens: a cancelled attempt whose
+    // in-place restoration could not prove itself still owes the reattachment.
+    yield* ensure(function* () {
+      if (owed && !reattached) {
+        let restored = false;
+        try {
+          restored = yield* reattach();
+        } finally {
+          if (!restored) {
+            target.markUnusable();
+          }
+        }
+      }
+    });
+
+    let outcome: { declined: true } | { declined: false; value: ConnectedOutcome };
+    try {
+      outcome = yield* connect(selector.optionId, (connection) =>
+        configureConnected(connection, target, { model, effort }, connected, () => {
+          owed = true;
+        }),
+      );
+    } catch (error) {
+      if (!owed) {
+        throw error;
+      }
+      let restored = false;
+      try {
+        restored = yield* reattach();
+      } finally {
+        if (!restored) {
+          target.markUnusable();
+        }
+      }
+      if (restored) {
+        throw error;
+      }
+      throw unusableAfter(error, target.sessionKey);
+    }
+    if (outcome.declined) {
+      return yield* configureOrdinary(target, request, initial, false);
+    }
+    if (outcome.value.kind === "configured") {
+      return outcome.value.selectors;
+    }
+    return yield* configureOrdinary(target, request, initial, true);
+  });
+}
+
+/** The requested model's selector, or the refusal that names what is offered. */
+function validModel(
+  target: ConfigurationTarget,
+  model: string,
+  initial: AgentOptionSelectors,
+): RecognizedSelector {
+  if (initial.model === null) {
+    throw configurationFailure(modelUnavailable(target.agent), "selector-unavailable", "model");
+  }
+  if (!initial.model.set.options.some((entry) => entry.id === model)) {
+    throw new AcpConfigurationError(unknownModel(target.agent, model, initial.model.set));
+  }
+  return initial.model;
+}
+
+/**
+ * Configure through single writes, starting from `initial`.
+ *
+ * `modelWritten` continues an attempt whose model write already settled on its
+ * own connection: the model is not sent again, and a later failure still owes
+ * the prior settings read before that write.
+ */
+function* configureOrdinary(
+  target: ConfigurationTarget,
+  request: SessionConfiguration,
+  initial: AgentOptionSelectors,
+  modelWritten: boolean,
+): Operation<AgentOptionSelectors> {
+  return yield* scoped(function* (): Operation<AgentOptionSelectors> {
     const priorModel = initial.model?.set.selected;
     const priorEffort = initial.effort?.set.selected;
     // A started write is a write that may have landed, so this is set before
     // one is issued rather than after it answers: an adapter that applies the
     // value and then fails its response has still applied it.
-    let touched = false;
+    let touched = modelWritten;
     let settled = false;
     let recovered = false;
 
@@ -362,21 +672,10 @@ export function* applySessionConfiguration(
 
     try {
       if (request.model !== undefined) {
-        if (initial.model === null) {
-          throw configurationFailure(
-            modelUnavailable(target.agent),
-            "selector-unavailable",
-            "model",
-          );
-        }
-        if (!initial.model.set.options.some((entry) => entry.id === request.model)) {
-          throw new AcpConfigurationError(
-            unknownModel(target.agent, request.model, initial.model.set),
-          );
-        }
-        if (initial.model.set.selected !== request.model) {
+        const selector = validModel(target, request.model, initial);
+        if (!modelWritten && selector.set.selected !== request.model) {
           touched = true;
-          yield* target.write(initial.model.optionId, request.model);
+          yield* target.write(selector.optionId, request.model);
         }
       }
 
@@ -444,13 +743,7 @@ export function* applySessionConfiguration(
         throw error;
       }
       target.markUnusable();
-      const original = error instanceof Error ? error : new Error(String(error));
-      const refused = new AcpConfigurationError(
-        `${original.message}\n${restorationFailed(target.sessionKey)}`,
-        { cause: original },
-      );
-      refused.sessionUnusable = true;
-      throw refused;
+      throw unusableAfter(error, target.sessionKey);
     }
   });
 }

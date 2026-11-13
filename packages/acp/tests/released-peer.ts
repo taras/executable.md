@@ -14,10 +14,19 @@ let sessionId;
 let model = "initial";
 let effort = "high";
 let remembered = "";
+// Control files make the backend outlive its worker and gate configuration.
+const control = name => Boolean(controlDirectory) && fs.existsSync(path.join(controlDirectory, name));
+const settingsFile = () => path.join(controlDirectory, "settings.json");
+if (control("persist-settings") && fs.existsSync(settingsFile())) ({model, effort} = JSON.parse(fs.readFileSync(settingsFile(), "utf8")));
+if (controlDirectory) {
+  fs.appendFileSync(path.join(controlDirectory, "processes.jsonl"), JSON.stringify({pid: process.pid, event: "start"}) + "\\n");
+  process.on("exit", () => fs.appendFileSync(path.join(controlDirectory, "processes.jsonl"), JSON.stringify({pid: process.pid, event: "exit"}) + "\\n"));
+}
+const effortId = () => control("model-effort-ids") ? "effort-" + model : "effort";
 const options = () => [
   { id: "model", name: "Model", category: "model", type: "select", currentValue: model,
     options: ["initial", "selected", "gpt-5.6-luna"].map(value => ({value, name: value})) },
-  { id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: effort,
+  { id: effortId(), name: "Effort", category: "thought_level", type: "select", currentValue: effort,
     options: ["high", "xhigh"].map(value => ({value, name: value})) },
 ];
 const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
@@ -35,7 +44,7 @@ process.stdin.on("data", chunk => {
 });
 function handle(request) {
   if (!controlDirectory || !request.method.startsWith("session/")) return respond(request);
-  fs.appendFile(path.join(controlDirectory, "methods.jsonl"), JSON.stringify({method: request.method, value: request.params?.value, sessionId: request.params?.sessionId, text: request.params?.prompt?.map(block => block.text ?? "").join("")}) + "\\n", error => {
+  fs.appendFile(path.join(controlDirectory, "methods.jsonl"), JSON.stringify({pid: process.pid, method: request.method, configId: request.params?.configId, value: request.params?.value, sessionId: request.params?.sessionId, text: request.params?.prompt?.map(block => block.text ?? "").join("")}) + "\\n", error => {
     if (error) throw error;
     const name = request.method === "session/load" ? "load" : request.method === "session/prompt" ? "prompt" : undefined;
     if (!name) return respond(request);
@@ -79,9 +88,22 @@ function respond(request) {
       });
     } else loaded();
   } else if (request.method === "session/set_config_option") {
-    if (request.params.configId === "model") model = request.params.value;
-    if (request.params.configId === "effort") effort = request.params.value;
-    reply(request.id, {configOptions: options()});
+    const configId = request.params.configId;
+    if (control("refuse-all-config") || (configId !== "model" && configId !== effortId())) {
+      return send({jsonrpc: "2.0", id: request.id, error: {code: -32602, message: "Refused config option " + configId}});
+    }
+    if (configId === "model") model = request.params.value;
+    else effort = request.params.value;
+    if (control("persist-settings")) fs.writeFileSync(settingsFile(), JSON.stringify({model, effort}));
+    const answer = () => {
+      if (control("refuse-config-" + configId)) {
+        send({jsonrpc: "2.0", id: request.id, error: {code: -32603, message: "Controlled refusal of " + configId + " after it applied"}});
+      } else reply(request.id, control("legacy-config-" + configId) ? {} : {configOptions: options()});
+    };
+    if (!control("hold-config-" + configId)) return answer();
+    fs.writeFileSync(path.join(controlDirectory, "mutated-" + configId), "");
+    const wait = () => control("release-config-" + configId) ? answer() : setTimeout(wait, 5);
+    wait();
   } else if (request.method === "session/prompt") {
     const text = request.params.prompt.map(block => block.text ?? "").join("");
     const answer = () => {

@@ -916,8 +916,31 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
   private resolveHandleState;
 }
 export declare function createAcpRuntime(options: AcpRuntimeOptions): AcpxRuntime;
+/** XMD cold session configuration: one attempt's control connection, as its body sees it. */
+interface ColdSessionConfigurationControl {
+  /** XMD cold session configuration: the connected record's status, detached. */
+  status(): AcpRuntimeStatus;
+  /** XMD cold session configuration: settled and saved before it answers; `acknowledged` says the response listed every selector. */
+  write(key: string, value: string): Promise<{
+    status: AcpRuntimeStatus;
+    acknowledged: boolean;
+  }>;
+  /** XMD cold session configuration: whether this connection still has the exact loaded session. */
+  usable(): boolean;
+}
+/** XMD cold session configuration: declined when anything already holds the record; reached only through src/acpx-runtime.ts. */
+export declare function withColdSessionConfiguration<T>(runtime: AcpRuntime, input: {
+  handle: AcpRuntimeHandle;
+  key: string;
+  requestedModel?: string;
+}, body: (control: ColdSessionConfigurationControl) => Promise<T>): Promise<{
+  declined: true;
+} | {
+  declined: false;
+  value: T;
+}>;
 export declare function createRuntimeStore(options: {
   stateDir: string;
 }): AcpSessionStore;
 // XMD prompt usage: AcpRuntimeTurnUsage and AcpRuntimeQuotaTokens are exported with the turn types.
-export { type AcpAgentInspection, type AcpAgentInspectionOptions, type AcpAgentRegistry, type AcpElicitationContext, type AcpElicitationHandler, type AcpElicitationMode, type AcpElicitationRequest, type AcpElicitationResponse, type AcpFileSessionStoreOptions, type AcpInspectableAgentRegistry, type AcpJsonRpcMessage, type AcpMessageDirection, type AcpPermissionDecision, type AcpPermissionHandler, type AcpPermissionRequest, type AcpProcessExit, type AcpProcessLaunch, type AcpProcessLaunchScope, type AcpProcessLifecycle, type AcpProcessSpawnFailure, type AcpProcessStarted, type AcpRuntime, type AcpRuntimeMaterialization, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePlanEntry, type AcpRuntimePromptMode, type AcpRuntimeSessionContext, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionPermissions, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeTurnUsage, type AcpRuntimeQuotaTokens, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, type AcpTextDeltaOriginMeta, DEFAULT_AGENT_NAME, type InspectAgentModelsOptions, type PermissionPolicy, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SessionWatchEvent, type SessionWatchResult, type SharedAcpRuntimeOptions, type SystemPromptOption, createAgentRegistry };
+export { type AcpAgentInspection, type AcpAgentInspectionOptions, type AcpAgentRegistry, type AcpElicitationContext, type AcpElicitationHandler, type AcpElicitationMode, type AcpElicitationRequest, type AcpElicitationResponse, type AcpFileSessionStoreOptions, type AcpInspectableAgentRegistry, type AcpJsonRpcMessage, type AcpMessageDirection, type AcpPermissionDecision, type AcpPermissionHandler, type AcpPermissionRequest, type AcpProcessExit, type AcpProcessLaunch, type AcpProcessLaunchScope, type AcpProcessLifecycle, type AcpProcessSpawnFailure, type AcpProcessStarted, type AcpRuntime, type AcpRuntimeMaterialization, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePlanEntry, type AcpRuntimePromptMode, type AcpRuntimeSessionContext, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionPermissions, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeTurnUsage, type AcpRuntimeQuotaTokens, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, type AcpTextDeltaOriginMeta, type ColdSessionConfigurationControl, DEFAULT_AGENT_NAME, type InspectAgentModelsOptions, type PermissionPolicy, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SessionWatchEvent, type SessionWatchResult, type SharedAcpRuntimeOptions, type SystemPromptOption, createAgentRegistry };

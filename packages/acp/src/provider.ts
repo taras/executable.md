@@ -83,7 +83,7 @@ import {
   applySessionConfiguration,
   sessionUnusable,
 } from "./session-configuration.ts";
-import type { ConfigurationTarget } from "./session-configuration.ts";
+import type { ConfigurationConnection, ConfigurationTarget } from "./session-configuration.ts";
 import { allocatesIdentity, bindsBuild } from "./native-launch.ts";
 import type {
   BoundProviderReturnedAdapter,
@@ -103,6 +103,7 @@ import {
   createAgentRegistry,
   createRuntimeStore,
   resolveAgentCommand,
+  withColdSessionConfiguration,
 } from "./acpx-runtime.ts";
 import type {
   AcpAgentRegistry,
@@ -118,6 +119,7 @@ import type {
   AcpRuntimeUsageCost,
   AcpSessionRecord,
   AcpSessionStore,
+  ColdSessionConfigurationControl,
   SessionAgentOptions,
 } from "./acpx-runtime.ts";
 import {
@@ -549,6 +551,50 @@ function modelRequest(configuration: SessionConfiguration | undefined): {
   requestedModel?: string;
 } {
   return configuration?.model === undefined ? {} : { requestedModel: configuration.model };
+}
+
+/**
+ * One ACPX control connection as a configuration attempt writes through it.
+ *
+ * A write's Promise is joined even when its caller is cancelled, as the
+ * single-write path does: restoration must not start while this exact write
+ * can still move the conversation. Its settlement reports whether the answer
+ * listed every selector, whoever is still waiting for it.
+ */
+function configurationConnection(
+  control: ColdSessionConfigurationControl,
+): ConfigurationConnection {
+  return {
+    readStatus: () => control.status(),
+    usable: () => control.usable(),
+    write(optionId, value, settled) {
+      return scoped(function* (): Operation<void> {
+        let pending: Promise<void> | undefined;
+        let observed = false;
+        yield* ensure(function* () {
+          if (observed || pending === undefined) {
+            return;
+          }
+          observed = true;
+          yield* until(
+            pending.then(
+              () => undefined,
+              () => undefined,
+            ),
+          );
+        });
+        pending = control.write(optionId, value).then((answer) => {
+          settled(answer.acknowledged);
+        });
+        try {
+          yield* until(pending);
+        } catch (error) {
+          throw nativeIdentityRefusal(error) ?? error;
+        }
+        observed = true;
+      });
+    },
+  };
 }
 
 function asName(routed: string | Session | undefined): string | undefined {
@@ -1134,6 +1180,9 @@ function* useAcpxProviderState(
   dependencies?: AcpxProviderDependencies,
 ): Operation<AcpxProviderState> {
   const createRuntime = dependencies?.createRuntime ?? createAcpRuntime;
+  // Only the in-process runtime this package builds can carry one attempt's
+  // dependent writes on one connection; a substituted runtime writes singly.
+  const connectsConfiguration = dependencies?.createRuntime === undefined;
   const store =
     dependencies?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
   const registry = dependencies?.agentRegistry ?? createAgentRegistry();
@@ -2948,7 +2997,74 @@ function* useAcpxProviderState(
           current.unusable = true;
         }
       },
+      ...(connectsConfiguration && entry.state === "existing"
+        ? {
+            connect: (modelOptionId, body) =>
+              connectConfiguration(entry, modelOptionId, configuration, body),
+          }
+        : {}),
     };
+  }
+
+  /**
+   * Run one configuration attempt's body on one ACPX control connection.
+   *
+   * The body runs in this operation's scope and its outcome travels back as a
+   * `Result`, so a refusal reaches ACPX as the rejection that closes the
+   * connection rather than as a failure of this scope. The manager's Promise
+   * is joined before this settles, cancellation included: the close, and the
+   * save after it, belong to the attempt that opened the connection.
+   */
+  function connectConfiguration<T>(
+    entry: ManagedSession,
+    modelOptionId: string,
+    configuration: SessionConfiguration | undefined,
+    body: (connection: ConfigurationConnection) => Operation<T>,
+  ): Operation<{ declined: true } | { declined: false; value: T }> {
+    return scoped(function* () {
+      const scope = yield* useScope();
+      let pending: Promise<{ declined: true } | { declined: false; value: T }> | undefined;
+      let observed = false;
+      yield* ensure(function* () {
+        if (observed || pending === undefined) {
+          return;
+        }
+        observed = true;
+        yield* until(
+          pending.then(
+            () => undefined,
+            () => undefined,
+          ),
+        );
+      });
+      pending = withColdSessionConfiguration(
+        entry.runtime.runtime,
+        { handle: entry.handle, key: modelOptionId, ...modelRequest(configuration) },
+        (control) =>
+          scope
+            .run(function* (): Operation<Result<T>> {
+              try {
+                return Ok(yield* body(configurationConnection(control)));
+              } catch (error) {
+                return Err(toError(error));
+              }
+            })
+            .then((result) => {
+              if (!result.ok) {
+                throw result.error;
+              }
+              return result.value;
+            }),
+      );
+      let outcome: { declined: true } | { declined: false; value: T };
+      try {
+        outcome = yield* until(pending);
+      } catch (error) {
+        throw nativeIdentityRefusal(error) ?? error;
+      }
+      observed = true;
+      return outcome;
+    });
   }
 
   /**

@@ -226,6 +226,42 @@ the old writer and passes on this writer, preserving the second publication.
 Injected I/O failures still fail. This establishes the demonstrated collision
 defect, not the cause of the historical live incident. No writer patch is added.
 
+## Cold session configuration (#1146)
+
+A resumed conversation that changes model and then effort used to start one
+cold control worker per write, because the public setter closes its client
+before returning. Effort's selector and choices come from the model write's
+answer, so the provider cannot predeclare both writes either.
+
+The `XMD cold session configuration:` seam adds a standalone
+`withColdSessionConfiguration` export, reached only through
+`packages/acp/src/acpx-runtime.ts`. An `AcpxRuntime` static block binds it to an
+ECMAScript-private method, so neither the runtime class type nor the package
+entrypoint gains a member. Under the record's existing operation lock, the
+manager declines when an active controller, retained or retiring owner, control
+record, close or pending materialization already holds the record, or when the
+session is not persistent. Otherwise one strict-resume control client loads the
+exact session with the model write's existing replay exclusion and runs the
+caller's body. Each write resolves the selector the same way as
+`setConfigOption`, applies the response and checkpoints the record before
+answering. It also reports whether the response listed every selector.
+
+The manager owns that client's single close. `withConnectedSession` skips its
+own close and process-interrupt race for this path. A strict-close client
+rejects its close when the process and its tracked descendants cannot be proved
+gone, keeps their accounting and releases the rejected cleanup for retry. A
+rejected close leaves the client in `retiringSessionOwners` with its checkpoint
+and no reset record, so the next operation on that record retries retirement
+first. `runtime.js` owns the seam, `queue-owner-runtime-ucHvXJ33.js` the
+scoped finalization and strict close, and `runtime.d.ts` declares the internal
+export.
+
+Remove the seam when a published runtime offers dependent configuration on one
+connection with per-write durable acknowledgements, a joined close that reports
+unproved quiescence, and exact reattachment for recovery. The replacement must
+pass the cold configuration regressions in
+`packages/acp/tests/released-runtime.test.ts` and offline vendor verification.
+
 ## Packaging adaptations and maintenance
 
 Sibling declaration imports name their colocated `.d.ts` files; source-map
