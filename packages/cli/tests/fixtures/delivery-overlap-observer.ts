@@ -7,7 +7,11 @@
  * positions. Targets leave the process as digest labels, never as paths.
  */
 import { Execution, Plugin } from "@executablemd/core/api";
-import { type DurableEvent, type DurableStream, preserveJournalProvenance } from "@executablemd/durable-streams";
+import {
+  type DurableEvent,
+  type DurableStream,
+  preserveJournalProvenance,
+} from "@executablemd/durable-streams";
 import { API, env } from "@executablemd/runtime";
 import { writeTextFile } from "@effectionx/fs";
 import { ensure, type Operation, until } from "effection";
@@ -51,12 +55,27 @@ const ROOT: Anchor[] = [
     expected: 1,
     test: (line) => line.includes("<Fail") && line.includes("do not start another review"),
   },
-  { site: "reviewEntered", name: "Delivery.Review", expected: 1, test: (line) => line.startsWith("<Delivery.Review ") },
+  {
+    site: "reviewEntered",
+    name: "Delivery.Review",
+    expected: 1,
+    test: (line) => line.startsWith("<Delivery.Review "),
+  },
 ];
 
 const REVIEW: Anchor[] = [
-  { site: "attempts", name: "Delivery.Attempts", expected: 3, test: (line) => line.startsWith("<Delivery.Attempts ") },
-  { site: "primaryReservation", name: "exec", expected: 1, test: (line) => line.startsWith('```bash exec as="reserved"') },
+  {
+    site: "attempts",
+    name: "Delivery.Attempts",
+    expected: 3,
+    test: (line) => line.startsWith("<Delivery.Attempts "),
+  },
+  {
+    site: "primaryReservation",
+    name: "exec",
+    expected: 1,
+    test: (line) => line.startsWith('```bash exec as="reserved"'),
+  },
   {
     site: "attemptRefusal",
     name: "Fail",
@@ -79,7 +98,8 @@ const REVIEW: Anchor[] = [
     site: "replacementRefusal",
     name: "Fail",
     expected: 1,
-    test: (line) => line.includes("<Fail") && line.includes("The replacement review is already reserved"),
+    test: (line) =>
+      line.includes("<Fail") && line.includes("The replacement review is already reserved"),
   },
   {
     site: "replacementDispatch",
@@ -90,7 +110,12 @@ const REVIEW: Anchor[] = [
 ];
 
 const DISPATCH: Anchor[] = [
-  { site: "role", name: "Delivery.Role", expected: 1, test: (line) => line.startsWith("<Delivery.Role ") },
+  {
+    site: "role",
+    name: "Delivery.Role",
+    expected: 1,
+    test: (line) => line.startsWith("<Delivery.Role "),
+  },
 ];
 
 const RESERVATION = /^mkdir -- '((?:[^']|'"'"')*)'\s*$/;
@@ -126,7 +151,10 @@ function digest(target: string): Operation<string> {
   return {
     *[Symbol.iterator]() {
       const bytes = yield* until(crypto.subtle.digest("SHA-256", new TextEncoder().encode(target)));
-      return [...new Uint8Array(bytes)].slice(0, 4).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      return [...new Uint8Array(bytes)]
+        .slice(0, 4)
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
     },
   };
 }
@@ -143,14 +171,18 @@ function positions(content: string): Pick<Write, "prior" | "position"> {
   }
   const values: number[] = [];
   for (const call of parsed) {
-    const position: unknown = typeof call === "object" && call !== null ? Reflect.get(call, "position") : undefined;
+    const position: unknown =
+      typeof call === "object" && call !== null ? Reflect.get(call, "position") : undefined;
     if (typeof position !== "number" || !Number.isSafeInteger(position)) {
       return { prior: "invalid", position: null };
     }
     values.push(position);
   }
   const prior = values.slice(0, -1);
-  return { prior: prior.length > POSITIONS ? "overflow" : prior, position: values[values.length - 1] };
+  return {
+    prior: prior.length > POSITIONS ? "overflow" : prior,
+    position: values[values.length - 1],
+  };
 }
 
 class Observation {
@@ -190,7 +222,10 @@ class Observation {
         this.fault(document + ":" + anchor.site + ":" + found.length);
       }
       found.forEach((line, index) => {
-        sites.set(line, anchor.name + "|" + anchor.site + (anchor.expected > 1 ? String(index + 1) : ""));
+        sites.set(
+          line,
+          anchor.name + "|" + anchor.site + (anchor.expected > 1 ? String(index + 1) : ""),
+        );
       });
     }
     this.sources.set(path, sites);
@@ -227,7 +262,10 @@ class Observation {
     }
     const site = sites.get(line);
     if (site === undefined || !site.startsWith(name + "|")) {
-      if (path === this.review && ["exec", "Fail", "Delivery.Dispatch", "Delivery.Attempts"].includes(name)) {
+      if (
+        path === this.review &&
+        ["exec", "Fail", "Delivery.Dispatch", "Delivery.Attempts"].includes(name)
+      ) {
         this.unattributed = Math.min(COUNT, this.unattributed + 1);
       }
       return undefined;
@@ -261,13 +299,14 @@ class Observation {
         this.retain("dispatch", path, content, DISPATCH);
       }
       if (site === "role") {
-        const origin = path === undefined
-          ? "other"
-          : path.endsWith("tests/components/Delivery/Role.md")
-          ? "fixture"
-          : path.endsWith("components/Delivery/Role.md")
-          ? "production"
-          : "other";
+        const origin =
+          path === undefined
+            ? "other"
+            : path.endsWith("tests/components/Delivery/Role.md")
+              ? "fixture"
+              : path.endsWith("components/Delivery/Role.md")
+                ? "production"
+                : "other";
         this.roles[origin] = Math.min(COUNT, this.roles[origin] + 1);
       }
       return;
@@ -278,7 +317,12 @@ class Observation {
     const command = description.command;
     const content = Array.isArray(command) ? text(command[2]) : undefined;
     const site = this.site(position, "exec");
-    const reserved = site === "primaryReservation" ? "primary" : site === "replacementReservation" ? "replacement" : undefined;
+    const reserved =
+      site === "primaryReservation"
+        ? "primary"
+        : site === "replacementReservation"
+          ? "replacement"
+          : undefined;
     if (content === undefined || (reserved === undefined && !content.startsWith("mkdir -- "))) {
       return;
     }
@@ -289,7 +333,8 @@ class Observation {
     } else if (result.status === "err") {
       canonical = "err";
     }
-    const entry = this.reservations.find((item) => item.content === content && item.canonical === "none") ??
+    const entry =
+      this.reservations.find((item) => item.content === content && item.canonical === "none") ??
       this.reservation({
         kind: kind(decode(content, undefined)),
         site: "none",
@@ -311,7 +356,8 @@ class Observation {
       if (entry.target !== undefined) {
         target = labels.get(entry.target) ?? (yield* digest(entry.target));
         labels.set(entry.target, target);
-        const wanted = entry.kind === "replacement" ? expected : expected.slice(0, -"/replacement".length);
+        const wanted =
+          entry.kind === "replacement" ? expected : expected.slice(0, -"/replacement".length);
         equality = entry.target === wanted ? "equal" : "different";
       }
       reservations.push({
@@ -348,8 +394,11 @@ export default Plugin({
     const called = yield* env("XMD_OVERLAP_CALLED");
     const replacement = yield* env("XMD_OVERLAP_REPLACEMENT");
     if (
-      request.command !== "run" || (slot !== "first" && slot !== "second") || report === undefined ||
-      called === undefined || replacement === undefined
+      request.command !== "run" ||
+      (slot !== "first" && slot !== "second") ||
+      report === undefined ||
+      called === undefined ||
+      replacement === undefined
     ) {
       return undefined;
     }
@@ -364,7 +413,10 @@ export default Plugin({
     });
     yield* API.Process.around({
       *exec([options], next) {
-        const content = options.command[0] === "bash" && options.command[1] === "-c" ? options.command[2] : undefined;
+        const content =
+          options.command[0] === "bash" && options.command[1] === "-c"
+            ? options.command[2]
+            : undefined;
         if (content === undefined || !content.startsWith("mkdir -- ")) {
           return yield* next(options);
         }
@@ -422,7 +474,10 @@ export default Plugin({
           },
         };
         return yield* next(
-          execution.withOptions({ ...execution.options, stream: preserveJournalProvenance(stream, observed) }),
+          execution.withOptions({
+            ...execution.options,
+            stream: preserveJournalProvenance(stream, observed),
+          }),
         );
       },
     });
