@@ -35,9 +35,6 @@ const ACP_SRC = "packages/acp/src";
  */
 const SEAMS: readonly string[] = [
   "materialization",
-  "exactSessionRecordIds",
-  "strictResume",
-  "Strict explicit resume:",
   "XMD prompt diagnostic:",
   "XMD prompt usage:",
   "XMD requested model:",
@@ -271,7 +268,7 @@ describe("Tier AV — vendored ACPX snapshot", () => {
     // this file, and a check that depends on the spelling stops checking.
     const pkg = JSON.parse(yield* until(readFile("packages/acp/package.json", "utf8")));
     const dependencies = (pkg as Record<string, Record<string, string>>).dependencies ?? {};
-    expect(dependencies.acpx).toBe("0.21.1");
+    expect(dependencies.acpx).toBe("0.22.0");
     // Sibling packages resolve through the workspace, as they always have.
     // What must not appear is a local protocol standing in for ACPX, or any
     // dependency reaching into the snapshot: either makes the runtime

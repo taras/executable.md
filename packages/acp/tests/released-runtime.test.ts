@@ -45,7 +45,7 @@ import { makeRecord } from "./helpers.ts";
 import {
   c as LiveSessionCheckpoint,
   l as runPromptTurn,
-} from "../vendor/acpx/generated/queue-owner-runtime-B0mPqOu4.js";
+} from "../vendor/acpx/generated/queue-owner-runtime-ucHvXJ33.js";
 
 import { STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
 

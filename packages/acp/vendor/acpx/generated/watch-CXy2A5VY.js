@@ -1,4 +1,4 @@
-import { E as observeProcessIncarnation, J as SessionWatchError, L as readSessionRecord, Y as watchSession$1, Zt as SessionNotFoundError, l as readQueueOwnerRecord } from "./ipc-BbYFsKOj.js";
+import { E as observeProcessIncarnation, J as SessionWatchError, L as readSessionRecord, Xt as SessionNotFoundError, Y as watchSession$1, l as readQueueOwnerRecord } from "./ipc-CQUNQ8QQ.js";
 // src/session/watch.ts
 const OWNER_OBSERVATION_REUSE_MS = 1e3;
 function reuseObservation(cached) {

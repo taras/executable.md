@@ -431,7 +431,7 @@ describe("headless child ACP clients", () => {
     expect(stdout).toContain("Answered by another supported input.");
     yield* held.task.halt();
   });
-  it("J4: stock ACPX 0.21.1 receives an offered permission and records its own default policy", function* () {
+  it("J4: stock ACPX receives an offered permission and records its own default policy", function* () {
     const held = yield* useHeadlessFixture();
     const home = yield* useTemporary("xmd-headless-stock-permission-home-");
     const stock = createRequire(new URL("../../acp/package.json", import.meta.url)).resolve("acpx");
@@ -1119,12 +1119,12 @@ describe("headless child ACP clients", () => {
     expect(held.host.fake.prompts[1]).not.toContain("Ask through a lost B notification.");
     yield* held.task.halt();
   });
-  it("H5/J4: stock ACPX 0.21.1 sends two actual prompts to the exact live child", function* () {
+  it("H5/J4: stock ACPX sends two actual prompts to the exact live child", function* () {
     const held = yield* useHeadlessFixture();
     const home = yield* useTemporary("xmd-headless-stock-home-");
     const stock = createRequire(new URL("../../acp/package.json", import.meta.url)).resolve("acpx");
     const version = yield* exec("node", { arguments: [stock, "--version"] }).join();
-    expect(version.stdout.trim()).toBe("0.21.1");
+    expect(version.stdout.trim()).toBe("0.22.0");
     const token = "retained-through-stock-two-prompts";
     const source = `<Let as="savedToken" value="${token}" /><Output>{savedToken}</Output>`;
     held.host.fake.script({

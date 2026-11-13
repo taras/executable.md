@@ -3230,7 +3230,7 @@ describe("Tier AP — Prompt usage observation", () => {
     expect(usage.provenance).toEqual({
       host: "deno-source",
       xmd: { version: "0.0.0-test" },
-      runtime: { version: "0.21.1" },
+      runtime: { version: "0.22.0" },
       adapter: {},
     });
     expect(usage.readings).toEqual([

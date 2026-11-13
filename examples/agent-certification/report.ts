@@ -143,7 +143,7 @@ export function initialReport(config: Configuration): Report {
     selectedCapabilitiesPassed: false,
     durableSessionCertified: false,
     fingerprints: { configuration: null, source: null, executable: null, adapter: null },
-    versions: { agent: null, adapter: "0.21.1", runtime: null },
+    versions: { agent: null, adapter: "0.22.0", runtime: null },
     platform: { os: "unknown", arch: "unknown" },
     counts: { prompts: 0, cancellationRequests: 0 },
     exitState: "settled",
