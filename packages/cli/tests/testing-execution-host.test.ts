@@ -658,6 +658,8 @@ describe("TestAgent inspection in a nested run", () => {
           "Preflight released.",
           "<AfterInspection />\n\nPreflight released.",
         ),
+        // The temp-file compiler writes .ts under this project, where tsx needs ESM.
+        "package.json": '{"type":"module"}',
         "inspection-host.mjs": inspectionHost(true),
         "inspection-events.json": "[]",
       });
@@ -729,6 +731,7 @@ describe("TestAgent inspection in a nested run", () => {
         'as="review" model="named" effort="deep"',
       ),
       "preflight.md": INSPECTION_PROBE,
+      "package.json": '{"type":"module"}',
       "inspection-host.mjs": inspectionHost(),
       "sibling.md": siblingProbe,
       "named.md": INSPECTION_PROBE.replace(
