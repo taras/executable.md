@@ -16,7 +16,7 @@ const request = z.strictObject({
     work: text,
     repository: absolute,
     revision,
-    spec: text.optional(),
+    spec: text.regex(/^[^/#][^#]*\.md#[^#\s]+$/).optional(),
     failingRevision: revision.optional(),
     probes: z
       .array(

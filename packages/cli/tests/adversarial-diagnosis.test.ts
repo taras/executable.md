@@ -18,10 +18,25 @@ import { z } from "zod";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { executeInstalled } from "@executablemd/core/host";
 import { installAgentProviderStack } from "../src/agent-stack.ts";
-import { git } from "../../git/tests/support/git-remotes.ts";
+import { git, gitOutput } from "../../git/tests/support/git-remotes.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
 
 const components = resolve("examples/adversarial-implementation/components");
+const specPath = "specs/test-agent-spec.md";
+const specSection = [
+  "## Controller and *worker*",
+  "",
+  "The assigned worker owns its startup.",
+  "",
+  "~~~md",
+  "## Controller and worker",
+  "~~~",
+  "",
+  "### Cancellation",
+  "",
+  "Join the worker after cancellation.",
+  "",
+].join("\n");
 
 function* fixture() {
   const temp = yield* useTempDirectory("xmd-diagnosis-");
@@ -29,7 +44,14 @@ function* fixture() {
   const repository = join(root, "repo");
   git(["init", repository], root, root);
   yield* writeTextFile(join(repository, "tracked"), "unchanged\n");
-  git(["add", "tracked"], repository, root);
+  yield* ensureDir(join(repository, "specs"));
+  yield* writeTextFile(
+    join(repository, specPath),
+    "# Test Agent\n\nUnrelated preamble.\n\n" +
+      specSection +
+      "\n## Replay\n\nUnrelated replay section.\n",
+  );
+  git(["add", "tracked", specPath], repository, root);
   git(
     ["-c", "user.name=Fixture", "-c", "user.email=f@example.test", "commit", "-qm", "fixture"],
     repository,
@@ -86,6 +108,27 @@ function* fixture() {
             *fn() {
               expect(yield* cwd()).toBe(repository);
               return { comparison: { base: expectedRevision }, changes: [], next: null };
+            },
+          },
+          {
+            name: "Git.File",
+            origin: "test://checkout",
+            props: {
+              type: "object",
+              properties: {
+                commit: { type: "string" },
+                path: { type: "string" },
+                limit: { type: "number" },
+              },
+            },
+            *fn(props) {
+              expect(yield* cwd()).toBe(repository);
+              const selected = z.object({ commit: z.string(), path: z.string() }).parse(props);
+              expect(selected.commit).toBe(revision);
+              return {
+                text: gitOutput(["show", selected.commit + ":" + selected.path], repository, root),
+                next: null,
+              };
             },
           },
         ]);
@@ -165,6 +208,21 @@ describe("adversarial problem-solver phase", () => {
     expect(test.fake.prompts).toHaveLength(2);
   });
 
+  it("holds an unresolved spec section before dispatch", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const result = JSON.parse(
+      yield* test.run(join(test.root, "missing-spec"), undefined, [test.evidence], {
+        spec: specPath + "#unknown-section",
+      }),
+    );
+    expect(result).toMatchObject({
+      status: "hold",
+      reason: expect.stringContaining("Select a unique spec section"),
+    });
+    expect(test.fake.prompts).toHaveLength(0);
+  });
+
   it("links oversized evidence without discarding captured content", function* () {
     const test = yield* fixture();
     offer(test.fake, ["fable"]);
@@ -185,7 +243,11 @@ describe("adversarial problem-solver phase", () => {
         handoff: "Repair the case and run the regression.",
       }),
     });
-    const output = JSON.parse(yield* test.run(attempt, undefined, [test.evidence, secondEvidence]));
+    const output = JSON.parse(
+      yield* test.run(attempt, undefined, [test.evidence, secondEvidence], {
+        spec: specPath + "#controller-and-worker",
+      }),
+    );
     expect(output).toMatchObject({ status: "cause" });
     expect(test.fake.prompts).toHaveLength(1);
     const prompt = test.fake.prompts[0];
@@ -193,7 +255,7 @@ describe("adversarial problem-solver phase", () => {
     expect(prompt).toContain("Read the captured evidence in " + snapshot);
     expect(prompt).not.toContain("first witness");
     expect(prompt).not.toContain("second witness");
-    expect(prompt).not.toContain("owning spec section");
+    expect(prompt).toContain(specSection.trimEnd());
     expect(prompt.length).toBeLessThanOrEqual(64_000);
     expect(JSON.parse(yield* readTextFile(snapshot))).toEqual([
       { path: test.evidence, content: firstText },
@@ -260,7 +322,10 @@ describe("adversarial problem-solver phase", () => {
     });
     const guidePath = join(first, "fable/submission-guide.md");
     const prompt = test.fake.prompts[0];
-    expect(prompt).toContain("Read the owning spec section at " + context.spec);
+    expect(prompt).toContain("Owning spec section from " + context.spec);
+    expect(prompt).toContain(specSection.trimEnd());
+    expect(prompt).not.toContain("Unrelated preamble.");
+    expect(prompt).not.toContain("Unrelated replay section.");
     expect(prompt).toContain("Failing CI revision: " + context.failingRevision);
     expect(prompt).toContain(context.probes[0].command);
     expect(prompt).toContain(context.probes[0].setup);

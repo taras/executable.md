@@ -940,8 +940,10 @@ xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-impleme
   --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
 
-Use `spec` for the owning section, `failingRevision` for the CI run’s verified
-head, and `probes` for commands the agent can reuse. Each probe can point to a
+Set `spec` to a repository-relative Markdown path and a unique heading anchor.
+The prompt includes that section from the assigned revision, including its
+subsections. Set `failingRevision` to the CI run’s verified head and `probes` to
+commands the agent can reuse. Each probe can point to a
 setup guide and prior artifacts. The workflow passes these as references. List
 files in `inputPaths` when their captured contents should accompany the
 assignment or support a result. When the evidence would push the prompt over

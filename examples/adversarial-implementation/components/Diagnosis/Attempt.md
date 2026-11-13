@@ -39,10 +39,22 @@ Return one JSON object. Keep any progress updates in plain prose.
 <Json value={schema.result} />
 </Let>
 <Phase.SubmissionGuide repository={assignment.repository} directory={props.directory} as="guide">{submission}</Phase.SubmissionGuide>
+<Let as="specSection" value={null} />
+<If condition={assignment.spec !== undefined}>
+<Dir path={assignment.repository}>
+<Git.File commit={assignment.revision} path={assignment.spec.split("#")[0]} limit={2097152} as="specFile" />
+<If condition={specFile.next !== null}><Fail message="The spec file exceeds the supported read size. Select a section in a smaller spec file." /></If>
+<Diagnosis.SpecSection reference={assignment.spec} source={specFile.text} as="specSection" />
+</Dir>
+</If>
 <Let as="instructions">
 Diagnose the failure using the assigned checkout at {assignment.revision}. Read the repository instructions. Use the captured evidence and reuse the listed probes where they address the missing witness. Run focused commands in owned scratch space and join them before replying. Keep source, workflow records, and external systems read-only.
 
-<If condition={assignment.spec !== undefined}>Read the owning spec section at {assignment.spec}.</If>
+<If condition={specSection !== null}>
+Owning spec section from {assignment.spec} at {assignment.revision}
+
+{specSection}
+</If>
 <If condition={assignment.failingRevision !== undefined}>Failing CI revision: {assignment.failingRevision}. Compare the relevant paths with the assigned checkout before attributing the failure.</If>
 <If condition={assignment.probes?.length > 0}>
 Reusable probes:
