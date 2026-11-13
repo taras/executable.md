@@ -43,6 +43,7 @@ import { attachSidekick } from "./lib/repl-bench/sidekick.ts";
 type Execute = (command: Command) => Operation<unknown>;
 const Active = createContext<Execute>("xmd.repl-bench.active");
 const RegionContext = createContext<Region | undefined>("xmd.repl-bench.region", undefined);
+const WaitTimeout = createContext<number | undefined>("xmd.repl-bench.wait-timeout", undefined);
 const Sidekick = createContext<Yielded<ReturnType<typeof attachSidekick>> | undefined>(
   "xmd.repl-bench.sidekick",
   undefined,
@@ -60,6 +61,7 @@ const wait = z.object({
 });
 const bench = size.partial().extend({
   expectExit: z.boolean().default(false),
+  waitTimeout: z.string().optional(),
   scenario: z.string().min(1).optional(),
   entryPermissionFixture: z.boolean().default(false),
   include: z.array(z.string().min(1)).default([]),
@@ -134,6 +136,10 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   }
   const directory = yield* cwd();
   const wanted = bench.parse(props);
+  const waitTimeout =
+    wanted.waitTimeout === undefined
+      ? undefined
+      : parseDuration(wanted.waitTimeout, "<ReplBench waitTimeout>");
   const captured = (yield* hasCapture("resume")) ? yield* capture("resume") : undefined;
   const prepared = yield* test.eval(function* () {
     const homes = (yield* Homes.get()) ?? (yield* Homes.set(new Set<object>()));
@@ -220,6 +226,7 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   yield* Sidekick.set(sidekick);
   yield* Active.set(execute);
   yield* RegionContext.set(undefined);
+  yield* WaitTimeout.set(waitTimeout);
   const rendered = yield* content();
   const bind = yield* hasBinding();
   if (!wanted.expectExit) {
@@ -279,6 +286,7 @@ const registrations = [
     ...registration("", ReplBench, {
       ...dimensions,
       expectExit: boolean,
+      waitTimeout: string,
       scenario: string,
       entryPermissionFixture: boolean,
       include: strings,
@@ -388,7 +396,7 @@ const registrations = [
         region: yield* RegionContext.get(),
         timeout:
           timeout === undefined
-            ? undefined
+            ? yield* WaitTimeout.get()
             : parseDuration(timeout, "<ReplBench.WaitForText timeout>"),
       });
       return point.nullable().parse(result);
