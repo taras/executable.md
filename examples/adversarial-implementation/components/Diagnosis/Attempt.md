@@ -39,10 +39,10 @@ Return one JSON object. Keep any progress updates in plain prose.
 <Json value={schema.result} />
 </Let>
 <Phase.SubmissionGuide repository={assignment.repository} directory={props.directory} as="guide">{submission}</Phase.SubmissionGuide>
-<Let as="prompt">
-Diagnose the failure using the assigned checkout at {assignment.revision}. Read the repository instructions and the owning spec section when supplied. Use the captured evidence and reuse the listed probes where they address the missing witness. Run focused commands in owned scratch space and join them before replying. Keep source, workflow records, and external systems read-only.
+<Let as="instructions">
+Diagnose the failure using the assigned checkout at {assignment.revision}. Read the repository instructions. Use the captured evidence and reuse the listed probes where they address the missing witness. Run focused commands in owned scratch space and join them before replying. Keep source, workflow records, and external systems read-only.
 
-<If condition={assignment.spec !== undefined}>Owning spec section: {assignment.spec}</If>
+<If condition={assignment.spec !== undefined}>Read the owning spec section at {assignment.spec}.</If>
 <If condition={assignment.failingRevision !== undefined}>Failing CI revision: {assignment.failingRevision}. Compare the relevant paths with the assigned checkout before attributing the failure.</If>
 <If condition={assignment.probes?.length > 0}>
 Reusable probes:
@@ -51,12 +51,20 @@ Reusable probes:
 
 {assignment.request}
 
-Captured evidence:
-<Json value={props.inputs} />
-
 Report a confirmed cause with supporting evidence or the specific missing witness. Read {guide.path} when preparing that result. Open it earlier only if a reporting requirement affects a concrete diagnostic decision. Keep progress updates in plain prose.
 </Let>
-<If condition={prompt.length > 64000}><Fail message="The diagnostic prompt exceeds 64000 characters. Prepare concise evidence in a fresh attempt." /></If>
+<Let as="evidence">
+Captured evidence:
+<Json value={props.inputs} />
+</Let>
+<Let as="evidenceReference">
+Read the captured evidence in {props.directory}/inputs.json. Each entry contains the original path and its captured content. Start with the paths relevant to the failure and inspect one entry at a time. Cite the original paths in your result.
+</Let>
+<Let as="prompt" value={instructions + "\n\n" + evidence} />
+<If condition={prompt.length > 64000}>
+<Let as="prompt" value={instructions + "\n\n" + evidenceReference} />
+</If>
+<If condition={prompt.length > 64000}><Fail message="The diagnostic assignment exceeds 64000 characters with evidence supplied by reference. Shorten the assignment in a fresh attempt." /></If>
 <Let as="catalog" value={null} />
 <Let as="turn" value={null} />
 <Ticket.Checkout repository={assignment.repository} as="before" />

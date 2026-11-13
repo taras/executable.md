@@ -944,7 +944,9 @@ Use `spec` for the owning section, `failingRevision` for the CI run’s verified
 head, and `probes` for commands the agent can reuse. Each probe can point to a
 setup guide and prior artifacts. The workflow passes these as references. List
 files in `inputPaths` when their captured contents should accompany the
-assignment or support a result. Omit context you do not have.
+assignment or support a result. When the evidence would push the prompt over
+64,000 characters, the prompt links to the complete captured `inputs.json`
+instead. Omit context you do not have.
 
 Fable starts the diagnosis. If its option inspection fails, its model is
 unavailable, or it returns a recognized usage-limit refusal, a fresh assignment

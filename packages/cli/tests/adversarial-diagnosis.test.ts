@@ -165,6 +165,42 @@ describe("adversarial problem-solver phase", () => {
     expect(test.fake.prompts).toHaveLength(2);
   });
 
+  it("links oversized evidence without discarding captured content", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable"]);
+    const secondEvidence = join(test.root, "second.log");
+    const firstText = "first witness\n" + "a".repeat(40_000);
+    const secondText = "second witness\n" + "b".repeat(40_000);
+    yield* writeTextFile(test.evidence, firstText);
+    yield* writeTextFile(secondEvidence, secondText);
+    const attempt = join(test.root, "oversized-evidence");
+    const directory = join(attempt, "fable");
+    test.fake.script({
+      reply: JSON.stringify({
+        outcome: "cause",
+        revision: test.revision,
+        cause: "The captured witnesses distinguish the cause.",
+        evidence: [test.evidence, secondEvidence],
+        regression: { command: "test case", expected: "pass", observed: "fail" },
+        handoff: "Repair the case and run the regression.",
+      }),
+    });
+    const output = JSON.parse(yield* test.run(attempt, undefined, [test.evidence, secondEvidence]));
+    expect(output).toMatchObject({ status: "cause" });
+    expect(test.fake.prompts).toHaveLength(1);
+    const prompt = test.fake.prompts[0];
+    const snapshot = join(directory, "inputs.json");
+    expect(prompt).toContain("Read the captured evidence in " + snapshot);
+    expect(prompt).not.toContain("first witness");
+    expect(prompt).not.toContain("second witness");
+    expect(prompt).not.toContain("owning spec section");
+    expect(prompt.length).toBeLessThanOrEqual(64_000);
+    expect(JSON.parse(yield* readTextFile(snapshot))).toEqual([
+      { path: test.evidence, content: firstText },
+      { path: secondEvidence, content: secondText },
+    ]);
+  });
+
   it("holds a reply if the submission guide changed during the turn", function* () {
     const test = yield* fixture();
     offer(test.fake, ["fable", "gpt-6-astra"]);
@@ -224,13 +260,14 @@ describe("adversarial problem-solver phase", () => {
     });
     const guidePath = join(first, "fable/submission-guide.md");
     const prompt = test.fake.prompts[0];
-    expect(prompt).toContain("Owning spec section: " + context.spec);
+    expect(prompt).toContain("Read the owning spec section at " + context.spec);
     expect(prompt).toContain("Failing CI revision: " + context.failingRevision);
     expect(prompt).toContain(context.probes[0].command);
     expect(prompt).toContain(context.probes[0].setup);
     expect(prompt).toContain(context.probes[0].artifacts[0]);
     expect(prompt).toContain(guidePath);
     expect(prompt).not.toContain('"oneOf"');
+    expect(prompt).toContain("failure witness");
     const guide = yield* readTextFile(guidePath);
     expect(guide).toContain('"oneOf"');
     expect(guide).toContain('"howToObtain"');
