@@ -54,6 +54,7 @@ const wait = z.object({
   timeout: z.string().optional(),
   at: point.optional(),
   present: z.boolean().optional(),
+  bold: z.boolean().optional(),
 });
 const bench = size.partial().extend({
   expectExit: z.boolean().default(false),
@@ -370,7 +371,7 @@ const registrations = [
       });
       return point.nullable().parse(result);
     },
-    { text: string, timeout: string, at: { type: "object" }, present: boolean },
+    { text: string, timeout: string, at: cell, present: boolean, bold: boolean },
     ["text"],
   ),
 ];

@@ -219,7 +219,15 @@ export function useDriver(options: Launch) {
       ]);
     }
     function waitFor(query: WaitOptions) {
-      const { text, region, at, present = true, unique = false, timeout = ACTION_TIMEOUT } = query;
+      const {
+        text,
+        region,
+        at,
+        present = true,
+        unique = false,
+        bold,
+        timeout = ACTION_TIMEOUT,
+      } = query;
       const label =
         `${present ? "" : "absence of "}${JSON.stringify(text)} in ${region ?? "viewport"}` +
         (at === undefined ? "" : ` at row ${at.row}, column ${at.column}`);
@@ -231,7 +239,9 @@ export function useDriver(options: Launch) {
             return undefined;
           }
           const hits = [...frame.matches(text, box)].filter(
-            (hit) => at === undefined || (at.row === hit.row && at.column === hit.column),
+            (hit) =>
+              (at === undefined || (at.row === hit.row && at.column === hit.column)) &&
+              (bold === undefined || frame.bold(hit) === bold),
           );
           return present
             ? unique && hits.length !== 1

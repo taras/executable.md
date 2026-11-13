@@ -779,8 +779,8 @@ components in a `<Test>` body:
 | `ReplBench.Key` | `key` sends a named key to the current focus. |
 | `ReplBench.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
 | `ReplBench.Resize` | `columns` and `rows` resize both the PTY and its emulator. |
-| `ReplBench.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
-| `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. `as` binds the unique positive match. `present={false}` requires the selected region to be visible. A `timeout` duration can bound the wait within the test deadline. |
+| `ReplBench.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, `name="history"`, or `name="recovery"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
+| `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. `present={false}` requires the selected region to be visible. A `timeout` duration can bound the wait within the test deadline. |
 | `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
 
 Set `scenario` on a fresh bench to resolve a Markdown Test Agent behavior file
