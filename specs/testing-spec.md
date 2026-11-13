@@ -759,9 +759,9 @@ supported. Gherkin syntax such as `Given`, `When`, and `Then` is not supported.
 
 The sections above specify the Executable Markdown testing language. This one
 specifies something different: how *this repository's* own test corpus — its
-TypeScript test files and its adversarial Markdown suites — is discovered,
-divided, and run under each supported runtime. It changes nothing about
-`<Test>`, `<Testing>`, assertions, or mocking.
+TypeScript test files and its Markdown suites — is discovered, divided, and
+run under each supported runtime. It changes nothing about `<Test>`,
+`<Testing>`, assertions, or mocking.
 
 ### One corpus
 
@@ -814,12 +814,10 @@ the run URL, the attempt, the runner label, and all three runtime versions —
 because a weight measured on another machine, image, or commit describes a
 corpus that no longer exists.
 
-The file is parsed rather than trusted. Version, every provenance field, the
-runtime names, the shape of every path — a TypeScript path under some
-`tests/`, or a Markdown suite directly inside
-`examples/adversarial-implementation/tests/` — and the positivity and
-integrality of every millisecond are checked; anything else is refused, because a partition
-computed from unusable data is worse than no partition.
+The reader checks the version, provenance, runtime names, test paths, and
+positive integer weights. A test path is either a repository-relative
+TypeScript test path under `tests/` or a Markdown suite path matching
+[the discovery rules](#one-corpus).
 
 `deno task weights:measure` is the only command that writes it, in two steps.
 
