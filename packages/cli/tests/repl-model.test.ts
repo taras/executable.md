@@ -1,3 +1,4 @@
+import { turnUsage, usageSummary } from "../src/repl/usage.ts";
 import { scoped, spawn, suspend, withResolvers } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import {
@@ -503,6 +504,62 @@ function withPrompt(
 
 describe("REPL model: the Agent conversations it projects", () => {
   beforeAll(() => useTempFileCompiler());
+
+  it("projects detached usage and selects only one retained view per Prompt", function* () {
+    const events = yield* agentReferenceEvents();
+    const response: Record<string, Json> = {
+      source: "response",
+      scope: "last-request",
+      kind: "tokens",
+      counter: "snapshot",
+    };
+    const quota: Record<string, Json> = { ...response, source: "quota-total" };
+    const tokens = (fields: Record<string, Json>): Json => fields;
+    const coverage = {
+      finalReport: "received",
+      outerPrompt: "partial",
+      limitations: ["codex-last-request-only"],
+    };
+    const provenance = { host: "deno-source", xmd: {}, runtime: {}, adapter: {} };
+    const mixed = withPrompt(events, 0, (record) => ({
+      ...record,
+      usage: {
+        provenance,
+        coverage,
+        readings: [
+          { ...response, tokens: tokens({ inputTokens: 400, outputTokens: 25 }) },
+          { ...quota, tokens: tokens({ inputTokens: 900, outputTokens: 55 }) },
+          { ...quota, source: "quota-model", tokens: tokens({ inputTokens: 800 }) },
+          {
+            ...response,
+            tokens: tokens({ inputTokens: 0, cachedReadTokens: 700, thoughtTokens: 80 }),
+          },
+        ] satisfies Json[],
+      },
+    }));
+    const failed = withPrompt(mixed, 3, (record) => ({
+      ...record,
+      usage: {
+        provenance,
+        coverage,
+        readings: [
+          { ...response, tokens: { inputTokens: 100, outputTokens: 20 } },
+          { ...response, tokens: null },
+          { ...quota, tokens: { inputTokens: 12, outputTokens: 3 } },
+        ] satisfies Json[],
+      },
+    }));
+    const model = projected(failed);
+    const [first, , , last] = model.turns;
+    expect(turnUsage(first.usage)).toBe("Usage · 0 in · out unknown · partial (last request)");
+    expect(Object.isFrozen(first.usage?.readings)).toBe(true);
+    const reading = first.usage?.readings[3];
+    expect(reading?.kind === "tokens" && Object.isFrozen(reading.tokens)).toBe(true);
+    expect(last.status).toBe("failed");
+    expect(usageSummary(model.turns, "Entry agents")).toBe(
+      "Entry agents · 12 in · 3 out subtotal · partial (last request) · 2 turns unavailable",
+    );
+  });
 
   it("M1: projects each retained Prompt as one turn owned by its exact scope", function* () {
     const events = yield* agentReferenceEvents();

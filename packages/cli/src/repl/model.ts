@@ -45,6 +45,7 @@ import type { Result } from "effection";
 import { validateBindingName } from "@executablemd/core";
 import { AGENT_PROMPT, parsePromptRecord, readElicitationSchema } from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
+import { projectUsage, type ReplUsage } from "./usage.ts";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 
 import { entryKey, entryMarker, partitionEntrySegments } from "./entries.ts";
@@ -210,6 +211,7 @@ export interface ReplAgentTurn {
    */
   readonly failure: string | undefined;
   readonly error: PromptRecord["error"];
+  readonly usage?: ReplUsage;
   readonly configuration: ReplAgentConfiguration | undefined;
   readonly permissions: readonly ReplAgentPermission[];
 }
@@ -1369,6 +1371,7 @@ function agentTurn(
     sessionKey: record.sessionKey,
     agentSessionId: record.agentSessionId,
     status: record.status,
+    usage: projectUsage(record.usage),
     stopReason: record.stopReason,
     text: record.text,
     failure: record.error?.message,

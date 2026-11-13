@@ -260,10 +260,15 @@ describe("wheel real consumers", () => {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
     yield* eighteenTurns(page);
     const cell = page.screen().locate("turn-00");
+    const second = page.screen().locate("turn-01");
+    const message = page.screen().locate("message-kept");
     yield* wheel(page, "down", cell);
-    expect(page.screen().shows("turn-00")).toBe(false);
+    expect(page.screen().locate("turn-01")).toEqual({ column: second.column, row: second.row - 3 });
+    expect(page.screen().locate("message-kept")).toEqual(message);
     yield* wheel(page, "up", cell);
-    expect(page.screen().shows("turn-00")).toBe(true);
+    expect(page.screen().locate("turn-00")).toEqual(cell);
+    expect(page.screen().locate("turn-01")).toEqual(second);
+    expect(page.screen().locate("message-kept")).toEqual(message);
     for (let tick = 0; tick < 30; tick += 1) {
       yield* wheel(page, "down", cell);
     }

@@ -1164,9 +1164,11 @@ function paneRow(page: ReplPage, text: string): number {
   return at;
 }
 
-/** The row under this one, as the screen drew it. */
-function rowUnder(page: ReplPage, row: number): string {
-  return page.screen().rows[row + 1] ?? "";
+/** The output at the pane's right edge; the neighboring reading ends at its divider. */
+function paneOutputRows(page: ReplPage, text: string): number[] {
+  return paneLines(page.screen()).flatMap((row, index) =>
+    row.trimEnd().endsWith(text) ? [index] : [],
+  );
 }
 
 /** The entry rows this pane draws, by the words each one carries. */
@@ -1575,18 +1577,18 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     repl.fake.releaseDeltas();
     yield* savedReplies(repl, 2);
     yield* page.until("the turn that was told what it read", sidekickIdle);
-    // ER2 — and the follow-up that *did* say something says it, in its own row,
-    // exactly as it always has: removing the silent reply's notice removes a
-    // sentence nobody wrote and nothing else.
+    // The follow-up that selected Output says it in its own row.
     expect(saidBySidekick(page.screen(), "Read it.")).toBe(true);
     expect(page.screen().shows("(preview)")).toBe(false);
-    // And the reply that selected no chat contributed no utterance at all. The
-    // superseded form of this row asserted a sentence about the absence; what
-    // it asserts now is that there is none — and no bare name, no metadata
-    // substitute and no empty row standing in for one either.
+    // The silent reply contributes its usage metadata without a fabricated utterance.
     expect(page.screen().shows("answered without saying")).toBe(false);
     const composed = yield* composedChat(repl);
-    expect(composed).toEqual(["  you: look", `  ${MOUNTED_AGENT}: Read it.`]);
+    expect(composed).toEqual([
+      "  you: look",
+      "  Usage unavailable",
+      `  ${MOUNTED_AGENT}: Read it.`,
+      "  Usage unavailable",
+    ]);
   });
 
   /**
@@ -1596,9 +1598,9 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
    * the automatic follow-up carrying its result, which also says nothing. Both
    * turns really happened — the control ran, its literal result reached the
    * next prompt, and both turns are saved — and neither of them told the person
-   * anything, so neither of them is in the chat.
+   * anything, so the chat shows only their usage metadata.
    */
-  it("ER1: a reply that only runs controls leaves the request and nothing else", function* () {
+  it("ER1: a reply that only runs controls leaves the request and no reply text", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
     // Two controls and no Output, then a follow-up that adds nothing: source is
@@ -1610,22 +1612,22 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
 
     yield* sendMessage(page, "look");
     // Waited for in the history rather than on the screen, because the chat is
-    // exactly where these two replies have nothing to say: there is no row for
-    // either of them to arrive in, so what settles this is the file, and then
-    // the Sidekick offering Send again.
+    // exactly where these two replies have nothing to say. The retained turns
+    // and the Sidekick offering Send again establish settlement.
     yield* savedReplies(repl, 2);
     yield* page.until("the Sidekick at rest", sidekickIdle);
 
-    // What a person asked for is still there, and nothing of the two replies is.
+    // What a person asked for is still there, with no text from either reply.
     expect(saidByPerson(page.screen(), "look")).toBe(true);
     expect(page.screen().shows("answered without saying")).toBe(false);
     expect(page.screen().shows("(preview)")).toBe(false);
     expect(page.screen().shows("REPL.Bindings")).toBe(false);
     expect(page.screen().shows("Nothing to add.")).toBe(false);
-    // Asked of the composition rather than of the screen, because this is the
-    // question a screen search cannot answer: an empty row, a bare agent name
-    // or a metadata sentence would all be *rows*, and the chat has one row.
-    expect(yield* composedChat(repl)).toEqual(["  you: look"]);
+    expect(yield* composedChat(repl)).toEqual([
+      "  you: look",
+      "  Usage unavailable",
+      "  Usage unavailable",
+    ]);
 
     // The work happened. The control ran, and its literal result is what the
     // follow-up was asked with — so the turn that said nothing is the turn that
@@ -1653,7 +1655,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(known.operations.map((one) => one.status)).toEqual(["ok", "ok"]);
     expect(known.delivered).toEqual([{ conversation: known.active, turn: 2 }]);
     // Sessions keeps both turns with their own titles and status: a silent
-    // reply is absent from the chat and from nothing else.
+    // reply adds no utterance, but both saved turns remain inspectable.
     expect(
       sidekickTurnRows(known, undefined).map((row) => `${row.title} \u00b7 ${row.state}`),
     ).toEqual(["look \u00b7 completed", "Automatic feedback \u00b7 completed"]);
@@ -1698,7 +1700,9 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(yield* composedChat(repl)).toEqual([
       "  you: remove it",
       `  ${MOUNTED_AGENT} (failed): ${failed.failure}`,
+      "  Usage unavailable",
       `  ${MOUNTED_AGENT}: Fixed it.`,
+      "  Usage unavailable",
     ]);
   });
 });
@@ -1795,6 +1799,8 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
    * other.
    */
   it("M3: each reply's rows carry the entry it admitted, and nothing it did not", function* () {
+    // Fit both submissions, their usage and their outputs in the same frame.
+    const size = { columns: 160, rows: 56 };
     // A component the entry below reads, so its preflight has somewhere to
     // wait: between the slot being reserved and the entry actually starting,
     // which is the window the start check exists for.
@@ -1823,7 +1829,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     let chat = "";
 
     yield* scoped(function* (): Operation<void> {
-      const page = yield* useReplPage({ host });
+      const page = yield* useReplPage({ host, size });
       const repl = page.repl;
       repl.fake.script({ reply: entrySource("first", "the first entry ran", "{first}") });
       repl.fake.script({ reply: "<Output>That is one.</Output>\n" });
@@ -1853,18 +1859,21 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       const live = yield* settledReading(repl);
       expect(live.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
       const at = (said: string): number => paneRow(page, said);
-      expect(at("Entry 1 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("Submitted it."));
-      // Its own output, on the row under the work row it belongs to. Read by
-      // that offset rather than by searching: the Transcript draws the same
-      // words, and this claim is about the pane's own ordering.
-      expect(rowUnder(page, at("Entry 1 \u00b7 \u2713 COMPLETED"))).toContain(
-        "the first entry ran",
-      );
-      expect(at("That is one.")).toBeGreaterThan(at("Entry 1 \u00b7 \u2713 COMPLETED"));
-      expect(at("Entry 2 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("That is one."));
-      expect(rowUnder(page, at("Entry 2 \u00b7 \u2713 COMPLETED"))).toContain(
-        "the second entry ran",
-      );
+      const submissions = paneOutputRows(page, "Submitted it.");
+      expect(submissions).toHaveLength(2);
+      const first = at("Entry 1 \u00b7 \u2713 COMPLETED");
+      const second = at("Entry 2 \u00b7 \u2713 COMPLETED");
+      const firstOutput = paneOutputRows(page, "the first entry ran");
+      const secondOutput = paneOutputRows(page, "the second entry ran");
+      expect(firstOutput).toHaveLength(1);
+      expect(secondOutput).toHaveLength(1);
+      expect(first).toBeGreaterThan(submissions[0]);
+      expect(firstOutput[0]).toBeGreaterThan(first);
+      expect(firstOutput[0]).toBeLessThan(at("That is one."));
+      expect(at("That is one.")).toBeLessThan(submissions[1]);
+      expect(second).toBeGreaterThan(submissions[1]);
+      expect(secondOutput[0]).toBeGreaterThan(second);
+      expect(secondOutput[0]).toBeLessThan(at("That is two."));
       // One row each: a reply is followed by the entry it submitted, not by
       // every entry this execution has admitted.
       for (const said of ENTRY_ROWS) {
@@ -1986,6 +1995,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       const base = initialState(execution);
       const page = yield* useReplPage({
         host,
+        size,
         location: encodeLocation({ ...base.route, at: earlier }),
       });
       const repl = page.repl;
@@ -1996,15 +2006,11 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // latest entry rather than the record's own coordinates would do here,
       // because this prefix holds exactly one.
       expect(counted("Entry 1 \u00b7 \u2713 COMPLETED")).toBe(1);
-      expect(
-        rowUnder(
-          page,
-          counted("Entry 1 \u00b7 \u2713 COMPLETED") === 1
-            ? paneRow(page, "Entry 1 \u00b7 \u2713 COMPLETED")
-            : -1,
-        ),
-      ).toContain("the first entry ran");
-      expect(counted("Entry 2 \u00b7")).toBe(0);
+      const output = paneOutputRows(page, "the first entry ran");
+      expect(output).toHaveLength(1);
+      expect(output[0]).toBeGreaterThan(paneRow(page, "Entry 1 \u00b7 \u2713 COMPLETED"));
+      expect(output[0]).toBeLessThan(paneRow(page, "That is one."));
+      expect(paneOutputRows(page, "the second entry ran")).toEqual([]);
       expect(counted("Entry 2 \u00b7")).toBe(0);
       repl.terminal.end();
       yield* awaited("the cold command leaving", () => repl.outcome() !== undefined);
@@ -2018,6 +2024,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     yield* scoped(function* (): Operation<void> {
       const page = yield* useReplPage({
         host,
+        size,
         location: encodeLocation(initialState(execution).route),
       });
       const repl = page.repl;
@@ -4679,7 +4686,7 @@ describe("993 mounted nested Output journeys", () => {
       expect(page.screen().shows("Documentation.")).toBe(false);
       expect(page.screen().shows("hidden")).toBe(false);
       if (!hasOutput) {
-        expect(yield* composedChat(page.repl)).toEqual(["  you: silent"]);
+        expect(yield* composedChat(page.repl)).toEqual(["  you: silent", "  Usage unavailable"]);
       }
     });
   }
