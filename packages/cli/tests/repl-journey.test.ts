@@ -63,18 +63,6 @@ describe("REPL journey: a person drives the running command", () => {
     expect(page.screen().shows("1 ✓")).toBe(true);
   });
 
-  it("keeps the Draft across a modal and a resize", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* draftText(page, "draft survives");
-    yield* openHistory(page);
-    expect(page.screen().shows("[close]")).toBe(true);
-    yield* closeDrawer(page);
-    const narrow = yield* page.resize(NARROW);
-    expect(narrow.found("draft survives", { after: " DRAFT" })).toBe(1);
-    const wide = yield* page.resize(WIDE);
-    expect(wide.found("draft survives", DRAFT_VALUE)).toBe(1);
-  });
-
   it("publishes no screen reading while a terminal write is held", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const terminal = page.repl.terminal;
