@@ -1,0 +1,105 @@
+name: Diagnose Delivery A-H (#1232)
+
+on:
+  push:
+    branches: [codex/diagnose-delivery-ci-1232]
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    name: ${{ matrix.runtime }} Delivery A-H
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: node
+            shard: 16/18
+          - runtime: bun
+            shard: 6/10
+    env:
+      XMD_TEST_ARTIFACTS: ${{ github.workspace }}/.xmd/test-artifacts
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - if: matrix.runtime == 'node'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.4"
+
+      - if: matrix.runtime == 'node'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - if: matrix.runtime == 'bun'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
+
+      - run: deno task deps
+
+      - if: matrix.runtime == 'node'
+        run: deno task build:web
+
+      - if: matrix.runtime == 'node'
+        run: pnpm install
+
+      - if: matrix.runtime == 'bun'
+        run: bun install
+
+      - if: matrix.runtime == 'node'
+        run: pnpm exec tsc --project tsconfig.node.json --noEmit
+
+      - name: Reproduce the original shard and repeat the Delivery test
+        env:
+          DIAGNOSTIC_RUNTIME: ${{ matrix.runtime }}
+          DIAGNOSTIC_SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set +e
+          set -u
+          mkdir -p "$RUNNER_TEMP/delivery-1232"
+          if [[ "$DIAGNOSTIC_RUNTIME" == node ]]; then
+            shard=(pnpm test:node "$DIAGNOSTIC_SHARD")
+            focused=(pnpm exec tsx --tsconfig tsconfig.node.json --test --test-concurrency=1)
+          else
+            shard=(bun run test:bun "$DIAGNOSTIC_SHARD")
+            focused=(bun test --timeout=300000)
+          fi
+
+          "${shard[@]}" 2>&1 | tee "$RUNNER_TEMP/delivery-1232/shard.log"
+          shard_status=${PIPESTATUS[0]}
+          if grep -Eq 'DIAG #1232|A-H required review.*failed \(error\)' "$RUNNER_TEMP/delivery-1232/shard.log"; then
+            exit 1
+          fi
+
+          for attempt in {1..5}; do
+            echo "Delivery repetition $attempt of 5"
+            "${focused[@]}" packages/cli/tests/adversarial-delivery.test.ts \
+              2>&1 | tee "$RUNNER_TEMP/delivery-1232/focused-$attempt.log"
+            focused_status=${PIPESTATUS[0]}
+            if (( focused_status != 0 )); then
+              exit "$focused_status"
+            fi
+          done
+
+          exit "$shard_status"
+
+      - name: Upload diagnostic logs and failed journals
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: delivery-1232-${{ matrix.runtime }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/delivery-1232
+            ${{ env.XMD_TEST_ARTIFACTS }}
+          if-no-files-found: ignore
+          retention-days: "7"

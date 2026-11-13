@@ -88,8 +88,8 @@ printf '%s' "$reached"
 <If condition={after.status !== expected.status}><Fail message={scenario + ": status " + after.status + " " + JSON.stringify(after.reviewAttempts)} /></If>
 <If condition={expected.next !== undefined}><AssertEquals actual={after.nextAction} expected={expected.next} /></If>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="observed" />
-<AssertEquals actual={observed.calls.length} expected={expected.calls} />
-<AssertEquals actual={observed.elicitations.length} expected={expected.elicits} />
+<AssertEquals actual={observed.calls.length} expected={expected.calls} msg={"DIAG #1232 " + scenario + ": reviewer calls " + observed.calls.length + " !== " + expected.calls + " " + JSON.stringify(observed.calls)} />
+<AssertEquals actual={observed.elicitations.length} expected={expected.elicits} msg={"DIAG #1232 " + scenario + ": questions " + observed.elicitations.length + " !== " + expected.elicits + " " + JSON.stringify(observed.elicitations.map(question => question.held))} />
 <AssertEquals actual={observed.calls.map(call => call.revision)} expected={observed.calls.map(() => revision)} />
 <AssertEquals actual={observed.calls.map(call => call.reviewer)} expected={[reviewer,astra].slice(0,expected.calls)} />
 <AssertEquals actual={observed.calls.map(call => call.position)} expected={[0,1].slice(0,expected.calls)} />
@@ -190,7 +190,7 @@ fi
 <If condition={scenario === "exhausted"}>
 <AssertEquals actual={again.status} expected="failed" />
 <AssertStringIncludes actual={again.failure} expected="already exists or cannot be reserved" />
-<AssertEquals actual={represented.elicitations.length} expected={1} />
+<AssertEquals actual={represented.elicitations.length} expected={1} msg={"DIAG #1232 " + scenario + ": questions after the repeated review " + represented.elicitations.length + " !== 1"} />
 <Else>
 <If condition={again.status !== "completed"}><Fail message={scenario + ": " + again.failure} /></If>
 <AssertEquals actual={represented.elicitations.length} expected={2} />
@@ -277,8 +277,16 @@ firstExit=$?
 wait "$second"
 secondExit=$?
 printf '%s %s' "$firstExit" "$secondExit"
+printf 'pids %s %s' "$first" "$second" >&2
 ```
-<AssertEquals actual={overlap.stdout.split(" ").filter(code => code === "0").length} expected={1} />
+<Let as="quotedAttempt" value={"'" + attempt.replaceAll("'",quote) + "'"} />
+<Let as="quotedCalled" value={"'" + (delivery.directory + "/called.json").replaceAll("'",quote) + "'"} />
+```bash exec as="overlapEvidence"
+for file in first.err second.err first.out second.out; do printf '\n== %s ==\n' "$file"; cat "$file"; done
+printf '\n== called.json ==\n'; cat {quotedCalled}
+printf '\n== attempt ==\n'; ls -laR {quotedAttempt}
+```
+<AssertEquals actual={overlap.stdout.split(" ").filter(code => code === "0").length} expected={1} msg={"DIAG #1232 overlap: exactly one of two overlapping review actions may exit 0; exits [" + overlap.stdout + "] " + overlap.stderr + overlapEvidence.stdout} />
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterOverlap" />
 <AssertEquals actual={afterOverlap.calls.map(call => call.position)} expected={[0,1,1]} />
 <Delivery.Status delivery={delivery} number={7} as="resumed" />
