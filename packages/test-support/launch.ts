@@ -474,6 +474,15 @@ function channel(name: string, content: string): string {
     : `--- ${name} before the deadline ---\n${content}`;
 }
 
+/**
+ * The environment a launched CLI receives: the inherited names above, with
+ * `env` on top. A runner that launches `xmd` outside `runCli` uses this so its
+ * children see exactly what a suite's children see.
+ */
+export function launchEnvironment(env: Record<string, string> = {}): Record<string, string> {
+  return cliEnv({ env });
+}
+
 function cliEnv(options: CliRunOptions): Record<string, string> {
   const env: Record<string, string> = {};
   const names = options.inheritEnv ? Object.keys(process.env) : INHERITED;

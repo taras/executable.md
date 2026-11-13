@@ -802,7 +802,7 @@ health and required CI as merge gates; review acceptance waives neither.
 ## Test without paid agents
 
 ```bash
-deno task test packages/cli/tests/adversarial-implementation.test.ts
+deno task test examples/adversarial-implementation/tests/Implementation.test.md
 ```
 
 The launcher wraps each Markdown suite in `<Testing>` and explicitly enables

@@ -14,10 +14,14 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { each } from "effection";
 import type { Operation } from "effection";
-import { walk } from "@effectionx/fs";
+import { ensureDir, walk, writeTextFile } from "@effectionx/fs";
 import type { WalkEntry } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { symlink } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { until } from "effection";
 
-import { listTestFiles } from "../lib/test-files.ts";
+import { listTestFiles, MARKDOWN_SUITES } from "../lib/test-files.ts";
 
 const ROOT = new URL("../../", import.meta.url);
 
@@ -85,7 +89,7 @@ function* repositoryTestFiles(): Operation<string[]> {
 describe("the discovered corpus against the whole repository", () => {
   it("matches Deno's test-file pattern exactly", function* () {
     const walked = yield* repositoryTestFiles();
-    const discovered = yield* listTestFiles(ROOT);
+    const discovered = (yield* listTestFiles(ROOT)).filter((file) => file.endsWith(".ts"));
 
     // A walk that pruned too much would agree with discovery by finding
     // nothing, so it has to have found the corpus first.
@@ -108,5 +112,31 @@ describe("the discovered corpus against the whole repository", () => {
     for (const name of ["tests.ts", "atest.ts", "test.md", "a.test.json", "contest.ts"]) {
       expect(DENO_TEST_FILE.test(name)).toBe(false);
     }
+  });
+});
+
+describe("the Markdown suites", () => {
+  it("are the admitted regular immediate children of the suite directory and nothing beneath it", function* () {
+    const base = yield* useTempDirectory("markdown-discovery-");
+    const root = pathToFileURL(`${base}/`);
+    const suites = new URL(MARKDOWN_SUITES, root);
+    yield* writeTextFile(new URL("deno.json", root), JSON.stringify({ workspace: [] }));
+    yield* ensureDir(new URL("nested/", suites));
+    yield* ensureDir(new URL("Directory.test.md/", suites));
+    for (const name of [
+      "Implementation.test.md",
+      "nested/Implementation.test.md",
+      "helper.md",
+      "Implementation.md",
+    ]) {
+      yield* writeTextFile(new URL(name, suites), "");
+    }
+    yield* ensureDir(new URL("examples/other/tests/", root));
+    yield* writeTextFile(new URL("examples/other/tests/Implementation.test.md", root), "");
+    yield* until(
+      symlink("Implementation.test.md", fileURLToPath(new URL("Linked.test.md", suites))),
+    );
+
+    expect(yield* listTestFiles(root)).toEqual([`${MARKDOWN_SUITES}Implementation.test.md`]);
   });
 });

@@ -7,6 +7,19 @@ import type { Runtime } from "../runtime-test-exclusions.ts";
 
 const EXTRA_MEMBERS = ["scripts"];
 
+/**
+ * The one directory whose Markdown documents are suites of their own. Only its
+ * immediate regular `*.test.md` children are, so the helper documents and
+ * deliberately failing fixtures nested beneath it never run as a suite.
+ */
+export const MARKDOWN_SUITES = "examples/adversarial-implementation/tests/";
+
+/**
+ * The Markdown suites admitted so far. Each joins with the retirement of its
+ * TypeScript launcher, so no journey runs twice.
+ */
+const ADMITTED_MARKDOWN = new Set(["Implementation.test.md"]);
+
 interface RootManifest {
   workspace: string[];
 }
@@ -15,13 +28,20 @@ function parseWorkspace(source: string): RootManifest {
   return JSON.parse(source);
 }
 
+/** Whether `file` is a Markdown suite rather than a TypeScript test file. */
+export function isMarkdownSuite(file: string): boolean {
+  return file.endsWith(".test.md");
+}
+
 /**
  * Every test file in the repository, as sorted repository-relative POSIX paths.
  *
- * Discovery covers `tests/` beneath each workspace member and `scripts/tests/`,
- * and nothing else. Walking those concrete directories rather than the
- * repository root is what keeps nested worktrees, `site`, and the deliberately
- * malformed `scripts/tests/fixtures` out without naming any of them.
+ * TypeScript discovery covers `tests/` beneath each workspace member and
+ * `scripts/tests/`, and nothing else. Walking those concrete directories rather
+ * than the repository root is what keeps nested worktrees, `site`, and the
+ * deliberately malformed `scripts/tests/fixtures` out without naming any of
+ * them. Markdown discovery adds the admitted immediate children of
+ * `MARKDOWN_SUITES`.
  */
 export function* listTestFiles(root: URL): Operation<string[]> {
   const { workspace } = parseWorkspace(yield* readTextFile(new URL("deno.json", root)));
@@ -40,7 +60,22 @@ export function* listTestFiles(root: URL): Operation<string[]> {
       yield* each.next();
     }
   }
-  return files.sort();
+  return [...files, ...(yield* listMarkdownSuites(root))].sort();
+}
+
+function* listMarkdownSuites(root: URL): Operation<string[]> {
+  const directory = new URL(MARKDOWN_SUITES, root);
+  if (!(yield* exists(directory))) {
+    return [];
+  }
+  const suites: string[] = [];
+  for (const entry of yield* each(walk(directory, { maxDepth: 0, includeDirs: false }))) {
+    if (entry.isFile && !entry.isSymlink && ADMITTED_MARKDOWN.has(entry.name)) {
+      suites.push(`${MARKDOWN_SUITES}${entry.name}`);
+    }
+    yield* each.next();
+  }
+  return suites;
 }
 
 /**

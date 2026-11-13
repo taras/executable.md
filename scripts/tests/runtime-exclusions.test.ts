@@ -7,6 +7,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
+import { shellQuote } from "@executablemd/test-support/launch";
+import { fileURLToPath } from "node:url";
 import { applicableTestFiles, listTestFiles, relativeWithin } from "../lib/test-files.ts";
 import { exclusions, parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
@@ -27,7 +29,7 @@ describe("test discovery", () => {
       // A Windows drive letter is absolute too, and would otherwise slip past.
       expect(file).not.toMatch(/^[A-Za-z]:/);
       expect(file).toContain("/tests/");
-      expect(file.endsWith(".test.ts")).toBe(true);
+      expect(file.endsWith(".test.ts") || file.endsWith(".test.md")).toBe(true);
     }
   });
 
@@ -158,7 +160,6 @@ describe("the applicable corpus", () => {
       "adversarial-decision-resolution",
       "adversarial-delivery",
       "adversarial-friction",
-      "adversarial-implementation",
       "adversarial-launch-policy",
       "adversarial-preparation",
       "adversarial-production-role",
@@ -174,6 +175,15 @@ describe("the applicable corpus", () => {
     for (const runtime of RUNTIMES) {
       const applicable = yield* applicableTestFiles(runtime, ROOT);
       expect(wrappers.filter((file) => !applicable.includes(file))).toEqual([]);
+    }
+  });
+
+  it("runs each migrated adversarial Markdown suite under every runtime", function* () {
+    const suites = ["examples/adversarial-implementation/tests/Implementation.test.md"];
+    expect((yield* listTestFiles(ROOT)).filter((file) => file.endsWith(".md"))).toEqual(suites);
+    for (const runtime of RUNTIMES) {
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      expect(suites.filter((file) => !applicable.includes(file))).toEqual([]);
     }
   });
 
@@ -243,6 +253,78 @@ describe("the one-file runner commands", () => {
         "packages/cli/tests/adversarial-preparation.test.ts",
       ],
     });
+  });
+});
+
+describe("the one-file Markdown commands", () => {
+  const SUITE = "examples/adversarial-implementation/tests/Implementation.test.md";
+  const at = (path: string) => fileURLToPath(new URL(path, ROOT));
+  const deno = [
+    "run",
+    "--quiet",
+    "--allow-all",
+    "--node-modules-dir=manual",
+    "--cached-only",
+    "--frozen",
+    at("packages/cli/src/deno.ts"),
+  ];
+  const profile = [
+    "test",
+    SUITE,
+    "--plugin",
+    at("packages/cli/tests/fixtures/workflow-test-permissions.mjs"),
+    "--include",
+    at("examples/adversarial-implementation/tests/components"),
+    "--include",
+    at("examples/adversarial-implementation/components"),
+  ];
+
+  it("runs a suite under the same runtime's xmd test entrypoint", function* () {
+    const vector = (runtime: Runtime) => {
+      const { command, arguments: args } = oneFileCommand(runtime, SUITE, ROOT);
+      return { command, arguments: args };
+    };
+    expect(vector("deno")).toEqual({ command: "deno", arguments: [...deno, ...profile] });
+    expect(vector("node")).toEqual({
+      command: "tsx",
+      arguments: [
+        "--tsconfig",
+        at("tsconfig.node.json"),
+        at("packages/cli/src/node.ts"),
+        ...profile,
+      ],
+    });
+    expect(vector("bun")).toEqual({
+      command: "bun",
+      arguments: [at("packages/cli/src/bun.ts"), ...profile],
+    });
+  });
+
+  it("gives every runtime's suite the prepared Deno fixture commands and nothing else of this environment", function* () {
+    const fixture = (subcommand: string[]) =>
+      ["deno", ...deno, ...subcommand].map(shellQuote).join(" ");
+    const allowed = new Set([
+      "PATH",
+      "DENO_DIR",
+      "DENO_INSTALL_ROOT",
+      "XDG_CACHE_HOME",
+      "TMPDIR",
+      "XMD_TEST_ARTIFACTS",
+      "XMD_EXAMPLE_COMMAND",
+      "XMD_EXAMPLE_TEST_COMMAND",
+    ]);
+    for (const runtime of RUNTIMES) {
+      const env = oneFileCommand(runtime, SUITE, ROOT).env ?? {};
+      expect(env.XMD_EXAMPLE_COMMAND).toEqual(fixture(["run", "--allow-absolute"]));
+      expect(env.XMD_EXAMPLE_TEST_COMMAND).toEqual(fixture(["test"]));
+      expect(Object.keys(env).filter((name) => !allowed.has(name))).toEqual([]);
+    }
+  });
+
+  it("leaves a TypeScript file's environment to the runner", function* () {
+    for (const runtime of RUNTIMES) {
+      expect(oneFileCommand(runtime, "packages/core/tests/a.test.ts").env).toBeUndefined();
+    }
   });
 });
 

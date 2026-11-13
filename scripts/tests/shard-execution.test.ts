@@ -15,14 +15,14 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { sleep, spawn } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readdir, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec, Stdio } from "@effectionx/process";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { chmod } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { until } from "effection";
 
-import { oneFileCommand, runShardFiles } from "../lib/runtime-tests.ts";
+import { oneFileCommand, runShardFiles, spawnLaunch, TestRuns } from "../lib/runtime-tests.ts";
 import type { ShardOutcome } from "../lib/runtime-tests.ts";
 
 const REPOSITORY = new URL("../../", import.meta.url);
@@ -188,6 +188,135 @@ describe("a shard running real children", () => {
     // nothing, so the only entries are the fixture's and the child's.
     const left = (yield* readdir(new URL(".", root))).sort();
     expect(left).toEqual(["deno.json", "slow.marker", "tests"]);
+  });
+});
+
+const SUITES = "examples/adversarial-implementation/tests/";
+
+/**
+ * A corpus of Markdown suites, run through the real `xmd test` entrypoint with
+ * its failure journals collected in a directory of the test's own rather than
+ * wherever this process's environment points.
+ */
+function* suites(files: Record<string, string>): Operation<{ root: URL; journals: URL }> {
+  const root = yield* workspace({});
+  yield* ensureDir(new URL(SUITES, root));
+  for (const [name, source] of Object.entries(files)) {
+    yield* writeTextFile(new URL(`${SUITES}${name}`, root), source);
+  }
+  const journals = new URL("journals/", pathToFileURL(`${yield* useTempDirectory("journals-")}/`));
+  yield* TestRuns.set((launch) =>
+    spawnLaunch({
+      ...launch,
+      env:
+        launch.env === undefined
+          ? undefined
+          : { ...launch.env, XMD_TEST_ARTIFACTS: fileURLToPath(journals) },
+    }),
+  );
+  return { root, journals };
+}
+
+/** Waits for `release` before failing, so its start can be seen while it still runs. */
+const HELD_FAILURE = `<Test name="fails deliberately">
+\`\`\`bash exec
+for attempt in $(seq 1 300); do test -e release && break; sleep 0.1; done
+echo MD_FAILED_DELIBERATELY >&2
+exit 3
+\`\`\`
+</Test>
+`;
+
+const MD_LATER = `<Test name="later">
+\`\`\`bash exec
+: > later.marker
+\`\`\`
+</Test>
+`;
+
+const MD_SLOW = `<Test name="slow" timeout="60s">
+\`\`\`bash exec
+: > slow.marker
+sleep 3
+: > outlived.marker
+\`\`\`
+</Test>
+`;
+
+function* collected(directory: URL): Operation<string[]> {
+  const found: string[] = [];
+  if (!(yield* exists(directory))) {
+    return found;
+  }
+  for (const run of yield* readdir(directory)) {
+    for (const name of yield* readdir(new URL(`${run}/`, directory))) {
+      found.push(`${run}/${name}`);
+    }
+  }
+  return found;
+}
+
+describe("a shard running real Markdown suites", () => {
+  it("shows a suite's named start live, saves its journal, runs the files after it and keeps its failure first", function* () {
+    const { root, journals } = yield* suites({
+      "Held.test.md": HELD_FAILURE,
+      "Later.test.md": MD_LATER,
+    });
+    yield* writeTextFile(new URL("tests/z.test.ts", root), FAILING);
+    const seen = yield* watching();
+    const held = `${SUITES}Held.test.md`;
+    const assigned = [held, `${SUITES}Later.test.md`, "tests/z.test.ts"];
+
+    let outcome: ShardOutcome | undefined;
+    const shard = yield* spawn(function* () {
+      outcome = yield* runShardFiles("deno", assigned, root);
+    });
+
+    const start = `[xmd test] start test "fails deliberately" at ${held}`;
+    let visible = false;
+    for (let attempt = 0; attempt < 300 && !visible; attempt += 1) {
+      visible = seen.stderr.includes(start);
+      if (!visible) {
+        yield* sleep(100);
+      }
+    }
+    // Seen while the suite is still waiting to be released, so before it settled.
+    expect({ visible, settled: outcome !== undefined }).toEqual({ visible: true, settled: false });
+    yield* writeTextFile(new URL("release", root), "");
+    yield* shard;
+
+    expect(outcome?.ran).toEqual(assigned);
+    expect(outcome?.failure).toEqual({ file: held, status: 1 });
+    expect(yield* exists(new URL("later.marker", root))).toBe(true);
+    expect(seen.stderr).toContain("MD_FAILED_DELIBERATELY");
+    expect(`${seen.stdout}\n${seen.stderr}`).toContain("B_FAILED_DELIBERATELY");
+
+    const saved = yield* collected(journals);
+    expect(saved.map((path) => path.replace(/^[^/]+\//, ""))).toEqual(["root-1.jsonl"]);
+    expect(seen.stderr).toContain(`journal saved: ${fileURLToPath(new URL(saved[0], journals))}`);
+    const lines = (yield* readTextFile(new URL(saved[0], journals))).trim().split("\n");
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(typeof JSON.parse(line)).toEqual("object");
+    }
+  });
+
+  it("halts the running suite's process group and starts no later file", function* () {
+    const { root } = yield* suites({ "Slow.test.md": MD_SLOW, "Later.test.md": MD_LATER });
+    yield* watching();
+
+    const shard = yield* spawn(() =>
+      runShardFiles("deno", [`${SUITES}Slow.test.md`, `${SUITES}Later.test.md`], root),
+    );
+    if (!(yield* waitFor(new URL("slow.marker", root)))) {
+      throw new Error("the slow suite never started its command");
+    }
+    yield* shard.halt();
+
+    // The command is the suite's grandchild, so only a signal to the group stops it.
+    yield* sleep(4_000);
+    expect(yield* exists(new URL("outlived.marker", root))).toBe(false);
+    expect(yield* exists(new URL("later.marker", root))).toBe(false);
   });
 });
 

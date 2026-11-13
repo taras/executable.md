@@ -212,6 +212,13 @@ errors, `Success Dry run complete` from the dry run, and every affected test
 passing. That is the state a feedback commit is offered from; `AGENTS.md`
 describes what happens next.
 
+`--changed` follows TypeScript imports, which cannot reach a Markdown suite's
+documents. Name an affected suite's path instead, beside any TypeScript paths:
+
+```bash
+deno task test examples/adversarial-implementation/tests/Implementation.test.md
+```
+
 ### Complete
 
 Run the complete applicable battery concurrently, yielding delivery

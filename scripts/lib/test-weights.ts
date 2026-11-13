@@ -44,12 +44,14 @@ const COMMIT = /^[0-9a-f]{40}$/;
 const RUN_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/;
 
 /**
- * The shape discovery produces: a repository-relative POSIX path under some
- * member's `tests/`. Anything else in a weights file is a path this repository
+ * The shapes discovery produces: a repository-relative POSIX path under some
+ * member's `tests/`, or an immediate Markdown suite of the adversarial example.
+ * Anything else in a weights file is a path this repository
  * never measured, and treating it as one would silently widen what a partition
  * can name.
  */
-const DISCOVERED_PATH = /^[\w.-]+(?:\/[\w.-]+)*\/tests\/(?:[\w.-]+\/)*[\w.-]+\.test\.ts$/;
+const DISCOVERED_PATH =
+  /^(?:[\w.-]+(?:\/[\w.-]+)*\/tests\/(?:[\w.-]+\/)*[\w.-]+\.test\.ts|examples\/adversarial-implementation\/tests\/[\w.-]+\.test\.md)$/;
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

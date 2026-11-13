@@ -11,15 +11,20 @@
  * its remaining files would report one defect and hide the rest, and the point
  * of running the corpus is to learn what is broken. The first failure is what
  * the shard exits with.
+ *
+ * A Markdown suite runs through the `xmd test` entrypoint of the same runtime,
+ * so a shard, a measurement and a local run all launch it the same way.
  */
-import { exit } from "effection";
+import { exit, until } from "effection";
 import type { Context, Operation } from "effection";
 import { createContext } from "effection";
 import { exec } from "@effectionx/process";
 import { exists, readTextFile } from "@effectionx/fs";
+import { launchEnvironment, shellQuote } from "@executablemd/test-support/launch";
+import { readlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { applicableTestFiles } from "./test-files.ts";
+import { applicableTestFiles, isMarkdownSuite } from "./test-files.ts";
 import { testShard } from "./test-shards.ts";
 import type { Shard } from "./test-shards.ts";
 import { parseTestWeights, weightsFile } from "./test-weights.ts";
@@ -37,10 +42,82 @@ interface Runner {
   serial: string[];
 }
 
-/** A program and its exact argument vector. */
+/** A program, its exact argument vector, and the environment it replaces this process's with. */
 export interface Launch {
   command: string;
   arguments: string[];
+  /** Absent for a TypeScript runner, which inherits this process's environment. */
+  env?: Record<string, string>;
+}
+
+/** The checkout this runner belongs to, which supplies every CLI entrypoint it launches. */
+const CHECKOUT = new URL("../../", import.meta.url);
+
+function checkoutPath(path: string): string {
+  return fileURLToPath(new URL(path, CHECKOUT));
+}
+
+/**
+ * The prepared Deno CLI. Fixture documents run their real workflow under it
+ * whichever runtime runs the suite, because the run profile they exercise is
+ * the Deno host's.
+ */
+function denoCli(): string[] {
+  return [
+    "deno",
+    "run",
+    "--quiet",
+    "--allow-all",
+    "--node-modules-dir=manual",
+    "--cached-only",
+    "--frozen",
+    checkoutPath("packages/cli/src/deno.ts"),
+  ];
+}
+
+function cliEntry(runtime: Runtime): string[] {
+  if (runtime === "deno") {
+    return denoCli();
+  }
+  if (runtime === "node") {
+    return [
+      "tsx",
+      "--tsconfig",
+      checkoutPath("tsconfig.node.json"),
+      checkoutPath("packages/cli/src/node.ts"),
+    ];
+  }
+  return ["bun", checkoutPath("packages/cli/src/bun.ts")];
+}
+
+/**
+ * `xmd test <file>` under `runtime`, with the fixture plugin, the example's
+ * component directories as absolute paths — so a nested `<Dir>` cannot move
+ * where components are found — and only the environment a launched CLI gets.
+ */
+function markdownCommand(runtime: Runtime, file: string, root: URL): Launch {
+  const [command, ...entry] = cliEntry(runtime);
+  const example = (path: string) =>
+    fileURLToPath(new URL(`examples/adversarial-implementation/${path}`, root));
+  const fixture = (subcommand: string[]) => [...denoCli(), ...subcommand].map(shellQuote).join(" ");
+  return {
+    command,
+    arguments: [
+      ...entry,
+      "test",
+      file,
+      "--plugin",
+      checkoutPath("packages/cli/tests/fixtures/workflow-test-permissions.mjs"),
+      "--include",
+      example("tests/components"),
+      "--include",
+      example("components"),
+    ],
+    env: launchEnvironment({
+      XMD_EXAMPLE_COMMAND: fixture(["run", "--allow-absolute"]),
+      XMD_EXAMPLE_TEST_COMMAND: fixture(["test"]),
+    }),
+  };
 }
 
 /**
@@ -71,7 +148,10 @@ export const RUNNERS: Record<Runtime, Runner> = {
  * assigned file — so the millisecond a weight records is the millisecond that
  * shard will spend, rather than a fraction of some larger invocation.
  */
-export function oneFileCommand(runtime: Runtime, file: string): Launch {
+export function oneFileCommand(runtime: Runtime, file: string, root: URL = CHECKOUT): Launch {
+  if (isMarkdownSuite(file)) {
+    return markdownCommand(runtime, file, root);
+  }
   const runner = RUNNERS[runtime];
   const prefix =
     runtime === "bun" && file === "packages/cli/tests/adversarial-preparation.test.ts"
@@ -91,7 +171,7 @@ export function exitCode(status: { code?: number | null }): number {
   return status.code ?? 1;
 }
 
-/** Runs one test file and settles with its exit status. */
+/** Runs one launch — a test file, or a native batch of them — and settles with its exit status. */
 export type RunLaunch = (launch: Launch & { cwd: string }) => Operation<number>;
 
 /**
@@ -105,17 +185,138 @@ export type RunLaunch = (launch: Launch & { cwd: string }) => Operation<number>;
  */
 export const TestRuns: Context<RunLaunch> = createContext<RunLaunch>(
   "runtime-tests.runs",
-  function* (launch) {
-    return exitCode(
-      yield* exec(launch.command, { arguments: launch.arguments, cwd: launch.cwd }).join(),
-    );
-  },
+  spawnLaunch,
 );
 
-/** Run `file` alone under `runtime`, from `root`. */
+/** The real runner `TestRuns` defaults to, for a test that adjusts a launch before running it. */
+export function* spawnLaunch(launch: Launch & { cwd: string }): Operation<number> {
+  return exitCode(
+    yield* exec(launch.command, {
+      arguments: launch.arguments,
+      cwd: launch.cwd,
+      env: launch.env,
+    }).join(),
+  );
+}
+
+/**
+ * The prepared dependency link a Markdown suite must leave as it found it. Its
+ * fixtures run nested Deno commands against the same checkout, and one that
+ * relinked `node_modules` would change what every later file imports.
+ */
+export const PREPARED_LINK = "node_modules/effection";
+
+function* preparedLink(root: URL): Operation<string | undefined> {
+  try {
+    return yield* until(readlink(fileURLToPath(new URL(PREPARED_LINK, root))));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Run `file` alone under `runtime`, from `root`.
+ *
+ * A Markdown suite is also held to the prepared dependency link it started
+ * with. A changed or missing link fails the file even when its own tests
+ * passed; a file that already failed keeps its own status.
+ */
 export function* runOneFile(runtime: Runtime, file: string, root: URL): Operation<number> {
   const run = yield* TestRuns.expect();
-  return yield* run({ ...oneFileCommand(runtime, file), cwd: fileURLToPath(root) });
+  const launch = { ...oneFileCommand(runtime, file, root), cwd: fileURLToPath(root) };
+  if (!isMarkdownSuite(file)) {
+    return yield* run(launch);
+  }
+  const before = yield* preparedLink(root);
+  const status = yield* run(launch);
+  const after = yield* preparedLink(root);
+  if (after === before) {
+    return status;
+  }
+  console.error(
+    `${file} changed the prepared dependency link ${PREPARED_LINK}: ${before ?? "absent"} -> ${after ?? "absent"}`,
+  );
+  return status === 0 ? 1 : status;
+}
+
+/** `current` unless it succeeded, so the earliest failure is the one kept. */
+function firstFailure(current: number, next: number): number {
+  return current === 0 ? next : current;
+}
+
+/**
+ * The whole applicable corpus under `runtime`: every TypeScript file in one
+ * native invocation, then each Markdown suite alone. The first failure is the
+ * status; a failure in one portion does not skip the other.
+ */
+export function* runSuite(runtime: Runtime, root: URL): Operation<number> {
+  const files = yield* applicableTestFiles(runtime, root);
+  const typescript = files.filter((file) => !isMarkdownSuite(file));
+  const run = yield* TestRuns.expect();
+  const runner = RUNNERS[runtime];
+  let status =
+    typescript.length === 0
+      ? 0
+      : yield* run({
+          command: runner.command,
+          arguments: [...runner.prefix, ...typescript],
+          cwd: fileURLToPath(root),
+        });
+  for (const file of files.filter(isMarkdownSuite)) {
+    status = firstFailure(status, yield* runOneFile(runtime, file, root));
+  }
+  return status;
+}
+
+/**
+ * `deno task test`. With no arguments it is Deno's own whole-repository run —
+ * including the files the CI corpus leaves to smoke jobs — followed by every
+ * applicable Markdown suite. Arguments go to `deno test` verbatim, so focused
+ * paths, `--changed` and `--related` keep their native meaning; the Markdown
+ * graph is invisible to those flags, so a Markdown suite is selected by naming
+ * its path, beside any TypeScript paths, and never beside a flag.
+ */
+export function* localDenoTests(args: string[], root: URL): Operation<number> {
+  const run = yield* TestRuns.expect();
+  const native = (selected: string[]) =>
+    run({
+      command: RUNNERS.deno.command,
+      arguments: [...RUNNERS.deno.prefix, ...selected],
+      cwd: fileURLToPath(root),
+    });
+  const markdown = args.filter((arg) => arg.endsWith(".md")).map((arg) => arg.replace(/^\.\//, ""));
+
+  if (args.length === 0) {
+    let status = yield* native([]);
+    for (const file of (yield* applicableTestFiles("deno", root)).filter(isMarkdownSuite)) {
+      status = firstFailure(status, yield* runOneFile("deno", file, root));
+    }
+    return status;
+  }
+  if (markdown.length === 0) {
+    return yield* native(args);
+  }
+
+  const flags = args.filter((arg) => arg.startsWith("-"));
+  if (flags.length > 0) {
+    console.error(
+      `a Markdown suite is selected by its path alone; remove ${flags.join(" ")} or run the Markdown paths separately`,
+    );
+    return 1;
+  }
+  const suites = new Set((yield* applicableTestFiles("deno", root)).filter(isMarkdownSuite));
+  const unknown = markdown.filter((file) => !suites.has(file));
+  if (unknown.length > 0) {
+    console.error(`not a Markdown suite under deno: ${unknown.join(" ")}`);
+    return 1;
+  }
+
+  const typescript = args.filter((arg) => !arg.endsWith(".md"));
+  let status = typescript.length === 0 ? 0 : yield* native(typescript);
+  for (const file of markdown) {
+    status = firstFailure(status, yield* runOneFile("deno", file, root));
+  }
+  return status;
 }
 
 /** Which shard of how many, as a matrix job spells it. */
@@ -210,9 +411,10 @@ function* selectShard(runtime: Runtime, root: URL, selection: ShardSelection): O
 /**
  * Run `runtime`'s tests and exit with what they reported.
  *
- * With no selection this is the whole applicable corpus in one invocation,
- * which is what a human debugging the suite wants and what `test:node` and
- * `test:bun` have always done. With one, it is that shard, file by file.
+ * With no selection this is the whole applicable corpus — its TypeScript in one
+ * native invocation, which is what a human debugging the suite wants and what
+ * `test:node` and `test:bun` have always done, then each Markdown suite. With
+ * one, it is that shard, file by file.
  */
 export function* runtimeTests(
   runtime: string,
@@ -237,12 +439,7 @@ export function* runtimeTests(
     }
     console.error(`running ${files.length} test files under ${selected}`);
 
-    const runner = RUNNERS[selected];
-    const status = yield* exec(runner.command, {
-      arguments: [...runner.prefix, ...files],
-      cwd: fileURLToPath(root),
-    }).join();
-    yield* exit(exitCode(status));
+    yield* exit(yield* runSuite(selected, root));
     return;
   }
 
