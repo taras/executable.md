@@ -1913,18 +1913,20 @@ function* runTestDocument(
   diagnostics: TestDiagnostics,
 ): Operation<Result<void>> {
   const root = diagnostics.execution("root", rootSourcePath(config.root));
-  try {
-    return yield* scoped(function* () {
-      const plugins = yield* testPlugins(rootSourcePath(config.root));
-      const observed: DocumentMode = { testing: true, plugins, diagnostics, observed: root };
-      if (config.journal !== undefined) {
-        return yield* runScopedDocument(config, observed, installService);
-      }
-      return yield* withFailureJournal(
-        root.journal((result: Result<void>) => !result.ok),
-        (stream) => runScopedDocument({ ...config, stream }, observed, installService),
-      );
+  const run = (document: DocumentConfig) =>
+    scoped(function* () {
+      const plugins = yield* testPlugins(rootSourcePath(document.root));
+      const mode: DocumentMode = { testing: true, plugins, diagnostics, observed: root };
+      return yield* runScopedDocument(document, mode, installService);
     });
+  try {
+    if (config.journal !== undefined) {
+      return yield* run(config);
+    }
+    return yield* withFailureJournal(
+      root.journal((result: Result<void>) => !result.ok),
+      (stream) => run({ ...config, stream }),
+    );
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }

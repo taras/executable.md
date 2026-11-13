@@ -663,4 +663,34 @@ describe("package test plugins", () => {
       },
     );
   });
+
+  it("saves the document journal when a plugin fails during teardown", function* () {
+    yield* useWorkspace(
+      {
+        "a/xmd.json": testPlugin(fixture("bad-cleanup.mjs")),
+        "a/example.test.md": '<Test name="passing before cleanup">body before cleanup</Test>\n',
+        "b/xmd.json": "{}",
+        "b/example.test.md": PLAIN_TEST,
+      },
+      function* (dir) {
+        const artifacts = join(dir, "artifacts");
+        const result = yield* runCli(["test"], {
+          cwd: dir,
+          env: { XMD_TEST_ARTIFACTS: artifacts },
+        }).join();
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('pass test "passing before cleanup"');
+        expect(result.stderr).toContain("a/example.test.md: fixture plugin cleanup failed");
+        const saved = result.stderr.match(/\[xmd test\] journal saved: (.+root-1\.jsonl) \(root 1/);
+        const journal = saved?.[1];
+        if (journal === undefined) {
+          throw new Error("Expected the document's failure journal");
+        }
+        expect(journal).toContain("artifacts");
+        expect(yield* exists(journal)).toBe(true);
+        expect(result.stdout).toContain("plain test body");
+        expect(result.stderr).toContain("1 of 2 documents failed");
+      },
+    );
+  });
 });
