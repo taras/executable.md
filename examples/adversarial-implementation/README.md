@@ -933,6 +933,7 @@ xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-impleme
 Fable starts the diagnosis. If its option inspection fails, its model is
 unavailable, or it returns a recognized usage-limit refusal, a fresh assignment
 can try Astra once. Each provider has its own attempt directory and conversation.
+Each diagnostic prompt has a 30-minute deadline.
 An uncertain turn, invalid reply, or failed continuation holds for reconciliation.
 
 The attempt retains the assignment, evidence snapshots and fingerprints, model

@@ -49,7 +49,7 @@ Reply with only the JSON object. Start with an opening brace and end with a clos
 <Try>
 <If condition={catalog.state === "selected"}>
 <Delivery.Turn as="turn">
-<Agent name={solver.provider}><Session name={solver.session} model={catalog.model} effort={solver.effort}><Phase.Session directory={identities} name={solver.session} requireExisting={props.previous !== null}><Prompt timeout="10m" throwOnError={true}>{prompt}</Prompt></Phase.Session></Session></Agent>
+<Agent name={solver.provider}><Session name={solver.session} model={catalog.model} effort={solver.effort}><Phase.Session directory={identities} name={solver.session} requireExisting={props.previous !== null}><Prompt timeout="30m" throwOnError={true}>{prompt}</Prompt></Phase.Session></Session></Agent>
 </Delivery.Turn>
 </If>
 <Finally><Dir path={props.directory}><File path="outcome.json"><Json value={{catalog,turn}} /></File></Dir></Finally>
