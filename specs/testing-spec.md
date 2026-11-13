@@ -776,11 +776,11 @@ Its TypeScript paths are the same set Deno's own test-file pattern finds in the
 repository. A test file discovery cannot see would run under no runtime at all,
 so the equivalence is a regression rather than a convention.
 
-A Markdown suite is a regular file directly inside
-`examples/adversarial-implementation/tests/` that discovery admits:
-`Implementation.test.md`. Discovery does not descend, so the helper documents
-and the deliberately failing fixtures beneath that directory never run as
-suites, and a document there without the `.test.md` suffix is a helper.
+A Markdown suite is a regular `*.test.md` file directly inside
+`examples/adversarial-implementation/tests/`. Discovery does not descend, so the
+helper documents and the deliberately failing fixtures beneath that directory
+never run as suites, and a document there without the `.test.md` suffix is a
+helper.
 
 ### Applicable corpus
 
@@ -884,9 +884,7 @@ one-file command:
 
 - Deno — `deno test --allow-all --frozen <file>`
 - Node — `tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 <file>`
-- Bun — `bun test --timeout=300000 <file>`, except
-  `bun test --timeout=450000 packages/cli/tests/adversarial-preparation.test.ts`,
-  whose own enclosing deadline is 420 seconds
+- Bun — `bun test --timeout=300000 <file>`
 
 A Markdown suite runs as `xmd test <file>` through the same runtime's CLI
 source entrypoint, resolved from the runner's checkout:
@@ -898,14 +896,23 @@ source entrypoint, resolved from the runner's checkout:
 followed by `test <file> --plugin packages/cli/tests/fixtures/workflow-test-permissions.mjs
 --include <root>/examples/adversarial-implementation/tests/components --include
 <root>/examples/adversarial-implementation/components`, with the include paths
-absolute so that a nested `<Dir>` cannot change where components are found. The
-child's working directory is the repository root. Its environment is the one a
+absolute so that a nested `<Dir>` cannot change where components are found.
+`Preparation`, `ProductionRole` and `Submission` include
+`tests/production-components` in place of `tests/components`. The child's
+working directory is the repository root. Its environment is the one a
 suite's launched CLI receives (`PATH`, the Deno cache and install variables,
 `XDG_CACHE_HOME`, `TMPDIR` and `XMD_TEST_ARTIFACTS`), plus `XMD_EXAMPLE_COMMAND`
 and `XMD_EXAMPLE_TEST_COMMAND`: the prepared Deno CLI above followed by
 `run --allow-absolute` and by `test`, as quoted shell words. Fixture documents
 run their real workflow through those commands under every outer runtime,
-because the run profile they exercise is the Deno host's.
+because the run profile they exercise is the Deno host's. The artifact-return
+suites also receive `XMD_ARTIFACT_RETURN_EVIDENCE` when it is set.
+
+Each suite but `Implementation`, whose named groups carry their own deadlines,
+runs under a whole-launch deadline: `Preparation` 420 seconds, `Friction` 180,
+`DecisionResolution` and `Delivery` 300, and every other suite 120. A suite that
+reaches it is stopped and its cleanup joined, its path and deadline are
+reported, and it fails with status 1; the files after it still run.
 
 The same operation reads the prepared `node_modules/effection` link before and
 after a Markdown suite. A link that changed or disappeared fails the file with

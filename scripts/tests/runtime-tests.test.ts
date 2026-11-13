@@ -11,7 +11,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep, until } from "effection";
+import { ensure, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -29,6 +29,7 @@ import {
   runShardFiles,
   runSuite,
   TestRuns,
+  withDeadline,
 } from "../lib/runtime-tests.ts";
 import type { RunLaunch } from "../lib/runtime-tests.ts";
 import { applicableTestFiles } from "../lib/test-files.ts";
@@ -421,5 +422,30 @@ describe("the prepared dependency link around a Markdown suite", () => {
     );
 
     expect(status).toEqual(0);
+  });
+});
+
+describe("a Markdown suite's whole-launch deadline", () => {
+  it("stops only that launch, joins its cleanup, and reports failure", function* () {
+    let cleaned = false;
+    const status = yield* withDeadline(SUITE, 20, function* () {
+      yield* ensure(function* () {
+        yield* sleep(5);
+        cleaned = true;
+      });
+      yield* suspend();
+      return 0;
+    });
+
+    expect({ status, cleaned }).toEqual({ status: 1, cleaned: true });
+  });
+
+  it("returns the launch's own status when it settles in time", function* () {
+    const status = yield* withDeadline(SUITE, 1_000, function* () {
+      yield* sleep(1);
+      return 4;
+    });
+
+    expect(status).toEqual(4);
   });
 });

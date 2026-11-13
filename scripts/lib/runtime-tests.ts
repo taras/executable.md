@@ -20,8 +20,10 @@ import type { Context, Operation } from "effection";
 import { createContext } from "effection";
 import { exec } from "@effectionx/process";
 import { exists, readTextFile } from "@effectionx/fs";
+import { timebox } from "@effectionx/timebox";
 import { launchEnvironment, shellQuote } from "@executablemd/test-support/launch";
 import { readlink } from "node:fs/promises";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { applicableTestFiles, isMarkdownSuite } from "./test-files.ts";
@@ -90,6 +92,38 @@ function cliEntry(runtime: Runtime): string[] {
   return ["bun", checkoutPath("packages/cli/src/bun.ts")];
 }
 
+/** The suites whose roles are the production ones rather than the general fixture components. */
+const PRODUCTION_SUITES = new Set(["Preparation", "ProductionRole", "Submission"]);
+
+/**
+ * Each suite's whole-launch deadline, in milliseconds. Implementation has none:
+ * each of its named groups carries its own.
+ */
+export const MARKDOWN_DEADLINES: Record<string, number> = {
+  ArtifactReturn: 120_000,
+  ArtifactReturnRecovery: 120_000,
+  DecisionResolution: 300_000,
+  Delivery: 300_000,
+  Friction: 180_000,
+  LaunchPolicy: 120_000,
+  Preparation: 420_000,
+  ProductionRole: 120_000,
+  Submission: 120_000,
+  Workflow: 120_000,
+};
+
+function suiteName(file: string): string {
+  return file.replace(/^.*\//, "").replace(/\.test\.md$/, "");
+}
+
+/** Where the artifact-return suites keep their storage evidence, when the caller asks. */
+function retainedEvidence(suite: string): Record<string, string> {
+  const evidence = process.env.XMD_ARTIFACT_RETURN_EVIDENCE;
+  return suite.startsWith("ArtifactReturn") && evidence !== undefined
+    ? { XMD_ARTIFACT_RETURN_EVIDENCE: evidence }
+    : {};
+}
+
 /**
  * `xmd test <file>` under `runtime`, with the fixture plugin, the example's
  * component directories as absolute paths — so a nested `<Dir>` cannot move
@@ -97,6 +131,7 @@ function cliEntry(runtime: Runtime): string[] {
  */
 function markdownCommand(runtime: Runtime, file: string, root: URL): Launch {
   const [command, ...entry] = cliEntry(runtime);
+  const suite = suiteName(file);
   const example = (path: string) =>
     fileURLToPath(new URL(`examples/adversarial-implementation/${path}`, root));
   const fixture = (subcommand: string[]) => [...denoCli(), ...subcommand].map(shellQuote).join(" ");
@@ -109,22 +144,21 @@ function markdownCommand(runtime: Runtime, file: string, root: URL): Launch {
       "--plugin",
       checkoutPath("packages/cli/tests/fixtures/workflow-test-permissions.mjs"),
       "--include",
-      example("tests/components"),
+      example(PRODUCTION_SUITES.has(suite) ? "tests/production-components" : "tests/components"),
       "--include",
       example("components"),
     ],
     env: launchEnvironment({
       XMD_EXAMPLE_COMMAND: fixture(["run", "--allow-absolute"]),
       XMD_EXAMPLE_TEST_COMMAND: fixture(["test"]),
+      ...retainedEvidence(suite),
     }),
   };
 }
 
 /**
  * Bun caps each test at 5s by default, which Deno and Node do not. Suites that
- * spawn a CLI or a worker need a larger base cap. oneFileCommand also raises
- * it for Preparation's enclosing deadline, leaving that suite's own timeout
- * in charge.
+ * spawn a CLI or a worker need a larger base cap.
  */
 const BUN_TEST_TIMEOUT_MS = 300_000;
 
@@ -153,13 +187,9 @@ export function oneFileCommand(runtime: Runtime, file: string, root: URL = CHECK
     return markdownCommand(runtime, file, root);
   }
   const runner = RUNNERS[runtime];
-  const prefix =
-    runtime === "bun" && file === "packages/cli/tests/adversarial-preparation.test.ts"
-      ? ["test", "--timeout=450000"]
-      : runner.prefix;
   return {
     command: runner.command,
-    arguments: [...prefix, ...runner.serial, file],
+    arguments: [...runner.prefix, ...runner.serial, file],
   };
 }
 
@@ -217,9 +247,10 @@ function* preparedLink(root: URL): Operation<string | undefined> {
 /**
  * Run `file` alone under `runtime`, from `root`.
  *
- * A Markdown suite is also held to the prepared dependency link it started
- * with. A changed or missing link fails the file even when its own tests
- * passed; a file that already failed keeps its own status.
+ * A Markdown suite is also held to its whole-launch deadline, which ends only
+ * that file, and to the prepared dependency link it started with. A changed or
+ * missing link fails the file even when its own tests passed; a file that
+ * already failed keeps its own status.
  */
 export function* runOneFile(runtime: Runtime, file: string, root: URL): Operation<number> {
   const run = yield* TestRuns.expect();
@@ -228,7 +259,11 @@ export function* runOneFile(runtime: Runtime, file: string, root: URL): Operatio
     return yield* run(launch);
   }
   const before = yield* preparedLink(root);
-  const status = yield* run(launch);
+  const deadline = MARKDOWN_DEADLINES[suiteName(file)];
+  const status =
+    deadline === undefined
+      ? yield* run(launch)
+      : yield* withDeadline(file, deadline, () => run(launch));
   const after = yield* preparedLink(root);
   if (after === before) {
     return status;
@@ -237,6 +272,20 @@ export function* runOneFile(runtime: Runtime, file: string, root: URL): Operatio
     `${file} changed the prepared dependency link ${PREPARED_LINK}: ${before ?? "absent"} -> ${after ?? "absent"}`,
   );
   return status === 0 ? 1 : status;
+}
+
+/** `launch`'s status, or 1 once its child is gone when it outlived `deadline` milliseconds. */
+export function* withDeadline(
+  file: string,
+  deadline: number,
+  launch: () => Operation<number>,
+): Operation<number> {
+  const settled = yield* timebox(deadline, launch);
+  if (!settled.timeout) {
+    return settled.value;
+  }
+  console.error(`${file} exceeded its ${deadline}ms deadline and was stopped`);
+  return 1;
 }
 
 /** `current` unless it succeeded, so the earliest failure is the one kept. */

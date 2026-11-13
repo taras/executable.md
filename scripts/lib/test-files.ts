@@ -14,12 +14,6 @@ const EXTRA_MEMBERS = ["scripts"];
  */
 export const MARKDOWN_SUITES = "examples/adversarial-implementation/tests/";
 
-/**
- * The Markdown suites admitted so far. Each joins with the retirement of its
- * TypeScript launcher, so no journey runs twice.
- */
-const ADMITTED_MARKDOWN = new Set(["Implementation.test.md"]);
-
 interface RootManifest {
   workspace: string[];
 }
@@ -40,7 +34,7 @@ export function isMarkdownSuite(file: string): boolean {
  * `scripts/tests/`, and nothing else. Walking those concrete directories rather
  * than the repository root is what keeps nested worktrees, `site`, and the
  * deliberately malformed `scripts/tests/fixtures` out without naming any of
- * them. Markdown discovery adds the admitted immediate children of
+ * them. Markdown discovery adds the regular immediate `*.test.md` children of
  * `MARKDOWN_SUITES`.
  */
 export function* listTestFiles(root: URL): Operation<string[]> {
@@ -70,7 +64,7 @@ function* listMarkdownSuites(root: URL): Operation<string[]> {
   }
   const suites: string[] = [];
   for (const entry of yield* each(walk(directory, { maxDepth: 0, includeDirs: false }))) {
-    if (entry.isFile && !entry.isSymlink && ADMITTED_MARKDOWN.has(entry.name)) {
+    if (entry.isFile && !entry.isSymlink && isMarkdownSuite(entry.name)) {
       suites.push(`${MARKDOWN_SUITES}${entry.name}`);
     }
     yield* each.next();
