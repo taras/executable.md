@@ -1041,6 +1041,8 @@ var AcpRuntimeManager = class {
 	options;
 	deps;
 	exactSessionRecordIds = /* @__PURE__ */ new Set();
+	// XMD verified resume: a later cold client must prove the same identity again.
+	verifiedResumeIdentities = /* @__PURE__ */ new Map();
 	activeControllers = /* @__PURE__ */ new Map();
 	controlSessionRecords = /* @__PURE__ */ new Map();
 	retainedSessionOwners = /* @__PURE__ */ new Map();
@@ -1447,6 +1449,8 @@ var AcpRuntimeManager = class {
 				timeoutMs: this.options.timeoutMs,
 				resumePolicy: resumePolicyForSessionMode(sessionMode),
 				strictResume: this.exactSessionRecordIds.has(record.acpxRecordId),
+				// XMD verified resume: prove identity before replaying saved preferences.
+				expectedAgentSessionId: this.verifiedResumeIdentities.get(record.acpxRecordId),
 				replacingMode: replayOptions?.replacingMode,
 				replacingConfigOption: replayOptions?.replacingConfigOption,
 				authority,
@@ -1519,6 +1523,11 @@ var AcpRuntimeManager = class {
 			agentCommand,
 			agentArgv
 		};
+		// XMD verified resume: a compatible saved record is not a live assertion.
+		if (input.expectedAgentSessionId !== void 0) {
+			this.assertRuntimeSessionIdle(input.sessionKey);
+			return await this.withManagerLock(this.runtimeOperationLocks, input.sessionKey, async () => this.reopenVerifiedSession(input, agent));
+		}
 		if (input.mode !== "persistent") return await this.acquireRuntimeSession(input, agent);
 		const compatible = await this.reuseCompatiblePersistentSession(input, agent);
 		if (compatible) return compatible;
@@ -1542,6 +1551,43 @@ var AcpRuntimeManager = class {
 		if (existing && this.canReuseRuntimeSession(input, agent, existing)) return await this.reuseRuntimeSession(existing);
 		await this.closeConflictingPersistentSession(input, existing?.owner);
 		return await this.createOwnedRuntimeSession(input, agent);
+	}
+	// XMD verified resume: keep the original record and reconnect its live owner.
+	async reopenVerifiedSession(input, agent) {
+		const existing = await this.loadExistingRuntimeSession(input);
+		const retained = existing?.record;
+		if (!retained || sessionMaterializationPending(retained) || retained.acpx?.reset_on_next_ensure === true ||
+			retained.acpSessionId !== input.resumeSessionId || path.resolve(retained.cwd) !== agent.cwd ||
+			(retained.agentSessionId !== void 0 && retained.agentSessionId !== input.expectedAgentSessionId)) {
+			throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "The retained ACP record cannot verify this native conversation.");
+		}
+		const record = { ...structuredClone(retained), agentCommand: agent.agentCommand, agentArgv: agent.agentArgv };
+		await this.closeConflictingPersistentSession(input, existing.owner);
+		// XMD verified resume: load and validate before making the owner visible.
+		const client = this.createTurnClient(record, input.requestedModel);
+		const owner = this.createSessionOwner({ client, sessionKey: input.sessionKey, mode: input.mode });
+		try {
+			await connectAndLoadSession({
+				client,
+				record,
+				sessionOptions: input.sessionOptions,
+				expectedAgentSessionId: input.expectedAgentSessionId,
+				timeoutMs: this.options.timeoutMs,
+				verbose: this.options.verbose
+			});
+			this.assertOpen();
+			this.attachIdleProjection(owner, record);
+			this.refreshOwnedRecordLifecycle(owner, record);
+			await this.retainInitializedSessionOwner(owner, record);
+			// XMD verified resume: other operations on this owner keep the same assertion.
+			this.verifiedResumeIdentities.set(record.acpxRecordId, input.expectedAgentSessionId);
+			return record;
+		} catch (error) {
+			// XMD verified resume: initialization cannot mark held history for replacement.
+			owner.recordId = void 0;
+			await this.abandonInitializingSessionOwner(owner);
+			throw error;
+		}
 	}
 	async loadExistingRuntimeSession(input) {
 		const existingRecordId = input.mode === "persistent" ? input.sessionKey : this.pendingOneShotRecordIds.get(input.sessionKey);
@@ -1639,6 +1685,8 @@ var AcpRuntimeManager = class {
 			await this.retainInitializedSessionOwner(owner, record);
 			if (!input.resumeSessionId) {
 				this.exactSessionRecordIds.delete(record.acpxRecordId);
+				// XMD verified resume: explicit fresh construction retires the assertion.
+				this.verifiedResumeIdentities.delete(record.acpxRecordId);
 			}
 			return record;
 		} catch (error) {
@@ -2082,6 +2130,8 @@ var AcpRuntimeManager = class {
 			record: turn.record,
 			resumePolicy: resumePolicyForSessionMode(task.input.sessionMode),
 			strictResume: this.exactSessionRecordIds.has(turn.record.acpxRecordId),
+			// XMD verified resume: a lost client cannot skip identity confirmation.
+			expectedAgentSessionId: this.verifiedResumeIdentities.get(turn.record.acpxRecordId),
 			timeoutMs: this.options.timeoutMs,
 			promptRecorded: true,
 			activeController: task.state.activeController,
@@ -2622,6 +2672,8 @@ var SharedAcpRuntime = class {
 		this.assertOpen();
 		// XMD requested model: shared sessions refuse this in-process input.
 		refuseSharedRequestedModel(input);
+		// XMD verified resume: shared runtime has no verified load boundary.
+		if (input.expectedAgentSessionId !== void 0) invalidOption("Verified resume requires the in-process runtime.");
 		if (input.mode !== "persistent") invalidOption("Shared sessions require persistent mode; use the in-process runtime for oneshot sessions.");
 		const session = this.sessionOptions(input);
 		return this.track(ensureSession({
@@ -2893,12 +2945,16 @@ var AcpxRuntime = class {
 		const { sessionName, agent } = this.resolveSessionIdentity(input);
 		// XMD requested model: validate before manager work begins.
 		const requestedModel = requestedModelOf(input);
+		// XMD verified resume: an identity assertion always belongs to an exact loading target.
+		const expectedAgentSessionId = input.expectedAgentSessionId;
+		if (expectedAgentSessionId !== void 0 && (typeof expectedAgentSessionId !== "string" || !expectedAgentSessionId.trim() || !input.resumeSessionId || input.mode !== "persistent")) invalidOption("Verified resume requires a retained native identity and exact persistent loading target.");
 		const record = await (await this.getManager()).ensureSession({
 			sessionKey: sessionName,
 			agent,
 			mode: input.mode,
 			cwd: input.cwd ?? this.options.cwd,
 			resumeSessionId: input.resumeSessionId,
+			expectedAgentSessionId,
 			sessionOptions: input.sessionOptions,
 			materialization: input.materialization,
 			// XMD requested model: consumed only by this attaching client.

@@ -47,7 +47,7 @@ import {
   l as runPromptTurn,
 } from "../vendor/acpx/generated/queue-owner-runtime-B0mPqOu4.js";
 
-import { AGENT_SOURCE, world } from "./released-peer.ts";
+import { STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
 
 function* runtimeWorld() {
   const current = yield* world();
@@ -72,10 +72,7 @@ function* runtimeWorld() {
 describe("Session information", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("SI: standard public configured sessions retain loading identity through close and load", function* () {
     const current = yield* world(true);
-    yield* writeTextFile(
-      current.agent,
-      AGENT_SOURCE.replace(', _meta: {agentSessionId: "native-" + sessionId}', ""),
-    );
+    yield* writeTextFile(current.agent, STANDARD_AGENT_SOURCE);
     const sessionKey = "public-standard";
     let held: Session | undefined;
     let hostCalls = 0;
@@ -823,6 +820,49 @@ function* drainedResult(turn: AcpRuntimeTurn) {
   return yield* until(turn.result);
 }
 
+describe("verified native resume", { sanitizeOps: false, sanitizeResources: false }, () => {
+  for (const operation of ["control", "prompt"]) {
+    it(`checks the live identity again on a cold ${operation}`, function* () {
+      const f = yield* explicitResumeWorld();
+      yield* f.restart();
+      const handle = yield* until(
+        f.runtime.ensureSession({
+          ...f.input,
+          resumeSessionId: f.before.acpSessionId,
+          expectedAgentSessionId: f.before.agentSessionId,
+        }),
+      );
+      expect(yield* f.lifecycle()).toEqual(["session/new", "session/load"]);
+      yield* until(f.runtime.close({ handle, reason: "force a cold client in the same runtime" }));
+      yield* f.mark("different-native-identity");
+      const before = (yield* f.reports()).length;
+      if (operation === "control") {
+        const [outcome] = yield* allSettled([
+          until(f.runtime.setConfigOption({ handle, key: "model", value: "initial" })),
+        ]);
+        if (outcome.ok) {
+          throw new Error("The cold configuration write was accepted");
+        }
+        expect(outcome.error).toMatchObject({ detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" });
+      } else {
+        const result = yield* drainedResult(
+          f.runtime.startTurn({ handle, text: "unsent", requestId: "refused", mode: "prompt" }),
+        );
+        expect(result).toMatchObject({
+          status: "failed",
+          error: { detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" },
+        });
+      }
+      expect((yield* f.reports()).slice(before).map((report) => report.method)).toEqual([
+        "session/load",
+      ]);
+      const after = yield* until(f.store.load(f.input.sessionKey));
+      assertProjection(f.before, after);
+      expect(after?.agentSessionId).toBe(f.before.agentSessionId);
+    });
+  }
+});
+
 describe(
   "vendored strict explicit resume",
   { sanitizeOps: false, sanitizeResources: false },
@@ -1115,7 +1155,7 @@ describe(
         const current = yield* world(true);
         yield* writeTextFile(
           current.agent,
-          AGENT_SOURCE.replace(', _meta: {agentSessionId: "native-" + sessionId}', "").replace(
+          STANDARD_AGENT_SOURCE.replace(
             'if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});',
             "",
           ),

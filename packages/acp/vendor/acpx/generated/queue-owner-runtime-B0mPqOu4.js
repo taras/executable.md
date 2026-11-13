@@ -5082,7 +5082,9 @@ async function connectAndLoadSession(options) {
 	const client = options.client;
 	assertControlAuthority(options.authority);
 	// strictResume excludes even an unprompted record's -32603 fallback.
-	const sameSessionOnly = requiresSameSession(options);
+	// XMD verified resume: an identity-bearing load never permits replacement.
+	const strictResume = options.strictResume || options.expectedAgentSessionId !== void 0;
+	const sameSessionOnly = strictResume || requiresSameSession(options);
 	const originalSessionId = record.acpSessionId;
 	const originalAgentSessionId = record.agentSessionId;
 	const originalAcpx = cloneSessionAcpxState(record.acpx);
@@ -5108,7 +5110,9 @@ async function connectAndLoadSession(options) {
 		timeoutMs: options.timeoutMs,
 		authority: options.authority,
 		promptRecorded: options.promptRecorded,
-		strictResume: options.strictResume
+		strictResume,
+		// XMD verified resume: read the live response, not the stored assertion.
+		expectedAgentSessionId: options.expectedAgentSessionId
 	});
 	const { resumed, loadError, sessionId, createdFreshSession, pendingAgentSessionId, sessionModels } = loadState;
 	applyReconnectedModelState(record, sessionModels, loadState.configOptionsPresent, loadState.legacyModelMetadataPresent, createdFreshSession);
@@ -5280,26 +5284,32 @@ async function loadOrCreateRuntimeSession(params) {
 	return await createFreshRuntimeSession(params.client, params.record, params.timeoutMs, params.authority);
 }
 async function loadRuntimeSession(params, resume) {
+	// XMD verified resume: separate the protocol failure from the identity refusal.
+	let loadResult;
 	try {
-		const loadResult = await withTimeout(resume ? params.client.resumeSession(params.record.acpSessionId, params.record.cwd, params.authority) : params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, {
+		loadResult = await withTimeout(resume ? params.client.resumeSession(params.record.acpSessionId, params.record.cwd, params.authority) : params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, {
 			suppressReplayUpdates: true,
 			...params.authority ? { authority: params.authority } : {}
 		}), params.timeoutMs);
-		reconcileAgentSessionId(params.record, loadResult.agentSessionId);
-		applyConfigOptionsToRecord(params.record, loadResult);
-		return {
-			sessionId: params.record.acpSessionId,
-			pendingAgentSessionId: params.record.agentSessionId,
-			sessionModels: loadResult.models,
-			configOptionsPresent: loadResult.configOptionsPresent,
-			legacyModelMetadataPresent: loadResult.legacyModelMetadataPresent,
-			resumed: true,
-			createdFreshSession: false
-		};
 	} catch (error) {
 		rethrowCancelledLoad(error, params.authority);
 		return await recoverRuntimeSessionLoadFailure(params, error);
 	}
+	// XMD verified resume: omission must not inherit the record's old identity.
+	if (params.expectedAgentSessionId !== void 0 && loadResult.agentSessionId !== params.expectedAgentSessionId) {
+		throw Object.assign(new Error(loadResult.agentSessionId === void 0 ? "The provider did not confirm the retained native conversation." : "The provider reopened a different native conversation."), { detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" });
+	}
+	reconcileAgentSessionId(params.record, loadResult.agentSessionId);
+	applyConfigOptionsToRecord(params.record, loadResult);
+	return {
+		sessionId: params.record.acpSessionId,
+		pendingAgentSessionId: params.record.agentSessionId,
+		sessionModels: loadResult.models,
+		configOptionsPresent: loadResult.configOptionsPresent,
+		legacyModelMetadataPresent: loadResult.legacyModelMetadataPresent,
+		resumed: true,
+		createdFreshSession: false
+	};
 }
 function rethrowCancelledLoad(error, authority) {
 	const signal = authority?.signal;
@@ -5402,6 +5412,8 @@ async function withConnectedSession(options) {
 				record,
 				resumePolicy: options.resumePolicy,
 				strictResume: options.strictResume,
+				// XMD verified resume: apply the same check on cold configuration.
+				expectedAgentSessionId: options.expectedAgentSessionId,
 				replacingMode: options.replacingMode,
 				replacingConfigOption: options.replacingConfigOption,
 				authority: options.authority,

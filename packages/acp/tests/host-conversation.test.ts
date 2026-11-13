@@ -1256,6 +1256,7 @@ describe(
  * ACPX itself and what a case reads is what the provider actually asked it.
  */
 interface RuntimeBoundary {
+  readonly environments: AcpRuntimeOptions["agentProcessEnv"][];
   readonly log: {
     readonly op: "ensure" | "close";
     readonly sessionKey?: string;
@@ -1268,9 +1269,12 @@ interface RuntimeBoundary {
 
 function runtimeBoundary(): RuntimeBoundary {
   const log: RuntimeBoundary["log"] = [];
+  const environments: RuntimeBoundary["environments"] = [];
   return {
     log,
+    environments,
     create(options) {
+      environments.push(options.agentProcessEnv);
       const runtime = createAcpRuntime(options);
       return new Proxy(runtime, {
         get(target, property) {
@@ -1317,31 +1321,35 @@ interface ChangingHost {
   readonly store: ReturnType<typeof createAcpxSessionStore>;
   readonly ownership: Owned;
   readonly runtime: RuntimeBoundary;
+  readonly observer: ReturnType<typeof createFakeObserver>;
   installation(command: string | string[]): ExecutionInstallation;
 }
 
-function changingHost(f: CertificationFixture): ChangingHost {
+function changingHost(f: CertificationFixture, agent = AGENT): ChangingHost {
   const store = createAcpxSessionStore(join(f.dir, "store"));
   const ownership = owned();
   const runtime = runtimeBoundary();
-  const observer = createFakeObserver({ versionOutput: "scribe 1.0.0\n" });
+  const observer = createFakeObserver({
+    versionOutput: agent === "codex" ? "codex-cli 0.163.0\n" : "scribe 1.0.0\n",
+  });
   return {
     store,
     ownership,
     runtime,
+    observer,
     installation(command) {
       return {
         *install() {
           yield* installAgentComponents({
-            defaultAgent: AGENT,
+            defaultAgent: agent,
             rootProvider: {
-              options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+              options: { defaultAgent: agent, permissionMode: "deny-all" },
               factory: createAcpxProvider({
                 createRuntime: runtime.create,
                 sessionStore: store,
-                agentRegistry: { resolve: () => command, list: () => [AGENT] },
-                nativeAdapters: { scribe: BOUND_SCRIBE },
-                advertiseNativeLaunch: ["scribe"],
+                agentRegistry: { resolve: () => command, list: () => [agent] },
+                ...(agent === AGENT ? { nativeAdapters: { scribe: BOUND_SCRIBE } } : {}),
+                advertiseNativeLaunch: [agent],
                 advertiseClientNativeAttachment: [],
                 coordinator: ownership.coordinator.coordinator,
                 routeStore: ownership.routes,
@@ -1722,6 +1730,99 @@ describe(
         ).toEqual(["seed", "recall"]);
       });
     });
+  },
+);
+
+describe(
+  "a held Codex conversation across a host CLI upgrade",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const [mode, failure, errorName] of [
+      ["distinct", undefined, undefined],
+      ["normal", "reopened a different native conversation", "AttachmentRefused"],
+      ["standard", "did not confirm the retained native conversation", "AttachmentRefused"],
+      ["missing", "could not be resumed", "SessionResumeRequiredError"],
+    ] as const) {
+      it(`requires the new build's live identity (${mode})`, function* () {
+        yield* withCertificationFixture(function* (f) {
+          const target = changingHost(f, "codex");
+          const command = f.command("distinct");
+          const key = deriveSessionKey(command, f.dir, "chat-1");
+          const tuple = { provider: "acpx", agent: command, sessionKey: key };
+          const history = new InMemoryStream();
+          expect(
+            answer(
+              yield* withConversation(
+                history,
+                target.installation(command),
+                (chat) => chat.prompt("seed:remembered"),
+                "codex",
+              ),
+            ),
+          ).toBe("READY");
+          const record = yield* until(target.store.load(key));
+          const route = yield* target.ownership.routes.read(tuple);
+          if (!record?.agentSessionId || route?.schema !== "session-route.v3") {
+            throw new Error("The original build did not establish a native conversation");
+          }
+          expect(route.executableBinding.reportedVersion).toBe("codex-cli 0.163.0");
+          const { lines, stream } = yield* reread(history);
+          const before = yield* f.calls();
+          if (mode === "missing") {
+            yield* rm(join(f.dir, `fixture-${record.acpSessionId}.json`));
+          }
+          const runtimeCount = target.runtime.environments.length;
+          target.observer.observation.path = "/opt/builds/codex-0.167.1";
+          target.observer.observation.versionOutput = "codex-cli 0.167.1\n";
+          target.observer.observation.digest = "b".repeat(64);
+          const resumed = yield* withConversation(
+            stream,
+            target.installation(mode === "missing" ? command : f.command(mode)),
+            (chat) => chat.prompt("recall", { model: "selected", effort: "high" }),
+            "codex",
+          );
+          const calls = (yield* f.calls()).slice(before.length);
+          const methods = calls.map((call) => call.method);
+          const environments = target.runtime.environments.slice(runtimeCount);
+          expect(environments).toContainEqual({ CODEX_PATH: "/opt/builds/codex-0.167.1" });
+          expect(methods).toContain("session/load");
+          expect(methods).not.toContain("session/new");
+          expect(
+            calls
+              .filter((call) => call.sessionId !== undefined)
+              .every((call) => call.sessionId === record.acpSessionId),
+          ).toBe(true);
+          expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
+          if (failure === undefined) {
+            expect(answer(resumed)).toBe("remembered");
+            expect(methods.indexOf("session/load")).toBeLessThan(
+              methods.indexOf("session/set_config_option"),
+            );
+            expect(methods.indexOf("session/load")).toBeLessThan(methods.indexOf("session/prompt"));
+            expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
+              methods.indexOf("session/prompt"),
+            );
+            const kept = yield* until(target.store.load(key));
+            expect(kept?.agentSessionId).toBe(record.agentSessionId);
+            expect(kept?.messages.slice(0, record.messages.length)).toEqual(record.messages);
+            expect(turns(stream.snapshot()).map((turn) => turn.record.agentSessionId)).toEqual([
+              record.agentSessionId,
+              record.agentSessionId,
+            ]);
+          } else {
+            if (!resumed.ok || resumed.value.ok) {
+              throw new Error("The held conversation did not report a resume refusal");
+            }
+            expect(resumed.value.error.name).toBe(errorName);
+            expect(resumed.value.error.message).toContain(failure);
+            expect(methods).not.toContain("session/set_config_option");
+            expect(methods).not.toContain("session/prompt");
+            expect(yield* until(target.store.load(key))).toEqual(record);
+            expect(stream.snapshot().map(serializeDurableEvent)).toEqual(lines);
+          }
+        });
+      });
+    }
   },
 );
 

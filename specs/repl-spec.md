@@ -3490,7 +3490,9 @@ conversation's own history before anything native can be created, and stays
 there unchanged as the account of how the chat began. A later explicit message
 is sent through today's adapter and today's Sidekick assembly to that same
 native conversation, even when the adapter command or the configuration
-differs; the Sidekick's own controls apply to every turn as it is built — no
+differs. After a host Codex upgrade, the installed build must confirm the
+original conversation on a live load before Sidekick uses it. The Sidekick's
+own controls apply to every turn as it is built — no
 provider tools, no MCP servers, strict permission routing and every native
 permission request denied — and the turn's model and effort are applied and
 read back before it is sent. Reopening asks for nothing. A resume, identity,
