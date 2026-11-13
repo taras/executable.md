@@ -10,6 +10,7 @@ export const props = {
     repository: { type: "string" },
     attempt: { type: "string" },
     session: { type: "string" },
+    retained: { type: "array", items: { type: "string" }, default: [] },
   },
   required: ["repository", "attempt", "session"],
   additionalProperties: false,
@@ -29,9 +30,19 @@ function* canonical(path: string) {
   }
 }
 
+function inside(root: string, path: string): boolean {
+  const part = relative(root, path);
+  return !isAbsolute(part) && part !== ".." && !part.startsWith(".." + sep);
+}
+
 export default function* Paths(input: unknown) {
-  const { repository, attempt, session } = z
-    .strictObject({ repository: z.string(), attempt: z.string(), session: z.string() })
+  const { repository, attempt, session, retained } = z
+    .strictObject({
+      repository: z.string(),
+      attempt: z.string(),
+      session: z.string(),
+      retained: z.array(z.string()),
+    })
     .parse(input);
   const git = yield* scoped(function* () {
     yield* useQuietProcessOutput();
@@ -51,10 +62,14 @@ export default function* Paths(input: unknown) {
   if (git.exitCode !== 0 || paths.length !== 3 || !paths.every(isAbsolute)) {
     throw new Error("Diagnosis requires an identified Git checkout.");
   }
-  const directory = yield* canonical(attempt);
+  const protectedPaths = [];
   for (const path of paths) {
-    const part = relative(yield* canonical(path), directory);
-    if (!isAbsolute(part) && part !== ".." && !part.startsWith(".." + sep)) {
+    protectedPaths.push(yield* canonical(path));
+  }
+  const directory = yield* canonical(attempt);
+  for (const location of [directory, ...retained]) {
+    const candidate = yield* canonical(location);
+    if (protectedPaths.some((path) => inside(path, candidate))) {
       throw new Error("Keep diagnostic artifacts outside the checkout and Git directories.");
     }
   }

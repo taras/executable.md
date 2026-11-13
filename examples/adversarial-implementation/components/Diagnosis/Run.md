@@ -11,9 +11,9 @@ returns: {type: object}
 
 <Diagnosis.Schema as="schema" />
 <Parse schema={schema.request} as="request"><Json value={props.request} /></Parse>
-<Diagnosis.Paths repository={request.assignment.repository} attempt={request.attempt} session={request.session} as="namespace" />
 <Let as="previous" value={null} />
 <Let as="previousModel" value={null} />
+<Let as="priorName" value={null} />
 <Let as="inputs" value={[]} />
 <If condition={request.previous !== undefined}>
 <Ticket.Read path={request.previous + "/assignment.json"} limit={1048576} as="saved" />
@@ -32,8 +32,10 @@ returns: {type: object}
 <If condition={JSON.stringify(sessionReceipt) !== JSON.stringify(priorResult.identity)}><Fail message="The saved diagnostic session receipt differs from the original result." /></If>
 <Let as="previousModel" value={priorResult.model} />
 <Let as="suffix" value={previous.position === 0 ? "-fable" : "-astra"} />
-<Let as="namespace" value={{directory:namespace.directory,identities:previous.identities,name:previous.solver.session.slice(0,-suffix.length)}} />
+<Let as="priorName" value={previous.solver.session.slice(0,-suffix.length)} />
 </If>
+<Diagnosis.Paths repository={request.assignment.repository} attempt={request.attempt} session={request.session} retained={previous === null ? [] : [request.previous, request.previous + "/continuation", previous.identities, previous.identities + "/" + encodeURIComponent(previous.solver.session) + ".json", previous.identities + "/" + encodeURIComponent(previous.solver.session) + ".json.mismatch.json"]} as="resolved" />
+<Let as="namespace" value={previous === null ? resolved : {directory:resolved.directory,identities:previous.identities,name:priorName}} />
 <Ticket.Checkout repository={request.assignment.repository} as="source" />
 <If condition={source.head !== request.assignment.revision || !source.clean}><Fail message="Select the clean diagnostic checkout at its exact assigned revision." /></If>
 <Diagnosis.Inputs repository={request.assignment.repository} paths={request.inputPaths} retained={inputs} as="captured" />

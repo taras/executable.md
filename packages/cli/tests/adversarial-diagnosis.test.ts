@@ -5,7 +5,7 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { join, resolve } from "node:path";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import {
   collect,
   agentIdentityComponents,
@@ -190,6 +190,15 @@ describe("adversarial problem-solver phase", () => {
     expect(JSON.parse(yield* test.run(first))).toMatchObject({ status: "missing_witness" });
     const previous = join(first, "fable");
     const result = yield* readTextFile(join(previous, "result.json"));
+    const relocated = join(test.repository, "prior-receipt");
+    yield* ensureDir(relocated);
+    for (const name of ["assignment.json", "inputs.json", "result.json"]) {
+      yield* writeTextFile(join(relocated, name), yield* readTextFile(join(previous, name)));
+    }
+    yield* expectRefusal(test.run(join(test.root, "relocated"), relocated), "outside the checkout");
+    expect(yield* API.Fs.operations.stat(join(relocated, "continuation"))).toMatchObject({
+      exists: false,
+    });
     const next = join(test.root, "interrupted");
     test.fake.script({ manual: true });
     const running = yield* spawn(() => test.run(next, previous));
