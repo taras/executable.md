@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { resolveAgentConfig } from "./agent-config.ts";
 import type { AgentFlags, AuthorshipFlags } from "./agent-config.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
+import { diagnosticAgent } from "./diagnostic-agent.ts";
 
 /**
  * Where a command that is not a workflow run materializes its adapters.
@@ -192,18 +193,21 @@ export function* installAgentProviderStack(
   acp?: AcpxProviderDependencies,
   selectedFactory?: AgentProviderFactory,
 ): Operation<void> {
-  const acpx = selectedFactory ?? createAcpxProvider(acp ?? hostAcpDependencies(stack));
+  const dependencies = acp ?? hostAcpDependencies(stack);
+  const acpx = selectedFactory ?? createAcpxProvider(dependencies);
   yield* registerAgentProvider("acpx", acpx);
   yield* registerAgentProvider(
     "claude-workflow-role",
     createAcpxProvider({
-      ...(acp ?? hostAcpDependencies(stack)),
+      ...dependencies,
       newSessionOptions: {
         env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
         disallowedTools: ["ScheduleWakeup", "Monitor"],
       },
     }),
   );
+
+  yield* registerAgentProvider("diagnostic-acpx", diagnosticAgent(dependencies, stack.adapters));
 
   // The trusted host selects its own root provider by name. Document-level
   // selection goes through the installation protocol; this is the host saying

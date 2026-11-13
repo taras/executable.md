@@ -794,6 +794,25 @@ selected environment value with the retained session options. A missing or
 different value refuses rather than silently reconfiguring, replacing or
 resetting the session. Fresh sessions record these settings on creation.
 
+### Diagnostic profile
+
+The CLI registers `diagnostic-acpx` for the standalone problem-solver phase.
+The provider resolves the working tree root, Git directory and common Git
+directory in the scoped directory when it is installed. It starts the carried
+Claude or Codex adapter inside a process sandbox that denies writes to those
+resolved directories. The restriction also applies to tools the agent starts.
+On macOS the provider uses `sandbox-exec`. On Linux it uses Bubblewrap with a
+private PID namespace and read-only mounts for those directories. The provider
+checks that the sandbox starts before inspecting model options. Unsupported
+hosts and failed sandbox setup stop dispatch before any agent is started.
+
+The profile denies ACP permission requests, supplies no ACP MCP servers and
+uses its sandboxed adapter command for session resolution. A diagnostic
+continuation requires its recorded identity. Native launch and client-native
+attachment are unavailable in this profile. The source protection applies to
+the diagnostic processes. The workflow itself owns evidence and result
+publication outside the checkout.
+
 ### Seeded configuration
 
 `installAgentComponents({ defaultAgent, permissionMode })` seeds the

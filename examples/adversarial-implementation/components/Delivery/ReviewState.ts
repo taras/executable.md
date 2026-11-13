@@ -77,7 +77,10 @@ type Outcome = z.infer<typeof outcomeSchema>;
  * matching message without that diagnostic, or a reviewer outside the Fable
  * chain is partial output and holds.
  */
-function usageLimitRefusal(outcome: Outcome, fableChoices: readonly string[] | null): boolean {
+export function isFableUsageLimit(
+  outcome: Pick<Outcome, "reviewer" | "catalog" | "turn">,
+  fableChoices: readonly string[] | null,
+): boolean {
   const turn = outcome.turn;
   if (
     fableChoices === null ||
@@ -187,7 +190,7 @@ function* attempt(
       "The provider reported the review turn cancelled, which is not evidence that the reviewer is unavailable.",
     );
   }
-  if (usageLimitRefusal(outcome, fableChoices)) {
+  if (isFableUsageLimit(outcome, fableChoices)) {
     return result(
       "eligible",
       "Fable reported its usage limit: the turn said exactly that notice, with the matching provider diagnostic, and no review output.",
