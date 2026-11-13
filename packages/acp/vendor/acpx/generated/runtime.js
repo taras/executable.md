@@ -1583,6 +1583,8 @@ var AcpRuntimeManager = class {
 			this.verifiedResumeIdentities.set(record.acpxRecordId, input.expectedAgentSessionId);
 			return record;
 		} catch (error) {
+			// XMD verified resume: initialization cannot mark held history for replacement.
+			owner.recordId = void 0;
 			await this.abandonInitializingSessionOwner(owner);
 			throw error;
 		}

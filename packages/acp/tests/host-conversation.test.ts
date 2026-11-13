@@ -1737,11 +1737,11 @@ describe(
   "a held Codex conversation across a host CLI upgrade",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    for (const [mode, failure] of [
-      ["distinct", undefined],
-      ["normal", "reopened a different native conversation"],
-      ["standard", "did not confirm the retained native conversation"],
-      ["missing", "missing controlled history"],
+    for (const [mode, failure, errorName] of [
+      ["distinct", undefined, undefined],
+      ["normal", "reopened a different native conversation", "AttachmentRefused"],
+      ["standard", "did not confirm the retained native conversation", "AttachmentRefused"],
+      ["missing", "could not be resumed", "SessionResumeRequiredError"],
     ] as const) {
       it(`requires the new build's live identity (${mode})`, function* () {
         yield* withCertificationFixture(function* (f) {
@@ -1795,6 +1795,9 @@ describe(
           expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
           if (failure === undefined) {
             expect(answer(resumed)).toBe("remembered");
+            expect(methods.indexOf("session/load")).toBeLessThan(
+              methods.indexOf("session/set_config_option"),
+            );
             expect(methods.indexOf("session/load")).toBeLessThan(methods.indexOf("session/prompt"));
             expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
               methods.indexOf("session/prompt"),
@@ -1810,6 +1813,7 @@ describe(
             if (!resumed.ok || resumed.value.ok) {
               throw new Error("The held conversation did not report a resume refusal");
             }
+            expect(resumed.value.error.name).toBe(errorName);
             expect(resumed.value.error.message).toContain(failure);
             expect(methods).not.toContain("session/set_config_option");
             expect(methods).not.toContain("session/prompt");

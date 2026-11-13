@@ -2009,9 +2009,7 @@ function* useAcpxProviderState(
       // reported as an ordinary reattachment's is: the adapter's account,
       // with nothing created in its place.
       if (attachment === undefined) {
-        throw expectedAgentSessionId === undefined
-          ? sessionResumeFailure(error, prepared.details.sessionKey)
-          : error;
+        throw sessionResumeFailure(error, prepared.details.sessionKey);
       }
       // An exact resume that the provider could not perform: it has no such
       // history, or it cannot resume by name at all. Either way the
@@ -2595,7 +2593,7 @@ function* useAcpxProviderState(
         adapter,
         prepared.sessionKey,
         constructed,
-        agentName === "codex" && continuationOfPrepared(prepared) !== undefined,
+        agentName === "codex" && prepared.kind === "details" && prepared.continuation !== undefined,
       );
     }
     const route = yield* reconcileRoute(
@@ -2908,7 +2906,11 @@ function* useAcpxProviderState(
               ...modelRequest(configuration),
             })
             .then(() => undefined);
-          yield* until(pending);
+          try {
+            yield* until(pending);
+          } catch (error) {
+            throw nativeIdentityRefusal(error) ?? error;
+          }
           // Only where the write answered. A `finally` here would run while
           // this very operation was being cancelled, which is the one moment
           // the cleanup below has to do its waiting.
@@ -5006,7 +5008,20 @@ function* useAcpxProviderState(
   };
 }
 
+function nativeIdentityRefusal(error: unknown): AttachmentRefused | undefined {
+  if (
+    error instanceof Error &&
+    Reflect.get(error, "detailCode") === "NATIVE_SESSION_IDENTITY_UNAVAILABLE"
+  ) {
+    return new AttachmentRefused({ class: "identity-unavailable", message: error.message });
+  }
+}
+
 function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
+  const refusal = nativeIdentityRefusal(error);
+  if (refusal) {
+    return refusal;
+  }
   if (
     typeof error === "object" &&
     error !== null &&

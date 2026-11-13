@@ -61,7 +61,12 @@ function respond(request) {
   } else if (request.method === "session/new" || request.method === "session/load") {
     sessionId = request.params.sessionId ?? (controlDirectory ? "fixed-session" : "session-" + process.pid);
     const loaded = () => {
-      const ready = () => reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId: "native-" + sessionId}});
+      const ready = () => {
+        const changedIdentity = request.method === "session/load" && controlDirectory &&
+          fs.existsSync(path.join(controlDirectory, "different-native-identity"));
+        const agentSessionId = changedIdentity ? "another-conversation" : "native-" + sessionId;
+        reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId}});
+      };
       if (controlDirectory && request.method === "session/load") {
         fs.readFile(path.join(controlDirectory, "remembered"), "utf8", (_error, text) => { remembered = text ?? ""; ready(); });
       } else ready();

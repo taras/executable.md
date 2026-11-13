@@ -1932,11 +1932,13 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   to reconnect again during the operation. The ACP record retains its history
   and saved preferences, and the original construction route is unchanged.
   The exact-build rule still applies to explicit native launch and attachment.
-  A load that fails raises the adapter's own failure, as an ordinary
-  reattachment's does; a load that answers another native conversation refuses
-  with `identity-unavailable`. Either happens before any turn, sends no
-  `session/new` and no prompt, and leaves the old record, the history and the
-  route as they were. ACPX
+  A failed load uses the ordinary resume error. A different native identity,
+  or an omitted identity when live confirmation is required, refuses with
+  `identity-unavailable`. A refusal at ensure sends no `session/new` or prompt
+  and leaves the record, history and route as they were. If a client disconnects
+  after ensure, a refused cold reconnect preserves the original identities and
+  prior history. ACPX can record the attempted submission before that load, even
+  when it sends no prompt to the provider. ACPX
   saves the arrangement a load answers with before returning it, so after
   giving up a handle whose assertion it refused the provider saves back the
   record it read before the load: the refused assertion never stands as the
