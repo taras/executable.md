@@ -1,6 +1,7 @@
 import { each } from "effection";
 import type { Operation } from "effection";
-import { exists, readTextFile, toPath, walk } from "@effectionx/fs";
+import { exists, lstat, readTextFile, toPath, walk } from "@effectionx/fs";
+import { DOCUMENT_SUITES } from "./markdown-suites.ts";
 import { listWorkspacePaths } from "./workspace.ts";
 import { exclusions } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
@@ -8,9 +9,8 @@ import type { Runtime } from "../runtime-test-exclusions.ts";
 const EXTRA_MEMBERS = ["scripts"];
 
 /**
- * The one directory whose Markdown documents are suites of their own. Only its
- * immediate regular `*.test.md` children are, so the helper documents and
- * deliberately failing fixtures nested beneath it never run as a suite.
+ * Adversarial suites are the regular immediate `*.test.md` files here.
+ * Nested helpers and failure fixtures stay outside the corpus.
  */
 export const MARKDOWN_SUITES = "examples/adversarial-implementation/tests/";
 
@@ -35,7 +35,7 @@ export function isMarkdownSuite(file: string): boolean {
  * than the repository root is what keeps nested worktrees, `site`, and the
  * deliberately malformed `scripts/tests/fixtures` out without naming any of
  * them. Markdown discovery adds the regular immediate `*.test.md` children of
- * `MARKDOWN_SUITES`.
+ * `MARKDOWN_SUITES` and the individually registered regular files.
  */
 export function* listTestFiles(root: URL): Operation<string[]> {
   const { workspace } = parseWorkspace(yield* readTextFile(new URL("deno.json", root)));
@@ -52,6 +52,12 @@ export function* listTestFiles(root: URL): Operation<string[]> {
     )) {
       files.push(`${member}/tests/${within(toPath(tests), entry.path)}`);
       yield* each.next();
+    }
+  }
+  for (const file of DOCUMENT_SUITES.keys()) {
+    const path = new URL(file, root);
+    if ((yield* exists(path)) && (yield* lstat(path)).isFile()) {
+      files.push(file);
     }
   }
   return [...files, ...(yield* listMarkdownSuites(root))].sort();

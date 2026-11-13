@@ -15,17 +15,20 @@
  * A Markdown suite runs through the `xmd test` entrypoint of the same runtime,
  * so a shard, a measurement and a local run all launch it the same way.
  */
-import { exit, until } from "effection";
+import { exit, scoped, until } from "effection";
 import type { Context, Operation } from "effection";
 import { createContext } from "effection";
 import { exec } from "@effectionx/process";
-import { exists, readTextFile } from "@effectionx/fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { timebox } from "@effectionx/timebox";
 import { launchEnvironment, shellQuote } from "@executablemd/test-support/launch";
-import { readlink } from "node:fs/promises";
+import { chmod, readlink } from "node:fs/promises";
+import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { DOCUMENT_SUITES } from "./markdown-suites.ts";
+import { useTempDirectory } from "./temp-directory.ts";
 import { applicableTestFiles, isMarkdownSuite } from "./test-files.ts";
 import { testShard } from "./test-shards.ts";
 import type { Shard } from "./test-shards.ts";
@@ -125,12 +128,26 @@ function retainedEvidence(suite: string): Record<string, string> {
 }
 
 /**
- * `xmd test <file>` under `runtime`, with the fixture plugin, the example's
- * component directories as absolute paths — so a nested `<Dir>` cannot move
- * where components are found — and only the environment a launched CLI gets.
+ * `xmd test <file>` under `runtime`. The adversarial suites also receive
+ * their fixture plugin and absolute component directories.
  */
 function markdownCommand(runtime: Runtime, file: string, root: URL): Launch {
   const [command, ...entry] = cliEntry(runtime);
+  const document = DOCUMENT_SUITES.get(file);
+  if (document !== undefined) {
+    return {
+      command,
+      arguments: [
+        ...entry,
+        "test",
+        file,
+        ...(runtime === "deno" && document.worker
+          ? ["--plugin", checkoutPath("packages/cli/tests/fixtures/prepared-test-worker.mjs")]
+          : []),
+      ],
+      env: launchEnvironment(),
+    };
+  }
   const suite = suiteName(file);
   const example = (path: string) =>
     fileURLToPath(new URL(`examples/adversarial-implementation/${path}`, root));
@@ -247,10 +264,9 @@ function* preparedLink(root: URL): Operation<string | undefined> {
 /**
  * Run `file` alone under `runtime`, from `root`.
  *
- * A Markdown suite is also held to its whole-launch deadline, which ends only
- * that file, and to the prepared dependency link it started with. A changed or
- * missing link fails the file even when its own tests passed; a file that
- * already failed keeps its own status.
+ * A Markdown suite observes any applicable whole-launch deadline and leaves
+ * the prepared dependency link as it found it. A changed or missing link
+ * fails the file. An earlier failure retains its own status.
  */
 export function* runOneFile(runtime: Runtime, file: string, root: URL): Operation<number> {
   const run = yield* TestRuns.expect();
@@ -259,11 +275,23 @@ export function* runOneFile(runtime: Runtime, file: string, root: URL): Operatio
     return yield* run(launch);
   }
   const before = yield* preparedLink(root);
-  const deadline = MARKDOWN_DEADLINES[suiteName(file)];
+  const document = DOCUMENT_SUITES.get(file);
+  const deadline =
+    document === undefined
+      ? MARKDOWN_DEADLINES[suiteName(file)]
+      : (document.deadline ?? (runtime === "bun" ? BUN_TEST_TIMEOUT_MS : undefined));
+  const launchSuite = () =>
+    scoped(function* () {
+      const env =
+        document?.shim === undefined
+          ? launch.env
+          : { ...launch.env, ...(yield* documentShim(runtime, document.shim)) };
+      return yield* run({ ...launch, env });
+    });
   const status =
     deadline === undefined
-      ? yield* run(launch)
-      : yield* withDeadline(file, deadline, () => run(launch));
+      ? yield* launchSuite()
+      : yield* withDeadline(file, deadline, launchSuite);
   const after = yield* preparedLink(root);
   if (after === before) {
     return status;
@@ -272,6 +300,26 @@ export function* runOneFile(runtime: Runtime, file: string, root: URL): Operatio
     `${file} changed the prepared dependency link ${PREPARED_LINK}: ${before ?? "absent"} -> ${after ?? "absent"}`,
   );
   return status === 0 ? 1 : status;
+}
+
+function* documentShim(
+  runtime: Runtime,
+  purpose: "syntax" | "verbose",
+): Operation<Record<string, string>> {
+  const script = join(yield* useTempDirectory("xmd-suite-"), "xmd");
+  const argv = cliEntry(runtime);
+  if (runtime === "node") {
+    argv[0] = checkoutPath("node_modules/.bin/tsx");
+  }
+  yield* writeTextFile(script, `#!/bin/sh\nexec ${argv.map(shellQuote).join(" ")} "$@"\n`);
+  yield* until(chmod(script, 0o755));
+  if (purpose === "syntax") {
+    return { XMD_SYNTAX_BIN: script };
+  }
+  return {
+    XMD_VERBOSE_BIN: script,
+    XMD_VERBOSE_COMPONENTS: checkoutPath("packages/cli/tests/document-suites/verbose/components"),
+  };
 }
 
 /** `launch`'s status, or 1 once its child is gone when it outlived `deadline` milliseconds. */
