@@ -899,10 +899,10 @@ the prompt and spends that preparation stage.
 
 ## Diagnose a failure
 
-Run a problem-solver phase from the workflow repository. Select a clean checkout
-at the failing commit, a new attempt directory outside the checkout and its Git
-directories, and captured evidence such as the first failing output and a
-passing comparison. On macOS the provider uses `sandbox-exec`. On Linux it
+Run a problem-solver phase with the assigned checkout selected by the current
+directory or an enclosing repository scope. Use a clean checkout at the failing
+commit, a new attempt directory outside the checkout and its Git directories,
+and captured evidence such as the first failing output and a passing comparison. On macOS the provider uses `sandbox-exec`. On Linux it
 requires `bwrap` with unprivileged user namespaces and `--disable-userns`
 support. If the sandbox cannot start, the phase holds before any prompt.
 
@@ -924,9 +924,10 @@ Save a request with these fields and replace the example paths and revision.
 ```
 
 ```sh
-deno task xmd run --allow-absolute examples/adversarial-implementation/phase.md \
+cd /absolute/path/to/source
+xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-implementation/phase.md \
   --props-request /absolute/path/to/request.json \
-  --include examples/adversarial-implementation/components --raw
+  --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
 
 Fable starts the diagnosis. If its option inspection fails, its model is
