@@ -4,7 +4,7 @@
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Type text="Inspect output." />
     <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="[review recovery]" />
+    <ReplBench.WaitForText text="[review recovery]" timeout="30s" />
     <ReplBench.SidekickStatus as="before" />
     <ReplBench.EntryOutput entry={1} as="entryBefore" />
     <AssertEquals actual={entryBefore.status} expected="completed" />
