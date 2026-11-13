@@ -7,7 +7,14 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 
+import { readTextFile } from "@effectionx/fs";
+
 import { effectiveWeights, partitionTests, ShardError, testShard } from "../lib/test-shards.ts";
+import { applicableTestFiles } from "../lib/test-files.ts";
+import { parseTestWeights, weightsFile } from "../lib/test-weights.ts";
+import { RUNTIMES } from "../runtime-test-exclusions.ts";
+
+const ROOT = new URL("../../", import.meta.url);
 
 const ONE = "packages/alpha/tests/one.test.ts";
 const TWO = "packages/alpha/tests/two.test.ts";
@@ -181,5 +188,32 @@ describe("refusals", () => {
   it("rejects a bad count before it looks at the index", function* () {
     expect(refuses(() => testShard(CORPUS, WEIGHTS, 1, 0))).toBe(true);
     expect(refuses(() => testShard(CORPUS, WEIGHTS, 1, CORPUS.length + 1))).toBe(true);
+  });
+});
+
+describe("the repository's own corpus", () => {
+  it("runs every applicable file, Markdown suites included, in exactly one shard of each runtime", function* () {
+    const weights = parseTestWeights(yield* readTextFile(weightsFile(ROOT)));
+    for (const runtime of RUNTIMES) {
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      const recorded = weights.runtimes[runtime];
+      const suites = applicable.filter((file) => file.endsWith(".test.md"));
+      expect(suites.length).toBeGreaterThan(0);
+
+      for (const count of [1, 7, 22]) {
+        const shards = partitionTests(applicable, recorded, count);
+        const assigned = shards.flatMap((shard) => shard.files);
+        expect({ runtime, count, assigned: [...assigned].sort() }).toEqual({
+          runtime,
+          count,
+          assigned: applicable,
+        });
+        expect(new Set(assigned).size).toEqual(assigned.length);
+        expect(partitionTests(applicable, recorded, count)).toEqual(shards);
+        for (const suite of suites.filter((file) => recorded[file] === undefined)) {
+          expect(shards.flatMap((shard) => shard.unmeasured)).toContain(suite);
+        }
+      }
+    }
   });
 });

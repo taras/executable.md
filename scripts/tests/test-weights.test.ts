@@ -11,7 +11,7 @@ import { sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   formatRuntimeMeasurement,
@@ -84,14 +84,18 @@ const IDENTITY: RunIdentity = {
 const ALPHA = "packages/alpha/tests/one.test.ts";
 const BETA = "packages/beta/tests/two.test.ts";
 const GAMMA = "packages/gamma/tests/three.test.ts";
+const SUITE = "examples/adversarial-implementation/tests/Two Words.test.md";
 
-/** A two-member workspace, so measurement walks a real discovery result. */
-function* workspace(): Operation<URL> {
+/**
+ * A two-member workspace, so measurement walks a real discovery result —
+ * optionally with a Markdown suite beside them.
+ */
+function* workspace(files: string[] = [ALPHA, BETA]): Operation<URL> {
   const base = yield* useTempDirectory("test-weights-");
   const root = pathToFileURL(`${base}/`);
 
   yield* writeTextFile(new URL("deno.json", root), JSON.stringify({ workspace: ["packages/*"] }));
-  for (const file of [ALPHA, BETA]) {
+  for (const file of files) {
     yield* ensureDir(new URL(file.replace(/\/[^/]+$/, "/"), root));
     yield* writeTextFile(new URL(file, root), "");
   }
@@ -182,6 +186,14 @@ describe("the weights file", () => {
     expect(parseTestWeights(JSON.stringify(VALID)).source).toEqual(SOURCE);
   });
 
+  it("accepts an adversarial Markdown suite's weight beside the TypeScript files", function* () {
+    const mixed = weighed({ "packages/core/tests/a.test.ts": 1, [SUITE]: 2 });
+    expect(parseTestWeights(JSON.stringify(mixed)).runtimes.deno).toEqual({
+      "packages/core/tests/a.test.ts": 1,
+      [SUITE]: 2,
+    });
+  });
+
   it("refuses every field class it cannot place", function* () {
     const rejected: Array<[string, unknown]> = [
       ["not JSON at all", "{"],
@@ -209,7 +221,20 @@ describe("the weights file", () => {
       ["a traversing path", weighed({ "../x/tests/a.test.ts": 1 })],
       ["a path outside tests/", weighed({ "packages/core/src/a.test.ts": 1 })],
       ["a path that is not a test file", weighed({ "packages/core/tests/a.ts": 1 })],
+      [
+        "a TypeScript basename with a space",
+        weighed({ "packages/core/tests/Two Words.test.ts": 1 }),
+      ],
       ["a Windows path", weighed({ "C:\\packages\\tests\\a.test.ts": 1 })],
+      [
+        "a nested Markdown document",
+        weighed({ "examples/adversarial-implementation/tests/fixtures/a.test.md": 1 }),
+      ],
+      ["a Markdown suite elsewhere", weighed({ "packages/core/tests/a.test.md": 1 })],
+      [
+        "a Markdown helper document",
+        weighed({ "examples/adversarial-implementation/tests/preparation-cases.md": 1 }),
+      ],
       ["a zero weight", weighed({ "packages/core/tests/a.test.ts": 0 })],
       ["a negative weight", weighed({ "packages/core/tests/a.test.ts": -1 })],
       ["a fractional weight", weighed({ "packages/core/tests/a.test.ts": 12.5 })],
@@ -333,6 +358,45 @@ describe("measuring one runtime", () => {
     }
   });
 
+  it("times a Markdown suite through the one-file launch a shard uses, from the repository", function* () {
+    const root = yield* workspace([ALPHA, SUITE]);
+    for (const runtime of RUNTIMES) {
+      const seen: Array<{ line: string; cwd: string; env?: Record<string, string> }> = [];
+
+      const measurement = yield* TestRuns.with(
+        function* (launch) {
+          seen.push({
+            line: `${launch.command} ${launch.arguments.join(" ")}`,
+            cwd: launch.cwd,
+            env: launch.env,
+          });
+          yield* sleep(5);
+          return 0;
+        },
+        () => measureRuntime(runtime, root, SOURCE, measurementFile(root, runtime)),
+      );
+
+      const [alpha, suite] = [ALPHA, SUITE].map((file) => oneFileCommand(runtime, file, root));
+      expect(seen).toEqual([
+        {
+          line: `${suite.command} ${suite.arguments.join(" ")}`,
+          cwd: fileURLToPath(root),
+          env: suite.env,
+        },
+        { line: `${alpha.command} ${alpha.arguments.join(" ")}`, cwd: fileURLToPath(root) },
+      ]);
+      expect(measurement.applicable).toEqual([SUITE, ALPHA]);
+      expect(measurement.status).toEqual("complete");
+      expect(yield* recorded(root, runtime)).toEqual(measurement);
+    }
+
+    const weights = yield* assembleMeasurements(root, root, IDENTITY);
+    const parsed = parseTestWeights(formatTestWeights(weights));
+    for (const runtime of RUNTIMES) {
+      expect(Object.keys(parsed.runtimes[runtime])).toEqual([SUITE, ALPHA]);
+    }
+  });
+
   it("records the child's own elapsed time", function* () {
     const root = yield* workspace();
 
@@ -443,6 +507,10 @@ describe("the runtime measurement record", () => {
       ["an extra provenance field", { ...valid, source: { ...valid.source, host: "laptop" } }],
       ["a missing provenance field", { ...valid, source: withoutBun }],
       ["a path outside tests/", { ...valid, applicable: ["packages/core/src/a.test.ts"] }],
+      [
+        "a nested Markdown document",
+        { ...valid, applicable: ["examples/adversarial-implementation/tests/x/a.test.md"] },
+      ],
       ["a zero millisecond", { ...valid, measured: [{ file: ALPHA, ms: 0 }] }],
       ["an extra measured field", { ...valid, measured: [{ file: ALPHA, ms: 1, runs: 2 }] }],
       ["measurements as a map", { ...valid, measured: { [ALPHA]: 1 } }],

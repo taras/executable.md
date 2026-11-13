@@ -3,7 +3,6 @@ import { expect } from "@executablemd/test-support/expect";
 import { Component } from "@executablemd/core/api";
 import { scoped } from "effection";
 import Capture from "../../../examples/adversarial-implementation/components/Ticket/Capture.ts";
-import { runAdversarialJourney } from "./support/adversarial-journey.ts";
 
 describe("adversarial implementation example", () => {
   it("keeps each failure message when its stack omits it", function* () {
@@ -27,7 +26,4 @@ describe("adversarial implementation example", () => {
     expect(captured.failure).toContain("cause sentinel");
     expect(captured.failure).toContain("cause-stack-marker");
   });
-
-  it("runs the ProductionRole Markdown journeys without native models", () =>
-    runAdversarialJourney("ProductionRole"));
 });

@@ -758,22 +758,29 @@ supported. Gherkin syntax such as `Given`, `When`, and `Then` is not supported.
 ## Repository Runtime Suites
 
 The sections above specify the Executable Markdown testing language. This one
-specifies something different: how *this repository's* own TypeScript test
-corpus is discovered, divided, and run under each supported runtime. It changes
-nothing about `<Test>`, `<Testing>`, assertions, or mocking.
+specifies something different: how *this repository's* own test corpus — its
+TypeScript test files and its adversarial Markdown suites — is discovered,
+divided, and run under each supported runtime. It changes nothing about
+`<Test>`, `<Testing>`, assertions, or mocking.
 
 ### One corpus
 
 `listTestFiles(root)` is the only discovery source. It returns sorted
 repository-relative POSIX paths for every `*.test.ts` beneath `tests/` in each
-root workspace member plus `scripts/tests/`, and nothing else. Walking those
-concrete directories rather than the repository root is what keeps nested
-worktrees, the site, and the deliberately malformed fixtures out without naming
-any of them.
+root workspace member plus `scripts/tests/`, and the Markdown suites, and
+nothing else. Walking those concrete directories rather than the repository
+root is what keeps nested worktrees, the site, and the deliberately malformed
+fixtures out without naming any of them.
 
-That result is the same set Deno's own test-file pattern finds in the
+Its TypeScript paths are the same set Deno's own test-file pattern finds in the
 repository. A test file discovery cannot see would run under no runtime at all,
 so the equivalence is a regression rather than a convention.
+
+A Markdown suite is a regular `*.test.md` file directly inside
+`examples/adversarial-implementation/tests/`. Discovery does not descend, so the
+helper documents and the deliberately failing fixtures beneath that directory
+never run as suites, and a document there without the `.test.md` suffix is a
+helper.
 
 ### Applicable corpus
 
@@ -797,8 +804,10 @@ because a weight measured on another machine, image, or commit describes a
 corpus that no longer exists.
 
 The file is parsed rather than trusted. Version, every provenance field, the
-runtime names, the shape of every path, and the positivity and integrality of
-every millisecond are checked; anything else is refused, because a partition
+runtime names, the shape of every path — a TypeScript path under some
+`tests/`, or a Markdown suite directly inside
+`examples/adversarial-implementation/tests/` — and the positivity and
+integrality of every millisecond are checked; anything else is refused, because a partition
 computed from unusable data is worse than no partition.
 
 `deno task weights:measure` is the only command that writes it, in two steps.
@@ -867,15 +876,50 @@ applicable corpus — every applicable file runs exactly once per runtime.
 ### Execution
 
 `runtime-tests.ts <deno|node|bun> [<index>/<count>]` runs a runtime's tests. With
-no selection it runs the whole applicable corpus in one invocation. With one it
-resolves that shard and invokes its files serially, in sorted order, each
-through that runtime's one-file command:
+no selection it runs the applicable TypeScript files in one native invocation,
+then each applicable Markdown suite through its one-file command, and exits with
+the first failure of either portion. With a selection it resolves that shard and
+invokes its files serially, in sorted order, each through that runtime's
+one-file command:
 
 - Deno — `deno test --allow-all --frozen <file>`
 - Node — `tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 <file>`
-- Bun — `bun test --timeout=300000 <file>`, except
-  `bun test --timeout=450000 packages/cli/tests/adversarial-preparation.test.ts`,
-  whose own enclosing deadline is 420 seconds
+- Bun — `bun test --timeout=300000 <file>`
+
+A Markdown suite runs as `xmd test <file>` through the same runtime's CLI
+source entrypoint, resolved from the runner's checkout:
+
+- Deno — `deno run --quiet --allow-all --node-modules-dir=manual --cached-only --frozen packages/cli/src/deno.ts`
+- Node — `tsx --tsconfig tsconfig.node.json packages/cli/src/node.ts`
+- Bun — `bun packages/cli/src/bun.ts`
+
+followed by `test <file> --plugin packages/cli/tests/fixtures/workflow-test-permissions.mjs
+--include <root>/examples/adversarial-implementation/tests/components --include
+<root>/examples/adversarial-implementation/components`, with the include paths
+absolute so that a nested `<Dir>` cannot change where components are found.
+`Preparation`, `ProductionRole` and `Submission` include
+`tests/production-components` in place of `tests/components`. The child's
+working directory is the repository root. Its environment is the one a
+suite's launched CLI receives (`PATH`, the Deno cache and install variables,
+`XDG_CACHE_HOME`, `TMPDIR` and `XMD_TEST_ARTIFACTS`), plus `XMD_EXAMPLE_COMMAND`
+and `XMD_EXAMPLE_TEST_COMMAND`: the prepared Deno CLI above followed by
+`run --allow-absolute` and by `test`, as quoted shell words. Fixture documents
+run their real workflow through those commands under every outer runtime,
+because the run profile they exercise is the Deno host's. The artifact-return
+suites also receive `XMD_ARTIFACT_RETURN_EVIDENCE` when it is set. The fixture
+plugin adds `--node-modules-dir=manual --cached-only --frozen` when the Deno
+source host relaunches itself as a TestAgent worker, including workers for
+isolated run-profile children.
+
+Each suite but `Implementation`, whose named groups carry their own deadlines,
+runs under a whole-launch deadline: `Preparation` 420 seconds, `Friction` 180,
+`DecisionResolution` and `Delivery` 300, and every other suite 120. A suite that
+reaches it is stopped and its cleanup joined, its path and deadline are
+reported, and it fails with status 1; the files after it still run.
+
+The same operation reads the prepared `node_modules/effection` link before and
+after a Markdown suite. A link that changed or disappeared fails the file with
+a message naming both targets; a file that already failed keeps its own status.
 
 A malformed runtime, index, or count is refused before any test process starts.
 
@@ -888,6 +932,18 @@ truncated, nor replaced by a summary.
 Cancellation is distinct from failure. Halting a shard halts the process group
 of the file it is running and starts no later file. The shard owns no scratch
 state to leave behind.
+
+`deno task test` is the local Deno suite. With no arguments it runs Deno's own
+whole-repository `deno test --allow-all --frozen`, including the files the CI
+corpus leaves to smoke jobs, then each applicable Markdown suite through its
+one-file command. Otherwise its arguments reach `deno test` verbatim unless a
+positional path selects an applicable Markdown suite. Native Markdown
+doctests outside that corpus, focused paths, `--changed` and `--related` keep
+their Deno meaning. Select an applicable Markdown suite by its
+repository-relative path, optionally prefixed with `./`. That selection may
+include native test paths and must contain only paths. Each portion runs only
+when it is nonempty, and the first failure is the status. `pnpm test:node` and
+`bun run test:bun` are the no-selection `runtime-tests.ts` run of their runtime.
 
 ### CI topology
 

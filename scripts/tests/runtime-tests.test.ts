@@ -11,17 +11,28 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep } from "effection";
+import { ensure, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
+import { ensureDir, rm } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { readlink, symlink } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   describeShard,
+  localDenoTests,
   oneFileCommand,
   parseShardSelection,
+  PREPARED_LINK,
+  RUNNERS,
+  runOneFile,
   runShardFiles,
+  runSuite,
   TestRuns,
+  withDeadline,
 } from "../lib/runtime-tests.ts";
 import type { RunLaunch } from "../lib/runtime-tests.ts";
+import { applicableTestFiles } from "../lib/test-files.ts";
 import { partitionTests } from "../lib/test-shards.ts";
 import { RUNTIMES } from "../runtime-test-exclusions.ts";
 
@@ -30,6 +41,11 @@ const ROOT = new URL("../../", import.meta.url);
 const ONE = "packages/alpha/tests/one.test.ts";
 const TWO = "packages/alpha/tests/two.test.ts";
 const THREE = "packages/beta/tests/three.test.ts";
+const SUITE = "examples/adversarial-implementation/tests/Implementation.test.md";
+
+function line(launch: { command: string; arguments: string[] }): string {
+  return `${launch.command} ${launch.arguments.join(" ")}`;
+}
 
 interface Recorder {
   launches: string[];
@@ -47,8 +63,9 @@ function recorder(failing?: string): Recorder {
     files: [],
     peak: 0,
     *run(launch) {
-      const file = launch.arguments[launch.arguments.length - 1] ?? "";
-      state.launches.push(`${launch.command} ${launch.arguments.join(" ")}`);
+      const file =
+        launch.arguments.find((arg) => arg.endsWith(".test.ts") || arg.endsWith(".test.md")) ?? "";
+      state.launches.push(line(launch));
       state.files.push(file);
       active += 1;
       state.peak = Math.max(state.peak, active);
@@ -122,6 +139,36 @@ describe("running a shard", () => {
       const launch = oneFileCommand(runtime, ONE);
       expect(runs.launches).toEqual([`${launch.command} ${launch.arguments.join(" ")}`]);
     }
+  });
+
+  it("routes a Markdown suite through its one-file command, from the repository", function* () {
+    for (const runtime of RUNTIMES) {
+      const seen: Array<{ line: string; cwd: string; env?: Record<string, string> }> = [];
+      yield* TestRuns.with(
+        function* (launch) {
+          seen.push({ line: line(launch), cwd: launch.cwd, env: launch.env });
+          return 0;
+        },
+        () => runShardFiles(runtime, [ONE, SUITE], ROOT),
+      );
+
+      expect(seen.map((entry) => entry.line)).toEqual([
+        line(oneFileCommand(runtime, ONE)),
+        line(oneFileCommand(runtime, SUITE, ROOT)),
+      ]);
+      expect(seen.map((entry) => entry.cwd)).toEqual([fileURLToPath(ROOT), fileURLToPath(ROOT)]);
+      expect(seen[1].env).toEqual(oneFileCommand(runtime, SUITE, ROOT).env);
+    }
+  });
+
+  it("keeps running after a failed Markdown suite and keeps its status first", function* () {
+    const runs = recorder(SUITE);
+    const outcome = yield* TestRuns.with(runs.run, () =>
+      runShardFiles("bun", [SUITE, ONE, TWO], ROOT),
+    );
+
+    expect(runs.files).toEqual([SUITE, ONE, TWO]);
+    expect(outcome.failure).toEqual({ file: SUITE, status: 7 });
   });
 
   it("runs the files after a failure and keeps the first one", function* () {
@@ -199,5 +246,218 @@ describe("what a shard announces before it starts", () => {
         });
       }
     }
+  });
+});
+
+describe("the whole suite", () => {
+  it("runs the TypeScript corpus in one native invocation, then each Markdown suite alone", function* () {
+    for (const runtime of RUNTIMES) {
+      const runs = recorder();
+      const status = yield* TestRuns.with(runs.run, () => runSuite(runtime, ROOT));
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      const runner = RUNNERS[runtime];
+
+      expect(status).toEqual(0);
+      expect(runs.launches).toEqual([
+        line({
+          command: runner.command,
+          arguments: [...runner.prefix, ...applicable.filter((file) => file.endsWith(".ts"))],
+        }),
+        ...applicable
+          .filter((file) => file.endsWith(".md"))
+          .map((file) => line(oneFileCommand(runtime, file, ROOT))),
+      ]);
+      expect(runs.peak).toEqual(1);
+    }
+  });
+
+  it("keeps the first failure across the two portions", function* () {
+    const statuses = (native: number, suite: number): RunLaunch =>
+      function* (launch) {
+        yield* sleep(1);
+        return launch.arguments.includes(SUITE) ? suite : native;
+      };
+
+    expect(yield* TestRuns.with(statuses(5, 3), () => runSuite("node", ROOT))).toEqual(5);
+    expect(yield* TestRuns.with(statuses(0, 3), () => runSuite("node", ROOT))).toEqual(3);
+    expect(yield* TestRuns.with(statuses(0, 0), () => runSuite("node", ROOT))).toEqual(0);
+  });
+});
+
+describe("the local Deno suite", () => {
+  const NATIVE = RUNNERS.deno.prefix;
+
+  function* local(
+    args: string[],
+    failing?: string,
+  ): Operation<{ status: number; launches: string[] }> {
+    const runs = recorder(failing);
+    const status = yield* TestRuns.with(runs.run, () => localDenoTests(args, ROOT));
+    return { status, launches: runs.launches };
+  }
+
+  it("runs Deno's whole native suite and then every Markdown suite once when given nothing", function* () {
+    const suites = (yield* applicableTestFiles("deno", ROOT)).filter((file) =>
+      file.endsWith(".md"),
+    );
+    expect(suites).toContain(SUITE);
+
+    expect((yield* local([])).launches).toEqual([
+      line({ command: "deno", arguments: [...NATIVE] }),
+      ...suites.map((file) => line(oneFileCommand("deno", file, ROOT))),
+    ]);
+  });
+
+  it("forwards focused paths and flags to deno test verbatim", function* () {
+    for (const args of [
+      [ONE],
+      ["--changed"],
+      ["--changed=origin/main"],
+      ["--related=packages/core/src/expand.ts"],
+      ["--filter", "a name", ONE],
+      ["--filter=README.md", ONE],
+      ["--doc", "README.md"],
+      ["--doc", "examples/adversarial-implementation/tests/preparation-cases.md"],
+      ["--doc", "examples/adversarial-implementation/tests/nested/Implementation.test.md"],
+      ["--filter", "README.md", ONE],
+      [ONE, "--filter", SUITE],
+      ["--related", "README.md", ONE],
+      ["--lock", "README.md", ONE],
+      ["-Ac", "README.md", ONE],
+      [ONE, "--", SUITE],
+    ]) {
+      expect((yield* local(args)).launches).toEqual([
+        line({ command: "deno", arguments: [...NATIVE, ...args] }),
+      ]);
+    }
+  });
+
+  it("runs a named Markdown suite through its one-file command beside named TypeScript paths", function* () {
+    expect((yield* local([SUITE])).launches).toEqual([line(oneFileCommand("deno", SUITE, ROOT))]);
+    expect((yield* local([`./${SUITE}`])).launches).toEqual([
+      line(oneFileCommand("deno", SUITE, ROOT)),
+    ]);
+    const mixed = yield* local([ONE, SUITE, TWO], ONE);
+    expect(mixed.launches).toEqual([
+      line({ command: "deno", arguments: [...NATIVE, ONE, TWO] }),
+      line(oneFileCommand("deno", SUITE, ROOT)),
+    ]);
+    expect(mixed.status).toEqual(7);
+    expect((yield* local([ONE, SUITE], SUITE)).status).toEqual(7);
+  });
+
+  it("refuses an admitted Markdown suite beside a flag before running anything", function* () {
+    for (const args of [
+      ["--doc", SUITE],
+      ["--filter", "x", SUITE],
+      ["--filter", "README.md", SUITE],
+      ["--filter", "--", SUITE],
+      [SUITE, "--", "README.md"],
+      [SUITE, "--changed"],
+    ]) {
+      const { status, launches } = yield* local(args);
+      expect({ args, status, launches }).toEqual({ args, status: 1, launches: [] });
+    }
+  });
+});
+
+describe("the prepared dependency link around a Markdown suite", () => {
+  function* prepared(): Operation<URL> {
+    const base = yield* useTempDirectory("prepared-link-");
+    const root = pathToFileURL(`${base}/`);
+    yield* ensureDir(new URL("node_modules/.pnpm/one/", root));
+    yield* ensureDir(new URL("node_modules/.pnpm/two/", root));
+    yield* until(symlink(".pnpm/one", fileURLToPath(new URL(PREPARED_LINK, root))));
+    return root;
+  }
+
+  function* relink(root: URL, target: string | undefined): Operation<void> {
+    const link = new URL(PREPARED_LINK, root);
+    yield* rm(link, { force: true });
+    if (target !== undefined) {
+      yield* until(symlink(target, fileURLToPath(link)));
+    }
+  }
+
+  /** A child that changes the link to `target` and then exits with `status`. */
+  function changing(
+    root: URL,
+    target: string | undefined,
+    status: number,
+    launches: string[],
+  ): RunLaunch {
+    return function* (launch) {
+      launches.push(line(launch));
+      yield* relink(root, target);
+      return status;
+    };
+  }
+
+  it("fails a passing suite that changed or removed the link, after one launch", function* () {
+    for (const target of [".pnpm/two", undefined]) {
+      const root = yield* prepared();
+      const launches: string[] = [];
+      const status = yield* TestRuns.with(changing(root, target, 0, launches), () =>
+        runOneFile("deno", SUITE, root),
+      );
+
+      expect({ target, status }).toEqual({ target, status: 1 });
+      expect(launches).toEqual([line(oneFileCommand("deno", SUITE, root))]);
+    }
+  });
+
+  it("keeps a failed suite's own status when it also changed the link", function* () {
+    const root = yield* prepared();
+    const status = yield* TestRuns.with(changing(root, ".pnpm/two", 6, []), () =>
+      runOneFile("node", SUITE, root),
+    );
+
+    expect(status).toEqual(6);
+  });
+
+  it("passes a suite that left the link as it found it", function* () {
+    const root = yield* prepared();
+    const status = yield* TestRuns.with(changing(root, ".pnpm/one", 0, []), () =>
+      runOneFile("bun", SUITE, root),
+    );
+
+    expect(status).toEqual(0);
+    expect(yield* until(readlink(fileURLToPath(new URL(PREPARED_LINK, root))))).toEqual(
+      ".pnpm/one",
+    );
+  });
+
+  it("is a Markdown suite's obligation and not a TypeScript file's", function* () {
+    const root = yield* prepared();
+    const status = yield* TestRuns.with(changing(root, ".pnpm/two", 0, []), () =>
+      runOneFile("deno", ONE, root),
+    );
+
+    expect(status).toEqual(0);
+  });
+});
+
+describe("a Markdown suite's whole-launch deadline", () => {
+  it("stops only that launch, joins its cleanup, and reports failure", function* () {
+    let cleaned = false;
+    const status = yield* withDeadline(SUITE, 20, function* () {
+      yield* ensure(function* () {
+        yield* sleep(5);
+        cleaned = true;
+      });
+      yield* suspend();
+      return 0;
+    });
+
+    expect({ status, cleaned }).toEqual({ status: 1, cleaned: true });
+  });
+
+  it("returns the launch's own status when it settles in time", function* () {
+    const status = yield* withDeadline(SUITE, 1_000, function* () {
+      yield* sleep(1);
+      return 4;
+    });
+
+    expect(status).toEqual(4);
   });
 });
