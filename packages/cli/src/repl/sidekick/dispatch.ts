@@ -28,6 +28,7 @@ export interface ConfigurationReservation {
   readonly kind: "inspect" | "save" | "replace" | "recover";
   readonly conversation: string | undefined;
   task: Task<void> | undefined;
+  readonly instruction?: Instruction;
 }
 
 export function createSidekickAdmission() {
@@ -79,12 +80,13 @@ export function createSidekickAdmission() {
     configure(
       kind: ConfigurationReservation["kind"],
       conversation: string | undefined,
+      instruction?: Instruction,
     ): Result<ConfigurationReservation> {
       const reason = occupied(kind);
       if (reason !== undefined) {
         return Err(new Error(reason));
       }
-      const held: ConfigurationReservation = { kind, conversation, task: undefined };
+      const held: ConfigurationReservation = { kind, conversation, task: undefined, instruction };
       configuration = held;
       return Ok(held);
     },
@@ -133,7 +135,11 @@ export interface SidekickQueueSnapshot {
     | undefined;
 }
 export interface SidekickDispatch {
-  send(text: string, instruction?: Instruction): Operation<Result<SidekickExchange>>;
+  send(
+    text: string,
+    instruction?: Instruction,
+    recoveryCurrent?: () => boolean,
+  ): Operation<Result<SidekickExchange>>;
   readonly current: SidekickExchange | undefined;
   readonly queue: SidekickQueueSnapshot;
   hold(): void;
@@ -153,7 +159,17 @@ export function* useSidekickDispatch(options: {
    * instruction is bound past a human Stop. Without it such an instruction
    * stays refused.
    */
-  reconcile?(): Operation<Result<void>>;
+  reconcile?(): Operation<
+    Result<
+      | void
+      | readonly {
+          readonly intent: {
+            readonly response: string;
+            readonly order: number;
+          };
+        }[]
+    >
+  >;
 }): Operation<SidekickDispatch> {
   const root = yield* useScope();
   const { owner, admission } = options;
@@ -186,6 +202,7 @@ export function* useSidekickDispatch(options: {
   let preparing:
     | { readonly entry: Pending; task: Task<void> | undefined; withdraw(): void }
     | undefined;
+  let explicitRecovery = false;
   let live = true;
   let sequence = 0;
   let association = owner.reading.ok ? owner.reading.value.active : undefined;
@@ -219,6 +236,7 @@ export function* useSidekickDispatch(options: {
       !live ||
       current !== undefined ||
       preparing !== undefined ||
+      explicitRecovery ||
       held !== undefined ||
       pending.length === 0
     ) {
@@ -251,6 +269,9 @@ export function* useSidekickDispatch(options: {
       updated();
     },
     *resume() {
+      if (explicitRecovery) {
+        return Err(new Error("The Sidekick is preparing a recovery message."));
+      }
       const ready = guard(pending[0]);
       if (!ready.ok) {
         return ready;
@@ -272,24 +293,36 @@ export function* useSidekickDispatch(options: {
         ? Ok(exchange)
         : Err(new Error("This live owner has no established association for that message."));
     },
-    *send(text, instruction): Operation<Result<SidekickExchange>> {
+    *send(text, instruction, recoveryCurrent): Operation<Result<SidekickExchange>> {
+      if (explicitRecovery) {
+        return Err(new Error("The Sidekick is preparing a recovery message."));
+      }
       const origin = Object.freeze({ ...(yield* SidekickOrigin.expect()) });
       if (origin.kind === "todo" && options.todoEligible?.() !== true) {
         return Err(
           new Error("TODO changes remain pending until another independently eligible prompt."),
         );
       }
-      // Only a person's own Send past their own Stop carries that consent: a
-      // checklist wake and an attachment's message are not the hand that
-      // stopped this owner, so they reach the unchanged guard.
-      const stop =
-        origin.kind === "ui" && held?.kind === "stopped" ? owner.humanStop?.at : undefined;
-      const ready = guard({ stop });
-      if (!ready.ok) {
-        return ready;
+      if (recoveryCurrent !== undefined && !owner.recoveryPending) {
+        return Err(new Error("The recovery message is no longer current."));
       }
-      if (held?.kind === "failure") {
-        return Err(new Error(held.reason));
+      const recover =
+        origin.kind === "ui" &&
+        instruction?.from === "composer" &&
+        recoveryCurrent !== undefined &&
+        owner.recoveryPending;
+      const stop =
+        origin.kind === "ui" && instruction?.from !== "saved" && held?.kind === "stopped"
+          ? owner.humanStop?.at
+          : undefined;
+      if (!recover) {
+        const ready = guard({ stop });
+        if (!ready.ok) {
+          return ready;
+        }
+        if (held?.kind === "failure") {
+          return Err(new Error(held.reason));
+        }
       }
       if (text.trim().length === 0 || (origin.kind === "acp" && origin.attachment.length === 0)) {
         return Err(new Error("A Sidekick dispatch requires text and an identified origin."));
@@ -297,12 +330,14 @@ export function* useSidekickDispatch(options: {
       if (new TextEncoder().encode(text).length > 65536) {
         return Err(new Error("A Sidekick message may contain at most 65536 UTF-8 bytes."));
       }
-      if (pending.length >= 16) {
+      if (!recover && pending.length >= 16) {
         return Err(
           new Error("The Sidekick queue is full (16 waiting messages). Remove one before sending."),
         );
       }
       const agent = owner.agent;
+      const selected = owner.reading;
+      const conversation = selected.ok ? selected.value.active : undefined;
       const captured = instruction === undefined ? undefined : Object.freeze({ ...instruction });
       const answer = withResolvers<Result<SidekickTurn>>();
       const changed = createSignal<SidekickDispatchSnapshot, never>();
@@ -397,7 +432,10 @@ export function* useSidekickDispatch(options: {
           const now = owner.reading;
           if (
             !now.ok ||
-            (association !== undefined && now.value.active !== association) ||
+            (recover
+              ? now.value.active !== conversation
+              : (conversation ?? association) !== undefined &&
+                now.value.active !== (conversation ?? association)) ||
             owner.agent !== agent
           ) {
             if (prepared !== undefined) {
@@ -419,7 +457,10 @@ export function* useSidekickDispatch(options: {
             updated();
             return reserved;
           }
-          pending.splice(pending.indexOf(entry), 1);
+          const index = pending.indexOf(entry);
+          if (index !== -1) {
+            pending.splice(index, 1);
+          }
           state = "active";
           current = exchange;
           running = family;
@@ -436,7 +477,12 @@ export function* useSidekickDispatch(options: {
             text,
             options: {
               origin,
-              ...(prepared === undefined ? {} : { recovery: prepared.recovery }),
+              ...(prepared === undefined
+                ? {}
+                : {
+                    recovery: prepared.recovery,
+                    acknowledgeRecovery: recover,
+                  }),
               saved(conversation, id) {
                 association = conversation;
                 message = Object.freeze({ execution: options.execution, conversation, id });
@@ -480,19 +526,7 @@ export function* useSidekickDispatch(options: {
           }> = Err(new Error("The stopped conversation changed before dispatch."));
           let returned = false;
           try {
-            prepared = yield* scoped(function* () {
-              const reconciled =
-                options.reconcile === undefined
-                  ? Err(new Error("Submit reconciliation is unavailable to this dispatch."))
-                  : yield* options.reconcile();
-              if (!reconciled.ok) {
-                return reconciled;
-              }
-              if (!bound()) {
-                return Err(new Error("The stopped conversation changed before dispatch."));
-              }
-              return yield* owner.prepareContinuation(text, { current: bound });
-            });
+            prepared = yield* bindContinuation(bound);
             returned = true;
           } finally {
             if (preparing === marker) {
@@ -522,11 +556,42 @@ export function* useSidekickDispatch(options: {
           });
         });
       }
-      function launch(prepared: Prepared | undefined): void {
+      function bindContinuation(bound: () => boolean): Operation<Result<Prepared["recovery"]>> {
+        return scoped(function* (): Operation<Result<Prepared["recovery"]>> {
+          const review = yield* owner.reviewRecovery();
+          if (!review.ok) {
+            return review;
+          }
+          if (options.reconcile === undefined) {
+            return Err(new Error("Submit reconciliation is unavailable to this dispatch."));
+          }
+          const reconciled = yield* options.reconcile();
+          if (!reconciled.ok) {
+            return reconciled;
+          }
+          if (!bound()) {
+            return Err(new Error("The stopped conversation changed before dispatch."));
+          }
+          const resolved = new Set(
+            (reconciled.value ?? []).map((one) => `${one.intent.response}\0${one.intent.order}`),
+          );
+          return yield* owner.prepareContinuation(
+            text,
+            { current: bound },
+            {
+              ...review.value,
+              controls: review.value.controls.filter(
+                (one) => !resolved.has(`${one.response}\0${one.order}`),
+              ),
+            },
+          );
+        });
+      }
+      function launch(prepared: Prepared | undefined): Result<void> {
         const family: Running = { task: undefined, stopped: false, finish() {}, publish() {} };
         const first = entry.activate(family, prepared);
         if (!first.ok) {
-          return;
+          return first;
         }
         family.task = root.run(function* (): Operation<void> {
           let result: Result<SidekickTurn> = Err(
@@ -550,7 +615,10 @@ export function* useSidekickDispatch(options: {
               if (family.stopped) {
                 return result;
               }
-              const checked = guard(prepared === undefined ? undefined : entry);
+              const checked =
+                recover && prepared !== undefined
+                  ? owner.reading
+                  : guard(prepared === undefined ? undefined : entry);
               if (!checked.ok) {
                 return checked;
               }
@@ -559,7 +627,10 @@ export function* useSidekickDispatch(options: {
                 return selected;
               }
               if (
-                (association !== undefined && selected.value.active !== association) ||
+                (recover
+                  ? selected.value.active !== conversation
+                  : (conversation ?? association) !== undefined &&
+                    selected.value.active !== (conversation ?? association)) ||
                 owner.agent !== agent
               ) {
                 return Err(
@@ -570,6 +641,7 @@ export function* useSidekickDispatch(options: {
                 ...first.value.options,
                 *advance(settled) {
                   if (
+                    recover ||
                     family.stopped ||
                     !live ||
                     held !== undefined ||
@@ -606,6 +678,64 @@ export function* useSidekickDispatch(options: {
             advance();
           }
         });
+        return Ok(undefined);
+      }
+      if (recover) {
+        if (!selected.ok) {
+          return selected;
+        }
+        if (explicitRecovery || preparing !== undefined || admission.configuration !== undefined) {
+          return Err(new Error("The Sidekick is already doing something you asked for."));
+        }
+        explicitRecovery = true;
+        held = STOPPED;
+        const previous = current;
+        updated();
+        const bound = () =>
+          live &&
+          recoveryCurrent() &&
+          owner.reading.ok &&
+          owner.reading.value.active === conversation;
+        try {
+          if (previous !== undefined) {
+            yield* previous.completion;
+          }
+          if (!bound()) {
+            return Err(new Error("The recovery message or conversation changed before dispatch."));
+          }
+          const reservation = admission.messageReservation(captured);
+          if (!reservation.ok) {
+            return reservation;
+          }
+          let activated = false;
+          try {
+            const prepared = yield* bindContinuation(bound);
+            if (!prepared.ok) {
+              return prepared;
+            }
+            if (!bound()) {
+              return Err(
+                new Error("The recovery message or conversation changed before dispatch."),
+              );
+            }
+            const launched = launch({ reservation: reservation.value, recovery: prepared.value });
+            if (!launched.ok) {
+              return launched;
+            }
+            activated = true;
+            if (pending.length === 0 && held === STOPPED) {
+              held = undefined;
+            }
+            return Ok(exchange);
+          } finally {
+            if (!activated) {
+              admission.releaseMessage(reservation.value);
+            }
+          }
+        } finally {
+          explicitRecovery = false;
+          updated();
+        }
       }
       if (pending.length === 0 && current === undefined) {
         association = owner.reading.ok ? owner.reading.value.active : association;

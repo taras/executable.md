@@ -3713,14 +3713,34 @@ describe("987 — actual child reference recording faults", () => {
             }
           };
           yield* held.input.ready(terminal.terminal);
-          yield* click("[review recovery]");
+          yield* awaited(
+            "the inline fallback",
+            () =>
+              terminal.terminal.screen?.rows().some((line) => line.includes("[Start new chat]")) ===
+              true,
+          );
+          for (
+            let step = 0;
+            step < 12 &&
+            !terminal.terminal.screen
+              ?.rows()
+              .some((row) => row.includes("> › message the sidekick"));
+            step++
+          ) {
+            yield* held.input.input(terminal.terminal, "\t");
+            yield* held.input.ready(terminal.terminal);
+          }
+          expect(
+            terminal.terminal.screen
+              ?.rows()
+              .some((row) => row.includes("> › message the sidekick")),
+          ).toBe(true);
           yield* held.input.input(
             terminal.terminal,
             "Inspect the established result and propose the next step.",
           );
-          yield* click("[different conversation]");
           armed = true;
-          yield* click("[abandon; new chat]", false);
+          yield* click("[Start new chat]", false);
           if (cut !== "offered") {
             yield* awaitedFact("the actual offered reference", function* () {
               return (yield* readSidekickRecords(
@@ -3960,24 +3980,11 @@ describe("987 — root whole-set reconciliation", () => {
         { at: "max" },
       );
       const activate = function* (page: import("./support/repl-page.ts").ReplPage) {
-        yield* page.until("the root recovery action", (one) => one.shows("[review recovery]"));
-        yield* page.press("[review recovery]");
-        yield* page.until("the root recovery account", (one) =>
-          one.shows("Earlier feedback acceptance remains unknown."),
-        );
+        yield* page.until("the inline fallback", (one) => one.shows("[Start new chat]"));
         const pending = yield* readSidekickRecords(chat.location.sidekick);
         expect(host.fake.prompts).toHaveLength(0);
         expect(pending.filter((one) => one.kind === "recovery-decision")).toHaveLength(0);
-        yield* page.until("the new instruction field", (one) => one.shows(">> New instruction:"));
-        yield* page.type("Propose the next distinct step.");
-        yield* page.until("the reviewed new instruction", (one) =>
-          one.shows("Propose the next distinct step."),
-        );
-        yield* page.press("[different conversation]");
-        yield* page.until("the deliberate replacement confirmation", (one) =>
-          one.shows("[abandon; new chat]"),
-        );
-        yield* page.press("[abandon; new chat]");
+        yield* page.press("[Start new chat]");
       };
       if (interrupted) {
         yield* scoped(function* () {
@@ -3994,17 +4001,12 @@ describe("987 — root whole-set reconciliation", () => {
       const beforeOpen = yield* until(readFile(chat.location.sidekick, "utf8"));
       const page = yield* useReplPage({ host, location: originalLocation });
       expect(yield* until(readFile(chat.location.sidekick, "utf8"))).toBe(beforeOpen);
-      host.fake.script({ reply: "<Output>Only the new instruction ran.</Output>" });
       yield* activate(page);
-      yield* page.until("the new recovery response", (one) =>
-        one.shows("Only the new instruction ran."),
-      );
+      yield* page.until("the new conversation", (one) => !one.shows("[Start new chat]"));
       const final = yield* readSidekickRecords(chat.location.sidekick);
       expect(final.filter((one) => one.kind === "control-outcome")).toHaveLength(2);
       expect(yield* until(readFile(chat.location.entries, "utf8"))).toBe(entriesBefore);
-      expect(host.fake.prompts).toHaveLength(1);
-      expect(host.fake.prompts[0]).toContain("Entry entry-1: completed");
-      expect(host.fake.prompts[0]).toContain("Entry entry-2: completed");
+      expect(host.fake.prompts).toHaveLength(0);
     });
   }
 });
@@ -4267,14 +4269,15 @@ describe("1151 — cold ordinary Send after a retained human Stop", () => {
       expect(held.fake.prompts).toHaveLength(prompts);
       expect(cold.dispatch.queue.held?.kind).toBe("stopped");
       held.fake.script({ reply: "<Output>The next step.</Output>" });
-      const next = yield* cold.dispatch.send("Propose the next step from the counted result.");
-      if (!next.ok) {
-        throw next.error;
-      }
-      expect(next.value.snapshot.state).toBe("queued");
-      expect(yield* bytes(held)).toBe(before);
-      expect((yield* cold.dispatch.resume()).ok).toBe(true);
+      const next = yield* cold.dispatch.send(
+        "Propose the next step from the counted result.",
+        { from: "composer", message: 1, draft: 0 },
+        () => true,
+      );
       if (mode === "clean") {
+        if (!next.ok) {
+          throw next.error;
+        }
         const sent = yield* next.value.completion;
         if (!sent.ok) {
           throw sent.error;
@@ -4292,13 +4295,10 @@ describe("1151 — cold ordinary Send after a retained human Stop", () => {
           ["continue-original", "retained-clean-ownership"],
         ]);
       } else {
-        yield* awaitedFact("the refused cold continuation", function* () {
-          return cold.dispatch.queue.held?.kind === "failure";
-        });
+        expect(next.ok).toBe(false);
         expect(held.fake.prompts).toHaveLength(prompts);
         expect(yield* bytes(held)).toBe(before);
-        expect(cold.dispatch.queue.pending).toHaveLength(1);
-        yield* next.value.cancel();
+        expect(cold.dispatch.queue.pending).toHaveLength(0);
       }
       expect(held.session.model.entries).toHaveLength(1);
       expect(effects()).toBe(1);

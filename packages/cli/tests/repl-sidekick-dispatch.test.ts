@@ -948,6 +948,55 @@ describe("1151 — ordinary Send after a joined human Stop", () => {
     }).length;
   }
 
+  it("joins Stop before a fresh composer Send and keeps the older queue held", function* () {
+    const { held, effects } = yield* counted();
+    held.fake.script({ reply: SUBMIT });
+    held.fake.script({ deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 });
+    const dispatch = yield* stopping(held);
+    const first = yield* send(dispatch, "Run the counted effect.");
+    yield* held.fake.streamingTurns(1);
+    const older = yield* send(dispatch, "Keep this queued.");
+    const oldPayload = held.fake.prompts[1];
+    const native = held.fake.turns[0]?.handle.sessionKey;
+    const cleanup = held.fake.holdCancellation();
+    yield* ensure(() => cleanup.release());
+    dispatch.hold();
+    const stop = yield* spawn(() => first.cancel("human"));
+    yield* cleanup.reached;
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(dispatch.queue.pending.map((one) => one.exchange)).toEqual([older]);
+    cleanup.release();
+    yield* stop;
+    const instruction = { from: "composer" as const, message: 3, draft: 0 };
+    const stale = yield* dispatch.send("Stale instruction.", instruction, () => false);
+    expect(stale.ok).toBe(false);
+    const retry = yield* dispatch.send("Retry.", { ...instruction, from: "saved" }, () => true);
+    expect(retry.ok).toBe(false);
+    yield* scoped(function* () {
+      yield* SidekickOrigin.set({ kind: "acp", attachment: "other" });
+      expect((yield* dispatch.send("ACP instruction.", instruction, () => true)).ok).toBe(false);
+    });
+    yield* scoped(function* () {
+      yield* SidekickOrigin.set({ kind: "todo" });
+      expect((yield* dispatch.send("TODO instruction.", instruction, () => true)).ok).toBe(false);
+    });
+    expect((yield* dispatch.send(oldPayload!, instruction, () => true)).ok).toBe(false);
+    held.fake.script({ reply: "<Output>Fresh only.</Output>" });
+    const sent = yield* dispatch.send("Fresh instruction.", instruction, () => true);
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect((yield* sent.value.completion).ok).toBe(true);
+    expect(sent.value.snapshot.message?.conversation).toBe(first.snapshot.message?.conversation);
+    expect(held.fake.turns[2]?.handle.sessionKey).toBe(native);
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain("Fresh instruction.");
+    expect(held.fake.prompts[2]).not.toContain(oldPayload!);
+    expect(dispatch.queue.pending.map((one) => one.exchange)).toEqual([older]);
+    expect(dispatch.queue.held?.kind).toBe("stopped");
+    expect(effects()).toBe(1);
+  });
+
   it("A1: Resume sends only the post-Stop UI instruction once and keeps old acceptance unknown", function* () {
     const { held, effects } = yield* counted();
     held.fake.script({ reply: SUBMIT });

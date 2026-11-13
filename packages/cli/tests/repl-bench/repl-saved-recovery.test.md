@@ -1,10 +1,9 @@
-<Test name="Saved recovery is open before resize and reads retained feedback without a new prompt" timeout="90s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-saved-recovery.md" columns={160} rows={36} waitTimeout="30s">
-    <ReplBench.WaitForText text="Original conversation:" present={false} />
+<Test name="Saved recovery stays visible through resize without a new prompt" timeout="90s">
+  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-saved-recovery.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Type text="Inspect output." />
     <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="[review recovery]" />
+    <ReplBench.WaitForText text="Entry saved. Feedback receipt unknown." />
     <ReplBench.SidekickStatus as="before" />
     <ReplBench.EntryOutput entry={1} as="entryBefore" />
     <AssertEquals actual={entryBefore.status} expected="completed" />
@@ -13,56 +12,26 @@
     <Each in={["OUTPUT-BEGIN: verified","ROW01: item verified","ROW02: item verified","ROW03: item verified","ROW04: item verified","ROW05: item verified","ROW06: item verified","ROW07: item verified","ROW08: item verified","OUTPUT-END: retained"]} let="line">
       <AssertStringIncludes actual={entryBefore.text} expected={line} />
     </Each>
-    <ReplBench.Focus target="sidekick-composer" />
-    <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="[send]" bold={true} />
-    <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="[x] Follow" bold={true} />
-    <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="[review recovery]" bold={true} />
-    <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="Original conversation:" />
     <ReplBench.Resize columns={120} rows={30} />
-    <ReplBench.WaitForText text="Review recovery" />
-    <ReplBench.Region name="recovery">
-      <ReplBench.WaitForText text="Original conversation:" />
-      <ReplBench.Scroll delta={2} />
-      <ReplBench.WaitForText text="OUTPUT-BEGIN:" />
-      <ReplBench.WaitForText text="ROW01:" />
-      <ReplBench.WaitForText text="ROW02:" />
-      <ReplBench.WaitForText text="ROW03:" />
-      <ReplBench.Scroll delta={3} />
-      <ReplBench.WaitForText text="ROW04:" />
-      <ReplBench.WaitForText text="ROW05:" />
-      <ReplBench.WaitForText text="ROW06:" />
-      <ReplBench.WaitForText text="ROW07:" />
-      <ReplBench.WaitForText text="ROW08:" />
-      <ReplBench.WaitForText text="OUTPUT-END:" />
-      <ReplBench.Scroll delta={30} />
-      <ReplBench.WaitForText text="New instruction:" />
-      <ReplBench.Key key="Shift+Tab" />
-      <ReplBench.WaitForText text=">> New instruction:" />
-    </ReplBench.Region>
-    <ReplBench.Key key="Escape" />
-    <ReplBench.WaitForText text="Review recovery" present={false} />
-    <ReplBench.Resize columns={160} rows={36} />
-    <ReplBench.WaitForText text="[review recovery]" bold={true} />
-    <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="Review recovery" />
+    <ReplBench.WaitForText text="Feedback receipt unknown." />
+    <ReplBench.Resize columns={72} rows={20} />
+    <ReplBench.WaitForText text="Entry saved. Feedback receipt unknown." />
     <ReplBench.SidekickStatus as="passive" />
     <ReplBench.EntryOutput entry={1} as="entryPassive" />
     <AssertEquals actual={passive.conversation} expected={before.conversation} />
     <AssertEquals actual={passive.messages} expected={before.messages} />
     <AssertEquals actual={passive.canonical} expected={before.canonical} />
     <AssertEquals actual={entryPassive} expected={entryBefore} />
-    <ReplBench.Region name="recovery">
-      <ReplBench.WaitForText text=">> New instruction:" />
-      <ReplBench.Key key="End" />
-      <ReplBench.Type text="Summarize the verified inventory." />
+    <ReplBench.Focus target="sidekick-composer" />
+    <ReplBench.Type text="Summarize the verified inventory." />
+    <ReplBench.Region name="sidekick-composer">
       <ReplBench.WaitForText text="inventory." />
-      <ReplBench.SidekickStatus as="typed" />
-      <AssertEquals actual={typed.messages} expected={before.messages} />
-      <AssertEquals actual={typed.canonical} expected={before.canonical} />
     </ReplBench.Region>
+    <ReplBench.SidekickStatus as="typed" />
+    <AssertEquals actual={typed.messages} expected={before.messages} />
+    <AssertEquals actual={typed.canonical} expected={before.canonical} />
+    <ReplBench.Key key="Ctrl+C" />
+    <ReplBench.Key key="Ctrl+C" />
   </ReplBench>
+  <AssertEquals actual={closed.exitCode} expected={0} />
 </Test>

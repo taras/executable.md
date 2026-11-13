@@ -7,8 +7,6 @@ import { Elicitation } from "@executablemd/core";
 import { replRoot } from "./storage.ts";
 import type { ReplChatPreparationStore } from "./application.ts";
 import { recoveryReference } from "./sidekick/recovery-record.ts";
-import type { ReplRecovering } from "./application.ts";
-import type { RecoveryReview } from "./sidekick/owner.ts";
 import { TODO_WAKE, todoWakeEligible } from "./todo/wake.ts";
 import { todoLinesOf, todoTaskKeys } from "./application.ts";
 import { TodoEditError, parseTodo } from "./todo/document.ts";
@@ -1318,17 +1316,19 @@ function* drive(
      * that produced it was saved.
      */
     let referenceWait: { readonly id: string; settle(result: Result<void>): void } | undefined;
+    let recoveryInspection: string | undefined;
     const recoveryReports: {
-      revision: number;
-      review?: RecoveryReview;
-      active?: string;
-      conversation?: string;
+      conversation: string;
       reference?: string;
       refusal?: string;
-      done?: true;
     }[] = [];
     const sidekickReports: (
-      | { readonly kind: "acknowledged"; readonly held: Instruction; settle(): void }
+      | {
+          readonly kind: "acknowledged";
+          readonly held: Instruction;
+          readonly recovery: boolean;
+          settle(): void;
+        }
       | { readonly kind: "refused"; readonly refusal: string }
       | {
           readonly kind: "inspected";
@@ -1368,35 +1368,16 @@ function* drive(
 
     function applySidekickReports(): void {
       for (const report of recoveryReports.splice(0)) {
-        const held = state.recovering;
-        const readingIsCurrent =
-          report.review !== undefined &&
-          sidekick.reading.ok &&
-          report.active === sidekick.reading.value.active;
-        const outcomeIsCurrent =
-          report.conversation !== undefined && held?.review?.conversation === report.conversation;
-        if (
-          held !== undefined &&
-          (held.revision === report.revision || readingIsCurrent || outcomeIsCurrent)
-        ) {
-          const { active: _active, conversation: _conversation, ...update } = report;
-          state = {
-            ...state,
-            recovering: {
-              ...held,
-              ...update,
-              revision: held.revision,
-              ...(report.done ? { open: false, reference: undefined } : {}),
-              ...(held.text.length === 0 && report.review?.unused !== undefined
-                ? { text: report.review.unused.text, replacing: report.review.unused.replace }
-                : {}),
-            },
-          };
+        if (sidekick.reading.ok && sidekick.reading.value.active === report.conversation) {
+          state = { ...state, recovering: report };
         }
       }
       for (const report of sidekickReports.splice(0)) {
         if (report.kind === "acknowledged") {
-          state = instructed(state, report.held);
+          state = instructed(
+            report.recovery ? acceptedInstruction(state, report.held) : state,
+            report.held,
+          );
           report.settle();
           continue;
         }
@@ -1528,10 +1509,12 @@ function* drive(
           },
         });
       },
-      revision: () => admissions.message?.instruction?.message ?? state.revisions.message,
+      revision: () =>
+        (admissions.message?.instruction ?? admissions.configuration?.instruction)?.message ??
+        state.revisions.message,
       draft: () => state.draft,
-      *acknowledge(revision: number): Operation<void> {
-        const held = admissions.message?.instruction;
+      *acknowledge(revision: number, recovery = false): Operation<void> {
+        const held = admissions.message?.instruction ?? admissions.configuration?.instruction;
         if (held === undefined || held.message !== revision) {
           // Not a cycle this screen started, so there is nothing of this
           // screen's to clear. It answers rather than refusing: the message is
@@ -1539,7 +1522,7 @@ function* drive(
           return;
         }
         const answer = withResolvers<void>();
-        sidekickReports.push({ kind: "acknowledged", held, settle: answer.resolve });
+        sidekickReports.push({ kind: "acknowledged", held, recovery, settle: answer.resolve });
         wakes.send({ kind: "session" });
         yield* answer.operation;
       },
@@ -1613,8 +1596,7 @@ function* drive(
       workspace,
       changed: () => wakes.send({ kind: "session" }),
       *reconcile() {
-        const findings = yield* reconcileSubmits();
-        return findings.ok ? Ok(undefined) : findings;
+        return yield* reconcileSubmits();
       },
     });
     const direct: DirectRepl = {
@@ -2026,39 +2008,51 @@ function* drive(
         reopening,
         {
           owner: sidekick,
-          reviewRecovery(): void {
-            const held = state.recovering;
-            if (held === undefined) {
-              return;
-            }
-            renderingOwner.run(function* () {
-              const conversation = sidekick.reading.ok ? sidekick.reading.value.active : undefined;
-              const read = yield* sidekick.reviewRecovery();
-              if (!sidekick.reading.ok || sidekick.reading.value.active !== conversation) {
-                return;
-              }
-              recoveryReports.push({
-                revision: held.revision,
-                active: conversation,
-                ...(read.ok ? { review: read.value } : { refusal: read.error.message }),
-              });
-              wakes.send({ kind: "session" });
-            });
-          },
-          reference(accept): void {
+          reference(accept, reference): void {
             const pending = referenceWait;
-            if (pending === undefined || state.recovering?.reference !== pending.id) {
+            if (
+              pending === undefined ||
+              pending.id !== reference ||
+              state.recovering?.reference !== reference
+            ) {
               return;
             }
             pending.settle(
               accept ? Ok(undefined) : Err(new Error("The conversation switch was cancelled.")),
             );
           },
-          recover(held): void {
-            if (held.review === undefined || state.recovering !== held) {
+          startNewChat(conversation): void {
+            if (
+              !sidekick.reading.ok ||
+              sidekick.reading.value.active !== conversation ||
+              !sidekick.recoveryPending ||
+              state.recovering?.conversation !== conversation ||
+              (state.recovering.refusal === undefined &&
+                options.headless?.handoffReference === undefined) ||
+              referenceWait !== undefined
+            ) {
               return;
             }
-            const taken = admissions.configure("recover", held.review.conversation);
+            const attached = options.headless?.handoffReference !== undefined;
+            const text = state.message;
+            if (attached && text.trim().length === 0) {
+              sidekickReports.push({
+                kind: "refused",
+                refusal: "Enter a new instruction in Message to switch chats.",
+              });
+              return;
+            }
+            if (attached && new TextEncoder().encode(text).length > 65536) {
+              sidekickReports.push({
+                kind: "refused",
+                refusal: "A Sidekick message may contain at most 65536 UTF-8 bytes.",
+              });
+              return;
+            }
+            const instruction: Instruction | undefined = attached
+              ? { from: "composer", message: state.revisions.message, draft: state.revisions.draft }
+              : undefined;
+            const taken = admissions.configure("recover", conversation, instruction);
             if (!taken.ok) {
               sidekickReports.push({ kind: "refused", refusal: taken.error.message });
               return;
@@ -2066,28 +2060,56 @@ function* drive(
             dispatch.hold();
             const exchange = dispatch.current;
             const job = taken.value;
-            const review = held.review;
             const reportRecovery = (refusal?: string): void => {
-              recoveryReports.push({
-                revision: held.revision,
-                conversation: review.conversation,
-                ...(refusal === undefined ? { done: true } : { refusal, reference: undefined }),
-              });
+              recoveryReports.push({ conversation, refusal });
             };
             const current = () =>
-              state.recovering?.revision === held.revision &&
-              state.recovering.text === held.text &&
-              state.recovering.replacing === held.replacing &&
-              state.recovering.review?.conversation === review.conversation;
+              admissions.configuration === job &&
+              (state.route.sidekick === undefined || state.route.sidekick === conversation) &&
+              (instruction === undefined || state.revisions.message === instruction.message);
             job.task = renderingOwner.run(function* () {
-              yield* ensure(() => {
+              let switched = false;
+              yield* ensure(function* () {
                 admissions.releaseConfiguration(job);
+                if (switched && dispatch.queue.pending.length === 0) {
+                  yield* dispatch.resume();
+                }
                 referenceWait = undefined;
                 wakes.send({ kind: "session" });
               });
               if (exchange !== undefined) {
                 yield* exchange.cancel();
               }
+              if (
+                !current() ||
+                !sidekick.reading.ok ||
+                sidekick.reading.value.active !== conversation
+              ) {
+                return;
+              }
+              if (!attached) {
+                const findings = yield* reconcileSubmits();
+                if (!findings.ok) {
+                  reportRecovery(findings.error.message);
+                  return;
+                }
+                const selected = yield* sidekick.select(sidekick.agent, current);
+                if (!selected.ok) {
+                  reportRecovery(selected.error.message);
+                } else {
+                  switched = true;
+                  if (state.route.sidekick === conversation) {
+                    state = { ...state, route: { ...state.route, sidekick: undefined } };
+                  }
+                }
+                return;
+              }
+              const initial = yield* sidekick.reviewRecovery();
+              if (!initial.ok) {
+                reportRecovery(initial.error.message);
+                return;
+              }
+              const review = initial.value;
               const findings = yield* reconcileSubmits();
               if (!findings.ok) {
                 reportRecovery(findings.error.message);
@@ -2114,8 +2136,9 @@ function* drive(
                 );
                 return;
               }
-              const result = yield* sidekick.recover(reconciled.value, held.text, held.replacing, {
+              const result = yield* sidekick.recover(reconciled.value, text, true, {
                 current,
+                acknowledge: true,
                 ...(options.headless?.handoffReference === undefined
                   ? {}
                   : {
@@ -2155,7 +2178,7 @@ function* drive(
                             const wait = withResolvers<Result<void>>();
                             referenceWait = { id: reference.sessionId, settle: wait.resolve };
                             recoveryReports.push({
-                              revision: held.revision,
+                              conversation,
                               reference: reference.sessionId,
                             });
                             wakes.send({ kind: "session" });
@@ -2181,8 +2204,51 @@ function* drive(
                       },
                     }),
               });
+              const selected = sidekick.reading;
+              switched = selected.ok && selected.value.active !== conversation;
+              if (switched && state.route.sidekick === conversation) {
+                state = { ...state, route: { ...state.route, sidekick: undefined } };
+              }
               reportRecovery(result.ok ? undefined : result.error.message);
               wakes.send({ kind: "session" });
+            });
+          },
+          sendRecovery(text, held): void {
+            const reading = sidekick.reading;
+            if (!reading.ok || reading.value.active === undefined) {
+              sidekickReports.push({
+                kind: "refused",
+                refusal: reading.ok
+                  ? "There is no current recovery target."
+                  : reading.error.message,
+              });
+              return;
+            }
+            const conversation = reading.value.active;
+            renderingOwner.run(function* () {
+              const sent = yield* dispatch.send(
+                text,
+                held,
+                () =>
+                  state.revisions.message === held.message &&
+                  (state.route.sidekick === undefined || state.route.sidekick === conversation),
+              );
+              if (!sent.ok) {
+                sidekickReports.push({ kind: "refused", refusal: sent.error.message });
+                if (sidekick.recoveryPending) {
+                  const safe = yield* sidekick.inspectContinuation();
+                  if (!safe.ok && referenceWait === undefined) {
+                    recoveryReports.push({ conversation, refusal: safe.error.message });
+                  }
+                }
+                wakes.send({ kind: "session" });
+                return;
+              }
+              const completed = yield* sent.value.completion;
+              if (!completed.ok) {
+                sidekickReports.push({ kind: "refused", refusal: completed.error.message });
+                wakes.send({ kind: "session" });
+              }
             });
           },
           toggleFollow() {
@@ -2574,6 +2640,33 @@ function* drive(
       // then the admissions — a fill raises the draft revision and an admission
       // clears only the revision it admitted, so in this order a reply that
       // filled while its own submission was being prepared keeps what it wrote.
+      const selected = sidekick.reading;
+      const incident = selected.ok && sidekick.recoveryPending ? selected.value.active : undefined;
+      if (
+        incident !== recoveryInspection &&
+        (incident === undefined || (dispatch.current === undefined && !sidekick.busy))
+      ) {
+        recoveryInspection = incident;
+        if (incident !== undefined && dispatch.current === undefined && !sidekick.busy) {
+          renderingOwner.run(function* () {
+            const safe = yield* sidekick.inspectContinuation();
+            if (
+              recoveryInspection === incident &&
+              referenceWait === undefined &&
+              admissions.configuration === undefined &&
+              (!safe.ok || options.headless?.handoffReference !== undefined)
+            ) {
+              recoveryReports.push({
+                conversation: incident,
+                refusal: safe.ok ? undefined : safe.error.message,
+              });
+              wakes.send({ kind: "session" });
+            }
+          });
+        } else if (referenceWait === undefined) {
+          state = { ...state, recovering: undefined };
+        }
+      }
       applySidekickReports();
       sidekickRoot.applyFills();
       applyReports();
@@ -2924,6 +3017,7 @@ function sidekickReadingOf(
   const reading = selected ?? active;
   return Object.freeze({
     recovery: owner.recoveryPending,
+    recoveryStatus: reading === undefined ? undefined : owner.recoveryStatus(reading),
     chat: sidekickChatRows(read.value, owner.previewing),
     // What the replies of this history actually did to this execution's
     // entries, as the coordinates their records hold. Detached from the chat
@@ -3658,9 +3752,9 @@ function* perform(
    */
   chat: {
     readonly owner: SidekickOwner;
-    reviewRecovery(): void;
-    recover(held: ReplRecovering): void;
-    reference(accept: boolean): void;
+    startNewChat(conversation: string): void;
+    reference(accept: boolean, reference: string): void;
+    sendRecovery(text: string, held: Instruction): void;
     todoWake(): Operation<void>;
     toggleFollow(): void;
     readonly dispatch: SidekickDispatch;
@@ -3723,14 +3817,11 @@ function* perform(
   refuse: (refusal: string) => void,
 ): Operation<Performed> {
   switch (intent.kind) {
-    case "review-recovery":
-      chat.reviewRecovery();
-      return {};
-    case "recover-sidekick":
-      chat.recover(intent.held);
+    case "start-new-chat":
+      chat.startNewChat(intent.conversation);
       return {};
     case "recovery-reference":
-      chat.reference(intent.accept);
+      chat.reference(intent.accept, intent.reference);
       return {};
     case "todo-save": {
       const todo = yield* Todo.get();
@@ -3797,6 +3888,10 @@ function* perform(
       wakes.send({ kind: "session" });
       return {};
     case "send-message": {
+      if (chat.owner.recoveryPending) {
+        chat.sendRecovery(intent.text, intent.held);
+        return { remounted: true };
+      }
       const admitted = yield* chat.dispatch.send(intent.text, intent.held);
       if (!admitted.ok) {
         return { refusal: admitted.error.message };

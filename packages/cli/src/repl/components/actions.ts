@@ -25,17 +25,11 @@ export type ReplFieldPurpose =
   | "message"
   | "answer"
   | "sidekick-answer"
-  | "configure-agent"
-  | "recovery";
+  | "configure-agent";
 
 export type ReplAction =
-  | { readonly kind: "open-recovery" }
-  | { readonly kind: "close-recovery" }
-  | { readonly kind: "recovery-replace" }
-  | { readonly kind: "recovery-continue" }
-  | { readonly kind: "recovery-reference-ack" }
-  | { readonly kind: "recovery-reference-cancel" }
-  | { readonly kind: "scroll-recovery"; readonly delta: number }
+  | { readonly kind: "start-new-chat"; readonly conversation: string }
+  | { readonly kind: "recovery-reference"; readonly accept: boolean; readonly reference: string }
   | { readonly kind: "select-task-tray"; readonly tray: "todo" | "queue" }
   | { readonly kind: "todo-collapse" }
   | {

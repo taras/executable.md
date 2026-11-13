@@ -20,6 +20,7 @@ export interface RecoveryReview {
 }
 export interface RecoveryHooks {
   current(): boolean;
+  readonly acknowledge?: boolean;
   handoff?(
     decision: RecoveryDecisionRecord,
     activate: () => Operation<Result<void>>,
@@ -194,6 +195,7 @@ export interface SidekickAssembly {
 export interface SidekickMessageOptions {
   readonly recovery?: { readonly decision: RecoveryDecisionRecord; readonly account: string };
   readonly origin: MessageOrigin;
+  readonly acknowledgeRecovery?: boolean;
   advance?(
     settled: SidekickTurn,
   ): Operation<
@@ -445,7 +447,7 @@ export interface SidekickOwnerInput {
    * Nothing newer is cleared: a person who typed again while the append was in
    * flight keeps what they typed.
    */
-  acknowledge(revision: number): Operation<void>;
+  acknowledge(revision: number, recovery?: boolean): Operation<void>;
   /**
    * The shared entry draft as it stands.
    *
@@ -459,6 +461,8 @@ export interface SidekickOwnerInput {
 /** The conversation this execution owns, for as long as the caller holds it. */
 export interface SidekickOwner {
   reviewRecovery(): Operation<Result<RecoveryReview>>;
+  recoveryStatus(conversation: string): string | undefined;
+  inspectContinuation(): Operation<Result<void>>;
   /**
    * Bind a distinct new instruction past a retained human Stop, without sending it.
    *
@@ -469,6 +473,7 @@ export interface SidekickOwner {
   prepareContinuation(
     text: string,
     hooks: RecoveryHooks,
+    expected?: RecoveryReview,
   ): Operation<Result<{ readonly decision: RecoveryDecisionRecord; readonly account: string }>>;
   /** The retained human Stop that still describes the active conversation's frontier. */
   readonly humanStop: HumanStopFact | undefined;
@@ -607,7 +612,7 @@ export interface SidekickOwner {
    * agent's own reason, and the conversation a person was in is still theirs.
    * Nothing falls back to another agent, and nothing is sent.
    */
-  select(agent: string): Operation<Result<void>>;
+  select(agent: string, current?: () => boolean): Operation<Result<void>>;
   /** Send one explicit message, and run the turn it produces. */
   message(text: string, options?: SidekickMessageOptions): Operation<Result<SidekickTurn>>;
   /**
@@ -1350,11 +1355,72 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       });
     }
 
+    function recoveryStatus(conversation: string): string | undefined {
+      if (projected === undefined) {
+        return undefined;
+      }
+      const { records, history } = projected;
+      const unknown = uncertainRequests(records, history.reading.requests, conversation).some(
+        (at) => at !== inFlight?.at && records[at]?.kind === "feedback",
+      );
+      if (!unknown) {
+        return conversation === history.reading.active && recovering
+          ? "A saved recovery decision needs your confirmation."
+          : undefined;
+      }
+      const saved = history.reading.operations.some(
+        (one) =>
+          one.conversation === conversation && one.component === "Elicit" && one.status === "ok",
+      )
+        ? "Answer saved."
+        : history.reading.submits.some((one) => one.conversation === conversation && one.admitted)
+          ? "Entry saved."
+          : "Conversation saved.";
+      return `${saved} Feedback receipt unknown.`;
+    }
+
+    function* inspectContinuation(): Operation<Result<void>> {
+      if (!reading.ok) {
+        return reading;
+      }
+      const active = reading.value.active;
+      if (active === undefined || projected === undefined || !recovering) {
+        return Err(new SidekickOwnerError("There is no current recovery target."));
+      }
+      if (failedPrompt(projected.records, active)) {
+        return Err(new SidekickOwnerError("The saved Prompt result cannot be continued safely."));
+      }
+      const unused = reading.value.recoveries.find(
+        (one) =>
+          !one.used &&
+          !one.withdrawn &&
+          (one.decision.target === active || one.decision.conversation === active),
+      );
+      if (unused?.decision.action === "replace") {
+        return unused.decision.target === active
+          ? Ok(undefined)
+          : Err(new SidekickOwnerError("The saved replacement is awaiting disposition."));
+      }
+      const frontier = stoppedTarget(reading.value);
+      if (stopped === frontier || joined?.frontier === frontier) {
+        return Ok(undefined);
+      }
+      const inspected = yield* inspectRecoveryOwnership(
+        projected.records,
+        active,
+        assembly.ownershipAdministration,
+      );
+      return inspected.ok
+        ? inspected
+        : Err(new SidekickOwnerError("Clean ownership of this chat could not be verified."));
+    }
+
     function* decide(
       review: RecoveryReview,
       text: string,
       replace: boolean,
       hooks: RecoveryHooks,
+      withdrawOnly = false,
     ): Operation<Result<RecoveryDecisionRecord>> {
       if (storage === undefined) {
         return Err(new SidekickOwnerError("Recovery storage is unavailable."));
@@ -1365,6 +1431,18 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
               !one.used && !one.withdrawn && one.decision.conversation === review.conversation,
           )
         : undefined;
+      const records = yield* storage.writer.readAll();
+      if (
+        review.requests.some((at) => {
+          const record = records[at];
+          return (
+            (record?.kind === "message" || record?.kind === "feedback") &&
+            record.text.trim() === text.trim()
+          );
+        })
+      ) {
+        return Err(new SidekickOwnerError("Enter a distinct new instruction."));
+      }
       const stale =
         existing?.decision.action === "replace" && reading.ok
           ? reading.value.conversations.find(
@@ -1394,6 +1472,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           new SidekickOwnerError(
             "The interrupted replacement preparation is withdrawn. Review recovery again before choosing a new instruction or conversation.",
           ),
+        );
+      }
+      if (withdrawOnly) {
+        return Err(
+          new SidekickOwnerError("Start new chat to continue with the saved replacement."),
         );
       }
       let basis: RecoveryDecisionRecord["basis"] = "explicit-abandonment";
@@ -1478,20 +1561,41 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     function* prepareContinuation(
       text: string,
       hooks: RecoveryHooks,
+      expected?: RecoveryReview,
     ): Operation<Result<{ readonly decision: RecoveryDecisionRecord; readonly account: string }>> {
       if (text.trim().length === 0 || storage === undefined || busy || !hooks.current()) {
         return Err(new SidekickOwnerError("Enter a new instruction for the stopped conversation."));
       }
+      yield* stop();
       const current = yield* reviewRecovery();
       if (!current.ok) {
         return current;
       }
-      if (current.value.requests.length === 0) {
+      if (
+        expected !== undefined &&
+        (current.value.conversation !== expected.conversation ||
+          JSON.stringify(current.value.requests) !== JSON.stringify(expected.requests) ||
+          JSON.stringify(current.value.controls) !== JSON.stringify(expected.controls))
+      ) {
+        return Err(new SidekickOwnerError("The recovery target changed before dispatch."));
+      }
+      if (current.value.requests.length === 0 && current.value.unused === undefined) {
         return Err(
           new SidekickOwnerError("The stopped feedback is no longer unresolved. Send it again."),
         );
       }
-      const decided = yield* decide(current.value, text, false, hooks);
+      const active = reading.ok ? reading.value.active : undefined;
+      const replace = current.value.unused?.replace === true;
+      if (replace && active === current.value.conversation) {
+        const withdrawn = yield* decide(current.value, text, true, hooks, true);
+        if (!withdrawn.ok) {
+          return withdrawn;
+        }
+        return Err(
+          new SidekickOwnerError("Start new chat to continue with the saved replacement."),
+        );
+      }
+      const decided = yield* decide(current.value, text, replace, hooks);
       return decided.ok ? Ok({ decision: decided.value, account: current.value.account }) : decided;
     }
 
@@ -1672,6 +1776,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return yield* message(text, {
         origin: { kind: "ui" },
         recovery: { decision: permission, account: current.value.account },
+        acknowledgeRecovery: hooks.acknowledge,
       });
     }
 
@@ -1987,7 +2092,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return settled.ok ? Ok(undefined) : settled;
     }
 
-    function* select(agent: string): Operation<Result<void>> {
+    function* select(agent: string, current?: () => boolean): Operation<Result<void>> {
       if (busy) {
         return Err(
           new SidekickOwnerError(
@@ -2001,7 +2106,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // conversation on top of one would add to an account nobody can read.
         return reading;
       }
-      if (agent === selection()) {
+      if (agent === selection() && current === undefined) {
         // Already this agent, so there is nothing to replace. Starting a
         // conversation anyway would discard the one a person is in to arrive
         // where they already are.
@@ -2018,6 +2123,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // Read before anything is released, because this is the association a
       // failure has to leave standing.
       const previous = known.value.active;
+      if (current !== undefined && !current()) {
+        return Err(new SidekickOwnerError("The recovery conversation changed."));
+      }
       chosen = agent;
       // One conversation at a time. The handle goes; the *association* is what
       // survives a failed replacement, and that is what the history says rather
@@ -2040,7 +2148,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // conversation a person could still have used had been given up. An
       // inspection is the one thing that reaches an agent without asking it for
       // a turn, so it is what "set up" means here.
-      const answered: Result<unknown> = opened.ok ? yield* opened.value.options() : opened;
+      let answered: Result<unknown> = opened.ok ? yield* opened.value.options() : opened;
+      if (answered.ok && current !== undefined && !current()) {
+        answered = Err(new SidekickOwnerError("The recovery conversation changed."));
+      }
       if (!answered.ok) {
         // The replacement that did not answer is let go of rather than left
         // open: it is not this Sidekick's conversation, and nothing will use it.
@@ -2050,6 +2161,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           conversation: id,
           agent,
           phase: "failed",
+          ...(previous === undefined ? {} : { previous }),
           error: serializeError(answered.error),
         });
         yield* refresh();
@@ -2058,11 +2170,19 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // other than what a person selected.
         return answered;
       }
+      const previousPreferences =
+        previous === undefined || current === undefined
+          ? undefined
+          : desired(known.value, previous);
+      if (previousPreferences !== undefined) {
+        yield* saving(paired.value, id, previousPreferences);
+      }
       yield* paired.value.writer.append({
         kind: "conversation",
         conversation: id,
         agent,
         phase: "activated",
+        ...(previous === undefined ? {} : { previous }),
       });
       yield* refresh();
       const settled = history();
@@ -2438,8 +2558,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // that came back immediately could report anything of its own.
         yield* refresh();
         sending.options.saved?.(conversation, messageId);
-        if (sending.options.origin.kind === "ui" && sending.options.recovery === undefined) {
-          yield* input.acknowledge(sending.revision);
+        if (
+          sending.options.origin.kind === "ui" &&
+          (sending.options.recovery === undefined || sending.options.acknowledgeRecovery === true)
+        ) {
+          yield* input.acknowledge(sending.revision, sending.options.acknowledgeRecovery);
         }
       }
 
@@ -2762,6 +2885,8 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         return applicable;
       },
       reviewRecovery,
+      recoveryStatus,
+      inspectContinuation,
       prepareContinuation,
       recover,
       message,
