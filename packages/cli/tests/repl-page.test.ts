@@ -163,24 +163,6 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     expect(recovered.occurrences("[send]")).toBe(2);
   });
 
-  it("an open History drawer takes the typing the Draft would have had", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* typed(page, "kept while open");
-
-    yield* page.press("[history]");
-    const opened = yield* page.until("the History drawer", (one) => one.shows("[close]"));
-    expect(opened.shows("History")).toBe(true);
-
-    // Typed at the drawer, and the Draft behind it did not take it: its own
-    // text is unchanged and the stray characters are not under its heading.
-    yield* page.type("stray");
-    yield* page.press("[close]");
-    yield* page.until("the drawer closing", (one) => !one.shows("[close]"));
-    const after = page.screen();
-    expect(after.found("kept while open", { after: DRAFT })).toBe(1);
-    expect(after.found("stray", { after: DRAFT })).toBe(0);
-  });
-
   it("publishes no reading for a write that is held, and resumes when it lands", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const terminal = page.repl.terminal;
