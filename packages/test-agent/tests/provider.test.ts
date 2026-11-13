@@ -303,176 +303,208 @@ describe("inspection acquisition", () => {
 });
 
 describe("real inspection lifecycle", { sanitizeOps: false, sanitizeResources: false }, () => {
-  it("joins real inspection release, worker exit and retry before reporting close refusal", function* () {
-    const models = {
-      selected: "small",
-      options: [
-        { id: "small", efforts: { selected: "low", options: ["low"] } },
-        { id: "sol", efforts: { selected: "medium", options: ["medium", "high"] } },
-      ],
-    };
-    type WireMessage = Parameters<NonNullable<AcpRuntimeOptions["onAcpMessage"]>>[1];
-    type Lifecycle = NonNullable<AcpRuntimeOptions["processLifecycle"]>;
-    type Started = Parameters<NonNullable<Lifecycle["onSpawned"]>>[0];
-    type Exited = Parameters<NonNullable<Lifecycle["onExit"]>>[0];
-    const requests: WireMessage[] = [];
-    const replies: WireMessage[] = [];
-    const starts: Started[] = [];
-    const exits: Exited[] = [];
-    const statusReads: {
-      handle: AcpRuntimeHandle;
-      options: ReturnType<typeof readAgentOptions>;
-    }[] = [];
-    const closes: { handle: AcpRuntimeHandle; reason: string; discardPersistentState?: boolean }[] =
-      [];
-    const finishedCloses: AcpRuntimeHandle[] = [];
-    const handles: AcpRuntimeHandle[] = [];
-    const order: string[] = [];
-    let namedRoutes = 0;
-    yield* useFlatWorld(tmpdir());
+  const cases: { name: string; refuse?: "open" | "close" }[] = [
+    { name: "joins ordinary inspection release and worker exit on success" },
+    { name: "joins worker exit after session/new refuses inspection", refuse: "open" },
+    {
+      name: "joins real inspection release, worker exit and retry before reporting close refusal",
+      refuse: "close",
+    },
+  ];
+  for (const { name, refuse } of cases) {
+    it(name, function* () {
+      const models = {
+        selected: "small",
+        options: [
+          { id: "small", efforts: { selected: "low", options: ["low"] } },
+          { id: "sol", efforts: { selected: "medium", options: ["medium", "high"] } },
+        ],
+      };
+      type WireMessage = Parameters<NonNullable<AcpRuntimeOptions["onAcpMessage"]>>[1];
+      type Lifecycle = NonNullable<AcpRuntimeOptions["processLifecycle"]>;
+      type Started = Parameters<NonNullable<Lifecycle["onSpawned"]>>[0];
+      type Exited = Parameters<NonNullable<Lifecycle["onExit"]>>[0];
+      const requests: WireMessage[] = [];
+      const replies: WireMessage[] = [];
+      const starts: Started[] = [];
+      const exits: Exited[] = [];
+      const statusReads: {
+        handle: AcpRuntimeHandle;
+        options: ReturnType<typeof readAgentOptions>;
+      }[] = [];
+      const closes: {
+        handle: AcpRuntimeHandle;
+        reason: string;
+        discardPersistentState?: boolean;
+      }[] = [];
+      const finishedCloses: AcpRuntimeHandle[] = [];
+      const handles: AcpRuntimeHandle[] = [];
+      const attemptedKeys: string[] = [];
+      const order: string[] = [];
+      let namedRoutes = 0;
+      yield* useFlatWorld(tmpdir());
 
-    let failure: unknown;
-    try {
-      yield* scoped(function* () {
-        const controller = yield* useTestAgentController();
-        const { provider } = yield* useTestAgentProvider({
-          defaultAgent: "codex",
-          agents: ["codex"],
-          workerCommand: [...cliBase(), "test-agent"],
-          probeRoute: controller.probeRoute,
-          // deno-lint-ignore require-yield
-          *routeFor() {
-            namedRoutes++;
-            throw new Error("inspection used a named route");
-          },
-          inspection: {
-            agent: "codex",
-            refuseClose: true,
-            register: () => controller.useInspection({ models, refuse: "close" }),
-          },
-          dependencies: {
-            createRuntime(options) {
-              const runtime = createAcpRuntime({
-                ...options,
-                onAcpMessage(direction, message) {
-                  (direction === "outbound" ? requests : replies).push(message);
-                },
-                processLifecycle: {
-                  onSpawned(start) {
-                    starts.push(start);
-                  },
-                  onExit(exit) {
-                    exits.push(exit);
-                  },
-                },
-              });
-              if (options.probeAgent !== undefined) {
-                return runtime;
-              }
-              const ensureSession = runtime.ensureSession.bind(runtime);
-              const getStatus = runtime.getStatus.bind(runtime);
-              const close = runtime.close.bind(runtime);
-              return Object.assign(runtime, {
-                ensureSession(input: Parameters<typeof ensureSession>[0]) {
-                  return ensureSession(input).then((handle) => {
-                    handles.push(handle);
-                    return handle;
-                  });
-                },
-                getStatus(input: Parameters<typeof getStatus>[0]) {
-                  return getStatus(input).then((status) => {
-                    order.push("status");
-                    statusReads.push({ handle: input.handle, options: readAgentOptions(status) });
-                    return status;
-                  });
-                },
-                close(input: Parameters<typeof close>[0]) {
-                  order.push("close");
-                  closes.push(input);
-                  return close(input).then(() => {
-                    finishedCloses.push(input.handle);
-                    order.push("released");
-                  });
-                },
-              });
+      let failure: unknown;
+      try {
+        yield* scoped(function* () {
+          const controller = yield* useTestAgentController();
+          const { provider } = yield* useTestAgentProvider({
+            defaultAgent: "codex",
+            agents: ["codex"],
+            workerCommand: [...cliBase(), "test-agent"],
+            probeRoute: controller.probeRoute,
+            // deno-lint-ignore require-yield
+            *routeFor() {
+              namedRoutes++;
+              throw new Error("inspection used a named route");
             },
-          },
+            inspection: {
+              agent: "codex",
+              refuseClose: refuse === "close",
+              register: () => controller.useInspection({ models, refuse }),
+            },
+            dependencies: {
+              createRuntime(options) {
+                const runtime = createAcpRuntime({
+                  ...options,
+                  onAcpMessage(direction, message) {
+                    (direction === "outbound" ? requests : replies).push(message);
+                  },
+                  processLifecycle: {
+                    onSpawned(start) {
+                      starts.push(start);
+                    },
+                    onExit(exit) {
+                      exits.push(exit);
+                    },
+                  },
+                });
+                if (options.probeAgent !== undefined) {
+                  return runtime;
+                }
+                const ensureSession = runtime.ensureSession.bind(runtime);
+                const getStatus = runtime.getStatus.bind(runtime);
+                const close = runtime.close.bind(runtime);
+                return Object.assign(runtime, {
+                  ensureSession(input: Parameters<typeof ensureSession>[0]) {
+                    attemptedKeys.push(input.sessionKey);
+                    return ensureSession(input).then((handle) => {
+                      handles.push(handle);
+                      return handle;
+                    });
+                  },
+                  getStatus(input: Parameters<typeof getStatus>[0]) {
+                    return getStatus(input).then((status) => {
+                      order.push("status");
+                      statusReads.push({ handle: input.handle, options: readAgentOptions(status) });
+                      return status;
+                    });
+                  },
+                  close(input: Parameters<typeof close>[0]) {
+                    order.push("close");
+                    closes.push(input);
+                    return close(input).then(() => {
+                      finishedCloses.push(input.handle);
+                      order.push("released");
+                    });
+                  },
+                });
+              },
+            },
+          });
+
+          const choices = yield* provider.options("codex", { model: "sol" });
+          expect(choices.agent).toBe("codex");
+          expect(choices.model?.selected).toBe("sol");
+          expect(choices.model?.options.map(({ id }) => id)).toEqual(["small", "sol"]);
+          expect(choices.effort?.selected).toBe("medium");
+          expect(choices.effort?.options.map(({ id }) => id)).toEqual(["medium", "high"]);
+          order.push("returned");
+          expect(finishedCloses.length).toBe(1);
         });
+      } catch (error) {
+        failure = error;
+      }
 
-        const choices = yield* provider.options("codex", { model: "sol" });
-        expect(choices.agent).toBe("codex");
-        expect(choices.model?.selected).toBe("sol");
-        expect(choices.model?.options.map(({ id }) => id)).toEqual(["small", "sol"]);
-        expect(choices.effort?.selected).toBe("medium");
-        expect(choices.effort?.options.map(({ id }) => id)).toEqual(["medium", "high"]);
-        order.push("returned");
-        expect(finishedCloses.length).toBe(1);
+      expect(namedRoutes).toBe(0);
+      expect(attemptedKeys.length).toBe(1);
+      const [sessionKey] = attemptedKeys;
+      expect(sessionKey.startsWith("xmd:inspect:")).toBe(true);
+      expect(starts.map(({ scope }) => scope)).toEqual([
+        { kind: "runtime-probe", agent: "codex" },
+        { kind: "runtime-session", sessionKey },
+      ]);
+      expect(exits.map(({ launchId, pid }) => ({ launchId, pid }))).toEqual(
+        starts.map(({ launchId, pid }) => ({ launchId, pid })),
+      );
+
+      const calls = requests.flatMap((message) =>
+        "method" in message && "id" in message ? [message] : [],
+      );
+      expect(calls.map(({ method }) => method)).toEqual(
+        refuse === "open"
+          ? ["initialize", "session/new"]
+          : ["initialize", "session/new", "session/set_config_option"],
+      );
+      const responses = calls.map(({ id }) =>
+        replies.find((message) => "id" in message && message.id === id),
+      );
+      expect(responses[0]).toMatchObject({ result: { protocolVersion: 1 } });
+
+      if (refuse === "open") {
+        expect(String(failure)).toContain("TestAgent inspection refused to open.");
+        expect(responses[1]).toMatchObject({
+          error: { message: "TestAgent inspection refused to open." },
+        });
+        expect(handles).toEqual([]);
+        expect(order).toEqual([]);
+        return;
+      }
+
+      if (refuse === "close") {
+        expect(String(failure)).toContain("TestAgent inspection refused to close.");
+      } else {
+        expect(failure).toBe(undefined);
+      }
+      expect(order).toEqual([
+        "status",
+        "status",
+        "close",
+        "released",
+        "returned",
+        ...(refuse === "close" ? ["close", "released"] : []),
+      ]);
+      expect(handles.length).toBe(1);
+      const handle = handles[0];
+      expect(handle.sessionKey).toBe(sessionKey);
+      expect(statusReads.every((read) => read.handle === handle)).toBe(true);
+      expect(statusReads[0].options.model?.set.selected).toBe("small");
+      expect(statusReads[1].options.model?.set.selected).toBe("sol");
+      expect(statusReads[1].options.effort?.set.selected).toBe("medium");
+      expect(statusReads[1].options.effort?.set.options.map(({ id }) => id)).toEqual([
+        "medium",
+        "high",
+      ]);
+      expect(closes.map(({ reason }) => reason)).toEqual([
+        "agent options inspected",
+        ...(refuse === "close" ? ["scope teardown"] : []),
+      ]);
+      expect(
+        closes.every(
+          (close) => close.handle === handle && close.discardPersistentState === undefined,
+        ),
+      ).toBe(true);
+      expect(finishedCloses.every((closed) => closed === handle)).toBe(true);
+
+      expect(responses[1]).toMatchObject({
+        result: { sessionId: handle.backendSessionId, configOptions: configOptions(models) },
       });
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(String(failure)).toContain("TestAgent inspection refused to close.");
-    expect(order).toEqual([
-      "status",
-      "status",
-      "close",
-      "released",
-      "returned",
-      "close",
-      "released",
-    ]);
-    expect(namedRoutes).toBe(0);
-    expect(handles.length).toBe(1);
-    const handle = handles[0];
-    expect(handle.sessionKey.startsWith("xmd:inspect:")).toBe(true);
-    expect(statusReads.every((read) => read.handle === handle)).toBe(true);
-    expect(statusReads[0].options.model?.set.selected).toBe("small");
-    expect(statusReads[1].options.model?.set.selected).toBe("sol");
-    expect(statusReads[1].options.effort?.set.selected).toBe("medium");
-    expect(statusReads[1].options.effort?.set.options.map(({ id }) => id)).toEqual([
-      "medium",
-      "high",
-    ]);
-    expect(closes.map(({ reason }) => reason)).toEqual([
-      "agent options inspected",
-      "scope teardown",
-    ]);
-    expect(
-      closes.every(
-        (close) => close.handle === handle && close.discardPersistentState === undefined,
-      ),
-    ).toBe(true);
-    expect(finishedCloses.every((closed) => closed === handle)).toBe(true);
-
-    const calls = requests.flatMap((message) =>
-      "method" in message && "id" in message ? [message] : [],
-    );
-    expect(calls.map(({ method }) => method)).toEqual([
-      "initialize",
-      "session/new",
-      "session/set_config_option",
-    ]);
-    const responses = calls.map(({ id }) =>
-      replies.find((message) => "id" in message && message.id === id && "result" in message),
-    );
-    expect(responses[0]).toMatchObject({ result: { protocolVersion: 1 } });
-    expect(responses[1]).toMatchObject({
-      result: { sessionId: handle.backendSessionId, configOptions: configOptions(models) },
+      expect(calls[2]).toMatchObject({
+        params: { sessionId: handle.backendSessionId, configId: "model", value: "sol" },
+      });
+      expect(responses[2]).toMatchObject({
+        result: { configOptions: configOptions({ ...models, selected: "sol" }) },
+      });
     });
-    expect(calls[2]).toMatchObject({
-      params: { sessionId: handle.backendSessionId, configId: "model", value: "sol" },
-    });
-    expect(responses[2]).toMatchObject({
-      result: { configOptions: configOptions({ ...models, selected: "sol" }) },
-    });
-
-    expect(starts.map(({ scope }) => scope)).toEqual([
-      { kind: "runtime-probe", agent: "codex" },
-      { kind: "runtime-session", sessionKey: handle.sessionKey },
-    ]);
-    expect(exits.map(({ launchId, pid }) => ({ launchId, pid }))).toEqual(
-      starts.map(({ launchId, pid }) => ({ launchId, pid })),
-    );
-  });
+  }
 });
