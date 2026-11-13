@@ -4,7 +4,7 @@
  *
  * XMD ships exactly one Plugin — `@executablemd/git` — and activates it for
  * the run-profile commands, which are not simply the ones that execute a
- * document: `xmd test` executes one and carries none. It is statically
+ * document: `xmd test` executes one and carries no bundled Plugin. Git is statically
  * imported rather than loaded, so the distribution carries it whole and no
  * resolution can substitute it. Explicit `--plugin` selections follow it in the
  * order they were written, which fixes how middleware composes: the bundled

@@ -11571,11 +11571,12 @@ installed anything and no document began. A Plugin is trusted executable code
 and is not sandboxed: selected Plugin code can execute whatever the surrounding
 runtime permits.
 
-**Selection is explicit.** Nothing is discovered: not from the repository, the
-installed packages, a manifest, the root document or the component search path.
-Specifiers resolve from the invocation's captured initial working directory. A
-path inside the current repository is valid when the operator names it. V1
-performs no ambient or document-declared discovery.
+**Selection.** Explicit specifiers resolve from the invocation's captured
+initial working directory. `xmd test` also selects Plugins declared in
+the test document's package configuration before the explicit flags, as
+defined by the [testing specification](testing-spec.md#package-test-plugins).
+The installed packages, document contents and component search path do not
+select Plugins.
 
 How a module is *reached* belongs to the host: the runtime entrypoint supplies
 the operation that loads one, and the shared command calls it once per
@@ -11583,9 +11584,10 @@ specifier. A Plugin's name is its own — nothing resolves it to the package or
 module it came from, and two modules with different package names may carry
 Plugins named anything.
 
-**Lifetime.** The complete command runs inside the scope the Plugins installed
-into. A load or install failure, or a cancellation, unwinds the Plugins already
-installed, reads no root and starts no document. An isolated nested
+**Lifetime.** A command runs inside the scope the Plugins installed into.
+`xmd test` installs afresh for each document in its own scope. A load or
+install failure unwinds the Plugins already installed for that root without
+starting the document. Cancellation joins the scope's teardown. An isolated nested
 `<Execution host="run">` inherits nothing and installs the same Plugin values
 again in its own scope, with command `run`.
 
@@ -15338,12 +15340,12 @@ Plugin is the run it always was.
 | PL14 | The key, not the name | An Api built under the bare names `Document`, `RootMetadata` or `ActivePlugins` composes nothing and observes nothing; one built under the published key composes, including from a second loaded copy inside the compiled binary |
 | PL15 | Selection by package | A bare specifier resolves in the invocation directory's package environment, and the Plugin's own name is what identifies it — not the package or module it came from |
 | PL16 | Cancellation | A command halted while a Plugin is still installing releases what the Plugins before it acquired, installs nothing after it, and stays a cancellation; a scope whose body and teardown both fail reports exactly what it reported before Plugins existed |
-| PL17 | One bundled Plugin, and nothing else by default | A command that names no `--plugin` installs exactly the bundled `@executablemd/git` where its profile carries it — `run`, `plan`, `syntax`, `repl` and workflow `start`/`resume`/`fork` — and nothing at all for `xmd test`, `upgrade` and a workflow management action; an unselected Plugin such as the review graph is absent from the symbols and from a run until it is named, and present in both once it is |
+| PL17 | Bundled and configured selection | A command that names no `--plugin` installs the bundled `@executablemd/git` where its profile carries it, and no bundled Plugin for `xmd test`, `upgrade`, or workflow management. `xmd test` also uses its [package configuration](testing-spec.md#package-test-plugins). An unselected Plugin is absent from the symbols and from a run until named. |
 | PL18 | REPL services | Selected `repl` contributions compose once per live logical session with independent child state; descriptive reads and UI attachment start no setup; failed or cancelled setup joins cleanup before operational work. |
 | PL19 | One declaration | REPL identity declarations supply entry syntax, eligible generated forms and documentation without granting extra execution authority; deselected contributions are absent. |
 | PL20 | Conversation composition | Sidekick setup shares session state, runs once per live conversation and ends with it; pre-capture provider decoration preserves the selected agent and exact checked Session without reaching entry Prompts. |
 
-| PL19 | The reserved selector | `--plugin git` names the bundled value rather than a module: it loads nothing, and writing it once or repeatedly leaves one `@executablemd/git` first in the active list. It cannot give a command a profile it does not have — `--plugin git` before a workflow management action or `xmd test` still installs none |
+| PL19 | The reserved selector | `--plugin git` names the bundled value rather than a module: it loads nothing, and writing it once or repeatedly leaves one `@executablemd/git` first where the profile carries it. For a workflow management action or `xmd test`, this flag adds no Plugin. |
 | PL20 | The selector is not the name | `--plugin @executablemd/git` is an ordinary specifier: it loads, and a module claiming the bundled Plugin's name is refused as a duplicate like any other collision. Identity-based idempotence belongs to the host's own selector for its own value, and a nested run child prefixing the bundled value drops it by identity so an impostor still collides |
 | PL21 | Test isolation | The outer `xmd test` root carries no bundled Plugin and resolves none of its names; a nested `<Execution host="run">` child assembles the run profile in its own scope and resolves all of them, and does not inherit what its parent declined |
 | PL18 | Both arms, every consumer | A Plugin declaring structural syntax and no Markdown component has its construct and region described by `xmd syntax` with the pair reported, accepted by Plan structural validation, and expanded by a run under the same installation; the same candidate is refused where nothing declared it |

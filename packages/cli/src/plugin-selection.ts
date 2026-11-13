@@ -3,8 +3,8 @@
  * argv.
  *
  * It runs before every other scanner for the same reason the eval scan does:
- * whatever a command line turns out to mean, the Plugins it selects are
- * installed before anything reads a document, and a selection the props phase
+ * the Plugins it selects are installed before document execution, and a
+ * selection the props phase
  * had already rewritten would be a selection made from somebody else's view of
  * the command line.
  *

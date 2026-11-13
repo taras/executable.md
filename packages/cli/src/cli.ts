@@ -149,6 +149,7 @@ import { runPlan } from "./plan.ts";
 import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
+import { installTestPlugins } from "./test-plugins.ts";
 import {
   renderSyntaxDocumentation,
   renderSyntaxJson,
@@ -1771,6 +1772,8 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
   pattern: string[];
 }
 
+type TestPlugins = (document: string) => Operation<CommandPlugins>;
+
 /**
  * `xmd test` — one document, or every document a directory holds.
  *
@@ -1782,8 +1785,7 @@ function* test(
   config: TestConfig,
   args: string[],
   installService: HostServiceInstaller,
-  /** What this command's Plugins installed, and the values a child reinstalls. */
-  plugins: CommandPlugins,
+  testPlugins: TestPlugins,
 ): Operation<void> {
   const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
@@ -1814,16 +1816,7 @@ function* test(
     }
     announceSecretDetection(config.secretDetection);
     const { value: result, delivery } = yield* withTestProgress((diagnostics) =>
-      runTestDocument(
-        { ...config, root: { path } },
-        { testing: true, plugins },
-        installService,
-        diagnostics,
-        // The outer `xmd test` command installs no operational repository
-        // provider. A test that needs the production behavior exercises an
-        // explicit `<Execution host="run">` child, which is an ordinary run and
-        // assembles the entrypoint's own bundled Plugin for itself.
-      ),
+      runTestDocument({ ...config, root: { path } }, testPlugins, installService, diagnostics),
     );
     if (!result.ok) {
       reportFailure(result.error);
@@ -1865,7 +1858,7 @@ function* test(
           root: { path: document.path },
           include: componentSearchPath(document, target.root, config.include),
         },
-        { testing: true, plugins },
+        testPlugins,
         installService,
         diagnostics,
       );
@@ -1913,21 +1906,30 @@ function* withTestProgress<T>(
  * explicit `--journal` already names the root's one file, so that run writes
  * it exactly as before and no second copy is made.
  */
-function runTestDocument(
+function* runTestDocument(
   config: DocumentConfig,
-  mode: DocumentMode,
+  testPlugins: TestPlugins,
   installService: HostServiceInstaller,
   diagnostics: TestDiagnostics,
 ): Operation<Result<void>> {
   const root = diagnostics.execution("root", rootSourcePath(config.root));
-  const observed: DocumentMode = { ...mode, diagnostics, observed: root };
-  if (config.journal !== undefined) {
-    return runScopedDocument(config, observed, installService);
+  const run = (document: DocumentConfig) =>
+    scoped(function* () {
+      const plugins = yield* testPlugins(rootSourcePath(document.root));
+      const mode: DocumentMode = { testing: true, plugins, diagnostics, observed: root };
+      return yield* runScopedDocument(document, mode, installService);
+    });
+  try {
+    if (config.journal !== undefined) {
+      return yield* run(config);
+    }
+    return yield* withFailureJournal(
+      root.journal((result: Result<void>) => !result.ok),
+      (stream) => run({ ...config, stream }),
+    );
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
   }
-  return withFailureJournal(
-    root.journal((result: Result<void>) => !result.ok),
-    (stream) => runScopedDocument({ ...config, stream }, observed, installService),
-  );
 }
 
 /** A file document reference read as one, or why it cannot be read. */
@@ -2932,6 +2934,7 @@ function* dispatch(
    * run host — reads it rather than installing a second time.
    */
   plugins: CommandPlugins,
+  testPlugins: TestPlugins,
   startup?: Result<ReplStartup>,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
@@ -3395,7 +3398,7 @@ function* dispatch(
         { ...command.config, retainProcessOutput: keepsProcessOutput(command.config.journal) },
         evalFlags.rest,
         installService,
-        plugins,
+        testPlugins,
       );
       break;
     }
@@ -3837,7 +3840,7 @@ function* runCommand(
   // describe or serve a grammar rather than running a document, so none of them
   // loads a module or installs anything: a Plugin's top-level code is trusted
   // code, and describing a command line is not a reason to run any.
-  const selectedPlugins = selection.loads ? selection : undefined;
+  const selectedPlugins = selection.loads && selection.command !== "test" ? selection : undefined;
 
   let startup: Result<ReplStartup> | undefined;
   if (selected?.name === "repl" && !helpRequest.requested && !selected.help) {
@@ -3933,6 +3936,7 @@ function* runCommand(
       sessions,
       replHost,
       plugins,
+      (document) => installTestPlugins(document, selection, loadPluginModule),
       startup,
     );
 

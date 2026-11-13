@@ -1,10 +1,8 @@
 /**
- * Admitting the modules `--plugin` selected.
+ * Admitting the modules the CLI selected.
  *
- * Explicit only. Nothing here scans the current repository, `node_modules`, a
- * package manifest, the root document or the component search path for a
- * Plugin: a module is loaded because an operator named it, and a package that
- * happens to be installed does nothing at all.
+ * The caller supplies specifiers and their resolution directory. CLI flags and
+ * test package configuration share this admission boundary.
  *
  * How a module is *reached* is the host's — see `host-plugin-modules.ts`. This
  * module holds the loader contract and what a loaded namespace has to be, which

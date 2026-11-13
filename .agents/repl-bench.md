@@ -57,9 +57,12 @@ focus, and resize evidence come from the terminal capture.
 
 ```sh
 deno run --allow-all --cached-only --frozen --node-modules-dir=none \
-  packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
-  scripts/tests/repl-bench.md
+  packages/cli/src/deno.ts test packages/cli/tests/repl-bench
 ```
+
+Run one document by passing its `*.test.md` path. Both forms use the plugin
+declared in `packages/cli/xmd.json`. Run from the worktree root so the scripted
+scenarios resolve from that working directory.
 
 The [testing specification](../specs/testing-spec.md#real-terminal-repl-tests)
 describes the plugin and its scope. Use a composer region for a field-value

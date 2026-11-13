@@ -21,7 +21,7 @@ import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/plugins/", import.meta.url));
 const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
@@ -567,5 +567,130 @@ describe("PC8 — an Api built under the bare public name intercepts nothing", (
       expect(run.stdout).toContain("document body");
       expect(run.stdout).not.toContain("INTERCEPTED");
     });
+  });
+});
+
+const PACKAGE_TEST = '<Test name="package profile">\n<Stamp />\n</Test>\n';
+const PLAIN_TEST = '<Test name="plain document">\nplain test body\n</Test>\n';
+
+function testPlugin(specifier: string): string {
+  return JSON.stringify({ test: { plugins: [specifier] } });
+}
+
+describe("package test plugins", () => {
+  it("resolves the same package plugin for one file and directory discovery", function* () {
+    yield* useWorkspace(
+      {
+        "a/package.json": "{}",
+        "a/xmd.json": testPlugin("./profile.mjs"),
+        "a/profile.mjs": `export { default } from ${JSON.stringify(pathToFileURL(fixture("declaring.mjs")).href)};\n`,
+        "a/nested/example.test.md": PACKAGE_TEST,
+        "b/package.json": "{}",
+        "b/xmd.json": testPlugin(fixture("wrapper-one.mjs")),
+        "b/example.test.md": PLAIN_TEST,
+        "c/package.json": "{}",
+        "c/example.test.md": PLAIN_TEST,
+        "c/leak-check.test.md": '<Test name="component isolation"><Stamp /></Test>\n',
+        "xmd.json": testPlugin("./must-not-load.mjs"),
+      },
+      function* (dir) {
+        const file = yield* runCli(["test", "a/nested/example.test.md"], { cwd: dir }).expect();
+        expect(file.stdout).toContain("stamped by the selected Plugin");
+
+        const directory = yield* runCli(["test", "."], { cwd: dir }).join();
+        expect(directory.code).toBe(1);
+        expect(directory.stdout.match(/stamped by the selected Plugin/g)).toHaveLength(1);
+        expect(directory.stdout.match(/one open/g)).toHaveLength(1);
+        expect(directory.stdout.match(/one close/g)).toHaveLength(1);
+        expect(directory.stderr).toContain("c/leak-check.test.md: tests failed:");
+        expect(directory.stderr).toContain("1 of 4 documents failed");
+        expect(directory.stderr).not.toContain("must-not-load.mjs");
+      },
+    );
+  });
+
+  it("appends explicit plugins resolved from the invocation directory", function* () {
+    yield* useWorkspace(
+      {
+        "suite/xmd.json": testPlugin("./first.mjs"),
+        "suite/first.mjs": renamedPlugin("configured-first", "configured-first"),
+        "explicit.mjs": renamedPlugin("explicit-last", "explicit-last"),
+        "suite/example.test.md": PLAIN_TEST,
+      },
+      function* (dir) {
+        const result = yield* runCli(["test", "suite", "--plugin", "./explicit.mjs"], {
+          cwd: dir,
+        }).expect();
+        expect(
+          result.stderr.split("\n").filter((line) => line.includes(": installed for ")),
+        ).toEqual(["configured-first: installed for test", "explicit-last: installed for test"]);
+        const duplicate = yield* runCli(
+          ["test", "suite/example.test.md", "--plugin=./suite/first.mjs"],
+          { cwd: dir },
+        ).join();
+        expect(duplicate.code).toBe(1);
+        expect(duplicate.stderr).toContain("two selected Plugins are named configured-first");
+        expect(duplicate.stderr).not.toContain("installed for test");
+      },
+    );
+  });
+
+  it("reports configuration and module failures before document execution", function* () {
+    yield* useWorkspace(
+      {
+        "a/xmd.json": '{"test":{"plugins":[42]}}',
+        "a/example.test.md": PLAIN_TEST,
+        "b/xmd.json": testPlugin("./missing.mjs"),
+        "b/example.test.md": PLAIN_TEST,
+        "c/xmd.json": "{}",
+        "c/example.test.md": PLAIN_TEST,
+        "explicit.mjs": renamedPlugin("explicit", "explicit"),
+      },
+      function* (dir) {
+        const malformed = yield* runCli(["test", "a/example.test.md", "--plugin=./explicit.mjs"], {
+          cwd: dir,
+        }).join();
+        expect(malformed.code).toBe(1);
+        expect(malformed.stderr).toContain(join("a", "xmd.json"));
+        expect(malformed.stderr).not.toContain("explicit: loaded");
+
+        const directory = yield* runCli(["test"], { cwd: dir }).join();
+        expect(directory.code).toBe(1);
+        expect(directory.stderr).toContain(join("b", "xmd.json"));
+        expect(directory.stderr).toContain("./missing.mjs");
+        expect(directory.stderr).toContain("2 of 3 documents failed");
+        expect(directory.stdout).toContain("plain test body");
+      },
+    );
+  });
+
+  it("saves the document journal when a plugin fails during teardown", function* () {
+    yield* useWorkspace(
+      {
+        "a/xmd.json": testPlugin(fixture("bad-cleanup.mjs")),
+        "a/example.test.md": '<Test name="passing before cleanup">body before cleanup</Test>\n',
+        "b/xmd.json": "{}",
+        "b/example.test.md": PLAIN_TEST,
+      },
+      function* (dir) {
+        const artifacts = join(dir, "artifacts");
+        const result = yield* runCli(["test"], {
+          cwd: dir,
+          env: { XMD_TEST_ARTIFACTS: artifacts },
+        }).join();
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('pass test "passing before cleanup"');
+        expect(result.stderr).toContain("a/example.test.md: fixture plugin cleanup failed");
+        const saved = result.stderr.match(/\[xmd test\] journal saved: (.+root-1\.jsonl) \(root 1/);
+        const journal = saved?.[1];
+        if (journal === undefined) {
+          throw new Error("Expected the document's failure journal");
+        }
+        expect(journal).toContain("artifacts");
+        expect(yield* exists(journal)).toBe(true);
+        expect(result.stdout).toContain("plain test body");
+        expect(result.stderr).toContain("1 of 2 documents failed");
+      },
+    );
   });
 });
