@@ -95,7 +95,7 @@ function absentButtons(page: ReplPage): void {
 }
 
 describe("wheel remaining migration journeys", () => {
-  it("permission pages from a control-only window to its explanation and final choice", function* () {
+  it("keeps permission focus through scrolling and acknowledges a held presentation", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const explanation = Array.from(
       { length: 45 },
@@ -116,50 +116,14 @@ describe("wheel remaining migration journeys", () => {
     yield* page.until("permission pending", (one) => one.shows("asks: Permission prose 00"));
     yield* page.press("asks: Permission prose 00");
     yield* page.until("first option", (one) => one.shows("> [Choice 00]"));
-    expect(page.screen().shows("Permission prose 44")).toBe(false);
     const choice = page.screen().locate("[Choice 00]");
     yield* ticks(page, "down", choice, 8);
     expect(page.screen().shows("> [Choice 00]")).toBe(true);
-    for (let at = 1; at <= 39; at += 1) {
-      // One middle step through the held frame, which is this walk's control.
-      if (at === 20) {
-        yield* heldStepTo(page, "ArrowDown", at);
-        continue;
-      }
+    for (let at = 1; at < 20; at += 1) {
       yield* steppedTo(page, "ArrowDown", at);
     }
-    expect(page.screen().shows("> [Choice 39]")).toBe(true);
+    yield* heldStepTo(page, "ArrowDown", 20);
     expect(page.repl.fake.decisions).toHaveLength(0);
-    for (let at = 38; at >= 0; at -= 1) {
-      yield* steppedTo(page, "ArrowUp", at);
-    }
-    expect(page.screen().shows("> [Choice 00]")).toBe(true);
-    for (let at = 0; at < 8; at += 1) {
-      yield* key(page, "PageUp");
-    }
-    expect(page.screen().shows("Permission prose 00")).toBe(true);
-    const prose = page.screen().locate("Permission prose 01");
-    yield* wheel(page, "down", prose);
-    expect(page.screen().shows("Permission prose 03")).toBe(true);
-    yield* wheel(page, "up", prose);
-    expect(page.screen().shows("Permission prose 00")).toBe(true);
-    for (let at = 0; at < 16; at += 1) {
-      yield* key(page, "PageDown");
-    }
-    expect(page.screen().shows("[Choice 39]")).toBe(true);
-    expect(page.screen().shows("[close]")).toBe(true);
-    expect(page.repl.fake.decisions).toHaveLength(0);
-    for (let at = 0; at < 8; at += 1) {
-      yield* key(page, "PageUp");
-    }
-    expect(page.screen().shows("Permission prose 00")).toBe(true);
-    absentButtons(page);
-    for (let at = 0; at < 16; at += 1) {
-      yield* key(page, "PageDown");
-    }
-    yield* page.press("[Choice 39]");
-    yield* page.until("deliberate permission choice", () => page.repl.fake.decisions.length === 1);
-    expect(page.repl.fake.prompts).toHaveLength(1);
   });
 
   it("narrow catalog reveals nested scopes and its final entry without selecting on wheel", function* () {

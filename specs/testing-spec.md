@@ -801,6 +801,11 @@ with a location. Pass it to a later bench in the same test to reuse the home
 and last terminal size. The later invocation supplies its own contextual cwd.
 A bench stopped by teardown has null exit fields.
 
+With `entryPermissionFixture={true}`, the child loads the permission-wheel
+fixture provider for the entry to select as `wheel-permission-fixture`. The
+fixture answers no live agent requests and presents a synthetic permission
+request through the REPL's normal entry permission UI.
+
 ## Repository Runtime Suites
 
 The sections above specify the Executable Markdown testing language. This one

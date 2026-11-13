@@ -55,9 +55,11 @@ const wait = z.object({
   at: point.optional(),
   present: z.boolean().optional(),
 });
-const bench = size
-  .partial()
-  .extend({ expectExit: z.boolean().default(false), scenario: z.string().min(1).optional() });
+const bench = size.partial().extend({
+  expectExit: z.boolean().default(false),
+  scenario: z.string().min(1).optional(),
+  entryPermissionFixture: z.boolean().default(false),
+});
 const resumeReference = z.object({ location: z.string(), home: z.string(), ...size.shape });
 
 function* connect(options: Launch): Operation<Execute> {
@@ -145,7 +147,13 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
     columns: wanted.columns ?? resume?.columns ?? defaultSize.columns,
     rows: wanted.rows ?? resume?.rows ?? defaultSize.rows,
   };
-  const args = ["--deny-all"];
+  const args = wanted.entryPermissionFixture
+    ? [
+        "--approve-reads",
+        "--plugin",
+        fileURLToPath(new URL("./lib/repl-bench/wheel-permission.ts", import.meta.url)),
+      ]
+    : ["--deny-all"];
   if (resume !== undefined) {
     args.push(resume.location);
   }
@@ -252,7 +260,12 @@ const cell = {
 const dimensions = { columns: integer, rows: integer };
 const registrations = [
   {
-    ...registration("", ReplBench, { ...dimensions, expectExit: boolean, scenario: string }),
+    ...registration("", ReplBench, {
+      ...dimensions,
+      expectExit: boolean,
+      scenario: string,
+      entryPermissionFixture: boolean,
+    }),
     captures: ["resume"],
   },
   registration(
