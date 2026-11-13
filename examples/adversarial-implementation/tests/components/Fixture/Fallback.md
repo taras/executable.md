@@ -377,6 +377,7 @@ async function presence(path) {
   }
 }
 const SITES = ["actionRefusal", "reviewEntered", "attempts1", "attempts2", "attempts3", "attemptRefusal1", "attemptRefusal2", "primaryDispatch", "replacementRefusal", "replacementDispatch", "role"];
+const DECISIVE = ["replacementRefusal", "replacementDispatch", "role"];
 const count = (value) => Number.isSafeInteger(value) && value >= 0 && 99 >= value;
 const code = (value, labels) => (Number.isSafeInteger(value) && value >= 0 && 999 >= value) || labels.includes(value);
 const only = (value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
@@ -390,7 +391,7 @@ function valid(report, slot) {
   const keys = ["schema", "slot", "pid", "executions", "anchors", "sites", "roles", "unattributed", "reservations", "writes", "calledElsewhere", "dropped"];
   return only(report, keys) && keys.every((key) => key in report) && report.schema === "delivery-overlap-observer.v1" && report.slot === slot && Number.isSafeInteger(report.pid) && report.pid > 0 && 1e10 > report.pid && count(report.executions) && Array.isArray(report.anchors) && 4 >= report.anchors.length && report.anchors.every((label) => typeof label === "string" && /^(?:root|review|dispatch):[A-Za-z]{1,24}:[0-9]{1,3}$/.test(label)) && only(report.sites, SITES) && Object.values(report.sites).every(count) && only(report.roles, ["fixture", "production", "other"]) && ["fixture", "production", "other"].every((key) => count(report.roles[key])) && count(report.unattributed) && Array.isArray(report.reservations) && 4 >= report.reservations.length && report.reservations.every(reservation) && Array.isArray(report.writes) && 4 >= report.writes.length && report.writes.every(write) && count(report.calledElsewhere) && only(report.dropped, ["reservations", "writes", "anchors"]) && ["reservations", "writes", "anchors"].every((key) => Number.isSafeInteger(report.dropped[key]) && report.dropped[key] >= 0 && 1e6 > report.dropped[key]);
 }
-async function observer(path, slot, waitPid) {
+async function observer(path, slot, waitPid, budget) {
   const file = await read(path);
   if (file.state !== "read") {
     return slot + " report " + (file.state === "unavailable" ? "absent" : file.state);
@@ -399,18 +400,41 @@ async function observer(path, slot, waitPid) {
   if (!valid(report, slot)) {
     return slot + " report invalid";
   }
-  const sites = SITES.filter((site) => site in report.sites).map((site) => site + "=" + report.sites[site]).join(" ");
-  const reservations = report.reservations.map((entry) => entry.kind + "@" + entry.site + " t=" + entry.target + " lexical " + entry.lexical + " process " + entry.process + " canonical " + entry.canonical).join(", ");
+  const named = (names) => names.map((site) => site + "=" + (report.sites[site] ?? 0)).join(" ");
   const writes = report.writes.map((entry) => (Array.isArray(entry.prior) ? "[" + entry.prior.join(",") + "]" : entry.prior) + "->" + entry.position + " " + entry.settled).join(", ");
-  const text = [
-    slot + " report pid " + report.pid + " " + (waitPid === undefined ? "wait pid unknown" : String(report.pid) === waitPid ? "matches wait" : "differs from wait"),
-    "reservations " + (reservations === "" ? "none" : reservations),
-    "called writes " + (writes === "" ? "none" : writes) + ", elsewhere " + report.calledElsewhere,
-    "dropped " + report.dropped.reservations + "/" + report.dropped.writes + "/" + report.dropped.anchors,
-    "sites " + (sites === "" ? "none" : sites) + ", roles fixture=" + report.roles.fixture + " production=" + report.roles.production + " other=" + report.roles.other + ", unattributed " + report.unattributed,
-    "executions " + report.executions + ", anchors " + (report.anchors.length === 0 ? "ok" : report.anchors.join(" ")),
-  ].join("; ");
-  return text.length > 395 ? text.slice(0, 392) + "..." : text;
+  const faults = report.anchors.length + report.dropped.anchors;
+  const head = slot + " report pid " + report.pid + " " + (waitPid === undefined ? "wait pid unknown" : String(report.pid) === waitPid ? "matches wait" : "differs from wait");
+  const called = "called writes " + (writes === "" ? "none" : writes) + (report.dropped.writes === 0 ? "" : " +" + report.dropped.writes + " dropped");
+  const decisive = "sites " + named(DECISIVE) + ", roles fixture=" + report.roles.fixture + " production=" + report.roles.production + " other=" + report.roles.other;
+  const attribution = "attribution " + (faults === 0 ? "ok" : "faults " + faults) + ", unattributed " + report.unattributed;
+  const detail = [["sites", "other sites " + (named(SITES.filter((site) => !DECISIVE.includes(site) && site in report.sites)) || "none")], ["executions", "executions " + report.executions], ["elsewhere", "elsewhere " + report.calledElsewhere], ["anchors", "anchors " + (report.anchors.length === 0 ? "none" : report.anchors.join(" "))]];
+  const note = "; omitted detail " + detail.map(([name]) => name).join(",");
+  const replacementFirst = (entry) => entry.kind === "replacement" || entry.site === "replacement";
+  const ordered = [...report.reservations.filter(replacementFirst), ...report.reservations.filter((entry) => !replacementFirst(entry))];
+  const room = budget - [head, called, decisive, attribution].join("; ").length - "; reservations none shown".length - " (omitted 4, dropped 999999)".length - note.length;
+  const rows = [];
+  for (const entry of ordered) {
+    const shown = entry.kind + "@" + entry.site + " t=" + entry.target + " lexical " + entry.lexical + " process " + entry.process + " canonical " + entry.canonical;
+    if ([...rows, shown].join(", ").length > room) {
+      break;
+    }
+    rows.push(shown);
+  }
+  const omitted = ordered.length - rows.length;
+  const reservations = "reservations " + (rows.length > 0 ? rows.join(", ") : omitted + report.dropped.reservations === 0 ? "none" : "none shown") + (omitted + report.dropped.reservations === 0 ? "" : " (omitted " + omitted + ", dropped " + report.dropped.reservations + ")");
+  let text = [head, reservations, called, decisive, attribution].join("; ");
+  const skipped = [];
+  for (const [name, part] of detail) {
+    if (budget - note.length >= text.length + 2 + part.length) {
+      text += "; " + part;
+    } else {
+      skipped.push(name);
+    }
+  }
+  if (skipped.length > 0) {
+    text += "; omitted detail " + skipped.join(",");
+  }
+  return text.length > budget ? text.slice(0, budget - 3) + "..." : text;
 }
 const exits = tokens === "" ? "none" : tokens.split(" ").slice(0, 4).map((token) => /^[0-9]{1,3}$/.test(token) ? token : "?").join(" ");
 const waits = /^overlap-waits first=([0-9]{1,10}):([0-9]{1,3}) second=([0-9]{1,10}):([0-9]{1,3})$/m.exec(shell);
@@ -426,7 +450,8 @@ const base = [
   "first stdout " + await stdoutSummary(firstOut) + ", stderr " + await stderrSummary(firstErr),
   "second stdout " + await stdoutSummary(secondOut) + ", stderr " + await stderrSummary(secondErr),
 ].join("; ").slice(0, 1000);
-console.log([base, await observer(firstReport, "first", waits?.[1]), await observer(secondReport, "second", waits?.[3])].join("; "));
+const budget = Math.floor((1800 - base.length - 4) / 2);
+console.log([base, await observer(firstReport, "first", waits?.[1], budget), await observer(secondReport, "second", waits?.[3], budget)].join("; "));
 COLLECT
 ```
 <Let as="evidence" value={overlapEvidence.exitCode === 0 && overlapEvidence.stdout.startsWith("exit tokens ") && 1801 > overlapEvidence.stdout.trim().length && !overlapEvidence.stdout.trim().includes("\n") ? overlapEvidence.stdout.trim() : "fixture evidence unavailable"} />

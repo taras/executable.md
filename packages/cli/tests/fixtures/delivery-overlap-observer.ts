@@ -349,7 +349,9 @@ class Observation {
 
   *report(slot: string, expected: string): Operation<string> {
     const labels = new Map<string, string>();
-    const reservations = [];
+    const reservations: Array<
+      Omit<Reservation, "content" | "target"> & { target: string; lexical: string }
+    > = [];
     for (const entry of this.reservations) {
       let target = "unknown";
       let equality = "unknown";
