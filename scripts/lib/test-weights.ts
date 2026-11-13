@@ -17,6 +17,7 @@
  */
 import { parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
+import { DOCUMENT_SUITES } from "./markdown-suites.ts";
 import { isMarkdownSuite, MARKDOWN_SUITES } from "./test-files.ts";
 
 /** Where the measurement came from, so a stale weight is visible rather than plausible. */
@@ -87,7 +88,11 @@ function positiveInteger(value: unknown, label: string): number {
 
 function discoveredPath(value: string, label: string): string {
   if (
-    !(TYPESCRIPT_PATH.test(value) || isDiscoveredMarkdownPath(value)) ||
+    !(
+      TYPESCRIPT_PATH.test(value) ||
+      isDiscoveredMarkdownPath(value) ||
+      DOCUMENT_SUITES.has(value)
+    ) ||
     value.split("/").some((part) => part === "." || part === "..")
   ) {
     throw new TestWeightsError(`${label} is not a repository-relative test path`);

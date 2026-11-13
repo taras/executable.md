@@ -194,6 +194,18 @@ describe("the weights file", () => {
     });
   });
 
+  it("accepts exact ordinary suite paths in both weight formats", function* () {
+    const file = "packages/test-agent/src/SessionConfiguration.test.md";
+    expect(parseTestWeights(JSON.stringify(weighed({ [file]: 2 }))).runtimes.deno).toEqual({
+      [file]: 2,
+    });
+    const measurement = complete("deno", {
+      applicable: [file],
+      measured: [{ file, ms: 2 }],
+    });
+    expect(parseRuntimeMeasurement(formatRuntimeMeasurement(measurement))).toEqual(measurement);
+  });
+
   it("refuses every field class it cannot place", function* () {
     const rejected: Array<[string, unknown]> = [
       ["not JSON at all", "{"],
@@ -231,6 +243,10 @@ describe("the weights file", () => {
         weighed({ "examples/adversarial-implementation/tests/fixtures/a.test.md": 1 }),
       ],
       ["a Markdown suite elsewhere", weighed({ "packages/core/tests/a.test.md": 1 })],
+      [
+        "an unregistered sibling",
+        weighed({ "packages/cli/tests/document-suites/inline/Helper.test.md": 1 }),
+      ],
       [
         "a Markdown helper document",
         weighed({ "examples/adversarial-implementation/tests/preparation-cases.md": 1 }),

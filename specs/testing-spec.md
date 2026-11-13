@@ -777,10 +777,21 @@ repository. A test file discovery cannot see would run under no runtime at all,
 so the equivalence is a regression rather than a convention.
 
 A Markdown suite is a regular `*.test.md` file directly inside
-`examples/adversarial-implementation/tests/`. Discovery does not descend, so the
-helper documents and the deliberately failing fixtures beneath that directory
-never run as suites, and a document there without the `.test.md` suffix is a
-helper.
+`examples/adversarial-implementation/tests/`, or a regular file at one of
+these registered paths:
+
+- `packages/cli/tests/document-suites/evaluate/Evaluate.test.md`
+- `packages/cli/tests/document-suites/inline/Inline.test.md`
+- `packages/cli/tests/document-suites/plan/Plan.test.md`
+- `packages/cli/tests/document-suites/props/Props.test.md`
+- `packages/cli/tests/document-suites/syntax/Syntax.test.md`
+- `packages/cli/tests/document-suites/targets/Targets.test.md`
+- `packages/cli/tests/document-suites/verbose/Verbose.test.md`
+- `packages/test-agent/src/SessionConfiguration.test.md`
+
+Discovery skips symlinks and directories. Adversarial discovery does not
+descend. The individually registered paths admit only the listed documents,
+so helpers and intentionally failing fixtures stay outside the corpus.
 
 ### Applicable corpus
 
@@ -893,17 +904,26 @@ source entrypoint, resolved from the runner's checkout:
 - Node — `tsx --tsconfig tsconfig.node.json packages/cli/src/node.ts`
 - Bun — `bun packages/cli/src/bun.ts`
 
-followed by `test <file> --plugin packages/cli/tests/fixtures/workflow-test-permissions.mjs
+The CLI receives `test <file>` and runs from the repository root with its inherited
+environment (`PATH`, the Deno cache and install variables, `XDG_CACHE_HOME`,
+`TMPDIR` and `XMD_TEST_ARTIFACTS`). Individually registered suites use the
+CLI's default includes and file permissions. Deno launches of `Plan` and
+`SessionConfiguration` select the test-only worker plugin. It carries the
+prepared Deno flags into TestAgent workers. `Syntax` and `Verbose` receive a
+temporary executable that invokes the same runtime's source CLI with its
+arguments intact. Each suite owns and removes its executable. `Verbose`
+also receives the absolute path to its fixture components.
+
+The adversarial suites append the following arguments to the source entrypoint:
+`test <file> --plugin packages/cli/tests/fixtures/workflow-test-permissions.mjs
 --include <root>/examples/adversarial-implementation/tests/components --include
 <root>/examples/adversarial-implementation/components`, with the include paths
 absolute so that a nested `<Dir>` cannot change where components are found.
 `Preparation`, `ProductionRole` and `Submission` include
 `tests/production-components` in place of `tests/components`. The child's
-working directory is the repository root. Its environment is the one a
-suite's launched CLI receives (`PATH`, the Deno cache and install variables,
-`XDG_CACHE_HOME`, `TMPDIR` and `XMD_TEST_ARTIFACTS`), plus `XMD_EXAMPLE_COMMAND`
-and `XMD_EXAMPLE_TEST_COMMAND`: the prepared Deno CLI above followed by
-`run --allow-absolute` and by `test`, as quoted shell words. Fixture documents
+environment also receives `XMD_EXAMPLE_COMMAND` and `XMD_EXAMPLE_TEST_COMMAND`.
+Each is the prepared Deno CLI above followed by `run --allow-absolute` or
+`test`, respectively, as quoted shell words. Fixture documents
 run their real workflow through those commands under every outer runtime,
 because the run profile they exercise is the Deno host's. The artifact-return
 suites also receive `XMD_ARTIFACT_RETURN_EVIDENCE` when it is set. The fixture
@@ -911,11 +931,15 @@ plugin adds `--node-modules-dir=manual --cached-only --frozen` when the Deno
 source host relaunches itself as a TestAgent worker, including workers for
 isolated run-profile children.
 
-Each suite but `Implementation`, whose named groups carry their own deadlines,
-runs under a whole-launch deadline: `Preparation` 420 seconds, `Friction` 180,
-`DecisionResolution` and `Delivery` 300, and every other suite 120. A suite that
+Each adversarial suite but `Implementation`, whose named groups carry their
+own deadlines, runs under a whole-launch deadline. `Preparation` has 420
+seconds, `Friction` has 180, `DecisionResolution` and `Delivery` have 300, and
+the other adversarial suites have 120. A suite that
 reaches it is stopped and its cleanup joined, its path and deadline are
-reported, and it fails with status 1; the files after it still run.
+reported, and it fails with status 1. The files after it still run.
+`SessionConfiguration` has a 120-second whole-launch deadline under each
+runtime. Other individually registered suites have a 300-second whole-launch
+deadline under Bun and use their authored test deadlines under Deno and Node.
 
 The same operation reads the prepared `node_modules/effection` link before and
 after a Markdown suite. A link that changed or disappeared fails the file with
@@ -930,8 +954,8 @@ code — a signalled child — is failure. Native output is neither captured,
 truncated, nor replaced by a summary.
 
 Cancellation is distinct from failure. Halting a shard halts the process group
-of the file it is running and starts no later file. The shard owns no scratch
-state to leave behind.
+of the file it is running, releases that file's scratch state and starts no
+later file.
 
 `deno task test` is the local Deno suite. With no arguments it runs Deno's own
 whole-repository `deno test --allow-all --frozen`, including the files the CI

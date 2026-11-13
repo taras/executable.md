@@ -29,7 +29,9 @@ describe("test discovery", () => {
       expect(file.startsWith("/")).toBe(false);
       // A Windows drive letter is absolute too, and would otherwise slip past.
       expect(file).not.toMatch(/^[A-Za-z]:/);
-      expect(file).toContain("/tests/");
+      if (file.endsWith(".test.ts")) {
+        expect(file).toContain("/tests/");
+      }
       expect(file.endsWith(".test.ts") || file.endsWith(".test.md")).toBe(true);
     }
   });
@@ -183,7 +185,11 @@ describe("the applicable corpus", () => {
       "Submission",
       "Workflow",
     ].map((name) => `examples/adversarial-implementation/tests/${name}.test.md`);
-    expect((yield* listTestFiles(ROOT)).filter((file) => file.endsWith(".md"))).toEqual(suites);
+    expect(
+      (yield* listTestFiles(ROOT)).filter(
+        (file) => file.startsWith("examples/") && file.endsWith(".md"),
+      ),
+    ).toEqual(suites);
     for (const runtime of RUNTIMES) {
       const applicable = yield* applicableTestFiles(runtime, ROOT);
       expect(suites.filter((file) => !applicable.includes(file))).toEqual([]);
@@ -277,6 +283,28 @@ describe("the one-file Markdown commands", () => {
       command: "bun",
       arguments: [at("packages/cli/src/bun.ts"), ...profile],
     });
+  });
+
+  it("uses CLI defaults and the neutral Deno worker plugin for registered documents", function* () {
+    const plan = "packages/cli/tests/document-suites/plan/Plan.test.md";
+    const inline = "packages/cli/tests/document-suites/inline/Inline.test.md";
+    for (const runtime of RUNTIMES) {
+      const base = oneFileCommand(runtime, SUITE, ROOT);
+      const cli = base.arguments.slice(0, base.arguments.indexOf("test"));
+      const planned = oneFileCommand(runtime, plan, ROOT);
+      expect(planned.arguments).toEqual([
+        ...cli,
+        "test",
+        plan,
+        ...(runtime === "deno"
+          ? ["--plugin", at("packages/cli/tests/fixtures/prepared-test-worker.mjs")]
+          : []),
+      ]);
+      expect(oneFileCommand(runtime, inline, ROOT).arguments).toEqual([...cli, "test", inline]);
+      expect(Object.keys(planned.env ?? {}).some((name) => name.startsWith("XMD_EXAMPLE_"))).toBe(
+        false,
+      );
+    }
   });
 
   it("gives every runtime's suite the prepared Deno fixture commands and nothing else of this environment", function* () {

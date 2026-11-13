@@ -26,16 +26,12 @@ import type {
 import { installTestAgentComponents } from "../src/components.ts";
 import { installChildTestAgent, testAgentChildDeclaration } from "../src/child-configuration.ts";
 import { useCommand } from "./command.ts";
-import { cliBase, runCli } from "@executablemd/test-support/launch";
+import { cliBase } from "@executablemd/test-support/launch";
 import type { Json } from "@executablemd/core";
 import { NativeSessionObserver } from "../src/controller.ts";
 import type { NativeSessionReport } from "../src/controller.ts";
 
 const DOC = path.resolve("packages/test-agent/src/SessionConfiguration.test.md");
-
-// The fixture relaunches xmd as a worker, so the run keeps this process's
-// working directory and its whole environment.
-const RUN = { inheritEnv: true, timeout: 120_000 };
 
 /**
  * The trusted `run` profile, as this package can state it.
@@ -165,17 +161,6 @@ describe(
   "Session configuration through TestAgent",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    it("runs configured Sessions and nested declarations through the source CLI and ACPX worker", function* () {
-      const cli = yield* runCli(["test", DOC], RUN).join();
-      if (cli.code !== 0) {
-        throw new Error(
-          `SessionConfiguration CLI exited ${cli.code}\nstdout:\n${cli.stdout}\nstderr:\n${cli.stderr}`,
-        );
-      }
-      expect(cli.stdout).toContain("review deep");
-      expect(cli.stdout).not.toContain("ERROR");
-    });
-
     it("refuses unknown, unsupported and unavailable Session selections before consuming the first stage", function* () {
       const run = yield* runConfiguration(
         new InMemoryStream(),

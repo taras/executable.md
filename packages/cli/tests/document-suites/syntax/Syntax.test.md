@@ -81,10 +81,10 @@ rows read.
 <AssertEquals actual={documented.description} expected="Greets the person a caller names." />
 <AssertEquals actual={documented.as} expected="The rendered greeting." />
 <AssertEquals actual={documented.context} expected="Markdown appended after the greeting." />
-<AssertStringIncludes actual={markdown.stdout} expected="Greets the person a caller names." />
-<AssertStringIncludes actual={markdown.stdout} expected="**`as`:** The rendered greeting." />
-<AssertStringIncludes actual={markdown.stdout} expected="**Body context:** Markdown appended after the greeting." />
-<AssertStringIncludes actual={markdown.stdout} expected="| `name` | `string` | yes | Who to greet |" />
+<Assert expr={markdown.stdout.includes("Greets the person a caller names.")} msg={"The catalog includes Greets the person a caller names."} />
+<Assert expr={markdown.stdout.includes("**`as`:** The rendered greeting.")} msg={"The catalog includes **`as`:** The rendered greeting."} />
+<Assert expr={markdown.stdout.includes("**Body context:** Markdown appended after the greeting.")} msg={"The catalog includes **Body context:** Markdown appended after the greeting."} />
+<Assert expr={markdown.stdout.includes("| `name` | `string` | yes | Who to greet |")} msg={"The catalog includes | `name` | `string` | yes | Who to greet |"} />
 </Test>
 
 <Test name="SM4: an undocumented Markdown component stays discoverable and complete">
@@ -104,7 +104,7 @@ rows read.
 <AssertEquals actual={opaque.inspectability} expected="origin-only" />
 <AssertEquals actual={opaque.props} expected={undefined} />
 <AssertEquals actual={opaque.forms} expected={undefined} />
-<AssertStringIncludes actual={markdown.stdout} expected="The module was not imported" />
+<Assert expr={markdown.stdout.includes("The module was not imported")} msg={"The catalog includes The module was not imported"} />
 <AssertEquals actual={markdown.stdout.includes("declares no individual props\n\n```json\n{}\n```")} expected={false} />
 </Test>
 
@@ -119,8 +119,8 @@ rows read.
 <Test name="SM9: the two formats describe the same components the same way">
 <AssertEquals actual={rendersEveryName} expected={true} />
 <AssertEquals actual={rendersEveryOrigin} expected={true} />
-<AssertStringIncludes actual={markdown.stdout} expected="**Forms:** `<Documented />`, `<Documented>…</Documented>`" />
-<AssertStringIncludes actual={markdown.stdout} expected="**Returns:** text" />
+<Assert expr={markdown.stdout.includes("**Forms:** `<Documented />`, `<Documented>…</Documented>`")} msg={"The catalog includes **Forms:** `<Documented />`, `<Documented>…</Documented>`"} />
+<Assert expr={markdown.stdout.includes("**Returns:** text")} msg={"The catalog includes **Returns:** text"} />
 </Test>
 
 <Test name="SM10: repeated includes select in caller order, and the defaults do not participate">
@@ -132,8 +132,8 @@ rows read.
 <Test name="SM12: the built-in <Json> entry publishes its prose in both formats">
 <AssertEquals actual={jsonEntry.description} expected="Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it." />
 <AssertEquals actual={jsonEntry.as} expected="Optional. Captures the JSON text instead of emitting it." />
-<AssertStringIncludes actual={markdown.stdout} expected="Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it." />
-<AssertStringIncludes actual={markdown.stdout} expected="**`as`:** Optional. Captures the JSON text instead of emitting it." />
+<Assert expr={markdown.stdout.includes("Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it.")} msg={"The catalog includes Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it."} />
+<Assert expr={markdown.stdout.includes("**`as`:** Optional. Captures the JSON text instead of emitting it.")} msg={"The catalog includes **`as`:** Optional. Captures the JSON text instead of emitting it."} />
 </Test>
 
 <Test name="SM11: the built-in category holds the run profile, including <Session>">

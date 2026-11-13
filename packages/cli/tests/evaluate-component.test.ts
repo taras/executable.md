@@ -10,7 +10,7 @@
  * It also fixes the spellings. `text` is the canonical one; `source` is the
  * workflow's alone and is refused here; `program` was never released and is
  * refused everywhere. Those two refusals are rows of the checked-in Markdown
- * suite `document-suites/evaluate/Evaluate.test.md`, which this file runs once.
+ * suite `document-suites/evaluate/Evaluate.test.md`.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -29,7 +29,6 @@ import {
   useOrdinaryGeneratedSelection,
 } from "../src/evaluation-profile.ts";
 import { syntaxSymbols } from "../src/syntax.ts";
-import { runMarkdownTier } from "./support/run-markdown-tier.ts";
 
 const NOTE = "the retained note\n";
 
@@ -181,21 +180,6 @@ describe("Tier FE — the ordinary selection is middleware, and it delegates", (
       return yield* Component.operations.generated;
     });
     expect(empty).toEqual({});
-  });
-});
-
-describe("Tier FE — the one spelling this host accepts", () => {
-  it("runs Evaluate.test.md once under the production run host", function* () {
-    const run = yield* runMarkdownTier(
-      "packages/cli/tests/document-suites/evaluate/Evaluate.test.md",
-    );
-    if (!run.completion.ok) {
-      throw run.completion.error;
-    }
-    expect(run.results.length).toBeGreaterThan(0);
-    for (const result of run.results) {
-      expect(result.status).toBe("pass");
-    }
   });
 });
 

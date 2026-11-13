@@ -116,6 +116,42 @@ describe("the discovered corpus against the whole repository", () => {
 });
 
 describe("the Markdown suites", () => {
+  it("discovers each exact ordinary Markdown suite in the repository", function* () {
+    expect(
+      (yield* listTestFiles(ROOT)).filter(
+        (path) => path.startsWith("packages/") && path.endsWith(".test.md"),
+      ),
+    ).toEqual([
+      "packages/cli/tests/document-suites/evaluate/Evaluate.test.md",
+      "packages/cli/tests/document-suites/inline/Inline.test.md",
+      "packages/cli/tests/document-suites/plan/Plan.test.md",
+      "packages/cli/tests/document-suites/props/Props.test.md",
+      "packages/cli/tests/document-suites/syntax/Syntax.test.md",
+      "packages/cli/tests/document-suites/targets/Targets.test.md",
+      "packages/cli/tests/document-suites/verbose/Verbose.test.md",
+      "packages/test-agent/src/SessionConfiguration.test.md",
+    ]);
+  });
+
+  it("admits only exact registered paths backed by regular files", function* () {
+    const base = yield* useTempDirectory("markdown-registration-");
+    const root = pathToFileURL(`${base}/`);
+    const inline = "packages/cli/tests/document-suites/inline/Inline.test.md";
+    const plan = "packages/cli/tests/document-suites/plan/Plan.test.md";
+    const props = "packages/cli/tests/document-suites/props/Props.test.md";
+    const sibling = "packages/cli/tests/document-suites/inline/Helper.test.md";
+    yield* writeTextFile(new URL("deno.json", root), JSON.stringify({ workspace: [] }));
+    yield* ensureDir(new URL(".", new URL(inline, root)));
+    yield* ensureDir(new URL(`${plan}/`, root));
+    yield* ensureDir(new URL(".", new URL(props, root)));
+    yield* writeTextFile(new URL(inline, root), "");
+    yield* writeTextFile(new URL(sibling, root), "");
+    yield* until(
+      symlink(fileURLToPath(new URL(inline, root)), fileURLToPath(new URL(props, root))),
+    );
+    expect(yield* listTestFiles(root)).toEqual([inline]);
+  });
+
   it("are the admitted regular immediate children of the suite directory and nothing beneath it", function* () {
     const base = yield* useTempDirectory("markdown-discovery-");
     const root = pathToFileURL(`${base}/`);
