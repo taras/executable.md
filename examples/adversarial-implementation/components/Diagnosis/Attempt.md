@@ -24,19 +24,37 @@ returns: {type: object}
 <Let as="record" value={{schema:"diagnosis-attempt.v1",assignment,primarySession:request.session,position:props.position,solver,identities,previous:request.previous ?? null,evidence}} />
 <Dir path={props.directory}><File path="assignment.json"><Json value={record} /></File><File path="inputs.json"><Json value={props.inputs} /></File></Dir>
 <Diagnosis.Schema as="schema" />
+<Let as="submission">
+# Submit a diagnosis result
+
+Read this when preparing the final diagnosis, including a missing-witness result.
+
+For a confirmed cause, cite the captured evidence that distinguishes it. Give a
+regression command, its expected and observed behavior, and a bounded Opus
+handoff. If the evidence leaves multiple causes possible, name the specific
+missing witness and how to obtain it.
+
+Return one JSON object. Keep any progress updates in plain prose.
+
+<Json value={schema.result} />
+</Let>
+<Phase.SubmissionGuide repository={assignment.repository} directory={props.directory} as="guide">{submission}</Phase.SubmissionGuide>
 <Let as="prompt">
-Diagnose the failure at {assignment.revision}. Read the repository instructions. Use the captured evidence and run focused probes in owned scratch space. Join every process you start before replying. Leave source, workflow records, and external systems unchanged.
+Diagnose the failure using the assigned checkout at {assignment.revision}. Read the repository instructions and the owning spec section when supplied. Use the captured evidence and reuse the listed probes where they address the missing witness. Run focused commands in owned scratch space and join them before replying. Keep source, workflow records, and external systems read-only.
+
+<If condition={assignment.spec !== undefined}>Owning spec section: {assignment.spec}</If>
+<If condition={assignment.failingRevision !== undefined}>Failing CI revision: {assignment.failingRevision}. Compare the relevant paths with the assigned checkout before attributing the failure.</If>
+<If condition={assignment.probes?.length > 0}>
+Reusable probes:
+<Json value={assignment.probes} />
+</If>
 
 {assignment.request}
 
 Captured evidence:
 <Json value={props.inputs} />
 
-For a confirmed cause, explain which captured observations distinguish it, cite their paths, describe the regression command with the observed and expected behavior, and give Opus the bounded implementation handoff. When the evidence cannot distinguish the cause, give the specific missing witness and how to obtain it.
-Use this JSON schema.
-<Json value={schema.result} />
-
-Return a single JSON object as your final result. Keep any progress updates in plain prose.
+Report a confirmed cause with supporting evidence or the specific missing witness. Read {guide.path} when preparing that result. Open it earlier only if a reporting requirement affects a concrete diagnostic decision. Keep progress updates in plain prose.
 </Let>
 <If condition={prompt.length > 64000}><Fail message="The diagnostic prompt exceeds 64000 characters. Prepare concise evidence in a fresh attempt." /></If>
 <Let as="catalog" value={null} />
@@ -59,4 +77,7 @@ Return a single JSON object as your final result. Keep any progress updates in p
 </Dir>
 <Ticket.Checkout repository={assignment.repository} as="after" />
 <If condition={after.head !== assignment.revision || !after.clean}><Fail message="The diagnostic checkout changed. Preserve the attempt for reconciliation." /></If>
+<If condition={turn?.state === "reply"}>
+<Phase.SubmissionGuide repository={assignment.repository} directory={props.directory} mode="check">{submission}</Phase.SubmissionGuide>
+</If>
 <Return value={{record,catalog,turn}} />

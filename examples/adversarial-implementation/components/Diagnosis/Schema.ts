@@ -16,6 +16,18 @@ const request = z.strictObject({
     work: text,
     repository: absolute,
     revision,
+    spec: text.optional(),
+    failingRevision: revision.optional(),
+    probes: z
+      .array(
+        z.strictObject({
+          command: text,
+          setup: text.optional(),
+          artifacts: z.array(text).min(1).max(12).optional(),
+        }),
+      )
+      .max(12)
+      .optional(),
     request: text,
   }),
 });

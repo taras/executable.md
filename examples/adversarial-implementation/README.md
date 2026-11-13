@@ -900,9 +900,10 @@ the prompt and spends that preparation stage.
 ## Diagnose a failure
 
 Run a problem-solver phase with the assigned checkout selected by the current
-directory or an enclosing repository scope. Use a clean checkout at the failing
-commit, a new attempt directory outside the checkout and its Git directories,
-and captured evidence such as the first failing output and a passing comparison. On macOS the provider uses `sandbox-exec`. On Linux it
+directory or an enclosing repository scope. Use a clean checkout at the
+assigned revision, a new attempt directory outside the checkout and its Git
+directories, and captured evidence such as the first failing output and a
+passing comparison. On macOS the provider uses `sandbox-exec`. On Linux it
 requires `bwrap` with unprivileged user namespaces and `--disable-userns`
 support. If the sandbox cannot start, the phase holds before any prompt.
 
@@ -911,13 +912,22 @@ Save a request with these fields and replace the example paths and revision.
 ```json
 {
   "role": "problem-solver",
-  "session": "issue-1143",
+  "session": "issue-1146",
   "attempt": "/absolute/path/to/records/diagnosis-1",
   "inputPaths": ["/absolute/path/to/first-failure.log"],
   "assignment": {
-    "work": "#1143",
+    "work": "#1146",
     "repository": "/absolute/path/to/source",
     "revision": "1111111111111111111111111111111111111111",
+    "spec": "specs/test-agent-spec.md#controller-and-worker",
+    "failingRevision": "2222222222222222222222222222222222222222",
+    "probes": [
+      {
+        "setup": "/absolute/path/to/scratch/setup.md",
+        "command": "node /absolute/path/to/scratch/probe.mjs",
+        "artifacts": ["/absolute/path/to/scratch/previous-run.log"]
+      }
+    ],
     "request": "Find which observation distinguishes the cause of this failure."
   }
 }
@@ -930,11 +940,21 @@ xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-impleme
   --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
 
+Use `spec` for the owning section, `failingRevision` for the CI run’s verified
+head, and `probes` for commands the agent can reuse. Each probe can point to a
+setup guide and prior artifacts. The workflow passes these as references. List
+files in `inputPaths` when their captured contents should accompany the
+assignment or support a result. Omit context you do not have.
+
 Fable starts the diagnosis. If its option inspection fails, its model is
 unavailable, or it returns a recognized usage-limit refusal, a fresh assignment
 can try Astra once. Each provider has its own attempt directory and conversation.
 Each diagnostic prompt has a 30-minute deadline.
 An uncertain turn, invalid reply, or failed continuation holds for reconciliation.
+
+The opening prompt points to `submission-guide.md`. Read that guide when preparing
+the result. The workflow checks the saved guide against its fingerprint before
+accepting the reply.
 
 The attempt retains the assignment, evidence snapshots and fingerprints, model
 selection, and provider outcome. A completed turn also leaves its raw reply.
@@ -948,9 +968,9 @@ run through their own entries.
 To add evidence after a saved result, keep the work, repository, revision and
 session, choose a new `attempt`, and set `previous` to the previous returned
 `attempt` path, including its `fable` or `astra` directory. List new evidence
-in `inputPaths`. Earlier snapshots retain their original bytes. The phase checks
-the original model and conversation before prompting and reserves one
-continuation per result. Preserve an interrupted attempt and its original
-receipt for reconciliation. To use an earlier Delivery
-conversation as context, supply its retained records as evidence and leave them
-in place.
+in `inputPaths`. Omitted assignment context carries forward. A different failing
+CI revision needs a fresh assignment. Earlier snapshots retain their original
+bytes. The phase checks the original model and conversation before prompting
+and reserves one continuation per result. Preserve an interrupted attempt and
+its original receipt for reconciliation. To use an earlier Delivery conversation
+as context, supply its retained records as evidence and leave them in place.

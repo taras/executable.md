@@ -19,6 +19,8 @@ returns: {type: object}
 <Ticket.Read path={request.previous + "/assignment.json"} limit={1048576} as="saved" />
 <Parse schema={schema.prior} as="previous">{saved}</Parse>
 <If condition={previous.primarySession !== request.session || previous.assignment.repository !== request.assignment.repository || previous.assignment.revision !== request.assignment.revision || previous.assignment.work !== request.assignment.work}><Fail message="Continue the original diagnostic assignment at its recorded revision and session." /></If>
+<If condition={previous.assignment.failingRevision !== undefined && request.assignment.failingRevision !== undefined && previous.assignment.failingRevision !== request.assignment.failingRevision}><Fail message="The failing revision differs from the original diagnostic assignment. Use a fresh assignment for a different failing revision." /></If>
+<Let as="request" value={{...request,assignment:{...previous.assignment,...request.assignment}}} />
 <Ticket.Read path={request.previous + "/inputs.json"} limit={1048576} as="savedInputs" />
 <Parse schema={schema.inputs} as="inputs">{savedInputs}</Parse>
 <Ticket.Fingerprint inputs={inputs} as="fingerprint" />

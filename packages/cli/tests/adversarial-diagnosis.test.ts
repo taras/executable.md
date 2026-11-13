@@ -41,7 +41,16 @@ function* fixture() {
   const fake = createFakeAcp();
   const store = makeStore();
   let expectedRevision = revision;
-  function run(attempt: string, previous?: string, inputPaths = [evidence]) {
+  function run(
+    attempt: string,
+    previous?: string,
+    inputPaths = [evidence],
+    context: {
+      spec?: string;
+      failingRevision?: string;
+      probes?: { command: string; setup?: string; artifacts?: string[] }[];
+    } = {},
+  ) {
     return scoped(function* () {
       yield* useHostFiles();
       yield* useComponentModuleLoader();
@@ -87,7 +96,7 @@ function* fixture() {
         attempt,
         ...(previous === undefined ? {} : { previous }),
         inputPaths,
-        assignment: { repository, revision, work: "test", request: "Find the cause." },
+        assignment: { repository, revision, work: "test", request: "Find the cause.", ...context },
       };
       const path = join(root, "request.json");
       yield* writeTextFile(path, JSON.stringify(request));
@@ -156,9 +165,49 @@ describe("adversarial problem-solver phase", () => {
     expect(test.fake.prompts).toHaveLength(2);
   });
 
+  it("holds a reply if the submission guide changed during the turn", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const attempt = join(test.root, "changed-guide");
+    const directory = join(attempt, "fable");
+    test.fake.script({
+      held: true,
+      reply: JSON.stringify({
+        outcome: "missing_witness",
+        revision: test.revision,
+        witness: "Worker trace",
+        howToObtain: "Capture it.",
+      }),
+    });
+    const running = yield* spawn(() => test.run(attempt));
+    yield* test.fake.holdingTurns(1);
+    yield* writeTextFile(join(directory, "submission-guide.md"), "Changed during the turn.");
+    test.fake.releaseTurn();
+    expect(JSON.parse(yield* running)).toMatchObject({
+      status: "hold",
+      reason: expect.stringContaining("frozen submission guide changed"),
+    });
+    expect(yield* readTextFile(join(directory, "raw.txt"))).toContain("missing_witness");
+    expect(yield* API.Fs.operations.stat(join(directory, "result.json"))).toMatchObject({
+      exists: false,
+    });
+    expect(test.fake.prompts).toHaveLength(1);
+  });
+
   it("records a cause, continues its original conversation, and refuses changed identity", function* () {
     const test = yield* fixture();
     const first = join(test.root, "first");
+    const context = {
+      spec: "specs/test-agent-spec.md#controller-and-worker",
+      failingRevision: "a".repeat(40),
+      probes: [
+        {
+          command: "node /tmp/fixture-probe.mjs",
+          setup: "/tmp/probe-setup.md",
+          artifacts: ["/tmp/prior-run.log"],
+        },
+      ],
+    };
     offer(test.fake, ["fable", "gpt-6-astra"]);
     test.fake.script({
       reply: JSON.stringify({
@@ -170,10 +219,32 @@ describe("adversarial problem-solver phase", () => {
         handoff: "Repair the case and run the regression.",
       }),
     });
-    expect(JSON.parse(yield* test.run(first))).toMatchObject({ status: "cause" });
+    expect(JSON.parse(yield* test.run(first, undefined, [test.evidence], context))).toMatchObject({
+      status: "cause",
+    });
+    const guidePath = join(first, "fable/submission-guide.md");
+    const prompt = test.fake.prompts[0];
+    expect(prompt).toContain("Owning spec section: " + context.spec);
+    expect(prompt).toContain("Failing CI revision: " + context.failingRevision);
+    expect(prompt).toContain(context.probes[0].command);
+    expect(prompt).toContain(context.probes[0].setup);
+    expect(prompt).toContain(context.probes[0].artifacts[0]);
+    expect(prompt).toContain(guidePath);
+    expect(prompt).not.toContain('"oneOf"');
+    const guide = yield* readTextFile(guidePath);
+    expect(guide).toContain('"oneOf"');
+    expect(guide).toContain('"howToObtain"');
     const original = JSON.parse(yield* readTextFile(join(first, "fable/result.json")));
     expect(original).toMatchObject({ model: "fable", assignment: { solver: { model: "fable" } } });
     expect(original.identity.identity).not.toBeNull();
+    expect(original.assignment.assignment).toMatchObject(context);
+    yield* expectRefusal(
+      test.run(join(test.root, "wrong-failure"), join(first, "fable"), [test.evidence], {
+        failingRevision: "b".repeat(40),
+      }),
+      "failing revision differs",
+    );
+    expect(test.fake.prompts).toHaveLength(1);
 
     const second = join(test.root, "second");
     const newEvidence = join(test.root, "later.log");
@@ -194,6 +265,8 @@ describe("adversarial problem-solver phase", () => {
     });
     const next = JSON.parse(yield* readTextFile(join(second, "fable/result.json")));
     expect(next.identity.identity).toEqual(original.identity.identity);
+    expect(next.assignment.assignment).toMatchObject(context);
+    expect(test.fake.prompts[1]).toContain("Failing CI revision: " + context.failingRevision);
     expect(test.fake.prompts[1]).toContain("failure witness");
     expect(test.fake.prompts[1]).toContain("fresh witness");
     expect(test.fake.prompts[1]).not.toContain("replacement on disk");
@@ -303,6 +376,7 @@ describe("adversarial problem-solver phase", () => {
       },
     });
     expect(test.fake.prompts).toHaveLength(1);
+    expect(test.fake.prompts[0]).toContain(join(attempt, "astra/submission-guide.md"));
     expect(
       test.fake.created.some(
         ({ agentProcessEnv }) => agentProcessEnv?.INITIAL_AGENT_MODE === "agent-full-access",
