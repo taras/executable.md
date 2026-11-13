@@ -40,6 +40,11 @@ returns: {type: object}
 <Parse schema={schema.inputs} as="inputs"><Json value={captured} /></Parse>
 <Ticket.ReserveDecision path={namespace.directory} as="reserved" />
 <If condition={!reserved}><Fail message="The diagnostic attempt is already reserved. Preserve it and reconcile before continuing." /></If>
+<If condition={previous !== null}>
+<Ticket.ReserveDecision path={request.previous + "/continuation"} as="linked" />
+<If condition={!linked}><Fail message="The original diagnostic result already has a reserved continuation. Reconcile it before prompting again." /></If>
+<Dir path={request.previous + "/continuation"}><File path="next.json"><Json value={{attempt:namespace.directory}} /></File></Dir>
+</If>
 <Let as="position" value={previous?.position ?? 0} />
 <Let as="directory" value={namespace.directory + (position === 1 ? "/astra" : "/fable")} />
 <Diagnosis.Dispatch request={request} namespace={namespace} directory={directory} position={position} inputs={inputs} previous={previous} previousModel={previousModel} as="attempt" />

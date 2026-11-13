@@ -945,7 +945,8 @@ To add evidence after a saved result, keep the work, repository, revision and
 session, choose a new `attempt`, and set `previous` to the previous returned
 `attempt` path, including its `fable` or `astra` directory. List new evidence
 in `inputPaths`. Earlier snapshots retain their original bytes. The phase checks
-the original model and conversation before prompting. Preserve any interrupted
-attempt and its original receipt for reconciliation. To use an earlier Delivery
+the original model and conversation before prompting and reserves one
+continuation per result. Preserve an interrupted attempt and its original
+receipt for reconciliation. To use an earlier Delivery
 conversation as context, supply its retained records as evidence and leave them
 in place.

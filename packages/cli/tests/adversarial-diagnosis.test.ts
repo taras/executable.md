@@ -202,6 +202,13 @@ describe("adversarial problem-solver phase", () => {
     });
     yield* expectRefusal(test.run(next, previous), "already reserved");
     yield* expectRefusal(
+      test.run(join(test.root, "duplicate"), previous),
+      "already has a reserved continuation",
+    );
+    expect(JSON.parse(yield* readTextFile(join(previous, "continuation", "next.json")))).toEqual({
+      attempt: next,
+    });
+    yield* expectRefusal(
       test.run(join(test.root, "new"), join(next, "fable")),
       "Reconcile the original diagnostic turn",
     );
@@ -231,6 +238,11 @@ describe("adversarial problem-solver phase", () => {
       },
     });
     expect(test.fake.prompts).toHaveLength(1);
+    expect(
+      test.fake.created.some(
+        ({ agentProcessEnv }) => agentProcessEnv?.INITIAL_AGENT_MODE === "agent-full-access",
+      ),
+    ).toBe(true);
     expect(
       test.fake.ensured
         .map(({ agent }) => agent)

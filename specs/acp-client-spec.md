@@ -805,6 +805,8 @@ On macOS the provider uses `sandbox-exec`. On Linux it uses Bubblewrap with a
 private PID namespace and read-only mounts for those directories. The provider
 checks that the sandbox starts before inspecting model options. Unsupported
 hosts and failed sandbox setup stop dispatch before any agent is started.
+The Codex adapter runs tools under the outer process sandbox. The provider
+selects the adapter mode that avoids applying a second sandbox to those tools.
 
 The profile denies ACP permission requests, supplies no ACP MCP servers and
 uses its sandboxed adapter command for session resolution. A diagnostic

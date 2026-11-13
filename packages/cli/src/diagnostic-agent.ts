@@ -70,6 +70,10 @@ export function diagnosticAgent(
           dependencies.agentProcessEnv === undefined
             ? undefined
             : yield* dependencies.agentProcessEnv(agent, adapters.command(agent));
+        if (agent === "codex") {
+          // Codex cannot apply its own Seatbelt profile inside the macOS process sandbox.
+          return { ...environment, INITIAL_AGENT_MODE: "agent-full-access" };
+        }
         return { ...environment, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
       },
       mcpServers: [],
