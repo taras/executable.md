@@ -42,6 +42,7 @@ import type {
   ChildDeclaration,
   ChildDeclarationChild,
   ChildScenario,
+  ChildInspection,
   OpenChildDeclaration,
   TestAgentChildConfiguration,
 } from "@executablemd/testing";
@@ -56,7 +57,7 @@ import {
 import type { ScenarioDeclaration } from "./components.ts";
 import { TEST_AGENT_PROVIDER } from "./provider.ts";
 
-import { normalizeModels } from "./configuration.ts";
+import { inspectionSchema, normalizeModels } from "./configuration.ts";
 
 const TEST_AGENT = "TestAgent";
 const SCENARIO = "TestAgent.Scenario";
@@ -147,6 +148,15 @@ function open(collect: {
     children: new Map<unknown, ChildDeclarationChild>([[Scenario, declareScenario]]),
     *expand(props: Record<string, Json>): Operation<string> {
       defaultAgent = typeof props.agent === "string" ? props.agent : DEFAULT_TEST_AGENT;
+      let inspection: ChildInspection | undefined;
+      if (props.inspection !== undefined) {
+        const parsed = inspectionSchema.safeParse(props.inspection);
+        if (!parsed.success) {
+          refuse(`<${TEST_AGENT}> has invalid inspection configuration: ${parsed.error.message}`);
+          return "";
+        }
+        inspection = { ...parsed.data, models: normalizeModels(parsed.data.models) };
+      }
       if (yield* hasContent()) {
         const projected = yield* tryContent();
         if (projected.failure !== undefined) {
@@ -158,11 +168,11 @@ function open(collect: {
           );
         }
       }
-      if (scenarios.length === 0 && !malformed) {
+      if (scenarios.length === 0 && inspection === undefined && !malformed) {
         refuse(`<${TEST_AGENT}> configures a child, so it requires at least one <${SCENARIO}>.`);
       }
       if (!malformed) {
-        collect.configure({ kind: "test-agent", defaultAgent, scenarios });
+        collect.configure({ kind: "test-agent", defaultAgent, scenarios, inspection });
       }
       return "";
     },
@@ -290,6 +300,22 @@ export function* installChildTestAgent(
     return partition.provider;
   });
   yield* registerAgentProvider(TEST_AGENT_PROVIDER, factory);
+  const inspection = configuration.inspection;
+  if (inspection !== undefined) {
+    yield* registerAgentProvider("acpx", function* (invocation, launcher) {
+      const explicit = yield* provisionPartition({
+        defaultAgent: invocation.defaultAgent,
+        controller,
+        declarations,
+        workerCommand: [...options.workerCommand],
+        inspection: { agent: configuration.defaultAgent, fixture: inspection },
+      });
+      // deno-lint-ignore require-yield
+      yield* createPartitionedAcpxProvider(function* () {
+        return explicit.provider;
+      })(invocation, launcher);
+    });
+  }
   // A launch under a controlled provider is recorded and answered rather than
   // started. The child has no observer of its own — the outer test's is not
   // reachable from here, which is the isolation working — so what this

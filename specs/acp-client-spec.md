@@ -1977,6 +1977,13 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   registry-dependent work (preparation, ensure/start) and is not held across
   turn consumption or across the wait on a session's own queue. The queues that
   serialize this are internal to the package.
+- **Inspection acquisition.** An embedder can supply
+  `withInspectionAcquisition` through `AcpxProviderDependencies`. It receives
+  the selected agent and a caller-owned operation that it may run once or
+  refuse before running. The operation covers availability and temporary
+  session acquisition. The hook joins acquisition on halt before releasing
+  any route pin. ACPX owns the handle and its release, and reads configuration
+  after the hook returns. Without the hook, ACPX acquires directly.
 - **Permissions.** ACPX permission requests are routed — keyed by the record's
   live ACP session id, refreshed on demand — to the in-flight prompt's scope
   and answered through `Agent.requestPermission`; an ambiguous or unknown

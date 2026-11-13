@@ -161,3 +161,19 @@ export const MODELS_PROPS: PropsSchema = {
     },
   ],
 };
+
+export const inspectionSchema = z
+  .object({
+    models: modelsSchema.nullish(),
+    refuse: z.enum(["open", "close"]).optional(),
+  })
+  .strict();
+
+export const INSPECTION_PROPS: PropsSchema = {
+  type: "object",
+  properties: {
+    models: MODELS_PROPS,
+    refuse: { enum: ["open", "close"] },
+  },
+  additionalProperties: false,
+};

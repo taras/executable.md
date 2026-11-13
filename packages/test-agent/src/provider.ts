@@ -10,10 +10,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Operation } from "effection";
-import { useAcpxProvider } from "@executablemd/acp";
+import { resource, suspend, useScope, withResolvers } from "effection";
+import type { Operation, Scope } from "effection";
+import { createAcpRuntime, useAcpxProvider } from "@executablemd/acp";
 import type {
   AcpAgentRegistry,
+  AcpRuntimeHandle,
+  ProbeCapableRuntime,
   AcpSessionRecord,
   AcpxProvider,
   AcpxProviderDependencies,
@@ -75,6 +78,11 @@ export interface TestAgentProviderOptions {
   /** Which build this partition observes. Its own controlled one. */
   executableObserver?: ExecutableObserver;
   dependencies?: AcpxProviderDependencies;
+  inspection?: {
+    agent: string;
+    refuseClose: boolean;
+    register(): Operation<{ route: string }>;
+  };
   /**
    * The narrower configuration a trusted child Plan host assembled.
    *
@@ -158,6 +166,34 @@ function quoteSegment(segment: string): string {
   return /\s/.test(segment) ? `"${segment}"` : segment;
 }
 
+function wrapInspectionRelease(
+  runtime: ProbeCapableRuntime,
+  isInspectionPinned: () => boolean,
+): ProbeCapableRuntime {
+  const refused = new WeakSet<AcpRuntimeHandle>();
+  const ensureSession = runtime.ensureSession.bind(runtime);
+  const close = runtime.close.bind(runtime);
+  return Object.assign(runtime, {
+    ensureSession(input: Parameters<typeof ensureSession>[0]) {
+      if (!isInspectionPinned()) {
+        return ensureSession(input);
+      }
+      return ensureSession(input).then((handle) => {
+        refused.add(handle);
+        return handle;
+      });
+    },
+    close(input: Parameters<typeof close>[0]) {
+      if (!refused.delete(input.handle)) {
+        return close(input);
+      }
+      return close(input).then(() => {
+        throw new Error("TestAgent inspection refused to close.");
+      });
+    },
+  });
+}
+
 export function* useTestAgentProvider(
   options: TestAgentProviderOptions,
 ): Operation<TestAgentPartition> {
@@ -173,6 +209,57 @@ export function* useTestAgentProvider(
       return options.agents;
     },
   };
+
+  const inspection = options.inspection;
+  let inspectionPinned = false;
+  let inspectionDependencies: AcpxProviderDependencies = {};
+  if (inspection !== undefined) {
+    // Created before the provider so its registrations survive release and retry.
+    const workers = yield* resource<Scope>(function* (provide) {
+      yield* provide(yield* useScope());
+    });
+    const createRuntime = options.dependencies?.createRuntime ?? createAcpRuntime;
+    inspectionDependencies = {
+      createRuntime(runtimeOptions) {
+        if (runtimeOptions.probeAgent !== undefined) {
+          return createRuntime({
+            ...runtimeOptions,
+            agentRegistry: {
+              ...registry,
+              resolve: () => workerAgentCommand(options.workerCommand, options.probeRoute),
+            },
+          });
+        }
+        const runtime = createRuntime(runtimeOptions);
+        return inspection.refuseClose
+          ? wrapInspectionRelease(runtime, () => inspectionPinned)
+          : runtime;
+      },
+      *withInspectionAcquisition(agentName, acquire) {
+        if (agentName !== inspection.agent) {
+          throw new Error(
+            `TestAgent inspection is configured for "${inspection.agent}", not "${agentName}".`,
+          );
+        }
+        yield* routeSlot.withSlot(function* () {
+          const ready = withResolvers<string>();
+          yield* workers.spawn(function* () {
+            const worker = yield* inspection.register();
+            ready.resolve(worker.route);
+            yield* suspend();
+          });
+          pendingRoute = yield* ready.operation;
+          inspectionPinned = true;
+          try {
+            yield* acquire();
+          } finally {
+            inspectionPinned = false;
+            pendingRoute = undefined;
+          }
+        });
+      },
+    };
+  }
 
   // Assembled once and then both used and returned. The provider is created
   // from this exact object, so a trusted host reporting it reports what runs —
@@ -218,6 +305,7 @@ export function* useTestAgentProvider(
     ...(options.dependencies?.createRuntime
       ? { createRuntime: options.dependencies.createRuntime }
       : {}),
+    ...inspectionDependencies,
     ...(planConfiguration === undefined ? {} : planConfiguration.dependencies),
   };
   const provider = yield* useAcpxProvider(

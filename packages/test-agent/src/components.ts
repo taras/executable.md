@@ -43,8 +43,8 @@ import type { ScenarioHandle, ScenarioRecord, TestAgentControllerInternals } fro
 import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
-import { normalizeModels, MODELS_PROPS } from "./configuration.ts";
-import type { ScenarioModels } from "@executablemd/testing";
+import { normalizeModels, INSPECTION_PROPS, MODELS_PROPS } from "./configuration.ts";
+import type { ChildInspection, ScenarioModels } from "@executablemd/testing";
 import { duplicateScenario, missingScenario } from "./child-configuration.ts";
 import {
   TEST_AGENT_CLIENT_NATIVE,
@@ -172,6 +172,7 @@ export function* provisionPartition(options: {
   /** How to re-invoke this host as the agent worker. */
   workerCommand: string[];
   planConfiguration?: { readonly dependencies: AcpxProviderDependencies };
+  inspection?: { agent: string; fixture: ChildInspection };
 }): Operation<BoundaryState> {
   const { defaultAgent, controller, declarations, workerCommand, planConfiguration } = options;
   const scenarios = new Map<string, ScenarioRecord>();
@@ -295,6 +296,7 @@ export function* provisionPartition(options: {
     },
   };
 
+  const inspection = options.inspection;
   const partition = yield* useTestAgentProvider({
     defaultAgent,
     // Two agents, because the two construction routes are two contracts:
@@ -304,6 +306,15 @@ export function* provisionPartition(options: {
     workerCommand,
     probeRoute: controller.probeRoute,
     routeFor,
+    ...(inspection === undefined
+      ? {}
+      : {
+          inspection: {
+            agent: inspection.agent,
+            refuseClose: inspection.fixture.refuse === "close",
+            register: () => controller.useInspection(inspection.fixture),
+          },
+        }),
     // This partition's own, so two boundaries owning "the same" session are
     // owning two sessions and never exclude each other — and so a route
     // one published is not an account the next has to live with.
@@ -339,6 +350,15 @@ export function* TestAgent(props: Record<string, Json>): Operation<unknown> {
       configError(
         "TestAgent",
         "is valid only in an active testing session created by xmd test or useTesting().",
+      ),
+    );
+    return reported.message;
+  }
+  if (props.inspection !== undefined) {
+    const reported = yield* raise(
+      configError(
+        "TestAgent",
+        'inspection is valid only in an <Execution host="run"> declaration.',
       ),
     );
     return reported.message;
@@ -545,7 +565,7 @@ export function* installTestAgentComponents(): Operation<void> {
 
 export const TEST_AGENT_PROPS: PropsSchema = {
   type: "object",
-  properties: { agent: { type: "string" } },
+  properties: { agent: { type: "string" }, inspection: INSPECTION_PROPS },
   additionalProperties: false,
 };
 

@@ -149,9 +149,9 @@ Inside the declaration prefix of one canonical test's `<Execution host="run">`,
 </Execution>
 ```
 
-Here it is child configuration, not a wrapper. It contains one or more direct
-`<TestAgent.Scenario>` children and nothing else, and it may appear once for that
-execution. The `agent` default, scenario props, duplicate and missing mapping
+This declaration may appear once per execution. It accepts direct
+`<TestAgent.Scenario>` children and requires at least one unless it declares
+`inspection`. The `agent` default, scenario props, duplicate and missing mapping
 rules, behavior-document language and source containment are exactly the ones
 above. The scenario source resolves relative to the outer test document; the
 child receives neither that host path nor a way to read outside the admitted
@@ -169,6 +169,31 @@ also declares `<Session>` and installs the other six Agent defaults there. No
 controller, provider factory, middleware or outer TestAgent context crosses the
 boundary. Without this declaration, the child inherits no TestAgent behavior
 from the test that invoked it.
+
+### Inspecting provider options
+
+A child declaration can use `<TestAgent agent="codex" inspection={{models: null}} />`
+to configure temporary Agent option discovery inside an explicit
+`<AgentProvider name="acpx">` invocation. The closed inspection object accepts
+optional `models`, with the same nullable catalog and validation as scenarios,
+and optional `refuse`, whose values are `"open"` and `"close"`. An omitted or
+null catalog exposes no choices. The wrapper form rejects `inspection`.
+
+The fixture belongs to the declaration's agent, even when the explicit
+provider sets a different default. Inspecting another agent fails before
+availability probing. Each inspection starts with fresh catalog selections
+and creates no named conversation or prompt. Named scenarios in the same
+invocation retain their own catalog and behavior.
+
+Open refusal rejects the temporary ACP session creation after availability
+succeeds. Close refusal reports an error after real transport release. The
+explicit provider joins release and retry before expansion can continue
+outside it, so the options may already have been read when the child fails.
+
+The trusted host registers the controlled `acpx` factory only in the
+configured child. Each explicit invocation owns its provider partition and
+worker registrations through teardown. The child's ordinary root provider
+and Plan writer keep their own partitions.
 
 ## Behavior documents
 

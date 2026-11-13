@@ -24,7 +24,7 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { cliBase, runCli } from "@executablemd/test-support/launch";
+import { cliBase, cliRuntime, runCli } from "@executablemd/test-support/launch";
 import { PLAN_WRITER_INSTRUCTIONS, DEFAULT_PLAN_WRITER_ROOT } from "../src/plan-writer-profile.ts";
 import type { PlanWriterObservation } from "../src/plan-writer-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
@@ -547,6 +547,225 @@ const DECLARATION = [
   '<TestAgent.Scenario session="review" src="./agents/review.md" />',
   "</TestAgent>",
 ];
+
+const INSPECTION_MODELS =
+  '{selected:"small",options:[' +
+  '{id:"small",efforts:{selected:"low",options:["low"]}},' +
+  '{id:"sol",efforts:{selected:"medium",options:["medium","high"]}}]}';
+
+const INSPECTION_PROBE = doc(
+  '<AgentProvider name="acpx" defaultAgent="codex">',
+  "",
+  "```js ephemeral eval",
+  'import { Agent } from "@executablemd/core";',
+  'const choices = yield* Agent.operations.options("codex", { model: "sol" });',
+  'if (choices.agent !== "codex" || choices.model?.selected !== "sol" ||',
+  '    choices.model?.options.map((choice) => choice.id).join(",") !== "small,sol" ||',
+  '    choices.effort?.selected !== "medium" ||',
+  '    choices.effort?.options.map((choice) => choice.id).join(",") !== "medium,high") {',
+  '  throw new Error("Unexpected Codex inspection choices");',
+  "}",
+  "```",
+  "",
+  "sol medium",
+  "",
+  "</AgentProvider>",
+  "",
+  "Preflight released.",
+);
+
+function inspectionHost(observe = false): string {
+  const core = new URL("../../core/mod.ts", import.meta.url).href;
+  const api = new URL("../../core/api.ts", import.meta.url).href;
+  const testing = new URL("../../testing/mod.ts", import.meta.url).href;
+  const runtime = new URL("../../runtime/mod.ts", import.meta.url).href;
+  const install = cliRuntime() === "deno" ? "useDataUriCompiler" : "useTempFileCompiler";
+  return doc(
+    `import { Agent, registerComponents, ${install} } from ${JSON.stringify(core)};`,
+    `import { writeTextFile } from ${JSON.stringify(runtime)};`,
+    'import { fileURLToPath } from "node:url";',
+    'const trace = fileURLToPath(new URL("./inspection-events.json", import.meta.url));',
+    `import { Plugin } from ${JSON.stringify(api)};`,
+    `import { ExecutionHost } from ${JSON.stringify(testing)};`,
+    'export default Plugin({ name: "inspection-test-host", *install(request) {',
+    '  if (request.command === "run") {',
+    `    yield* ${install}();`,
+    ...(observe
+      ? [
+          "    const events = [];",
+          "    function* record(event) {",
+          "      events.push(event);",
+          "      yield* writeTextFile(trace, JSON.stringify(events));",
+          "    }",
+          "    yield* Agent.around({ *options(args, next) {",
+          "      const result = yield* next(...args);",
+          '      yield* record({ kind: "options", args, agent: result.agent,',
+          "        model: result.model?.selected, models: result.model?.options.map(({id}) => id),",
+          "        effort: result.effort?.selected, efforts: result.effort?.options.map(({id}) => id) });",
+          "      return result;",
+          "    } });",
+          '    yield* registerComponents([{ name: "AfterInspection", origin: "fixture",',
+          '      props: { type: "object", properties: {}, additionalProperties: false }, *fn() {',
+          '      yield* record({ kind: "following-component" });',
+          '      return "";',
+          "    } }]);",
+        ]
+      : []),
+    "    return;",
+    "  }",
+    "  yield* ExecutionHost.around({ *run([request], next) {",
+    "    const config = request.profile.configuration?.[0];",
+    '    if (config?.kind === "test-agent" && config.inspection) {',
+    "      const { inspection } = config;",
+    "      const models = inspection.models;",
+    "      const effort = models?.options[1]?.efforts;",
+    "      if (!models || models.selected !== models.options[0]?.id || !effort ||",
+    "          ![config, inspection, models, models.options, models.options[1], effort, effort.options]",
+    "            .every(Object.isFrozen)) {",
+    '        throw new Error("Expected detached inspection configuration at the host boundary");',
+    "      }",
+    "    }",
+    "    yield* next(request);",
+    "  } });",
+    "} });",
+  );
+}
+
+describe("TestAgent inspection in a nested run", () => {
+  for (const mode of ["success", "open", "close"]) {
+    it(`observes inspection ${mode} through explicit acpx`, function* () {
+      const success = mode === "success";
+      const refusal = success ? "" : `,refuse:"${mode}"`;
+      const project = yield* useProject({
+        "README.md": doc(
+          `<Test name="inspection ${mode}" timeout="120s">`,
+          '<Execution host="run" target="./preflight.md" as="run">',
+          `<TestAgent agent="codex" inspection={{models:${INSPECTION_MODELS}${refusal}}} />`,
+          '<CollectOutput as="output" />',
+          '<AssertEquals actual={run.kind} expected="settled" />',
+          `<AssertEquals actual={run.result.ok} expected={${success}} />`,
+          `<AssertEquals actual={output.includes("sol medium")} expected={${success}} />`,
+          `<AssertEquals actual={output.includes("Preflight released.")} expected={${success}} />`,
+          ...(success
+            ? []
+            : [
+                `<AssertStringIncludes actual={run.result.error.message} expected="TestAgent inspection refused to ${mode}." />`,
+              ]),
+          "</Execution>",
+          "</Test>",
+        ),
+        "preflight.md": INSPECTION_PROBE.replace(
+          "Preflight released.",
+          "<AfterInspection />\n\nPreflight released.",
+        ),
+        // The temp-file compiler writes .ts under this project, where tsx needs ESM.
+        "package.json": '{"type":"module"}',
+        "inspection-host.mjs": inspectionHost(true),
+        "inspection-events.json": "[]",
+      });
+      const result = yield* runCli(["test", "--plugin", "./inspection-host.mjs", "README.md"], {
+        cwd: project,
+        ...WORKER,
+      }).join();
+      expect(result.stdout + result.stderr).not.toContain("❌");
+      expect(result.code).toBe(0);
+      const events: unknown = JSON.parse(
+        yield* readTextFile(join(project, "inspection-events.json")),
+      );
+      expect(events).toEqual([
+        ...(mode === "open"
+          ? []
+          : [
+              {
+                kind: "options",
+                args: ["codex", { model: "sol" }],
+                agent: "codex",
+                model: "sol",
+                models: ["small", "sol"],
+                effort: "medium",
+                efforts: ["medium", "high"],
+              },
+            ]),
+        ...(success ? [{ kind: "following-component" }] : []),
+      ]);
+    });
+  }
+
+  it("keeps inspection independent of a same-agent named scenario and sibling children", function* () {
+    const namedControl = doc(
+      '<Session name="review" model="named" effort="deep">',
+      '<Prompt text="Review the plan" as="first" />',
+      "</Session>",
+      "",
+      "named result: {first}",
+    );
+    const siblingProbe = INSPECTION_PROBE.replaceAll("small,sol", "tiny,sol").replaceAll(
+      "medium,high",
+      "medium,deep",
+    );
+    const siblingModels = INSPECTION_MODELS.replaceAll("small", "tiny").replaceAll("high", "deep");
+    const project = yield* useProject({
+      "README.md": doc(
+        '<Test name="inspection owns one child" timeout="120s">',
+        '<Execution host="run" target="./named.md" as="named">',
+        `<TestAgent agent="codex" inspection={{models:${INSPECTION_MODELS}}}>`,
+        '<TestAgent.Scenario session="review" src="./agents/review.md" models={{selected:"named",options:[{id:"named",efforts:{selected:"deep",options:["deep"]}}]}} />',
+        "</TestAgent>",
+        '<CollectOutput as="namedOutput" />',
+        "<AssertEquals actual={named.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={namedOutput} expected="sol medium" />',
+        '<AssertStringIncludes actual={namedOutput} expected="reviewed **the plan**" />',
+        "</Execution>",
+        '<Execution host="run" target="./sibling.md" as="sibling">',
+        `<TestAgent agent="codex" inspection={{models:${siblingModels}}} />`,
+        "<AssertEquals actual={sibling.result.ok} expected={true} />",
+        "</Execution>",
+        '<Execution host="run" target="./preflight.md" as="plain">',
+        "<AssertEquals actual={plain.result.ok} expected={false} />",
+        '<AssertStringIncludes actual={plain.result.error.message} expected="AgentProvider" />',
+        "</Execution>",
+        "</Test>",
+      ),
+      "agents/review.md": BEHAVIOR.replace(
+        'as="review"',
+        'as="review" model="named" effort="deep"',
+      ),
+      "preflight.md": INSPECTION_PROBE,
+      "package.json": '{"type":"module"}',
+      "inspection-host.mjs": inspectionHost(),
+      "sibling.md": siblingProbe,
+      "named.md": INSPECTION_PROBE.replace(
+        "</AgentProvider>",
+        `
+${namedControl}
+</AgentProvider>`,
+      ),
+    });
+    const result = yield* runCli(["test", "--plugin", "./inspection-host.mjs", "README.md"], {
+      cwd: project,
+      ...WORKER,
+    }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+  });
+
+  it("refuses an invalid inspection catalog before importing the child", function* () {
+    const project = yield* useProject({
+      "child.md": doc("the child imported its root"),
+      "README.md": doc(
+        '<Test name="malformed inspection">',
+        '<Execution host="run" target="./child.md" as="run">',
+        '<TestAgent inspection={{models:{selected:"missing",options:[{id:"sol"}]}}} />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.code).toBe(1);
+    expect(result.stdout + result.stderr).toContain("model selections must be unique members");
+    expect(result.stdout + result.stderr).not.toContain("the child imported its root");
+  });
+});
 
 describe("deterministic dependencies declared for a nested run", () => {
   it("gives a declared child the agent defaults, its own session and its answers", function* () {

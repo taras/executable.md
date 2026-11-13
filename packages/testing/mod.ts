@@ -87,6 +87,7 @@ export type {
   ChildDeclarationChild,
   ChildScenario,
   ScenarioModels,
+  ChildInspection,
   ScenarioModel,
   ScenarioEfforts,
   OpenChildDeclaration,
