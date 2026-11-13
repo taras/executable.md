@@ -34,9 +34,9 @@ second="$(cat "$second_file")"
 "$bench" type "$second" 'bench-second;'
 "$bench" wait "$first" 'bench-first;'
 "$bench" wait "$second" 'bench-second;'
-"$bench" look "$first" | rg -F 'bench-first;'
-"$bench" look "$second" | rg -F 'bench-second;'
-if rg -F 'bench-second;' ".bench/$first/screen.txt" || rg -F 'bench-first;' ".bench/$second/screen.txt"; then
+"$bench" look "$first" | grep -F 'bench-first;'
+"$bench" look "$second" | grep -F 'bench-second;'
+if grep -F 'bench-second;' ".bench/$first/screen.txt" || grep -F 'bench-first;' ".bench/$second/screen.txt"; then
   exit 1
 fi
 
@@ -45,8 +45,8 @@ if "$bench" wait "$first" 'missing-on-purpose' > "$log" 2>&1; then
   exit 1
 fi
 cat "$log"
-rg -F 'Timed out waiting for "missing-on-purpose"' "$log"
-rg -F 'bench-first;' ".bench/$first/screen.txt"
+grep -F 'Timed out waiting for "missing-on-purpose"' "$log"
+grep -F 'bench-first;' ".bench/$first/screen.txt"
 test -s ".bench/$first/terminal.ansi"
 test -f ".bench/$first/closed.json"
 test ! -e ".bench/$first/endpoint"
@@ -65,5 +65,5 @@ if deno run --allow-all --cached-only --frozen --node-modules-dir=none \
   echo 'Expected the Markdown timeout controls to fail' >&2
   exit 1
 fi
-rg -F 'test timed out after 8 seconds' "$log"
-rg -F 'Timed out waiting for "only-in-draft-1248" in sidekick-composer' "$log"
+grep -F 'test timed out after 8 seconds' "$log"
+grep -F 'Timed out waiting for "only-in-draft-1248" in sidekick-composer' "$log"
