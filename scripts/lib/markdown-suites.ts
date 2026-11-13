@@ -13,5 +13,6 @@ export const DOCUMENT_SUITES: ReadonlyMap<string, DocumentSuite> = new Map([
   ["packages/cli/tests/document-suites/syntax/Syntax.test.md", { shim: "syntax" }],
   ["packages/cli/tests/document-suites/targets/Targets.test.md", {}],
   ["packages/cli/tests/document-suites/verbose/Verbose.test.md", { shim: "verbose" }],
+  ["packages/test-agent/src/NativeSessionLaunch.test.md", { worker: true }],
   ["packages/test-agent/src/SessionConfiguration.test.md", { worker: true, deadline: 120_000 }],
 ]);

@@ -287,23 +287,26 @@ describe("the one-file Markdown commands", () => {
 
   it("uses CLI defaults and the neutral Deno worker plugin for registered documents", function* () {
     const plan = "packages/cli/tests/document-suites/plan/Plan.test.md";
+    const native = "packages/test-agent/src/NativeSessionLaunch.test.md";
     const inline = "packages/cli/tests/document-suites/inline/Inline.test.md";
     for (const runtime of RUNTIMES) {
       const base = oneFileCommand(runtime, SUITE, ROOT);
       const cli = base.arguments.slice(0, base.arguments.indexOf("test"));
-      const planned = oneFileCommand(runtime, plan, ROOT);
-      expect(planned.arguments).toEqual([
-        ...cli,
-        "test",
-        plan,
-        ...(runtime === "deno"
-          ? ["--plugin", at("packages/cli/tests/fixtures/prepared-test-worker.mjs")]
-          : []),
-      ]);
+      for (const worker of [plan, native]) {
+        const launched = oneFileCommand(runtime, worker, ROOT);
+        expect(launched.arguments).toEqual([
+          ...cli,
+          "test",
+          worker,
+          ...(runtime === "deno"
+            ? ["--plugin", at("packages/cli/tests/fixtures/prepared-test-worker.mjs")]
+            : []),
+        ]);
+        expect(
+          Object.keys(launched.env ?? {}).some((name) => name.startsWith("XMD_EXAMPLE_")),
+        ).toBe(false);
+      }
       expect(oneFileCommand(runtime, inline, ROOT).arguments).toEqual([...cli, "test", inline]);
-      expect(Object.keys(planned.env ?? {}).some((name) => name.startsWith("XMD_EXAMPLE_"))).toBe(
-        false,
-      );
     }
   });
 
