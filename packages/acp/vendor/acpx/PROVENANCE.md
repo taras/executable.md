@@ -203,6 +203,20 @@ continuation input and an equal-model replay skip that pass the same
 reconnect regressions (`packages/acp/tests/claude-reconnect.test.ts`) and
 offline vendor verification.
 
+## Verified resume after a Codex executable change (#891)
+
+A retained ACPX record can satisfy an ordinary ensure without opening a client.
+When a held Codex conversation uses a different executable, XMD supplies the
+expected native identity alongside its existing exact ACP loading target. The
+in-process runtime loads the saved record through the current client and checks
+the live response before replaying preferences or exposing a handle. It keeps
+that check for any cold reconnect by the same runtime. The expected identity is
+never written to the record as a new field. The shared runtime refuses this
+input before work because its ensure cannot make that guarantee.
+
+The `XMD verified resume:` seam stays until ACPX can enforce a live native
+identity assertion on an exact retained load, including later reconnects.
+
 ## Released environment seam (#566)
 
 The released runtime snapshots `agentProcessEnv`, delivers it to every child and

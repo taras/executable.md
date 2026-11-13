@@ -5082,7 +5082,9 @@ async function connectAndLoadSession(options) {
 	const client = options.client;
 	assertControlAuthority(options.authority);
 	// strictResume excludes even an unprompted record's -32603 fallback.
-	const sameSessionOnly = requiresSameSession(options);
+	// XMD verified resume: an identity-bearing load never permits replacement.
+	const strictResume = options.strictResume || options.expectedAgentSessionId !== void 0;
+	const sameSessionOnly = strictResume || requiresSameSession(options);
 	const originalSessionId = record.acpSessionId;
 	const originalAgentSessionId = record.agentSessionId;
 	const originalAcpx = cloneSessionAcpxState(record.acpx);
@@ -5108,7 +5110,9 @@ async function connectAndLoadSession(options) {
 		timeoutMs: options.timeoutMs,
 		authority: options.authority,
 		promptRecorded: options.promptRecorded,
-		strictResume: options.strictResume
+		strictResume,
+		// XMD verified resume: read the live response, not the stored assertion.
+		expectedAgentSessionId: options.expectedAgentSessionId
 	});
 	const { resumed, loadError, sessionId, createdFreshSession, pendingAgentSessionId, sessionModels } = loadState;
 	applyReconnectedModelState(record, sessionModels, loadState.configOptionsPresent, loadState.legacyModelMetadataPresent, createdFreshSession);
@@ -5285,6 +5289,10 @@ async function loadRuntimeSession(params, resume) {
 			suppressReplayUpdates: true,
 			...params.authority ? { authority: params.authority } : {}
 		}), params.timeoutMs);
+		// XMD verified resume: omission must not inherit the record's old identity.
+		if (params.expectedAgentSessionId !== void 0 && loadResult.agentSessionId !== params.expectedAgentSessionId) {
+			throw new Error(loadResult.agentSessionId === void 0 ? "the provider did not confirm the retained native conversation" : "the provider reopened a different native conversation");
+		}
 		reconcileAgentSessionId(params.record, loadResult.agentSessionId);
 		applyConfigOptionsToRecord(params.record, loadResult);
 		return {
@@ -5402,6 +5410,8 @@ async function withConnectedSession(options) {
 				record,
 				resumePolicy: options.resumePolicy,
 				strictResume: options.strictResume,
+				// XMD verified resume: apply the same check on cold configuration.
+				expectedAgentSessionId: options.expectedAgentSessionId,
 				replacingMode: options.replacingMode,
 				replacingConfigOption: options.replacingConfigOption,
 				authority: options.authority,

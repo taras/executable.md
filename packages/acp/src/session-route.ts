@@ -76,11 +76,10 @@ export interface AgentSessionRouteV2 {
 /**
  * The exact V3 record, which exists only for `acp-first`.
  *
- * It carries the same fact V2 added, for the other construction. An ACP-first
- * session is named by the provider, and a name the provider issued is resumable
- * only by the build that issued it: the native UI resuming that conversation
- * has to be the same build ACP created it through, and nothing in the identity
- * itself says which one that was.
+ * It carries the same fact V2 added, for the other construction. Native launch
+ * uses the build ACP created the session through. A held Codex conversation
+ * can instead prove continuity from the current build's ACP load response;
+ * this record still describes the original construction.
  *
  * It still says nothing about the conversation. There remains no provider
  * identity, instruction layer or process fact here — an ACP-first route names

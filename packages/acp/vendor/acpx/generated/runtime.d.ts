@@ -75,6 +75,8 @@ type AcpRuntimeEnsureInput = {
    * attaching through another runtime instance.
    */
   resumeSessionId?: string;
+  /** XMD verified resume: require this native assertion from the live load before using its record. */
+  expectedAgentSessionId?: string;
   cwd?: string;
   /**
    * Per-session agent options applied when a fresh ACP session is created.
