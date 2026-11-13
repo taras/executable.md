@@ -1,3 +1,11 @@
+---
+props:
+  run:
+    type: string
+    pattern: '^tmux\.[a-zA-Z0-9]+$'
+required: [run]
+---
+
 # The REPL workbench
 
 This reads one live `xmd repl` invocation and says what is actually on its screen.
@@ -14,73 +22,26 @@ it exits may never be received (effectionx #244) — and a frame lost that way w
 read as a REPL defect rather than as a lost frame. The harness redirects into
 `.bench/<run>/`, and this document reads those paths.
 
-Run it from the worktree root, against a session already started:
+From the assigned worktree, start an interactive run and capture its screen
+and journal. Pass its printed `tmux.…` ID as `--props-run`.
 
-```
-scripts/repl-bench.sh start --size 160x36
-deno task xmd run scripts/repl-workbench.md
-```
-
-Do not pass `-j`/`--journal`. A capture is terminal content, and retaining it would
-put the screen through the pre-persistence secret gate for no benefit.
-
-## Take a frame now
-
-The capture is bound rather than forwarded, so a non-zero exit is data here instead
-of ending the run before the report below can say what went wrong.
-
-```bash exec as="lookRun"
-scripts/repl-bench.sh look report 2>&1
+```sh
+./scripts/repl-bench.sh start --tmux --size 160x36
+read -r run  # Enter the printed tmux run ID.
+./scripts/repl-bench.sh look "$run" report
+./scripts/repl-bench.sh journal "$run"
+deno task xmd run scripts/repl-workbench.md --props-run "$run"
 ```
 
-```bash exec as="journalRun"
-scripts/repl-bench.sh journal 2>&1
-```
+Keep this report outside a retained journal. Its output contains terminal content.
 
 ## Which run this is
 
-<File path=".bench/current" as="currentRaw" />
+<Let as="runDir" value={".bench/" + props.run} />
+<Let as="framePath" value={runDir + "/latest.ansi"} />
+<Let as="journalPath" value={runDir + "/journal.jsonl"} />
 
-```ts eval
-const runId = currentRaw.trim();
-const runDir = `.bench/${runId}`;
-const framePath = `${runDir}/latest.ansi`;
-const metaPath = `${runDir}/meta.env`;
-const journalPath = `${runDir}/journal.jsonl`;
-```
-
-<File path={metaPath} as="metaRaw" />
-
-```ts eval
-// meta.env is shell-quoted key=value, because the darwin journal root contains
-// "Application Support" and the harness has to source it.
-// Two eval rules are load-bearing here. A `ts eval` block is parsed as
-// JavaScript, so a `const meta: Record<string, string>` fails at the colon. And
-// an export snapshots at its declaration, so an object filled in by a later loop
-// publishes as `{}` — anything prose reads has to be complete when it is bound.
-const meta = Object.fromEntries(
-  metaRaw.split("\n")
-    .filter((line) => line.indexOf("=") > 0)
-    .map((line) => {
-      const at = line.indexOf("=");
-      return [line.slice(0, at), line.slice(at + 1).replace(/^"|"$/g, "")];
-    }),
-);
-const size = `${meta.COLUMNS_}x${meta.ROWS_}`;
-const replArgs = meta.REPL_ARGS;
-const homeLabel = meta.HOME_MODE === "yes" ? "a real" : "an isolated";
-// The three sizes the spec gives distinct screens for, and the refusal below them.
-const band = Number(meta.COLUMNS_) < 72 || Number(meta.ROWS_) < 20
-  ? "below the minimum — this is the refusal screen"
-  : Number(meta.COLUMNS_) >= 160 && Number(meta.ROWS_) >= 36
-  ? "full: sidebar, transcript, bindings, footer"
-  : Number(meta.COLUMNS_) >= 120 && Number(meta.ROWS_) >= 30
-  ? "narrower sidebar and inspection column"
-  : "one routed surface, two surface controls, drawer and footer";
-```
-
-Run `{runId}` at **{size}** — {band}. The REPL was started with `{replArgs}`
-and {homeLabel} `HOME`.
+Run `{props.run}`. Its launch details are in `{runDir}/meta.env`.
 
 ## What the screen shows
 
@@ -176,11 +137,11 @@ const journalReport = records.length > 0
 To reproduce a state before capturing it, rather than typing it each time:
 
 ```
-scripts/repl-bench.sh type '# an entry'     # literal text, through the paste path
-scripts/repl-bench.sh send Enter            # named keys: Tab BTab Enter Escape Backspace
-scripts/repl-bench.sh resize 72x20          # a real SIGWINCH
-scripts/repl-bench.sh tape                  # every frame captured, in order
-scripts/repl-bench.sh stop                  # kill this run's private server
+scripts/repl-bench.sh type "$run" '# an entry'     # literal text, through the paste path
+scripts/repl-bench.sh send "$run" Enter            # named keys: Tab BTab Enter Escape Backspace
+scripts/repl-bench.sh resize "$run" 72x20          # a real SIGWINCH
+scripts/repl-bench.sh tape "$run"                  # every frame captured, in order
+scripts/repl-bench.sh stop "$run"                  # kill this run's private server
 ```
 
 `type` goes through tmux's paste buffer, not `send-keys`: tmux's parser eats a

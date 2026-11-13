@@ -755,6 +755,39 @@ removed with its scope.
 BDD syntax such as `describe`, `it`, `beforeEach`, and `beforeAll` is not
 supported. Gherkin syntax such as `Given`, `When`, and `Then` is not supported.
 
+## Real-terminal REPL tests
+
+From a prepared checkout on macOS or Linux, the repository's
+`scripts/repl-bench.sh preflight` drives the Deno CLI in a private Bun PTY. It
+verifies typing and clearing an unsent Sidekick message, checks the exit code,
+and captures the quoted reopen location from the drained terminal output.
+The default size is `160x36`. Each launch writes its revision, dirty status,
+working directory, dimensions, last readable screen, and raw output under
+`.bench/<run>/`.
+
+Select `scripts/repl-bench-plugin.ts` with `xmd test --plugin` to use these
+components in a `<Test>` body:
+
+| Component | Contract |
+| --- | --- |
+| `ReplBench` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd. Optional `columns` and `rows` override the defaults. |
+| `ReplBench.Focus` | `target="sidekick-composer"` focuses the composer through visible controls and waits for its focus marker. |
+| `ReplBench.Type` | `text` is pasted into the focused field, preserving punctuation and line breaks. |
+| `ReplBench.Key` | `key` sends a named key to the current focus. |
+| `ReplBench.Resize` | `columns` and `rows` resize both the PTY and its emulator. |
+| `ReplBench.Region` | The paired `name="sidekick-composer"` or `name="transcript"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
+| `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. `as` binds the unique positive match. `present={false}` requires the selected region to be visible. A `timeout` duration can bound the wait within the test deadline. |
+| `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. |
+
+The bench invocation owns the driver. Failure or cancellation closes the
+child and terminal and keeps the captures. The enclosing test owns the private
+home. With `expectExit={true}`, the body triggers a normal exit and `as` binds
+`{ exitCode, location, resume }` after PTY output drains. `location` is `null`
+when no reopen command is printed. `resume` is available after a clean exit
+with a location. Pass it to a later bench in the same test to reuse the home
+and last terminal size. The later invocation supplies its own contextual cwd.
+A bench stopped by teardown has null exit fields.
+
 ## Repository Runtime Suites
 
 The sections above specify the Executable Markdown testing language. This one
@@ -953,6 +986,10 @@ only to its `Test` step, and keeps that runtime's own preparation unchanged and
 repeated per shard. `green` requires all three job IDs; GitHub collapses a
 matrix into one result behind its ID, so a shard that fails, is cancelled, times
 out, or unexpectedly skips makes that dependency non-success.
+
+The `repl-bench` matrix prepares a checkout with spaces in its path on macOS
+and Linux. It runs preflight, Markdown journeys, and the concurrent-run
+isolation check. `green` requires the matrix result.
 
 Concurrency inside a shard is not enabled.
 

@@ -712,6 +712,7 @@ describe("the CI workflow aggregate", () => {
     for (const job of [
       "lint",
       "test-deno",
+      "repl-bench",
       "jsr",
       "smoke",
       "filesystem-contract",
@@ -776,7 +777,16 @@ describe("the CI workflow aggregate", () => {
   it("rejects an unexpected skip from a job that always runs", function* () {
     const parsed = yield* workflow();
     const commandText = command(green(parsed));
-    const unconditional = ["lint", "test-deno", "jsr", "smoke", "site", "test-node", "test-bun"];
+    const unconditional = [
+      "lint",
+      "test-deno",
+      "repl-bench",
+      "jsr",
+      "smoke",
+      "site",
+      "test-node",
+      "test-bun",
+    ];
 
     for (const occasion of ["push", "pull-request", "repair"] as const) {
       for (const job of unconditional) {
