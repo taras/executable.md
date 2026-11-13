@@ -61,8 +61,7 @@ test ! -e ".bench/$second/endpoint"
 ! kill -0 "$(cat ".bench/$second/pid")" 2>/dev/null
 
 deno run --allow-all --cached-only --frozen --node-modules-dir=none \
-  packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
-  scripts/tests/repl-bench-timeout.md > "$log" 2>&1 &
+  packages/cli/src/deno.ts test packages/cli/tests/repl-bench/timeout-controls.md > "$log" 2>&1 &
 suite_pid=$!
 while kill -0 "$suite_pid" 2>/dev/null; do
   ps -ww -axo pid=,ppid=,command= | awk -v cli="$root/packages/cli/src/deno.ts" '

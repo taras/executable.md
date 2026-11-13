@@ -21,7 +21,7 @@ import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/plugins/", import.meta.url));
 const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
@@ -567,5 +567,100 @@ describe("PC8 — an Api built under the bare public name intercepts nothing", (
       expect(run.stdout).toContain("document body");
       expect(run.stdout).not.toContain("INTERCEPTED");
     });
+  });
+});
+
+const PACKAGE_TEST = '<Test name="package profile">\n<Stamp />\n</Test>\n';
+const PLAIN_TEST = '<Test name="plain document">\nplain test body\n</Test>\n';
+
+function testPlugin(specifier: string): string {
+  return JSON.stringify({ test: { plugins: [specifier] } });
+}
+
+describe("package test plugins", () => {
+  it("resolves the same package plugin for one file and directory discovery", function* () {
+    yield* useWorkspace(
+      {
+        "a/package.json": "{}",
+        "a/xmd.json": testPlugin("./profile.mjs"),
+        "a/profile.mjs": `export { default } from ${JSON.stringify(pathToFileURL(fixture("declaring.mjs")).href)};\n`,
+        "a/nested/example.test.md": PACKAGE_TEST,
+        "b/package.json": "{}",
+        "b/xmd.json": testPlugin(fixture("wrapper-one.mjs")),
+        "b/example.test.md": PLAIN_TEST,
+        "c/package.json": "{}",
+        "c/example.test.md": PLAIN_TEST,
+        "c/leak-check.test.md": '<Test name="component isolation"><Stamp /></Test>\n',
+        "xmd.json": testPlugin("./must-not-load.mjs"),
+      },
+      function* (dir) {
+        const file = yield* runCli(["test", "a/nested/example.test.md"], { cwd: dir }).expect();
+        expect(file.stdout).toContain("stamped by the selected Plugin");
+
+        const directory = yield* runCli(["test", "."], { cwd: dir }).join();
+        expect(directory.code).toBe(1);
+        expect(directory.stdout.match(/stamped by the selected Plugin/g)).toHaveLength(1);
+        expect(directory.stdout.match(/one open/g)).toHaveLength(1);
+        expect(directory.stdout.match(/one close/g)).toHaveLength(1);
+        expect(directory.stderr).toContain("c/leak-check.test.md: tests failed:");
+        expect(directory.stderr).toContain("1 of 4 documents failed");
+        expect(directory.stderr).not.toContain("must-not-load.mjs");
+      },
+    );
+  });
+
+  it("appends explicit plugins resolved from the invocation directory", function* () {
+    yield* useWorkspace(
+      {
+        "suite/xmd.json": testPlugin("./first.mjs"),
+        "suite/first.mjs": renamedPlugin("configured-first", "configured-first"),
+        "explicit.mjs": renamedPlugin("explicit-last", "explicit-last"),
+        "suite/example.test.md": PLAIN_TEST,
+      },
+      function* (dir) {
+        const result = yield* runCli(["test", "suite", "--plugin", "./explicit.mjs"], {
+          cwd: dir,
+        }).expect();
+        expect(
+          result.stderr.split("\n").filter((line) => line.includes(": installed for ")),
+        ).toEqual(["configured-first: installed for test", "explicit-last: installed for test"]);
+        const duplicate = yield* runCli(
+          ["test", "suite/example.test.md", "--plugin=./suite/first.mjs"],
+          { cwd: dir },
+        ).join();
+        expect(duplicate.code).toBe(1);
+        expect(duplicate.stderr).toContain("two selected Plugins are named configured-first");
+        expect(duplicate.stderr).not.toContain("installed for test");
+      },
+    );
+  });
+
+  it("reports configuration and module failures before document execution", function* () {
+    yield* useWorkspace(
+      {
+        "a/xmd.json": '{"test":{"plugins":[42]}}',
+        "a/example.test.md": PLAIN_TEST,
+        "b/xmd.json": testPlugin("./missing.mjs"),
+        "b/example.test.md": PLAIN_TEST,
+        "c/xmd.json": "{}",
+        "c/example.test.md": PLAIN_TEST,
+        "explicit.mjs": renamedPlugin("explicit", "explicit"),
+      },
+      function* (dir) {
+        const malformed = yield* runCli(["test", "a/example.test.md", "--plugin=./explicit.mjs"], {
+          cwd: dir,
+        }).join();
+        expect(malformed.code).toBe(1);
+        expect(malformed.stderr).toContain(join("a", "xmd.json"));
+        expect(malformed.stderr).not.toContain("explicit: loaded");
+
+        const directory = yield* runCli(["test"], { cwd: dir }).join();
+        expect(directory.code).toBe(1);
+        expect(directory.stderr).toContain(join("b", "xmd.json"));
+        expect(directory.stderr).toContain("./missing.mjs");
+        expect(directory.stderr).toContain("2 of 3 documents failed");
+        expect(directory.stdout).toContain("plain test body");
+      },
+    );
   });
 });

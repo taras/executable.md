@@ -253,6 +253,43 @@ begins with `-`. Options after `--` are not inspected. `--journal` writes one
 trace for one document, so a directory target rejects it before any document
 runs.
 
+### Package test plugins
+
+Declare the plugins a package's Markdown tests use in its `xmd.json`:
+
+```json
+{
+  "test": {
+    "plugins": ["./tests/support/test-plugin.mjs"]
+  }
+}
+```
+
+`xmd test` starts at the test document's directory and searches upward for
+the nearest `xmd.json`. It checks the directory containing the nearest
+`package.json` and stops there. Without a package manifest the search ends
+at the filesystem root. An explicit symlink to a test uses the resolved
+document's directory. A nearer config replaces the whole selection, including
+when it declares no plugins. The invocation directory and directory target
+do not affect which config is selected.
+
+The CLI reads and validates the selected config before loading any Plugin for
+that document. Paths beginning with `./` or `../`, and bare installed package
+specifiers, resolve from the config directory. Absolute local paths and
+`file:` URLs use the same rules as `--plugin`. Explicit flags append in argv
+order and resolve from the invocation directory. Duplicate Plugin names
+refuse the document before installation. A malformed config or a configured
+module load failure names the config path. Plugin modules are trusted code
+that execute with the host's permissions.
+
+Each test document owns a fresh Plugin installation scope, including a
+directory run spanning several packages. Install-time resources,
+registrations and middleware end before the next document starts. Module
+imports follow the host's ordinary module cache. A selection or installation
+failure is reported for that document, and directory execution continues.
+This lookup belongs to `xmd test`. Other commands and `REPL.Test` use their
+own Plugin selections.
+
 ### Tests requested from the REPL
 
 `REPL.Test` uses the same directory discovery convention and real per-document
@@ -766,8 +803,13 @@ The default size is `160x36`. Each launch writes its revision, dirty status,
 working directory, dimensions, last readable screen, and raw output under
 `.bench/<run>/`.
 
-Select `scripts/repl-bench-plugin.ts` with `xmd test --plugin` to use these
-components in a `<Test>` body:
+Run `xmd test packages/cli/tests/repl-bench` from the repository root to
+discover the acceptance documents, or pass the path to a single
+`*.test.md` document. Both use the Plugin in `packages/cli/xmd.json`.
+The shell harness selects `timeout-controls.md` directly. Its intentional
+failures stay outside the default discovery pattern.
+
+The Plugin supplies these components in a `<Test>` body:
 
 | Component | Contract |
 | --- | --- |
@@ -1041,8 +1083,10 @@ matrix into one result behind its ID, so a shard that fails, is cancelled, times
 out, or unexpectedly skips makes that dependency non-success.
 
 The `repl-bench` matrix prepares a checkout with spaces in its path on macOS
-and Linux. It runs preflight, Markdown journeys, and the concurrent-run
-isolation check. `green` requires the matrix result.
+and Linux. It runs preflight, discovers the Markdown journeys under
+`packages/cli/tests/repl-bench`, and runs the concurrent-run isolation check.
+This matrix owns those Markdown journeys outside the weighted runtime corpus.
+`green` requires the matrix result.
 
 Concurrency inside a shard is not enabled.
 
