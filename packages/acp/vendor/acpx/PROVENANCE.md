@@ -90,6 +90,15 @@ released implementation. They cover cold prompt and control refusal through
 aliases, replay of saved settings, independent untargeted fallback, explicit
 fresh preparation and admission during active work.
 
+## Built-in session command keys
+
+XMD derives session keys and checks retained workflow placement using the
+registry's command string. The `XMD retained command:` patch keeps the ACPX
+0.21.1 command spellings for Pi, Codex, Claude, Kilo Code, Mux and OpenCode in
+the embedded registry. The separately installed ACPX CLI uses its 0.22.0
+defaults. Remove this patch when XMD can find and reopen retained sessions
+across changes to those command spellings.
+
 ## Selected Prompt failure facts (#1039)
 
 The released normalizer extracts protocol error code/message and `data.details`,

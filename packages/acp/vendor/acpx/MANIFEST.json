@@ -9,7 +9,8 @@
     "generated/runtime.d.ts",
     "generated/ipc-CQUNQ8QQ.js",
     "generated/queue-owner-runtime-ucHvXJ33.js",
-    "generated/session-options-D9KL7-d8.d.ts"
+    "generated/session-options-D9KL7-d8.d.ts",
+    "generated/agent-registry-CxpAF3nI.js"
   ],
   "packagingAdapted": [
     "generated/agent-registry-CxpAF3nI.js",
@@ -31,12 +32,12 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "d04acce10c455590570327d35a363d650c97e7373ad8eb57e1c7243031faa3ff"
+      "sha256": "1c1a19ac4d8765d90644a8a4a45013620b8204b37bf6967393778fbbe5e531b4"
     },
     {
       "path": "generated/agent-registry-CxpAF3nI.js",
       "kind": "generated",
-      "sha256": "8f906c78cf5aa9bbec9836a1748c9bf0dc84344f2fd13e036384cef08ed43916"
+      "sha256": "d8d05b3760497bbf391fb2e42a02addc799838af45bd2843833f7ec545a1fbef"
     },
     {
       "path": "generated/agent-registry.d.ts",

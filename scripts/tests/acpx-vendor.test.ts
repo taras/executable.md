@@ -41,6 +41,7 @@ const SEAMS: readonly string[] = [
   "XMD workflow role controls:",
   "XMD exact-model replay:",
   "XMD verified resume:",
+  "XMD retained command:",
 ];
 
 /** How far an introduced line may sit from one that names the seam. */

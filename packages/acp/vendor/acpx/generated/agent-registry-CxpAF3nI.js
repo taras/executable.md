@@ -373,12 +373,8 @@ const ACP_ADAPTER_PACKAGE_RANGES = {
 const AGENT_DEFINITIONS = {
 	pi: {
 		name: "Pi",
-		argv: [
-			"npx",
-			`--package=pi-acp@${ACP_ADAPTER_PACKAGE_RANGES.pi}`,
-			"--",
-			"pi-acp"
-		],
+		// XMD retained command: preserve the built-in command used in saved session keys.
+		argv: ["npx", `pi-acp@${ACP_ADAPTER_PACKAGE_RANGES.pi}`],
 		installedArgv: ["pi-acp"],
 		requiredCommands: ["pi"],
 		package: {
@@ -393,37 +389,37 @@ const AGENT_DEFINITIONS = {
 	},
 	codex: {
 		name: "Codex",
+		// XMD retained command: preserve the built-in command used in saved session keys.
 		argv: [
 			"npx",
 			"-y",
-			`--package=@agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex}`,
-			"--",
-			"codex-acp"
+			`@agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex}`
 		],
 		installedArgv: ["codex-acp"],
 		package: {
 			packageName: "@agentclientprotocol/codex-acp",
 			packageRange: ACP_ADAPTER_PACKAGE_RANGES.codex,
 			preferredBinName: "codex-acp",
-			legacyFallbackCommands: [`npx -y @agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex}`]
+			// XMD retained command: also recognize the 0.22.0 stock spelling.
+			legacyFallbackCommands: [`npx -y --package=@agentclientprotocol/codex-acp@${ACP_ADAPTER_PACKAGE_RANGES.codex} -- codex-acp`]
 		},
 		packageExecFallback: true
 	},
 	claude: {
 		name: "Claude Code",
+		// XMD retained command: preserve the built-in command used in saved session keys.
 		argv: [
 			"npx",
 			"-y",
-			`--package=@agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`,
-			"--",
-			"claude-agent-acp"
+			`@agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`
 		],
 		installedArgv: ["claude-agent-acp"],
 		package: {
 			packageName: "@agentclientprotocol/claude-agent-acp",
 			packageRange: ACP_ADAPTER_PACKAGE_RANGES.claude,
 			preferredBinName: "claude-agent-acp",
-			legacyFallbackCommands: [`npx -y @agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`, `npm exec @agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`]
+			// XMD retained command: also recognize the 0.22.0 stock spelling.
+			legacyFallbackCommands: [`npx -y --package=@agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude} -- claude-agent-acp`, `npm exec @agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_PACKAGE_RANGES.claude}`]
 		},
 		packageExecFallback: true
 	},
@@ -507,12 +503,11 @@ const AGENT_DEFINITIONS = {
 	},
 	kilocode: {
 		name: "Kilo Code",
+		// XMD retained command: preserve the built-in command used in saved session keys.
 		argv: [
 			"npx",
 			"-y",
-			"--package=@kilocode/cli",
-			"--",
-			"kilo",
+			"@kilocode/cli",
 			"acp"
 		],
 		installedArgv: ["kilo", "acp"]
@@ -531,12 +526,11 @@ const AGENT_DEFINITIONS = {
 	},
 	mux: {
 		name: "Mux",
+		// XMD retained command: preserve the built-in command used in saved session keys.
 		argv: [
 			"npx",
 			"-y",
-			`--package=mux@${ACP_ADAPTER_PACKAGE_RANGES.mux}`,
-			"--",
-			"mux",
+			`mux@${ACP_ADAPTER_PACKAGE_RANGES.mux}`,
 			"acp"
 		]
 	},
@@ -550,12 +544,11 @@ const AGENT_DEFINITIONS = {
 	},
 	opencode: {
 		name: "OpenCode",
+		// XMD retained command: preserve the built-in command used in saved session keys.
 		argv: [
 			"npx",
 			"-y",
-			"--package=opencode-ai",
-			"--",
-			"opencode",
+			"opencode-ai",
 			"acp"
 		],
 		installedArgv: ["opencode", "acp"]
