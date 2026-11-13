@@ -46,7 +46,11 @@ import { fileURLToPath } from "node:url";
 import { ensure, Err, Ok, race, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type { AgentSessionOwnershipAdministration } from "@executablemd/runtime";
-import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sidekick/dispatch.ts";
+import {
+  createSidekickAdmission,
+  SidekickRecoveryCurrent,
+  useSidekickDispatch,
+} from "../src/repl/sidekick/dispatch.ts";
 import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/dispatch.ts";
 import type { SidekickOwner } from "../src/repl/sidekick/owner.ts";
 import type { PairedChatStorage } from "../src/repl/sidekick/repository.ts";
@@ -4277,10 +4281,14 @@ describe("1151 — cold ordinary Send after a retained human Stop", () => {
       expect(held.fake.prompts).toHaveLength(prompts);
       expect(cold.dispatch.queue.held?.kind).toBe("stopped");
       held.fake.script({ reply: "<Output>The next step.</Output>" });
-      const next = yield* cold.dispatch.send(
-        "Propose the next step from the counted result.",
-        { from: "composer", message: 1, draft: 0 },
+      const next = yield* SidekickRecoveryCurrent.with(
         () => true,
+        () =>
+          cold.dispatch.send("Propose the next step from the counted result.", {
+            from: "composer",
+            message: 1,
+            draft: 0,
+          }),
       );
       if (mode === "clean") {
         if (!next.ok) {
