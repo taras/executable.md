@@ -53,6 +53,7 @@ const wait = z.object({
   text: z.string().min(1),
   timeout: z.string().optional(),
   at: point.optional(),
+  row: z.int().nonnegative().optional(),
   present: z.boolean().optional(),
   bold: z.boolean().optional(),
 });
@@ -371,7 +372,7 @@ const registrations = [
       });
       return point.nullable().parse(result);
     },
-    { text: string, timeout: string, at: cell, present: boolean, bold: boolean },
+    { text: string, timeout: string, at: cell, row: integer, present: boolean, bold: boolean },
     ["text"],
   ),
 ];

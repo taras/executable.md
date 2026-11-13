@@ -223,6 +223,7 @@ export function useDriver(options: Launch) {
         text,
         region,
         at,
+        row,
         present = true,
         unique = false,
         bold,
@@ -230,7 +231,11 @@ export function useDriver(options: Launch) {
       } = query;
       const label =
         `${present ? "" : "absence of "}${JSON.stringify(text)} in ${region ?? "viewport"}` +
-        (at === undefined ? "" : ` at row ${at.row}, column ${at.column}`);
+        (at === undefined
+          ? row === undefined
+            ? ""
+            : ` at row ${row}`
+          : ` at row ${at.row}, column ${at.column}`);
       return wait(
         label,
         (frame) => {
@@ -240,6 +245,7 @@ export function useDriver(options: Launch) {
           }
           const hits = [...frame.matches(text, box)].filter(
             (hit) =>
+              (row === undefined || row === hit.row) &&
               (at === undefined || (at.row === hit.row && at.column === hit.column)) &&
               (bold === undefined || frame.bold(hit) === bold),
           );
