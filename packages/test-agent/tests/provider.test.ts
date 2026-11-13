@@ -15,7 +15,11 @@ import { cliBase } from "@executablemd/test-support/launch";
 import { readAgentOptions } from "../../acp/src/session-configuration.ts";
 import { configOptions } from "../src/configuration.ts";
 import { useTestAgentController } from "../src/controller.ts";
-import { useTestAgentProvider, workerAgentCommand } from "../src/provider.ts";
+import {
+  TEST_AGENT_CLIENT_NATIVE,
+  useTestAgentProvider,
+  workerAgentCommand,
+} from "../src/provider.ts";
 import { createDeterministicSessionCoordinator } from "../src/session-coordinator.ts";
 import { deriveSessionKey } from "../../acp/src/session-key.ts";
 import { createFakeRuntime, useFlatWorld } from "../../acp/tests/helpers.ts";
@@ -193,7 +197,75 @@ describe("inspection acquisition", () => {
     expect(harness.ensureCalls.length).toBe(2);
   });
 
+  it("checks availability before acquiring a temporary session for the client-native agent", function* () {
+    const agent = TEST_AGENT_CLIENT_NATIVE;
+    const harness = createFakeRuntime();
+    const probeCommands: (string | string[])[] = [];
+    harness.doctorReports.push(
+      { ok: false, message: "availability deliberately refused" },
+      { ok: true, message: "available" },
+    );
+    yield* useFlatWorld("/work");
+    const { provider } = yield* useTestAgentProvider({
+      defaultAgent: agent,
+      agents: [agent],
+      workerCommand,
+      probeRoute: PROBE,
+      // deno-lint-ignore require-yield
+      *routeFor() {
+        throw new Error("inspection used a named route");
+      },
+      inspection: { ...inspection, agent },
+      dependencies: {
+        createRuntime(options) {
+          const runtime = harness.create(options);
+          if (options.probeAgent === undefined) {
+            return runtime;
+          }
+          return {
+            ...runtime,
+            doctor() {
+              probeCommands.push(options.agentRegistry.resolve(agent));
+              return runtime.doctor();
+            },
+          };
+        },
+      },
+    });
+
+    expect(yield* provider.agent(agent)).toBe(agent);
+    expect(harness.doctorCalls).toBe(0);
+
+    let failure: unknown;
+    try {
+      yield* provider.options(agent);
+    } catch (error) {
+      failure = error;
+    }
+    const probeCommand = workerAgentCommand(workerCommand, PROBE);
+    expect(String(failure)).toContain("availability deliberately refused");
+    expect(probeCommands).toEqual([probeCommand]);
+    expect(harness.ensureCalls).toEqual([]);
+    expect(harness.closeCalls).toEqual([]);
+    expect(harness.turns).toEqual([]);
+
+    harness.activity = (activity) => {
+      if (activity === "ensure") {
+        expect(harness.doctorCalls).toBe(2);
+      }
+    };
+    expect((yield* provider.options(agent)).agent).toBe(agent);
+    expect(probeCommands).toEqual([probeCommand, probeCommand]);
+    expect(harness.ensureCalls.length).toBe(1);
+    expect(harness.ensureCalls[0].sessionKey.startsWith("xmd:inspect:")).toBe(true);
+    expect(harness.closeCalls.map(({ sessionKey }) => sessionKey)).toEqual([
+      harness.ensureCalls[0].sessionKey,
+    ]);
+    expect(harness.turns).toEqual([]);
+  });
+
   it("binds the disposable probe independently and joins its pending cleanup on halt", function* () {
+    const agent = TEST_AGENT_CLIENT_NATIVE;
     const harness = createFakeRuntime();
     const probing = withResolvers<void>();
     const lookup = withResolvers<void>();
@@ -208,12 +280,12 @@ describe("inspection acquisition", () => {
     yield* scoped(function* () {
       const scope = yield* useScope();
       const { provider, dependencies } = yield* useTestAgentProvider({
-        defaultAgent: "test",
-        agents: ["test"],
+        defaultAgent: agent,
+        agents: [agent],
         workerCommand,
         probeRoute: PROBE,
         routeFor,
-        inspection,
+        inspection: { ...inspection, agent },
         dependencies: {
           createRuntime(options) {
             const runtime = harness.create(options);
@@ -226,7 +298,7 @@ describe("inspection acquisition", () => {
                 probing.resolve();
                 return scope.run(function* () {
                   yield* lookup.operation;
-                  command = options.agentRegistry.resolve("test");
+                  command = options.agentRegistry.resolve(agent);
                   const report = yield* until(runtime.doctor());
                   closing.resolve();
                   yield* cleanup.operation;
@@ -245,7 +317,7 @@ describe("inspection acquisition", () => {
       yield* probing.operation;
       const competing = yield* spawn(function* () {
         attempted.resolve();
-        yield* hook({ agentName: "test", session: "named", cwd: "/work" }, function* () {
+        yield* hook({ agentName: agent, session: "named", cwd: "/work" }, function* () {
           waiter.resolve();
           yield* release.operation;
         });
@@ -256,12 +328,15 @@ describe("inspection acquisition", () => {
         haltFinished = true;
       });
       expect(haltFinished).toBe(false);
-      expect(dependencies.agentRegistry?.resolve("test")).toBe(
+      expect(dependencies.agentRegistry?.resolve(agent)).toBe(
         workerAgentCommand(workerCommand, INSPECTION),
       );
       lookup.resolve();
       yield* closing.operation;
       expect(haltFinished).toBe(false);
+      expect(dependencies.agentRegistry?.resolve(agent)).toBe(
+        workerAgentCommand(workerCommand, INSPECTION),
+      );
       cleanup.resolve();
       release.resolve();
       yield* halting;

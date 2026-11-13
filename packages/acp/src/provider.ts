@@ -1610,7 +1610,7 @@ function* useAcpxProviderState(
     releasedHandle(session);
   }
 
-  function* resolveAgent(name: string | undefined, joinProbe = false): Operation<string> {
+  function* resolveAgent(name: string | undefined, routedInspection = false): Operation<string> {
     const selected = name ?? providerOptions.defaultAgent;
     // Before the probe, because the probe spawns this agent's command: a host
     // that materializes its own adapter has to have done so by now, and a
@@ -1628,10 +1628,11 @@ function* useAcpxProviderState(
     // session may not talk to. Nothing on that path needs the answer: a
     // client-native session is created by a native process, and where ACP does
     // serve one, the establishment itself reports being unable to.
-    if (!validatedAgents.has(selected) && !boundSessions(selected)) {
+    // Routed inspection acquires its own temporary session without a bound build.
+    if (!validatedAgents.has(selected) && (routedInspection || !boundSessions(selected))) {
       const base = yield* runtimeOptions(selected);
       const probe = createRuntime({ ...base, probeAgent: selected });
-      const report = joinProbe
+      const report = routedInspection
         ? yield* scoped(function* () {
             let pending: ReturnType<typeof probe.doctor> | undefined;
             yield* ensure(function* () {
