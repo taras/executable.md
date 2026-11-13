@@ -3,6 +3,7 @@ import { gitRoot } from "@executablemd/git/api";
 import { cwd, realpath } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { z } from "zod";
+import { retainedVerdict } from "../Delivery/observation.ts";
 
 export const props = {
   type: "object",
@@ -15,6 +16,12 @@ const input = z.strictObject({ root: z.string().min(1) });
 
 export default function* Checkout(value: unknown): Operation<string | null> {
   const { root } = input.parse(value);
+  return yield* retainedVerdict("entry-checkout-verdict", z.string().nullable(), () =>
+    observe(root),
+  );
+}
+
+function* observe(root: string): Operation<string | null> {
   const expected = yield* realpath(root);
   if (expected === undefined) {
     throw new Error("The assigned Git checkout is no longer available: " + root);

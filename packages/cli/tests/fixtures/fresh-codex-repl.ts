@@ -1,9 +1,12 @@
-import { exists, ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { exists, ensureDir, readTextFile, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import { Component } from "@executablemd/core/api";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import { GitQuery } from "@executablemd/git/api";
 import { useDenoComponentModuleLoader } from "@executablemd/core/host/deno";
 import { Permissions, realpath } from "@executablemd/runtime";
 import { expect } from "@executablemd/test-support/expect";
-import { main, spawn, withResolvers } from "effection";
+import { ensure, main, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { join } from "node:path";
 import process from "node:process";
@@ -13,6 +16,8 @@ import { resolveAgentStack } from "../../src/agent-stack.ts";
 import { denoReplEntry } from "../../src/deno-repositories.ts";
 import { installPlugins } from "../../src/plugin-host.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
+import { initialState } from "../../src/repl/application.ts";
+import { encodeLocation } from "../../src/repl/route.ts";
 import { useReplLiveScreen } from "../../src/repl/live-screen.ts";
 import { runReplProgram } from "../../src/repl/program.ts";
 import type { HeadlessReplRoot } from "../../src/repl/program.ts";
@@ -54,58 +59,109 @@ function* events() {
     .map((line) => eventSchema.parse(JSON.parse(line)));
 }
 
-function* withRepl(body: (root: Parameters<HeadlessReplRoot["ready"]>[0]) => Operation<void>) {
-  const host = yield* useMountedHost({
-    projectCwd: repository,
-    dataRoot: join(root, "repl"),
-    entryInstallation: denoReplEntry(
-      { runtime: "source", platform: "unix", execPath: process.execPath },
-      join(root, "managed"),
-    ),
-  });
-  yield* Permissions.around({
-    files: ([operation], next) => operation === "absolute" || next(operation),
-  });
-  yield* usePosixSidekickTransport(process.platform);
-  const stack = value(
-    yield* resolveAgentStack(
-      {
-        agentProvider: "acpx",
-        defaultAgent: "codex",
-        approveAll: false,
-        approveReads: false,
-        denyAll: false,
-      },
-      useMachineSessions(),
-    ),
-  );
-  const plugins = yield* installPlugins([BUNDLED_PLUGIN], { command: "repl", args: [] });
-  const view = yield* useReplLiveScreen();
-  const ready = withResolvers<Parameters<HeadlessReplRoot["ready"]>[0]>();
-  const task = yield* spawn(function* () {
-    const profile = yield* assembleReplProfile(
-      { ...stack, adapters: createEmbeddedAdapters(join(root, "adapters")) },
-      plugins,
-      { includes: [join(example, "components")] },
-    );
-    value(
-      yield* runReplProgram({
-        profile,
-        root: host.root,
-        headless: {
-          view,
-          *ready(root) {
-            ready.resolve(root);
-          },
+type ReplRoot = Parameters<HeadlessReplRoot["ready"]>[0];
+
+function* within<T>(operation: Operation<T>): Operation<T> {
+  return yield* race([
+    operation,
+    (function* () {
+      yield* sleep(30000);
+      throw new Error("The unfinished launch did not reach its expected boundary.");
+    })(),
+  ]);
+}
+
+function withRepl<T>(body: (root: ReplRoot) => Operation<T>, location?: string) {
+  return scoped(function* () {
+    const host = yield* useMountedHost({
+      projectCwd: repository,
+      dataRoot: join(root, "repl"),
+      entryInstallation: denoReplEntry(
+        { runtime: "source", platform: "unix", execPath: process.execPath },
+        join(root, "managed"),
+      ),
+    });
+    yield* Permissions.around({
+      files: ([operation], next) => operation === "absolute" || next(operation),
+    });
+    yield* usePosixSidekickTransport(process.platform);
+    const stack = value(
+      yield* resolveAgentStack(
+        {
+          agentProvider: "acpx",
+          defaultAgent: "codex",
+          approveAll: false,
+          approveReads: false,
+          denyAll: false,
         },
-      }),
+        useMachineSessions(),
+      ),
     );
+    const plugins = yield* installPlugins([BUNDLED_PLUGIN], { command: "repl", args: [] });
+    const view = yield* useReplLiveScreen();
+    const ready = withResolvers<Parameters<HeadlessReplRoot["ready"]>[0]>();
+    const task = yield* spawn(function* () {
+      const profile = yield* assembleReplProfile(
+        { ...stack, adapters: createEmbeddedAdapters(join(root, "adapters")) },
+        plugins,
+        { includes: [join(example, "components")] },
+      );
+      value(
+        yield* runReplProgram({
+          profile,
+          root: host.root,
+          location,
+          headless: {
+            view,
+            *ready(opened) {
+              ready.resolve(opened);
+            },
+          },
+        }),
+      );
+    });
+    yield* ensure(() => task.halt());
+    return yield* body(yield* within(ready.operation));
   });
-  try {
-    yield* body(yield* ready.operation);
-  } finally {
-    yield* task.halt();
-  }
+}
+
+function* entryJournal(workspace: string) {
+  const text = yield* readTextFile(join(workspace, "entries.jsonl"));
+  const journal = text
+    .trimEnd()
+    .split("\n")
+    .map((line) => value(parseDurableEvent(line)));
+  const start = journal.findLastIndex(
+    (event) =>
+      event.type === "yield" &&
+      event.coroutineId === "root" &&
+      event.description.name === "__root__",
+  );
+  expect(start).toBeGreaterThanOrEqual(0);
+  return journal.slice(start);
+}
+
+function* verdicts(workspace: string, settled: boolean) {
+  const journal = yield* entryJournal(workspace);
+  expect(journal.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
+    settled,
+  );
+  expect(
+    journal.flatMap((event) =>
+      event.type === "yield" &&
+      ["entry-checkout-verdict", "entry-codex-verdict"].includes(event.description.name)
+        ? [[event.description.name, event.result]]
+        : [],
+    ),
+  ).toEqual([
+    ["entry-checkout-verdict", { status: "ok", value: null }],
+    ["entry-codex-verdict", { status: "ok", value: true }],
+  ]);
+}
+
+function* noManagedOutput(directory: string) {
+  expect(yield* exists(directory)).toBe(false);
+  expect(yield* exists(directory + ".inputs")).toBe(false);
 }
 
 main(function* () {
@@ -148,115 +204,230 @@ main(function* () {
       discoveryGaps: [],
     }),
   );
-  yield* withRepl(function* (repl) {
-    // The REPL permits its session components directory outside the source checkout.
-    const components = yield* realpath(join(repl.workspace, "components"));
-    if (components === undefined) {
-      throw new Error("The REPL did not prepare its session components directory.");
-    }
-    const directory = join(components, "work");
-    const task = join(root, "task.json");
-    yield* writeTextFile(
-      task,
-      JSON.stringify({
-        work,
-        repository,
-        directory,
-        revision,
-        request: "Plan the accepted scope.",
-        inputs: [evidence],
-        sessions: {
-          planner: "fixture-planner",
-          implementor: "fixture-implementor",
-          architect: "fixture-architect",
-        },
-        providers: { architect: "codex", planner: "codex", implementor: "codex" },
-        maxCorrections: 3,
-        maxApiRepairs: 3,
-        maxResponseCorrections: 0,
-        assessment,
-        scope: {
-          decisions: { evidence: [evidence], openQuestions: [] },
-          implementation: { ready: false, evidence: [evidence] },
-          sharedApi: { needed: false, evidence: [evidence] },
-          migration: null,
-        },
-        delivery: {
-          repository: "taras/executable.md",
-          reviewer: {
-            provider: "claude",
-            model: "fixture",
-            effort: null,
-            session: "fixture-review",
-          },
-          acceptance: [
-            { id: "accepted", source: evidence, requirement: "Preserve accepted scope." },
-          ],
-        },
-      }),
-    );
-    const entry = `<Entry.Run task={${JSON.stringify(task)}} as="launch" /><Output><Json value={launch} /></Output>`;
-    const first = value(yield* repl.session.submit(entry));
-    value(yield* first.join());
-    const output = value(yield* first.output()).output;
-    expect(JSON.parse(output)).toEqual({
-      status: "hold",
-      reason:
-        "Codex could not verify model gpt-6.1-sol with effort medium. Correct the Codex profile or launch environment and explicitly submit the same fresh task again.",
-      history: [],
-    });
-    const before = yield* events();
-    expect(before.some((event) => event.method === "account/read")).toBe(true);
-    expect(before.some((event) => event.authenticated === false)).toBe(true);
-    expect(
-      before.filter((event) => ["thread/start", "turn/start"].includes(event.method ?? "")),
-    ).toEqual([]);
-    expect(yield* exists(directory)).toBe(false);
-    expect(yield* exists(directory + ".inputs")).toBe(false);
-
-    yield* writeTextFile(join(root, "home", "fixture-auth"), "present");
-    const second = value(yield* repl.session.submit(entry));
-    value(yield* second.join());
-    expect(JSON.parse(value(yield* second.output()).output)).toMatchObject({
-      status: "hold",
-      publication: "confirmed",
-    });
-    const after = (yield* events()).slice(before.length);
-    const turns = after.filter((event) => event.method === "turn/start");
-    if (turns.length === 0) {
-      const receipt = yield* readTextFile(join(directory, "calls", "0000", "execution.json"));
-      throw new Error(`The role started no turn. ${receipt}`);
-    }
-    const threads = after.filter((event) => event.method === "thread/start");
-    expect(threads).toHaveLength(2);
-    expect(turns).toHaveLength(1);
-    const [inspection, role] = threads;
-    expect(inspection.launch).not.toBe(role.launch);
-    expect(turns[0].launch).toBe(role.launch);
-    expect(turns[0].params).toMatchObject({ model: "gpt-6.1-sol", effort: "medium" });
-    const inspectionClosed = after.findIndex(
-      (event) => event.launch === inspection.launch && ["exit", "eof"].includes(event.event ?? ""),
-    );
-    const roleOpened = after.findIndex(
-      (event) => event.launch === role.launch && event.event === "launch",
-    );
-    expect(inspectionClosed).toBeGreaterThan(after.indexOf(inspection));
-    expect(roleOpened).toBeGreaterThan(inspectionClosed);
-    for (const launch of [inspection.launch, role.launch]) {
-      expect(
-        after.find((event) => event.launch === launch && event.event === "auth"),
-      ).toMatchObject({ authenticated: true });
-      expect(
-        after.find((event) => event.launch === launch && event.event === "launch"),
-      ).toMatchObject({ home: process.env.HOME, path: process.env.PATH });
-    }
-    expect(
-      JSON.parse(yield* readTextFile(join(directory, "attempts", "0000", "result.json"))),
-    ).toMatchObject({
-      phase: "discovery",
-      outcome: "needs_decision",
-      revision,
-      handoff: "ROOT: record the accepted design decision.",
-    });
+  const marker = join(root, "home", "fixture-auth");
+  const paused = withResolvers<void>();
+  let checkoutReads = 0;
+  let documentsVisits = 0;
+  let roleVisits = 0;
+  yield* GitQuery.around({
+    *root(_, next) {
+      checkoutReads += 1;
+      return yield* next();
+    },
   });
+  const initial = yield* scoped(function* () {
+    yield* Component.around({
+      *expand([request], next) {
+        const { name, position } = request.expansion;
+        if (
+          name === "Ticket.Documents" &&
+          position?.path === join(example, "components/Entry/Run.md")
+        ) {
+          documentsVisits += 1;
+          paused.resolve();
+          yield* suspend();
+        }
+        return yield* next(request);
+      },
+    });
+    return yield* firstLaunch();
+  });
+  yield* noManagedOutput(initial.directory);
+  const frontier = yield* events();
+  expect(frontier.slice(0, initial.log.length)).toEqual(initial.log);
+  expect(
+    frontier.slice(initial.log.length).every(({ event }) => event === "eof" || event === "exit"),
+  ).toBe(true);
+  yield* rm(marker);
+
+  yield* scoped(function* () {
+    function* beforeRole() {
+      expect(yield* exists(marker)).toBe(false);
+      expect(checkoutReads).toBe(initial.checkoutReads);
+      expect(yield* events()).toEqual(frontier);
+    }
+    yield* Component.around({
+      *expand([request], next) {
+        const { name, position } = request.expansion;
+        if (
+          name === "Ticket.Documents" &&
+          position?.path === join(example, "components/Entry/Run.md")
+        ) {
+          documentsVisits += 1;
+          yield* beforeRole();
+          yield* noManagedOutput(initial.directory);
+        }
+        if (name === "Phase.Role" && position?.path === join(example, "components/Phase/Run.md")) {
+          roleVisits += 1;
+          yield* beforeRole();
+          yield* writeTextFile(marker, "present");
+        }
+        return yield* next(request);
+      },
+    });
+    yield* withRepl(
+      function* (reopened) {
+        expect(reopened.execution).toBe(initial.execution);
+        value(yield* within(reopened.session.join()));
+        const entries = reopened.session.model.entries;
+        expect(entries.map(({ key }) => key)).toEqual(initial.entries);
+        const terminal = entries.at(-1)?.terminal;
+        expect(terminal?.status).toBe("ok");
+        expect(JSON.parse(terminal?.output ?? "")).toMatchObject({
+          status: "hold",
+          publication: "confirmed",
+        });
+        yield* verdicts(reopened.workspace, true);
+        expect(documentsVisits).toBe(2);
+        expect(roleVisits).toBe(1);
+        expect(checkoutReads).toBe(initial.checkoutReads);
+
+        const logged = yield* events();
+        const resumed = logged.slice(frontier.length);
+        const threads = resumed.filter(({ method }) => method === "thread/start");
+        const turns = resumed.filter(({ method }) => method === "turn/start");
+        expect(threads).toHaveLength(1);
+        expect(turns).toHaveLength(1);
+        const [role] = threads;
+        expect(role.launch).not.toBe(initial.inspection);
+        expect(turns[0].launch).toBe(role.launch);
+        expect(turns[0].params).toMatchObject({ model: "gpt-6.1-sol", effort: "medium" });
+        expect(
+          resumed.find(({ event, launch }) => event === "auth" && launch === role.launch),
+        ).toMatchObject({ authenticated: true });
+        const launched = resumed.find(
+          ({ event, launch }) => event === "launch" && launch === role.launch,
+        );
+        expect(launched).toMatchObject({ home: process.env.HOME, path: process.env.PATH });
+        const inspectionClosed = logged.findIndex(
+          ({ event, launch }) =>
+            launch === initial.inspection && (event === "eof" || event === "exit"),
+        );
+        expect(inspectionClosed).toBeGreaterThan(
+          logged.findIndex(
+            ({ event, launch }) => event === "launch" && launch === initial.inspection,
+          ),
+        );
+        expect(logged.findIndex((event) => event === launched)).toBeGreaterThan(inspectionClosed);
+        expect(yield* readdir(join(initial.directory, "calls"))).toEqual(["0000"]);
+        const result = yield* readTextFile(
+          join(initial.directory, "attempts", "0000", "result.json"),
+        );
+        expect(JSON.parse(result)).toMatchObject({
+          phase: "discovery",
+          outcome: "needs_decision",
+          revision,
+          handoff: "ROOT: record the accepted design decision.",
+        });
+      },
+      encodeLocation(initialState(initial.execution).route),
+    );
+  });
+
+  function* firstLaunch() {
+    return yield* withRepl(function* (repl) {
+      // The REPL permits its session components directory outside the source checkout.
+      const components = yield* realpath(join(repl.workspace, "components"));
+      if (components === undefined) {
+        throw new Error("The REPL did not prepare its session components directory.");
+      }
+      const directory = join(components, "work");
+      const task = join(root, "task.json");
+      yield* writeTextFile(
+        task,
+        JSON.stringify({
+          work,
+          repository,
+          directory,
+          revision,
+          request: "Plan the accepted scope.",
+          inputs: [evidence],
+          sessions: {
+            planner: "fixture-planner",
+            implementor: "fixture-implementor",
+            architect: "fixture-architect",
+          },
+          providers: { architect: "codex", planner: "codex", implementor: "codex" },
+          maxCorrections: 3,
+          maxApiRepairs: 3,
+          maxResponseCorrections: 0,
+          assessment,
+          scope: {
+            decisions: { evidence: [evidence], openQuestions: [] },
+            implementation: { ready: false, evidence: [evidence] },
+            sharedApi: { needed: false, evidence: [evidence] },
+            migration: null,
+          },
+          delivery: {
+            repository: "taras/executable.md",
+            reviewer: {
+              provider: "claude",
+              model: "fixture",
+              effort: null,
+              session: "fixture-review",
+            },
+            acceptance: [
+              { id: "accepted", source: evidence, requirement: "Preserve accepted scope." },
+            ],
+          },
+        }),
+      );
+      const entry = `<Entry.Run task={${JSON.stringify(task)}} as="launch" /><Output><Json value={launch} /></Output>`;
+      const first = value(yield* repl.session.submit(entry));
+      value(yield* first.join());
+      const output = value(yield* first.output()).output;
+      expect(JSON.parse(output)).toEqual({
+        status: "hold",
+        reason:
+          "Codex could not verify model gpt-6.1-sol with effort medium. Correct the Codex profile or launch environment and explicitly submit the same fresh task again.",
+        history: [],
+      });
+      const before = yield* events();
+      expect(before.some((event) => event.method === "account/read")).toBe(true);
+      expect(before.some((event) => event.authenticated === false)).toBe(true);
+      expect(
+        before.filter((event) => ["thread/start", "turn/start"].includes(event.method ?? "")),
+      ).toEqual([]);
+      yield* noManagedOutput(directory);
+
+      yield* writeTextFile(marker, "present");
+      const second = value(yield* repl.session.submit(entry));
+      yield* within(paused.operation);
+      expect(repl.session.model.entries.at(-1)).toMatchObject({
+        key: second.entry,
+        settled: false,
+      });
+      yield* verdicts(repl.workspace, false);
+      yield* noManagedOutput(directory);
+
+      const log = yield* events();
+      const after = log.slice(before.length);
+      const threads = after.filter(({ method }) => method === "thread/start");
+      expect(threads).toHaveLength(1);
+      expect(after.filter(({ method }) => method === "turn/start")).toEqual([]);
+      const inspection = threads[0].launch;
+      expect(
+        after.find(({ event, launch }) => event === "auth" && launch === inspection),
+      ).toMatchObject({ authenticated: true });
+      const opened = after.findIndex(
+        ({ event, launch }) => event === "launch" && launch === inspection,
+      );
+      expect(opened).toBeGreaterThanOrEqual(0);
+      expect(after[opened]).toMatchObject({ home: process.env.HOME, path: process.env.PATH });
+      expect(
+        after.findIndex(
+          ({ event, launch }) => launch === inspection && (event === "eof" || event === "exit"),
+        ),
+      ).toBeGreaterThan(opened);
+      expect(checkoutReads).toBe(2);
+      return {
+        log,
+        execution: repl.execution,
+        entries: repl.session.model.entries.map(({ key }) => key),
+        checkoutReads,
+        directory,
+        inspection,
+      };
+    });
+  }
 });

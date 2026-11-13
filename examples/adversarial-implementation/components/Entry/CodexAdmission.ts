@@ -12,6 +12,7 @@ import { asFilesFatal } from "@executablemd/runtime/files";
 import { all } from "effection";
 import type { Operation } from "effection";
 import { z } from "zod";
+import { retainedVerdict } from "../Delivery/observation.ts";
 
 export const props = {
   type: "object",
@@ -58,6 +59,12 @@ function infrastructure(...errors: unknown[]): Error | undefined {
 
 export default function* CodexAdmission(value: unknown): Operation<boolean> {
   const { repository, model, effort } = input.parse(value);
+  return yield* retainedVerdict("entry-codex-verdict", z.boolean(), () =>
+    observe(repository, model, effort),
+  );
+}
+
+function* observe(repository: string, model: string, effort: string): Operation<boolean> {
   let bodyFailure: Error | undefined;
   function* inspect(): Operation<boolean> {
     yield* API.Env.around(
