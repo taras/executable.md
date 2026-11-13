@@ -84,7 +84,7 @@ const IDENTITY: RunIdentity = {
 const ALPHA = "packages/alpha/tests/one.test.ts";
 const BETA = "packages/beta/tests/two.test.ts";
 const GAMMA = "packages/gamma/tests/three.test.ts";
-const SUITE = "examples/adversarial-implementation/tests/Implementation.test.md";
+const SUITE = "examples/adversarial-implementation/tests/Two Words.test.md";
 
 /**
  * A two-member workspace, so measurement walks a real discovery result —
@@ -221,6 +221,10 @@ describe("the weights file", () => {
       ["a traversing path", weighed({ "../x/tests/a.test.ts": 1 })],
       ["a path outside tests/", weighed({ "packages/core/src/a.test.ts": 1 })],
       ["a path that is not a test file", weighed({ "packages/core/tests/a.ts": 1 })],
+      [
+        "a TypeScript basename with a space",
+        weighed({ "packages/core/tests/Two Words.test.ts": 1 }),
+      ],
       ["a Windows path", weighed({ "C:\\packages\\tests\\a.test.ts": 1 })],
       [
         "a nested Markdown document",
@@ -355,8 +359,8 @@ describe("measuring one runtime", () => {
   });
 
   it("times a Markdown suite through the one-file launch a shard uses, from the repository", function* () {
+    const root = yield* workspace([ALPHA, SUITE]);
     for (const runtime of RUNTIMES) {
-      const root = yield* workspace([ALPHA, SUITE]);
       const seen: Array<{ line: string; cwd: string; env?: Record<string, string> }> = [];
 
       const measurement = yield* TestRuns.with(
@@ -383,7 +387,13 @@ describe("measuring one runtime", () => {
       ]);
       expect(measurement.applicable).toEqual([SUITE, ALPHA]);
       expect(measurement.status).toEqual("complete");
-      expect(parseRuntimeMeasurement(formatRuntimeMeasurement(measurement))).toEqual(measurement);
+      expect(yield* recorded(root, runtime)).toEqual(measurement);
+    }
+
+    const weights = yield* assembleMeasurements(root, root, IDENTITY);
+    const parsed = parseTestWeights(formatTestWeights(weights));
+    for (const runtime of RUNTIMES) {
+      expect(Object.keys(parsed.runtimes[runtime])).toEqual([SUITE, ALPHA]);
     }
   });
 

@@ -17,6 +17,7 @@
  */
 import { parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
+import { isMarkdownSuite, MARKDOWN_SUITES } from "./test-files.ts";
 
 /** Where the measurement came from, so a stale weight is visible rather than plausible. */
 export interface WeightSource {
@@ -50,8 +51,15 @@ const RUN_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/;
  * never measured, and treating it as one would silently widen what a partition
  * can name.
  */
-const DISCOVERED_PATH =
-  /^(?:[\w.-]+(?:\/[\w.-]+)*\/tests\/(?:[\w.-]+\/)*[\w.-]+\.test\.ts|examples\/adversarial-implementation\/tests\/[\w.-]+\.test\.md)$/;
+const TYPESCRIPT_PATH = /^[\w.-]+(?:\/[\w.-]+)*\/tests\/(?:[\w.-]+\/)*[\w.-]+\.test\.ts$/;
+
+function isDiscoveredMarkdownPath(path: string): boolean {
+  if (!path.startsWith(MARKDOWN_SUITES)) {
+    return false;
+  }
+  const name = path.slice(MARKDOWN_SUITES.length);
+  return !name.includes("/") && !name.includes("\0") && isMarkdownSuite(name);
+}
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -79,7 +87,7 @@ function positiveInteger(value: unknown, label: string): number {
 
 function discoveredPath(value: string, label: string): string {
   if (
-    !DISCOVERED_PATH.test(value) ||
+    !(TYPESCRIPT_PATH.test(value) || isDiscoveredMarkdownPath(value)) ||
     value.split("/").some((part) => part === "." || part === "..")
   ) {
     throw new TestWeightsError(`${label} is not a repository-relative test path`);

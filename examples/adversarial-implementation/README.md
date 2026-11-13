@@ -805,8 +805,8 @@ health and required CI as merge gates; review acceptance waives neither.
 deno task test examples/adversarial-implementation/tests/*.test.md
 ```
 
-The launcher wraps each Markdown suite in `<Testing>` and explicitly enables
-absolute host paths for its temporary checkouts and artifacts.
+The launcher runs each Markdown suite through `xmd test` and enables absolute
+host paths for its temporary checkouts and artifacts through a test plugin.
 
 Only the role boundaries are replaced. These journeys use real signed scratch
 Git repositories, committed shell consumers, focused command failures, the

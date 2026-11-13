@@ -936,14 +936,14 @@ state to leave behind.
 `deno task test` is the local Deno suite. With no arguments it runs Deno's own
 whole-repository `deno test --allow-all --frozen`, including the files the CI
 corpus leaves to smoke jobs, then each applicable Markdown suite through its
-one-file command. Otherwise its arguments reach `deno test` verbatim, so focused
-paths, `--changed` and `--related` keep their native meaning; the import graph
-those flags follow cannot see a Markdown suite's documents, so a suite is
-selected by naming its path, beside any TypeScript paths, and never beside a
-flag. A named path that is not an applicable suite is refused before anything
-runs. Each portion runs only when it is nonempty, and the first failure is the
-status. `pnpm test:node` and `bun run test:bun` are the no-selection
-`runtime-tests.ts` run of their runtime.
+one-file command. Otherwise its arguments reach `deno test` verbatim unless a
+positional path selects an applicable Markdown suite. Native Markdown
+doctests outside that corpus, focused paths, `--changed` and `--related` keep
+their Deno meaning. Select an applicable Markdown suite by its
+repository-relative path, optionally prefixed with `./`. That selection may
+include native test paths and must contain only paths. Each portion runs only
+when it is nonempty, and the first failure is the status. `pnpm test:node` and
+`bun run test:bun` are the no-selection `runtime-tests.ts` run of their runtime.
 
 ### CI topology
 

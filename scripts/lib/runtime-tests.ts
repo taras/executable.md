@@ -353,9 +353,9 @@ const DENO_TEST_SHORT_SEPARATE_VALUE = /^-[AEhINPqRrSuVvW]*[cL]$/;
  * `deno task test`. With no arguments it is Deno's own whole-repository run —
  * including the files the CI corpus leaves to smoke jobs — followed by every
  * applicable Markdown suite. Arguments go to `deno test` verbatim, so focused
- * paths, `--changed` and `--related` keep their native meaning; the Markdown
- * graph is invisible to those flags, so a Markdown suite is selected by naming
- * its path, beside any TypeScript paths, and never beside a flag.
+ * paths, doctests, `--changed` and `--related` keep their native meaning.
+ * An applicable Markdown suite is selected by naming its path, beside any
+ * native test paths, with no Deno options or test arguments.
  */
 export function* localDenoTests(args: string[], root: URL): Operation<number> {
   const run = yield* TestRuns.expect();
@@ -373,7 +373,7 @@ export function* localDenoTests(args: string[], root: URL): Operation<number> {
     }
     return status;
   }
-  const markdown: string[] = [];
+  const candidates: string[] = [];
   const flags: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -390,10 +390,16 @@ export function* localDenoTests(args: string[], root: URL): Operation<number> {
       ) {
         index++;
       }
-    } else if (arg.endsWith(".md")) {
-      markdown.push(arg.replace(/^\.\//, ""));
+    } else if (isMarkdownSuite(arg)) {
+      candidates.push(arg);
     }
   }
+  if (candidates.length === 0) {
+    return yield* native(args);
+  }
+
+  const suites = new Set((yield* applicableTestFiles("deno", root)).filter(isMarkdownSuite));
+  const markdown = candidates.filter((path) => suites.has(path.replace(/^\.\//, "")));
   if (markdown.length === 0) {
     return yield* native(args);
   }
@@ -404,17 +410,11 @@ export function* localDenoTests(args: string[], root: URL): Operation<number> {
     );
     return 1;
   }
-  const suites = new Set((yield* applicableTestFiles("deno", root)).filter(isMarkdownSuite));
-  const unknown = markdown.filter((file) => !suites.has(file));
-  if (unknown.length > 0) {
-    console.error(`not a Markdown suite under deno: ${unknown.join(" ")}`);
-    return 1;
-  }
-
-  const typescript = args.filter((arg) => !arg.endsWith(".md"));
-  let status = typescript.length === 0 ? 0 : yield* native(typescript);
-  for (const file of markdown) {
-    status = firstFailure(status, yield* runOneFile("deno", file, root));
+  const selected = new Set(markdown);
+  const nativePaths = args.filter((arg) => !selected.has(arg));
+  let status = nativePaths.length === 0 ? 0 : yield* native(nativePaths);
+  for (const path of markdown) {
+    status = firstFailure(status, yield* runOneFile("deno", path.replace(/^\.\//, ""), root));
   }
   return status;
 }
