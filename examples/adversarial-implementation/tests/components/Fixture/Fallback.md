@@ -276,9 +276,119 @@ wait "$first"
 firstExit=$?
 wait "$second"
 secondExit=$?
+zeros=0
+if test "$firstExit" = 0; then zeros=$((zeros + 1)); fi
+if test "$secondExit" = 0; then zeros=$((zeros + 1)); fi
+if test "$zeros" != 1; then
+  printf 'overlap-waits first=%s:%s second=%s:%s\n' "$first" "$firstExit" "$second" "$secondExit" >&2
+fi
 printf '%s %s' "$firstExit" "$secondExit"
 ```
-<AssertEquals actual={overlap.stdout.split(" ").filter(code => code === "0").length} expected={1} />
+<Let as="zeroExits" value={overlap.stdout.split(" ").filter(code => code === "0").length} />
+<If condition={zeroExits !== 1}>
+<Let as="evidenceArguments" value={[overlap.stdout.slice(0,64),overlap.stderr.slice(0,512),delivery.directory + "/called.json",attempt + "/replacement","first.out","first.err","second.out","second.err"].map(value => "'" + value.replaceAll("'",quote) + "'").join(" ")} />
+```bash exec as="overlapEvidence"
+deno run --quiet --no-config --no-lock --no-code-cache --ext=js --allow-read - {evidenceArguments} <<'COLLECT'
+const LIMIT = 16384;
+const STATUSES = ["feedback_pending", "source_changed", "reconciliation_required", "review_pending", "repair_required", "blocked", "review_held", "checks_failed", "checks_pending", "delivered", "closed_unmerged", "publication_pending", "ready_for_merge"];
+const ACTIONS = ["continue_feedback", "review", "request_approved_repair", "reconcile_original_review", "wait_for_checks", "repair_failed_check", "finish_pr_metadata", "await_authorized_merge", "report_delivery", "report_review_blocker", "resolve_review_hold", "report_review_hold", "reconcile_source"];
+const REFUSALS = [["do not start another review", "action-gate-refusal"], ["The review attempt already exists or cannot be reserved", "attempt-reservation-refusal"], ["The replacement review is already reserved", "replacement-reservation-refusal"]];
+const [tokens, shell, called, replacement, firstOut, firstErr, secondOut, secondErr] = Deno.args;
+function read(path) {
+  let file;
+  try {
+    file = Deno.openSync(path);
+  } catch {
+    return { state: "unavailable" };
+  }
+  try {
+    const buffer = new Uint8Array(LIMIT + 1);
+    let total = 0;
+    while (buffer.length > total) {
+      const count = file.readSync(buffer.subarray(total));
+      if (count === null) {
+        break;
+      }
+      total += count;
+    }
+    if (total > LIMIT) {
+      return { state: "oversize" };
+    }
+    return { state: "read", text: new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, total)) };
+  } catch {
+    return { state: "unavailable" };
+  } finally {
+    file.close();
+  }
+}
+function parsed(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+function stdoutSummary(path) {
+  const channel = read(path);
+  if (channel.state !== "read") {
+    return channel.state;
+  }
+  if (channel.text.trim() === "") {
+    return "empty";
+  }
+  const value = parsed(channel.text);
+  return STATUSES.includes(value?.status) && ACTIONS.includes(value?.nextAction) ? "status " + value.status + "/" + value.nextAction : "other-redacted";
+}
+function stderrSummary(path) {
+  const channel = read(path);
+  if (channel.state !== "read") {
+    return channel.state;
+  }
+  if (channel.text.trim() === "") {
+    return "empty";
+  }
+  const labels = REFUSALS.filter(([text]) => channel.text.includes(text)).map(([, label]) => label);
+  return labels.length === 0 ? "other-redacted" : labels.join("+");
+}
+function positions(path) {
+  const file = read(path);
+  if (file.state !== "read") {
+    return file.state;
+  }
+  const calls = parsed(file.text);
+  if (!Array.isArray(calls)) {
+    return "unavailable";
+  }
+  const shown = calls.slice(0, 8).map((call) => Number.isSafeInteger(call?.position) ? String(call.position) : "?");
+  return "[" + shown.join(",") + (calls.length > 8 ? ",+" + (calls.length - 8) + " more" : "") + "]";
+}
+function presence(path) {
+  try {
+    Deno.statSync(path);
+    return "yes";
+  } catch (error) {
+    return error instanceof Deno.errors.NotFound ? "no" : "unavailable";
+  }
+}
+const exits = tokens === "" ? "none" : tokens.split(" ").slice(0, 4).map((token) => /^[0-9]{1,3}$/.test(token) ? token : "?").join(" ");
+const waits = /^overlap-waits first=([0-9]{1,10}):([0-9]{1,3}) second=([0-9]{1,10}):([0-9]{1,3})$/m.exec(shell);
+const files = ["transition.json", "execution.json", "outcome.json", "raw.txt", "receipt.json"].map((name) => name + " " + presence(replacement + "/" + name)).join(", ");
+console.log([
+  "exit tokens " + exits,
+  waits === null ? "post-wait record absent" : "first pid " + waits[1] + " wait " + waits[2] + ", second pid " + waits[3] + " wait " + waits[4],
+  "called.json positions " + positions(called),
+  "replacement directory " + presence(replacement) + ": " + files,
+  "first stdout " + stdoutSummary(firstOut) + ", stderr " + stderrSummary(firstErr),
+  "second stdout " + stdoutSummary(secondOut) + ", stderr " + stderrSummary(secondErr),
+].join("; ").slice(0, 1800));
+COLLECT
+```
+<Let as="evidence" value={overlapEvidence.exitCode === 0 && overlapEvidence.stdout.startsWith("exit tokens ") && 1801 > overlapEvidence.stdout.trim().length && !overlapEvidence.stdout.trim().includes("\n") ? overlapEvidence.stdout.trim() : "fixture evidence unavailable"} />
+<AssertEquals actual={zeroExits} expected={1} msg={"Delivery A-H turn-failed overlap: zero exits " + zeroExits + ", expected 1; " + evidence} />
+<Else>
+<AssertEquals actual={zeroExits} expected={1} />
+</Else>
+</If>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterOverlap" />
 <AssertEquals actual={afterOverlap.calls.map(call => call.position)} expected={[0,1,1]} />
 <Delivery.Status delivery={delivery} number={7} as="resumed" />
