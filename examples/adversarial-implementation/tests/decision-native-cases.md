@@ -3,7 +3,7 @@ pwd -P
 ```
 <Let as="root" value={location.stdout.trim()} />
 
-<Each in={["continued","missing"]} let="variant">
+<Each in={["continued","missing","first-failure"]} let="variant">
 <Test name={"DR1 native " + variant + ": a resolved Planner decision continues only the established native session"} timeout="180s">
 <TempDir>
 ```bash exec as="repositoryPrepared"
@@ -35,7 +35,7 @@ git rev-parse HEAD
 <Dir path={fixture.repository}>
 <Execution host="run" target={root+"/examples/adversarial-implementation/tests/decision-native-journey.md"} props={{manifest:fixture.root+"/manifest.json",root:fixture.root,variant}}>
 <TestAgent>
-<TestAgent.Scenario agent="codex" session="decision-planner" src={variant === "continued" ? "./agents/decision-planner.md" : "./agents/decision-planner-held.md"} models={{selected:"gpt-6.1-sol",options:[{id:"gpt-6.1-sol",efforts:{selected:"medium",options:["medium","high"]}}]}} />
+<TestAgent.Scenario agent="codex" session="decision-planner" src={variant === "first-failure" ? "./agents/preparation-uncertain.md" : variant === "continued" ? "./agents/decision-planner.md" : "./agents/decision-planner-held.md"} models={{selected:"gpt-6.1-sol",options:[{id:"gpt-6.1-sol",efforts:{selected:"medium",options:["medium","high"]}}]}} />
 </TestAgent>
 <CollectOutput as="stdout" />
 {stdout}
@@ -43,6 +43,13 @@ git rev-parse HEAD
 </Dir>
 </Let>
 <Parse schema={{type:"object"}} as="journey">{journeyText}</Parse>
+<If condition={variant === "first-failure"}>
+<AssertEquals actual={[journey.held.checkpoint.hold.kind,journey.held.checkpoint.dispatchable,journey.held.calls.map(call => call.status)]} expected={["execution_failure",false,["failed_without_result"]]} />
+<AssertEquals actual={journey.continuedReturn} expected={journey.heldReturn} />
+<AssertEquals actual={journey.continued} expected={journey.held} />
+<AssertEquals actual={journey.attemptsAfter} expected={journey.attemptsBefore} />
+<AssertEquals actual={[...new Set(journey.attemptsBefore.map(path => path.split("/")[0]))]} expected={["0000"]} />
+<Else>
 <Parse schema={{type:"object"}} as="identity">{journey.identityBefore}</Parse>
 <AssertEquals actual={[journey.held.checkpoint.hold.kind,journey.heldReturn.nextAction.action,journey.held.calls.length]} expected={["needs_decision","resolve_decision",1]} />
 <AssertEquals actual={[identity.schema,identity.name,identity.cwd,identity.attempted,identity.identity === null]} expected={["phase-session.v2","decision-planner",fixture.repository,true,false]} />
@@ -62,6 +69,7 @@ git rev-parse HEAD
 <AssertEquals actual={effects} expected={[]} />
 </Else>
 </If>
+</Else></If>
 </TempDir>
 </Test>
 </Each>

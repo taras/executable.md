@@ -737,3 +737,50 @@ describe("workflow ACP loading identity", { sanitizeOps: false, sanitizeResource
     });
   }
 });
+
+describe("fresh Codex preflight in the REPL", () => {
+  it("fresh Codex preflight in the REPL", function* () {
+    const root = yield* useStorageRoot();
+    yield* createEmbeddedAdapters(join(root, "adapters")).materialize("codex");
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    yield* ensureDir(bin);
+    yield* ensureDir(home);
+    const fake = (yield* readTextFile(
+      fileURLToPath(new URL("../../acp/tests/fixtures/fake-codex-app-server.cjs", import.meta.url)),
+    )).replace(/^#!.*\n/, "");
+    const host = join(bin, "codex");
+    yield* writeTextFile(
+      host,
+      [
+        "#!/usr/bin/env node",
+        'if (process.argv.includes("--version")) { console.log("codex-cli 0.153.2"); process.exit(0); }',
+        `process.env.FAKE_CODEX_LOG = ${JSON.stringify(join(root, "app-server.jsonl"))};`,
+        'process.env.FAKE_CODEX_AUTH_MARKER = "fixture-auth";',
+        'process.env.FAKE_CODEX_CATALOG = "sol";',
+        `process.env.FAKE_CODEX_ROLE_REPLY = require("node:fs").readFileSync(${JSON.stringify(join(root, "role-reply.json"))}, "utf8");`,
+        fake,
+      ].join("\n"),
+    );
+    yield* until(chmod(host, 0o755));
+    const result = yield* scoped(function* () {
+      yield* useQuietProcessOutput();
+      return yield* exec({
+        command: [
+          process.execPath,
+          "run",
+          "--allow-all",
+          "--node-modules-dir=manual",
+          "--cached-only",
+          "--frozen",
+          fileURLToPath(new URL("./fixtures/fresh-codex-repl.ts", import.meta.url)),
+          root,
+        ],
+        env: { HOME: home, PATH: bin + ":" + process.env.PATH, CODEX_PATH: "" },
+      });
+    });
+    expect({ code: result.exitCode, output: result.stdout + result.stderr }).toMatchObject({
+      code: 0,
+    });
+  });
+});

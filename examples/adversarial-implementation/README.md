@@ -38,6 +38,16 @@ The workflow enters the prepared checkout and artifact directory through absolut
 `Dir` paths. Enable `--allow-absolute` for these runs; the flag retains existing
 read/write restrictions.
 
+For a fresh ordinary launch whose first role uses Codex, the entry directory
+must belong to the assigned Git checkout. A symlink to that checkout works.
+A hold names the selected directory or checkout and the expected Git root.
+The workflow checks the exact role model and its advertised effort in a
+temporary Codex session using the launch environment. It sends zero turns
+during inspection and may leave an empty conversation in provider history,
+even if later delivery validation holds the task. If inspection holds, correct
+the named Codex profile or launch environment and explicitly submit the same
+fresh task again.
+
 ## Select role providers and budgets
 
 The launch task requires `providers` for all three original roles and explicit
