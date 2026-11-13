@@ -323,6 +323,12 @@ export function useDriver(options: Launch) {
               send(input);
               return null;
             }
+            case "click":
+              if (command.at.row >= size.rows || command.at.column >= size.columns) {
+                throw new Error("Click cell is outside the viewport");
+              }
+              click(command.at);
+              return null;
             case "scroll": {
               if (command.delta === 0) {
                 return null;
@@ -330,16 +336,25 @@ export function useDriver(options: Launch) {
               const box =
                 command.region === undefined ? undefined : lastFrame().box(command.region);
               if (
-                box === undefined ||
-                box.top >= box.bottom ||
-                box.left >= box.right ||
+                (command.region !== undefined && box === undefined) ||
+                (command.at === undefined && box === undefined) ||
                 command.region === "sidekick-composer"
               ) {
                 throw new Error(`No visible scroll target in ${command.region ?? "viewport"}`);
               }
+              const target = box ?? { left: 0, right: size.columns, top: 0, bottom: size.rows };
+              const at = command.at ?? { row: target.top + 1, column: target.left + 1 };
+              if (
+                at.row < target.top ||
+                at.row >= target.bottom ||
+                at.column < target.left ||
+                at.column >= target.right
+              ) {
+                throw new Error(`Wheel cell is outside ${command.region ?? "the viewport"}`);
+              }
               const button = command.delta < 0 ? 64 : 65;
               send(
-                `\x1b[<${button};${box.left + 2};${box.top + 1}M`.repeat(Math.abs(command.delta)),
+                `\x1b[<${button};${at.column + 1};${at.row + 1}M`.repeat(Math.abs(command.delta)),
               );
               return null;
             }

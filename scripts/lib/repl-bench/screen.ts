@@ -50,6 +50,12 @@ export function viewport(backend: TerminalBackend, size: Size) {
     top: composerLabel.row + 1,
     bottom: bodyBottom,
   };
+  const historyTitle = [...matches(" History ")].find(
+    ({ row, column }) =>
+      background(row, column + 1) === REPL_PALETTE.drawerSurface &&
+      cells[row - 1]?.[column] === "─" &&
+      cells[row - 1]?.[column + 1] === "─",
+  );
   const transcriptDivider = cells[transcriptTitle]?.indexOf("│") ?? -1;
   const transcript =
     transcriptTitle < 0
@@ -73,6 +79,21 @@ export function viewport(backend: TerminalBackend, size: Size) {
           return composer;
         case "transcript":
           return transcript;
+        case "history":
+          if (historyTitle === undefined) {
+            return undefined;
+          }
+          const topBorder = cells[historyTitle.row - 1] ?? [];
+          let right = historyTitle.column;
+          while (topBorder[right] === "─") {
+            right++;
+          }
+          return {
+            left: historyTitle.column,
+            right,
+            top: historyTitle.row + 1,
+            bottom: bodyBottom,
+          };
         default:
           return full;
       }

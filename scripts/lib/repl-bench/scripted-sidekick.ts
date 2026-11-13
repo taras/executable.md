@@ -10,7 +10,7 @@ import type { Operation } from "effection";
 import { basename, dirname, join } from "node:path";
 import { denoCommand } from "./run.ts";
 
-const AGENT = "scripted-sidekick";
+const AGENT = "scripted";
 const Worker = createContext<string[]>("xmd.repl-bench.scripted-sidekick.worker");
 
 export default Plugin({

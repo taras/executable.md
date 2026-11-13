@@ -42,3 +42,14 @@
     </All>
   </ReplBench>
 </Test>
+
+
+<Test name="Draft text cannot imitate the History drawer">
+  <ReplBench columns={72} rows={20}>
+    <ReplBench.Type text={"────────────────────────\n History \nfalse-history-drawer"} />
+    <ReplBench.WaitForText text="false-history-drawer" />
+    <ReplBench.Region name="history">
+      <ReplBench.WaitForText text="false-history-drawer" timeout="500ms" />
+    </ReplBench.Region>
+  </ReplBench>
+</Test>

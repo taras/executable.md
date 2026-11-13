@@ -64,6 +64,13 @@ export function* attachSidekick(path: string, directory: string) {
         })(),
       );
     },
+    status() {
+      return step(
+        "read status",
+        directory,
+        requestAttachment(path, { method: "status" }, undefined, descriptor),
+      );
+    },
     output(entry: number) {
       return step(
         `read entry ${entry} output`,

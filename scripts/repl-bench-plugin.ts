@@ -164,7 +164,7 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
       "--plugin",
       fileURLToPath(new URL("./lib/repl-bench/scripted-sidekick.ts", import.meta.url)),
       "--sidekick-agent",
-      "scripted-sidekick",
+      "scripted",
       "--sidekick-acp",
       attachment,
     );
@@ -243,6 +243,12 @@ function registration(
 const integer = { type: "integer" };
 const string = { type: "string" };
 const boolean = { type: "boolean" };
+const cell = {
+  type: "object",
+  properties: { row: integer, column: integer },
+  required: ["row", "column"],
+  additionalProperties: false,
+};
 const dimensions = { columns: integer, rows: integer };
 const registrations = [
   {
@@ -257,6 +263,9 @@ const registrations = [
     { text: string },
     ["text"],
   ),
+  registration(".SidekickStatus", function* () {
+    return yield* (yield* scriptedSidekick()).status();
+  }),
   registration(
     ".EntryOutput",
     function* (props) {
@@ -312,15 +321,24 @@ const registrations = [
     ["name"],
   ),
   registration(
+    ".Click",
+    function* (props) {
+      yield* action({ action: "click", at: point.parse(props.at) });
+    },
+    { at: cell },
+    ["at"],
+  ),
+  registration(
     ".Scroll",
     function* (props) {
       yield* action({
         action: "scroll",
+        at: point.optional().parse(props.at),
         region: yield* RegionContext.get(),
         delta: z.int().parse(props.delta),
       });
     },
-    { delta: integer },
+    { delta: integer, at: cell },
     ["delta"],
   ),
   registration(

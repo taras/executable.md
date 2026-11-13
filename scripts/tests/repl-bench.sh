@@ -76,6 +76,7 @@ if wait "$suite_pid"; then
 fi
 grep -F 'test timed out after 8 seconds' "$log"
 grep -F 'Timed out waiting for "only-in-draft-1248" in sidekick-composer' "$log"
+grep -F 'Timed out waiting for "false-history-drawer" in history' "$log"
 
 grep -F 'Scripted Sidekick prompt "Unexpected prompt.": prompt did not match the active stage.' "$log"
 check_failed_run_closed() {

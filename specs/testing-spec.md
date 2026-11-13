@@ -772,21 +772,23 @@ components in a `<Test>` body:
 | --- | --- |
 | `ReplBench` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd. Optional `columns` and `rows` override the defaults. |
 | `ReplBench.SidekickPrompt` | Sends `text` over ACP and waits until the exchange joins, including any automatic entry feedback. On completion, `as` binds the exchange with `ending.joined`, `ending.outcome` and `output`. A failed or cancelled exchange fails this step. |
+| `ReplBench.SidekickStatus` | Binds the attachment status with `as`, including its submitted `messages` and `canonical` conversation counts. |
 | `ReplBench.EntryOutput` | Reads the final window of a submitted entry's output over ACP. `entry` is the one-based entry number and `as` binds the page, including its `status` and `text`. |
 | `ReplBench.Focus` | `target="sidekick-composer"` focuses the composer through visible controls and waits for its focus marker. |
 | `ReplBench.Type` | `text` is pasted into the focused field, preserving punctuation and line breaks. |
 | `ReplBench.Key` | `key` sends a named key to the current focus. |
+| `ReplBench.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
 | `ReplBench.Resize` | `columns` and `rows` resize both the PTY and its emulator. |
-| `ReplBench.Region` | The paired `name="sidekick-composer"` or `name="transcript"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
+| `ReplBench.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
 | `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. `as` binds the unique positive match. `present={false}` requires the selected region to be visible. A `timeout` duration can bound the wait within the test deadline. |
-| `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. |
+| `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
 
 Set `scenario` on a fresh bench to resolve a Markdown Test Agent behavior file
 from the invocation's contextual cwd. The child starts a private scripted
 Sidekick and the bench waits for its ACP attachment before running the body.
 The scenario starts with the attachment initialization prompt and progresses
-through each user prompt and the resulting entry feedback. The two ACP actions
-use the enclosing bench's attachment. Each scripted bench starts its own
+through each user prompt and the resulting entry feedback. ACP actions use
+the enclosing bench's attachment. Each scripted bench starts its own
 scenario and session. A scenario cannot be supplied with `resume`.
 
 The bench invocation owns the driver. Failure or cancellation closes the
