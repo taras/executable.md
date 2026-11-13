@@ -652,32 +652,54 @@ function sameArgv(left, right) {
 	const rightValues = right ?? [];
 	return leftValues.length === rightValues.length && leftValues.every((value, index) => value === rightValues[index]);
 }
-// XMD cold session configuration: detached status, settled writes, and whether the session still answers.
-function coldConfigurationControl(manager, client, sessionId, record, checkpoint) {
+// XMD cold session configuration: the same mutation serves standalone and connected controls.
+async function writeConnectedConfigOption(client, sessionId, record, key, value, authority, started) {
+	const configId = resolveSupportedConfigOptionId(record, key);
+	const models = advertisedModelState(record.acpx);
+	const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
+		configId,
+		value,
+		models,
+		agentCommand: record.agentCommand
+	});
+	// XMD cold session configuration: possible mutation begins only at dispatch.
+	started?.();
+	const response = await client.setSessionConfigOption(sessionId, configId, value, models, authority);
+	record.acpx = applyConfigOptionSelection(record.acpx, configId, value, response, modelConfigId, resolvedValue);
+	return response;
+}
+// XMD cold session configuration: saved projection and live selector evidence have separate lifetimes.
+function coldConfigurationControl(manager, client, sessionId, record, checkpoint, loadObserved, saved) {
 	const usable = () => record.acpSessionId === sessionId && client.hasReusableSession(sessionId);
+	let observed = loadObserved;
 	return {
 		status: () => runtimeStatusFromRecord(record),
+		observedStatus: () => observed ? runtimeStatusFromRecord(record) : void 0,
+		savedPreferences: () => saved,
 		usable,
-		write: async (key, value) => {
-			// XMD cold session configuration: a write reaches only the pinned loaded session.
+		write: async (key, value, started) => {
 			if (!usable()) throw new AcpRuntimeError("ACP_TURN_FAILED", `Session ${record.acpxRecordId} can no longer be configured on this connection.`);
-			const configId = resolveSupportedConfigOptionId(record, key);
-			const models = advertisedModelState(record.acpx);
-			const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
-				configId,
-				value,
-				models,
-				agentCommand: record.agentCommand
+			const response = await writeConnectedConfigOption(client, sessionId, record, key, value, void 0, () => {
+				started();
+				observed = false;
 			});
-			const response = await client.setSessionConfigOption(sessionId, configId, value, models);
-			record.acpx = applyConfigOptionSelection(record.acpx, configId, value, response, modelConfigId, resolvedValue);
-			// XMD cold session configuration: durable before anyone acts on it.
+			// XMD cold session configuration: checkpoint before the next dependent write.
+			observed = Array.isArray(response?.configOptions);
 			manager.refreshControlledRecordLifecycle(client, record);
 			await checkpoint.checkpoint();
-			return {
-				status: runtimeStatusFromRecord(record),
-				acknowledged: Array.isArray(response?.configOptions)
-			};
+		},
+		restorePreferences: async (prior, affected) => {
+			const state = record.acpx ??= {};
+			if (prior.model === void 0) {
+				delete state.session_options?.model;
+				if (state.session_options && Object.keys(state.session_options).length === 0) delete state.session_options;
+			} else state.session_options = { ...state.session_options, model: prior.model };
+			// XMD cold session configuration: retain pre-attempt preference presence.
+			const options = { ...state.desired_config_options, ...prior.options };
+			for (const id of affected) if (!Object.hasOwn(prior.options, id)) delete options[id];
+			if (Object.keys(options).length) state.desired_config_options = options;
+			else delete state.desired_config_options;
+			await checkpoint.checkpoint();
 		}
 	};
 }
@@ -1086,8 +1108,12 @@ var AcpRuntimeManager = class {
 			const retirement = owner.retirement;
 			if (retirement) await retirement;
 			else {
-				const failure = await this.stopSessionOwner(owner);
-				if (failure) throw failure.error;
+				// XMD cold session configuration: retry the original final checkpoint.
+				if (owner.finishColdConfiguration) await owner.finishColdConfiguration();
+				else {
+					const failure = await this.stopSessionOwner(owner);
+					if (failure) throw failure.error;
+				}
 			}
 			this.retiringSessionOwners.delete(owner);
 		}));
@@ -1286,10 +1312,11 @@ var AcpRuntimeManager = class {
 	}
 	async retrySessionCleanup(recordId) {
 		for (const owner of this.retiringSessionOwners) if (owner.recordId === recordId) {
-			owner.retirement ??= this.finalizeSessionConnection({
+			// XMD cold session configuration: a retired worker can still owe its save.
+			owner.retirement ??= (owner.finishColdConfiguration ? owner.finishColdConfiguration() : this.finalizeSessionConnection({
 				client: owner.client,
 				owner
-			}).then(async () => {
+			})).then(async () => {
 				await this.settleRetiredSessionRecord(owner);
 				this.retiringSessionOwners.delete(owner);
 			}).finally(() => {
@@ -1355,7 +1382,7 @@ var AcpRuntimeManager = class {
 		};
 	}
 	// XMD requested model: this control call supplies its own selection.
-	// XMD cold session configuration: `coldConfiguration` keeps one client for one attempt.
+	// XMD cold session configuration: keep one client for one configuration attachment.
 	async withRuntimeControlSession(record, sessionMode, run, replayOptions, authority, requestedModel, coldConfiguration) {
 		await this.retrySessionCleanup(record.acpxRecordId);
 		assertControlAuthority(authority);
@@ -1378,6 +1405,9 @@ var AcpRuntimeManager = class {
 		}
 		let controlClient;
 		let controlledRecord = record;
+		// XMD cold session configuration: no checkpoint can assert an unverified load.
+		let pendingAttachment;
+		let trustedAttachment = false;
 		const checkpoint = new LiveSessionCheckpoint({ save: async () => this.options.sessionStore.save(controlledRecord) });
 		try {
 			const result = await settleAttempt(async () => withConnectedSession({
@@ -1396,7 +1426,7 @@ var AcpRuntimeManager = class {
 					// XMD requested model: only this cold control client receives it.
 					requestedModel,
 					// XMD cold session configuration: close rejects until the worker is proved gone.
-					xmdStrictClose: coldConfiguration === true,
+					xmdStrictClose: coldConfiguration !== void 0,
 					processLifecycle: this.options.processLifecycle,
 					processLaunchScope: {
 						kind: "runtime-session",
@@ -1417,21 +1447,25 @@ var AcpRuntimeManager = class {
 				timeoutMs: this.options.timeoutMs,
 				resumePolicy: resumePolicyForSessionMode(sessionMode),
 				// XMD cold session configuration: only the exact loaded session is configured.
-				strictResume: coldConfiguration === true || this.exactSessionRecordIds.has(record.acpxRecordId),
+				strictResume: coldConfiguration !== void 0 || this.exactSessionRecordIds.has(record.acpxRecordId),
 				// XMD verified resume: prove identity before replaying saved preferences.
 				expectedAgentSessionId: this.verifiedResumeIdentities.get(record.acpxRecordId),
+				retainedAgentSessionId: coldConfiguration?.retainedAgentSessionId,
+				xmdObserveConfiguration: coldConfiguration !== void 0 && coldConfiguration.phase !== "model",
+				xmdAdmitConfiguration: coldConfiguration?.admit,
+				xmdTrackAttachment: coldConfiguration && ((pending) => pendingAttachment = pending),
 				replacingMode: replayOptions?.replacingMode,
 				replacingConfigOption: replayOptions?.replacingConfigOption,
 				authority,
 				// XMD cold session configuration: the manager closes, after the attempt settles.
-				xmdScopedFinalization: coldConfiguration === true,
-				run: coldConfiguration === true ? async (connected) => await run({
-					...connected,
-					checkpoint
-				}) : run
+				xmdScopedFinalization: coldConfiguration !== void 0,
+				run: coldConfiguration !== void 0 ? async (connected) => {
+					trustedAttachment = true;
+					return await run({ ...connected, checkpoint });
+				} : run
 			}));
 			// XMD cold session configuration: release follows a joined close and final save.
-			if (coldConfiguration === true) return await this.settleColdConfigurationClient(record, controlClient, () => controlledRecord, checkpoint, result);
+			if (coldConfiguration !== void 0) return await this.settleColdConfigurationClient(controlClient, controlledRecord, trustedAttachment ? checkpoint : void 0, pendingAttachment, result);
 			this.controlSessionRecords.delete(record.acpxRecordId);
 			const flushed = await settleAttempt(async () => checkpoint.flush());
 			if (!result.ok) throw result.error;
@@ -1440,40 +1474,77 @@ var AcpRuntimeManager = class {
 		} finally {
 			this.controlSessionRecords.delete(record.acpxRecordId);
 			// XMD cold session configuration: an unclosed client stays owned until retired.
-			if (controlClient && coldConfiguration !== true) this.liveClients.delete(controlClient);
+			if (controlClient && coldConfiguration === void 0) this.liveClients.delete(controlClient);
 		}
 	}
-	// XMD cold session configuration: one close, one final save, and the first failure.
-	async settleColdConfigurationClient(record, client, controlledRecord, checkpoint, result) {
-		const closed = await settleAttempt(async () => {
-			if (client) await this.closeClient(client);
+	// XMD cold session configuration: retirement retains the exact close and final checkpoint.
+	async settleColdConfigurationClient(client, record, checkpoint, attachment, result) {
+		let closed = false;
+		const close = async () => {
+			if (client && !closed) {
+				await this.closeClient(client);
+				closed = true;
+				applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
+			}
+		};
+		const closeResult = await settleAttempt(close);
+		const joined = attachment && await attachment;
+		// XMD cold session configuration: startup can produce a child while close is pending.
+		const lateClose = await settleAttempt(async () => {
+			if (closed && client.agent) {
+				closed = false;
+				await close();
+			}
 		});
-		if (client && closed.ok) applyLifecycleSnapshotToRecord(controlledRecord(), client.getAgentLifecycleSnapshot());
-		// XMD cold session configuration: an unsettled client blocks the record until retired.
-		if (!closed.ok) this.retiringSessionOwners.add({
+		const flushed = await settleAttempt(async () => checkpoint?.checkpoint());
+		// XMD cold session configuration: either unfinished action keeps the record owned.
+		if (!closeResult.ok || !lateClose.ok || !flushed.ok) this.retiringSessionOwners.add({
 			recordId: record.acpxRecordId,
 			client,
-			checkpoint
+			finishColdConfiguration: async () => {
+				await close();
+				await checkpoint?.checkpoint();
+			}
 		});
-		const flushed = await settleAttempt(async () => checkpoint.checkpoint());
-		this.controlSessionRecords.delete(record.acpxRecordId);
-		const failure = firstFailedAttempt([result, closed, flushed]);
-		if (failure) throw failure.error;
+		// XMD cold session configuration: preserve the body and each finalization failure.
+		const errors = [result, closeResult, lateClose, flushed].filter((attempt) => !attempt.ok).map((attempt) => attempt.error);
+		if (joined && !joined.ok && joined.error !== result.error) {
+			// The deadline is primary. A shutdown-triggered attachment rejection is expected.
+			if (!closeResult.ok || !lateClose.ok) errors.push(joined.error);
+		}
+		if (errors.length > 1) throw new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"), { cause: errors[0] });
+		if (errors.length) throw errors[0];
 		return result.value.value;
 	}
-	// XMD cold session configuration: dependent writes of one attempt on one control client.
-	async withColdSessionConfiguration(handle, sessionMode, modelKey, requestedModel, body) {
+	// XMD cold session configuration: reuse the record lock for each joined attachment.
+	async withColdSessionConfiguration(handle, sessionMode, input, requestedModel, body) {
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
 		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => {
+			input.admit();
 			await this.retrySessionCleanup(recordId);
+			input.admit();
 			const record = await this.requireRecord(recordId);
-			// XMD cold session configuration: anything already connected keeps its own path.
+			input.admit();
+			// XMD cold session configuration: choose a path and pin identity under the record lock.
 			if (!this.acceptsColdSessionConfiguration(record, sessionMode)) return { declined: true };
 			if (handle.backendSessionId !== void 0 && handle.backendSessionId !== record.acpSessionId) throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", `Session ${recordId} no longer names the conversation this handle configured.`);
-			const value = await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connected, checkpoint }) => await body(coldConfigurationControl(this, client, sessionId, connected, checkpoint)), { replacingConfigOption: {
-				key: modelKey,
-				resolve: (connectedRecord) => resolveSupportedConfigOptionId(connectedRecord, modelKey)
-			} }, void 0, requestedModel, true);
+			if (handle.agentSessionId && record.agentSessionId && handle.agentSessionId !== record.agentSessionId) {
+				throw Object.assign(new Error("The saved session names a different native conversation."), { detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" });
+			}
+			// XMD cold session configuration: recovery restores prior preferences after live verification.
+			const saved = {
+				model: record.acpx?.session_options?.model,
+				options: { ...record.acpx?.desired_config_options }
+			};
+			const value = await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connected, checkpoint, configOptionsObserved }) => await body(coldConfigurationControl(this, client, sessionId, connected, checkpoint, configOptionsObserved, saved)), { replacingConfigOption: {
+				key: input.key,
+				resolve: (connectedRecord) => resolveSupportedConfigOptionId(connectedRecord, input.key)
+			} }, void 0, requestedModel, {
+				// XMD cold session configuration: each attachment uses the same native assertion.
+				phase: input.phase,
+				admit: input.admit,
+				retainedAgentSessionId: record.agentSessionId ?? handle.agentSessionId
+			});
 			return {
 				declined: false,
 				value
@@ -2346,17 +2417,7 @@ var AcpRuntimeManager = class {
 			return response;
 		}
 		return await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connectedRecord }) => {
-			const configId = resolveSupportedConfigOptionId(connectedRecord, key);
-			const models = advertisedModelState(connectedRecord.acpx);
-			const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
-				configId,
-				value,
-				models,
-				agentCommand: connectedRecord.agentCommand
-			});
-			const response = await client.setSessionConfigOption(sessionId, configId, value, models, authority);
-			connectedRecord.acpx = applyConfigOptionSelection(connectedRecord.acpx, configId, value, response, modelConfigId, resolvedValue);
-			return response;
+			return await writeConnectedConfigOption(client, sessionId, connectedRecord, key, value, authority);
 		}, { replacingConfigOption: {
 			key,
 			resolve: (connectedRecord) => resolveSupportedConfigOptionId(connectedRecord, key)
@@ -2919,7 +2980,7 @@ var AcpxRuntime = class {
 	async #coldSessionConfiguration(input, body) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
 		const requestedModel = requestedModelOf(input);
-		return await (await this.getManager()).withColdSessionConfiguration(handle, state.mode, input.key, requestedModel, body);
+		return await (await this.getManager()).withColdSessionConfiguration(handle, state.mode, input, requestedModel, body);
 	}
 	options;
 	testOptions;

@@ -34,7 +34,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import type { Operation, Result, Scope, Stream } from "effection";
+import type { Operation, Result, Scope, Stream, Task } from "effection";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -553,47 +553,46 @@ function modelRequest(configuration: SessionConfiguration | undefined): {
   return configuration?.model === undefined ? {} : { requestedModel: configuration.model };
 }
 
-/**
- * One ACPX control connection as a configuration attempt writes through it.
- *
- * A write's Promise is joined even when its caller is cancelled, as the
- * single-write path does: restoration must not start while this exact write
- * can still move the conversation. Its settlement reports whether the answer
- * listed every selector, whoever is still waiting for it.
- */
+/** Join a configuration effect before its caller moves on to recovery. */
 function configurationConnection(
   control: ColdSessionConfigurationControl,
+  admit: () => void,
+  rejectedOnUnwind: (error: unknown) => void,
 ): ConfigurationConnection {
+  function join(effect: () => Promise<void>): Operation<void> {
+    return scoped(function* () {
+      let pending: Promise<void> | undefined;
+      yield* ensure(function* () {
+        if (pending !== undefined) {
+          yield* until(pending.then(() => undefined, rejectedOnUnwind));
+        }
+      });
+      try {
+        pending = effect();
+        yield* until(pending);
+      } catch (error) {
+        pending = undefined;
+        throw error;
+      }
+      pending = undefined;
+    });
+  }
   return {
     readStatus: () => control.status(),
+    observedStatus: () => control.observedStatus(),
+    savedPreferences: () => control.savedPreferences(),
+    restorePreferences: (prior, affected) =>
+      join(() => control.restorePreferences(prior, affected)),
     usable: () => control.usable(),
-    write(optionId, value, settled) {
-      return scoped(function* (): Operation<void> {
-        let pending: Promise<void> | undefined;
-        let observed = false;
-        yield* ensure(function* () {
-          if (observed || pending === undefined) {
-            return;
+    write: (optionId, value, started, restoring) =>
+      join(() =>
+        control.write(optionId, value, () => {
+          if (!restoring) {
+            admit();
           }
-          observed = true;
-          yield* until(
-            pending.then(
-              () => undefined,
-              () => undefined,
-            ),
-          );
-        });
-        pending = control.write(optionId, value).then((answer) => {
-          settled(answer.acknowledged);
-        });
-        try {
-          yield* until(pending);
-        } catch (error) {
-          throw nativeIdentityRefusal(error) ?? error;
-        }
-        observed = true;
-      });
-    },
+          started();
+        }),
+      ),
   };
 }
 
@@ -2999,8 +2998,9 @@ function* useAcpxProviderState(
       },
       ...(connectsConfiguration && entry.state === "existing"
         ? {
-            connect: (modelOptionId, body) =>
-              connectConfiguration(entry, modelOptionId, configuration, body),
+            connect: (modelOptionId, phase, body) =>
+              connectConfiguration(entry, modelOptionId, phase, configuration, body),
+            recordCleanupFailure: (error) => cleanupErrors.push(error),
           }
         : {}),
     };
@@ -3018,52 +3018,95 @@ function* useAcpxProviderState(
   function connectConfiguration<T>(
     entry: ManagedSession,
     modelOptionId: string,
+    phase: "model" | "effort" | "recovery",
     configuration: SessionConfiguration | undefined,
     body: (connection: ConfigurationConnection) => Operation<T>,
   ): Operation<{ declined: true } | { declined: false; value: T }> {
     return scoped(function* () {
       const scope = yield* useScope();
-      let pending: Promise<{ declined: true } | { declined: false; value: T }> | undefined;
+      const cancelled = new Error("Configuration attempt cancelled");
+      type Outcome = { declined: true } | { declined: false; value: T };
+      let pending: Promise<Outcome> | undefined;
+      let callback: Task<Result<T>> | undefined;
+      let unwinding = false;
       let observed = false;
+      let leafFailure: unknown;
+      function admit(): void {
+        if (unwinding) {
+          throw cancelled;
+        }
+      }
+
       yield* ensure(function* () {
         if (observed || pending === undefined) {
           return;
         }
-        observed = true;
-        yield* until(
-          pending.then(
-            () => undefined,
-            () => undefined,
-          ),
-        );
+        try {
+          if (callback !== undefined) {
+            yield* callback.halt();
+          }
+        } catch (error) {
+          cleanupErrors.push(toError(error));
+        }
+        try {
+          yield* until(pending);
+        } catch (error) {
+          if (error !== cancelled) {
+            cleanupErrors.push(nativeIdentityRefusal(error) ?? toError(error));
+          }
+        }
       });
-      pending = withColdSessionConfiguration(
-        entry.runtime.runtime,
-        { handle: entry.handle, key: modelOptionId, ...modelRequest(configuration) },
-        (control) =>
-          scope
-            .run(function* (): Operation<Result<T>> {
+
+      try {
+        pending = withColdSessionConfiguration(
+          entry.runtime.runtime,
+          {
+            handle: entry.handle,
+            key: modelOptionId,
+            phase,
+            admit,
+            ...modelRequest(configuration),
+          },
+          (control) => {
+            admit();
+            callback = scope.run(function* (): Operation<Result<T>> {
               try {
-                return Ok(yield* body(configurationConnection(control)));
+                return Ok(
+                  yield* body(
+                    configurationConnection(control, admit, (error) => {
+                      leafFailure = error;
+                    }),
+                  ),
+                );
               } catch (error) {
                 return Err(toError(error));
               }
-            })
-            .then((result) => {
-              if (!result.ok) {
-                throw result.error;
-              }
-              return result.value;
-            }),
-      );
-      let outcome: { declined: true } | { declined: false; value: T };
-      try {
-        outcome = yield* until(pending);
+            });
+            return callback.then(
+              (result) => {
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
+              },
+              (error: unknown) => {
+                if (unwinding && error instanceof Error && error.message === "halted") {
+                  throw leafFailure ?? cancelled;
+                }
+                throw error;
+              },
+            );
+          },
+        );
+        const outcome = yield* until(pending);
+        observed = true;
+        return outcome;
       } catch (error) {
+        observed = true;
         throw nativeIdentityRefusal(error) ?? error;
+      } finally {
+        unwinding = true;
       }
-      observed = true;
-      return outcome;
     });
   }
 
@@ -5043,12 +5086,12 @@ function* useAcpxProviderState(
         // client-native.
         const construction = yield* constructRoute(agentName, prepared);
         const resumeSessionId = construction?.resumeSessionId;
-        return yield* turns.withSlot(prepared.sessionKey, () =>
-          withSessionRoute(context, () =>
+        return yield* scoped(function* () {
+          // Join configuration and handle release before the successor receives the slot.
+          yield* turns.slot(prepared.sessionKey);
+          return yield* withSessionRoute(context, () =>
             scoped(function* (): Operation<Session> {
-              // Before the ensure that creates it, so nothing this scope takes
-              // outlives the scope — a handle held past this operation is a
-              // second owner of a session a native UI may take.
+              refuseIfUnusable(prepared.sessionKey);
               yield* ensure(() => releaseHandle(prepared.sessionKey));
               const entry = yield* ensureFromPrepared(agentName, prepared, {
                 ...(construction === undefined
@@ -5060,11 +5103,7 @@ function* useAcpxProviderState(
                   ? {}
                   : { requestedModel: setup.requestedModel }),
               });
-              // An existing session is reattached here: its route and its
-              // identity already exist, so this is a conversation that can be
-              // configured in place, and one that cannot refuses before
-              // anything prompts it. Settling the setup says how, and core
-              // applies it before the element's resolution returns.
+              // Finish the existing session's configuration before returning it.
               if (setup === undefined) {
                 return entry.session;
               }
@@ -5073,8 +5112,8 @@ function* useAcpxProviderState(
                 configure: configuringSession(agentName, entry),
               });
             }),
-          ),
-        );
+          );
+        });
       },
     );
   }

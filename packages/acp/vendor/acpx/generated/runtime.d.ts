@@ -918,13 +918,17 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
 export declare function createAcpRuntime(options: AcpRuntimeOptions): AcpxRuntime;
 /** XMD cold session configuration: one attempt's control connection, as its body sees it. */
 interface ColdSessionConfigurationControl {
-  /** XMD cold session configuration: the connected record's status, detached. */
   status(): AcpRuntimeStatus;
-  /** XMD cold session configuration: settled and saved before it answers; `acknowledged` says the response listed every selector. */
-  write(key: string, value: string): Promise<{
-    status: AcpRuntimeStatus;
-    acknowledged: boolean;
-  }>;
+  observedStatus(): AcpRuntimeStatus | undefined;
+  savedPreferences(): {
+    readonly model: string | undefined;
+    readonly options: Readonly<Record<string, string>>;
+  };
+  restorePreferences(
+    prior: ReturnType<ColdSessionConfigurationControl["savedPreferences"]>,
+    affected: ReadonlySet<string>,
+  ): Promise<void>;
+  write(key: string, value: string, started: () => void): Promise<void>;
   /** XMD cold session configuration: whether this connection still has the exact loaded session. */
   usable(): boolean;
 }
@@ -932,6 +936,8 @@ interface ColdSessionConfigurationControl {
 export declare function withColdSessionConfiguration<T>(runtime: AcpRuntime, input: {
   handle: AcpRuntimeHandle;
   key: string;
+  phase: "model" | "effort" | "recovery";
+  admit(): void;
   requestedModel?: string;
 }, body: (control: ColdSessionConfigurationControl) => Promise<T>): Promise<{
   declined: true;

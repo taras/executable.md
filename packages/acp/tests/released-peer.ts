@@ -75,7 +75,7 @@ function respond(request) {
         const changedIdentity = request.method === "session/load" && controlDirectory &&
           fs.existsSync(path.join(controlDirectory, "different-native-identity"));
         const agentSessionId = changedIdentity ? "another-conversation" : "native-" + sessionId;
-        reply(request.id, {sessionId, configOptions: options()${assertIdentity ? ", _meta: {agentSessionId}" : ""}});
+        reply(request.id, {sessionId, configOptions: options()${assertIdentity ? ', ...(control("omit-native-identity") ? {} : {_meta: {agentSessionId}})' : ""}});
       };
       if (controlDirectory && request.method === "session/load") {
         fs.readFile(path.join(controlDirectory, "remembered"), "utf8", (_error, text) => { remembered = text ?? ""; ready(); });

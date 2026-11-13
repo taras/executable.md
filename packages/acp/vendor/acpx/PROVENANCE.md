@@ -242,17 +242,21 @@ manager declines when an active controller, retained or retiring owner, control
 record, close or pending materialization already holds the record, or when the
 session is not persistent. Otherwise one strict-resume control client loads the
 exact session with the model write's existing replay exclusion and runs the
-caller's body. Each write resolves the selector the same way as
-`setConfigOption`, applies the response and checkpoints the record before
-answering. It also reports whether the response listed every selector.
+caller's body. Exact reattachment checks a reported native identity against
+the retained assertion before replay or save, including on the split effort
+and recovery paths. Those paths read actual load selectors before preference
+replay. Each write uses the same selector resolution and response projection
+as `setConfigOption` and checkpoints the record before answering. Recovery
+uses observed selectors and restores the affected saved preference entries
+after the prior values are verified.
 
 The manager owns that client's single close. `withConnectedSession` skips its
-own close and process-interrupt race for this path. A strict-close client
-rejects its close when the process and its tracked descendants cannot be proved
-gone, keeps their accounting and releases the rejected cleanup for retry. A
-rejected close leaves the client in `retiringSessionOwners` with its checkpoint
-and no reset record, so the next operation on that record retries retirement
-first. `runtime.js` owns the seam, `queue-owner-runtime-ucHvXJ33.js` the
+own close and process-interrupt race for this path. The manager joins startup
+or load that outlives a deadline. A strict-close client rejects its close when
+process or descendant ownership remains unresolved. A rejected close or final
+checkpoint retains the client and checkpoint in `retiringSessionOwners` so
+the next operation retries the unfinished work first. When the body and
+finalization both fail, the body error remains primary in the aggregate. `runtime.js` owns the seam, `queue-owner-runtime-ucHvXJ33.js` the
 scoped finalization and strict close, and `runtime.d.ts` declares the internal
 export.
 

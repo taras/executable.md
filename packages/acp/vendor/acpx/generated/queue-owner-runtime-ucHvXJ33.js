@@ -2743,6 +2743,9 @@ var AcpClient = class {
 			this.agentStartedAt = startedProcess.startedAt;
 			this.lastAgentExit = void 0;
 			this.lastKnownPid = startedProcess.pid;
+		} else if (this.options.xmdStrictClose) {
+			// XMD cold session configuration: a spawn racing the deadline still belongs to this client.
+			this.agent = child;
 		}
 		const startupStderr = [];
 		child.stderr.on("data", (chunk) => {
@@ -3421,7 +3424,8 @@ var AcpClient = class {
 		} finally {
 			this.rejectPendingConnectionRequests(this.lastAgentExit ? new AgentDisconnectedError(this.lastAgentExit.reason, this.lastAgentExit.exitCode, this.lastAgentExit.signal, { outputAlreadyEmitted: Boolean(this.activePrompt) }) : new AgentDisconnectedError("connection_close", null, null, { outputAlreadyEmitted: Boolean(this.activePrompt) }));
 		}
-		if (failures.length > 0) throw new AggregateError(failures, "ACP client cleanup failed", { cause: failures[0] });
+		// XMD cold session configuration: retain the ownership failure in the settlement diagnostic.
+		if (failures.length > 0) throw new AggregateError(failures, this.options.xmdStrictClose ? `ACP client cleanup failed: ${failures.map(formatErrorMessage).join("\n")}` : "ACP client cleanup failed", { cause: failures[0] });
 	}
 	async stopIfClosedDuringLaunch(epoch, child, startupFailure, authority) {
 		if (this.closeEpoch === epoch) return;
@@ -3480,7 +3484,9 @@ var AcpClient = class {
 			}
 		}
 		// XMD cold session configuration: the close reports what it could not settle.
-		if (!quiescent) throw new Error("The ACP agent process did not exit after close.");
+		if (!quiescent) throw new Error(descendants?.hasUnresolvedOwnership()
+			? "ACP agent descendant ownership could not be proved settled."
+			: "The ACP agent process did not exit after close.");
 	}
 	endAgentStdin(child) {
 		if (!child.stdin || child.stdin.destroyed) return;
@@ -3496,7 +3502,8 @@ var AcpClient = class {
 		} catch {}
 		const remaining = Math.min(waitMs, Math.max(0, deadline - performance.now()));
 		const [exited, descendantsExited] = await Promise.all([waitForChildExit(child, remaining), descendants ? descendants.waitForExit(remaining) : Promise.resolve(true)]);
-		return exited && descendantsExited;
+		// XMD cold session configuration: an empty tracked set cannot settle unknown ownership.
+		return exited && descendantsExited && (!this.options.xmdStrictClose || !descendants?.hasUnresolvedOwnership());
 	}
 	detachAgentHandles(agent, unref) {
 		const stdin = agent.stdin;
@@ -3812,7 +3819,8 @@ var AcpClient = class {
 	attachAgentLifecycleObservers(child, startedProcess, exitNotificationBarrier) {
 		this.attachProcessExitObserver(child, startedProcess, exitNotificationBarrier, (exitCode, signal) => {
 			this.handleAgentDisconnect(child, "process_exit", exitCode, signal);
-			this.terminateAgentProcess(child);
+			// XMD cold session configuration: one manager joins termination and reports its failure.
+			if (!this.options.xmdStrictClose) this.terminateAgentProcess(child);
 		});
 		child.once("close", (exitCode, signal) => {
 			this.handleAgentDisconnect(child, "process_close", exitCode, signal);
@@ -3835,7 +3843,8 @@ var AcpClient = class {
 	}
 	handleAgentDisconnect(child, reason, exitCode, signal) {
 		this.recordAgentExit(child, reason, exitCode, signal);
-		if (this.agent !== child || this.closing || !this.connection) return;
+		// XMD cold session configuration: disconnect reports the request failure; the manager joins close.
+		if (this.agent !== child || this.closing || !this.connection || this.options.xmdStrictClose) return;
 		this.close().catch((error) => {
 			this.log(`disconnected agent cleanup failed: ${String(error)}`);
 		});
@@ -5122,6 +5131,14 @@ function restoreOriginalSessionState(params) {
 	params.record.acpSessionId = params.sessionId;
 	params.record.agentSessionId = params.agentSessionId;
 }
+// XMD cold session configuration: retain a deadline-raced attachment until the manager joins it.
+function timedAttachment(options, pending) {
+	options.xmdTrackAttachment?.(pending.then(
+		() => ({ ok: true }),
+		(error) => ({ ok: false, error })
+	));
+	return withTimeout(pending, options.timeoutMs);
+}
 async function connectAndLoadSession(options) {
 	const record = options.record;
 	const client = options.client;
@@ -5139,8 +5156,10 @@ async function connectAndLoadSession(options) {
 	logReconnectAttempt(record, storedProcessAlive, Boolean(record.pid) && !storedProcessAlive, options.verbose);
 	const reusingLoadedSession = client.hasReusableSession(record.acpSessionId);
 	if (reusingLoadedSession) incrementPerfCounter("runtime.connect_and_load.reused_session");
-	else await withTimeout(client.start(options.authority, { sessionOptions: mergeSessionOptions(options.sessionOptions, sessionOptionsFromRecord(record)) }), options.timeoutMs);
+	// XMD cold session configuration: join an attaching client before admitting the body.
+	else await timedAttachment(options, client.start(options.authority, { sessionOptions: mergeSessionOptions(options.sessionOptions, sessionOptionsFromRecord(record)) }));
 	assertControlAuthority(options.authority);
+	options.xmdAdmitConfiguration?.();
 	options.onClientAvailable?.(options.activeController);
 	applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
 	record.closed = false;
@@ -5156,10 +5175,21 @@ async function connectAndLoadSession(options) {
 		promptRecorded: options.promptRecorded,
 		strictResume,
 		// XMD verified resume: read the live response, not the stored assertion.
-		expectedAgentSessionId: options.expectedAgentSessionId
+		expectedAgentSessionId: options.expectedAgentSessionId,
+		retainedAgentSessionId: options.retainedAgentSessionId,
+		xmdTrackAttachment: options.xmdTrackAttachment
 	});
 	const { resumed, loadError, sessionId, createdFreshSession, pendingAgentSessionId, sessionModels } = loadState;
+	options.xmdAdmitConfiguration?.();
 	applyReconnectedModelState(record, sessionModels, loadState.configOptionsPresent, loadState.legacyModelMetadataPresent, createdFreshSession);
+	// XMD cold session configuration: split and recovery observe before any saved setting can replay.
+	if (options.xmdObserveConfiguration) return {
+		sessionId,
+		agentSessionId: record.agentSessionId,
+		resumed,
+		loadError,
+		configOptionsObserved: loadState.configOptionsPresent
+	};
 	const preferenceReplay = await replaySessionPreferences({
 		client,
 		record,
@@ -5186,7 +5216,9 @@ async function connectAndLoadSession(options) {
 		sessionId,
 		agentSessionId: record.agentSessionId,
 		resumed,
-		loadError
+		loadError,
+		// XMD cold session configuration: replayed selectors are not load evidence.
+		configOptionsObserved: loadState.configOptionsPresent && !preferenceReplay.modelReplay.replayed && !preferenceReplay.configReplay.replayed
 	};
 }
 function resolveModelsAfterReplay(replay, initialModels) {
@@ -5331,16 +5363,19 @@ async function loadRuntimeSession(params, resume) {
 	// XMD verified resume: separate the protocol failure from the identity refusal.
 	let loadResult;
 	try {
-		loadResult = await withTimeout(resume ? params.client.resumeSession(params.record.acpSessionId, params.record.cwd, params.authority) : params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, {
+		loadResult = await timedAttachment(params, resume ? params.client.resumeSession(params.record.acpSessionId, params.record.cwd, params.authority) : params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, {
 			suppressReplayUpdates: true,
 			...params.authority ? { authority: params.authority } : {}
-		}), params.timeoutMs);
+		}));
 	} catch (error) {
 		rethrowCancelledLoad(error, params.authority);
 		return await recoverRuntimeSessionLoadFailure(params, error);
 	}
 	// XMD verified resume: omission must not inherit the record's old identity.
-	if (params.expectedAgentSessionId !== void 0 && loadResult.agentSessionId !== params.expectedAgentSessionId) {
+	if (
+		params.expectedAgentSessionId !== void 0 && loadResult.agentSessionId !== params.expectedAgentSessionId ||
+		params.retainedAgentSessionId !== void 0 && loadResult.agentSessionId !== void 0 && loadResult.agentSessionId !== params.retainedAgentSessionId
+	) {
 		throw Object.assign(new Error(loadResult.agentSessionId === void 0 ? "The provider did not confirm the retained native conversation." : "The provider reopened a different native conversation."), { detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" });
 	}
 	reconcileAgentSessionId(params.record, loadResult.agentSessionId);
@@ -5451,13 +5486,17 @@ async function withConnectedSession(options) {
 	const interruptible = options.xmdScopedFinalization ? async (run) => await run() : withInterrupt;
 	try {
 		return await interruptible(async () => {
-			const { sessionId, resumed, loadError } = await connectAndLoadSession({
+			const { sessionId, resumed, loadError, configOptionsObserved } = await connectAndLoadSession({
 				client,
 				record,
 				resumePolicy: options.resumePolicy,
 				strictResume: options.strictResume,
 				// XMD verified resume: apply the same check on cold configuration.
 				expectedAgentSessionId: options.expectedAgentSessionId,
+				retainedAgentSessionId: options.retainedAgentSessionId,
+				xmdObserveConfiguration: options.xmdObserveConfiguration,
+				xmdAdmitConfiguration: options.xmdAdmitConfiguration,
+				xmdTrackAttachment: options.xmdTrackAttachment,
 				replacingMode: options.replacingMode,
 				replacingConfigOption: options.replacingConfigOption,
 				authority: options.authority,
@@ -5480,7 +5519,9 @@ async function withConnectedSession(options) {
 				activeController,
 				sessionId,
 				resumed,
-				loadError
+				loadError,
+				// XMD cold session configuration: caller can distinguish live and saved selectors.
+				configOptionsObserved
 			});
 			const now = isoNow$2();
 			record.lastUsedAt = now;
