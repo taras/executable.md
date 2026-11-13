@@ -32,8 +32,11 @@ Diagnose the failure at {assignment.revision}. Read the repository instructions.
 Captured evidence:
 <Json value={props.inputs} />
 
-Return one JSON object. For a confirmed cause, explain which captured observations distinguish it, cite their paths, describe the regression command with the observed and expected behavior, and give Opus the bounded implementation handoff. When the evidence cannot distinguish the cause, give the specific missing witness and how to obtain it.
+For a confirmed cause, explain which captured observations distinguish it, cite their paths, describe the regression command with the observed and expected behavior, and give Opus the bounded implementation handoff. When the evidence cannot distinguish the cause, give the specific missing witness and how to obtain it.
+Use this JSON schema.
 <Json value={schema.result} />
+
+Reply with only the JSON object. Start with an opening brace and end with a closing brace. Omit Markdown fences and any text before or after the object.
 </Let>
 <If condition={prompt.length > 64000}><Fail message="The diagnostic prompt exceeds 64000 characters. Prepare concise evidence in a fresh attempt." /></If>
 <Let as="catalog" value={null} />
