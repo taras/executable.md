@@ -1,4 +1,4 @@
-import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
 import { keyToAnsi, parseKey } from "@termless/core";
 import { createXtermBackend } from "@termless/xtermjs";
 import {
@@ -17,6 +17,7 @@ import process from "node:process";
 import { join } from "node:path";
 import { decodeLocation } from "../../../packages/cli/src/repl/route.ts";
 import type { Command, Launch, Point, WaitOptions } from "./protocol.ts";
+import { denoCommand } from "./run.ts";
 import { viewport } from "./screen.ts";
 
 interface Pty {
@@ -50,6 +51,8 @@ declare const Bun: {
 
 const START_TIMEOUT = 15_000;
 const ACTION_TIMEOUT = 5_000;
+// Give ACPX's bounded active-turn and agent retirement time to finish before forcing REPL exit.
+const SCRIPTED_STOP_GRACE = 10_000;
 
 function reopenLocation(raw: string): string | null {
   // A terminal wraps at display time. If a host inserts line breaks in the
@@ -62,7 +65,7 @@ function reopenLocation(raw: string): string | null {
   return decodeLocation(location).ok ? location : null;
 }
 
-export function useDriver(root: string, options: Launch) {
+export function useDriver(options: Launch) {
   return resource(function* (
     provide: (value: { execute(command: Command): Operation<unknown> }) => Operation<void>,
   ) {
@@ -121,7 +124,7 @@ export function useDriver(root: string, options: Launch) {
         const timely = yield* race([
           closed,
           (function* () {
-            yield* sleep(2_000);
+            yield* sleep(options.scenario === undefined ? 2_000 : SCRIPTED_STOP_GRACE);
             return null;
           })(),
         ]);
@@ -141,52 +144,38 @@ export function useDriver(root: string, options: Launch) {
     });
     try {
       yield* ensureDir(home);
-      child = Bun.spawn(
-        [
-          "deno",
-          "run",
-          "--allow-all",
-          "--cached-only",
-          "--frozen",
-          "--node-modules-dir=none",
-          "--config",
-          join(root, "deno.json"),
-          options.entry,
-          "repl",
-          ...options.args,
-        ],
-        {
-          cwd,
-          env: {
-            ...process.env,
-            HOME: home,
-            DENO_DIR: options.denoDir,
-            XDG_DATA_HOME: join(home, ".local", "share"),
-            XDG_CONFIG_HOME: join(home, ".config"),
-            XDG_STATE_HOME: join(home, ".local", "state"),
-            XDG_CACHE_HOME: join(home, ".cache"),
-            TERM: "xterm-256color",
+      child = Bun.spawn(denoCommand(["repl", ...options.args]), {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XMD_SIDEKICK_SCENARIO: options.scenario,
+          DENO_DIR: options.denoDir,
+          XDG_DATA_HOME: join(home, ".local", "share"),
+          XDG_CONFIG_HOME: join(home, ".config"),
+          XDG_STATE_HOME: join(home, ".local", "state"),
+          XDG_CACHE_HOME: join(home, ".cache"),
+          TERM: "xterm-256color",
+        },
+        terminal: {
+          cols: size.columns,
+          rows: size.rows,
+          data(_terminal, bytes) {
+            chunks.push(Uint8Array.from(bytes));
+            backend.feed(bytes);
+            if (backend.getMode("altScreen")) {
+              // Keep the last application screen when the child restores the normal buffer.
+              screen = backend.getText();
+            }
+            update();
           },
-          terminal: {
-            cols: size.columns,
-            rows: size.rows,
-            data(_terminal, bytes) {
-              chunks.push(Uint8Array.from(bytes));
-              backend.feed(bytes);
-              if (backend.getMode("altScreen")) {
-                // Keep the last application screen when the child restores the normal buffer.
-                screen = backend.getText();
-              }
-              update();
-            },
-            exit() {
-              ptyEnded = true;
-              eof.resolve();
-              update();
-            },
+          exit() {
+            ptyEnded = true;
+            eof.resolve();
+            update();
           },
         },
-      );
+      });
       yield* writeTextFile(join(directory, "pid"), `${child.pid}\n`);
     } catch (error) {
       throw new Error(`${step} failed. Evidence in ${directory}`, { cause: error });
@@ -275,6 +264,27 @@ export function useDriver(root: string, options: Launch) {
                   frame.matches("XMD REPL").next().value && frame.matches("[exit]").next().value,
                 START_TIMEOUT,
               );
+            case "attachment-ready": {
+              return yield* race([
+                (function* () {
+                  while (!(yield* exists(command.path))) {
+                    yield* sleep(25);
+                  }
+                  return null;
+                })(),
+                (function* () {
+                  const code = yield* until(owned.exited);
+                  yield* eof.operation;
+                  throw new Error(
+                    `REPL exited (${code}) before publishing its Sidekick attachment`,
+                  );
+                })(),
+                (function* () {
+                  yield* sleep(START_TIMEOUT);
+                  throw new Error("Timed out waiting for the Sidekick attachment");
+                })(),
+              ]);
+            }
             case "focus": {
               const current = lastFrame();
               if (current.composerFocused) {

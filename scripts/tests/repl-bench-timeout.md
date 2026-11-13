@@ -18,3 +18,27 @@
     </ReplBench.Region>
   </ReplBench>
 </Test>
+
+
+<Test name="a scripted Sidekick mismatch fails the exact prompt step" timeout="60s">
+  <ReplBench scenario="scripts/tests/fixtures/repl-scripted-sidekick.md">
+    <ReplBench.SidekickPrompt text="Unexpected prompt." />
+  </ReplBench>
+</Test>
+
+
+<Test name="a failed test closes the REPL during an active ACP prompt" timeout="60s">
+  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-ordered-reads.md">
+    <ReplBench.SidekickPrompt text="What should I know?" />
+    <ReplBench.Focus target="sidekick-composer" />
+    <All>
+      <Spawn>
+        <ReplBench.SidekickPrompt text="Ask the human." />
+      </Spawn>
+      <Spawn>
+        <ReplBench.WaitForText text="[answer sidekick]" />
+        <ReplBench.WaitForText text="fail-with-a-pending-acp-question" timeout="3s" />
+      </Spawn>
+    </All>
+  </ReplBench>
+</Test>

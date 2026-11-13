@@ -1018,29 +1018,6 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     expect(answered.value.output).toContain("I will prepare source first.");
   });
 
-  it("R5: two reads come back with their own headings, in admission order", function* () {
-    const held = yield* useHarness();
-    held.fake.script({ reply: "<Guide.Lifetimes />\n<REPL.Environment />\n" });
-    held.fake.script({ reply: "<Output>Read both.</Output>\n" });
-
-    const answered = yield* held.owner.message("what should I know?");
-    if (!answered.ok) {
-      throw answered.error;
-    }
-    const delivered = held.fake.prompts[1] ?? "";
-    // Two results, so each says which control produced it — and in the order
-    // the reply admitted them, not in the order they happened to finish.
-    expect(delivered).toContain("## Guide.Lifetimes");
-    expect(delivered).toContain("## REPL.Environment");
-    expect(delivered.indexOf("## Guide.Lifetimes")).toBeLessThan(
-      delivered.indexOf("## REPL.Environment"),
-    );
-    // The chapter and the snapshot themselves, not a description of them.
-    expect(delivered).toContain("# Lifetimes");
-    expect(delivered).toContain("- working directory:");
-    expect(answered.value.output).toContain("Read both.");
-  });
-
   it("R5: reopening restores the chat and asks the provider for nothing", function* () {
     const held = yield* useHarness();
     held.fake.script({ reply: "<Output>Noted.</Output>\n" });

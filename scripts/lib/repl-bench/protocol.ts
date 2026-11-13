@@ -13,6 +13,7 @@ export const waitOptions = z.object({
 });
 export const command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ready") }),
+  z.object({ action: z.literal("attachment-ready"), path: z.string() }),
   z.object({ action: z.literal("focus") }),
   z.object({ action: z.literal("type"), text: z.string() }),
   z.object({ action: z.literal("key"), key: z.string().min(1) }),
@@ -32,6 +33,7 @@ export const launch = z.object({
   directory: z.string(),
   cwd: z.string(),
   home: z.string(),
+  scenario: z.string().optional(),
   entry: z.string(),
   denoDir: z.string(),
   ...size.shape,
