@@ -791,6 +791,11 @@ through each user prompt and the resulting entry feedback. ACP actions use
 the enclosing bench's attachment. Each scripted bench starts its own
 scenario and session. A scenario cannot be supplied with `resume`.
 
+The optional `include` and `mount` arrays pass repeated `--include` and
+`--mount` values in order. Each mount value uses the CLI's `SOURCE:TARGET`
+syntax. `allowAbsolute={true}` passes `--allow-absolute`. These options belong
+to each launch, so a resumed bench supplies the options its new command uses.
+
 The bench invocation owns the driver. Failure or cancellation closes the
 child, its scripted worker, and the terminal. Failed steps retain their captures.
 The enclosing test owns the private home. With `expectExit={true}`, the body

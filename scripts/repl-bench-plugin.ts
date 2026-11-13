@@ -62,6 +62,9 @@ const bench = size.partial().extend({
   expectExit: z.boolean().default(false),
   scenario: z.string().min(1).optional(),
   entryPermissionFixture: z.boolean().default(false),
+  include: z.array(z.string().min(1)).default([]),
+  mount: z.array(z.string().min(1)).default([]),
+  allowAbsolute: z.boolean().default(false),
 });
 const resumeReference = z.object({ location: z.string(), home: z.string(), ...size.shape });
 
@@ -160,6 +163,15 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   if (resume !== undefined) {
     args.push(resume.location);
   }
+  for (const path of wanted.include) {
+    args.push(`--include=${path}`);
+  }
+  for (const pair of wanted.mount) {
+    args.push(`--mount=${pair}`);
+  }
+  if (wanted.allowAbsolute) {
+    args.push("--allow-absolute");
+  }
   const scenario = wanted.scenario === undefined ? undefined : resolve(directory, wanted.scenario);
   let attachment: string | undefined;
   if (scenario !== undefined) {
@@ -254,6 +266,7 @@ function registration(
 const integer = { type: "integer" };
 const string = { type: "string" };
 const boolean = { type: "boolean" };
+const strings = { type: "array", items: string };
 const cell = {
   type: "object",
   properties: { row: integer, column: integer },
@@ -268,6 +281,9 @@ const registrations = [
       expectExit: boolean,
       scenario: string,
       entryPermissionFixture: boolean,
+      include: strings,
+      mount: strings,
+      allowAbsolute: boolean,
     }),
     captures: ["resume"],
   },
