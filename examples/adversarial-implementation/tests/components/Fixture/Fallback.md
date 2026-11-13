@@ -404,11 +404,11 @@ async function observer(path, slot, waitPid) {
   const writes = report.writes.map((entry) => (Array.isArray(entry.prior) ? "[" + entry.prior.join(",") + "]" : entry.prior) + "->" + entry.position + " " + entry.settled).join(", ");
   const text = [
     slot + " report pid " + report.pid + " " + (waitPid === undefined ? "wait pid unknown" : String(report.pid) === waitPid ? "matches wait" : "differs from wait"),
-    "executions " + report.executions + ", anchors " + (report.anchors.length === 0 ? "ok" : report.anchors.join(" ")),
-    "sites " + (sites === "" ? "none" : sites) + ", roles fixture=" + report.roles.fixture + " production=" + report.roles.production + " other=" + report.roles.other + ", unattributed " + report.unattributed,
     "reservations " + (reservations === "" ? "none" : reservations),
     "called writes " + (writes === "" ? "none" : writes) + ", elsewhere " + report.calledElsewhere,
     "dropped " + report.dropped.reservations + "/" + report.dropped.writes + "/" + report.dropped.anchors,
+    "sites " + (sites === "" ? "none" : sites) + ", roles fixture=" + report.roles.fixture + " production=" + report.roles.production + " other=" + report.roles.other + ", unattributed " + report.unattributed,
+    "executions " + report.executions + ", anchors " + (report.anchors.length === 0 ? "ok" : report.anchors.join(" ")),
   ].join("; ");
   return text.length > 395 ? text.slice(0, 392) + "..." : text;
 }
