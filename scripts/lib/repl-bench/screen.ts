@@ -1,4 +1,5 @@
 import type { TerminalBackend } from "@termless/core";
+import { REPL_PALETTE } from "../../../packages/cli/src/repl/presentation-style.ts";
 import type { Point, Region, Size } from "./protocol.ts";
 
 type Box = { left: number; right: number; top: number; bottom: number };
@@ -6,11 +7,14 @@ type Box = { left: number; right: number; top: number; bottom: number };
 export function viewport(backend: TerminalBackend, size: Size) {
   const { totalRows, screenRows } = backend.getScrollback();
   const bufferStart = totalRows - screenRows;
-  const cells = Array.from({ length: size.rows }, (_, row) =>
-    backend
-      .getRow(bufferStart + row)
-      .map((cell, column, line) => cell.char || (column > 0 && line[column - 1]?.wide ? "" : " ")),
+  const styled = Array.from({ length: size.rows }, (_, row) => backend.getRow(bufferStart + row));
+  const cells = styled.map((line) =>
+    line.map((cell, column) => cell.char || (column > 0 && line[column - 1]?.wide ? "" : " ")),
   );
+  function background(row: number, column: number): number | undefined {
+    const colour = styled[row]?.[column]?.bg;
+    return colour == null ? undefined : (colour.r << 16) | (colour.g << 8) | colour.b;
+  }
   const full: Box = { left: 0, right: size.columns, top: 0, bottom: size.rows };
   const rows = cells.map((row) => row.join(""));
 
@@ -32,8 +36,14 @@ export function viewport(backend: TerminalBackend, size: Size) {
 
   const history = rows.findIndex((row) => /^ HISTORY\s/.test(row));
   const bodyBottom = history < 0 ? size.rows : history;
-  const composerLabel = [...matches("› message the sidekick")].find(({ row }) => row < bodyBottom);
-  const transcriptTitle = rows.findIndex((row) => /^\s*TRANSCRIPT\s/.test(row));
+  // Document text can contain the label. The field sits inside the composer tray.
+  const composerLabel = [...matches("› message the sidekick")].find(
+    ({ row, column }) =>
+      row < bodyBottom &&
+      background(row, column) === REPL_PALETTE.draftSurface &&
+      background(row, column - 3) === REPL_PALETTE.composerSurface,
+  );
+  const transcriptTitle = rows.findIndex((row, index) => index < 4 && /^\s*TRANSCRIPT\s/.test(row));
   const composer = composerLabel && {
     left: composerLabel.column - 2,
     right: size.columns - 1,

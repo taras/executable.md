@@ -8,3 +8,13 @@
     </ReplBench.Region>
   </ReplBench>
 </Test>
+
+<Test name="Draft text cannot imitate the hidden Sidekick composer">
+  <ReplBench columns={72} rows={20}>
+    <ReplBench.Type text={"› message the sidekick\nonly-in-draft-1248"} />
+    <ReplBench.WaitForText text="only-in-draft-1248" />
+    <ReplBench.Region name="sidekick-composer">
+      <ReplBench.WaitForText text="only-in-draft-1248" timeout="500ms" />
+    </ReplBench.Region>
+  </ReplBench>
+</Test>

@@ -58,3 +58,12 @@ test ! -e ".bench/$first/endpoint"
 test -f ".bench/$second/closed.json"
 test ! -e ".bench/$second/endpoint"
 ! kill -0 "$(cat ".bench/$second/pid")" 2>/dev/null
+
+if deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+  scripts/tests/repl-bench-timeout.md > "$log" 2>&1; then
+  echo 'Expected the Markdown timeout controls to fail' >&2
+  exit 1
+fi
+rg -F 'test timed out after 8 seconds' "$log"
+rg -F 'Timed out waiting for "only-in-draft-1248" in sidekick-composer' "$log"
