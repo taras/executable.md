@@ -19,13 +19,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, ensure, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { readTextFile, ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
+import { readTextFile, ensureDir, lstat, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { until } from "effection";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { cliBase, cliRuntime, runCli } from "@executablemd/test-support/launch";
-import { PLAN_WRITER_INSTRUCTIONS, DEFAULT_PLAN_WRITER_ROOT } from "../src/plan-writer-profile.ts";
+import { cliBase, cliRuntime, runCli, runShell } from "@executablemd/test-support/launch";
+import { PLAN_WRITER_INSTRUCTIONS } from "../src/plan-writer-profile.ts";
 import type { PlanWriterObservation } from "../src/plan-writer-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
@@ -137,27 +137,41 @@ const PLAN_DECLARATION = [
 ];
 
 /**
- * What the two Plan authorship trees hold right now.
+ * Whether nothing is at `path`.
  *
- * `children` is the temporary directory, filtered to the roots a configured
- * child makes; `production` is the tree a real `xmd plan` keeps its sessions in,
- * read and never written. A tree that does not exist yet holds nothing, which is
- * the ordinary state of the production one on a machine that has never run the
- * command.
+ * Only absence answers yes: a path that cannot be read for any other reason
+ * fails the test rather than passing it as a cleanup.
  */
-function* planRoots(): Operation<{ children: string[]; production: string[] }> {
-  return {
-    children: (yield* listing(tmpdir())).filter((entry) => entry.startsWith("xmd-child-plan-")),
-    production: yield* listing(DEFAULT_PLAN_WRITER_ROOT),
-  };
+function* absent(path: string): Operation<boolean> {
+  try {
+    yield* lstat(path);
+    return false;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return true;
+    }
+    throw error;
+  }
 }
 
-function* listing(directory: string): Operation<string[]> {
-  try {
-    return (yield* readdir(directory)).sort();
-  } catch {
-    return [];
+/**
+ * The prepared Deno cache, named explicitly for a launch that replaces `HOME`:
+ * Deno finds its default cache under the home directory.
+ */
+function* preparedDenoCache(): Operation<Record<string, string>> {
+  if (cliRuntime() !== "deno") {
+    return {};
   }
+  const info: unknown = JSON.parse((yield* runShell("deno info --json").expect()).stdout);
+  if (
+    typeof info !== "object" ||
+    info === null ||
+    !("denoDir" in info) ||
+    typeof info.denoDir !== "string"
+  ) {
+    throw new Error("deno info supplied no prepared cache path");
+  }
+  return { DENO_DIR: info.denoDir };
 }
 
 /** A declared child relaunches `xmd` as its agent worker, so it needs both. */
@@ -917,9 +931,10 @@ describe("deterministic dependencies declared for a nested run", () => {
    * Where the root goes is a host dependency no caller selects. Production keeps
    * it under the caller's home; a configured child gets one of its own under the
    * temporary directory, so a test never reads or removes anything a real
-   * `xmd plan` owns. Both facts are read the same way — what these directories
-   * held before the run against what they hold after — because a child's root
-   * exists only while that child does, and the evidence is the absence.
+   * `xmd plan` owns. The run gets a temporary directory and a home of its own,
+   * both created empty, so whatever a child left behind is this run's and no
+   * concurrent process can add to it: a child's root exists only while that
+   * child does, and the evidence is the absence.
    *
    * The two endings are here together because cleanup that only ran on the happy
    * path would satisfy a case that checked one of them. The approved sibling and
@@ -927,7 +942,6 @@ describe("deterministic dependencies declared for a nested run", () => {
    * from its own scenario and its own authored decision.
    */
   it("gives each configured child its own Plan root, and keeps none of them", function* () {
-    const before = yield* planRoots();
     const project = yield* useProject({
       "agents/plan.md": PLAN_BEHAVIOR,
       "writes-a-plan.md": PLAN_CHILD,
@@ -960,17 +974,24 @@ describe("deterministic dependencies declared for a nested run", () => {
         "</Test>",
       ),
     });
-    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    const temporary = join(project, "tmp");
+    const home = join(project, "home");
+    yield* ensureDir(temporary);
+    yield* ensureDir(home);
+    const env = { ...(yield* preparedDenoCache()), TMPDIR: temporary, HOME: home };
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER, env }).join();
     expect(result.stdout + result.stderr).not.toContain("❌");
     expect(result.code).toBe(0);
 
     // Both children wrote a Plan — the rows above say so — and neither kept the
     // root it wrote it under. One that outlived its child would be here, named
     // for the child that made it.
-    const after = yield* planRoots();
-    expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
-    // And neither of them reached the tree a production `xmd plan` owns.
-    expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
+    expect(
+      (yield* readdir(temporary)).filter((entry) => entry.startsWith("xmd-child-plan-")),
+    ).toEqual([]);
+    // Both Plans name a session, which production keeps, so a child that fell
+    // back to the production tree would have left one under this home.
+    expect(yield* absent(join(home, ".xmd", "plan", "sessions"))).toBe(true);
   });
 
   /**
@@ -988,7 +1009,6 @@ describe("deterministic dependencies declared for a nested run", () => {
    * declaration, the session directory and the child root have all gone.
    */
   it("installs the controlled Plan configuration and removes its root after cancellation", function* () {
-    const before = yield* planRoots();
     const observed = withResolvers<PlanWriterObservation>();
     const hold = withResolvers<void>();
     const host = testingExecutionHost({
@@ -1065,9 +1085,18 @@ describe("deterministic dependencies declared for a nested run", () => {
     expect(dependencies.newSessionOptions?.allowedTools).toEqual([]);
     expect(dependencies.mcpServers).toEqual([]);
     expect(dependencies.permissions).toBe("strict");
-    const agentCwd = dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd();
-    expect(agentCwd.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
-    expect(agentCwd.startsWith(DEFAULT_PLAN_WRITER_ROOT)).toBe(false);
+    if (dependencies.agentCwd === undefined) {
+      throw new Error("the installed Plan provider reports no working directory");
+    }
+    // The session's directory sits directly in this child's own root, and that
+    // root directly in the temporary directory — which also places it outside
+    // the tree a production `xmd plan` keeps its sessions in.
+    const session = yield* dependencies.agentCwd();
+    const root = dirname(session);
+    expect(basename(root).startsWith("xmd-child-plan-")).toBe(true);
+    expect(yield* until(realpath(dirname(root)))).toBe(yield* until(realpath(tmpdir())));
+    expect((yield* lstat(session)).isDirectory()).toBe(true);
+    expect((yield* lstat(root)).isDirectory()).toBe(true);
 
     // The observer runs once the Plan writer frame is installed and before the
     // Component's content starts, so no Prompt has been sent yet — what is in
@@ -1076,9 +1105,8 @@ describe("deterministic dependencies declared for a nested run", () => {
     // returns, which is what makes this a structured-cancellation proof rather
     // than a check that something was deleted eventually.
     yield* running.halt();
-    const after = yield* planRoots();
-    expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
-    expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
+    expect(yield* absent(session)).toBe(true);
+    expect(yield* absent(root)).toBe(true);
   });
 
   /**
