@@ -567,9 +567,9 @@ The essential acceptance coverage is:
    provider-returned launch that prepares its own session and spends no turn, an
    existing session refusing a different instruction layer, a launch under
    `test-agent-client-native` that names its own session and is continued by the
-   next launch of the same body, and an eager `<Session>` — which settles the
-   route as ACP-first — refusing a launch that would name the same session
-   again. It also covers attachment: the same named `<Session>` opened after
+   next launch of the same body, and a prompt that establishes an ACP-first
+   session, after which a launch that would name the same session again is
+   refused. It also covers attachment: the same named `<Session>` opened after
    those launches joins the conversation the native process made, and a
    `<Prompt>` in it answers from that conversation. Each refusal asserts its
    failure class as well as its message, so a launch that stopped for some other

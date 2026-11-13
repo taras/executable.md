@@ -10,8 +10,9 @@
  *
  * The behavior document keeps one unused `<WhenPrompt>` stage throughout. A
  * launch that secretly took a model turn would consume it, and the `<Prompt>`
- * that follows would find the scenario exhausted — so "no hidden prompt" is
- * asserted by the answer the later prompt gets, not by an absence.
+ * that follows would find the scenario exhausted. `NativeSessionLaunch.test.md`
+ * asserts "no hidden prompt" by the answer that later prompt gets, not by an
+ * absence.
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -220,26 +221,6 @@ describe(
       const request = run.launches[0]!;
       expect(request.command.join(" ")).not.toContain("repository implementor");
       expect(JSON.stringify(request.env ?? {})).not.toContain("repository implementor");
-    });
-
-    it("TL4: the launch takes no model turn, so the stage is still there afterwards", function* () {
-      const run = yield* runDoc(
-        testDoc(
-          [
-            LAUNCH_BODY,
-            "",
-            '<Session name="implementor">',
-            "<Prompt>what changed?</Prompt>",
-            "</Session>",
-          ].join("\n"),
-        ),
-      );
-
-      expect(run.result.ok ? "" : run.result.error.message).toBe("");
-      // The one scripted stage answered the prompt that came *after* the
-      // launch, which it could not have done had the launch consumed it.
-      expect(run.output).toContain("nothing yet");
-      expect(run.results.every((result) => result.status === "pass")).toBe(true);
     });
 
     it("TL5: a later prompt reattaches to the session the native UI was given", function* () {

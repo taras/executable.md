@@ -820,6 +820,7 @@ these registered paths:
 - `packages/cli/tests/document-suites/syntax/Syntax.test.md`
 - `packages/cli/tests/document-suites/targets/Targets.test.md`
 - `packages/cli/tests/document-suites/verbose/Verbose.test.md`
+- `packages/test-agent/src/NativeSessionLaunch.test.md`
 - `packages/test-agent/src/SessionConfiguration.test.md`
 
 Discovery skips symlinks and directories. Adversarial discovery does not
@@ -938,8 +939,9 @@ source entrypoint, resolved from the runner's checkout:
 The CLI receives `test <file>` and runs from the repository root with its inherited
 environment (`PATH`, the Deno cache and install variables, `XDG_CACHE_HOME`,
 `TMPDIR` and `XMD_TEST_ARTIFACTS`). Individually registered suites use the
-CLI's default includes and file permissions. Deno launches of `Plan` and
-`SessionConfiguration` select the test-only worker plugin. It carries the
+CLI's default includes and file permissions. Deno launches of `Plan`,
+`NativeSessionLaunch` and `SessionConfiguration` select the test-only worker
+plugin. It carries the
 prepared Deno flags into TestAgent workers. `Syntax` and `Verbose` receive a
 temporary executable that invokes the same runtime's source CLI with its
 arguments intact. Each suite owns and removes its executable. `Verbose`

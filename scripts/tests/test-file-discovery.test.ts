@@ -129,6 +129,7 @@ describe("the Markdown suites", () => {
       "packages/cli/tests/document-suites/syntax/Syntax.test.md",
       "packages/cli/tests/document-suites/targets/Targets.test.md",
       "packages/cli/tests/document-suites/verbose/Verbose.test.md",
+      "packages/test-agent/src/NativeSessionLaunch.test.md",
       "packages/test-agent/src/SessionConfiguration.test.md",
     ]);
   });
