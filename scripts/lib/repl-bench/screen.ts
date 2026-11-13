@@ -93,8 +93,6 @@ export function viewport(backend: TerminalBackend, size: Size) {
           return transcript;
         case "history":
           return drawer(" History ");
-        case "recovery":
-          return drawer("Review recovery");
         default:
           return full;
       }

@@ -1,7 +1,4 @@
 import { makeRegistry } from "./support/fake-acp.ts";
-import { initialState, reduceRepl, NO_AGENT } from "../src/repl/application.ts";
-import type { ReplState, ReplLive } from "../src/repl/application.ts";
-import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 /** Read Sidekick work from the pane and controls the terminal actually shows. */
 
 import {
@@ -17,7 +14,7 @@ import { FsApi, ensureDir, readdir, readTextFile, writeTextFile } from "@effecti
 import { join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { ensure, withResolvers, scoped, sleep, race } from "effection";
+import { ensure, withResolvers, scoped, sleep } from "effection";
 import { decodeLocation } from "../src/repl/route.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import {
@@ -35,7 +32,7 @@ import type { MountedHost } from "./support/mounted-repl.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
-import type { ReplPage, ScreenCell, ScreenReading } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import type { Operation } from "effection";
 import { expect } from "@executablemd/test-support/expect";
@@ -82,93 +79,70 @@ function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Ope
 }
 
 /**
- * Whether the committed tree holds focus on the saved account's own row.
+ * Walk the keyboard from the composer to the Draft, and prove it arrived.
  *
- * Read from the decoration rather than from the `> ` cue, because the cue is
- * written from the view the frame was built from and is therefore a frame
- * behind, while the frame draws its focused row's runs bold from the tree's own
- * answer after the reconcile. A walk that stepped on the cue would send one Tab
- * too many whenever the cue had not caught up, and the Enter after it would
- * reach the control past this one.
+ * The Draft's own value is the oracle, not a phrase somewhere on the screen:
+ * `Type here` is optional guidance that required recovery and placement
+ * advice can crowd out, so a traversal that waited for it would be waiting on
+ * the layout rather than on focus. One probe character is typed at each stop
+ * and erased again; the stop where it lands in the Draft's own rows, and not
+ * the composer's, is the one these keystrokes are reaching.
  *
- * The decoration is read from the emulator, which is sound because a page hands
- * a predicate only its latest reading and the emulator holds exactly the cells
- * that write left. Nothing moves focus without a keystroke, so once a frame
- * says the tree holds it here, it is still here when the next key is sent.
+ * The probe is polled rather than awaited, because a stop that is not a text
+ * field swallows the key and draws nothing — which is an answer about focus,
+ * not a reason to fail.
  */
-function recoveryFocused(page: ReplPage, one: ScreenReading): boolean {
-  const screen = page.repl.terminal.screen;
-  if (screen === undefined) {
-    throw new Error("The terminal emulator is absent.");
+function* draftFromComposer(page: ReplPage): Operation<void> {
+  yield* intoComposer(page);
+  // A token no part of this screen draws: a single letter would collide with
+  // ordinary labels like QUEUE and make every stop look like the Draft.
+  const probe = "zq7";
+  function* settles(holds: (one: ScreenReading) => boolean): Operation<boolean> {
+    for (let poll = 0; poll < 25; poll += 1) {
+      if (holds(page.screen())) {
+        return true;
+      }
+      yield* sleep(20);
+    }
+    return holds(page.screen());
   }
-  if (one.occurrences("[review recovery]") !== 1) {
-    return false;
+  const route: string[] = [];
+  for (let stop = 0; stop < 24; stop += 1) {
+    yield* page.type(probe);
+    const landed = yield* settles((one) => draftHolds(one, probe));
+    const anywhere = landed || (yield* settles((one) => one.shows(probe)));
+    if (anywhere) {
+      for (let erase = 0; erase < probe.length; erase += 1) {
+        yield* page.key("Backspace");
+      }
+      yield* settles((one) => !one.shows(probe));
+    }
+    if (landed) {
+      return;
+    }
+    route.push(anywhere ? "field" : "control");
+    const before = page.screen().index;
+    yield* page.key("Tab");
+    yield* page.until("the next keyboard traversal", (one) => one.index > before);
   }
-  const at = one.locate("[review recovery]");
-  return screen.styleAt(at.column, at.row).attrs.includes(1);
+  throw new Error(
+    `the keyboard never reached the Draft from the composer. stops=${JSON.stringify(route)} ` +
+      `${page.describe()}`,
+  );
 }
 
-/**
- * Whether the committed tree holds focus on the Message field's own heading.
- *
- * The same answer `recoveryFocused` reads, asked of the other control in this
- * region: the frame draws its focused node's runs bold after the reconcile, and
- * this field's style role carries no weight of its own, so bold on its heading
- * is the tree's answer. Its value rows are read rather than reached.
- */
-function messageFocused(page: ReplPage, one: ScreenReading): boolean {
-  const screen = page.repl.terminal.screen;
-  if (screen === undefined) {
-    throw new Error("The terminal emulator is absent.");
+function* focusMessage(page: ReplPage): Operation<void> {
+  for (let step = 0; step < 12 && !page.screen().shows(`> › ${COMPOSER}`); step++) {
+    yield* page.key("Tab");
+    yield* sleep(30);
   }
-  if (one.occurrences(COMPOSER) !== 1) {
-    return false;
-  }
-  const at = one.locate(COMPOSER);
-  return screen.styleAt(at.column, at.row).attrs.includes(1);
-}
-
-/**
- * Open the saved account the way somebody without a mouse opens it.
- *
- * Two stages, because recovery is not a region entry. It is one of the fixed
- * conversation controls of the Message region, whose own fixed entry is the
- * Message field — so Tab cycles to that region and Alt+ArrowUp walks the
- * controls inside it. Replacing Tab with Alt+ArrowUp outright would not do:
- * this case can arrive with the Draft focused, where Alt+ArrowUp stays local to
- * the Draft and never leaves it.
- *
- * So: if recovery already holds focus, activate it. Otherwise Tab until the
- * Message heading holds focus, then Alt+ArrowUp until recovery does. Both
- * stages are bounded and both read the frame's own answer rather than the `> `
- * cue, which is written from the view and can lag a step behind. Then one Enter.
- *
- * The press is the other route a person has, and this one case gives it up
- * deliberately. Its rail is still filling while the account is offered, so the
- * row's coordinates can belong to a frame the program has already replaced,
- * and a press naming no target in the current frame is dropped without an
- * action or a trace. That route keeps its own coverage elsewhere; nothing else
- * this case is about changes.
- */
-function* openSavedAccount(page: ReplPage): Operation<void> {
-  if (!recoveryFocused(page, page.screen())) {
-    for (let step = 0; step < 12 && !messageFocused(page, page.screen()); step += 1) {
-      yield* completedKey(page, "Tab");
-    }
-    yield* page.until("the Message heading holding focus", (one) => messageFocused(page, one));
-    for (let step = 0; step < 8 && !recoveryFocused(page, page.screen()); step += 1) {
-      yield* completedKey(page, "Alt+ArrowUp");
-    }
-  }
-  yield* page.until("the saved account's own row focused", (one) => recoveryFocused(page, one));
-  yield* page.key("Enter");
+  yield* page.until("the Message keyboard region", (one) => one.shows(`> › ${COMPOSER}`));
 }
 
 describe("987 — mounted original recovery", () => {
   for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
     it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
       const page = yield* useReplPage({ size: WIDE });
-      expect(page.screen().shows("Review recovery")).toBe(false);
       const lines = [
         "OUTPUT-BEGIN: verified",
         ...Array.from(
@@ -183,7 +157,7 @@ describe("987 — mounted original recovery", () => {
       page.repl.fake.script({ reply: "", failure: "Internal error" });
       yield* sendMessage(page, "Inspect output.");
       yield* page.until("the failed feedback recovery action", (one) =>
-        one.shows("[review recovery]"),
+        one.shows("Feedback receipt unknown"),
       );
       const before = yield* settledReading(page.repl);
       const feedback = before.chat.find((one) => one.kind === "feedback");
@@ -193,87 +167,26 @@ describe("987 — mounted original recovery", () => {
       for (const line of lines) {
         expect(feedback.text).toContain(line);
       }
-      yield* openSavedAccount(page);
-      yield* page.until("the saved recovery account", (one) => one.shows("Original conversation:"));
-      if (size.columns !== 160) {
+      if (size !== WIDE) {
         yield* page.resize(size);
       }
-      {
-        yield* page.until("the recovery account frame", (one) => one.shows("Review recovery"));
-        const heading = page.screen().locate("Review recovery");
-        for (let step = 0; step < 60 && !page.screen().shows("New instruction:"); step++) {
-          const before = page.screen().index;
-          yield* page.wheel("down", { column: heading.column + 2, row: heading.row + 2 });
-          yield* page.until("the account reveals its field", (one) => one.index > before);
-        }
-        for (let step = 0; step < 12 && !page.screen().shows(">> New instruction:"); step++) {
-          yield* completedKey(page, "Backtab");
-        }
-        yield* page.until("the Content field owns focus", (one) =>
-          one.shows(">> New instruction:"),
-        );
-        for (let step = 0; step < 8; step++) {
-          yield* completedKey(page, "PageUp");
-        }
-        const seen = new Set<string>();
-        for (let step = 0; step < 100; step++) {
-          const column = page.screen().locate("Review recovery").column;
-          const rendered = page
-            .screen()
-            .rows.slice(3, -3)
-            .map((row) => row.slice(column))
-            .join("")
-            .replace(/\s+/g, "");
-          for (const line of lines) {
-            if (rendered.includes(line.replace(/\s+/g, ""))) {
-              seen.add(line);
-            }
-          }
-          if (seen.size === lines.length) {
-            break;
-          }
-          const before = page.screen().rows.slice(3, -3).join("");
-          yield* completedKey(page, "Alt+ArrowUp");
-          yield* completedKey(page, "PageDown");
-          if (page.screen().rows.slice(3, -3).join("") === before) {
-            yield* completedKey(page, "Tab");
-          }
-        }
-        expect(lines.filter((line) => seen.has(line))).toEqual(lines);
-      }
-      yield* page.key("Escape");
-      yield* page.until("the closed account", (one) => !one.shows("Review recovery"));
-      if (size.columns !== 160) {
-        yield* page.resize(WIDE);
-      }
-      yield* openSavedAccount(page);
-      yield* page.until("the reopened saved account", (one) => one.shows("Review recovery"));
+      yield* page.until(
+        "the fixed saved status",
+        (one) => one.shows("Entry saved.") && one.shows("Feedback receipt unknown."),
+      );
+      yield* focusMessage(page);
       const passive = yield* settledReading(page.repl);
       expect(passive.chat).toEqual(before.chat);
       expect(passive.model.entries).toEqual(before.model.entries);
       expect(page.repl.fake.prompts).toHaveLength(2);
-      const heading = page.screen().locate("Review recovery");
-      for (let step = 0; step < 60 && !page.screen().shows("New instruction:"); step++) {
-        const at = page.screen().index;
-        yield* page.wheel("down", { column: heading.column + 2, row: heading.row + 2 });
-        yield* page.until("the reopened field is revealed", (one) => one.index > at);
-      }
-      for (let step = 0; step < 12 && !page.screen().shows(">> New instruction:"); step++) {
-        yield* completedKey(page, "Backtab");
-      }
-      yield* page.until("the new instruction owns focus", (one) =>
-        one.shows(">> New instruction:"),
-      );
       const instruction = "Summarize the verified inventory.";
       yield* completedKey(page, "End");
       yield* page.type(instruction);
       yield* page.until("the distinct instruction is visible", (one) => one.shows("inventory."));
       page.repl.fake.script({ reply: "<Output>Inventory recovery continued once.</Output>" });
-      yield* page.press("[send new instruction]");
-      yield* page.until(
-        "the explicit continuation completed",
-        (one) => one.shows("Inventory recovery continued once.") && sidekickIdle(one),
-      );
+      yield* page.key("Enter");
+      yield* awaited("one new recovery prompt", () => page.repl.fake.prompts.length === 3);
+      yield* page.until("the recovery exchange settling", sidekickIdle);
       const after = yield* settledReading(page.repl);
       expect(page.repl.fake.prompts).toHaveLength(3);
       expect(page.repl.fake.prompts[2]).toContain(instruction);
@@ -284,216 +197,52 @@ describe("987 — mounted original recovery", () => {
       expect(after.model.entries).toEqual(before.model.entries);
     });
   }
-  /**
-   * Walk the keyboard from the composer to the Draft, and prove it arrived.
-   *
-   * The Draft's own value is the oracle, not a phrase somewhere on the screen:
-   * `Type here` is optional guidance that required recovery and placement
-   * advice can crowd out, so a traversal that waited for it would be waiting on
-   * the layout rather than on focus. One probe character is typed at each stop
-   * and erased again; the stop where it lands in the Draft's own rows, and not
-   * the composer's, is the one these keystrokes are reaching.
-   *
-   * The probe is polled rather than awaited, because a stop that is not a text
-   * field swallows the key and draws nothing — which is an answer about focus,
-   * not a reason to fail.
-   */
-  function* draftFromComposer(page: ReplPage): Operation<void> {
-    yield* intoComposer(page);
-    // A token no part of this screen draws: a single letter would collide with
-    // ordinary labels like QUEUE and make every stop look like the Draft.
-    const probe = "zq7";
-    function* settles(holds: (one: ScreenReading) => boolean): Operation<boolean> {
-      for (let poll = 0; poll < 25; poll += 1) {
-        if (holds(page.screen())) {
-          return true;
-        }
-        yield* sleep(20);
-      }
-      return holds(page.screen());
-    }
-    const route: string[] = [];
-    for (let stop = 0; stop < 24; stop += 1) {
-      yield* page.type(probe);
-      const landed = yield* settles((one) => draftHolds(one, probe));
-      const anywhere = landed || (yield* settles((one) => one.shows(probe)));
-      if (anywhere) {
-        for (let erase = 0; erase < probe.length; erase += 1) {
-          yield* page.key("Backspace");
-        }
-        yield* settles((one) => !one.shows(probe));
-      }
-      if (landed) {
-        return;
-      }
-      route.push(anywhere ? "field" : "control");
-      const before = page.screen().index;
-      yield* page.key("Tab");
-      yield* page.until("the next keyboard traversal", (one) => one.index > before);
-    }
-    throw new Error(
-      `the keyboard never reached the Draft from the composer. stops=${JSON.stringify(route)} ` +
-        `${page.describe()}`,
-    );
-  }
-
   it("keeps recovery closed through healthy idle and running work, and removes the action on an exact completed match", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    expect(page.screen().shows("Review recovery")).toBe(false);
-    expect(page.screen().shows("[review recovery]")).toBe(false);
+    expect(page.screen().shows("Feedback receipt unknown")).toBe(false);
     page.repl.fake.script({ reply: "<REPL.Bindings />", held: true });
     page.repl.fake.script({ reply: "<Output>Healthy completed match.</Output>", held: true });
     yield* sendMessage(page, "An ordinary healthy request.");
     yield* page.repl.fake.holdingTurns(1);
-    expect(page.screen().shows("Review recovery")).toBe(false);
-    expect(page.screen().shows("[review recovery]")).toBe(false);
+    expect(page.screen().shows("Feedback receipt unknown")).toBe(false);
     page.repl.fake.releaseTurn();
     yield* page.repl.fake.startedTurns(2);
     yield* page.repl.fake.holdingTurns(1);
     yield* page.until("the ordinary feedback turn running", (one) => one.shows("[stop]"));
-    expect(page.screen().shows("Review recovery")).toBe(false);
     page.repl.fake.releaseTurn();
     yield* page.until(
       "the healthy feedback completing",
       (one) => sidekickIdle(one) && one.shows("Healthy completed match."),
     );
-    expect(page.screen().shows("Review recovery")).toBe(false);
-    expect(page.screen().shows("[review recovery]")).toBe(false);
+    expect(page.screen().shows("Feedback receipt unknown")).toBe(false);
   });
-  it("routes recovery edits and Close without changing either owner's held form values", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* draftText(page, "A retained entry draft.");
-    yield* intoComposer(page);
-    yield* typed(page, "A retained message.");
-    const saved = yield* settledReading(page.repl);
-    const form = {
-      values: { answer: "Entry's partial answer" },
-      field: "answer",
-      messages: [],
-      offset: 0,
-    };
-    const asking = {
-      key: "original-question",
-      open: false,
-      form: { ...form, values: { answer: "Sidekick's partial answer" } },
-    };
-    const state: ReplState = {
-      ...initialState(saved.execution),
-      draft: "A retained entry draft.",
-      message: "A retained message.",
-      form,
-      asking,
-      recovering: { open: true, text: "", revision: 0, offset: 0, replacing: false },
-    };
-    const live: ReplLive = {
-      output: "",
-      question: undefined,
-      expansion: "playing",
-      pausable: false,
-      running: false,
-      agent: NO_AGENT,
-      lifecycle: NO_LIFECYCLE,
-    };
-    const edited = reduceRepl(
-      state,
-      { kind: "type", text: "A distinct instruction." },
-      saved.model,
-      live,
-      undefined,
-      { kind: "recovery" },
-    ).state;
-    const closed = reduceRepl(edited, { kind: "close-recovery" }, saved.model, live).state;
-    expect(closed.recovering?.text).toBe("A distinct instruction.");
-    expect(closed.recovering?.open).toBe(false);
-    expect(closed.form).toBe(form);
-    expect(closed.asking).toBe(asking);
-    expect(closed.draft).toBe(state.draft);
-    expect(closed.message).toBe(state.message);
-    expect(closed.route).toBe(state.route);
-  });
-  it("reviews without work, preserves a new instruction through resize and sends it once", function* () {
+  it("keeps the ordinary composer editable during resize", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<REPL.Bindings />" });
-    page.repl.fake.script({ reply: "<REPL.Submit />", failure: "Internal error" });
+    page.repl.fake.script({ reply: "", failure: "Internal error" });
     yield* sendMessage(page, "Inspect the established result.");
-    yield* page.until("the recovery action", (one) => one.shows("[review recovery]"));
-    yield* draftFromComposer(page);
-    yield* draftText(page, "Draft survives review.");
+    yield* page.until("unknown feedback", (one) => one.shows("Feedback receipt unknown"));
     yield* intoComposer(page);
-    yield* typed(page, "Message survives review.");
-    yield* page.press("[review recovery]");
-    yield* page.until("the original recovery account", (one) =>
-      one.shows("Earlier feedback acceptance remains unknown."),
-    );
-    expect(page.repl.fake.prompts).toHaveLength(2);
-    yield* page.until("the new instruction field", (one) => one.shows("New instruction:"));
-    yield* page.until("the focused new instruction", (one) => one.shows(">> New instruction:"));
-    const instruction = "Inspect the established result and propose the next step.";
-    yield* page.type(instruction);
-    yield* page.until("the instruction end", (one) => one.shows("propose the next step."));
-    yield* page.resize({ columns: 120, rows: 30 });
+    yield* typed(page, "A distinct instruction.");
     yield* page.resize(NARROW);
-    yield* page.until("fixed recovery action at narrow size", (one) =>
-      one.shows("[send new instruction]"),
+    yield* page.until(
+      "message and status together",
+      (one) =>
+        composerHolds(one, "A distinct instruction.") && one.shows("Feedback receipt unknown"),
     );
-    for (let pageAt = 0; pageAt < 30 && !page.screen().shows("New instruction:"); pageAt++) {
-      const before = page.screen().index;
-      yield* page.wheel("down", { column: 2, row: 4 });
-      yield* page.until("the recovery drawer scrolling", (one) => one.index > before);
-    }
-    for (
-      let traversal = 0;
-      traversal < 12 && !page.screen().shows(">> New instruction:");
-      traversal++
-    ) {
-      yield* completedKey(page, "Backtab");
-    }
-    yield* page.until("the focused narrow instruction", (one) => one.shows(">> New instruction:"));
-    for (let at = 0; at < instruction.length; at++) {
-      yield* completedKey(page, "ArrowLeft");
-    }
     yield* completedKey(page, "Home");
-    yield* page.until("the narrow instruction prefix", (one) =>
-      one.shows("New instruction: Inspect"),
+    yield* typed(page, "New: ");
+    yield* page.until("the edited message", (one) =>
+      composerHolds(one, "New: A distinct instruction."),
     );
-    for (let at = 0; at < 28; at++) {
-      yield* completedKey(page, "ArrowRight");
-    }
-    yield* page.type("X");
-    yield* page.until("the narrow instruction middle", (one) => one.shows("resuXlt"));
-    yield* completedKey(page, "Backspace");
-    for (let at = 28; at < instruction.length; at++) {
-      yield* completedKey(page, "ArrowRight");
-    }
-    yield* completedKey(page, "End");
-    yield* page.until("the narrow instruction end", (one) => one.shows("step."));
-    const refused = yield* page.resize({ columns: 60, rows: 18 });
-    expect(refused.shows("needs at least 72x20")).toBe(true);
-    expect(refused.shows("[send new instruction]")).toBe(false);
-    expect(refused.shows("[close]")).toBe(false);
-    yield* page.resize(NARROW);
-    yield* page.key("Escape");
-    yield* page.until("the closed recovery drawer", (one) => !one.shows("Review recovery"));
-    yield* page.resize(WIDE);
-    expect(draftHolds(page.screen(), "Draft survives review.")).toBe(true);
-    expect(composerHolds(page.screen(), "Message survives review.")).toBe(true);
-    yield* page.press("[review recovery]");
-    yield* page.until("the saved instruction", (one) => one.shows("propose the next step."));
     expect(page.repl.fake.prompts).toHaveLength(2);
-    page.repl.fake.script({ reply: "<Output>Continued once.</Output>" });
-    yield* page.press("[send new instruction]");
-    yield* awaited("one distinct recovery request", () => page.repl.fake.prompts.length === 3);
-    expect(page.repl.fake.prompts[2]).toContain(instruction);
-    expect(page.repl.fake.turns[2]?.handle.sessionKey).toBe(
-      page.repl.fake.turns[0]?.handle.sessionKey,
-    );
   });
   it("keeps an independent entry question waiting through recovery inspection and resize", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<REPL.Bindings />" });
     page.repl.fake.script({ reply: "", failure: "Internal error" });
     yield* sendMessage(page, "Inspect established work.");
-    yield* page.until("unknown feedback", (one) => one.shows("[review recovery]"));
+    yield* page.until("unknown feedback", (one) => one.shows("Feedback receipt unknown"));
     yield* draftFromComposer(page);
     yield* pasteDraft(
       page,
@@ -508,14 +257,9 @@ describe("987 — mounted original recovery", () => {
     yield* page.key("Escape");
     yield* page.until("closed entry form", (one) => !one.shows("[submit]"));
     yield* selectPane(page, "sidekick");
-    yield* page.press("[review recovery]");
-    yield* page.until("recovery account", (one) =>
-      one.shows("Earlier feedback acceptance remains unknown."),
-    );
+    yield* page.until("unknown feedback", (one) => one.shows("Feedback receipt unknown"));
     yield* page.resize(NARROW);
     yield* page.resize(WIDE);
-    yield* page.key("Escape");
-    yield* page.until("closed recovery", (one) => !one.shows("Review recovery"));
     yield* page.press("[answer]");
     yield* page.until(
       "the original waiting question",
@@ -524,121 +268,29 @@ describe("987 — mounted original recovery", () => {
     expect(page.repl.fake.prompts).toHaveLength(2);
     expect(page.screen().shows("Independent entry question.")).toBe(true);
   });
-  it("closes a completed recovery after edits during its new prompt and retains newer values", function* () {
+  it("preserves a newer Message while the recovery prompt runs", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<REPL.Bindings />" });
     page.repl.fake.script({ reply: "", failure: "Internal error" });
     yield* sendMessage(page, "Inspect established work.");
-    yield* page.until("unresolved feedback", (one) => one.shows("[review recovery]"));
+    yield* page.until("unresolved feedback", (one) => one.shows("Feedback receipt unknown"));
     yield* draftFromComposer(page);
     yield* typed(page, "A held Draft.");
     yield* intoComposer(page);
-    yield* typed(page, "A held Message.");
-    yield* page.press("[review recovery]");
-    yield* page.until("the account", (one) =>
-      one.shows("Earlier feedback acceptance remains unknown."),
-    );
-    yield* typed(page, "The authorized instruction.");
     page.repl.fake.script({ reply: "<Output>Recovery completed once.</Output>", held: true });
-    yield* page.press("[send new instruction]");
+    yield* sendMessage(page, "The authorized instruction.");
     yield* page.repl.fake.holdingTurns(1);
-    yield* page.press("New instruction:");
-    yield* page.type("A newer unused instruction.");
-    yield* page.until("the newer instruction suffix", (one) =>
-      one.rows.some(
-        (row) => row.includes("New instruction:") && row.trimEnd().endsWith("unused instruction."),
-      ),
-    );
+    yield* intoComposer(page);
+    yield* typed(page, "A newer unused instruction.");
     page.repl.fake.releaseTurn();
-    yield* page.until(
-      "the completed recovery drawer closing",
-      (one) => !one.shows("Review recovery") && one.shows("Recovery completed once."),
-    );
-    expect(page.screen().shows("[review recovery]")).toBe(false);
+    yield* page.until("continued", (one) => one.shows("Recovery completed once."));
     expect(draftHolds(page.screen(), "A held Draft.")).toBe(true);
-    expect(composerHolds(page.screen(), "A held Message.")).toBe(true);
+    expect(composerHolds(page.screen(), "A newer unused instruction.")).toBe(true);
+    expect(page.screen().shows("Feedback receipt unknown")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.repl.fake.prompts[2]).toContain("The authorized instruction.");
     expect(page.repl.fake.prompts[2]).not.toContain("A newer unused instruction.");
   });
-  for (const change of ["instruction", "action"]) {
-    it(`refuses stale held preparation after changing the ${change} without losing edits`, function* () {
-      const gate = appendGate();
-      const host = yield* useMountedHost({ gate });
-      const page = yield* useReplPage({ host, size: WIDE });
-      host.fake.script({ reply: "<REPL.Bindings />" });
-      host.fake.script({ reply: "", failure: "Internal error" });
-      yield* sendMessage(page, "Inspect established work.");
-      yield* page.until("recovery after failed feedback", (one) => one.shows("[review recovery]"));
-      yield* page.press("[review recovery]");
-      yield* page.until("focused new instruction", (one) => one.shows(">> New instruction:"));
-      yield* typed(page, "An unused original instruction.");
-      yield* page.until("the account settling without replacing newer text", (one) =>
-        one.shows("Earlier feedback acceptance remains unknown."),
-      );
-      yield* page.resize({ columns: 120, rows: 30 });
-      yield* page.resize(WIDE);
-      const decision = gate.holdNext(
-        (path, record) =>
-          path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"recovery-decision"'),
-      );
-      yield* page.press("[send new instruction]");
-      yield* race([
-        decision.started(),
-        (function* () {
-          yield* sleep(5000);
-          throw new Error("The recovery decision was not reached. " + page.describe());
-        })(),
-      ]);
-      if (change === "instruction") {
-        for (
-          let traversal = 0;
-          traversal < 8 && !page.screen().shows(">> New instruction:");
-          traversal++
-        ) {
-          const before = page.screen().index;
-          yield* page.key("Tab");
-          yield* page.until("the next recovery traversal", (one) => one.index > before);
-        }
-        yield* page.until("the instruction focused after resizing", (one) =>
-          one.shows(">> New instruction:"),
-        );
-        yield* typed(page, " Newer instruction text.");
-      } else {
-        yield* page.press("[different conversation]");
-      }
-      yield* page.key("Escape");
-      yield* page.until(
-        "closed while preparation stays held",
-        (one) => !one.shows("Review recovery"),
-      );
-      yield* draftFromComposer(page);
-      yield* draftText(page, "Newer held Draft.");
-      yield* intoComposer(page);
-      yield* typed(page, "Newer held Message.");
-      expect(host.fake.prompts).toHaveLength(2);
-      yield* page.press("[review recovery]");
-      yield* page.until("the retained instruction", (one) =>
-        one.shows(
-          change === "instruction" ? "Newer instruction text." : "An unused original instruction.",
-        ),
-      );
-      if (change === "instruction") {
-        expect(page.screen().shows("Newer instruction text.")).toBe(true);
-      }
-      decision.release();
-      yield* page.until("stale preparation refusal", (one) => one.shows("instruction changed"));
-      expect(host.fake.prompts).toHaveLength(2);
-      yield* page.key("Escape");
-      yield* page.until(
-        "the preserved composer values",
-        (one) =>
-          one.shows(COMPOSER) &&
-          composerHolds(one, "Newer held Message.") &&
-          draftHolds(one, "Newer held Draft."),
-      );
-    });
-  }
 });
 
 describe("Sidekick presentation: visible work owns its controls", () => {
@@ -3686,12 +3338,10 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
     { length: 60 },
     (_, at) => `LONG${String(at + 1).padStart(2, "0")} retained reply row`,
   );
-  const RECOVERY = "[review recovery]";
+  const RECOVERY = "Feedback receipt unknown";
   /** The person's own message, which is this chat's first item. */
   const ASKED = "A long retained reply.";
   const UNFINISHED = "(unfinished): Internal error";
-  /** The send refusal's opening words, which a narrow frame wraps after. */
-  const REFUSED = "This conversation holds feedback whose acceptance";
 
   /** The Sidekick's own reading, which a narrow frame routes as the whole screen. */
   function chatShows(reading: ScreenReading, text: string): boolean {
@@ -3731,95 +3381,62 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
     });
   }
 
-  /**
-   * The recovery action, drawn once on the row directly above the tray.
-   *
-   * Above the tray rather than at a fixed screen row: a narrow frame's guidance
-   * grows by several rows when focus enters the reading, and every fixed
-   * control of the outlet moves up with it.
-   */
-  function fixedRecovery(reading: ScreenReading): ScreenCell {
-    expect(reading.occurrences(RECOVERY)).toBe(1);
-    const at = reading.locate(RECOVERY);
-    expect(reading.locate("TODO").row).toBe(at.row + 1);
-    expect(reading.locate(COMPOSER).row).toBeGreaterThan(at.row);
-    return at;
-  }
-
-  for (const [size, other] of [
-    [WIDE, NARROW],
-    [NARROW, WIDE],
-  ] as const) {
-    it(`keeps [review recovery] visible and keyboard-reachable in a long retained chat at ${size.columns}x${size.rows}`, function* () {
-      const dataRoot = yield* useTemporary("xmd-1137-recovery-");
+  for (const size of [WIDE, NARROW]) {
+    it(`keeps recovery and Message available on cold reopen at ${size.columns} columns`, function* () {
+      const dataRoot = yield* useTemporary("xmd-inline-recovery-");
       const retained = yield* retainedRecovery(dataRoot);
       const before = yield* pairBytes(retained.root, retained.execution);
       const cold = yield* useMountedHost({ dataRoot });
       const page = yield* useReplPage({ host: cold, location: retained.location, size });
       yield* page.until("the retained chat tail", (one) => chatShows(one, UNFINISHED));
-      yield* page.until("the retained recovery action", (one) => one.shows(RECOVERY));
+      yield* page.until(
+        "the inline fallback",
+        (one) => one.shows(RECOVERY) && one.shows("[Start new chat]"),
+      );
+      expect(page.screen().locate(RECOVERY).row).toBeLessThan(page.screen().locate(COMPOSER).row);
       expect(chatShows(page.screen(), "LONG01")).toBe(false);
-      expect(fixedRecovery(page.screen()).row).toBeGreaterThan(
-        page.screen().locate(UNFINISHED).row,
-      );
-
-      // Up to the start this case is about, not merely into the long reply. The
-      // assertion after the account closes is about the person's own message,
-      // which this chat emits before that reply's first row — so stopping as
-      // soon as LONG01 appears can leave the message just above the window, and
-      // whether it is inside depends on where a three-row traversal happens to
-      // land at each measured capacity. The established reading requires both.
-      const started = (one: ScreenReading): boolean =>
-        chatShows(one, ASKED) && chatShows(one, "LONG01");
-      for (let tick = 0; tick < 40 && !started(page.screen()); tick++) {
-        const at = page.screen().index;
-        const control = fixedRecovery(page.screen());
-        yield* page.wheel("up", { column: control.column + 2, row: control.row - 3 });
-        yield* page.until("the chat scrolling back", (one) => one.index > at);
-      }
-      expect(chatShows(page.screen(), "LONG01")).toBe(true);
-      expect(chatShows(page.screen(), ASKED)).toBe(true);
-      expect(chatShows(page.screen(), UNFINISHED)).toBe(false);
-      fixedRecovery(page.screen());
-
-      for (let step = 0; step < 10 && !page.screen().shows(`> › ${COMPOSER}`); step++) {
-        yield* completedKey(page, "Tab");
-      }
+      yield* focusMessage(page);
       yield* typed(page, "A held message.");
-      for (let step = 0; step < 8 && !page.screen().shows(`> ${RECOVERY}`); step++) {
-        yield* completedKey(page, "Alt+ArrowUp");
-      }
-      expect(page.screen().shows(`> ${RECOVERY}`)).toBe(true);
-      fixedRecovery(page.screen());
-
-      yield* completedKey(page, "Enter");
-      yield* page.until("the existing recovery account", (one) =>
-        one.shows("Earlier feedback acceptance remains unknown."),
+      yield* page.resize(size === WIDE ? NARROW : WIDE);
+      yield* page.until(
+        "status and composer after resizing",
+        (one) => one.shows(RECOVERY) && composerHolds(one, "A held message."),
       );
-      yield* page.key("Escape");
-      yield* page.until("the closed account", (one) => !one.shows("Review recovery"));
-      yield* page.until("focus returning to its opener", (one) => one.shows(`> ${RECOVERY}`));
-      expect(chatShows(page.screen(), ASKED)).toBe(true);
-      expect(page.screen().shows("A held message.")).toBe(true);
-
-      for (const next of [other, size]) {
-        yield* page.resize(next);
-        yield* page.until(`the recovery action at ${next.columns}x${next.rows}`, (one) =>
-          one.shows(RECOVERY),
-        );
-        fixedRecovery(page.screen());
-        expect(page.screen().shows(`> ${RECOVERY}`)).toBe(true);
-      }
-
-      for (let step = 0; step < 10 && !page.screen().shows(`> › ${COMPOSER}`); step++) {
-        yield* completedKey(page, "Tab");
-      }
-      yield* completedKey(page, "Enter");
-      yield* page.until("the intentional send refusal", (one) => one.shows(REFUSED));
-      expect(page.screen().shows("A held message.")).toBe(true);
-      fixedRecovery(page.screen());
       expect(cold.fake.prompts).toHaveLength(0);
       expect(yield* pairBytes(retained.root, retained.execution)).toEqual(before);
+      if (page.screen().size.columns !== WIDE.columns) {
+        yield* page.resize(WIDE);
+      }
+      yield* draftFromComposer(page);
+      yield* typed(page, "A held Draft.");
+      yield* page.press("[Start new chat]");
+      yield* page.until(
+        "the new composer",
+        (one) => !one.shows("[Start new chat]") && composerHolds(one, "A held message."),
+      );
+      expect(draftHolds(page.screen(), "A held Draft.")).toBe(true);
+      expect(cold.fake.prompts).toHaveLength(0);
+      const after = yield* pairBytes(retained.root, retained.execution);
+      expect(after.entries).toEqual(before.entries);
+      const history = projectSidekick(
+        yield* readSidekickRecords(
+          join(retained.root, PAIRED_DIRECTORY, retained.execution, SIDEKICK_FILE),
+        ),
+      );
+      if (!history.ok) {
+        throw history.error;
+      }
+      const selected = history.value.conversations.find((one) => one.id === history.value.active);
+      expect(selected?.previous).toBeDefined();
+      expect(selected?.agent).toBe(
+        history.value.conversations.find((one) => one.id === selected?.previous)?.agent,
+      );
+      expect(
+        history.value.chat.some(
+          (one) =>
+            one.kind === "person" && one.conversation === selected?.previous && one.text === ASKED,
+        ),
+      ).toBe(true);
     });
   }
 });

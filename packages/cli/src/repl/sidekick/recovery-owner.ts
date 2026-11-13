@@ -56,6 +56,8 @@ export function* inspectRecoveryOwnership(
   const inspection = yield* administration.inspectOwnership(digest);
   if (
     !inspection.ok ||
+    inspection.value.keyDigest !== digest ||
+    inspection.value.record.keyDigest !== digest ||
     inspection.value.record.state !== "idle" ||
     inspection.value.record.release !== "quiesced"
   ) {

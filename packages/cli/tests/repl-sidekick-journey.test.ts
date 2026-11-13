@@ -5155,7 +5155,7 @@ describe("1183 — a follow-up sent during live automatic feedback", () => {
     yield* intoComposer(page);
     yield* typed(page, "newer unsent text");
     const queued = page.screen();
-    expect(queued.shows("[review recovery]")).toBe(false);
+    expect(queued.shows("Feedback receipt unknown")).toBe(false);
     expect(queued.shows("cannot be established")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(2);
     const before = yield* settledReading(page.repl);
@@ -5168,7 +5168,7 @@ describe("1183 — a follow-up sent during live automatic feedback", () => {
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.repl.fake.prompts[2]).toContain(FOLLOW_UP);
     expect(page.screen().found("newer unsent text", COMPOSER_VALUE)).toBe(1);
-    expect(page.screen().shows("[review recovery]")).toBe(false);
+    expect(page.screen().shows("Feedback receipt unknown")).toBe(false);
     const after = yield* settledReading(page.repl);
     const messages = after.chat.flatMap((record) => (record.kind === "message" ? [record] : []));
     expect(messages.map((record) => record.text)).toEqual(["run the counted entry", FOLLOW_UP]);

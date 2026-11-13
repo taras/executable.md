@@ -2757,7 +2757,7 @@ starting a replacement; prepared Sidekick attachments grant no submission rights
 
 ## Attaching to the live Sidekick
 
-Explicit recovery fallback in an established child offers a fresh reference to
+**Start new chat** in an established child offers a fresh reference inline to
 the same live REPL before selecting its different conversation. The receipt shows
 the actual `xmd repl --attach <sessionId>` command and `{sessionId: "<sessionId>"}`
 for later parent composition. `[saved reference; continue]` retains the person's
@@ -2978,44 +2978,40 @@ history position is selected, or while Sidekick is active. Arrival wakes the
 screen without moving selection, focus, Follow or either editable draft.
 Ordinary `xmd run` retains its existing foreground forwarding.
 
-The recovery guard presents `[review recovery]` for unresolved feedback or a
-pending recovery decision, using the same
-[live feedback exception](#live-feedback-exception) as queue admission. The
-review shows the original request, saved failure, established entries and
-unfinished controls.
-The action sits with the conversation's fixed controls, directly above the tray
-and outside the scrolling chat, so neither a long conversation nor its scroll
-position hides it at any supported size. It belongs to the Message keyboard
-region, where Alt+Up from Message reaches it.
-Inspection, closing and resizing send nothing and record no decision. The person
-enters a distinct New instruction, then chooses `[continue with new instruction]`.
-The shared admission owner holds dispatch, joins the captured Sidekick exchange
-and reconciles the entire unresolved Submit set before retaining that decision.
-The new message uses the same readable canonical conversation and native identity;
-it neither delivers the old feedback nor re-evaluates interrupted controls.
-Unknown old acceptance remains visible. Running entries retain their own lifetime.
-The separate Message and Draft values survive review.
+The Sidekick shows saved work and unknown feedback receipt with the fixed
+controls above the ordinary Message tray. The chat shows the full instruction
+from an unused recovery decision. **Use saved instruction** loads it into an
+empty Message composer. Send requires a separate action and checks the exact
+saved text again. The chat and
+entry output remain available in their reading surfaces. Navigation, resizing
+and inspection send nothing and retain no decision.
 
-A human Sidekick Stop during automatic feedback is the one ordinary path past
-that refusal. Once its owned cancellation and cleanup have joined, and before the
-owner admits anything else, the history retains a `human-stop` record binding the
-exact retained prefix, the conversation's unresolved requests and its unfinished
-controls. The record marks no Prompt terminal and delivers nothing: old
-acceptance stays unknown and `[review recovery]` stays available. While that Stop
-still describes the active conversation's exact frontier, a UI Send typed after
-it waits in the held queue bound to that Stop. Resume releases the hold only for
-such a message at the head. Its activation reconciles the entire unresolved
-Submit set, retains the same `continue-original` decision for that exact
-instruction, and sends it once as an ordinary message carrying the
-unknown-acceptance account. Messages queued before the Stop, ACP-origin messages
-and Resume itself bind nothing; an older head keeps the queue held until it is
-removed or explicit recovery runs. A later request, another active conversation,
-a new unfinished control or a used decision ends the Stop's eligibility. A
-refused binding leaves the message waiting at the head under a failure hold and
-sends nothing. A cold reopening of that history starts with the queue held and
-writes nothing, and its continuation still requires exact retained clean
-ownership. A retained Stop is local joined evidence, never backend acceptance or
-cold quiescence.
+After the exchange and cleanup join, an explicit Send from Message can bind a
+distinct new instruction to the original conversation. The owner reconciles the
+entire unresolved Submit set, checks the remaining request and control frontier
+and establishes exact ownership before binding the decision. This exchange uses
+the existing dispatch slot. Earlier waiting messages stay held and ordered for
+explicit queue action. The prompt carries the new instruction and recovery
+context. The interrupted payload, prompts, controls and entries are not replayed.
+Unknown old receipt remains visible and running entries retain their lifetime.
+
+A human Sidekick Stop during automatic feedback retains a `human-stop` record
+after cancellation and cleanup join. It binds the exact retained prefix,
+unresolved requests and unfinished controls. It proves the local join only.
+Cold continuation still requires exact retained clean ownership. A later
+request, another active conversation, a new unfinished control or a used
+decision ends the Stop's eligibility. ACP, Retry, TODO and Resume do not supply
+a fresh recovery instruction.
+
+When ownership or exact native session load refuses, the fixed status gives the reason and offers
+**Start new chat**. In a local REPL this prepares and selects a different
+same-agent conversation without a prompt, keeping both drafts, entry history
+and the prior chat. An established attached child uses the
+[reference handoff](#attaching-to-the-live-sidekick) and captures its distinct
+instruction from Message.
+
+An unselected retained replacement preparation is withdrawn by the first
+deliberate fallback action. A further action is required to prepare a fresh chat.
 
 A cold original continues only with exact retained clean ownership evidence.
 An outer failed Prompt outcome or unreadable/fatal canonical history refuses.

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const size = z.object({ columns: z.int().min(1).max(500), rows: z.int().min(1).max(200) });
 export const point = z.object({ column: z.int().nonnegative(), row: z.int().nonnegative() });
-export const region = z.enum(["sidekick-composer", "transcript", "history", "recovery"]);
+export const region = z.enum(["sidekick-composer", "transcript", "history"]);
 export const waitOptions = z.object({
   text: z.string().min(1),
   region: region.optional(),

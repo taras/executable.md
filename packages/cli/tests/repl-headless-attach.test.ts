@@ -80,83 +80,28 @@ describe("987 — fresh child recovery reference", () => {
         }
         return undefined;
       });
-      yield* visible(terminal.terminal, "[review recovery]", frames);
-      yield* click(terminal.terminal, "[review recovery]");
-      yield* visible(terminal.terminal, "Earlier feedback acceptance remains unknown.", frames);
-      yield* held.input.ready(terminal.terminal);
-      const contentAt = yield* locate(terminal.terminal, "Original conversation:", frames);
-      for (let page = 0; page < 60; page++) {
-        yield* held.input.ready(terminal.terminal);
-        if (terminal.terminal.screen?.rows().some((row) => row.includes("New instruction:"))) {
-          break;
-        }
-        yield* held.input.input(
-          terminal.terminal,
-          `\x1b[<65;${contentAt.column + 1};${contentAt.row + 1}M`,
-        );
+      yield* visible(terminal.terminal, "Feedback receipt unknown", frames);
+      yield* visible(terminal.terminal, "[Start new chat]", frames);
+      terminal.terminal.resized({ columns: 72, rows: 20 });
+      yield* visible(terminal.terminal, "Sessions", frames);
+      if (terminal.terminal.screen?.rows().some((row) => row.includes("* Entries"))) {
+        yield* click(terminal.terminal, "Sidekick");
       }
-      for (let traversal = 0; traversal < 12; traversal++) {
+      yield* visible(terminal.terminal, "[Start new chat]", frames);
+      for (
+        let step = 0;
+        step < 8 &&
+        !terminal.terminal.screen?.rows().some((row) => row.includes("> › message the sidekick"));
+        step++
+      ) {
+        yield* held.input.input(terminal.terminal, "\t");
         yield* held.input.ready(terminal.terminal);
-        if (terminal.terminal.screen?.rows().some((row) => row.includes(">> New instruction:"))) {
-          break;
-        }
-        yield* held.input.input(terminal.terminal, "\x1b[Z");
       }
-      yield* visible(terminal.terminal, ">> New instruction:", frames);
+      yield* visible(terminal.terminal, "> › message the sidekick", frames);
       const instruction = "Inspect the established result and propose the next step.";
       yield* held.input.input(terminal.terminal, instruction);
       yield* visible(terminal.terminal, "propose the next step.", frames);
-      if (branch === "continue") {
-        for (const size of [
-          { columns: 160, rows: 36 },
-          { columns: 120, rows: 30 },
-        ]) {
-          terminal.terminal.resized(size);
-          yield* held.input.input(terminal.terminal, "\t");
-          const drawerAt = yield* locate(terminal.terminal, "Review recovery", frames);
-          for (let page = 0; page < 60; page++) {
-            if (terminal.terminal.screen?.rows().some((row) => row.includes("New instruction:"))) {
-              break;
-            }
-            yield* held.input.input(
-              terminal.terminal,
-              `\x1b[<65;${drawerAt.column + 1};${drawerAt.row + 3}M`,
-            );
-          }
-          for (let traversal = 0; traversal < 12; traversal++) {
-            if (
-              terminal.terminal.screen?.rows().some((row) => row.includes(">> New instruction:"))
-            ) {
-              break;
-            }
-            yield* held.input.input(terminal.terminal, "\x1b[Z");
-          }
-          yield* held.input.input(terminal.terminal, "\x1b[F");
-          yield* visible(terminal.terminal, "step.", frames);
-          for (let at = 0; at < instruction.length; at++) {
-            yield* held.input.input(terminal.terminal, "\x1b[D");
-          }
-          yield* held.input.input(terminal.terminal, "\x1b[H");
-          yield* visible(terminal.terminal, "New instruction: Inspect", frames);
-          for (let at = 0; at < 28; at++) {
-            yield* held.input.input(terminal.terminal, "\x1b[C");
-          }
-          yield* held.input.input(terminal.terminal, "X");
-          yield* visible(terminal.terminal, "resuXlt", frames);
-          yield* held.input.input(terminal.terminal, "\x7f");
-          for (let at = 28; at < instruction.length; at++) {
-            yield* held.input.input(terminal.terminal, "\x1b[C");
-          }
-          yield* held.input.input(terminal.terminal, "\x1b[F");
-          yield* visible(terminal.terminal, "step.", frames);
-          expect(terminal.terminal.screen?.size).toEqual(size);
-        }
-      }
-      terminal.terminal.resized({ columns: 160, rows: 36 });
-      yield* held.input.input(terminal.terminal, "\t");
-      yield* click(terminal.terminal, "[different conversation]");
-      yield* visible(terminal.terminal, "[abandon; new chat]", frames);
-      yield* click(terminal.terminal, "[abandon; new chat]");
+      yield* click(terminal.terminal, "[Start new chat]");
       yield* visible(terminal.terminal, "[saved reference; continue]", frames);
       yield* held.input.ready(terminal.terminal);
       const text = terminal.terminal.screen?.rows().join("\n") ?? "";
@@ -214,21 +159,6 @@ describe("987 — fresh child recovery reference", () => {
           ),
         ).toHaveLength(1);
         yield* click(restored.terminal, "[cancel switch]");
-        yield* visible(restored.terminal, "[abandon; new chat]", frames);
-        yield* held.input.ready(restored.terminal);
-        const cancelledAt = yield* locate(restored.terminal, "Original conversation:", frames);
-        for (let page = 0; page < 60; page++) {
-          yield* held.input.ready(restored.terminal);
-          if (
-            restored.terminal.screen?.rows().some((row) => row.includes("switch was cancelled"))
-          ) {
-            break;
-          }
-          yield* held.input.input(
-            restored.terminal,
-            `\x1b[<65;${cancelledAt.column + 1};${cancelledAt.row + 1}M`,
-          );
-        }
         yield* visible(restored.terminal, "switch was cancelled", frames);
         let withdrawn: Error | undefined;
         try {
