@@ -938,6 +938,8 @@ An uncertain turn, invalid reply, or failed continuation holds for reconciliatio
 
 The attempt retains the assignment, evidence snapshots and fingerprints, model
 selection, and provider outcome. A completed turn also leaves its raw reply.
+The phase extracts one unambiguous JSON result from the reply before validating
+it. The raw reply retains any surrounding progress text.
 The result contains either the evidence, discriminating regression and Opus
 handoff for a cause, or the missing witness and how to obtain it. Diagnosis
 returns that receipt to the coordinator. Implementation and independent review

@@ -28,7 +28,10 @@ returns: {type: object}
 <Return value={{replace,result:{...hold,reason:attempt.turn?.failure?.split("\n")[0] ?? attempt.catalog.failure ?? "The requested diagnostic model is unavailable."}}} />
 <Else>
 <Diagnosis.Schema as="schema" />
-<SafeParse schema={schema.result} as="parsed">{attempt.turn.reply}</SafeParse>
+<Phase.Extract text={attempt.turn.reply} as="extracted" />
+<If condition={!extracted.ok}><Return value={{replace:false,result:{...hold,reason:extracted.rejection.message}}} />
+<Else>
+<SafeParse schema={schema.result} as="parsed">{extracted.json}</SafeParse>
 <If condition={!parsed.ok || parsed.value.revision !== revision || (parsed.value.outcome === "cause" && (parsed.value.regression.expected.trim() === parsed.value.regression.observed.trim() || parsed.value.evidence.some(path => !props.inputs.some(input => input.path === path))))}><Return value={{replace:false,result:{...hold,reason:"The saved reply does not match the diagnostic result contract or captured evidence."}}} />
 <Else>
 <Ticket.Capture as="receipt"><Ticket.Read path={attempt.record.identities + "/" + encodeURIComponent(attempt.record.solver.session) + ".json"} limit={1048576} as="text" /><Json value={text} /></Ticket.Capture>
@@ -38,6 +41,8 @@ returns: {type: object}
 <Else>
 <Dir path={props.directory}><File path="result.json"><Json value={{schema:"diagnosis-result.v1",assignment:attempt.record,model:attempt.catalog.model,identity:checked.value,result:parsed.value}} /></File></Dir>
 <Return value={{replace:false,result:{status:parsed.value.outcome,revision,attempt:props.directory,result:props.directory + "/result.json"}}} />
+</Else>
+</If>
 </Else>
 </If>
 </Else>

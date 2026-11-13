@@ -36,7 +36,7 @@ For a confirmed cause, explain which captured observations distinguish it, cite 
 Use this JSON schema.
 <Json value={schema.result} />
 
-Reply with only the JSON object. Start with an opening brace and end with a closing brace. Omit Markdown fences and any text before or after the object.
+Return a single JSON object as your final result. Keep any progress updates in plain prose.
 </Let>
 <If condition={prompt.length > 64000}><Fail message="The diagnostic prompt exceeds 64000 characters. Prepare concise evidence in a fresh attempt." /></If>
 <Let as="catalog" value={null} />

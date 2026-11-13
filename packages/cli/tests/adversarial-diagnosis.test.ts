@@ -125,6 +125,37 @@ function offer(fake: ReturnType<typeof createFakeAcp>, models: string[]) {
 }
 
 describe("adversarial problem-solver phase", () => {
+  it("accepts one diagnosis after progress text and holds an ambiguous reply", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const result = {
+      outcome: "missing_witness",
+      revision: test.revision,
+      witness: "Reservation result",
+      howToObtain: "Capture one journal per child.",
+    };
+    const json = JSON.stringify(result);
+    const reply = `Recording one overlap pair.\n${json}`;
+    const first = join(test.root, "progress");
+    test.fake.script({ reply });
+    expect(JSON.parse(yield* test.run(first))).toMatchObject({ status: "missing_witness" });
+    expect((yield* readTextFile(join(first, "fable/raw.txt"))).trim()).toBe(reply);
+    expect(JSON.parse(yield* readTextFile(join(first, "fable/result.json"))).result).toEqual(
+      result,
+    );
+
+    const second = join(test.root, "ambiguous");
+    test.fake.script({ reply: `${reply}\n${json}` });
+    expect(JSON.parse(yield* test.run(second))).toMatchObject({
+      status: "hold",
+      reason: expect.stringContaining("exactly one unambiguous JSON result"),
+    });
+    expect(yield* API.Fs.operations.stat(join(second, "fable/result.json"))).toMatchObject({
+      exists: false,
+    });
+    expect(test.fake.prompts).toHaveLength(2);
+  });
+
   it("records a cause, continues its original conversation, and refuses changed identity", function* () {
     const test = yield* fixture();
     const first = join(test.root, "first");
