@@ -9,6 +9,7 @@ export const waitOptions = z.object({
   timeout: z.int().positive().optional(),
   at: point.optional(),
   row: z.int().nonnegative().optional(),
+  count: z.int().nonnegative().optional(),
   present: z.boolean().optional(),
   unique: z.boolean().optional(),
   bold: z.boolean().optional(),

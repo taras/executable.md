@@ -196,6 +196,9 @@ jobs:
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
             packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
             scripts/tests/repl-saved-recovery.md
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts \
+            scripts/tests/repl-command-output.md
           bash scripts/tests/repl-bench.sh
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

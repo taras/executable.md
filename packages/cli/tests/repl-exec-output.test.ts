@@ -17,10 +17,9 @@ import type { ReplPage } from "./support/repl-page.ts";
 import { awaitedFact, mountedReading } from "./support/mounted-repl.ts";
 import { intoComposer, pasteDraft, sidekickIdle } from "./support/screen-journeys.ts";
 
-describe("E3 associated command Output", () => {
-  it("shows captured controls as readable escapes in both entry readings", function* () {
+describe("E3 retained command output", () => {
+  it("retains captured control bytes in output, bindings, and command records", function* () {
     const received = "PROBE\x1b[2JTAIL\rEND";
-    const displayed = "PROBE\\x1b[2JTAIL\\x0dEND";
     yield* API.Process.around({
       *exec() {
         yield* Stdio.operations.stdout(new TextEncoder().encode(received));
@@ -39,19 +38,10 @@ describe("E3 associated command Output", () => {
     yield* intoComposer(page);
     yield* page.type("Run the probe");
     yield* page.key("Enter");
-    const shown = yield* page.until(
+    yield* page.until(
       "the completed associated entry",
       (one) => one.shows("1 ✓") && sidekickIdle(one) && one.shows("Probe completed."),
     );
-    const centerColumn = shown.locate("Entries").column;
-    const sidekickColumn = shown.locate("BINDINGS").column;
-    const center = shown.rows.map((row) => row.slice(centerColumn, sidekickColumn)).join("\n");
-    const associated = shown.rows.map((row) => row.slice(sidekickColumn)).join("\n");
-    expect(center).toContain(displayed);
-    expect(associated).toContain(displayed);
-    expect(center).not.toContain("�");
-    expect(associated).not.toContain("�");
-    expect(shown.occurrences(displayed)).toBe(2);
     const saved = yield* mountedReading(page.repl);
     const entry = saved.model.entries[0];
     expect(entry.terminal?.output).toContain(received);
@@ -138,7 +128,7 @@ describe("REPL foreground command presentation E1", () => {
 });
 
 describe("REPL command routing, containment and history E2–E5", () => {
-  it("E2: keeps routing separate from document output, bindings and retained streams", function* () {
+  it("E2: retains bound, captured, and silent command results", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 52 } });
     yield* submit(
       page,
@@ -161,13 +151,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
         "```",
       ].join("\n"),
     );
-    const shown = yield* page.until("the routing comparison settling", (one) => one.shows("1 ✓"));
-    expect(shown.occurrences("bound-stdout")).toBe(1);
-    expect(shown.shows("bound-stderr")).toBe(false);
-    expect(shown.shows("capture-stdout")).toBe(false);
-    expect(shown.shows("capture-stderr")).toBe(true);
-    expect(shown.shows("hidden-stdout")).toBe(false);
-    expect(shown.shows("hidden-stderr")).toBe(false);
+    yield* page.until("the routing comparison settling", (one) => one.shows("1 ✓"));
     const saved = yield* mountedReading(page.repl);
     const entry = saved.model.entries[0];
     expect(entry.terminal?.output.trim()).toBe("bound-stdout");

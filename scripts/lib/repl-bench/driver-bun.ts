@@ -224,13 +224,17 @@ export function useDriver(options: Launch) {
         region,
         at,
         row,
+        count,
         present = true,
         unique = false,
         bold,
         timeout = ACTION_TIMEOUT,
       } = query;
+      const expected = count ?? (present ? (unique ? 1 : undefined) : 0);
+      const quantity =
+        count === undefined ? (present ? "" : "absence of ") : `${count} matches for `;
       const label =
-        `${present ? "" : "absence of "}${JSON.stringify(text)} in ${region ?? "viewport"}` +
+        `${quantity}${JSON.stringify(text)} in ${region ?? "viewport"}` +
         (at === undefined
           ? row === undefined
             ? ""
@@ -249,13 +253,10 @@ export function useDriver(options: Launch) {
               (at === undefined || (at.row === hit.row && at.column === hit.column)) &&
               (bold === undefined || frame.bold(hit) === bold),
           );
-          return present
-            ? unique && hits.length !== 1
-              ? undefined
-              : hits[0]
-            : hits.length === 0
-              ? null
-              : undefined;
+          if (expected !== undefined && hits.length !== expected) {
+            return undefined;
+          }
+          return expected === 0 ? null : hits[0];
         },
         timeout,
       );

@@ -54,6 +54,7 @@ const wait = z.object({
   timeout: z.string().optional(),
   at: point.optional(),
   row: z.int().nonnegative().optional(),
+  count: z.int().nonnegative().optional(),
   present: z.boolean().optional(),
   bold: z.boolean().optional(),
 });
@@ -360,10 +361,14 @@ const registrations = [
     ".WaitForText",
     function* (props) {
       const { timeout, ...options } = wait.parse(props);
+      const unique = yield* hasBinding();
+      if (options.count !== undefined && (unique || options.present !== undefined)) {
+        throw new Error("ReplBench.WaitForText count cannot be combined with as or present");
+      }
       const result = yield* action({
         action: "wait",
         ...options,
-        unique: yield* hasBinding(),
+        unique,
         region: yield* RegionContext.get(),
         timeout:
           timeout === undefined
@@ -372,7 +377,15 @@ const registrations = [
       });
       return point.nullable().parse(result);
     },
-    { text: string, timeout: string, at: cell, row: integer, present: boolean, bold: boolean },
+    {
+      text: string,
+      timeout: string,
+      at: cell,
+      row: integer,
+      count: integer,
+      present: boolean,
+      bold: boolean,
+    },
     ["text"],
   ),
 ];
