@@ -2979,8 +2979,10 @@ screen without moving selection, focus, Follow or either editable draft.
 Ordinary `xmd run` retains its existing foreground forwarding.
 
 The Sidekick shows saved work and unknown feedback receipt with the fixed
-controls above the ordinary Message tray. An unused recovery decision is shown
-as pending confirmation when there is no unknown feedback receipt. The chat and
+controls above the ordinary Message tray. The chat shows the full instruction
+from an unused recovery decision. **Use saved instruction** loads it into an
+empty Message composer. Send requires a separate action and checks the exact
+saved text again. The chat and
 entry output remain available in their reading surfaces. Navigation, resizing
 and inspection send nothing and retain no decision.
 
@@ -3001,12 +3003,15 @@ request, another active conversation, a new unfinished control or a used
 decision ends the Stop's eligibility. ACP, Retry, TODO and Resume do not supply
 a fresh recovery instruction.
 
-When ownership refuses, the fixed status gives the reason and offers
+When ownership or exact native session load refuses, the fixed status gives the reason and offers
 **Start new chat**. In a local REPL this prepares and selects a different
 same-agent conversation without a prompt, keeping both drafts, entry history
 and the prior chat. An established attached child uses the
 [reference handoff](#attaching-to-the-live-sidekick) and captures its distinct
 instruction from Message.
+
+An unselected retained replacement preparation is withdrawn by the first
+deliberate fallback action. A further action is required to prepare a fresh chat.
 
 A cold original continues only with exact retained clean ownership evidence.
 An outer failed Prompt outcome or unreadable/fatal canonical history refuses.

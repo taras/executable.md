@@ -480,6 +480,7 @@ export interface ReplSidekickReading {
   /** Whether the current exchange is running. */
   readonly recovery?: boolean;
   readonly recoveryStatus?: string;
+  readonly savedRecovery?: { readonly id: string; readonly text: string };
   readonly busy: boolean;
   /** The agent the chat being read was held with. */
   readonly agent: string;
@@ -819,6 +820,7 @@ export interface ReplRecovering {
   readonly conversation: string;
   readonly reference?: string;
   readonly refusal?: string;
+  readonly canStartNewChat?: boolean;
 }
 
 export interface ReplConfiguring {
@@ -1194,7 +1196,7 @@ export interface ReplState {
 
 /** What the root must perform, because a component cannot. */
 export type ReplIntent =
-  | { readonly kind: "start-new-chat"; readonly conversation: string }
+  | { readonly kind: "start-new-chat"; readonly conversation: string; readonly decision: string }
   | { readonly kind: "recovery-reference"; readonly accept: boolean; readonly reference: string }
   | {
       readonly kind: "todo-save";
@@ -2072,11 +2074,33 @@ export function reduceRepl(
   const configuring = presented?.kind === "configure" && state.configuring.open;
 
   switch (action.kind) {
+    case "use-saved-recovery": {
+      const sidekick = live.sidekick;
+      const saved = sidekick?.savedRecovery;
+      if (
+        sidekick?.current !== true ||
+        sidekick.conversation !== action.conversation ||
+        saved?.id !== action.decision ||
+        state.recovering?.reference !== undefined
+      ) {
+        return settled(state);
+      }
+      if (state.message !== "" && state.message !== saved.text) {
+        return refuse(state, "Clear Message before using the saved instruction.");
+      }
+      return settled({
+        ...messaging(state, saved.text).state,
+        messageCaret: undefined,
+        restore: { kind: "message" },
+      });
+    }
     case "start-new-chat":
       return live.sidekick?.current !== true ||
         live.sidekick.recovery !== true ||
         live.sidekick.conversation !== action.conversation ||
         state.recovering?.conversation !== action.conversation ||
+        state.recovering.canStartNewChat !== true ||
+        (live.sidekick.savedRecovery?.id ?? "") !== action.decision ||
         state.recovering.reference !== undefined
         ? settled(state)
         : { state, intent: action };
@@ -4111,6 +4135,16 @@ function sidekickComposedRows(
     items.push(text(`sidekick:${item.key}`, `  ${reading.agent}: ${item.text}`, styleOf("output")));
     metadata();
   }
+  if (reading.savedRecovery !== undefined) {
+    const saved = reading.savedRecovery;
+    items.push(
+      text(
+        `sidekick:recovery-reading:${saved.id}`,
+        `Saved instruction:\n${saved.text}`,
+        styleOf("source"),
+      ),
+    );
+  }
   return items;
 }
 
@@ -4418,7 +4452,24 @@ function inlineRecovery(view: ReplView, reading: ReplSidekickReading): readonly 
       rows.push(line("sidekick:recovery:status", reading.recoveryStatus, styleOf("waiting")));
     }
   }
+  const saved = reading.savedRecovery;
   const held = view.state.recovering;
+  if (
+    reading.current &&
+    saved !== undefined &&
+    reading.conversation !== undefined &&
+    held?.reference === undefined
+  ) {
+    rows.push(
+      row(
+        `sidekick:recovery:use:${saved.id}`,
+        "[Use saved instruction]",
+        { select: "use-saved-recovery", conversation: reading.conversation, decision: saved.id },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+  }
   if (!reading.current || held === undefined || held.conversation !== reading.conversation) {
     return rows;
   }
@@ -4454,18 +4505,17 @@ function inlineRecovery(view: ReplView, reading: ReplSidekickReading): readonly 
     if (held.refusal !== undefined) {
       rows.push(line("sidekick:recovery:refusal", held.refusal, styleOf("failed-outcome")));
     }
-    rows.push(
-      row(
-        "sidekick:recovery:new",
-        "[Start new chat]",
-        {
-          select: "start-new-chat",
-          conversation: held.conversation,
-        },
-        styleOf("action"),
-        { here: view.focused },
-      ),
-    );
+    if (held.canStartNewChat) {
+      rows.push(
+        row(
+          `sidekick:recovery:new:${saved?.id ?? ""}`,
+          "[Start new chat]",
+          { select: "start-new-chat", conversation: held.conversation, decision: saved?.id ?? "" },
+          styleOf("action"),
+          { here: view.focused },
+        ),
+      );
+    }
   }
   return rows;
 }
@@ -11568,6 +11618,17 @@ function workspaceChatComposed(
         });
       }
     }
+  }
+  if (reading.savedRecovery !== undefined) {
+    const saved = reading.savedRecovery;
+    items.push(
+      text(
+        `sidekick:recovery-reading:${saved.id}`,
+        `Saved instruction:\n${saved.text}`,
+        styleOf("source"),
+        SIDEKICK_MARK,
+      ),
+    );
   }
   if (reading.busy) {
     const running = staging.model.entries.find(

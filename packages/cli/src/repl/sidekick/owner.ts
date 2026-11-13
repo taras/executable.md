@@ -168,6 +168,10 @@ export class SidekickOwnerError extends Error {
   }
 }
 
+export class SidekickContinuationUnavailable extends Error {
+  override name = "SidekickContinuationUnavailable";
+}
+
 /** What the Sidekick's own conversations run under. */
 export interface SidekickAssembly {
   readonly repl?: readonly ReplPluginExtension[];
@@ -463,6 +467,7 @@ export interface SidekickOwner {
   reviewRecovery(): Operation<Result<RecoveryReview>>;
   recoveryStatus(conversation: string): string | undefined;
   inspectContinuation(): Operation<Result<void>>;
+  prepareLocalReplacement(conversation: string, current: () => boolean): Operation<Result<void>>;
   /**
    * Bind a distinct new instruction past a retained human Stop, without sending it.
    *
@@ -1399,7 +1404,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       if (unused?.decision.action === "replace") {
         return unused.decision.target === active
           ? Ok(undefined)
-          : Err(new SidekickOwnerError("The saved replacement is awaiting disposition."));
+          : Err(
+              new SidekickContinuationUnavailable("The saved replacement is awaiting disposition."),
+            );
       }
       const frontier = stoppedTarget(reading.value);
       if (stopped === frontier || joined?.frontier === frontier) {
@@ -1412,7 +1419,70 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       );
       return inspected.ok
         ? inspected
-        : Err(new SidekickOwnerError("Clean ownership of this chat could not be verified."));
+        : Err(
+            new SidekickContinuationUnavailable(
+              "Clean ownership of this chat could not be verified.",
+            ),
+          );
+    }
+
+    function* withdrawPreparedReplacement(
+      decision: RecoveryDecisionRecord | undefined,
+      current: () => boolean,
+    ): Operation<Result<void>> {
+      if (storage === undefined) {
+        return Err(new SidekickOwnerError("Recovery storage is unavailable."));
+      }
+      if (decision?.action !== "replace" || !reading.ok) {
+        return Ok(undefined);
+      }
+      const stale = reading.value.conversations.find(
+        (one) => one.id === decision.target && one.phase === "prepared",
+      );
+      if (
+        stale !== undefined &&
+        reading.value.active !== stale.id &&
+        held?.conversation !== stale.id &&
+        current()
+      ) {
+        yield* storage.writer.append({
+          kind: "conversation",
+          conversation: stale.id,
+          agent: stale.agent,
+          phase: "failed",
+          previous: decision.conversation,
+          error: serializeError(
+            new Error(
+              "The replacement preparation ended before activation and has no live handle in this root.",
+            ),
+          ),
+        });
+        yield* refresh();
+        return Err(
+          new SidekickContinuationUnavailable(
+            "The interrupted replacement preparation is withdrawn. Choose Start new chat again to prepare a new conversation.",
+          ),
+        );
+      }
+      return Ok(undefined);
+    }
+
+    function* prepareLocalReplacement(
+      conversation: string,
+      current: () => boolean,
+    ): Operation<Result<void>> {
+      const review = yield* reviewRecovery();
+      if (!review.ok) {
+        return review;
+      }
+      const known = reading;
+      if (!current() || !known.ok || known.value.active !== conversation || !recovering) {
+        return Err(new SidekickOwnerError("The recovery conversation changed."));
+      }
+      const existing = known.value.recoveries.find(
+        (one) => !one.used && !one.withdrawn && one.decision.conversation === conversation,
+      );
+      return yield* withdrawPreparedReplacement(existing?.decision, current);
     }
 
     function* decide(
@@ -1443,36 +1513,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       ) {
         return Err(new SidekickOwnerError("Enter a distinct new instruction."));
       }
-      const stale =
-        existing?.decision.action === "replace" && reading.ok
-          ? reading.value.conversations.find(
-              (one) => one.id === existing.decision.target && one.phase === "prepared",
-            )
-          : undefined;
-      if (
-        stale !== undefined &&
-        reading.ok &&
-        reading.value.active !== stale.id &&
-        held?.conversation !== stale.id
-      ) {
-        yield* storage.writer.append({
-          kind: "conversation",
-          conversation: stale.id,
-          agent: stale.agent,
-          phase: "failed",
-          previous: review.conversation,
-          error: serializeError(
-            new Error(
-              "The replacement preparation ended before activation and has no live handle in this root.",
-            ),
-          ),
-        });
-        yield* refresh();
-        return Err(
-          new SidekickOwnerError(
-            "The interrupted replacement preparation is withdrawn. Review recovery again before choosing a new instruction or conversation.",
-          ),
-        );
+      const disposition = yield* withdrawPreparedReplacement(existing?.decision, hooks.current);
+      if (!disposition.ok) {
+        return disposition;
       }
       if (withdrawOnly) {
         return Err(
@@ -2700,6 +2743,16 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // that turn is shown inside this item rather than beside it, so the
         // screen holds one account of one failure.
         interrupted(attempted?.turn);
+        if (
+          sending.kind === "message" &&
+          sending.options.recovery?.decision.action === "continue-original" &&
+          !live.begun &&
+          attempted === undefined
+        ) {
+          return Err(
+            new SidekickContinuationUnavailable(replied.error.message, { cause: replied.error }),
+          );
+        }
         return Ok({
           held: {
             conversation,
@@ -2887,6 +2940,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       reviewRecovery,
       recoveryStatus,
       inspectContinuation,
+      prepareLocalReplacement,
       prepareContinuation,
       recover,
       message,

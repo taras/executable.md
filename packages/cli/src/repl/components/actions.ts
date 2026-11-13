@@ -28,7 +28,12 @@ export type ReplFieldPurpose =
   | "configure-agent";
 
 export type ReplAction =
-  | { readonly kind: "start-new-chat"; readonly conversation: string }
+  | { readonly kind: "start-new-chat"; readonly conversation: string; readonly decision: string }
+  | {
+      readonly kind: "use-saved-recovery";
+      readonly conversation: string;
+      readonly decision: string;
+    }
   | { readonly kind: "recovery-reference"; readonly accept: boolean; readonly reference: string }
   | { readonly kind: "select-task-tray"; readonly tray: "todo" | "queue" }
   | { readonly kind: "todo-collapse" }

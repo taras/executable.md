@@ -400,9 +400,12 @@ function activation(input: ReplViewData): ReplAction | undefined {
     const question = named["question"];
     return typeof question === "string" ? { kind: "answer-sidekick", question } : undefined;
   }
-  if (select === "start-new-chat") {
+  if (select === "start-new-chat" || select === "use-saved-recovery") {
     const conversation = named["conversation"];
-    return typeof conversation === "string" ? { kind: "start-new-chat", conversation } : undefined;
+    const decision = named["decision"];
+    return typeof conversation === "string" && typeof decision === "string"
+      ? { kind: select, conversation, decision }
+      : undefined;
   }
   if (select === "recovery-reference") {
     const reference = named["reference"];

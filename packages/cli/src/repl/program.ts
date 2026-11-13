@@ -165,7 +165,7 @@ import {
   take,
 } from "./sidekick/admission.ts";
 import type { Admitting, ColdReservation } from "./sidekick/admission.ts";
-import { fillable, stillAdmissible } from "./sidekick/gate.ts";
+import { edited, fillable, stillAdmissible } from "./sidekick/gate.ts";
 import type { DraftFacts, Instruction, Reservation } from "./sidekick/gate.ts";
 import { rootReads } from "./sidekick/requests.ts";
 import type { RootReading } from "./sidekick/requests.ts";
@@ -180,7 +180,7 @@ import type {
   PairedReplExecution,
   PairedReplRepository,
 } from "./sidekick/repository.ts";
-import { useSidekickOwner } from "./sidekick/owner.ts";
+import { SidekickContinuationUnavailable, useSidekickOwner } from "./sidekick/owner.ts";
 import { createSidekickAdmission, useSidekickDispatch } from "./sidekick/dispatch.ts";
 import type { SidekickDispatch } from "./sidekick/dispatch.ts";
 import type { SidekickLiveTurn, SidekickOwner, SidekickPreview } from "./sidekick/owner.ts";
@@ -1321,6 +1321,8 @@ function* drive(
       conversation: string;
       reference?: string;
       refusal?: string;
+      canStartNewChat?: boolean;
+      restoreMessage?: { readonly text: string; readonly held: Instruction };
     }[] = [];
     const sidekickReports: (
       | {
@@ -1369,7 +1371,21 @@ function* drive(
     function applySidekickReports(): void {
       for (const report of recoveryReports.splice(0)) {
         if (sidekick.reading.ok && sidekick.reading.value.active === report.conversation) {
-          state = { ...state, recovering: report };
+          const restore = report.restoreMessage;
+          const { restoreMessage: _restore, ...recovery } = report;
+          state = { ...state, recovering: recovery };
+          if (
+            restore !== undefined &&
+            state.message === "" &&
+            state.revisions.message === restore.held.message + 1
+          ) {
+            state = {
+              ...state,
+              message: restore.text,
+              messageCaret: undefined,
+              revisions: edited(state.revisions, "message"),
+            };
+          }
         }
       }
       for (const report of sidekickReports.splice(0)) {
@@ -2027,8 +2043,7 @@ function* drive(
               sidekick.reading.value.active !== conversation ||
               !sidekick.recoveryPending ||
               state.recovering?.conversation !== conversation ||
-              (state.recovering.refusal === undefined &&
-                options.headless?.handoffReference === undefined) ||
+              state.recovering.canStartNewChat !== true ||
               referenceWait !== undefined
             ) {
               return;
@@ -2061,7 +2076,7 @@ function* drive(
             const exchange = dispatch.current;
             const job = taken.value;
             const reportRecovery = (refusal?: string): void => {
-              recoveryReports.push({ conversation, refusal });
+              recoveryReports.push({ conversation, refusal, canStartNewChat: true });
             };
             const current = () =>
               admissions.configuration === job &&
@@ -2088,9 +2103,27 @@ function* drive(
                 return;
               }
               if (!attached) {
+                const eligible = yield* sidekick.prepareLocalReplacement(conversation, current);
+                if (!eligible.ok) {
+                  recoveryReports.push({
+                    conversation,
+                    refusal: eligible.error.message,
+                    canStartNewChat: eligible.error instanceof SidekickContinuationUnavailable,
+                  });
+                  return;
+                }
                 const findings = yield* reconcileSubmits();
                 if (!findings.ok) {
                   reportRecovery(findings.error.message);
+                  return;
+                }
+                const ready = yield* sidekick.prepareLocalReplacement(conversation, current);
+                if (!ready.ok) {
+                  recoveryReports.push({
+                    conversation,
+                    refusal: ready.error.message,
+                    canStartNewChat: ready.error instanceof SidekickContinuationUnavailable,
+                  });
                   return;
                 }
                 const selected = yield* sidekick.select(sidekick.agent, current);
@@ -2238,7 +2271,11 @@ function* drive(
                 if (sidekick.recoveryPending) {
                   const safe = yield* sidekick.inspectContinuation();
                   if (!safe.ok && referenceWait === undefined) {
-                    recoveryReports.push({ conversation, refusal: safe.error.message });
+                    recoveryReports.push({
+                      conversation,
+                      refusal: safe.error.message,
+                      canStartNewChat: safe.error instanceof SidekickContinuationUnavailable,
+                    });
                   }
                 }
                 wakes.send({ kind: "session" });
@@ -2246,7 +2283,19 @@ function* drive(
               }
               const completed = yield* sent.value.completion;
               if (!completed.ok) {
-                sidekickReports.push({ kind: "refused", refusal: completed.error.message });
+                if (
+                  completed.error instanceof SidekickContinuationUnavailable &&
+                  referenceWait === undefined
+                ) {
+                  recoveryReports.push({
+                    conversation,
+                    refusal: completed.error.message,
+                    canStartNewChat: true,
+                    restoreMessage: { text, held },
+                  });
+                } else {
+                  sidekickReports.push({ kind: "refused", refusal: completed.error.message });
+                }
                 wakes.send({ kind: "session" });
               }
             });
@@ -2659,6 +2708,7 @@ function* drive(
               recoveryReports.push({
                 conversation: incident,
                 refusal: safe.ok ? undefined : safe.error.message,
+                canStartNewChat: safe.ok || safe.error instanceof SidekickContinuationUnavailable,
               });
               wakes.send({ kind: "session" });
             }
@@ -3015,7 +3065,15 @@ function sidekickReadingOf(
   // Which chat these rows are of. The selector pins it; omission follows the
   // current association, which is what a person who has not chosen is reading.
   const reading = selected ?? active;
+  const saved = read.value.recoveries.find(
+    (one) =>
+      !one.used &&
+      !one.withdrawn &&
+      (one.decision.conversation === reading || one.decision.target === reading),
+  )?.decision;
   return Object.freeze({
+    savedRecovery:
+      saved === undefined ? undefined : Object.freeze({ id: saved.id, text: saved.text }),
     recovery: owner.recoveryPending,
     recoveryStatus: reading === undefined ? undefined : owner.recoveryStatus(reading),
     chat: sidekickChatRows(read.value, owner.previewing),

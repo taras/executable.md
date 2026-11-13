@@ -100,7 +100,15 @@ import {
 } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
-import { draftText, entrySettles, sendMessage } from "./support/screen-journeys.ts";
+import {
+  composerHolds,
+  draftHolds,
+  draftText,
+  entrySettles,
+  intoComposer,
+  sendMessage,
+  typed,
+} from "./support/screen-journeys.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -4749,4 +4757,238 @@ describe("1183 — the exact live feedback request is the only exception", () =>
     expect(held.session.model.entries).toHaveLength(1);
     expect(effects()).toBe(1);
   });
+});
+
+describe("1269 — mounted retained recovery corrections", () => {
+  const savedText = "Continue the exact saved instruction.";
+  const oldText = "Original chat remains readable.";
+  const entryText = "An established entry remains readable.";
+
+  function* retained() {
+    const host = yield* useMountedHost();
+    let execution = "";
+    yield* scoped(function* () {
+      const page = yield* useReplPage({ host });
+      yield* draftText(page, entryText);
+      yield* page.key("Enter");
+      yield* entrySettles(page, 1, "ok");
+      host.fake.script({ reply: "<REPL.Bindings />" });
+      host.fake.script({ reply: "", failure: "Internal error" });
+      yield* sendMessage(page, oldText);
+      yield* page.until("the interrupted feedback", (one) => one.shows("Feedback receipt unknown"));
+      execution = yield* mountedExecution(page.repl);
+      page.repl.terminal.end();
+      yield* awaited("the original REPL joining", () => page.repl.outcome() !== undefined);
+    });
+    const pair = yield* host.repository.open(execution);
+    if (pair.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const chat = pair.chat;
+    const history = project(yield* chat.writer.readAll());
+    const conversation = history.active;
+    const session = host.fake.turns[0]?.handle.sessionKey;
+    if (conversation === undefined || session === undefined) {
+      throw new Error("Expected retained conversation and native session.");
+    }
+    const profile = {
+      ...host.profile,
+      *finalize(workspace?: string, privateRoot?: string) {
+        const profile = yield* host.profile.finalize(workspace, privateRoot);
+        return {
+          ...profile,
+          sidekickAssembly: {
+            ...profile.sidekickAssembly,
+            ownershipAdministration: administered("clean"),
+          },
+        };
+      },
+    };
+    const location = encodeLocation({
+      ...initialState(execution).route,
+      view: "sidekick",
+      right: "sidekick",
+    });
+    return { host, profile, chat, conversation, session, location };
+  }
+
+  function* decision(
+    held: ReturnType<typeof retained> extends Operation<infer T> ? T : never,
+    replace: boolean,
+  ) {
+    const records = yield* readSidekickRecords(held.chat.location.sidekick);
+    const requests = records.flatMap((one, index) =>
+      one.kind === "feedback" && one.turn === null ? [index] : [],
+    );
+    expect(requests).toHaveLength(1);
+    yield* held.chat.writer.append({
+      kind: "recovery-decision",
+      id: "saved-decision",
+      conversation: held.conversation,
+      retained: yield* bindRetainedPrefix(held.chat.writer.path),
+      requests,
+      controls: [],
+      message: "saved-message",
+      text: savedText,
+      origin: { kind: "ui" },
+      action: replace ? "replace" : "continue-original",
+      basis: replace ? "explicit-abandonment" : "retained-clean-ownership",
+      target: replace ? "saved-replacement" : held.conversation,
+    });
+  }
+
+  it("reads an unused instruction and loads it only into empty Message", function* () {
+    const held = yield* retained();
+    yield* decision(held, false);
+    const before = yield* readSidekickRecords(held.chat.location.sidekick);
+    const page = yield* useReplPage({
+      host: { ...held.host, profile: held.profile },
+      location: held.location,
+    });
+    yield* page.until(
+      "the saved text and its action",
+      (one) => one.shows(savedText) && one.shows("[Use saved instruction]"),
+    );
+    yield* draftText(page, "Keep the entry draft.");
+    yield* intoComposer(page);
+    yield* typed(page, "Keep this message.");
+    yield* page.press("[Use saved instruction]");
+    yield* page.until("the existing Message refusal", (one) =>
+      one.shows("Clear Message before using"),
+    );
+    expect(composerHolds(page.screen(), "Keep this message.")).toBe(true);
+    expect(draftHolds(page.screen(), "Keep the entry draft.")).toBe(true);
+    yield* intoComposer(page);
+    page.repl.terminal.feed("\x03");
+    yield* page.resize({ columns: 120, rows: 30 });
+    yield* page.until("medium inline action", (one) => one.shows("[Use saved instruction]"));
+    yield* page.resize({ columns: 72, rows: 20 });
+    yield* page.until("narrow inline action", (one) => one.shows("[Use saved instruction]"));
+    yield* page.press("[Use saved instruction]");
+    yield* page.until("the exact saved Message", (one) => composerHolds(one, savedText));
+    expect(held.host.fake.prompts).toHaveLength(2);
+    expect(yield* readSidekickRecords(held.chat.location.sidekick)).toEqual(before);
+    held.host.fake.script({ reply: "<Output>Fresh reply only.</Output>" });
+    yield* page.key("Enter");
+    yield* page.until(
+      "the fresh reply",
+      (one) => one.shows("Fresh reply only.") && !one.shows("[stop]"),
+    );
+    expect(held.host.fake.prompts).toHaveLength(3);
+    expect(held.host.fake.turns.at(-1)?.handle.sessionKey).toBe(held.session);
+    expect(held.host.fake.prompts.at(-1)).toContain(savedText);
+    const after = project(yield* readSidekickRecords(held.chat.location.sidekick));
+    expect(after.active).toBe(held.conversation);
+    expect(after.recoveries.map((one) => one.used)).toEqual([true]);
+  });
+
+  it("refuses an outer failed Prompt before local replacement can write", function* () {
+    const held = yield* retained();
+    const event = parseDurableEvent(
+      JSON.stringify({
+        type: "yield",
+        coroutineId: "root",
+        description: { type: AGENT_PROMPT, name: "turn:2", input: "old feedback" },
+        result: { status: "err", error: { name: "Error", message: "Outer Prompt failure" } },
+      }),
+    );
+    if (!event.ok) {
+      throw event.error;
+    }
+    const records = yield* readSidekickRecords(held.chat.location.sidekick);
+    const position = records.findLastIndex((record) => {
+      if (record.kind !== "event") {
+        return false;
+      }
+      const parsed = parseDurableEvent(record.event);
+      return (
+        parsed.ok && parsed.value.type === "yield" && parsed.value.description.type === AGENT_PROMPT
+      );
+    });
+    const failed = records[position];
+    if (failed?.kind !== "event") {
+      throw new Error("Expected a retained automatic Prompt.");
+    }
+    records[position] = { ...failed, event: serializeDurableEvent(event.value) };
+    yield* until(
+      writeFile(held.chat.location.sidekick, records.map(serializeSidekickRecord).join("")),
+    );
+    const before = yield* readSidekickRecords(held.chat.location.sidekick);
+    const page = yield* useReplPage({ host: held.host, location: held.location });
+    yield* page.until("the outer Prompt refusal", (one) =>
+      one.shows("saved Prompt result cannot be continued"),
+    );
+    expect(page.screen().shows("[Start new chat]")).toBe(false);
+    yield* sendMessage(page, savedText);
+    yield* page.until("the refused Message remains", (one) => composerHolds(one, savedText));
+    expect(yield* readSidekickRecords(held.chat.location.sidekick)).toEqual(before);
+    expect(held.host.fake.prompts).toHaveLength(2);
+  });
+
+  for (const mode of ["prepared", "missing load"] as const) {
+    it(`requires explicit local fallback after ${mode}`, function* () {
+      const held = yield* retained();
+      if (mode === "prepared") {
+        yield* decision(held, true);
+        yield* held.chat.writer.append({
+          kind: "conversation",
+          conversation: "saved-replacement",
+          agent: AGENT,
+          phase: "prepared",
+          previous: held.conversation,
+        });
+      } else {
+        held.host.fake.missingSession(held.session);
+      }
+      const profile = mode === "prepared" ? held.host.profile : held.profile;
+      const page = yield* useReplPage({ host: { ...held.host, profile }, location: held.location });
+      yield* draftText(page, "Keep the entry draft.");
+      if (mode === "missing load") {
+        expect(page.screen().shows("[Start new chat]")).toBe(false);
+        yield* sendMessage(page, savedText);
+        yield* page.until("the exact load refusal", (one) =>
+          one.shows("exact retained backend session is missing"),
+        );
+      } else {
+        yield* intoComposer(page);
+        yield* typed(page, savedText);
+      }
+      yield* page.until("the local fallback", (one) => one.shows("[Start new chat]"));
+      const before = yield* readSidekickRecords(held.chat.location.sidekick);
+      const entries = yield* until(readFile(held.chat.location.entries, "utf8"));
+      if (mode === "prepared") {
+        yield* page.press("[Start new chat]");
+        yield* page.until("the withdrawn preparation", (one) =>
+          one.shows("preparation is withdrawn"),
+        );
+        const withdrawn = yield* readSidekickRecords(held.chat.location.sidekick);
+        expect(withdrawn).toHaveLength(before.length + 1);
+        expect(project(withdrawn).active).toBe(held.conversation);
+        expect(project(withdrawn).recoveries[0]?.withdrawn).toBe(true);
+      }
+      yield* page.press("[Start new chat]");
+      yield* page.until(
+        "the new chat with both drafts",
+        (one) =>
+          !one.shows("[Start new chat]") &&
+          composerHolds(one, savedText) &&
+          draftHolds(one, "Keep the entry draft."),
+      );
+      const after = project(yield* readSidekickRecords(held.chat.location.sidekick));
+      expect(after.active).not.toBe(held.conversation);
+      expect(after.conversations.find((one) => one.id === after.active)).toMatchObject({
+        agent: AGENT,
+        previous: held.conversation,
+        phase: "activated",
+      });
+      expect(
+        after.chat.some(
+          (one) =>
+            one.kind === "person" && one.conversation === held.conversation && one.text === oldText,
+        ),
+      ).toBe(true);
+      expect(yield* until(readFile(held.chat.location.entries, "utf8"))).toBe(entries);
+      expect(held.host.fake.prompts).toHaveLength(2);
+    });
+  }
 });
