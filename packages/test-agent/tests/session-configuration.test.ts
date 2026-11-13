@@ -33,6 +33,11 @@ import type { NativeSessionReport } from "../src/controller.ts";
 
 const DOC = path.resolve("packages/test-agent/src/SessionConfiguration.test.md");
 
+/** A native session report stamped with milliseconds since the run began. */
+interface TimedSessionReport extends NativeSessionReport {
+  elapsedMs: number;
+}
+
 /**
  * The trusted `run` profile, as this package can state it.
  *
@@ -84,13 +89,16 @@ function* runConfiguration(
   result: Result<Json>;
   output: string;
   results: readonly TestResult[];
-  sessions: NativeSessionReport[];
+  sessions: TimedSessionReport[];
 }> {
   // The scope closes before the assertions run, so the provider and its
   // workers finish teardown and the completion settles.
   return yield* scoped(function* () {
-    const sessions: NativeSessionReport[] = [];
-    yield* NativeSessionObserver.set((report) => sessions.push(report));
+    const sessions: TimedSessionReport[] = [];
+    const origin = performance.now();
+    yield* NativeSessionObserver.set((report) =>
+      sessions.push({ ...report, elapsedMs: performance.now() - origin }),
+    );
     // Session configuration refusals are raw Errors, outside AssertThrows' raised-segment contract.
     yield* registerComponents([
       {
@@ -138,6 +146,7 @@ function configurationSucceeded(run: {
   result: Result<Json>;
   output: string;
   results: readonly TestResult[];
+  sessions: readonly TimedSessionReport[];
 }): void {
   if (!run.result.ok || run.results.some((entry) => entry.status !== "pass")) {
     throw new Error(
@@ -148,6 +157,7 @@ function configurationSucceeded(run: {
             : { message: run.result.error.message, stack: run.result.error.stack },
           output: run.output,
           results: run.results,
+          sessions: run.sessions,
         },
         (_key, value) =>
           value instanceof Error ? { message: value.message, stack: value.stack } : value,

@@ -101,7 +101,9 @@ describe(
         "",
       ].join("\n");
       const { results } = yield* runDocWithScenario(doc, asked);
-      expect(results.map((entry) => entry.status)).toEqual(["pass"]);
+      expect(results.map(({ status, error }) => ({ status, error }))).toEqual([
+        { status: "pass", error: undefined },
+      ]);
       // One provider per isolation boundary — the <TestAgent> scope and each
       // <Test> lease — so the count tracks boundaries, not documents. What
       // matters is that every request is for the worker subcommand and nothing
