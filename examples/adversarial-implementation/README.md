@@ -950,6 +950,11 @@ assignment or support a result. When the evidence would push the prompt over
 64,000 characters, the prompt links to the complete captured `inputs.json`
 instead. Omit context you do not have.
 
+The standalone entry supplies the solver profiles. A profile names the attempt
+key, provider, ordered model choices, and reasoning effort. A fresh run can
+supply a fallback profile and an exact quota notice for the primary.
+A continuation uses the original recorded solver and resolved model.
+
 Fable starts the diagnosis. If its option inspection fails, its model is
 unavailable, or it returns a recognized usage-limit refusal, a fresh assignment
 can try Astra once. Each provider has its own attempt directory and conversation.

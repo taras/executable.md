@@ -1,19 +1,21 @@
 ---
-description: 'Run a recorded problem-solver assignment. Use <Diagnosis.Run request={request} as="diagnosis" />.'
+description: 'Run a recorded problem-solver assignment. Use <Diagnosis.Run request={request} solvers={solvers} as="diagnosis" />.'
 props:
   type: object
   properties:
     request: {type: object}
-  required: [request]
+    solvers: {type: object}
+  required: [request, solvers]
   additionalProperties: false
 returns: {type: object}
 ---
 
 <Diagnosis.Schema as="schema" />
 <Parse schema={schema.request} as="request"><Json value={props.request} /></Parse>
+<Parse schema={schema.solvers} as="solvers"><Json value={props.solvers} /></Parse>
+<If condition={solvers.primary.key === solvers.fallback?.key}><Fail message="Primary and fallback solvers must use distinct keys." /></If>
 <Let as="previous" value={null} />
 <Let as="previousModel" value={null} />
-<Let as="priorName" value={null} />
 <Let as="inputs" value={[]} />
 <If condition={request.previous !== undefined}>
 <Ticket.Read path={request.previous + "/assignment.json"} limit={1048576} as="saved" />
@@ -33,27 +35,29 @@ returns: {type: object}
 <Parse schema={schema.identity} as="sessionReceipt">{sessionText}</Parse>
 <If condition={JSON.stringify(sessionReceipt) !== JSON.stringify(priorResult.identity)}><Fail message="The saved diagnostic session receipt differs from the original result." /></If>
 <Let as="previousModel" value={priorResult.model} />
-<Let as="suffix" value={previous.position === 0 ? "-fable" : "-astra"} />
-<Let as="priorName" value={previous.solver.session.slice(0,-suffix.length)} />
 </If>
 <Diagnosis.Paths repository={request.assignment.repository} attempt={request.attempt} session={request.session} retained={previous === null ? [] : [request.previous, request.previous + "/continuation", previous.identities, previous.identities + "/" + encodeURIComponent(previous.solver.session) + ".json", previous.identities + "/" + encodeURIComponent(previous.solver.session) + ".json.mismatch.json"]} as="resolved" />
-<Let as="namespace" value={previous === null ? resolved : {directory:resolved.directory,identities:previous.identities,name:priorName}} />
+<Let as="identities" value={previous?.identities ?? resolved.identities} />
 <Ticket.Checkout repository={request.assignment.repository} as="source" />
 <If condition={source.head !== request.assignment.revision || !source.clean}><Fail message="Select the clean diagnostic checkout at its exact assigned revision." /></If>
 <Diagnosis.Inputs repository={request.assignment.repository} paths={request.inputPaths} retained={inputs} as="captured" />
 <Parse schema={schema.inputs} as="inputs"><Json value={captured} /></Parse>
-<Ticket.ReserveDecision path={namespace.directory} as="reserved" />
+<Ticket.ReserveDecision path={resolved.directory} as="reserved" />
 <If condition={!reserved}><Fail message="The diagnostic attempt is already reserved. Preserve it and reconcile before continuing." /></If>
 <If condition={previous !== null}>
 <Ticket.ReserveDecision path={request.previous + "/continuation"} as="linked" />
 <If condition={!linked}><Fail message="The original diagnostic result already has a reserved continuation. Reconcile it before prompting again." /></If>
-<Dir path={request.previous + "/continuation"}><File path="next.json"><Json value={{attempt:namespace.directory}} /></File></Dir>
+<Dir path={request.previous + "/continuation"}><File path="next.json"><Json value={{attempt:resolved.directory}} /></File></Dir>
 </If>
 <Let as="position" value={previous?.position ?? 0} />
-<Let as="directory" value={namespace.directory + (position === 1 ? "/astra" : "/fable")} />
-<Diagnosis.Dispatch request={request} namespace={namespace} directory={directory} position={position} inputs={inputs} previous={previous} previousModel={previousModel} as="attempt" />
-<If condition={previous === null && attempt.replace}>
-<Let as="directory" value={namespace.directory + "/astra"} />
-<Diagnosis.Dispatch request={request} namespace={namespace} directory={directory} position={1} inputs={inputs} as="attempt" />
+<Let as="key" value={previous?.solverKey ?? (position === 0 ? solvers.primary.key : solvers.fallback?.key ?? "fallback")} />
+<Let as="directory" value={resolved.directory + "/" + key} />
+<Let as="solver" value={previous?.solver ?? {provider:solvers.primary.provider,model:solvers.primary.models[0],effort:solvers.primary.effort,session:resolved.name+"-"+key}} />
+<Diagnosis.Dispatch request={request} identities={identities} directory={directory} position={position} solverKey={key} solver={solver} models={previous === null ? solvers.primary.models : [previousModel]} quotaNotice={previous === null ? solvers.primary.quotaNotice : undefined} inputs={inputs} requireExisting={previous !== null} as="attempt" />
+<If condition={previous === null && attempt.replace && solvers.fallback !== undefined}>
+<Let as="fallback" value={solvers.fallback} />
+<Let as="directory" value={resolved.directory + "/" + fallback.key} />
+<Let as="solver" value={{provider:fallback.provider,model:fallback.models[0],effort:fallback.effort,session:resolved.name+"-"+fallback.key}} />
+<Diagnosis.Dispatch request={request} identities={identities} directory={directory} position={1} solverKey={fallback.key} solver={solver} models={fallback.models} inputs={inputs} as="attempt" />
 </If>
 <Return value={attempt.result} />

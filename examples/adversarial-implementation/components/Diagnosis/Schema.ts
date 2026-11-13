@@ -6,6 +6,16 @@ const text = z.string().regex(/\S/).max(8_000);
 const revision = z.string().regex(/^[a-f0-9]{40}$/);
 const absolute = z.string().startsWith("/");
 const session = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
+const key = z.string().regex(/^[a-z0-9][a-z0-9-]{0,9}$/);
+const provider = z.enum(["claude", "codex"]);
+const profile = z.strictObject({
+  key,
+  provider,
+  models: z.array(text).min(1),
+  effort: text,
+  quotaNotice: text.optional(),
+});
+const solvers = z.strictObject({ primary: profile, fallback: profile.optional() });
 const request = z.strictObject({
   role: z.literal("problem-solver"),
   session: session.max(96),
@@ -65,12 +75,13 @@ const prior = z.strictObject({
   primarySession: session,
   position: z.number().int().min(0).max(1),
   identities: absolute,
+  solverKey: key.optional(),
   previous: absolute.nullable(),
   evidence,
   solver: z.strictObject({
-    provider: z.enum(["claude", "codex"]),
+    provider,
     model: z.string().min(1),
-    effort: z.literal("high"),
+    effort: text,
     session,
   }),
 });
@@ -98,6 +109,7 @@ function json(schema: z.ZodType) {
 export default function* Schema() {
   return {
     request: json(request),
+    solvers: json(solvers),
     result: json(result),
     prior: json(prior),
     inputs: json(inputs),

@@ -1,3 +1,4 @@
+import { fableUsageLimitNotice, isUsageLimit } from "./usage-limit.ts";
 import { API, parseFilesFailure } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { z } from "zod";
@@ -64,52 +65,17 @@ function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-const USAGE_LIMIT_NOTICE =
-  "You've reached your Fable limit. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
-const USAGE_LIMIT_MESSAGE = `Internal error: ${USAGE_LIMIT_NOTICE}`;
-
 type Outcome = z.infer<typeof outcomeSchema>;
 
-/**
- * Fable's usage-limit refusal, recognized only as the whole of what the turn
- * said: the exact notice in every reading of its output, and the exact
- * provider runtime-turn diagnostic it was reported with. Any other text, a
- * matching message without that diagnostic, or a reviewer outside the Fable
- * chain is partial output and holds.
- */
-export function isFableUsageLimit(
+function isFableUsageLimit(
   outcome: Pick<Outcome, "reviewer" | "catalog" | "turn">,
   fableChoices: readonly string[] | null,
 ): boolean {
-  const turn = outcome.turn;
-  if (
-    fableChoices === null ||
-    outcome.reviewer.provider !== "claude" ||
-    outcome.catalog.model === null ||
-    !fableChoices.includes(outcome.catalog.model) ||
-    turn === null ||
-    turn.state !== "failed" ||
-    turn.stage !== "turn" ||
-    turn.configuration !== null ||
-    turn.refusal === null
-  ) {
-    return false;
-  }
-  const { requestId: _requestId, ...diagnostic } = turn.refusal.diagnostic;
   return (
-    turn.refusal.agent === outcome.reviewer.provider &&
-    turn.partial === USAGE_LIMIT_NOTICE &&
-    turn.refusal.output === USAGE_LIMIT_NOTICE &&
-    turn.refusal.closeValue === USAGE_LIMIT_NOTICE &&
-    turn.refusal.message === USAGE_LIMIT_MESSAGE &&
-    same(diagnostic, {
-      provider: "acp",
-      operation: "session/prompt",
-      stage: "runtime-turn",
-      code: "RUNTIME",
-      origin: "runtime",
-      acp: { code: -32603, message: USAGE_LIMIT_MESSAGE },
-    })
+    outcome.reviewer.provider === "claude" &&
+    outcome.catalog.model !== null &&
+    fableChoices?.includes(outcome.catalog.model) === true &&
+    isUsageLimit(outcome.reviewer.provider, outcome.turn, fableUsageLimitNotice)
   );
 }
 

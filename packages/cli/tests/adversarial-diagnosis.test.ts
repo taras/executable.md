@@ -22,6 +22,14 @@ import { git, gitOutput } from "../../git/tests/support/git-remotes.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
 
 const components = resolve("examples/adversarial-implementation/components");
+interface SolverProfile {
+  key: string;
+  provider: string;
+  models: string[];
+  effort: string;
+  quotaNotice?: string;
+}
+
 const specPath = "specs/test-agent-spec.md";
 const specSection = [
   "## Controller and *worker*",
@@ -72,6 +80,7 @@ function* fixture() {
       failingRevision?: string;
       probes?: { command: string; setup?: string; artifacts?: string[] }[];
     } = {},
+    solvers?: { primary: SolverProfile; fallback?: SolverProfile },
   ) {
     return scoped(function* () {
       yield* useHostFiles();
@@ -143,7 +152,11 @@ function* fixture() {
       };
       const path = join(root, "request.json");
       yield* writeTextFile(path, JSON.stringify(request));
-      const source = `<Entry.Phase request=${JSON.stringify(path)} as="result" /><Json value={result} />`;
+      const entry =
+        solvers === undefined
+          ? `<Entry.Phase request=${JSON.stringify(path)} as="result" />`
+          : `<Diagnosis.Run request={${JSON.stringify(request)}} solvers={${JSON.stringify(solvers)}} as="result" />`;
+      const source = entry + "<Json value={result} />";
       yield* writeTextFile(doc, source);
       const result = yield* collect(
         yield* executeInstalled(
@@ -204,6 +217,83 @@ describe("adversarial problem-solver phase", () => {
     });
     expect(yield* API.Fs.operations.stat(join(second, "fable/result.json"))).toMatchObject({
       exists: false,
+    });
+    expect(test.fake.prompts).toHaveLength(2);
+  });
+
+  it("uses supplied solver profiles for fresh runs and recorded profiles for continuations", function* () {
+    const test = yield* fixture();
+    const models = ["preferred-model", "advertised-model"];
+    test.fake.configuration({
+      model: { selected: models[1]!, choices: [{ id: models[1]! }] },
+      effort: { [models[1]!]: { selected: "medium", choices: [{ id: "medium" }] } },
+    });
+    const profile = { key: "custom", provider: "codex", models, effort: "medium" };
+    const reply = JSON.stringify({
+      outcome: "missing_witness",
+      revision: test.revision,
+      witness: "Worker trace",
+      howToObtain: "Capture it.",
+    });
+    const first = join(test.root, "configured");
+    test.fake.script({ reply });
+    expect(
+      JSON.parse(yield* test.run(first, undefined, [test.evidence], {}, { primary: profile })),
+    ).toMatchObject({ status: "missing_witness", attempt: join(first, "custom") });
+    const original = JSON.parse(yield* readTextFile(join(first, "custom/result.json")));
+    expect(original).toMatchObject({
+      model: models[1],
+      assignment: {
+        solverKey: "custom",
+        solver: { provider: "codex", model: models[0], effort: "medium" },
+      },
+    });
+    const next = join(test.root, "continued");
+    test.fake.script({ reply });
+    const replacement = { ...profile, key: "new", models: ["unavailable"], effort: "high" };
+    expect(
+      JSON.parse(yield* test.run(next, join(first, "custom"), [], {}, { primary: replacement })),
+    ).toMatchObject({ status: "missing_witness", attempt: join(next, "custom") });
+    const continued = JSON.parse(yield* readTextFile(join(next, "custom/result.json")));
+    expect(continued.assignment.solver).toEqual(original.assignment.solver);
+    expect(continued.identity.identity).toEqual(original.identity.identity);
+    expect(test.fake.prompts).toHaveLength(2);
+  });
+
+  it("uses the supplied fallback after the primary's configured quota refusal", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["custom-primary", "custom-fallback"]);
+    const quotaNotice = "The fixture provider has reached its quota.";
+    const failure = "Internal error: " + quotaNotice;
+    test.fake.script({
+      reply: quotaNotice,
+      failure,
+      failureFacts: { code: "RUNTIME", origin: "runtime", acp: { code: -32603, message: failure } },
+    });
+    test.fake.script({
+      reply: JSON.stringify({
+        outcome: "missing_witness",
+        revision: test.revision,
+        witness: "Worker trace",
+        howToObtain: "Capture it.",
+      }),
+    });
+    const attempt = join(test.root, "quota");
+    const solvers = {
+      primary: {
+        key: "first",
+        provider: "codex",
+        models: ["custom-primary"],
+        effort: "high",
+        quotaNotice,
+      },
+      fallback: { key: "second", provider: "claude", models: ["custom-fallback"], effort: "high" },
+    };
+    const result = JSON.parse(yield* test.run(attempt, undefined, [test.evidence], {}, solvers));
+    expect(result).toMatchObject({ status: "missing_witness", attempt: join(attempt, "second") });
+    expect(JSON.parse(yield* readTextFile(result.result))).toMatchObject({
+      model: "custom-fallback",
+      assignment: { solver: { provider: "claude" } },
     });
     expect(test.fake.prompts).toHaveLength(2);
   });
@@ -347,6 +437,15 @@ describe("adversarial problem-solver phase", () => {
       "failing revision differs",
     );
     expect(test.fake.prompts).toHaveLength(1);
+
+    const originalPath = join(first, "fable");
+    const legacy = JSON.parse(yield* readTextFile(join(originalPath, "assignment.json")));
+    delete legacy.solverKey;
+    yield* writeTextFile(join(originalPath, "assignment.json"), JSON.stringify(legacy));
+    yield* writeTextFile(
+      join(originalPath, "result.json"),
+      JSON.stringify({ ...original, assignment: legacy }),
+    );
 
     const second = join(test.root, "second");
     const newEvidence = join(test.root, "later.log");

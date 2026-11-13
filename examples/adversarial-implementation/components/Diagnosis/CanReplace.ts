@@ -1,5 +1,5 @@
 import { catalogSchema, outcomeSchema, reviewerSchema } from "../Delivery/records.ts";
-import { isFableUsageLimit } from "../Delivery/ReviewState.ts";
+import { isUsageLimit } from "../Delivery/usage-limit.ts";
 import { z } from "zod";
 
 export const props = {
@@ -8,17 +8,19 @@ export const props = {
     solver: { type: "object" },
     catalog: { type: "object" },
     turn: { type: ["object", "null"] },
+    quotaNotice: { type: "string" },
   },
   required: ["solver", "catalog", "turn"],
   additionalProperties: false,
 };
 
 export default function* CanReplace(input: unknown) {
-  const { solver, catalog, turn } = z
+  const { solver, catalog, turn, quotaNotice } = z
     .strictObject({
       solver: reviewerSchema,
       catalog: catalogSchema,
       turn: outcomeSchema.shape.turn,
+      quotaNotice: z.string().min(1).optional(),
     })
     .parse(input);
   return (
@@ -26,6 +28,6 @@ export default function* CanReplace(input: unknown) {
     (turn?.state === "failed" &&
       turn.terminal !== "cancelled" &&
       ((turn.stage === "session" && turn.configuration?.reason === "selector-unavailable") ||
-        isFableUsageLimit({ reviewer: solver, catalog, turn }, catalog.choices)))
+        isUsageLimit(solver.provider, turn, quotaNotice)))
   );
 }

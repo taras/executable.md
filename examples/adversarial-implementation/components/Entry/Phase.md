@@ -11,7 +11,8 @@ returns: {type: object}
 <Ticket.Read path={props.request} limit={1048576} as="text" />
 <Parse schema={{type:"object"}} as="selected">{text}</Parse>
 <If condition={selected.role === "problem-solver"}>
-<Diagnosis.Run request={selected} as="diagnosis" />
+<Entry.DiagnosticSolvers as="solvers" />
+<Diagnosis.Run request={selected} solvers={solvers} as="diagnosis" />
 <Return value={diagnosis} />
 <Else>
 <Parse schema={{type:"object",properties:{role:{enum:["architect","planner","implementor"]},session:{type:"string",minLength:1},assignment:{type:"object"},attempt:{type:"string",pattern:"^/"},initialize:{type:"boolean",default:false},inputPaths:{type:"array",items:{type:"string"},default:[]},plannerProvider:{enum:["claude","codex"],default:"claude"},implementationProvider:{enum:["claude","codex"],default:"claude"},maxResponseCorrections:{type:"integer",minimum:0,maximum:3,default:3}},required:["role","session","assignment","attempt"],additionalProperties:false}} as="request">{text}</Parse>
