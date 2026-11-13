@@ -802,9 +802,10 @@ directory in the scoped directory when it is installed. It starts the carried
 Claude or Codex adapter inside a process sandbox that denies writes to those
 resolved directories. The restriction also applies to tools the agent starts.
 On macOS the provider uses `sandbox-exec`. On Linux it uses Bubblewrap with a
-private PID namespace and read-only mounts for those directories. The provider
-checks that the sandbox starts before inspecting model options. Unsupported
-hosts and failed sandbox setup stop dispatch before any agent is started.
+private PID namespace, a private `/dev` for terminal allocation, and read-only
+mounts for those directories. The provider checks that the sandbox starts before
+inspecting model options. Unsupported hosts and failed sandbox setup stop
+dispatch before any agent is started.
 The Codex adapter runs tools under the outer process sandbox. The provider
 selects the adapter mode that avoids applying a second sandbox to those tools.
 

@@ -71,7 +71,7 @@ export function diagnosticAgent(
             ? undefined
             : yield* dependencies.agentProcessEnv(agent, adapters.command(agent));
         if (agent === "codex") {
-          // Codex cannot apply its own Seatbelt profile inside the macOS process sandbox.
+          // The outer diagnostic sandbox owns the checkout restriction.
           return { ...environment, INITIAL_AGENT_MODE: "agent-full-access" };
         }
         return { ...environment, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
@@ -101,6 +101,8 @@ function diagnosticSandbox(os: string, paths: readonly string[]): string[] {
       "--bind",
       "/",
       "/",
+      "--dev",
+      "/dev",
       ...paths.flatMap((path) => ["--ro-bind", path, path]),
       "--proc",
       "/proc",
