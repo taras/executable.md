@@ -756,11 +756,14 @@ describe("REPL.Test retained and fatal outcomes", () => {
         throw pending.error;
       }
       expect(pending.value.unestablished).toHaveLength(1);
-      yield* sendMessage(reopenedPage, "B");
+      yield* intoComposer(reopenedPage);
+      yield* reopenedPage.type("B");
+      yield* reopenedPage.until("Message contains B", (one) => composerHolds(one, "B"));
+      yield* reopenedPage.key("Enter");
       yield* reopenedPage.until(
-        "unknown-feedback refusal preserves text",
+        "the active recovery refusal preserves Message",
         (one) =>
-          one.shows("feedback whose acceptance cannot be established") && composerHolds(one, "B"),
+          one.shows("! The Sidekick is already working on a message.") && composerHolds(one, "B"),
       );
       expect(host.fake.prompts).toHaveLength(prompts + 1);
       expect(yield* reports(reopened)).toHaveLength(1);
@@ -773,7 +776,11 @@ describe("REPL.Test retained and fatal outcomes", () => {
         (record) => record.kind === "response" && record.output === "inspection only",
       );
     });
-    yield* reopenedPage.until("explicit recovery joins", sidekickIdle);
+    yield* reopenedPage.until(
+      "explicit recovery joins with B still in Message",
+      (one) => sidekickIdle(one) && composerHolds(one, "B"),
+    );
+    expect(host.fake.prompts).toHaveLength(prompts + 1);
     const recovered = projectSidekick((yield* settledReading(reopened)).chat);
     if (!recovered.ok) {
       throw recovered.error;

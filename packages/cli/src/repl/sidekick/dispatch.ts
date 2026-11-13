@@ -174,6 +174,7 @@ export function* useSidekickDispatch(options: {
   const root = yield* useScope();
   const { owner, admission } = options;
   let current: SidekickExchange | undefined;
+  let activeFamily: Running | undefined;
   const messages = new Map<string, SidekickExchange>();
   type Activated = { readonly text: string; readonly options: SidekickMessageOptions };
   interface Running {
@@ -464,12 +465,14 @@ export function* useSidekickDispatch(options: {
           }
           state = "active";
           current = exchange;
+          activeFamily = family;
           running = family;
           family.publish = publish;
           family.finish = (result) => {
             admission.releaseMessage(reserved.value);
             if (current === exchange) {
               current = undefined;
+              activeFamily = undefined;
             }
             settle(result);
           };
@@ -688,9 +691,13 @@ export function* useSidekickDispatch(options: {
         if (explicitRecovery || preparing !== undefined || admission.configuration !== undefined) {
           return Err(new Error("The Sidekick is already doing something you asked for."));
         }
+        // Only an exchange already stopping can lend this Send a join to wait for.
+        const previous = current;
+        if (previous !== undefined && activeFamily?.stopped !== true) {
+          return Err(new Error("The Sidekick is already working on a message."));
+        }
         explicitRecovery = true;
         held = STOPPED;
-        const previous = current;
         updated();
         const bound = () =>
           live &&
