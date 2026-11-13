@@ -1,4 +1,4 @@
-import { C as PROCESS_HELPER_TIMEOUT_MS, E as isChildProcessRunning, N as runTimedExecFile, P as splitCommandLine, S as PROCESS_HELPER_MAX_BUFFER_BYTES, n as AGENT_REGISTRY, r as BUILT_IN_AGENT_PACKAGES, t as AGENT_ARGV_REGISTRY } from "./agent-registry-Cz9fD9H1.js";
+import { D as runTimedExecFile, F as readWindowsEnvValue, I as resolveInstalledExecutable, O as splitCommandLine, _ as PROCESS_HELPER_TIMEOUT_MS, b as isChildProcessRunning, g as PROCESS_HELPER_MAX_BUFFER_BYTES, n as AGENT_REGISTRY, r as BUILT_IN_AGENT_PACKAGES, t as AGENT_ARGV_REGISTRY } from "./agent-registry-CxpAF3nI.js";
 import fs, { statSync } from "node:fs";
 import path from "node:path";
 import fs$1 from "node:fs/promises";
@@ -39,11 +39,23 @@ var SessionNotFoundError = class extends AcpxOperationalError {
 	}
 };
 var SessionResolutionError = class extends AcpxOperationalError {};
+/** Best-effort description of which launch path was missing when spawn failed with ENOENT. */
+function spawnEnoentHint(context) {
+	try {
+		if (!fs.statSync(context.cwd, { throwIfNoEntry: false })?.isDirectory()) return `Working directory is unavailable: ${context.cwd}. `;
+		if (resolveInstalledExecutable(context.command, context)) return "";
+		if (path.parse(context.command).dir.length > 0) return `Executable path could not be resolved: ${path.resolve(context.cwd, context.command)}. `;
+		return (process.platform === "win32" ? readWindowsEnvValue(context.env, "PATH") : context.env.PATH) === void 0 ? "" : `No runnable executable named ${JSON.stringify(context.command)} was found on the child PATH. `;
+	} catch {
+		return "";
+	}
+}
 var AgentSpawnError = class extends AcpxOperationalError {
 	agentCommand;
-	constructor(agentCommand, cause) {
+	constructor(agentCommand, cause, context) {
 		const spawnEnoent = (cause instanceof Error ? cause.code : void 0) === "ENOENT";
-		const message = spawnEnoent ? `Failed to spawn agent command: ${agentCommand}. The agent process could not start because a required executable, interpreter, working directory, or other launch path was not found. Check the command, effective PATH, and working directory, or verify the custom agent's configured argv.` : `Failed to spawn agent command: ${agentCommand}`;
+		const hint = spawnEnoent && context ? spawnEnoentHint(context) : "";
+		const message = spawnEnoent ? `Failed to spawn agent command: ${agentCommand}. ${hint}The agent process could not start because a required executable, interpreter, working directory, or other launch path was not found. Check the command, effective PATH, and working directory, or verify the custom agent's configured argv.` : `Failed to spawn agent command: ${agentCommand}`;
 		super(message, {
 			cause: cause instanceof Error ? cause : void 0,
 			...spawnEnoent ? { detailCode: "AGENT_SPAWN_ENOENT" } : {}
@@ -302,7 +314,6 @@ function isAcpResourceNotFoundError(error) {
 }
 // src/acp/error-normalization.ts
 const AUTH_REQUIRED_ACP_CODES = /* @__PURE__ */ new Set([-32e3]);
-const QUERY_CLOSED_BEFORE_RESPONSE_DETAIL = "query closed before response received";
 function asRecord$4(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	return value;
@@ -366,13 +377,6 @@ function isUsageLike(error) {
 }
 function formatErrorMessage(error) {
 	return formatUnknownErrorMessage(error);
-}
-function isAcpQueryClosedBeforeResponseError(error) {
-	const acp = extractAcpError(error);
-	if (!acp || acp.code !== -32603) return false;
-	const details = asRecord$4(acp.data)?.details;
-	if (typeof details !== "string") return false;
-	return details.toLowerCase().includes(QUERY_CLOSED_BEFORE_RESPONSE_DETAIL);
 }
 function mapErrorCode(error) {
 	if (error instanceof PermissionPromptUnavailableError) return "PERMISSION_PROMPT_UNAVAILABLE";
@@ -1330,7 +1334,8 @@ const LEGACY_AGENT_COMMANDS = {
 		"npx pi-acp",
 		"npx pi-acp@^0.0.22",
 		"npx pi-acp@^0.0.26",
-		"npx pi-acp@^0.0.31"
+		"npx pi-acp@^0.0.31",
+		"npx pi-acp@^0.0.33"
 	],
 	codex: [
 		"npx @zed-industries/codex-acp",
@@ -1339,7 +1344,8 @@ const LEGACY_AGENT_COMMANDS = {
 		"npx @zed-industries/codex-acp@^0.11.1",
 		"npx @zed-industries/codex-acp@^0.12.0",
 		"npx -y @agentclientprotocol/codex-acp@^0.0.44",
-		"npx -y @agentclientprotocol/codex-acp@^1.1.4"
+		"npx -y @agentclientprotocol/codex-acp@^1.1.4",
+		"npx -y @agentclientprotocol/codex-acp@^1.1.5"
 	],
 	claude: [
 		"npx @zed-industries/claude-agent-acp",
@@ -1357,6 +1363,7 @@ const LEGACY_AGENT_COMMANDS = {
 		"npx -y @agentclientprotocol/claude-agent-acp@^0.60.0",
 		"npx -y @agentclientprotocol/claude-agent-acp@^0.76.0",
 		"npx -y @agentclientprotocol/claude-agent-acp@^0.81.2",
+		"npx -y @agentclientprotocol/claude-agent-acp@^0.95.0",
 		"npm exec @agentclientprotocol/claude-agent-acp@^0.25.0",
 		"npm exec @agentclientprotocol/claude-agent-acp@^0.31.0",
 		"npm exec @agentclientprotocol/claude-agent-acp@^0.36.1",
@@ -1366,9 +1373,10 @@ const LEGACY_AGENT_COMMANDS = {
 		"npm exec @agentclientprotocol/claude-agent-acp@^0.81.2"
 	],
 	gemini: ["gemini", "gemini --experimental-acp"],
+	kilocode: ["npx -y @kilocode/cli acp"],
 	kiro: ["kiro-cli acp"],
-	mux: ["npx -y mux@^0.27.0 acp"],
-	opencode: ["npx opencode-ai"]
+	mux: ["npx -y mux@^0.27.0 acp", "npx -y mux@^0.28.0 acp"],
+	opencode: ["npx opencode-ai", "npx -y opencode-ai acp"]
 };
 function currentArgv(name) {
 	const argv = AGENT_ARGV_REGISTRY[name];
@@ -1902,22 +1910,10 @@ const OPAQUE_VALUE_PATHS = /* @__PURE__ */ new Set([
 function isRecord(value) {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
-function joinPath(path) {
-	return path.join(".");
-}
-function shouldSkipKeyRule(path) {
-	return MAP_OBJECT_PATHS.has(joinPath(path));
-}
-function shouldSkipDescend(path) {
-	return OPAQUE_VALUE_PATHS.has(joinPath(path)) || isToolResultOutputPath(path);
-}
-function isToolResultOutputTail(path, toolResultsIndex) {
-	return toolResultsIndex !== -1 && toolResultsIndex + 2 === path.length - 1;
-}
 function isToolResultOutputPath(path) {
 	if (path.length < 5 || path[path.length - 1] !== "output") return false;
 	const toolResultsIndex = path.lastIndexOf("tool_results");
-	if (!isToolResultOutputTail(path, toolResultsIndex)) return false;
+	if (toolResultsIndex === -1 || toolResultsIndex + 2 !== path.length - 1) return false;
 	return path.slice(0, toolResultsIndex + 1).join(".") === "messages.Agent.tool_results";
 }
 function collectViolations(value, path, violations) {
@@ -1926,13 +1922,13 @@ function collectViolations(value, path, violations) {
 		return;
 	}
 	if (!isRecord(value)) return;
-	const skipKeyRule = shouldSkipKeyRule(path);
+	const skipKeyRule = MAP_OBJECT_PATHS.has(path.join("."));
 	for (const [key, child] of Object.entries(value)) collectKeyViolation(child, key, path, skipKeyRule, violations);
 }
 function collectKeyViolation(child, key, path, skipKeyRule, violations) {
-	if (!skipKeyRule && !SNAKE_CASE_KEY.test(key) && !ZED_TAG_KEYS.has(key)) violations.push(`${joinPath(path)}.${key}`.replace(/^\./, ""));
+	if (!skipKeyRule && !SNAKE_CASE_KEY.test(key) && !ZED_TAG_KEYS.has(key)) violations.push(`${path.join(".")}.${key}`.replace(/^\./, ""));
 	const childPath = [...path, key];
-	if (!shouldSkipDescend(childPath)) collectViolations(child, childPath, violations);
+	if (!OPAQUE_VALUE_PATHS.has(childPath.join(".")) && !isToolResultOutputPath(childPath)) collectViolations(child, childPath, violations);
 }
 function findPersistedKeyPolicyViolations(value) {
 	const violations = [];
@@ -2652,40 +2648,10 @@ function isImageMimeType(value) {
 function isAudioMimeType(value) {
 	return /^audio\/[A-Za-z0-9.+-]+$/i.test(value);
 }
-function isTextBlock(value) {
-	const record = asRecord$1(value);
-	return record?.type === "text" && typeof record.text === "string";
-}
-function isImageBlock(value) {
-	const record = asRecord$1(value);
-	return record?.type === "image" && isNonEmptyString(record.mimeType) && isImageMimeType(record.mimeType) && typeof record.data === "string" && isBase64Data(record.data);
-}
-function isAudioBlock(value) {
-	const record = asRecord$1(value);
-	return record?.type === "audio" && isNonEmptyString(record.mimeType) && isAudioMimeType(record.mimeType) && typeof record.data === "string" && isBase64Data(record.data);
-}
-function isResourceLinkBlock(value) {
-	const record = asRecord$1(value);
-	return record?.type === "resource_link" && isNonEmptyString(record.uri) && (record.title == null || typeof record.title === "string") && typeof record.name === "string";
-}
 function isResourcePayload(value) {
 	const record = asRecord$1(value);
 	if (!record || !isNonEmptyString(record.uri)) return false;
 	return typeof record.text === "string" || typeof record.blob === "string";
-}
-function isResourceBlock(value) {
-	const record = asRecord$1(value);
-	return record?.type === "resource" && isResourcePayload(record.resource);
-}
-const CONTENT_BLOCK_VALIDATORS = [
-	isTextBlock,
-	isImageBlock,
-	isAudioBlock,
-	isResourceLinkBlock,
-	isResourceBlock
-];
-function isContentBlock(value) {
-	return CONTENT_BLOCK_VALIDATORS.some((validator) => validator(value));
 }
 const CONTENT_BLOCK_ERROR_VALIDATORS = {
 	text: validateTextContentBlock,
@@ -2728,7 +2694,7 @@ function getContentBlockValidationError(value, index) {
 	return validator ? validator(record, index) : `prompt[${index}] has unsupported content block type ${JSON.stringify(record.type)}`;
 }
 function isPromptInput(value) {
-	return Array.isArray(value) && value.every((entry) => isContentBlock(entry));
+	return Array.isArray(value) && value.every((entry, index) => getContentBlockValidationError(entry, index) === void 0);
 }
 function promptCapabilityRequirement(block) {
 	switch (block.type) {
@@ -4638,11 +4604,6 @@ var SessionQueueOwner = class SessionQueueOwner {
 		this.onQueueDepthChanged?.(this.pending.length);
 	}
 	enqueue(task) {
-		if (this.closed) {
-			task.send(makeQueueOwnerError(task.requestId, "Queue owner is shutting down", "QUEUE_OWNER_SHUTTING_DOWN", { retryable: true }));
-			task.close();
-			return false;
-		}
 		if (this.activeTask?.requestId === task.requestId || this.pending.some((queued) => queued.requestId === task.requestId)) {
 			task.send(makeQueueOwnerError(task.requestId, "Request is already queued or active", "QUEUE_REQUEST_DUPLICATE", { retryable: false }));
 			task.close();
@@ -5353,4 +5314,4 @@ async function trySetConfigOptionOnRunningOwner(sessionId, configId, value, time
 		submit: (owner) => withOwnerControlPersistence(owner, submitSetConfigOptionToQueueOwner(owner, configId, value, timeoutMs, assertDispatch))
 	});
 }
-export { measurePerf as $, UnsupportedPromptContentError as $t, findSession as A, AUTH_POLICIES as At, assertPersistedKeyPolicy as B, AgentStartupError as Bt, textPrompt as C, exitCodeForOutputErrorCode as Ct, DEFAULT_HISTORY_LIMIT as D, normalizeOutputError as Dt, observeProcessIncarnation as E, isRetryablePromptError as Et, normalizeName as F, PERMISSION_POLICY_ACTIONS as Ft, normalizeAgentSessionId as G, PermissionDeniedError as Gt, canonicalAgentCommand as H, ClaudeAcpSessionCreateTimeoutError as Ht, pruneSessions as I, SESSION_RECORD_SCHEMA as It, SessionWatchError as J, SessionConfigOptionReplayError as Jt, SESSION_JOURNAL_SCHEMA as K, PermissionPromptUnavailableError as Kt, readSessionRecord as L, AcpxOperationalError as Lt, isoNow as M, NON_INTERACTIVE_PERMISSION_POLICIES as Mt, listSessions as N, OUTPUT_FORMATS as Nt, absolutePath as O, extractAcpError as Ot, listSessionsForAgent as P, PERMISSION_MODES as Pt, incrementPerfCounter as Q, SessionResumeRequiredError as Qt, resolveSessionRecord as R, AgentDisconnectedError as Rt, promptToDisplayText as S, isProcessAlive as St, lockOwnerPid as T, isAcpQueryClosedBeforeResponseError as Tt, serializeSessionRecordForDisk as U, CopilotAcpUnsupportedError as Ut, parseSessionRecord as V, AuthPolicyError as Vt, extractAgentSessionId as W, GeminiAcpStartupTimeoutError as Wt, formatPerfMetric as X, SessionModelReplayError as Xt, watchSession as Y, SessionModeReplayError as Yt, getPerfMetricsSnapshot as Z, SessionNotFoundError as Zt, ProcessDescendants as _, sessionEventLockPath as _t, trySetModelOnRunningOwner as a, isAcpMessageObject as at, mergePromptSourceWithText as b, writePrivateJsonFile as bt, probeQueueOwnerHealth as c, parsePermissionNotice as ct, releaseQueueOwnerLease as d, boundedEventMaxSegments as dt, resetPerfMetrics as et, terminateProcess as f, defaultSessionEventLog as ft, QueueLeaseGuardSettlementError as g, sessionEventActivePath as gt, waitMs as h, sessionBaseDir as ht, trySetModeOnRunningOwner as i, isAcpJsonRpcMessage as it, findSessionByDirectoryWalk as j, EXIT_CODES as jt, findGitRepositoryRoot as k, isAcpResourceNotFoundError as kt, readQueueOwnerRecord as l, parsePromptStopReason as lt, tryAcquireQueueOwnerLease as m, retainedEventMaxSegments as mt, tryCloseSessionOnRunningOwner as n, startPerfTimer as nt, trySubmitToRunningOwner as o, isSessionUpdateNotification as ot, terminateQueueOwnerForSession as p, existingEventSegmentIndices as pt, SessionJournalReader as q, QueueConnectionError as qt, trySetConfigOptionOnRunningOwner as r, extractSessionUpdateNotification as rt, SessionQueueOwner as s, parseJsonRpcErrorMessage as st, tryCancelOnRunningOwner as t, setPerfGauge as tt, refreshQueueOwnerLease as u, DEFAULT_EVENT_SEGMENT_MAX_BYTES as ut, PromptInputValidationError as v, sessionEventSegmentPath as vt, createLockOwner as w, formatErrorMessage as wt, parsePromptSource as x, _usingCtx as xt, getUnsupportedPromptContentMessage as y, writePrivateFile as yt, writeSessionRecord as z, AgentSpawnError as zt };
+export { measurePerf as $, spawnEnoentHint as $t, findSession as A, EXIT_CODES as At, assertPersistedKeyPolicy as B, AuthPolicyError as Bt, textPrompt as C, exitCodeForOutputErrorCode as Ct, DEFAULT_HISTORY_LIMIT as D, extractAcpError as Dt, observeProcessIncarnation as E, normalizeOutputError as Et, normalizeName as F, SESSION_RECORD_SCHEMA as Ft, normalizeAgentSessionId as G, PermissionPromptUnavailableError as Gt, canonicalAgentCommand as H, CopilotAcpUnsupportedError as Ht, pruneSessions as I, AcpxOperationalError as It, SessionWatchError as J, SessionModeReplayError as Jt, SESSION_JOURNAL_SCHEMA as K, QueueConnectionError as Kt, readSessionRecord as L, AgentDisconnectedError as Lt, isoNow as M, OUTPUT_FORMATS as Mt, listSessions as N, PERMISSION_MODES as Nt, absolutePath as O, isAcpResourceNotFoundError as Ot, listSessionsForAgent as P, PERMISSION_POLICY_ACTIONS as Pt, incrementPerfCounter as Q, UnsupportedPromptContentError as Qt, resolveSessionRecord as R, AgentSpawnError as Rt, promptToDisplayText as S, isProcessAlive as St, lockOwnerPid as T, isRetryablePromptError as Tt, serializeSessionRecordForDisk as U, GeminiAcpStartupTimeoutError as Ut, parseSessionRecord as V, ClaudeAcpSessionCreateTimeoutError as Vt, extractAgentSessionId as W, PermissionDeniedError as Wt, formatPerfMetric as X, SessionNotFoundError as Xt, watchSession as Y, SessionModelReplayError as Yt, getPerfMetricsSnapshot as Z, SessionResumeRequiredError as Zt, ProcessDescendants as _, sessionEventLockPath as _t, trySetModelOnRunningOwner as a, isAcpMessageObject as at, mergePromptSourceWithText as b, writePrivateJsonFile as bt, probeQueueOwnerHealth as c, parsePermissionNotice as ct, releaseQueueOwnerLease as d, boundedEventMaxSegments as dt, resetPerfMetrics as et, terminateProcess as f, defaultSessionEventLog as ft, QueueLeaseGuardSettlementError as g, sessionEventActivePath as gt, waitMs as h, sessionBaseDir as ht, trySetModeOnRunningOwner as i, isAcpJsonRpcMessage as it, findSessionByDirectoryWalk as j, NON_INTERACTIVE_PERMISSION_POLICIES as jt, findGitRepositoryRoot as k, AUTH_POLICIES as kt, readQueueOwnerRecord as l, parsePromptStopReason as lt, tryAcquireQueueOwnerLease as m, retainedEventMaxSegments as mt, tryCloseSessionOnRunningOwner as n, startPerfTimer as nt, trySubmitToRunningOwner as o, isSessionUpdateNotification as ot, terminateQueueOwnerForSession as p, existingEventSegmentIndices as pt, SessionJournalReader as q, SessionConfigOptionReplayError as qt, trySetConfigOptionOnRunningOwner as r, extractSessionUpdateNotification as rt, SessionQueueOwner as s, parseJsonRpcErrorMessage as st, tryCancelOnRunningOwner as t, setPerfGauge as tt, refreshQueueOwnerLease as u, DEFAULT_EVENT_SEGMENT_MAX_BYTES as ut, PromptInputValidationError as v, sessionEventSegmentPath as vt, createLockOwner as w, formatErrorMessage as wt, parsePromptSource as x, _usingCtx as xt, getUnsupportedPromptContentMessage as y, writePrivateFile as yt, writeSessionRecord as z, AgentStartupError as zt };

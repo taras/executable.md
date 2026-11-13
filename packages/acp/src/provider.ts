@@ -1889,6 +1889,8 @@ function* useAcpxProviderState(
      */
     build?: BoundBuild;
     attachment?: { resumeSessionId: string };
+    /** Require the live Codex load to confirm a held conversation after a build change. */
+    verifyReopening?: boolean;
     /** The session's state, as the caller resolved it. */
     state: "new" | "existing";
     /**
@@ -1951,6 +1953,16 @@ function* useAcpxProviderState(
       attachment === undefined && intent.state === "existing"
         ? yield* reopeningOf(prepared)
         : undefined;
+    let expectedAgentSessionId: string | undefined;
+    if (intent.verifyReopening) {
+      expectedAgentSessionId = reopening?.agentSessionId;
+      if (!expectedAgentSessionId) {
+        throw new AttachmentRefused({
+          class: "identity-unavailable",
+          message: `session "${prepared.sessionKey}" has no retained native identity to verify after the Codex build changed`,
+        });
+      }
+    }
     const resumeSessionId = attachment?.resumeSessionId ?? reopening?.acpSessionId;
     let managedEntry: ManagedSession;
     try {
@@ -1962,6 +1974,7 @@ function* useAcpxProviderState(
           mode: "persistent",
           cwd: prepared.details.cwd,
           ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+          ...(expectedAgentSessionId === undefined ? {} : { expectedAgentSessionId }),
           ...(newSessionOptions === undefined ? {} : { sessionOptions: newSessionOptions }),
           ...(intent.materialization === true
             ? { materialization: "first-turn-acceptance" as const }
@@ -2481,7 +2494,8 @@ function* useAcpxProviderState(
     adapter: BoundProviderReturnedAdapter,
     sessionKey: string,
     hasProviderState: boolean,
-  ): Operation<BoundBuild> {
+    verifyChangedBuild = false,
+  ): Operation<SessionConstruction> {
     const build = yield* observeBuild(agentName, agentCommand, adapter.binding);
     let route: AgentSessionRoute;
     try {
@@ -2518,9 +2532,12 @@ function* useAcpxProviderState(
       });
     }
     if (!sameExecutableBuild(build.binding, route.executableBinding)) {
-      throw new AttachmentRefused(buildDrift(sessionKey, route.executableBinding, build.binding));
+      if (!verifyChangedBuild) {
+        throw new AttachmentRefused(buildDrift(sessionKey, route.executableBinding, build.binding));
+      }
+      return { build, verifyReopening: true };
     }
-    return build;
+    return { build };
   }
 
   /** What a settled construction route lets one ACP operation do. */
@@ -2535,6 +2552,7 @@ function* useAcpxProviderState(
      * a name supplied here would be XMD choosing one after the fact.
      */
     resumeSessionId?: string;
+    verifyReopening?: boolean;
   }
 
   /**
@@ -2568,15 +2586,15 @@ function* useAcpxProviderState(
       if (!bindsBuild(adapter)) {
         return undefined;
       }
-      const build = yield* bindProviderNamed(
+      return yield* bindProviderNamed(
         agentName,
         agentCommand,
         routeCommand,
         adapter,
         prepared.sessionKey,
         constructed,
+        agentName === "codex" && prepared.kind === "details" && prepared.continuation !== undefined,
       );
-      return { build };
     }
     const route = yield* reconcileRoute(
       routeCommand,
@@ -2888,7 +2906,11 @@ function* useAcpxProviderState(
               ...modelRequest(configuration),
             })
             .then(() => undefined);
-          yield* until(pending);
+          try {
+            yield* until(pending);
+          } catch (error) {
+            throw nativeIdentityRefusal(error) ?? error;
+          }
           // Only where the write answered. A `finally` here would run while
           // this very operation was being cancelled, which is the one moment
           // the cleanup below has to do its waiting.
@@ -3115,7 +3137,9 @@ function* useAcpxProviderState(
           const constructing =
             state === "new" && resumeSessionId === undefined && prepared.kind === "details";
           const entry = yield* ensureFromPrepared(agentName, prepared, {
-            ...(construction === undefined ? {} : { build: construction.build }),
+            ...(construction === undefined
+              ? {}
+              : { build: construction.build, verifyReopening: construction.verifyReopening }),
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
             ...modelRequest(desired),
@@ -3679,14 +3703,14 @@ function* useAcpxProviderState(
     let build: BoundBuild | undefined;
     if (bindsBuild(adapter)) {
       try {
-        build = yield* bindProviderNamed(
+        ({ build } = yield* bindProviderNamed(
           agentName,
           agentCommand,
           agentCommand,
           adapter,
           sessionKey,
           existing !== undefined,
-        );
+        ));
       } catch (error) {
         if (error instanceof AttachmentRefused) {
           return refusal(error.failure.class, error.failure.message, known);
@@ -4871,7 +4895,9 @@ function* useAcpxProviderState(
               // second owner of a session a native UI may take.
               yield* ensure(() => releaseHandle(prepared.sessionKey));
               const entry = yield* ensureFromPrepared(agentName, prepared, {
-                ...(construction === undefined ? {} : { build: construction.build }),
+                ...(construction === undefined
+                  ? {}
+                  : { build: construction.build, verifyReopening: construction.verifyReopening }),
                 ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
                 state,
                 ...(setup?.requestedModel === undefined
@@ -4982,7 +5008,20 @@ function* useAcpxProviderState(
   };
 }
 
+function nativeIdentityRefusal(error: unknown): AttachmentRefused | undefined {
+  if (
+    error instanceof Error &&
+    Reflect.get(error, "detailCode") === "NATIVE_SESSION_IDENTITY_UNAVAILABLE"
+  ) {
+    return new AttachmentRefused({ class: "identity-unavailable", message: error.message });
+  }
+}
+
 function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
+  const refusal = nativeIdentityRefusal(error);
+  if (refusal) {
+    return refusal;
+  }
   if (
     typeof error === "object" &&
     error !== null &&

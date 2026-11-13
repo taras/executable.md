@@ -1,6 +1,6 @@
 import { AcpAgentInspection, AcpAgentInspectionOptions, AcpAgentRegistry, AcpInspectableAgentRegistry, DEFAULT_AGENT_NAME, createAgentRegistry } from "./agent-registry.d.ts";
-import { C as PermissionPolicy, E as PromptInput, S as PermissionMode, T as SessionRecord, _ as AcpProcessSpawnFailure, a as AcpElicitationHandler, b as McpServer$1, c as AcpElicitationResponse, d as AcpPermissionHandler, f as AcpPermissionRequest, g as AcpProcessLifecycle, h as AcpProcessLaunchScope, i as AcpElicitationContext, l as AcpJsonRpcMessage, m as AcpProcessLaunch, n as SystemPromptOption, o as AcpElicitationMode, p as AcpProcessExit, s as AcpElicitationRequest, t as SessionAgentOptions, u as AcpPermissionDecision, v as AcpProcessStarted, x as NonInteractivePermissionPolicy, y as AuthPolicy } from "./session-options-BlnP3WAc.d.ts";
-import { n as AcpControlAuthority, t as AcpClient } from "./client-D12zqSyN.d.ts";
+import { C as PermissionMode, D as PromptInput, E as SessionRecord, S as NonInteractivePermissionPolicy, _ as AcpProcessLifecycle, a as AcpElicitationHandler, b as AuthPolicy, c as AcpElicitationResponse, d as AcpPermissionDecision, f as AcpPermissionHandler, g as AcpProcessLaunchScope, h as AcpProcessLaunch, i as AcpElicitationContext, l as AcpJsonRpcMessage, m as AcpProcessExit, n as SystemPromptOption, o as AcpElicitationMode, p as AcpPermissionRequest, s as AcpElicitationRequest, t as SessionAgentOptions, u as AcpMessageDirection, v as AcpProcessSpawnFailure, w as PermissionPolicy, x as McpServer$1, y as AcpProcessStarted } from "./session-options-D9KL7-d8.d.ts";
+import { n as AcpControlAuthority, t as AcpClient } from "./client-BqZW_W14.d.ts";
 import { z } from "zod";
 import { SetSessionConfigOptionResponse, ToolCallContent, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
 export declare const REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE: "ACP_MODEL_UNSUPPORTED";
@@ -67,14 +67,16 @@ type AcpRuntimeEnsureInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   /**
-   * Strict explicit resume: resume this exact ACP session. The in-process runtime
-   * keeps matching local history and saved configuration, and later prompt/control
-   * reconnects refuse replacement if this target cannot load. Same-record aliases
-   * cannot relax this constraint. Adding the constraint requires an idle arrangement;
-   * explicit lifecycle reset remains separate. Supply the target again when
-   * attaching through another runtime instance.
+   * Resume this exact ACP session. The in-process runtime keeps matching local
+   * history and saved configuration, and later prompt/control reconnects refuse
+   * replacement if this target cannot load. Same-record aliases cannot relax
+   * this constraint. Adding the constraint requires an idle arrangement;
+   * explicit lifecycle reset remains separate. Supply the
+   * target again when attaching through another runtime instance.
    */
   resumeSessionId?: string;
+  /** XMD verified resume: require this native assertion from the live load before using its record. */
+  expectedAgentSessionId?: string;
   cwd?: string;
   /**
    * Per-session agent options applied when a fresh ACP session is created.
@@ -491,6 +493,13 @@ type AcpRuntimeOptions = {
   verbose?: boolean;
   /** ACP elicitation modes the embedding host can render for prompt turns. */
   elicitationModes?: readonly AcpElicitationMode[];
+  /**
+   * Best-effort wire observation for owned session clients, including setup and
+   * reconnects. Elicitation payloads and suppressed replay updates are omitted.
+   * Outbound observations precede transport writes; they are not delivery receipts.
+   * Callback failures are ignored. Treat observed messages as read-only.
+   */
+  onAcpMessage?: (direction: AcpMessageDirection, message: AcpJsonRpcMessage) => void;
   /** Optional lifecycle observer for ACP agent processes owned by this runtime. */
   processLifecycle?: AcpProcessLifecycle;
   onPermissionRequest?: AcpPermissionHandler;
@@ -609,6 +618,7 @@ declare class AcpRuntimeManager {
   private readonly pendingTasks;
   private shuttingDown;
   private shutdownTask?;
+  private readonly observeAcpMessage;
   constructor(options: AcpRuntimeOptions, deps?: AcpRuntimeManagerDeps);
   private createClient;
   probe(): Promise<RuntimeHealthReport>;
@@ -910,4 +920,4 @@ export declare function createRuntimeStore(options: {
   stateDir: string;
 }): AcpSessionStore;
 // XMD prompt usage: AcpRuntimeTurnUsage and AcpRuntimeQuotaTokens are exported with the turn types.
-export { type AcpAgentInspection, type AcpAgentInspectionOptions, type AcpAgentRegistry, type AcpElicitationContext, type AcpElicitationHandler, type AcpElicitationMode, type AcpElicitationRequest, type AcpElicitationResponse, type AcpFileSessionStoreOptions, type AcpInspectableAgentRegistry, type AcpPermissionDecision, type AcpPermissionHandler, type AcpPermissionRequest, type AcpProcessExit, type AcpProcessLaunch, type AcpProcessLaunchScope, type AcpProcessLifecycle, type AcpProcessSpawnFailure, type AcpProcessStarted, type AcpRuntime, type AcpRuntimeMaterialization, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePlanEntry, type AcpRuntimePromptMode, type AcpRuntimeSessionContext, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionPermissions, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeTurnUsage, type AcpRuntimeQuotaTokens, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, type AcpTextDeltaOriginMeta, DEFAULT_AGENT_NAME, type InspectAgentModelsOptions, type PermissionPolicy, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SessionWatchEvent, type SessionWatchResult, type SharedAcpRuntimeOptions, type SystemPromptOption, createAgentRegistry };
+export { type AcpAgentInspection, type AcpAgentInspectionOptions, type AcpAgentRegistry, type AcpElicitationContext, type AcpElicitationHandler, type AcpElicitationMode, type AcpElicitationRequest, type AcpElicitationResponse, type AcpFileSessionStoreOptions, type AcpInspectableAgentRegistry, type AcpJsonRpcMessage, type AcpMessageDirection, type AcpPermissionDecision, type AcpPermissionHandler, type AcpPermissionRequest, type AcpProcessExit, type AcpProcessLaunch, type AcpProcessLaunchScope, type AcpProcessLifecycle, type AcpProcessSpawnFailure, type AcpProcessStarted, type AcpRuntime, type AcpRuntimeMaterialization, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePlanEntry, type AcpRuntimePromptMode, type AcpRuntimeSessionContext, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionPermissions, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeTurnUsage, type AcpRuntimeQuotaTokens, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, type AcpTextDeltaOriginMeta, DEFAULT_AGENT_NAME, type InspectAgentModelsOptions, type PermissionPolicy, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SessionWatchEvent, type SessionWatchResult, type SharedAcpRuntimeOptions, type SystemPromptOption, createAgentRegistry };

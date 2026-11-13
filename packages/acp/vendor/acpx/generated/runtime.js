@@ -1,7 +1,7 @@
-import { A as findSession, B as assertPersistedKeyPolicy, C as textPrompt, Dt as normalizeOutputError, L as readSessionRecord, Ot as extractAcpError, R as resolveSessionRecord, U as serializeSessionRecordForDisk, V as parseSessionRecord, bt as writePrivateJsonFile, kt as isAcpResourceNotFoundError, t as tryCancelOnRunningOwner } from "./ipc-BbYFsKOj.js";
-import { O as normalizeAgentCommandInput, a as createAgentRegistry, i as DEFAULT_AGENT_NAME } from "./agent-registry-Cz9fD9H1.js";
-import { $ as isRequestedModelUnsupportedError, A as applyInitialModelSelection, B as reconcileAgentSessionId, C as setSessionModeOnOwner, D as connectAndLoadSession, E as withConnectedSession, F as persistSessionOptions, G as recordSessionUpdate, I as sessionOptionsFromRecord, J as advertisedModelState, K as trimConversationForRuntime, L as applyConversation, M as applyRequestedModelIfAdvertised, N as setDesiredModeId, O as applyConfigOptionSelection, P as normalizeSessionOptionShape, Q as RequestedModelUnsupportedError, R as applyLifecycleSnapshotToRecord, T as setSessionModelOnOwner, U as recordClientOperation, V as cloneSessionConversation, W as recordPromptSubmission, X as REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, Y as AcpClient, Z as REQUESTED_MODEL_UNSUPPORTED_REASONS, _ as cancelSessionPrompt, c as LiveSessionCheckpoint, et as resolveRequestedConfigOption, ft as TimeoutError, h as ensureSession, ht as withTimeout, j as applyModelSelection, k as applyConfigOptionsToRecord, l as runPromptTurn, pt as assertControlAuthority, q as cloneSessionAcpxState, r as sendSession, rt as snapshotEnvNames, s as DISCARD_OUTPUT_FORMATTER, tt as resolveRequestedModelId, v as closeSession, x as setSessionConfigOptionOnOwner, z as createInitialSessionRecord } from "./queue-owner-runtime-B0mPqOu4.js";
-import { t as watchSession } from "./watch-bQXyUy3z.js";
+import { S as normalizeAgentCommandInput, a as createAgentRegistry, i as DEFAULT_AGENT_NAME } from "./agent-registry-CxpAF3nI.js";
+import { A as findSession, B as assertPersistedKeyPolicy, C as textPrompt, Dt as extractAcpError, Et as normalizeOutputError, L as readSessionRecord, Ot as isAcpResourceNotFoundError, R as resolveSessionRecord, U as serializeSessionRecordForDisk, V as parseSessionRecord, bt as writePrivateJsonFile, t as tryCancelOnRunningOwner } from "./ipc-CQUNQ8QQ.js";
+import { $ as resolveRequestedConfigOption, A as applyInitialModelSelection, B as reconcileAgentSessionId, C as setSessionModeOnOwner, D as connectAndLoadSession, E as withConnectedSession, F as persistSessionOptions, G as recordSessionUpdate, I as sessionOptionsFromRecord, J as AcpClient, K as cloneSessionAcpxState, L as applyConversation, M as applyRequestedModelIfAdvertised, N as setDesiredModeId, O as applyConfigOptionSelection, P as normalizeSessionOptionShape, Q as isRequestedModelUnsupportedError, R as applyLifecycleSnapshotToRecord, T as setSessionModelOnOwner, U as recordClientOperation, V as cloneSessionConversation, W as recordPromptSubmission, X as REQUESTED_MODEL_UNSUPPORTED_REASONS, Y as REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, Z as RequestedModelUnsupportedError, _ as cancelSessionPrompt, c as LiveSessionCheckpoint, dt as TimeoutError, et as resolveRequestedModelId, ft as assertControlAuthority, h as ensureSession, j as applyModelSelection, k as applyConfigOptionsToRecord, l as runPromptTurn, mt as withTimeout, nt as snapshotEnvNames, q as advertisedModelState, r as sendSession, s as DISCARD_OUTPUT_FORMATTER, v as closeSession, x as setSessionConfigOptionOnOwner, z as createInitialSessionRecord } from "./queue-owner-runtime-ucHvXJ33.js";
+import { t as watchSession } from "./watch-CXy2A5VY.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -68,43 +68,8 @@ function deriveAgentFromSessionKey(sessionKey, fallbackAgent) {
 }
 // src/runtime/public/events.ts
 const TOOL_OUTPUT_SUMMARY_MAX_CHARS = 500;
-function safeParseJsonObject(line) {
-	try {
-		const parsed = JSON.parse(line);
-		return isRecord(parsed) ? parsed : null;
-	} catch {
-		return null;
-	}
-}
 function asOptionalFiniteNumber(value) {
 	return typeof value === "number" && Number.isFinite(value) ? value : void 0;
-}
-function resolveStructuredPromptPayload(parsed) {
-	if (asTrimmedString(parsed.method) === "session/update") {
-		const params = parsed.params;
-		if (isRecord(params) && isRecord(params.update)) {
-			const update = params.update;
-			const tag = asOptionalString(update.sessionUpdate);
-			return {
-				type: tag ?? "",
-				payload: update,
-				...tag ? { tag } : {}
-			};
-		}
-	}
-	const sessionUpdate = asOptionalString(parsed.sessionUpdate);
-	if (sessionUpdate) return {
-		type: sessionUpdate,
-		payload: parsed,
-		tag: sessionUpdate
-	};
-	const type = asTrimmedString(parsed.type);
-	const tag = asOptionalString(parsed.tag);
-	return {
-		type,
-		payload: parsed,
-		...tag ? { tag } : {}
-	};
 }
 function resolveStatusTextForTag(params) {
 	const resolver = STATUS_TEXT_RESOLVERS[params.tag];
@@ -245,15 +210,6 @@ function resolveTextChunk(params) {
 		...origin
 	};
 }
-function createTextDeltaEvent(params) {
-	if (params.content == null || params.content.length === 0) return null;
-	return {
-		type: "text_delta",
-		text: params.content,
-		stream: params.stream,
-		...params.tag ? { tag: params.tag } : {}
-	};
-}
 function readFirstString(record, keys) {
 	for (const key of keys) {
 		const value = asOptionalString(record[key]);
@@ -343,9 +299,6 @@ function summarizeToolOutput(rawOutput) {
 function isScalarToolOutput(value) {
 	return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 }
-function shouldForwardArray(value) {
-	return Array.isArray(value);
-}
 function readToolKind(value) {
 	const kind = asOptionalString(value);
 	return kind && TOOL_KINDS.has(kind) ? kind : void 0;
@@ -392,44 +345,29 @@ function assignToolCallEventMetadata(event, payload, values) {
 	assignForwardedToolPayload(event, payload);
 }
 function assignForwardedToolPayload(event, payload) {
-	if (shouldForwardArray(payload.locations)) event.locations = payload.locations;
-	if (Object.prototype.hasOwnProperty.call(payload, "rawInput")) event.rawInput = payload.rawInput;
-	if (Object.prototype.hasOwnProperty.call(payload, "rawOutput")) event.rawOutput = payload.rawOutput;
-	if (shouldForwardArray(payload.content)) event.content = payload.content;
+	const snapshot = JSON.parse(JSON.stringify(payload));
+	if (Array.isArray(snapshot.locations)) event.locations = snapshot.locations;
+	if (Object.prototype.hasOwnProperty.call(snapshot, "rawInput")) event.rawInput = snapshot.rawInput;
+	if (Object.prototype.hasOwnProperty.call(snapshot, "rawOutput")) event.rawOutput = snapshot.rawOutput;
+	if (Array.isArray(snapshot.content)) event.content = snapshot.content;
 }
-function parsePromptEventLine(line) {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	const parsed = safeParseJsonObject(trimmed);
-	if (!parsed) return {
-		type: "status",
-		text: trimmed
-	};
-	const structured = resolveStructuredPromptPayload(parsed);
-	const type = structured.type;
-	const payload = structured.payload;
-	const tag = structured.tag;
-	const parser = promptEventParser(type);
-	return parser ? parser(payload, tag) : null;
+function runtimeEventFromMessage(message) {
+	if (!isRecord(message)) return null;
+	if (asTrimmedString(message.method) !== "session/update") return message.type === "client_operation" ? clientOperationEvent(message) : null;
+	const params = message.params;
+	if (!isRecord(params) || !isRecord(params.update)) return null;
+	const payload = params.update;
+	const parser = promptEventParser(asTrimmedString(payload.sessionUpdate));
+	return parser ? parser(payload) : null;
 }
 const PROMPT_EVENT_PARSERS = {
-	text: (payload, tag) => createTextDeltaEvent({
-		content: asString(payload.content),
-		stream: "output",
-		tag
-	}),
-	thought: (payload, tag) => createTextDeltaEvent({
-		content: asString(payload.content),
-		stream: "thought",
-		tag
-	}),
-	tool_call: (payload, tag) => createToolCallEvent({
+	tool_call: (payload) => createToolCallEvent({
 		payload,
-		tag: tag ?? "tool_call"
+		tag: "tool_call"
 	}),
-	tool_call_update: (payload, tag) => createToolCallEvent({
+	tool_call_update: (payload) => createToolCallEvent({
 		payload,
-		tag: tag ?? "tool_call_update"
+		tag: "tool_call_update"
 	}),
 	agent_message_chunk: (payload) => resolveTextChunk({
 		payload,
@@ -446,11 +384,7 @@ const PROMPT_EVENT_PARSERS = {
 	current_mode_update: (payload) => statusUpdateEvent("current_mode_update", payload),
 	config_option_update: (payload) => statusUpdateEvent("config_option_update", payload),
 	session_info_update: (payload) => statusUpdateEvent("session_info_update", payload),
-	plan: planUpdateEvent,
-	client_operation: clientOperationEvent,
-	update: updateStatusEvent,
-	done: () => null,
-	error: () => null
+	plan: planUpdateEvent
 };
 function promptEventParser(type) {
 	return Object.hasOwn(PROMPT_EVENT_PARSERS, type) ? PROMPT_EVENT_PARSERS[type] : void 0;
@@ -552,25 +486,15 @@ function statusUpdateEvent(tag, payload) {
 		tag
 	};
 }
-function clientOperationEvent(payload, tag) {
-	const text = [
-		asTrimmedString(payload.method) || "operation",
-		asTrimmedString(payload.status),
-		asTrimmedString(payload.summary)
-	].filter(Boolean).join(" ");
-	return text ? {
+function clientOperationEvent(payload) {
+	return {
 		type: "status",
-		text,
-		...tag ? { tag } : {}
-	} : null;
-}
-function updateStatusEvent(payload, tag) {
-	const update = asTrimmedString(payload.update);
-	return update ? {
-		type: "status",
-		text: update,
-		...tag ? { tag } : {}
-	} : null;
+		text: [
+			asTrimmedString(payload.method) || "operation",
+			asTrimmedString(payload.status),
+			asTrimmedString(payload.summary)
+		].filter(Boolean).join(" ")
+	};
 }
 // src/runtime/public/probe.ts
 /**
@@ -959,10 +883,18 @@ async function startRuntimeClient(client, agent, timeoutMs) {
 		throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", `ACP agent ${path.basename(agent.agentArgv?.[0] ?? agent.agentCommand.split(/\s+/)[0])} did not complete ACP initialization within ${timeoutMs}ms. Check that the configured command starts an ACP server.`, { cause: error });
 	}
 }
-async function createOrLoadRuntimeSession(client, resumeSessionId, cwd) {
+async function withSessionSetupTimeout(method, request, timeoutMs) {
+	try {
+		return await withTimeout(request, timeoutMs);
+	} catch (error) {
+		if (!(error instanceof TimeoutError)) throw error;
+		throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", `ACP ${method} did not complete within ${timeoutMs}ms. Retry session setup and check that the configured ACP agent is responding.`, { cause: error });
+	}
+}
+async function createOrLoadRuntimeSession(client, resumeSessionId, cwd, timeoutMs) {
 	if (resumeSessionId) {
 		if (client.supportsResumeSession()) {
-			const resumed = await client.resumeSession(resumeSessionId, cwd);
+			const resumed = await withSessionSetupTimeout("session/resume", client.resumeSession(resumeSessionId, cwd), timeoutMs);
 			return {
 				sessionId: resumeSessionId,
 				agentSessionId: resumed.agentSessionId,
@@ -970,14 +902,14 @@ async function createOrLoadRuntimeSession(client, resumeSessionId, cwd) {
 			};
 		}
 		if (!client.supportsLoadSession()) throw new Error(`Agent does not support session/resume or session/load; cannot resume session ${resumeSessionId}`);
-		const loaded = await client.loadSession(resumeSessionId, cwd);
+		const loaded = await withSessionSetupTimeout("session/load", client.loadSession(resumeSessionId, cwd), timeoutMs);
 		return {
 			sessionId: resumeSessionId,
 			agentSessionId: loaded.agentSessionId,
 			sessionResult: loaded
 		};
 	}
-	const created = await client.createSession(cwd);
+	const created = await withSessionSetupTimeout("session/new", client.createSession(cwd), timeoutMs);
 	return {
 		sessionId: created.sessionId,
 		agentSessionId: created.agentSessionId,
@@ -1041,6 +973,8 @@ var AcpRuntimeManager = class {
 	options;
 	deps;
 	exactSessionRecordIds = /* @__PURE__ */ new Set();
+	// XMD verified resume: a later cold client must prove the same identity again.
+	verifiedResumeIdentities = /* @__PURE__ */ new Map();
 	activeControllers = /* @__PURE__ */ new Map();
 	controlSessionRecords = /* @__PURE__ */ new Map();
 	retainedSessionOwners = /* @__PURE__ */ new Map();
@@ -1054,6 +988,11 @@ var AcpRuntimeManager = class {
 	pendingTasks = /* @__PURE__ */ new Set();
 	shuttingDown = false;
 	shutdownTask;
+	observeAcpMessage = (direction, message) => {
+		try {
+			Promise.resolve(this.options.onAcpMessage?.(direction, message)).catch(() => {});
+		} catch {}
+	};
 	constructor(options, deps = {}) {
 		this.options = options;
 		this.deps = deps;
@@ -1062,6 +1001,7 @@ var AcpRuntimeManager = class {
 		this.assertOpen();
 		const clientOptions = {
 			...options,
+			onAcpMessage: options.processLaunchScope?.kind === "runtime-session" ? this.observeAcpMessage : void 0,
 			agentProcessEnv: this.options.agentProcessEnv,
 			agentProcessEnvAllow: this.options.agentProcessEnvAllow,
 			agentProcessEnvBlock: this.options.agentProcessEnvBlock,
@@ -1172,6 +1112,7 @@ var AcpRuntimeManager = class {
 			pendingSessionUpdates: []
 		};
 		input.client.setEventHandlers({
+			onAcpMessage: this.observeAcpMessage,
 			onSessionUpdate: (notification) => this.routeOwnedSessionUpdate(owner, notification),
 			onClientOperation: (operation) => this.routeOwnedClientOperation(owner, operation)
 		});
@@ -1205,7 +1146,6 @@ var AcpRuntimeManager = class {
 				turn.acpxState = recordSessionUpdate(turn.conversation, turn.acpxState, notification);
 				owner.checkpoint.request();
 			} else turn.record.acpx = recordSessionUpdate(turn.conversation, turn.record.acpx, notification);
-			trimConversationForRuntime(turn.conversation);
 			this.emitRuntimeTurnEvent(task, {
 				jsonrpc: "2.0",
 				method: "session/update",
@@ -1223,7 +1163,6 @@ var AcpRuntimeManager = class {
 			return;
 		}
 		projection.record.acpx = recordSessionUpdate(projection.conversation, projection.record.acpx, notification);
-		trimConversationForRuntime(projection.conversation);
 		owner.checkpoint.request();
 	}
 	async promoteSessionMaterialization(task, turn) {
@@ -1253,7 +1192,6 @@ var AcpRuntimeManager = class {
 			turn.acpxState = recordClientOperation(turn.conversation, turn.acpxState, operation);
 			owner.checkpoint.request();
 		} else turn.record.acpx = recordClientOperation(turn.conversation, turn.record.acpx, operation);
-		trimConversationForRuntime(turn.conversation);
 		this.emitRuntimeTurnEvent(task, {
 			type: "client_operation",
 			...operation
@@ -1447,6 +1385,8 @@ var AcpRuntimeManager = class {
 				timeoutMs: this.options.timeoutMs,
 				resumePolicy: resumePolicyForSessionMode(sessionMode),
 				strictResume: this.exactSessionRecordIds.has(record.acpxRecordId),
+				// XMD verified resume: prove identity before replaying saved preferences.
+				expectedAgentSessionId: this.verifiedResumeIdentities.get(record.acpxRecordId),
 				replacingMode: replayOptions?.replacingMode,
 				replacingConfigOption: replayOptions?.replacingConfigOption,
 				authority,
@@ -1474,8 +1414,6 @@ var AcpRuntimeManager = class {
 		return await this.withEnsureSessionLock(input, async () => {
 			const record = await this.ensureSessionWithOwnership(input);
 			if (input.resumeSessionId && !this.exactSessionRecordIds.has(record.acpxRecordId)) {
-				// Compatible ensures bypass operation locks; an earlier alias may
-				// already have committed to fresh fallback while awaiting its reply.
 				this.assertRuntimeSessionIdle(record.acpxRecordId);
 				this.exactSessionRecordIds.add(record.acpxRecordId);
 			}
@@ -1519,6 +1457,11 @@ var AcpRuntimeManager = class {
 			agentCommand,
 			agentArgv
 		};
+		// XMD verified resume: a compatible saved record is not a live assertion.
+		if (input.expectedAgentSessionId !== void 0) {
+			this.assertRuntimeSessionIdle(input.sessionKey);
+			return await this.withManagerLock(this.runtimeOperationLocks, input.sessionKey, async () => this.reopenVerifiedSession(input, agent));
+		}
 		if (input.mode !== "persistent") return await this.acquireRuntimeSession(input, agent);
 		const compatible = await this.reuseCompatiblePersistentSession(input, agent);
 		if (compatible) return compatible;
@@ -1542,6 +1485,43 @@ var AcpRuntimeManager = class {
 		if (existing && this.canReuseRuntimeSession(input, agent, existing)) return await this.reuseRuntimeSession(existing);
 		await this.closeConflictingPersistentSession(input, existing?.owner);
 		return await this.createOwnedRuntimeSession(input, agent);
+	}
+	// XMD verified resume: keep the original record and reconnect its live owner.
+	async reopenVerifiedSession(input, agent) {
+		const existing = await this.loadExistingRuntimeSession(input);
+		const retained = existing?.record;
+		if (!retained || sessionMaterializationPending(retained) || retained.acpx?.reset_on_next_ensure === true ||
+			retained.acpSessionId !== input.resumeSessionId || path.resolve(retained.cwd) !== agent.cwd ||
+			(retained.agentSessionId !== void 0 && retained.agentSessionId !== input.expectedAgentSessionId)) {
+			throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "The retained ACP record cannot verify this native conversation.");
+		}
+		const record = { ...structuredClone(retained), agentCommand: agent.agentCommand, agentArgv: agent.agentArgv };
+		await this.closeConflictingPersistentSession(input, existing.owner);
+		// XMD verified resume: load and validate before making the owner visible.
+		const client = this.createTurnClient(record, input.requestedModel);
+		const owner = this.createSessionOwner({ client, sessionKey: input.sessionKey, mode: input.mode });
+		try {
+			await connectAndLoadSession({
+				client,
+				record,
+				sessionOptions: input.sessionOptions,
+				expectedAgentSessionId: input.expectedAgentSessionId,
+				timeoutMs: this.options.timeoutMs,
+				verbose: this.options.verbose
+			});
+			this.assertOpen();
+			this.attachIdleProjection(owner, record);
+			this.refreshOwnedRecordLifecycle(owner, record);
+			await this.retainInitializedSessionOwner(owner, record);
+			// XMD verified resume: other operations on this owner keep the same assertion.
+			this.verifiedResumeIdentities.set(record.acpxRecordId, input.expectedAgentSessionId);
+			return record;
+		} catch (error) {
+			// XMD verified resume: initialization cannot mark held history for replacement.
+			owner.recordId = void 0;
+			await this.abandonInitializingSessionOwner(owner);
+			throw error;
+		}
 	}
 	async loadExistingRuntimeSession(input) {
 		const existingRecordId = input.mode === "persistent" ? input.sessionKey : this.pendingOneShotRecordIds.get(input.sessionKey);
@@ -1626,7 +1606,7 @@ var AcpRuntimeManager = class {
 		try {
 			await startRuntimeClient(client, agent, this.options.timeoutMs);
 			this.assertOpen();
-			const session = await createOrLoadRuntimeSession(client, input.resumeSessionId, cwd);
+			const session = await createOrLoadRuntimeSession(client, input.resumeSessionId, cwd, this.options.timeoutMs);
 			const record = await this.prepareInitialRuntimeRecord({
 				input,
 				client,
@@ -1637,8 +1617,10 @@ var AcpRuntimeManager = class {
 				session
 			});
 			await this.retainInitializedSessionOwner(owner, record);
+			// XMD verified resume: explicit fresh construction retires the assertion.
 			if (!input.resumeSessionId) {
 				this.exactSessionRecordIds.delete(record.acpxRecordId);
+				this.verifiedResumeIdentities.delete(record.acpxRecordId);
 			}
 			return record;
 		} catch (error) {
@@ -1888,7 +1870,6 @@ var AcpRuntimeManager = class {
 		try {
 			const promptStartedAt = isoNow();
 			const promptMessageId = recordPromptSubmission(conversation, task.promptInput, promptStartedAt);
-			trimConversationForRuntime(conversation);
 			record.lastPromptAt = promptStartedAt;
 			record.lastUsedAt = promptStartedAt;
 			record.acpx = acpxState;
@@ -2061,7 +2042,7 @@ var AcpRuntimeManager = class {
 		};
 	}
 	emitRuntimeTurnEvent(task, payload) {
-		const parsed = parsePromptEventLine(JSON.stringify(payload));
+		const parsed = runtimeEventFromMessage(payload);
 		if (!parsed) return;
 		task.queue.push(parsed);
 	}
@@ -2082,6 +2063,8 @@ var AcpRuntimeManager = class {
 			record: turn.record,
 			resumePolicy: resumePolicyForSessionMode(task.input.sessionMode),
 			strictResume: this.exactSessionRecordIds.has(turn.record.acpxRecordId),
+			// XMD verified resume: a lost client cannot skip identity confirmation.
+			expectedAgentSessionId: this.verifiedResumeIdentities.get(turn.record.acpxRecordId),
 			timeoutMs: this.options.timeoutMs,
 			promptRecorded: true,
 			activeController: task.state.activeController,
@@ -2586,6 +2569,7 @@ var SharedAcpRuntime = class {
 			"sessionPermissions",
 			"processLifecycle",
 			"onPermissionRequest",
+			"onAcpMessage",
 			"elicitationModes",
 			"fs",
 			"terminal"
@@ -2622,6 +2606,8 @@ var SharedAcpRuntime = class {
 		this.assertOpen();
 		// XMD requested model: shared sessions refuse this in-process input.
 		refuseSharedRequestedModel(input);
+		// XMD verified resume: shared runtime has no verified load boundary.
+		if (input.expectedAgentSessionId !== void 0) invalidOption("Verified resume requires the in-process runtime.");
 		if (input.mode !== "persistent") invalidOption("Shared sessions require persistent mode; use the in-process runtime for oneshot sessions.");
 		const session = this.sessionOptions(input);
 		return this.track(ensureSession({
@@ -2693,7 +2679,7 @@ var SharedAcpRuntime = class {
 				outputFormatter: {
 					...DISCARD_OUTPUT_FORMATTER,
 					onAcpMessage: (message) => {
-						const event = parsePromptEventLine(JSON.stringify(message));
+						const event = runtimeEventFromMessage(message);
 						if (event) events.push(event);
 					}
 				},
@@ -2893,12 +2879,16 @@ var AcpxRuntime = class {
 		const { sessionName, agent } = this.resolveSessionIdentity(input);
 		// XMD requested model: validate before manager work begins.
 		const requestedModel = requestedModelOf(input);
+		// XMD verified resume: an identity assertion always belongs to an exact loading target.
+		const expectedAgentSessionId = input.expectedAgentSessionId;
+		if (expectedAgentSessionId !== void 0 && (typeof expectedAgentSessionId !== "string" || !expectedAgentSessionId.trim() || !input.resumeSessionId || input.mode !== "persistent")) invalidOption("Verified resume requires a retained native identity and exact persistent loading target.");
 		const record = await (await this.getManager()).ensureSession({
 			sessionKey: sessionName,
 			agent,
 			mode: input.mode,
 			cwd: input.cwd ?? this.options.cwd,
 			resumeSessionId: input.resumeSessionId,
+			expectedAgentSessionId,
 			sessionOptions: input.sessionOptions,
 			materialization: input.materialization,
 			// XMD requested model: consumed only by this attaching client.

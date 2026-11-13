@@ -953,6 +953,31 @@ record rather than a second row beside it. Entry rows and Sidekick rows are
 never merged, whatever they have in common: they have different owners, so an
 equal provider conversation or an equal turn number leaves two rows.
 
+Saved Sidekick turns show reported token usage beside their recording and
+outcome in Sessions, Transcript and chat. A failed or cancelled Prompt, a
+failed evaluated reply and a saved Prompt without an evaluated reply each
+retain their own usage. An unavailable report, an unrecorded turn and a
+reported zero remain distinguishable. Reading a saved chat exposes its token
+sources, counters, scopes and retained limitations as text.
+
+The [ACP Prompt usage contract](acp-client-spec.md#prompt-usage) defines the
+source views and counter meanings. For each saved Prompt, the display takes
+the last token reading of each source. It counts at most one response or
+quota-total view, preferring the response, when the reading covers a main-loop
+turn total or a last-request snapshot and supplies a number. The turn can show
+other reported views with unknown coverage. Missing counters stay unknown.
+Cached and reasoning counters stay in the source detail. A reported total is
+shown in place of the input and output breakdown when both are missing.
+
+The Sidekick total uses every saved Sidekick turn in the retained owner history,
+once per conversation and turn, across all selections. It sums each counter
+independently, identifies partial and unknown coverage and counts unavailable
+and uncountable turns separately. The associated entry outcome shows an Entry
+agents summary of that entry's retained Prompts when its terminal is present in
+the selected prefix. The same counter rules apply to that summary. Reopening,
+replay and presentation read retained facts without starting provider work or
+writing usage.
+
 Conversations are the provider's own session keys, offered in Entry agents order
 and then Sidekick order, each owner earliest-observed first and a duplicate
 key offered once: above the Sessions surface's own list, and behind the **All
@@ -3465,7 +3490,9 @@ conversation's own history before anything native can be created, and stays
 there unchanged as the account of how the chat began. A later explicit message
 is sent through today's adapter and today's Sidekick assembly to that same
 native conversation, even when the adapter command or the configuration
-differs; the Sidekick's own controls apply to every turn as it is built — no
+differs. After a host Codex upgrade, the installed build must confirm the
+original conversation on a live load before Sidekick uses it. The Sidekick's
+own controls apply to every turn as it is built — no
 provider tools, no MCP servers, strict permission routing and every native
 permission request denied — and the turn's model and effort are applied and
 read back before it is sent. Reopening asks for nothing. A resume, identity,

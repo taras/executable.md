@@ -1210,7 +1210,7 @@ second usage journal. A transient history stays transient.
     "provenance": {
       "host": "deno-source",
       "xmd": { "version": "0.14.1" },
-      "runtime": { "version": "0.21.1" },
+      "runtime": { "version": "0.22.0" },
       "adapter": { "version": "1.6.2", "digest": "sha256:…" }
     },
     "readings": [
@@ -1794,7 +1794,7 @@ records why Codex runs the host CLI.
 
 ## ACPX provider
 
-`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.21.1 runtime source closure (the explicit first-turn materialization
+`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.22.0 runtime source closure (the explicit first-turn materialization
 barrier remains a local patch, recorded with what removes it in
 `packages/acp/vendor/acpx/PROVENANCE.md`). The released `promptStarted`
 transport acknowledgement is not backend acceptance. `createAcpxProvider()`
@@ -1924,11 +1924,21 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   native assertion, when the adapter reports one, must equal the one the
   history's Prompt records assert, or — before the host acknowledged one — the
   one the provider's promoted record asserts. A pending record supplies
-  neither. A load that fails raises the adapter's own failure, as an ordinary
-  reattachment's does; a load that answers another native conversation refuses
-  with `identity-unavailable`. Either happens before any turn, sends no
-  `session/new` and no prompt, and leaves the old record, the history and the
-  route as they were. ACPX
+  neither. For an established Codex conversation held by a host such as Sidekick,
+  a different observed executable version or digest requires a live load on
+  the current build before applying settings or sending a prompt. The live
+  response must assert the retained native identity; an omitted assertion does
+  not inherit the saved identity. The same check applies if the runtime has
+  to reconnect again during the operation. The ACP record retains its history
+  and saved preferences, and the original construction route is unchanged.
+  The exact-build rule still applies to explicit native launch and attachment.
+  A failed load uses the ordinary resume error. A different native identity,
+  or an omitted identity when live confirmation is required, refuses with
+  `identity-unavailable`. A refusal at ensure sends no `session/new` or prompt
+  and leaves the record, history and route as they were. If a client disconnects
+  after ensure, a refused cold reconnect preserves the original identities and
+  prior history. ACPX can record the attempted submission before that load, even
+  when it sends no prompt to the provider. ACPX
   saves the arrangement a load answers with before returning it, so after
   giving up a handle whose assertion it refused the provider saves back the
   record it read before the load: the refused assertion never stands as the
@@ -2121,7 +2131,7 @@ The existing live-turn/root view shows these separately from reply text. Core
 reply and durable Prompt records retain their text and terminal facts only;
 ordinary providers need not emit these notices.
 
-Stock ACPX 0.21.1 provides no form input. It receives complete readable
+Stock ACPX 0.22.0 provides no form input. It receives complete readable
 question content followed by a precise capability refusal, with the child still
 pending. A capable client or attached UI can answer that same original.
 Standard text/JSON notices remain useful without metadata; quiet output

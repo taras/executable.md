@@ -348,8 +348,8 @@ describe(
       for (const declaration of [
         "runtime.d.ts",
         "agent-registry.d.ts",
-        "client-D12zqSyN.d.ts",
-        "session-options-BlnP3WAc.d.ts",
+        "client-BqZW_W14.d.ts",
+        "session-options-D9KL7-d8.d.ts",
       ]) {
         const source = path.join(workspace, "packages/acp/vendor/acpx/generated", declaration);
         const published = path.join(

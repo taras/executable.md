@@ -1,5 +1,5 @@
-import { $ as measurePerf, $t as UnsupportedPromptContentError, Bt as AgentStartupError, C as textPrompt, Dt as normalizeOutputError, Et as isRetryablePromptError, F as normalizeName, G as normalizeAgentSessionId, Gt as PermissionDeniedError, H as canonicalAgentCommand, Ht as ClaudeAcpSessionCreateTimeoutError, Jt as SessionConfigOptionReplayError, K as SESSION_JOURNAL_SCHEMA, Kt as PermissionPromptUnavailableError, L as readSessionRecord, Lt as AcpxOperationalError, M as isoNow$1, O as absolutePath, Ot as extractAcpError, Q as incrementPerfCounter, Qt as SessionResumeRequiredError, R as resolveSessionRecord, Rt as AgentDisconnectedError, S as promptToDisplayText, St as isProcessAlive, T as lockOwnerPid, Tt as isAcpQueryClosedBeforeResponseError, Ut as CopilotAcpUnsupportedError, Vt as AuthPolicyError, W as extractAgentSessionId, Wt as GeminiAcpStartupTimeoutError, X as formatPerfMetric, Xt as SessionModelReplayError, Yt as SessionModeReplayError, Z as getPerfMetricsSnapshot, _ as ProcessDescendants, _t as sessionEventLockPath, a as trySetModelOnRunningOwner, at as isAcpMessageObject, d as releaseQueueOwnerLease, et as resetPerfMetrics, f as terminateProcess, ft as defaultSessionEventLog, g as QueueLeaseGuardSettlementError, gt as sessionEventActivePath, h as waitMs$1, ht as sessionBaseDir, i as trySetModeOnRunningOwner, it as isAcpJsonRpcMessage, j as findSessionByDirectoryWalk, k as findGitRepositoryRoot, kt as isAcpResourceNotFoundError, m as tryAcquireQueueOwnerLease, mt as retainedEventMaxSegments, n as tryCloseSessionOnRunningOwner, nt as startPerfTimer, o as trySubmitToRunningOwner, ot as isSessionUpdateNotification, p as terminateQueueOwnerForSession, pt as existingEventSegmentIndices, q as SessionJournalReader, qt as QueueConnectionError, r as trySetConfigOptionOnRunningOwner, s as SessionQueueOwner, t as tryCancelOnRunningOwner, tt as setPerfGauge, u as refreshQueueOwnerLease, vt as sessionEventSegmentPath, w as createLockOwner, wt as formatErrorMessage, y as getUnsupportedPromptContentMessage, z as writeSessionRecord, zt as AgentSpawnError } from "./ipc-BbYFsKOj.js";
-import { A as requireAgentStdio, C as PROCESS_HELPER_TIMEOUT_MS, D as isoNow$2, E as isChildProcessRunning, F as waitForChildExit, I as waitForSpawn, M as resolveAgentSessionCwd, N as runTimedExecFile, P as splitCommandLine, T as basenameToken, _ as buildSpawnCommandOptions, b as readWindowsEnvValue, f as resolveBuiltInAgentLaunch, g as buildAgentSpawnCommand, j as resolveAgentCommandParts, v as buildTerminalShellSpawnCommand, w as asAbsoluteCwd, x as resolveWindowsExecutablePath, y as buildTerminalSpawnCommand } from "./agent-registry-Cz9fD9H1.js";
+import { A as waitForSpawn, D as runTimedExecFile, E as resolveAgentSessionCwd, F as readWindowsEnvValue, L as resolveWindowsExecutablePath, M as buildSpawnCommandOptions, N as buildTerminalShellSpawnCommand, O as splitCommandLine, P as buildTerminalSpawnCommand, T as resolveAgentCommandParts, _ as PROCESS_HELPER_TIMEOUT_MS, b as isChildProcessRunning, f as resolveBuiltInAgentLaunch, j as buildAgentSpawnCommand, k as waitForChildExit, v as asAbsoluteCwd, w as requireAgentStdio, x as isoNow$1, y as basenameToken } from "./agent-registry-CxpAF3nI.js";
+import { $ as measurePerf, Bt as AuthPolicyError, C as textPrompt, Dt as extractAcpError, Et as normalizeOutputError, F as normalizeName, G as normalizeAgentSessionId, Gt as PermissionPromptUnavailableError, H as canonicalAgentCommand, Ht as CopilotAcpUnsupportedError, It as AcpxOperationalError, Jt as SessionModeReplayError, K as SESSION_JOURNAL_SCHEMA, Kt as QueueConnectionError, L as readSessionRecord, Lt as AgentDisconnectedError, M as isoNow$2, O as absolutePath, Ot as isAcpResourceNotFoundError, Q as incrementPerfCounter, Qt as UnsupportedPromptContentError, R as resolveSessionRecord, Rt as AgentSpawnError, S as promptToDisplayText, St as isProcessAlive, T as lockOwnerPid, Tt as isRetryablePromptError, Ut as GeminiAcpStartupTimeoutError, Vt as ClaudeAcpSessionCreateTimeoutError, W as extractAgentSessionId, Wt as PermissionDeniedError, X as formatPerfMetric, Yt as SessionModelReplayError, Z as getPerfMetricsSnapshot, Zt as SessionResumeRequiredError, _ as ProcessDescendants, _t as sessionEventLockPath, a as trySetModelOnRunningOwner, at as isAcpMessageObject, d as releaseQueueOwnerLease, et as resetPerfMetrics, f as terminateProcess, ft as defaultSessionEventLog, g as QueueLeaseGuardSettlementError, gt as sessionEventActivePath, h as waitMs$1, ht as sessionBaseDir, i as trySetModeOnRunningOwner, it as isAcpJsonRpcMessage, j as findSessionByDirectoryWalk, k as findGitRepositoryRoot, m as tryAcquireQueueOwnerLease, mt as retainedEventMaxSegments, n as tryCloseSessionOnRunningOwner, nt as startPerfTimer, o as trySubmitToRunningOwner, ot as isSessionUpdateNotification, p as terminateQueueOwnerForSession, pt as existingEventSegmentIndices, q as SessionJournalReader, qt as SessionConfigOptionReplayError, r as trySetConfigOptionOnRunningOwner, s as SessionQueueOwner, t as tryCancelOnRunningOwner, tt as setPerfGauge, u as refreshQueueOwnerLease, vt as sessionEventSegmentPath, w as createLockOwner, wt as formatErrorMessage, y as getUnsupportedPromptContentMessage, z as writeSessionRecord, zt as AgentStartupError } from "./ipc-CQUNQ8QQ.js";
 import fs, { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -1065,7 +1065,7 @@ async function resolveReadOrPromptPermission(params, nonInteractivePolicy, allow
 function permissionModeSatisfies(actual, required) {
 	return PERMISSION_MODE_RANK[actual] >= PERMISSION_MODE_RANK[required];
 }
-async function resolvePermissionRequestWithDetails(params, mode, nonInteractivePolicy = "deny", policy, signal) {
+async function resolvePermissionRequest(params, mode, nonInteractivePolicy = "deny", policy, signal) {
 	try {
 		signal?.throwIfAborted();
 		const result = await resolvePermissionByPolicy(params, mode, nonInteractivePolicy, policy, signal);
@@ -1121,13 +1121,17 @@ const GEMINI_ACP_FLAG_VERSION = [
 const COPILOT_HELP_TIMEOUT_MS = 2e3;
 const CLAUDE_CODE_DEFAULT_SETTING_SOURCES = ["project", "local"];
 const QODER_BENIGN_STDOUT_LINES = /* @__PURE__ */ new Set(["Received interrupt signal. Cleaning up resources...", "Cleanup completed. Exiting..."]);
+function isQoderCommand(command) {
+	const name = basenameToken(command);
+	return name === "qoder" || name === "qodercli";
+}
 function resolveAgentCloseAfterStdinEndMs(agentCommand) {
 	const { command } = splitCommandLine(agentCommand);
-	return basenameToken(command) === "qodercli" ? QODER_AGENT_CLOSE_AFTER_STDIN_END_MS : DEFAULT_AGENT_CLOSE_AFTER_STDIN_END_MS;
+	return isQoderCommand(command) ? QODER_AGENT_CLOSE_AFTER_STDIN_END_MS : DEFAULT_AGENT_CLOSE_AFTER_STDIN_END_MS;
 }
 function shouldIgnoreNonJsonAgentOutputLine(agentCommand, trimmedLine) {
 	const { command } = splitCommandLine(agentCommand);
-	return basenameToken(command) === "qodercli" && QODER_BENIGN_STDOUT_LINES.has(trimmedLine);
+	return isQoderCommand(command) && QODER_BENIGN_STDOUT_LINES.has(trimmedLine);
 }
 function isGeminiAcpCommand(command, args) {
 	return basenameToken(command) === "gemini" && (args.includes("--acp") || args.includes("--experimental-acp"));
@@ -1140,7 +1144,7 @@ function isCopilotAcpCommand(command, args) {
 	return basenameToken(command) === "copilot" && args.includes("--acp");
 }
 function isQoderAcpCommand(command, args) {
-	return basenameToken(command) === "qodercli" && args.includes("--acp");
+	return isQoderCommand(command) && args.includes("--acp");
 }
 function isCursorAcpCommand(command, args) {
 	const commandToken = basenameToken(command);
@@ -1941,8 +1945,8 @@ function isLikelySessionControlUnsupportedError(acp) {
 	return typeof details === "string" && details.toLowerCase().includes("invalid params");
 }
 function formatSessionControlAcpSummary(acp) {
-	const details = asRecord$1(acp.data)?.details;
-	if (typeof details === "string" && details.trim().length > 0) return `${details.trim()} (ACP ${acp.code}, adapter reported "${acp.message}")`;
+	const data = asRecord$1(acp.data);
+	for (const value of [data?.details, data?.message]) if (typeof value === "string" && value.trim().length > 0) return `${value.trim()} (ACP ${acp.code}, adapter reported "${acp.message}")`;
 	return `${acp.message} (ACP ${acp.code})`;
 }
 function maybeWrapSessionControlError(method, error, context) {
@@ -1992,9 +1996,6 @@ function readTerminalOutputCeiling() {
 }
 function resolveTerminalOutputLimit(requested, ceiling) {
 	return Math.min(Math.max(0, Math.round(requested ?? DEFAULT_TERMINAL_OUTPUT_LIMIT_BYTES)), ceiling ?? Number.POSITIVE_INFINITY);
-}
-function tracksTerminalDescendants(terminal) {
-	return terminal.killProcessGroup || terminal.descendants !== void 0;
 }
 function createTerminalDescendants(proc, killProcessGroup) {
 	return process.platform === "win32" && killProcessGroup ? void 0 : new ProcessDescendants(proc, { ownProcessGroup: true });
@@ -2293,7 +2294,6 @@ var TerminalManager = class {
 		return terminal.exitCode === void 0 && terminal.signal === void 0;
 	}
 	async killProcess(terminal) {
-		if (!this.isRunning(terminal) && !tracksTerminalDescendants(terminal)) return;
 		try {
 			await this.signalProcess(terminal, "SIGTERM");
 		} catch {
@@ -2597,7 +2597,6 @@ var AcpClient = class {
 	observedSessionUpdates = 0;
 	processedSessionUpdates = 0;
 	suppressSessionUpdates = false;
-	suppressReplaySessionUpdateMessages = false;
 	activePrompt;
 	pendingPromptOwners = [];
 	cancellingSessionIds = /* @__PURE__ */ new Set();
@@ -2870,7 +2869,7 @@ var AcpClient = class {
 		return Object.freeze({
 			...launch,
 			pid,
-			startedAt: isoNow$2()
+			startedAt: isoNow$1()
 		});
 	}
 	async spawnAgentProcess(plan, authority) {
@@ -2886,7 +2885,11 @@ var AcpClient = class {
 			});
 			await waitForSpawn(spawnedChild);
 		} catch (error) {
-			const spawnError = new AgentSpawnError(this.options.agentCommand, error);
+			const spawnError = new AgentSpawnError(this.options.agentCommand, error, {
+				command: launch.command,
+				cwd: launch.cwd,
+				env: plan.spawnOptions.env
+			});
 			this.notifyProcessSpawnFailure(launch, spawnError);
 			throw spawnError;
 		}
@@ -2935,7 +2938,11 @@ var AcpClient = class {
 				detached: process.platform !== "win32"
 			});
 		} catch (error) {
-			this.notifyProcessSpawnFailure(launch, new AgentSpawnError(command, error));
+			this.notifyProcessSpawnFailure(launch, new AgentSpawnError(command, error, {
+				command: launch.command,
+				cwd: launch.cwd,
+				env: options.env
+			}));
 			return;
 		}
 		this.commandProbes.add(child);
@@ -2945,7 +2952,11 @@ var AcpClient = class {
 			try {
 				await waitForSpawn(child);
 			} catch (error) {
-				this.notifyProcessSpawnFailure(launch, new AgentSpawnError(command, error));
+				this.notifyProcessSpawnFailure(launch, new AgentSpawnError(command, error, {
+					command: launch.command,
+					cwd: launch.cwd,
+					env: options.env
+				}));
 				return;
 			}
 			if (child.pid === void 0) {
@@ -3058,7 +3069,7 @@ var AcpClient = class {
 				this.eventHandlers.onAcpOutputMessage?.(direction, message);
 				this.eventHandlers.onAcpMessage?.(direction, message);
 			},
-			suppressReplaySessionUpdates: () => this.suppressReplaySessionUpdateMessages,
+			suppressReplaySessionUpdates: () => this.suppressSessionUpdates,
 			bindPromptOwner: (owner) => this.bindPromptOwner(owner),
 			assertPromptActive: (active) => this.assertPromptActive(active),
 			onPromptRequestWritten: (active, owner) => this.onPromptRequestWritten(active, owner)
@@ -3123,7 +3134,8 @@ var AcpClient = class {
 		const connection = this.getConnection();
 		const sessionCwd = await resolveAgentSessionCwd(cwd, this.options.agentCommand);
 		assertControlAuthority(options.authority);
-		const previousSuppression = this.applySessionUpdateSuppression(Boolean(options.suppressReplayUpdates));
+		const previousSuppression = this.suppressSessionUpdates;
+		this.suppressSessionUpdates = previousSuppression || Boolean(options.suppressReplayUpdates);
 		let response;
 		try {
 			response = await this.runConnectionRequest(() => connection.agent.request(methods.agent.session.load, {
@@ -3135,7 +3147,7 @@ var AcpClient = class {
 			}), options.authority);
 			await this.waitForSessionUpdateDrain(options.replayIdleMs ?? REPLAY_IDLE_MS, options.replayDrainTimeoutMs ?? REPLAY_DRAIN_TIMEOUT_MS);
 		} finally {
-			this.restoreSessionUpdateSuppression(previousSuppression);
+			this.suppressSessionUpdates = previousSuppression;
 		}
 		this.loadedSessionId = sessionId;
 		const result = toReconnectedSessionResult(response);
@@ -3157,19 +3169,6 @@ var AcpClient = class {
 		const result = toReconnectedSessionResult(response);
 		await this.captureAgentDescendants(this.agent);
 		return result;
-	}
-	applySessionUpdateSuppression(enabled) {
-		const previous = {
-			suppressSessionUpdates: this.suppressSessionUpdates,
-			suppressReplaySessionUpdateMessages: this.suppressReplaySessionUpdateMessages
-		};
-		this.suppressSessionUpdates = previous.suppressSessionUpdates || enabled;
-		this.suppressReplaySessionUpdateMessages = previous.suppressReplaySessionUpdateMessages || enabled;
-		return previous;
-	}
-	restoreSessionUpdateSuppression(previous) {
-		this.suppressSessionUpdates = previous.suppressSessionUpdates;
-		this.suppressReplaySessionUpdateMessages = previous.suppressReplaySessionUpdateMessages;
 	}
 	async prompt(sessionId, prompt, onRequestWritten, onElicitation, onPermissionRequest, authority) {
 		const connection = this.getConnection();
@@ -3396,7 +3395,6 @@ var AcpClient = class {
 		this.observedSessionUpdates = 0;
 		this.processedSessionUpdates = 0;
 		this.suppressSessionUpdates = false;
-		this.suppressReplaySessionUpdateMessages = false;
 		this.activePrompt = void 0;
 		this.pendingPromptOwners.length = 0;
 		this.cancellingSessionIds.clear();
@@ -3769,7 +3767,7 @@ var AcpClient = class {
 	async resolvePermissionRequestFromMode(params, owner) {
 		try {
 			assertControlAuthority(owner);
-			const result = await resolvePermissionRequestWithDetails(preferCodexPermissionRefusal(params, this.initResult?.agentInfo?.name), this.options.permissionMode, this.options.nonInteractivePermissions ?? "deny", this.options.permissionPolicy, owner.signal);
+			const result = await resolvePermissionRequest(preferCodexPermissionRefusal(params, this.initResult?.agentInfo?.name), this.options.permissionMode, this.options.nonInteractivePermissions ?? "deny", this.options.permissionPolicy, owner.signal);
 			assertControlAuthority(owner);
 			this.emitPermissionEscalation(result.escalation);
 			return this.explainPermissionRefusal(params, result.response);
@@ -3786,7 +3784,7 @@ var AcpClient = class {
 				method: "session/request_permission",
 				status: "completed",
 				summary: notice,
-				timestamp: isoNow$2()
+				timestamp: isoNow$1()
 			});
 		} catch {}
 		return withPermissionMetadata(response, { permissionNotice: notice });
@@ -3813,7 +3811,7 @@ var AcpClient = class {
 	}
 	attachProcessExitObserver(child, started, barrier, onProcessExit) {
 		const onExit = (exitCode, signal) => {
-			const exitedAt = isoNow$2();
+			const exitedAt = isoNow$1();
 			onProcessExit?.(exitCode, signal);
 			barrier.then(() => this.notifyProcessExit(started, exitCode, signal, exitedAt));
 		};
@@ -3836,7 +3834,7 @@ var AcpClient = class {
 		const event = Object.freeze({
 			...launch,
 			error,
-			failedAt: isoNow$2()
+			failedAt: isoNow$1()
 		});
 		try {
 			Promise.resolve(handler(event)).catch((observerError) => {
@@ -3872,7 +3870,7 @@ var AcpClient = class {
 		this.lastAgentExit = {
 			exitCode,
 			signal,
-			exitedAt: isoNow$2(),
+			exitedAt: isoNow$1(),
 			reason,
 			unexpectedDuringPrompt: !this.closing && Boolean(this.activePrompt)
 		};
@@ -4917,6 +4915,44 @@ function applyConfigOptionSelection(state, configId, value, response, modelConfi
 		value
 	});
 }
+// src/session/configuration.ts
+async function applySessionConfigOptions(params) {
+	let state = params.getState();
+	const selections = [];
+	for (const selection of params.configOptions ?? []) {
+		assertControlAuthority(params.authority);
+		const models = advertisedModelState(params.getState());
+		const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
+			...selection,
+			models,
+			agentCommand: params.agentCommand
+		});
+		const response = await withTimeout(params.client.setSessionConfigOption(params.sessionId, selection.configId, selection.value, models, params.authority), params.timeoutMs);
+		assertControlAuthority(params.authority);
+		state = applyConfigOptionSelection(params.getState(), selection.configId, selection.value, response, modelConfigId, resolvedValue);
+		params.setState(state);
+		const acceptedValue = Array.isArray(response?.configOptions) ? response.configOptions.find((option) => option.id === selection.configId)?.currentValue : void 0;
+		selections.push({
+			...selection,
+			acceptedValue: typeof acceptedValue === "string" ? acceptedValue : resolvedValue,
+			reported: typeof acceptedValue === "string"
+		});
+	}
+	return {
+		state,
+		selections
+	};
+}
+function describeSessionConfiguration(params) {
+	return {
+		...params.requestedModel === void 0 ? {} : { model: {
+			requested: params.requestedModel,
+			applied: params.modelApplied,
+			...params.state?.current_model_id === void 0 ? {} : { accepted: params.state.current_model_id }
+		} },
+		configOptions: params.selections
+	};
+}
 // src/session/execution/direct-lifetime.ts
 function ownDirectClient(client, signal) {
 	let closing;
@@ -4964,16 +5000,13 @@ function shouldFallbackToNewSession(error, record) {
 	if (isHardReconnectFailure(error)) return false;
 	const acp = extractAcpError(error);
 	if (isAcpResourceNotFoundError(error) || isUnsupportedSessionLoadAcpError(acp)) return true;
-	return !sessionHasAgentMessages(record) && isFallbackSafeEmptySessionError(error, acp);
+	return !sessionHasAgentMessages(record) && acp?.code === -32603;
 }
 function isHardReconnectFailure(error) {
 	return error instanceof TimeoutError || error instanceof InterruptedError;
 }
 function isUnsupportedSessionLoadAcpError(acp) {
 	return !!acp && SESSION_LOAD_UNSUPPORTED_CODES.has(acp.code);
-}
-function isFallbackSafeEmptySessionError(error, acp) {
-	return isAcpQueryClosedBeforeResponseError(error) || acp?.code === -32603;
 }
 function requiresSameSession(options) {
 	return options.resumePolicy === "same-session-only" || Boolean(options.record.importedFrom) || options.strictResume === true;
@@ -5081,8 +5114,9 @@ async function connectAndLoadSession(options) {
 	const record = options.record;
 	const client = options.client;
 	assertControlAuthority(options.authority);
-	// strictResume excludes even an unprompted record's -32603 fallback.
-	const sameSessionOnly = requiresSameSession(options);
+	// XMD verified resume: an identity-bearing load never permits replacement.
+	const strictResume = options.strictResume || options.expectedAgentSessionId !== void 0;
+	const sameSessionOnly = strictResume || requiresSameSession(options);
 	const originalSessionId = record.acpSessionId;
 	const originalAgentSessionId = record.agentSessionId;
 	const originalAcpx = cloneSessionAcpxState(record.acpx);
@@ -5108,7 +5142,9 @@ async function connectAndLoadSession(options) {
 		timeoutMs: options.timeoutMs,
 		authority: options.authority,
 		promptRecorded: options.promptRecorded,
-		strictResume: options.strictResume
+		strictResume,
+		// XMD verified resume: read the live response, not the stored assertion.
+		expectedAgentSessionId: options.expectedAgentSessionId
 	});
 	const { resumed, loadError, sessionId, createdFreshSession, pendingAgentSessionId, sessionModels } = loadState;
 	applyReconnectedModelState(record, sessionModels, loadState.configOptionsPresent, loadState.legacyModelMetadataPresent, createdFreshSession);
@@ -5280,26 +5316,32 @@ async function loadOrCreateRuntimeSession(params) {
 	return await createFreshRuntimeSession(params.client, params.record, params.timeoutMs, params.authority);
 }
 async function loadRuntimeSession(params, resume) {
+	// XMD verified resume: separate the protocol failure from the identity refusal.
+	let loadResult;
 	try {
-		const loadResult = await withTimeout(resume ? params.client.resumeSession(params.record.acpSessionId, params.record.cwd, params.authority) : params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, {
+		loadResult = await withTimeout(resume ? params.client.resumeSession(params.record.acpSessionId, params.record.cwd, params.authority) : params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, {
 			suppressReplayUpdates: true,
 			...params.authority ? { authority: params.authority } : {}
 		}), params.timeoutMs);
-		reconcileAgentSessionId(params.record, loadResult.agentSessionId);
-		applyConfigOptionsToRecord(params.record, loadResult);
-		return {
-			sessionId: params.record.acpSessionId,
-			pendingAgentSessionId: params.record.agentSessionId,
-			sessionModels: loadResult.models,
-			configOptionsPresent: loadResult.configOptionsPresent,
-			legacyModelMetadataPresent: loadResult.legacyModelMetadataPresent,
-			resumed: true,
-			createdFreshSession: false
-		};
 	} catch (error) {
 		rethrowCancelledLoad(error, params.authority);
 		return await recoverRuntimeSessionLoadFailure(params, error);
 	}
+	// XMD verified resume: omission must not inherit the record's old identity.
+	if (params.expectedAgentSessionId !== void 0 && loadResult.agentSessionId !== params.expectedAgentSessionId) {
+		throw Object.assign(new Error(loadResult.agentSessionId === void 0 ? "The provider did not confirm the retained native conversation." : "The provider reopened a different native conversation."), { detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" });
+	}
+	reconcileAgentSessionId(params.record, loadResult.agentSessionId);
+	applyConfigOptionsToRecord(params.record, loadResult);
+	return {
+		sessionId: params.record.acpSessionId,
+		pendingAgentSessionId: params.record.agentSessionId,
+		sessionModels: loadResult.models,
+		configOptionsPresent: loadResult.configOptionsPresent,
+		legacyModelMetadataPresent: loadResult.legacyModelMetadataPresent,
+		resumed: true,
+		createdFreshSession: false
+	};
 }
 function rethrowCancelledLoad(error, authority) {
 	const signal = authority?.signal;
@@ -5321,9 +5363,7 @@ async function recoverRuntimeSessionLoadFailure(params, error) {
 	};
 }
 function canRecoverLoadWithFreshSession(params, error) {
-	if (params.strictResume) {
-		return false;
-	}
+	if (params.strictResume) return false;
 	if (!params.sameSessionOnly) return shouldFallbackToNewSession(error, params.record);
 	return isUnpromptedNewSession(params.record, params.promptRecorded) && extractAcpError(error)?.code === -32603;
 }
@@ -5402,6 +5442,8 @@ async function withConnectedSession(options) {
 				record,
 				resumePolicy: options.resumePolicy,
 				strictResume: options.strictResume,
+				// XMD verified resume: apply the same check on cold configuration.
+				expectedAgentSessionId: options.expectedAgentSessionId,
 				replacingMode: options.replacingMode,
 				replacingConfigOption: options.replacingConfigOption,
 				authority: options.authority,
@@ -5426,7 +5468,7 @@ async function withConnectedSession(options) {
 				resumed,
 				loadError
 			});
-			const now = isoNow$1();
+			const now = isoNow$2();
 			record.lastUsedAt = now;
 			record.closed = false;
 			record.closedAt = void 0;
@@ -5447,7 +5489,7 @@ async function withConnectedSession(options) {
 			});
 			else await client.cancelActivePrompt(2500);
 			applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
-			record.lastUsedAt = isoNow$1();
+			record.lastUsedAt = isoNow$2();
 			await options.saveRecord(record).catch(() => {});
 			await client.close();
 		});
@@ -5474,9 +5516,7 @@ function buildDirectConnectedSessionOptions(options, run) {
 		terminal: options.terminal,
 		timeoutMs: options.timeoutMs,
 		verbose: options.verbose,
-		onClientAvailable: (controller) => {
-			options.onClientAvailable?.(controller);
-		},
+		onClientAvailable: options.onClientAvailable,
 		onClientClosed: options.onClientClosed,
 		run
 	};
@@ -5680,16 +5720,8 @@ async function setSessionMode(options) {
 	const onOwner = await setSessionModeOnOwner(options);
 	if (onOwner) return onOwner;
 	return await runSessionSetModeDirect({
-		sessionRecordId: options.sessionId,
-		modeId: options.modeId,
-		mcpServers: options.mcpServers,
-		nonInteractivePermissions: options.nonInteractivePermissions,
-		authCredentials: options.authCredentials,
-		authPolicy: options.authPolicy,
-		fs: options.fs,
-		terminal: options.terminal,
-		timeoutMs: options.timeoutMs,
-		verbose: options.verbose
+		...options,
+		sessionRecordId: options.sessionId
 	});
 }
 /** Owner-only counterpart of {@link setSessionMode} for the model control. */
@@ -5715,16 +5747,8 @@ async function setSessionModel(options) {
 	const onOwner = await setSessionModelOnOwner(options);
 	if (onOwner) return onOwner;
 	return await runSessionSetModelDirect({
-		sessionRecordId: options.sessionId,
-		modelId: options.modelId,
-		mcpServers: options.mcpServers,
-		nonInteractivePermissions: options.nonInteractivePermissions,
-		authCredentials: options.authCredentials,
-		authPolicy: options.authPolicy,
-		fs: options.fs,
-		terminal: options.terminal,
-		timeoutMs: options.timeoutMs,
-		verbose: options.verbose
+		...options,
+		sessionRecordId: options.sessionId
 	});
 }
 /** Owner-only counterpart of {@link setSessionMode} for the config option control. */
@@ -5753,17 +5777,8 @@ async function setSessionConfigOption(options) {
 	const onOwner = await setSessionConfigOptionOnOwner(options);
 	if (onOwner) return onOwner;
 	return await runSessionSetConfigOptionDirect({
-		sessionRecordId: options.sessionId,
-		configId: options.configId,
-		value: options.value,
-		mcpServers: options.mcpServers,
-		nonInteractivePermissions: options.nonInteractivePermissions,
-		authCredentials: options.authCredentials,
-		authPolicy: options.authPolicy,
-		fs: options.fs,
-		terminal: options.terminal,
-		timeoutMs: options.timeoutMs,
-		verbose: options.verbose
+		...options,
+		sessionRecordId: options.sessionId
 	});
 }
 function firstAgentCommandToken(command, argv) {
@@ -5849,7 +5864,7 @@ async function closeSession(sessionId) {
 		const current = await resolveSessionRecord(record.acpxRecordId);
 		current.pid = void 0;
 		current.closed = true;
-		current.closedAt = isoNow$1();
+		current.closedAt = isoNow$2();
 		await writeSessionRecord(current);
 		return current;
 	} finally {
@@ -5885,9 +5900,32 @@ async function createSessionRecordWithClient(client, options, resumedRecordId) {
 	persistSessionOptions(record, options.sessionOptions);
 	applyConfigOptionsToRecord(record, createdState.sessionResult);
 	applyInitialModelSelection(record, createdState.sessionResult.models, createdState.modelApplication);
+	await configureCreatedSession(client, options, record, createdState.modelApplication.applied);
+	assertControlAuthority({ signal: options.signal });
 	await writeSessionRecord(record);
 	assertControlAuthority({ signal: options.signal });
 	return record;
+}
+async function configureCreatedSession(client, options, record, modelApplied) {
+	const configured = await applySessionConfigOptions({
+		client,
+		sessionId: record.acpSessionId,
+		agentCommand: options.agentCommand,
+		getState: () => record.acpx,
+		setState: (state) => {
+			record.acpx = state;
+		},
+		configOptions: options.configOptions,
+		timeoutMs: options.timeoutMs,
+		authority: { signal: options.signal }
+	});
+	record.acpx = configured.state;
+	options.onSessionConfigured?.(describeSessionConfiguration({
+		requestedModel: options.sessionOptions?.model,
+		modelApplied,
+		state: record.acpx,
+		selections: configured.selections
+	}));
 }
 async function createFreshSessionState(client, options, cwd) {
 	const createdSession = await withTimeout(client.createSession(cwd, { signal: options.signal }), options.timeoutMs);
@@ -6362,33 +6400,20 @@ var QueueOwnerControlAdmission = class {
 };
 // src/session/queue/owner-turn-controller.ts
 var QueueOwnerTurnController = class {
-	state = "idle";
 	pendingCancel = false;
 	activeController;
 	waitingTurn;
-	get lifecycleState() {
-		return this.state;
-	}
-	get hasPendingCancel() {
-		return this.pendingCancel;
-	}
 	beginTurn() {
-		this.state = "starting";
 		this.pendingCancel = false;
 		this.waitingTurn = new AbortController();
 		return this.waitingTurn.signal;
 	}
-	markPromptActive() {
-		if (this.state === "starting" || this.state === "active") this.state = "active";
-	}
 	endTurn() {
-		this.state = "idle";
 		this.pendingCancel = false;
 		this.waitingTurn = void 0;
 	}
 	beginClosing() {
-		this.state = "closing";
-		this.pendingCancel = false;
+		this.endTurn();
 		this.activeController = void 0;
 	}
 	setActiveController(controller) {
@@ -6400,9 +6425,9 @@ var QueueOwnerTurnController = class {
 	async requestCancel() {
 		const activeController = this.activeController;
 		if (activeController?.hasActivePrompt()) return await this.cancelActivePrompt(activeController);
-		if (this.state === "starting" || this.state === "active") {
+		if (this.waitingTurn) {
 			this.pendingCancel = true;
-			this.waitingTurn?.abort();
+			this.waitingTurn.abort();
 			return true;
 		}
 		return false;
@@ -6488,7 +6513,7 @@ async function runIdleControlWithRecord(options, record, invoke) {
 		retire().catch(() => {});
 	};
 	const checkpoint = async () => {
-		record.lastUsedAt = isoNow$1();
+		record.lastUsedAt = isoNow$2();
 		applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
 		await writeSessionRecord(record);
 	};
@@ -6963,7 +6988,7 @@ function requestedModelId(value) {
 }
 async function applyPromptModelIfAdvertised(params) {
 	const requestedModel = requestedModelId(params.requestedModel);
-	if (!requestedModel) return;
+	if (!requestedModel) return false;
 	const result = await applyRequestedModelIfAdvertised({
 		client: params.client,
 		sessionId: params.sessionId,
@@ -6975,6 +7000,37 @@ async function applyPromptModelIfAdvertised(params) {
 		onWarning: params.suppressWarnings ? void 0 : (message) => process.stderr.write(`[acpx] warning: ${message}\n`)
 	});
 	if (result.applied) params.record.acpx = applyModelSelection(params.record.acpx, requestedModel, result.response, result.resolvedModelId);
+	return result.applied;
+}
+async function applyPromptConfiguration(client, activeSessionId, record, options) {
+	const modelApplied = await applyPromptModelIfAdvertised({
+		client,
+		sessionId: activeSessionId,
+		requestedModel: options.sessionOptions?.model,
+		record,
+		timeoutMs: options.timeoutMs,
+		suppressWarnings: options.suppressSdkConsoleErrors,
+		signal: options.ownedSignal
+	});
+	const configured = await applySessionConfigOptions({
+		client,
+		sessionId: activeSessionId,
+		agentCommand: record.agentCommand,
+		getState: () => record.acpx,
+		setState: (state) => {
+			record.acpx = state;
+		},
+		configOptions: options.configOptions,
+		timeoutMs: options.timeoutMs,
+		authority: { signal: options.ownedSignal }
+	});
+	record.acpx = configured.state;
+	options.onSessionConfigured?.(describeSessionConfiguration({
+		requestedModel: options.sessionOptions?.model,
+		modelApplied,
+		state: record.acpx,
+		selections: configured.selections
+	}));
 }
 function jsonRpcIdKey(message) {
 	if (!("id" in message)) return;
@@ -7189,7 +7245,7 @@ async function runSessionPrompt(options) {
 function preparePromptConversation(record, options) {
 	const conversation = cloneSessionConversation(record);
 	record.acpx = cloneSessionAcpxState(record.acpx);
-	const promptStartedAt = isoNow$1();
+	const promptStartedAt = isoNow$2();
 	const promptMessageId = recordPromptSubmission(conversation, options.prompt, promptStartedAt);
 	record.lastPromptAt = promptStartedAt;
 	record.lastUsedAt = promptStartedAt;
@@ -7306,7 +7362,7 @@ async function runOwnedSessionPrompt(options) {
 		const latest = await resolveSessionRecord(record.acpxRecordId).catch(() => void 0);
 		if (!latest?.closed) return;
 		record.closed = true;
-		record.closedAt = latest.closedAt ?? record.closedAt ?? isoNow$1();
+		record.closedAt = latest.closedAt ?? record.closedAt ?? isoNow$2();
 		record.pid = latest.pid;
 		if (latest.acpx) record.acpx = {
 			...record.acpx,
@@ -7316,7 +7372,7 @@ async function runOwnedSessionPrompt(options) {
 	const liveCheckpoint = new LiveSessionCheckpoint({
 		save: async () => {
 			await flushPendingMessages(false);
-			record.lastUsedAt = isoNow$1();
+			record.lastUsedAt = isoNow$2();
 			applyConversation(record, conversation);
 			await preserveClosedState();
 			await eventWriter.checkpoint();
@@ -7371,14 +7427,12 @@ async function runOwnedSessionPrompt(options) {
 		onSessionUpdate: (notification) => {
 			if (promptTurnActive) promptTurnHadSideEffects = true;
 			record.acpx = recordSessionUpdate(conversation, record.acpx, notification);
-			trimConversationForRuntime(conversation);
 			liveCheckpoint.request();
 			options.onSessionUpdate?.(notification);
 		},
 		onClientOperation: (operation) => {
 			if (promptTurnActive) promptTurnHadSideEffects = true;
 			record.acpx = recordClientOperation(conversation, record.acpx, operation);
-			trimConversationForRuntime(conversation);
 			liveCheckpoint.request();
 			options.onClientOperation?.(operation);
 		},
@@ -7434,7 +7488,7 @@ async function runOwnedSessionPrompt(options) {
 						notifiedClientAvailable = true;
 					},
 					onConnectedRecord: (connectedRecord) => {
-						connectedRecord.lastPromptAt = isoNow$1();
+						connectedRecord.lastPromptAt = isoNow$2();
 					},
 					onSessionIdResolved: (sessionId) => {
 						activeSessionIdForControl = sessionId;
@@ -7496,7 +7550,7 @@ async function runOwnedSessionPrompt(options) {
 		});
 		await flushPendingMessages(false).catch(() => {});
 		output.flush();
-		record.lastUsedAt = isoNow$1();
+		record.lastUsedAt = isoNow$2();
 		applyConversation(record, conversation);
 		const propagated = error instanceof Error ? error : new Error(formatErrorMessage(error));
 		attachAcpErrorPayload(propagated, normalizedError.acp);
@@ -7523,7 +7577,7 @@ async function runOwnedSessionPrompt(options) {
 	const savePromptSuccess = async (response) => {
 		await flushPendingMessages(false);
 		output.flush();
-		const now = isoNow$1();
+		const now = isoNow$2();
 		record.lastUsedAt = now;
 		record.closed = false;
 		record.closedAt = void 0;
@@ -7541,15 +7595,7 @@ async function runOwnedSessionPrompt(options) {
 		const { sessionId: activeSessionId, resumed, loadError } = await connectForPrompt();
 		options.ownedSignal?.throwIfAborted();
 		try {
-			await applyPromptModelIfAdvertised({
-				client,
-				sessionId: activeSessionId,
-				requestedModel: options.sessionOptions?.model,
-				record,
-				timeoutMs: options.timeoutMs,
-				suppressWarnings: options.suppressSdkConsoleErrors,
-				signal: options.ownedSignal
-			});
+			await applyPromptConfiguration(client, activeSessionId, record, options);
 		} catch (error) {
 			if (error instanceof TimeoutError) closeClientOnExit = true;
 			throw error;
@@ -7569,7 +7615,7 @@ async function runOwnedSessionPrompt(options) {
 	const handleInterrupt = async () => {
 		await client.cancelActivePrompt(INTERRUPT_CANCEL_WAIT_MS);
 		applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
-		record.lastUsedAt = isoNow$1();
+		record.lastUsedAt = isoNow$2();
 		applyConversation(record, conversation);
 		await flushPendingMessages(false).catch(() => {});
 		if (closeClientOnExit) await closeOwnedClient();
@@ -7735,17 +7781,25 @@ async function runOnce(options, control) {
 					onWarning: options.suppressSdkConsoleErrors ? void 0 : (message) => process.stderr.write(`[acpx] warning: ${message}\n`)
 				});
 				if (modelApplication.applied) controlState = applyModelSelection(controlState, modelApplication.modelId, modelApplication.response, modelApplication.resolvedModelId);
-				for (const configOption of options.configOptions ?? []) {
-					assertControlAuthority(authority);
-					const models = advertisedModelState(controlState);
-					const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
-						...configOption,
-						models,
-						agentCommand: options.agentCommand
-					});
-					const response = await withTimeout(client.setSessionConfigOption(sessionId, configOption.configId, configOption.value, models, authority), options.timeoutMs);
-					controlState = applyConfigOptionSelection(controlState, configOption.configId, configOption.value, response, modelConfigId, resolvedValue);
-				}
+				const configured = await applySessionConfigOptions({
+					client,
+					sessionId,
+					agentCommand: options.agentCommand,
+					getState: () => controlState,
+					setState: (state) => {
+						controlState = state ?? {};
+					},
+					configOptions: options.configOptions,
+					timeoutMs: options.timeoutMs,
+					authority
+				});
+				controlState = configured.state ?? {};
+				options.onSessionConfigured?.(describeSessionConfiguration({
+					requestedModel: options.sessionOptions?.model,
+					modelApplied: modelApplication.applied,
+					state: controlState,
+					selections: configured.selections
+				}));
 				assertControlAuthority(authority);
 				output.setContext({ sessionId });
 				const response = await runExecPromptWithRetries(sessionId);
@@ -7803,7 +7857,10 @@ async function sendSessionDirect(options, control) {
 			timeoutMs: options.timeoutMs,
 			suppressSdkConsoleErrors: options.suppressSdkConsoleErrors,
 			verbose: options.verbose,
-			client: options.client
+			client: options.client,
+			sessionOptions: options.sessionOptions,
+			configOptions: options.configOptions,
+			onSessionConfigured: options.onSessionConfigured
 		});
 	} finally {
 		await closeProvidedClient?.();
@@ -8157,7 +8214,6 @@ async function runQueueOwnerRuntime(options, lease, bindStopRequest) {
 						onPromptFinalizing: () => controls.seal(ticket),
 						onPromptActive: async () => {
 							if (activeControls) controls.publish(ticket, activeControls);
-							turnController.markPromptActive();
 							await applyPendingCancel();
 						},
 						handleProcessInterrupts: false,
@@ -8218,4 +8274,4 @@ async function sendSession(options) {
 	}
 }
 const queueOwnerRuntimeTestInternals = { queueOwnerExitIsFatal };
-export { isRequestedModelUnsupportedError as $, applyInitialModelSelection as A, reconcileAgentSessionId as B, setSessionModeOnOwner as C, connectAndLoadSession as D, withConnectedSession as E, persistSessionOptions as F, recordSessionUpdate as G, createSessionConversation as H, sessionOptionsFromRecord as I, advertisedModelState as J, trimConversationForRuntime as K, applyConversation as L, applyRequestedModelIfAdvertised as M, setDesiredModeId as N, applyConfigOptionSelection as O, normalizeSessionOptionShape as P, RequestedModelUnsupportedError as Q, applyLifecycleSnapshotToRecord as R, setSessionMode as S, setSessionModelOnOwner as T, recordClientOperation as U, cloneSessionConversation as V, recordPromptSubmission as W, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE as X, AcpClient as Y, REQUESTED_MODEL_UNSUPPORTED_REASONS as Z, cancelSessionPrompt as _, runQueuedTask as a, DEFAULT_QUEUE_OWNER_TTL_MS as at, setSessionConfigOption as b, LiveSessionCheckpoint as c, acquireSessionScope as ct, flushPerfMetricsCapture as d, InterruptedError as dt, resolveRequestedConfigOption as et, installPerfMetricsCapture as f, TimeoutError as ft, listAgentSessions as g, ensureSession as h, withTimeout as ht, runOnce as i, permissionModeSatisfies as it, applyModelSelection as j, applyConfigOptionsToRecord as k, runPromptTurn as l, listSessionEvents as lt, createSessionWithClient as m, withInterrupt as mt, runSessionQueueOwner as n, getAcpxVersion as nt, sendSessionDirect as o, normalizeQueueOwnerTtlMs as ot, createSession as p, assertControlAuthority as pt, cloneSessionAcpxState as q, sendSession as r, snapshotEnvNames as rt, DISCARD_OUTPUT_FORMATTER as s, acquireSessionImport as st, queueOwnerRuntimeTestInternals as t, resolveRequestedModelId as tt, buildQueueOwnerArgOverride as u, isLegacyZedCodexAcpInvocation as ut, closeSession as v, setSessionModel as w, setSessionConfigOptionOnOwner as x, sessionControlTestInternals as y, createInitialSessionRecord as z };
+export { resolveRequestedConfigOption as $, applyInitialModelSelection as A, reconcileAgentSessionId as B, setSessionModeOnOwner as C, connectAndLoadSession as D, withConnectedSession as E, persistSessionOptions as F, recordSessionUpdate as G, createSessionConversation as H, sessionOptionsFromRecord as I, AcpClient as J, cloneSessionAcpxState as K, applyConversation as L, applyRequestedModelIfAdvertised as M, setDesiredModeId as N, applyConfigOptionSelection as O, normalizeSessionOptionShape as P, isRequestedModelUnsupportedError as Q, applyLifecycleSnapshotToRecord as R, setSessionMode as S, setSessionModelOnOwner as T, recordClientOperation as U, cloneSessionConversation as V, recordPromptSubmission as W, REQUESTED_MODEL_UNSUPPORTED_REASONS as X, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE as Y, RequestedModelUnsupportedError as Z, cancelSessionPrompt as _, runQueuedTask as a, normalizeQueueOwnerTtlMs as at, setSessionConfigOption as b, LiveSessionCheckpoint as c, listSessionEvents as ct, flushPerfMetricsCapture as d, TimeoutError as dt, resolveRequestedModelId as et, installPerfMetricsCapture as f, assertControlAuthority as ft, listAgentSessions as g, ensureSession as h, runOnce as i, DEFAULT_QUEUE_OWNER_TTL_MS as it, applyModelSelection as j, applyConfigOptionsToRecord as k, runPromptTurn as l, isLegacyZedCodexAcpInvocation as lt, createSessionWithClient as m, withTimeout as mt, runSessionQueueOwner as n, snapshotEnvNames as nt, sendSessionDirect as o, acquireSessionImport as ot, createSession as p, withInterrupt as pt, advertisedModelState as q, sendSession as r, permissionModeSatisfies as rt, DISCARD_OUTPUT_FORMATTER as s, acquireSessionScope as st, queueOwnerRuntimeTestInternals as t, getAcpxVersion as tt, buildQueueOwnerArgOverride as u, InterruptedError as ut, closeSession as v, setSessionModel as w, setSessionConfigOptionOnOwner as x, sessionControlTestInternals as y, createInitialSessionRecord as z };

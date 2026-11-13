@@ -106,6 +106,23 @@ function* refusal(body: () => Operation<unknown>): Operation<unknown> {
 }
 
 describe("Tier AM — embedded adapter materialization", () => {
+  it("keeps the command keys of existing ACPX sessions after a runtime upgrade", function* () {
+    const registry = overlaidAdapterRegistry(createEmbeddedAdapters(yield* useRoot()));
+    const defaultRegistry = createAgentRegistry();
+    for (const [agent, retained] of [
+      ["pi", ["npx", "pi-acp@^0.0.33"]],
+      ["codex", ["npx", "-y", "@agentclientprotocol/codex-acp@^1.1.5"]],
+      ["claude", ["npx", "-y", "@agentclientprotocol/claude-agent-acp@^0.95.0"]],
+      ["kilocode", ["npx", "-y", "@kilocode/cli", "acp"]],
+      ["mux", ["npx", "-y", "mux@^0.28.0", "acp"]],
+      ["opencode", ["npx", "-y", "opencode-ai", "acp"]],
+    ] as const) {
+      expect(defaultRegistry.resolve(agent)).toEqual(retained);
+      if (agent !== "codex" && agent !== "claude") {
+        expect(registry.resolve(agent)).toEqual(retained);
+      }
+    }
+  });
   it("AM Claude: installs one reviewed runtime and completes an accepted fake exchange", function* () {
     const recipe = JSON.parse(
       yield* until(readFile("packages/acp/vendor/adapters/claude/recipe.json", "utf8")),

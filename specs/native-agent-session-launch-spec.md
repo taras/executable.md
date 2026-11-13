@@ -426,7 +426,7 @@ live:    the canonical executable path
 The live path exists only in the operation that observed it. Native creation and
 resume replace the adapter command's first argv member with it, and the matching
 Claude ACP child receives it through `CLAUDE_CODE_EXECUTABLE` in a transient
-child-process environment. The integrity-pinned ACPX 0.21.1 source closure
+child-process environment. The integrity-pinned ACPX 0.22.0 source closure
 supplies the child-only environment seam. Its local first-turn materialization
 barrier remains required independently of that released capability. It enters no route, journal, ACPX session option or
 record, public result, diagnostic, `process.env`, or provider partition that
@@ -483,11 +483,13 @@ this one.
 
 What is exact is the session, not the release. The canonical string a
 preparation accepted becomes that session's retained executable binding, and
-every later create, resume, attachment and incomplete replay reobserves the live
+every later native launch, attachment or incomplete launch replay reobserves the live
 build and compares it against that binding before a process, an ensure or a
 turn. A build that no longer matches refuses without creating a substitute
-conversation. Continuing a session across releases is therefore not something
-this contract offers, and admitting a newer Codex does not confer it. Complete means through to history: the gate closes
+conversation. This is the native launch and attachment contract. A held Codex
+conversation can continue over ACP on a different build when a live load
+confirms its original native identity; see [ACP client](acp-client-spec.md#acpx-provider).
+Complete means through to history: the gate closes
 only when XMD rejoins that same conversation over ACP afterwards and reads the
 native turn back out of it, because a conversation that cannot be rejoined is
 not the one this contract says was handed over.

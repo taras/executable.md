@@ -580,7 +580,7 @@ function* clientIdentity() {
   const fromDeclarer = createRequire(join(ROOT, "packages/acp/package.json"));
   const packagePath = yield* until(realpath(fromDeclarer.resolve("acpx/package.json")));
   const info = z
-    .object({ version: z.literal("0.21.1") })
+    .object({ version: z.literal("0.22.0") })
     .passthrough()
     .parse(JSON.parse(yield* readTextFile(packagePath)));
   const cli = join(dirname(packagePath), "dist/cli.js");
@@ -592,7 +592,7 @@ function* clientIdentity() {
     JSON.stringify({
       kind: "actual-client-provenance",
       releasedVersion: info.version,
-      releaseCommit: "e6c782459a18a5b22d06210fde61d75003883ab0",
+      releaseCommit: "1ed28f2842182fdc0526927b8fbe2f5ba906ab2e",
       packagePath,
       cli,
       cliSha256: digest(yield* readTextFile(cli)),
@@ -607,7 +607,7 @@ function* clientIdentity() {
 }
 
 describe("minimal live Sidekick ACP attachment", () => {
-  it("A1/A2: released acpx0.21.1 delegates serially through the real bridge and bounded reads stay passive", function* () {
+  it("A1/A2: released acpx0.22.0 delegates serially through the real bridge and bounded reads stay passive", function* () {
     const one = yield* world();
     const cli = yield* clientIdentity();
     const target = "98a72388dc63f4b72a0a5e84960a2667d1a1acdb";
