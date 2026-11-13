@@ -315,6 +315,13 @@ describe("the local Deno suite", () => {
       ["--changed=origin/main"],
       ["--related=packages/core/src/expand.ts"],
       ["--filter", "a name", ONE],
+      ["--filter=README.md", ONE],
+      ["--filter", "README.md", ONE],
+      [ONE, "--filter", SUITE],
+      ["--related", "README.md", ONE],
+      ["--lock", "README.md", ONE],
+      ["-Ac", "README.md", ONE],
+      [ONE, "--", SUITE],
     ]) {
       expect((yield* local(args)).launches).toEqual([
         line({ command: "deno", arguments: [...NATIVE, ...args] }),
@@ -339,6 +346,9 @@ describe("the local Deno suite", () => {
   it("refuses a Markdown path beside a flag, or one that is not a suite, before running anything", function* () {
     for (const args of [
       ["--filter", "x", SUITE],
+      ["--filter", "README.md", SUITE],
+      ["--filter", "--", SUITE],
+      [SUITE, "--", "README.md"],
       [SUITE, "--changed"],
       ["examples/adversarial-implementation/tests/implementation-launch.md"],
       ["examples/adversarial-implementation/tests/nested/Implementation.test.md"],

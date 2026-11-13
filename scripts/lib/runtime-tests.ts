@@ -317,6 +317,38 @@ export function* runSuite(runtime: Runtime, root: URL): Operation<number> {
   return status;
 }
 
+// These Deno test options consume the next token when written without "=".
+const DENO_TEST_SEPARATE_VALUE_FLAGS = new Set([
+  "--cert",
+  "--conditions",
+  "--config",
+  "--coverage-threshold",
+  "--ext",
+  "--filter",
+  "--import",
+  "--import-map",
+  "--importmap",
+  "--inspect-publish-uid",
+  "--junit-path",
+  "--linker",
+  "--location",
+  "--log-level",
+  "--min-dep-age",
+  "--minimum-dependency-age",
+  "--node-modules-linker",
+  "--preload",
+  "--related",
+  "--repeats",
+  "--reporter",
+  "--require",
+  "--retry",
+  "--seed",
+  "--shard",
+]);
+
+// In a short option group, -c and -L take a separate value only at the end.
+const DENO_TEST_SHORT_SEPARATE_VALUE = /^-[AEhINPqRrSuVvW]*[cL]$/;
+
 /**
  * `deno task test`. With no arguments it is Deno's own whole-repository run —
  * including the files the CI corpus leaves to smoke jobs — followed by every
@@ -333,7 +365,6 @@ export function* localDenoTests(args: string[], root: URL): Operation<number> {
       arguments: [...RUNNERS.deno.prefix, ...selected],
       cwd: fileURLToPath(root),
     });
-  const markdown = args.filter((arg) => arg.endsWith(".md")).map((arg) => arg.replace(/^\.\//, ""));
 
   if (args.length === 0) {
     let status = yield* native([]);
@@ -342,11 +373,31 @@ export function* localDenoTests(args: string[], root: URL): Operation<number> {
     }
     return status;
   }
+  const markdown: string[] = [];
+  const flags: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg.startsWith("-") && arg !== "-") {
+      flags.push(arg);
+      // Deno passes arguments after this separator to the tests.
+      if (arg === "--") {
+        break;
+      }
+      if (
+        DENO_TEST_SEPARATE_VALUE_FLAGS.has(arg) ||
+        DENO_TEST_SHORT_SEPARATE_VALUE.test(arg) ||
+        (arg === "--lock" && !args[index + 1]?.startsWith("-"))
+      ) {
+        index++;
+      }
+    } else if (arg.endsWith(".md")) {
+      markdown.push(arg.replace(/^\.\//, ""));
+    }
+  }
   if (markdown.length === 0) {
     return yield* native(args);
   }
 
-  const flags = args.filter((arg) => arg.startsWith("-"));
   if (flags.length > 0) {
     console.error(
       `a Markdown suite is selected by its path alone; remove ${flags.join(" ")} or run the Markdown paths separately`,
