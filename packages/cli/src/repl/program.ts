@@ -13,7 +13,7 @@ import { TodoEditError, parseTodo } from "./todo/document.ts";
 import { TodoSourceError } from "./todo/source.ts";
 import { parseFilesFailure } from "@executablemd/runtime";
 import { Todo } from "./todo/service.ts";
-import { SidekickOrigin } from "./sidekick/dispatch.ts";
+import { SidekickOrigin, SidekickRecoveryCurrent } from "./sidekick/dispatch.ts";
 import { useSidekickAttachment } from "../sidekick-acp/server.ts";
 import { SidekickTransport } from "../sidekick-acp/protocol.ts";
 import { testForSidekick } from "./sidekick/admission.ts";
@@ -2259,13 +2259,12 @@ function* drive(
             }
             const conversation = reading.value.active;
             renderingOwner.run(function* () {
-              const sent = yield* dispatch.send(
-                text,
-                held,
+              yield* SidekickRecoveryCurrent.set(
                 () =>
                   state.revisions.message === held.message &&
                   (state.route.sidekick === undefined || state.route.sidekick === conversation),
               );
+              const sent = yield* dispatch.send(text, held);
               if (!sent.ok) {
                 sidekickReports.push({ kind: "refused", refusal: sent.error.message });
                 if (sidekick.recoveryPending) {

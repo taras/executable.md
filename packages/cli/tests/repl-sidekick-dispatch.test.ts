@@ -10,6 +10,7 @@ import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import {
   createSidekickAdmission,
   SidekickOrigin,
+  SidekickRecoveryCurrent,
   useSidekickDispatch,
 } from "../src/repl/sidekick/dispatch.ts";
 import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/dispatch.ts";
@@ -968,21 +969,27 @@ describe("1151 — ordinary Send after a joined human Stop", () => {
     cleanup.release();
     yield* stop;
     const instruction = { from: "composer" as const, message: 3, draft: 0 };
-    const stale = yield* dispatch.send("Stale instruction.", instruction, () => false);
+    const stale = yield* SidekickRecoveryCurrent.with(
+      () => false,
+      () => dispatch.send("Stale instruction.", instruction),
+    );
     expect(stale.ok).toBe(false);
-    const retry = yield* dispatch.send("Retry.", { ...instruction, from: "saved" }, () => true);
-    expect(retry.ok).toBe(false);
-    yield* scoped(function* () {
-      yield* SidekickOrigin.set({ kind: "acp", attachment: "other" });
-      expect((yield* dispatch.send("ACP instruction.", instruction, () => true)).ok).toBe(false);
-    });
-    yield* scoped(function* () {
-      yield* SidekickOrigin.set({ kind: "todo" });
-      expect((yield* dispatch.send("TODO instruction.", instruction, () => true)).ok).toBe(false);
-    });
-    expect((yield* dispatch.send(oldPayload!, instruction, () => true)).ok).toBe(false);
-    held.fake.script({ reply: "<Output>Fresh only.</Output>" });
-    const sent = yield* dispatch.send("Fresh instruction.", instruction, () => true);
+    const sent = yield* SidekickRecoveryCurrent.with(
+      () => true,
+      function* () {
+        const retry = yield* dispatch.send("Retry.", { ...instruction, from: "saved" });
+        expect(retry.ok).toBe(false);
+        yield* SidekickOrigin.with({ kind: "acp", attachment: "other" }, function* () {
+          expect((yield* dispatch.send("ACP instruction.", instruction)).ok).toBe(false);
+        });
+        yield* SidekickOrigin.with({ kind: "todo" }, function* () {
+          expect((yield* dispatch.send("TODO instruction.", instruction)).ok).toBe(false);
+        });
+        expect((yield* dispatch.send(oldPayload!, instruction)).ok).toBe(false);
+        held.fake.script({ reply: "<Output>Fresh only.</Output>" });
+        return yield* dispatch.send("Fresh instruction.", instruction);
+      },
+    );
     if (!sent.ok) {
       throw sent.error;
     }

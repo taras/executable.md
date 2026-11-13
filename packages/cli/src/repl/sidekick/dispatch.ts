@@ -21,6 +21,10 @@ export const SidekickOrigin = createContext<MessageOrigin>("executablemd.repl.si
   kind: "ui",
 });
 
+export const SidekickRecoveryCurrent = createContext<() => boolean>(
+  "executablemd.repl.sidekick-recovery-current",
+);
+
 export interface MessageReservation {
   readonly instruction?: Instruction;
 }
@@ -135,11 +139,7 @@ export interface SidekickQueueSnapshot {
     | undefined;
 }
 export interface SidekickDispatch {
-  send(
-    text: string,
-    instruction?: Instruction,
-    recoveryCurrent?: () => boolean,
-  ): Operation<Result<SidekickExchange>>;
+  send(text: string, instruction?: Instruction): Operation<Result<SidekickExchange>>;
   readonly current: SidekickExchange | undefined;
   readonly queue: SidekickQueueSnapshot;
   hold(): void;
@@ -293,7 +293,7 @@ export function* useSidekickDispatch(options: {
         ? Ok(exchange)
         : Err(new Error("This live owner has no established association for that message."));
     },
-    *send(text, instruction, recoveryCurrent): Operation<Result<SidekickExchange>> {
+    *send(text, instruction): Operation<Result<SidekickExchange>> {
       if (explicitRecovery) {
         return Err(new Error("The Sidekick is preparing a recovery message."));
       }
@@ -303,6 +303,7 @@ export function* useSidekickDispatch(options: {
           new Error("TODO changes remain pending until another independently eligible prompt."),
         );
       }
+      const recoveryCurrent = yield* SidekickRecoveryCurrent.get();
       if (recoveryCurrent !== undefined && !owner.recoveryPending) {
         return Err(new Error("The recovery message is no longer current."));
       }
