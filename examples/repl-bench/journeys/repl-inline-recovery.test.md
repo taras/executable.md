@@ -1,5 +1,5 @@
 <Test name="a saved Sidekick answer stays readable and ordinary Message continues after Stop" timeout="120s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-stopped-answer.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-stopped-answer.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Type text="Ask me to save a decision." />
     <ReplBench.WaitForText text="Ask me to save a decision." />

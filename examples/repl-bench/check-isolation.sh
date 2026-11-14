@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root"
-bench=./scripts/repl-bench.sh
+bench=(bun --no-install ./examples/repl-bench/bench.ts)
 
 first_file="$(mktemp)"
 second_file="$(mktemp)"
@@ -14,35 +14,35 @@ cleanup() {
   for file in "$first_file" "$second_file"; do
     run="$(cat "$file")"
     if [ -n "$run" ] && [ -f ".bench/$run/endpoint" ]; then
-      "$bench" stop "$run" || true
+      "${bench[@]}" stop "$run" || true
     fi
   done
   rm -f "$first_file" "$second_file" "$log" "$workers"
 }
 trap cleanup EXIT
 
-"$bench" start > "$first_file" & first_start=$!
-"$bench" start > "$second_file" & second_start=$!
+"${bench[@]}" start > "$first_file" & first_start=$!
+"${bench[@]}" start > "$second_file" & second_start=$!
 wait "$first_start"
 wait "$second_start"
 first="$(cat "$first_file")"
 second="$(cat "$second_file")"
 [ "$first" != "$second" ]
 
-"$bench" focus "$first"
-"$bench" focus "$second"
-"$bench" type "$first" 'bench-first;'
-"$bench" type "$second" 'bench-second;'
-"$bench" wait "$first" 'bench-first;'
-"$bench" wait "$second" 'bench-second;'
-"$bench" look "$first" | grep -F 'bench-first;'
-"$bench" look "$second" | grep -F 'bench-second;'
+"${bench[@]}" focus "$first"
+"${bench[@]}" focus "$second"
+"${bench[@]}" type "$first" 'bench-first;'
+"${bench[@]}" type "$second" 'bench-second;'
+"${bench[@]}" wait "$first" 'bench-first;'
+"${bench[@]}" wait "$second" 'bench-second;'
+"${bench[@]}" look "$first" | grep -F 'bench-first;'
+"${bench[@]}" look "$second" | grep -F 'bench-second;'
 if grep -F 'bench-second;' ".bench/$first/screen.txt" || grep -F 'bench-first;' ".bench/$second/screen.txt"; then
   exit 1
 fi
 
-first_image="$("$bench" screenshot "$first" composer)"
-second_image="$("$bench" screenshot "$second" composer)"
+first_image="$("${bench[@]}" screenshot "$first" composer)"
+second_image="$("${bench[@]}" screenshot "$second" composer)"
 [ "$first_image" = "$root/.bench/$first/composer.svg" ]
 [ "$second_image" = "$root/.bench/$second/composer.svg" ]
 grep -q '^<svg ' "$first_image"
@@ -52,7 +52,7 @@ if grep -qF 'bench-second;' "$first_image" || grep -qF 'bench-first;' "$second_i
   exit 1
 fi
 
-if "$bench" wait "$first" 'missing-on-purpose' > "$log" 2>&1; then
+if "${bench[@]}" wait "$first" 'missing-on-purpose' > "$log" 2>&1; then
   echo 'Expected the wait to fail' >&2
   exit 1
 fi
@@ -65,15 +65,15 @@ test -f ".bench/$first/closed.json"
 test ! -e ".bench/$first/endpoint"
 ! kill -0 "$(cat ".bench/$first/pid")" 2>/dev/null
 
-"$bench" type "$second" 'still-open;'
-"$bench" wait "$second" 'bench-second;still-open;'
-"$bench" stop "$second"
+"${bench[@]}" type "$second" 'still-open;'
+"${bench[@]}" wait "$second" 'bench-second;still-open;'
+"${bench[@]}" stop "$second"
 test -f ".bench/$second/closed.json"
 test ! -e ".bench/$second/endpoint"
 ! kill -0 "$(cat ".bench/$second/pid")" 2>/dev/null
 
 deno run --allow-all --cached-only --frozen --node-modules-dir=none \
-  packages/cli/src/deno.ts test packages/cli/tests/repl-bench/timeout-controls.md > "$log" 2>&1 &
+  packages/cli/src/deno.ts test examples/repl-bench/journeys/timeout-controls.md > "$log" 2>&1 &
 suite_pid=$!
 while kill -0 "$suite_pid" 2>/dev/null; do
   ps -ww -axo pid=,ppid=,command= | awk -v cli="$root/packages/cli/src/deno.ts" '

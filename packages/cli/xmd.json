@@ -1,5 +1,0 @@
-{
-  "test": {
-    "plugins": ["../../scripts/repl-bench-plugin.ts"]
-  }
-}

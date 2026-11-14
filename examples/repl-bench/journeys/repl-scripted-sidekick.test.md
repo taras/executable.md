@@ -1,5 +1,5 @@
 <Test name="a scripted Sidekick submits an entry and acknowledges its output" timeout="60s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-scripted-sidekick.md" expectExit={true} as="closed">
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-scripted-sidekick.md" expectExit={true} as="closed">
     <ReplBench.SidekickPrompt text="Run the fixture entry." as="exchange" />
     <AssertEquals actual={exchange.ending.joined} expected={true} />
     <AssertEquals actual={exchange.ending.outcome} expected="completed" />
@@ -15,7 +15,7 @@
 </Test>
 
 <Test name="Sidekick receives two reads in admission order" timeout="60s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-ordered-reads.md" expectExit={true} as="closed">
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-ordered-reads.md" expectExit={true} as="closed">
     <ReplBench.SidekickPrompt text="What should I know?" as="exchange" />
     <AssertEquals actual={exchange.ending.joined} expected={true} />
     <AssertStringIncludes actual={exchange.output} expected="Read both." />
@@ -25,7 +25,7 @@
 </Test>
 
 <Test name="Transcript wheel and keyboard reach the exact presented turn" timeout="90s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-transcript.md" columns={160} rows={36}>
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-transcript.md" columns={160} rows={36}>
     <ReplBench.Focus target="sidekick-composer" />
     <Each in={["00","01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17"]} let="turn">
       <ReplBench.Type text={"turn-"+turn} />
@@ -85,7 +85,7 @@
 </Test>
 
 <Test name="History wheel and keyboard preserve a held Sidekick answer and reach its final outcome" timeout="120s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-held-history.md" columns={120} rows={30}>
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-held-history.md" columns={120} rows={30}>
     <Each in={[0,1,2,3,4,5,6,7,8,9,10,11]} let="index">
       <Let as="source" value={index===11 ? Array.from({length:70},(_,row)=>"Background row "+row).join("\n") : '<Let as="history'+index+'" value={'+index+'} />'} />
       <ReplBench.Type text={source} />
