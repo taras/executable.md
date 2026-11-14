@@ -49,11 +49,11 @@ deno run --allow-all --cached-only --frozen --node-modules-dir=none \
 ```
 
 Replace the example checkout paths and revisions and submit the Sidekick
-response. One `<Terminal>` keeps the viewport and one `<Dir>` supplies the
-fixture to both launches. Each `<XMD.Build>` selects the implementation for its
-nested `<XMD.Repl>`. Follow the receipt's output-reading instruction to get
-the two captures. For a feature journey, add more named checkpoints inside
-the same pair of launches.
+response. One `<Terminal>` supplies the same viewport to both launches. Each
+`<XMD.Build>` selects the implementation for its nested `<XMD.Repl>`. Follow
+the receipt’s output-reading instruction to get both captures. For a journey
+that reads fixtures, put the builds inside the same `<Dir>` and create the
+fixtures there. Add more named checkpoints inside the same pair of launches.
 
 ````xmd
 <Let as="entry" select="code">
@@ -62,32 +62,22 @@ the same pair of launches.
   {label: "baseline", checkout: "/absolute/path/to/baseline", revision: "168dd99dc4ac04ecb23c6f3a7419eaa39f808a4b"},
   {label: "candidate", checkout: "/absolute/path/to/candidate", revision: "f1047c25234783c87ee804fc0111a9bb62d97d09"}
 ]} />
-<TempDir>
-  <Terminal columns={72} rows={20}>
-    <Dir path="fixtures">
-      <File path="bench-fixture.md">shared-bench-fixture</File>
-      <Each in={builds} let="build">
-        <XMD.Build checkout={build.checkout} expectedRevision={build.revision}>
-          <XMD.Repl>
-            <Terminal.WaitForText text="DRAFT" as="draft" />
-            <Terminal.Click at={{row: draft.row + 1, column: draft.column}} />
-            <Terminal.Type text={'<File path="bench-fixture.md" />'} />
-            <Terminal.Key key="Enter" />
-            <Terminal.WaitForText text="shared-bench-fixture" />
-            <Terminal.Focus target="sidekick-composer" />
-            <Terminal.Type text="visual-bench-marker;" />
-            <Terminal.Region name="sidekick-composer">
-              <Terminal.WaitForText text="visual-bench-marker;" />
-            </Terminal.Region>
-            <XMD.Repl.Revision as="revision" />
-            <Terminal.Screenshot name={build.label} format="png" as="screenshot" />
-            <Output><Json value={{label: build.label, revision, screenshot}} /></Output>
-          </XMD.Repl>
-        </XMD.Build>
-      </Each>
-    </Dir>
-  </Terminal>
-</TempDir>
+<Terminal columns={72} rows={20}>
+  <Each in={builds} let="build">
+    <XMD.Build checkout={build.checkout} expectedRevision={build.revision}>
+      <XMD.Repl>
+        <Terminal.Focus target="sidekick-composer" />
+        <Terminal.Type text="visual-bench-marker;" />
+        <Terminal.Region name="sidekick-composer">
+          <Terminal.WaitForText text="visual-bench-marker;" />
+        </Terminal.Region>
+        <XMD.Repl.Revision as="revision" />
+        <Terminal.Screenshot name={build.label} format="png" as="screenshot" />
+        <Output><Json value={{label: build.label, revision, screenshot}} /></Output>
+      </XMD.Repl>
+    </XMD.Build>
+  </Each>
+</Terminal>
 ```
 </Let>
 <REPL.EntryInput>{entry}</REPL.EntryInput>
