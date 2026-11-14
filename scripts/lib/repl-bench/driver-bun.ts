@@ -1,5 +1,5 @@
 import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
-import { keyToAnsi, parseKey } from "@termless/core";
+import { keyToAnsi, parseKey, screenshotSvg } from "@termless/core";
 import { createXtermBackend } from "@termless/xtermjs";
 import {
   all,
@@ -385,6 +385,24 @@ export function useDriver(options: Launch) {
             case "look":
               yield* save();
               return screen || lastFrame().text;
+            case "screenshot": {
+              const path = join(directory, `${command.name}.svg`);
+              const { viewportTop, totalRows, screenRows } = backend.getScrollback();
+              const cursor = backend.getCursor();
+              const cursorRow = cursor.row + totalRows - screenRows - viewportTop;
+              const svg = screenshotSvg({
+                ...backend,
+                getRows: () =>
+                  Array.from({ length: screenRows }, (_, row) => backend.getRow(viewportTop + row)),
+                getCursor: () => ({
+                  ...cursor,
+                  row: cursorRow,
+                  visible: cursor.visible && cursorRow >= 0 && cursorRow < screenRows,
+                }),
+              });
+              yield* writeTextFile(path, svg);
+              return path;
+            }
             case "exit":
               return yield* exit();
             case "stop":

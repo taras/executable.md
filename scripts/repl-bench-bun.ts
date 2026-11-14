@@ -75,6 +75,7 @@ function* followup(action: string, directory: string, args: string[]): Operation
           command.parse({
             action,
             text: args[0],
+            name: args[0],
             ...(action === "resize" ? dimensions(args[0] ?? "") : {}),
           }),
         ];

@@ -11,6 +11,7 @@ repl-bench type <run> <text>
 repl-bench send <run> <key>...
 repl-bench wait <run> <text>
 repl-bench resize <run> <WxH>
+repl-bench screenshot <run> <name>
 repl-bench look|status|exit|stop <run>
 repl-bench start --tmux [--size WxH] [--real-home] [-- <repl args>]
 repl-bench attach|look|tape|journal|send|type|resize|status|stop <tmux-run> [args]

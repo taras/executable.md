@@ -24,10 +24,16 @@
 
 <Test name="a resized Sidekick view reopens at its last terminal size">
   <ReplBench columns={120} rows={30} expectExit={true} as="closed">
+    <Cwd as="directory" />
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="Entries    * Sidekick" />
     <ReplBench.WaitForText text="message the sidekick" />
+    <Terminal.Screenshot name="narrow-sidekick" as="image" />
+    <AssertStringIncludes actual={image} expected="/narrow-sidekick.svg" />
+    <File path={image.slice(directory.length + 1)} as="svg" />
+    <AssertMatch actual={svg} expected={/^<svg .* viewBox="0 0 [\d.]+ 400"/} />
+    <AssertStringIncludes actual={svg} expected="message the sidekick" />
     <ReplBench.Key key="Ctrl+C" />
   </ReplBench>
   <AssertEquals actual={closed.exitCode} expected={0} />

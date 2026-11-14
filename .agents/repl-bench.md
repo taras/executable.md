@@ -37,6 +37,7 @@ run=$(./scripts/repl-bench.sh start --size 160x36)
 ./scripts/repl-bench.sh resize "$run" 72x20
 ./scripts/repl-bench.sh wait "$run" 'Entries    * Sidekick'
 ./scripts/repl-bench.sh look "$run"
+./scripts/repl-bench.sh screenshot "$run" narrow-sidekick
 ./scripts/repl-bench.sh stop "$run"
 ```
 
@@ -46,6 +47,9 @@ Use `type` for literal text. Each run owns a terminal, a test home, and
 readable screen, and `terminal.ansi` holds the raw PTY output. A failed action
 closes its driver and keeps the available evidence. To capture a normal exit,
 send the exit key and call `exit <run>` to collect the status and reopen location.
+Use `screenshot <run> <name>` after waiting for the expected state. It prints the
+path to `.bench/<run>/<name>.svg`, an image of the visible viewport with its
+terminal colors and styling. Use distinct names for before and after captures.
 
 Use `start --tmux` when a person needs to attach to the terminal. Pass its
 printed `tmux.…` ID to `attach`, `look`, `tape`, `journal`, and `stop`. Use
@@ -67,6 +71,9 @@ scenarios resolve from that working directory.
 The [testing specification](../specs/testing-spec.md#real-terminal-repl-tests)
 describes the plugin and its scope. Use a composer region for a field-value
 check. A viewport match can also find the same text in the Draft or Transcript.
+Use `<Terminal.Screenshot name="narrow-sidekick" as="image" />` inside an active
+bench to save the visible viewport and bind the image path. The bench CI jobs
+include saved screenshots in their failure artifacts.
 
 Run `repl-shared-terminal.test.md` to check these launch transitions in one
 test. Start at `120x30`, submit the marker entry, and resize to `72x20` with
