@@ -43,6 +43,8 @@ printf 'hidden-%s\n' stderr >&2
 ````
     </Let>
 
+    <Terminal.Key key="Ctrl+G" />
+    <Terminal.Key key="4" />
     <ReplBench.Type text={source} />
     <ReplBench.WaitForText text="printf 'hidden-%s" />
     <ReplBench.Key key="Enter" />

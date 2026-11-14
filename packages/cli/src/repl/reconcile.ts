@@ -47,9 +47,11 @@ import {
   focusLayout,
   homeTarget,
   isNavigationKey,
+  regionEntry,
   regionTarget,
   survivorTarget,
 } from "./focus-navigation.ts";
+import { shortcutRegion } from "./screen-regions.ts";
 import type { ReplFocusLayout, ReplPlacement, ReplStop } from "./focus-navigation.ts";
 import type {
   ReplComponent,
@@ -633,6 +635,17 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
           focused: held(moved) === undefined ? undefined : moved.id,
         };
         return Ok(Object.freeze(traversed));
+      }
+
+      if (event.kind === "key" && event.key.startsWith("Focus")) {
+        const region = shortcutRegion(event.key.slice("Focus".length));
+        const destination =
+          region === undefined || modals.length > 0 ? undefined : regionEntry(stops(), region);
+        if (destination === undefined) {
+          return Ok(dropped("the requested focus region is unavailable."));
+        }
+        focusId(destination);
+        return Ok({ outcome: "focus", focused: holding() });
       }
 
       let target: Node | undefined;

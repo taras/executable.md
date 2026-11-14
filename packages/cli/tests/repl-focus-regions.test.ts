@@ -45,6 +45,11 @@ function* typed(page: ReplPage, text: string): Operation<void> {
   yield* page.until(`text ${JSON.stringify(text)}`, (one) => one.shows(text));
 }
 
+function* draftFocus(page: ReplPage): Operation<void> {
+  yield* page.type("\x074");
+  yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+}
+
 describe("REPL focus regions: the normal screen", () => {
   for (const size of [WIDE, MEDIUM]) {
     it(`R1/R2: fixed region entries deliver Draft and Message input at ${size.columns}x${size.rows}`, function* () {
@@ -89,6 +94,7 @@ describe("REPL focus regions: the normal screen", () => {
 
   it("R3: tabs and History arrows move without activation; Enter selects", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* draftFocus(page);
     yield* key(page, "Tab");
     yield* key(page, "ArrowRight");
     yield* key(page, "ArrowRight");
@@ -111,6 +117,7 @@ describe("REPL focus regions: the normal screen", () => {
 
   it("R4: narrowing from Tabs recovers to the bar and widening keeps its destination", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* draftFocus(page);
     yield* typed(page, "survives-resize");
     yield* key(page, "Tab");
     yield* page.resize(NARROW);
@@ -127,6 +134,7 @@ describe("REPL focus regions: the normal screen", () => {
 describe("REPL focus regions: Unicode caret editing", () => {
   it("PV3: Draft and Message edit at independent carets across rows, focus and resize", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
+    yield* draftFocus(page);
     yield* page.type("é界\nsecond");
     yield* page.until("both Draft rows", (one) => one.shows("é界") && one.shows("second"));
     yield* key(page, "Home");
@@ -173,6 +181,7 @@ describe("REPL focus regions: Unicode caret editing", () => {
 describe("REPL focus regions: reading and narrow recovery", () => {
   it("PV5: the selected reading reaches both boundaries without activating or editing", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
+    yield* draftFocus(page);
     yield* page.type(Array.from({ length: 50 }, (_, at) => `Reading row ${at}`).join("\n"));
     yield* page.until("the complete source", (one) => one.shows("Reading row 49"));
     yield* page.key("Enter");
@@ -195,6 +204,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
 
   it("PV6: running work and both texts survive narrow access and minimum-size recovery", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* draftFocus(page);
     yield* page.type(
       '<Elicit as="response" schema={{type:"object",properties:{response:{type:"string"}},required:["response"],additionalProperties:false}}>Waiting for your answer.</Elicit>',
     );
@@ -242,6 +252,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
 describe("REPL focus regions: the catalog drawer at the narrow size", () => {
   it("R5: nested arrows reveal hidden entries, fixed Content entry and modal close restore", function* () {
     const page = yield* useReplPage({ size: NARROW, includes: [REFERENCE_DIRECTORY] });
+    yield* draftFocus(page);
     for (let order = 1; order <= 6; order += 1) {
       yield* typed(page, `<Checklist title="Plan ${order}" steps={1} />`);
       yield* page.key("Enter");
@@ -606,6 +617,7 @@ describe("REPL focus regions: logical drawer reveal", () => {
 describe("REPL focus regions: background input ownership", () => {
   it("PV7: a reply and question leave a middle Message caret and Draft untouched", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
+    yield* draftFocus(page);
     yield* typed(page, "kept draft");
     for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
@@ -641,6 +653,7 @@ describe("REPL focus regions: background input ownership", () => {
 describe("REPL focus regions: Sidekick reading keys", () => {
   it("PV5: Home/End and pages preserve an unsent Message while output arrives", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
+    yield* draftFocus(page);
     yield* typed(page, "draft kept");
     for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
