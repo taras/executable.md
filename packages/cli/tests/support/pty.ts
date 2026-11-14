@@ -427,6 +427,12 @@ function* showing(pty: Pty, what: string, within: number): Operation<void> {
   }
 }
 
+/** Move to Draft and wait for its focus cue before sending entry text. */
+export function* focusPtyDraft(pty: Pty, within: number): Operation<void> {
+  yield* pty.type("\x074");
+  yield* showing(pty, "> DRAFT", within);
+}
+
 /**
  * Wait until the screen shows this text, wrapped wherever the frame wrapped it.
  *

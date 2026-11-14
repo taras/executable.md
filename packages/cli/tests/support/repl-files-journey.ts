@@ -26,7 +26,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
-import { allocate, settledEntry, showing, showingAcross } from "./pty.ts";
+import { allocate, focusPtyDraft, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -186,6 +186,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* showing(first, "[exit]", REACH_MS);
 
     // Typed as a person types it: one paste carrying newlines, then Enter.
+    yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(ENTRY);
     yield* sleep(500);
     yield* first.type("\r");
@@ -263,6 +264,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     // what this journey is about.
     const third = yield* allocate(inside(["repl", "--deny-all", location]), home);
     yield* showing(third, "[exit]", REACH_MS);
+    yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(LIVE_READ);
     yield* sleep(500);
     yield* third.type("\r");
@@ -442,6 +444,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
       home,
     );
     yield* showing(first, "[exit]", REACH_MS);
+    yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(managedEntry(through, origin));
     yield* sleep(500);
     yield* first.type("\r");
@@ -508,6 +511,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
       home,
     );
     yield* showing(third, "[exit]", REACH_MS);
+    yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(managedLiveRead(through, origin));
     yield* sleep(500);
     yield* third.type("\r");
@@ -535,6 +539,7 @@ export function replUnsupportedSelection(repl: ReplCommand): Operation<void> {
     yield* until(mkdir(away, { recursive: true }));
     const pty = yield* allocate(`cd ${shellQuote(away)} && ${repl(["repl", "--deny-all"])}`, home);
     yield* showing(pty, "[exit]", REACH_MS);
+    yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(
       [
         `<Repository name="project" url=${JSON.stringify(origin)}>`,
@@ -573,6 +578,7 @@ export function replOrdinaryFileWork(repl: ReplCommand): Operation<void> {
       home,
     );
     yield* showing(pty, "[exit]", REACH_MS);
+    yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(ENTRY);
     yield* sleep(500);
     yield* pty.type("\r");
@@ -790,6 +796,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
       home,
     );
     yield* showing(first, "[exit]", REACH_MS);
+    yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(gitEntry(through, origin));
     yield* sleep(500);
     yield* first.type("\r");
@@ -877,6 +884,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
       home,
     );
     yield* showing(third, "[exit]", REACH_MS);
+    yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(gitLiveCommit(through, origin));
     yield* sleep(500);
     yield* third.type("\r");
@@ -921,6 +929,7 @@ export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
     // All three in one printing region, because an absent provider is an
     // ordinary refusal a region recovers: each of them reports, and the
     // ordinary file work after them still runs.
+    yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(
       [
         "<PrintErrors>",

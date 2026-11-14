@@ -30,7 +30,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
-import { allocate, settledEntry, showing, showingAcross } from "./pty.ts";
+import { allocate, focusPtyDraft, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -114,6 +114,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
 
     const first = yield* allocate(open(["repl", "--deny-all", "--allow-absolute"]), home);
     yield* showing(first, "[exit]", REACH_MS);
+    yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(entry(origin, "notes.md"));
     yield* sleep(500);
     yield* first.type("\r");
@@ -184,6 +185,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     // branch and advances the destination to what the checkout holds now.
     const third = yield* allocate(open(["repl", "--deny-all", "--allow-absolute", location]), home);
     yield* showing(third, "[exit]", REACH_MS);
+    yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(republishing(origin));
     yield* sleep(500);
     yield* third.type("\r");
@@ -219,6 +221,7 @@ export function replUnsupportedPush(repl: ReplCommand): Operation<void> {
       home,
     );
     yield* showing(pty, "[exit]", REACH_MS);
+    yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(
       [
         "<PrintErrors>",

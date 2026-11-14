@@ -29,7 +29,7 @@ import type { Operation } from "effection";
 import { useIssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
 import type { IssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
 import { credential } from "../../../git/tests/support/issue-tracker-server.ts";
-import { allocate, settledEntry, showing, showingAcross } from "./pty.ts";
+import { allocate, focusPtyDraft, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -165,6 +165,7 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     yield* showing(first, "[exit]", REACH_MS);
 
     // Typed as a person types it: one paste carrying newlines, then Enter.
+    yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(ENTRY);
     yield* sleep(500);
     yield* first.type("\r");
@@ -248,6 +249,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
 
     const first = yield* allocate(inside(["repl", "--deny-all"]), home);
     yield* showing(first, "[exit]", REACH_MS);
+    yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(ENTRY);
     yield* sleep(500);
     yield* first.type("\r");
@@ -299,6 +301,7 @@ export function replIssuesUnsupported(repl: ReplCommand): Operation<void> {
 
     const pty = yield* allocate(line, home);
     yield* showing(pty, "[exit]", REACH_MS);
+    yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(ENTRY);
     yield* sleep(500);
     yield* pty.type("\r");

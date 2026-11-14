@@ -6,7 +6,7 @@ import { scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { join, parse, relative, sep } from "node:path";
 import { realpath } from "node:fs/promises";
-import { allocate, showing } from "./pty.ts";
+import { allocate, focusPtyDraft, showing } from "./pty.ts";
 import { click, holding, ended, printedLocation } from "./repl-files-journey.ts";
 import type { ReplCommand } from "./repl-files-journey.ts";
 
@@ -51,6 +51,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
         '<File path="result.md">{saved}|{current}</File>',
         "</Dir>",
       ].join("\n");
+      yield* focusPtyDraft(first, 30_000);
       yield* first.type(source);
       yield* sleep(500);
       yield* first.type("\r");
@@ -78,6 +79,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       const nextLocation = printedLocation((yield* second.shows()).join("\n"));
       const third = yield* allocate(line([nextLocation, "--allow-absolute", ...flags]), home);
       yield* showing(third, "Ready for Entry 2", 180_000);
+      yield* focusPtyDraft(third, 30_000);
       yield* third.type(
         `<Dir path=${JSON.stringify(target)}><File path="read.md" as="fresh" /><File path="fresh.md">{fresh}</File>fresh is {fresh}</Dir>`,
       );

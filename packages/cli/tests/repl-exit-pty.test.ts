@@ -659,6 +659,8 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       // becomes many decoded keystrokes, so a reader that handed its buffer over
       // without yielding would lose the tail of it — and losing the tail of what
       // somebody typed is the kind of defect a single keypress never shows.
+      yield* pty.type("\x074");
+      yield* showing(pty, "> DRAFT", LEAVE_MS);
       yield* pty.type(BURST);
       yield* showing(pty, BURST, LEAVE_MS);
 
