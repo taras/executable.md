@@ -474,6 +474,9 @@ function refuseReroutedHeldCall(
       }. A held turn's bound is not something its content composition decides.`,
     );
   }
+  if (forwarded.images !== checked.images) {
+    throw new HeldPromptRoutingError("This held conversation's prompt images changed in transit.");
+  }
 }
 
 /**
@@ -490,6 +493,7 @@ function refuseReroutedHeldCall(
  */
 interface HeldPromptTurn {
   readonly timeout: number | undefined;
+  readonly images: PromptOptions["images"];
   admitted: boolean;
   stream?: Stream<AgentPromptEvent, string>;
   /** The native subscription reached its own `done`. */
@@ -515,7 +519,13 @@ interface HeldPromptTurn {
 }
 
 function heldPromptTurn(options: PromptOptions): HeldPromptTurn {
-  return { timeout: options.timeout, admitted: false, settled: false, cleaned: false };
+  return {
+    timeout: options.timeout,
+    images: options.images,
+    admitted: false,
+    settled: false,
+    cleaned: false,
+  };
 }
 
 /**

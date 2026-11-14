@@ -140,8 +140,14 @@ export type AgentPromptEvent =
       error?: Error;
     };
 
+export interface PromptImage {
+  readonly mediaType: "image/png";
+  readonly data: string;
+}
+
 export interface PromptOptions {
   agent?: Agent;
+  images?: readonly PromptImage[];
   /**
    * Which conversation this prompt belongs to.
    *

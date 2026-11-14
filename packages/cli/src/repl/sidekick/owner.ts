@@ -120,10 +120,16 @@ import type {
 import { serializeError } from "@executablemd/durable-streams";
 import { useAgentConversation } from "@executablemd/core/host";
 import type { AgentConversation } from "@executablemd/core/host";
-import type { AgentOptions, AgentOptionsRequest, SessionConfiguration } from "@executablemd/core";
+import type {
+  AgentOptions,
+  AgentOptionsRequest,
+  PromptImage,
+  SessionConfiguration,
+} from "@executablemd/core";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 
 import { ReplHost } from "../host.ts";
+import { readPromptImage } from "./asset-image.ts";
 import { API } from "@executablemd/runtime";
 import { conversationStream, failedOutcome } from "./history.ts";
 import type { SidekickRecord, SidekickWriter } from "./history.ts";
@@ -222,9 +228,18 @@ type Sending =
        * was true when they sent it.
        */
       readonly revision: number;
-      readonly finished?: { readonly response: string; readonly text: string };
+      readonly finished?: {
+        readonly response: string;
+        readonly text: string;
+        readonly images?: readonly PromptImage[];
+      };
     }
-  | { readonly kind: "feedback"; readonly of: string; readonly text: string };
+  | {
+      readonly kind: "feedback";
+      readonly of: string;
+      readonly text: string;
+      readonly images?: readonly PromptImage[];
+    };
 
 /** One turn's own outcome, and what the turn after it owes. */
 interface Responded {
@@ -245,6 +260,7 @@ interface Responded {
    * nothing a correction could fix, so the next move is the person's.
    */
   readonly next: string | undefined;
+  readonly images?: readonly PromptImage[];
   readonly round?: string;
 }
 
@@ -645,6 +661,7 @@ interface ServingResponse {
   output(): ReplPrinting | undefined;
   readonly test?: ReplTesting;
   importAsset(source: string, destination: string): Operation<Result<string>>;
+  inspectImage(path: string): Operation<Result<string>>;
   readonly journal: ControlJournal;
   /** Admit the draft for this response, recording a refusal that wrote nothing. */
   submit(): Operation<Result<SubmitReceipt>>;
@@ -704,20 +721,25 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      */
     function responseCeiling(project?: (value: unknown) => Result<Json | undefined>) {
       return sidekickResponseCeiling(
-        sidekickRequests(
-          root,
-          function* (): Operation<Result<SubmitReceipt>> {
-            return yield* servingNow().submit();
-          },
-          function* (path) {
-            const test = servingNow().test;
-            return test === undefined
-              ? Err(new Error("this REPL host has no test runner"))
-              : yield* test(path);
-          },
-          () => servingNow().output(),
-          (source, destination) => servingNow().importAsset(source, destination),
-        ),
+        {
+          ...sidekickRequests(
+            root,
+            function* (): Operation<Result<SubmitReceipt>> {
+              return yield* servingNow().submit();
+            },
+            function* (path) {
+              const test = servingNow().test;
+              return test === undefined
+                ? Err(new Error("this REPL host has no test runner"))
+                : yield* test(path);
+            },
+            () => servingNow().output(),
+            (source, destination) => servingNow().importAsset(source, destination),
+          ),
+          ...(input.workspace !== undefined
+            ? { inspectImage: (path: string) => servingNow().inspectImage(path) }
+            : {}),
+        },
         {
           *began(occurrence, reserved): Operation<number> {
             return yield* servingNow().journal.began(occurrence, reserved);
@@ -2341,7 +2363,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
               text: queued.text,
               options: queued.options,
               revision: input.revision(),
-              finished: { response: settled.response, text: responded.value.next },
+              finished: {
+                response: settled.response,
+                text: responded.value.next,
+                images: responded.value.images,
+              },
             };
             continue;
           }
@@ -2349,7 +2375,12 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         if (responded.value.next === undefined) {
           return Ok(settled);
         }
-        sending = { kind: "feedback", of: settled.response, text: responded.value.next };
+        sending = {
+          kind: "feedback",
+          of: settled.response,
+          text: responded.value.next,
+          images: responded.value.images,
+        };
       }
     }
 
@@ -2445,12 +2476,28 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       let contributedFailure: Error | undefined;
       let submitted: ReplPrinting | undefined;
       let submissionFailure: Error | undefined;
+      const images: PromptImage[] = [];
       const responding: ServingResponse = {
         failed(error) {
           contributedFailure ??= error;
         },
         output: observation,
         journal,
+        *inspectImage(path): Operation<Result<string>> {
+          if (input.workspace === undefined) {
+            return Err(new Error("This response has no session workspace for reading assets."));
+          }
+          if (images.length >= 2) {
+            return Err(new Error("Inspect at most two images in one response."));
+          }
+          try {
+            const { image, sha256 } = yield* readPromptImage(input.workspace, path);
+            images.push(image);
+            return Ok(`Image ${images.length}: ${path} (SHA-256 ${sha256})`);
+          } catch (error) {
+            return Err(error instanceof Error ? error : new Error(String(error)));
+          }
+        },
         *importAsset(source, destination): Operation<Result<string>> {
           if (input.workspace === undefined) {
             return Err(new Error("This response has no session workspace for asset import."));
@@ -2715,7 +2762,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           todo?.finishPrompt(false);
         }
       });
-      const replied = yield* handle.prompt(request, desired(settings.value, conversation));
+      const replied = yield* handle.prompt(
+        request,
+        desired(settings.value, conversation),
+        sending.kind === "feedback" ? sending.images : sending.finished?.images,
+      );
       todo?.finishPrompt(replied.ok);
       confirmed = true;
       if (!replied.ok) {
@@ -2904,6 +2955,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         answered: true,
         ...(submitted === undefined ? {} : { round: submitted.entry }),
         next,
+        ...(images.length === 0 ? {} : { images }),
       });
     }
 

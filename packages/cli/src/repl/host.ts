@@ -54,6 +54,8 @@ export interface ReplHostApi {
   /** Refuse a project directory this process cannot read and search. */
   checkProjectAccess(directory: string): Operation<void>;
   importAsset(request: AssetImportRequest): Operation<Result<string>>;
+  /** Read a regular session asset by its assets-relative path, up to maxBytes. */
+  readAsset(workspace: string, path: string, maxBytes: number): Operation<Uint8Array>;
   /**
    * What this process is standing on, stated rather than detected.
    *
@@ -96,6 +98,10 @@ export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
   },
   *importAsset(_request: AssetImportRequest): Operation<Result<string>> {
     return Err(new Error("This REPL host has no asset importer."));
+  },
+  // deno-lint-ignore require-yield
+  *readAsset(): Operation<Uint8Array> {
+    throw new ReplHostError("reading a session asset");
   },
   // deno-lint-ignore require-yield
   *environment(): Operation<readonly ReplHostFact[]> {
