@@ -49,16 +49,11 @@ For Effection-based code, consult the
 
 ### Test design
 
-Prefer a few tests that exercise meaningful behavior through the normal entry
-point. Use controlled test doubles at dependency boundaries such as ACP, HTTP,
-or subprocesses. Keep the production logic that makes the decision under test
-in the execution path, and assert observable behavior. Use focused unit tests
-for edge cases that benefit from direct inputs and assertions.
-
-For example, to test reviewer fallback, connect the workflow to scripted ACP
-reviewers. Have the primary fail and the replacement wait for a release signal
-while a second command tries to resume the review. Check that the workflow
-contacts the replacement once and handles both commands as expected.
+- Prefer test doubles over stubs. Use controlled test doubles at dependency
+  boundaries such as ACP, HTTP, or subprocesses.
+- Exercise black boxes through realistic code paths.
+- Use unit tests only for simple input/output cases where type safety or
+  schemas are insufficient.
 
 ### Running checks
 
