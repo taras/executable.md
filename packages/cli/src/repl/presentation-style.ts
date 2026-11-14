@@ -2,10 +2,8 @@
  * Map typed row roles to colour, weight and surface in one pure, private module.
  * No model, host Api, Journal access or mutable state reaches this mapping.
  *
- * Role, selection and history belong to the reading; keyboard focus arrives
- * after reconciliation and adds weight without changing geometry or replacing
- * token foregrounds. Only its marker takes the focus colour. Selection keeps
- * its own surface, so moving focus cannot erase it.
+ * The reading supplies role, selection and history. Focus adds a surface and
+ * emphasizes the label after reconciliation, leaving the measured width intact.
  *
  * Text remains sufficient without colour: outcomes spell `[ok]` or `[err]`,
  * selection keeps `*`, and focus keeps `>`.
@@ -197,6 +195,8 @@ export const REPL_PALETTE = Object.freeze({
   focus: 0x7fd3e8,
   /** Behind a selected row, for the whole width the frame measured it at. */
   selectedSurface: 0x122026,
+  focusSurface: 0x243747,
+  selectedFocusSurface: 0x264853,
   /** A retained reading, and the band that holds the positions. */
   historical: 0xc9a86a,
   historySurface: 0x08090b,
@@ -319,6 +319,7 @@ export const REPL_PALETTE = Object.freeze({
  * stated as that flag rather than as an escape this product writes itself.
  */
 export const BOLD = 1;
+const UNDERLINE = 8;
 
 /** What one row's text is drawn with. */
 export interface ReplTextStyle {
@@ -330,10 +331,7 @@ export interface ReplTextStyle {
 /**
  * The foreground one row's text takes, focus included.
  *
- * Focus adds weight and nothing else. It leaves the surface alone, so a selected
- * row that loses focus is still visibly the selected row; and it leaves the
- * foreground alone, so the row a keystroke reaches is still readable as the
- * thing it is. Which row that is, is said by the marker in front of it.
+ * Focus adds bold and underline to the control's label.
  */
 export function textStyleOf(style: ReplRowStyle, focused: boolean): ReplTextStyle {
   return runStyleOf(style.role, style, focused);
@@ -353,13 +351,15 @@ export function runStyleOf(
 ): ReplTextStyle {
   return Object.freeze({
     colour:
-      row.role === "todo-completed" && !focused
-        ? REPL_PALETTE.historical
-        : colourOf(role, row.inspected),
+      focused && (role === "field-label" || role === "metadata" || role === "field-hint")
+        ? REPL_PALETTE.heading
+        : row.role === "todo-completed" && !focused
+          ? REPL_PALETTE.historical
+          : colourOf(role, row.inspected),
     attrs:
       attrsOf(role) |
       (row.role === "todo-completed" ? 64 | (focused ? 0 : 2) : 0) |
-      (focused ? BOLD : 0),
+      (focused ? BOLD | UNDERLINE : 0),
   });
 }
 
@@ -372,7 +372,10 @@ export function runStyleOf(
  * facts, and a screen that drew them with one property could only ever show one
  * of them.
  */
-export function surfaceOf(style: ReplRowStyle): number | undefined {
+export function surfaceOf(style: ReplRowStyle, focused: boolean): number | undefined {
+  if (focused) {
+    return style.selected ? REPL_PALETTE.selectedFocusSurface : REPL_PALETTE.focusSurface;
+  }
   if (style.selected) {
     return REPL_PALETTE.selectedSurface;
   }

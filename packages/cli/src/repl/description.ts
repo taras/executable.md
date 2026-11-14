@@ -119,6 +119,8 @@ export type ReplKey =
   | "Backtab"
   | "Backspace"
   | "Interrupt"
+  | "Ctrl+G"
+  | `Focus${number}`
   | "ArrowUp"
   | "ArrowDown"
   | "ArrowLeft"
@@ -140,12 +142,12 @@ export type ReplKey =
  * Text is its own member rather than a key with a payload, because the two are
  * answered differently: a named key is a command its handler recognizes,
  * and text is content that goes wherever content goes. It carries the string the
- * terminal decoded — one grapheme as typed, or `"\n"` for a newline inside a
- * paste — and never a raw terminal event.
+ * terminal decoded. Framed paste carries the whole value and is marked so
+ * its contents cannot complete a keyboard shortcut.
  */
 export type ReplInputEvent =
   | { readonly kind: "key"; readonly key: ReplKey }
-  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string; readonly pasted?: true }
   | { readonly kind: "pointer"; readonly target: string; readonly frame: number }
   | {
       readonly kind: "wheel";

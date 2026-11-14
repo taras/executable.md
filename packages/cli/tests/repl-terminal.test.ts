@@ -2010,7 +2010,7 @@ describe("REPL bracketed paste", () => {
   for (const separator of ["\r", "\n", "\r\n"]) {
     it(`keeps framed ${JSON.stringify(separator)} as text only`, function* () {
       expect(yield* decoded([framed(payload.replaceAll("\n", separator))])).toEqual([
-        { kind: "text", text: payload },
+        { kind: "text", text: payload, pasted: true },
       ]);
     });
   }
@@ -2019,11 +2019,11 @@ describe("REPL bracketed paste", () => {
     const bytes = framed(payload.replaceAll("\n", "\r\n"));
     for (let split = 0; split <= bytes.length; split += 1) {
       expect(yield* decoded([bytes.slice(0, split), bytes.slice(split)])).toEqual([
-        { kind: "text", text: payload },
+        { kind: "text", text: payload, pasted: true },
       ]);
     }
     expect(yield* decoded(Array.from(bytes, (byte) => Uint8Array.of(byte)))).toEqual([
-      { kind: "text", text: payload },
+      { kind: "text", text: payload, pasted: true },
     ]);
   });
 
@@ -2052,6 +2052,8 @@ describe("REPL bracketed paste", () => {
 
   it("keeps a framed Draft editable until a deliberate Enter", function* () {
     const page = yield* useReplPage();
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     const source = "<Output>first\n\n  é界🙂 last</Output>";
     page.repl.terminal.bytes(framed(source.replaceAll("\n", "\r\n")));
     yield* page.until(
@@ -2284,6 +2286,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // its guidance row says the Draft is taking them, and says something else
     // once it is not.
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     expect(page.screen().shows(TYPING)).toBe(true);
 
     yield* page.key("Tab");
@@ -2323,6 +2327,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
 
   it("I1: text and Backspace reach the draft through the same ancestry as a key", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
 
     // The keystrokes are going to the draft line, which the guidance row says.
     expect(page.screen().shows(TYPING)).toBe(true);
@@ -2680,6 +2686,8 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
 
   it("TL7: typing while the drawer is open does not change the Draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     yield* draftText(page, "kept in the Draft");
     yield* page.press("[history]");
     yield* page.until("the History drawer", (one) => one.shows("[close]"));
@@ -3050,6 +3058,8 @@ function* submitPast(page: ReplPage, order: number): Operation<void> {
 describe("REPL terminal: History past the row-full point (#1017)", () => {
   it("keeps every action reachable and preserves results, selection and the draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     // Past the row-full point: the compact map's text grows roughly three
     // cells an entry and nothing else bounds it, so twenty-four entries at
     // this width overruns what the row's two controls leave long before the
@@ -3088,6 +3098,8 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
 
   it("bounds the same row at 200x36 without losing a control", function* () {
     const page = yield* useReplPage({ size: { columns: 200, rows: 36 } });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     // Past this width's own row-full point (twenty-five, measured) without
     // adding a viewport matrix: one further size, driven through the same
     // harness as the 160-column case above.

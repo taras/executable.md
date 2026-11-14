@@ -40,7 +40,8 @@ export function viewport(backend: TerminalBackend, size: Size) {
   const composerLabel = [...matches("› message the sidekick")].find(
     ({ row, column }) =>
       row < bodyBottom &&
-      background(row, column) === REPL_PALETTE.draftSurface &&
+      (background(row, column) === REPL_PALETTE.draftSurface ||
+        background(row, column) === REPL_PALETTE.focusSurface) &&
       background(row, column - 3) === REPL_PALETTE.composerSurface,
   );
   const transcriptTitle = rows.findIndex((row, index) => index < 4 && /^\s*TRANSCRIPT\s/.test(row));

@@ -86,6 +86,8 @@
 
 <Test name="History wheel and keyboard preserve a held Sidekick answer and reach its final outcome" timeout="120s">
   <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-held-history.md" columns={120} rows={30}>
+    <Terminal.Key key="Ctrl+G" />
+    <Terminal.Key key="4" />
     <Each in={[0,1,2,3,4,5,6,7,8,9,10,11]} let="index">
       <Let as="source" value={index===11 ? Array.from({length:70},(_,row)=>"Background row "+row).join("\n") : '<Let as="history'+index+'" value={'+index+'} />'} />
       <ReplBench.Type text={source} />

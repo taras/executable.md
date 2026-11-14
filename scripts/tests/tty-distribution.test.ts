@@ -26,7 +26,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { copyPreparedCandidate } from "./candidate-copy.ts";
 import { compileArguments, PREPARED_NOTICES } from "../lib/compile.ts";
-import { allocate, settledEntry, showing } from "../../packages/cli/tests/support/pty.ts";
+import {
+  allocate,
+  focusPtyDraft,
+  settledEntry,
+  showing,
+} from "../../packages/cli/tests/support/pty.ts";
 import {
   click,
   ended,
@@ -166,6 +171,7 @@ describe("the prepared terminal runtime in the canonical host binary", () => {
       ].join("; ");
     const first = yield* allocate(repl([]), home);
     yield* showing(first, "[exit]", 180_000);
+    yield* focusPtyDraft(first, 60_000);
     yield* first.type(`${SHORT}\n\n${LONG}`);
     yield* sleep(500);
     yield* first.type("\r");

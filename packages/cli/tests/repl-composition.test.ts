@@ -1621,6 +1621,7 @@ describe("1075 invocation to REPL entry", () => {
           ),
         );
         yield* awaited("initial REPL frame", () => recording.terminal.drawn > 1);
+        recording.terminal.feed("\x074");
         recording.terminal.feed(
           `<Dir path=${JSON.stringify(external)}><File path="input.txt" /></Dir>\r`,
         );

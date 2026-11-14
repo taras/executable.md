@@ -345,6 +345,13 @@ export function regionTarget(
   return entryOf(regions[next], byId);
 }
 
+export function regionEntry(stops: readonly ReplStop[], key: string): string | undefined {
+  const region = focusLayout(stops).regions.find((one) => one.spec.key === key);
+  return region === undefined
+    ? undefined
+    : entryOf(region, new Map(stops.map((stop) => [stop.id, stop])));
+}
+
 /** The present region focus recovers into, by the lowest `home`. */
 function homeOf(layout: ReplFocusLayout): Region | undefined {
   let best: Region | undefined;

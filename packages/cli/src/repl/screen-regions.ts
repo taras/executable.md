@@ -16,6 +16,7 @@
 
 import { describe as describeNode, readDescription, fields } from "./description.ts";
 import type { ReplDescription, ReplViewData } from "./description.ts";
+import type { ReplRoute } from "./route.ts";
 import type { ReplFocusGroup, ReplFocusRegion, ReplPlacement } from "./focus-navigation.ts";
 
 /** The facts a placement depends on besides the key. */
@@ -65,6 +66,56 @@ const SURFACE_REGION: ReplFocusRegion = Object.freeze({
   rank: 0,
   axis: "horizontal",
 });
+const TODO_REGION: ReplFocusRegion = Object.freeze({
+  key: "todo",
+  rank: 5.5,
+  axis: "vertical",
+});
+
+const SHORTCUTS = new Map<string, string>([
+  ["1", MESSAGE_REGION.key],
+  ["2", TRANSCRIPT_REGION.key],
+  ["3", SELECTED_REGION.key],
+  ["4", DRAFT_REGION.key],
+  ["5", TABS_REGION.key],
+  ["6", READING_REGION.key],
+  ["7", TODO_REGION.key],
+  ["8", HISTORY_REGION.key],
+  ["9", SURFACE_REGION.key],
+]);
+
+export function shortcutRegion(digit: string): string | undefined {
+  return SHORTCUTS.get(digit);
+}
+
+export function shortcutRoute(route: ReplRoute, region: string, narrow: boolean): ReplRoute {
+  if (
+    region === MESSAGE_REGION.key ||
+    region === TODO_REGION.key ||
+    (narrow && region === READING_REGION.key)
+  ) {
+    if (narrow) {
+      return route.view === "sidekick" ? route : { ...route, view: "sidekick" };
+    }
+    return route.right === "bindings" ? { ...route, right: "sidekick" } : route;
+  }
+  if (
+    narrow &&
+    region === TRANSCRIPT_REGION.key &&
+    (route.surface !== "sessions" || route.view !== undefined)
+  ) {
+    return { ...route, surface: "sessions", view: undefined };
+  }
+  if (
+    narrow &&
+    (region === SELECTED_REGION.key || region === DRAFT_REGION.key) &&
+    (route.surface !== "entries" || route.view !== undefined)
+  ) {
+    return { ...route, surface: "entries", view: undefined };
+  }
+  return route;
+}
+
 const DRAWER_CONTENT_REGION: ReplFocusRegion = Object.freeze({
   key: "drawer-content",
   rank: 1,
@@ -240,7 +291,7 @@ function screenPlacement(
       ? key.replace(/:action:(up|down|remove)$/, "")
       : undefined;
     return {
-      region: { key: "todo", rank: 5.5, axis: "vertical" },
+      region: TODO_REGION,
       ...(key === "todo:header" ? { entry: 0 } : {}),
       ...(key === "todo:header" || key === "tray:queue" || key === "todo:add"
         ? { groups: [{ key: "task-tabs", axis: "horizontal" }] }

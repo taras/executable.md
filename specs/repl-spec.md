@@ -1121,6 +1121,25 @@ Transcript -> Selected work -> Draft -> Tabs/Configure
  History <- Message <- TODO <- Right reading <-----+
 ```
 
+Ctrl+G followed by a digit enters a region at the same fixed control as Tab.
+
+| Digit | Region |
+| --- | --- |
+| 1 | Sidekick Message |
+| 2 | Transcript |
+| 3 | Selected work |
+| 4 | Draft |
+| 5 | Tabs/Configure |
+| 6 | Right reading |
+| 7 | TODO |
+| 8 | History |
+| 9 | Narrow surface bar |
+
+A shortcut reveals the destination's outlet when needed. It preserves both
+drafts and the selected entry and conversation. An unavailable destination
+leaves focus and values intact. A modal keeps focus in its own branch. The
+prefix and digit are consumed without entering either field.
+
 Arrows move between local controls along their group's axis. Right enters a
 vertical group from its anchor; Left returns to that anchor. A group always
 enters its first admitted child. Local edges stop, and Alt+Up/Down walks the
@@ -1506,8 +1525,7 @@ what a cold process shows.
 One chord ends it, and it is the only one: Control-C. Raw mode clears `ISIG`, so
 no signal reaches this process and the byte is the whole of the notice — which is
 why dropping it with the other chords left the reflex every terminal program
-answers doing nothing, and saying nothing about why. Every other Control or Alt
-combination is still dropped whole.
+answers doing nothing, and saying nothing about why.
 
 The one place Control-C means something else is a focused Message that holds
 text, where it clears the message and the command goes on. Everywhere else no
@@ -1820,13 +1838,10 @@ should not also spell out that you are looking at it. Which reading is showing i
 legible without colour from the pane itself — the Sidekick's body is the box its
 messages are typed into, and Bindings has none.
 
-Two of these are independent and stay that way. The row you have **selected**
-keeps its own surface for its whole measured width, and keyboard **focus** marks
-the row your next keystroke reaches and adds weight to it — so moving focus never
-takes the selection off what you were reading, and both are visible at once.
-Focus takes no colour off a row: what a row's characters are stays readable while
-you are standing on it, and the marker in front of the row is the one thing the
-focus colour belongs to.
+The focused control has a distinct background across its measured width and a
+bold, underlined label. A focused selected row has its own background and keeps
+its selection marker. As focus moves, a selected row returns to its selected
+background. The focus cue is the same after Tab, Shift+Tab and a direct shortcut.
 
 Source and JSON are read character by character. In a draft, in a read-only
 source row and in the source a question shows you, a heading, the characters that
@@ -2060,14 +2075,12 @@ has no saved chat to select and is not upgraded by being read. It grants no
 provider or execution capability: a stored location is no right to continue an
 old conversation. It is encoded after every member that was canonical before it,
 so a location written before it existed still comes back out spelled exactly as
-it went in. A wide or medium frame therefore opens
-with the Sidekick as the right pane's reading and the draft still holding focus;
-a narrow frame routes one outlet and shows the Sidekick only where `view` names
-it. The pane shows one of its two readings at a time: the one not selected is
-absent from the frame, its targets and its focus order rather than hidden inside
-it. Activating the Sidekick's own tab focuses its message box, because somebody
-who asked to read it is about to type into it; default visibility claims no
-focus. Selecting the Sidekick sets both and
+it went in. A fresh ordinary REPL opens with focus in Message when the
+composer is available. A narrow frame reveals Sidekick for that initial focus.
+An opening dialog keeps its focus. An explicit location opens the reading it
+names. The pane shows one of its two readings at a time. Only the visible
+reading contributes cells and focus targets. Activating the Sidekick tab
+focuses Message when available. Selecting the Sidekick sets both and
 changes nothing else; selecting Entries or Sessions clears the reading and
 selects that surface; selecting Bindings retains the pane and puts the saved
 surface back. Each of those keeps the selected chat available for returning to.
@@ -3081,8 +3094,9 @@ Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
 keystroke never edits a field nobody is looking at, and the row above the surface
-says how to get back to the draft while that is the case. A Control or Alt chord is dropped whole rather than typed as its letter.
-The decoder names navigation keys, including Alt+Up/Down, separately. Control-J,
+says how to get back to the draft while that is the case. The decoder names
+navigation keys, including Alt+Up/Down and the Control-G focus prefix. Unassigned
+Control or Alt chords are discarded as a unit. Control-J,
 Enter carrying only Shift, and Enter carrying both Control and Alt — how
 Terminal.app sends Shift+Return as `ESC CR` — are text containing a newline on a
 press or repeat, and a release is nothing. Plain Enter stays Enter. Control-C is
