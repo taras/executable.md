@@ -16,30 +16,36 @@ const profile = z.strictObject({
   quotaNotice: text.optional(),
 });
 const solvers = z.strictObject({ primary: profile, fallback: profile.optional() });
+const specSection = text.regex(/^[^/#][^#]*\.md#[^#\s]+$/);
+const source = z.strictObject({ work: text, repository: absolute, revision });
+const diagnosis = source.extend({
+  spec: specSection.optional(),
+  failingRevision: revision.optional(),
+  probes: z
+    .array(
+      z.strictObject({
+        command: text,
+        setup: text.optional(),
+        artifacts: z.array(text).min(1).max(12).optional(),
+      }),
+    )
+    .max(12)
+    .optional(),
+  request: text,
+});
+const design = source.extend({
+  kind: z.literal("design"),
+  question: text,
+  constraints: z.array(text).max(12),
+  specs: z.array(specSection).min(1).max(6).optional(),
+});
 const request = z.strictObject({
   role: z.literal("problem-solver"),
   session: session.max(96),
   attempt: absolute,
   previous: absolute.optional(),
   inputPaths: z.array(text).max(12),
-  assignment: z.strictObject({
-    work: text,
-    repository: absolute,
-    revision,
-    spec: text.regex(/^[^/#][^#]*\.md#[^#\s]+$/).optional(),
-    failingRevision: revision.optional(),
-    probes: z
-      .array(
-        z.strictObject({
-          command: text,
-          setup: text.optional(),
-          artifacts: z.array(text).min(1).max(12).optional(),
-        }),
-      )
-      .max(12)
-      .optional(),
-    request: text,
-  }),
+  assignment: z.union([diagnosis, design]),
 });
 const result = z.discriminatedUnion("outcome", [
   z.strictObject({
@@ -57,6 +63,21 @@ const result = z.discriminatedUnion("outcome", [
     howToObtain: text,
   }),
 ]);
+const designResult = z.strictObject({
+  outcome: z.literal("design"),
+  revision,
+  options: z
+    .array(z.strictObject({ option: text, tradeoffs: text }))
+    .min(2)
+    .max(4),
+  observations: z
+    .array(z.strictObject({ source: text, observation: text }))
+    .min(1)
+    .max(12),
+  recommendation: text,
+  whatWouldChange: text,
+  openQuestions: z.array(text).max(12),
+});
 const evidence = z.array(
   z.strictObject({
     path: text,
@@ -65,10 +86,8 @@ const evidence = z.array(
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
   }),
 );
-const inputs = z
-  .array(z.strictObject({ path: text, content: z.string() }))
-  .min(1)
-  .max(12);
+const designInputs = z.array(z.strictObject({ path: text, content: z.string() })).max(12);
+const inputs = designInputs.min(1);
 const prior = z.strictObject({
   schema: z.literal("diagnosis-attempt.v1"),
   assignment: request.shape.assignment,
@@ -96,10 +115,14 @@ const identity = z.looseObject({
 
 const receipt = z.strictObject({
   schema: z.literal("diagnosis-result.v1"),
-  assignment: prior,
+  assignment: prior.extend({ assignment: diagnosis }),
   model: text,
   identity,
   result,
+});
+const designReceipt = receipt.extend({
+  assignment: prior.extend({ assignment: design }),
+  result: designResult,
 });
 
 function json(schema: z.ZodType) {
@@ -111,9 +134,11 @@ export default function* Schema() {
     request: json(request),
     solvers: json(solvers),
     result: json(result),
+    designResult: json(designResult),
     prior: json(prior),
     inputs: json(inputs),
+    designInputs: json(designInputs),
     identity: json(identity),
-    receipt: json(receipt),
+    receipt: json(z.union([receipt, designReceipt])),
   };
 }
