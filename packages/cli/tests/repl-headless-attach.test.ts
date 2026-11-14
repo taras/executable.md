@@ -580,19 +580,14 @@ describe("headless live UI", () => {
     ]);
     expect(sequence).toBe(1);
 
-    let ready = false;
-    const waiting = withResolvers<void>();
-    const click = yield* spawn(function* () {
-      waiting.resolve();
-      yield* held.input.ready(screen);
-      ready = true;
-      const at = yield* locate(screen, "BINDINGS");
-      yield* held.input.input(screen, pointerPress(at));
+    yield* held.input.ready(screen, (ready) => {
+      if (ready) {
+        throw new Error(`Frame ${sequence} became ready before its send completed.`);
+      }
+      gate.release();
     });
-    yield* waiting.operation;
-    expect(ready).toBe(false);
-    gate.release();
-    yield* click;
+    const at = yield* locate(screen, "BINDINGS");
+    yield* held.input.input(screen, pointerPress(at));
     yield* gone(screen, "message the sidekick");
     screen.end();
     yield* ui;
