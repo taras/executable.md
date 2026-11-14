@@ -130,10 +130,10 @@ const bench = size.partial().extend({
 });
 
 function* connect(options: Launch) {
-  const script = fileURLToPath(new URL("./bench.ts", import.meta.url));
+  const script = fileURLToPath(new URL("./driver.ts", import.meta.url));
   const child = yield* exec("bun", {
     cwd: root,
-    arguments: ["--no-install", script, "driver", JSON.stringify(options)],
+    arguments: ["--no-install", script, JSON.stringify(options)],
   });
   const decoder = new TextDecoder();
   let pending = "";

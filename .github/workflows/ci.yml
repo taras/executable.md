@@ -183,11 +183,10 @@ jobs:
         run: |
           deno task setup
           bun --no-install ./examples/repl-bench/check-screen.ts
-          bun --no-install ./examples/repl-bench/bench.ts preflight
-          bun --no-install ./examples/repl-bench/bench.ts preflight --size 72x20
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
             packages/cli/src/deno.ts test examples/repl-bench/journeys
-          bash examples/repl-bench/check-isolation.sh
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            examples/repl-bench/check-teardown.ts
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
@@ -199,7 +198,6 @@ jobs:
             repl bench checkout/.bench/*/*.svg
             repl bench checkout/.bench/*/terminal.ansi
             repl bench checkout/.bench/*/closed.json
-            repl bench checkout/.bench/*/driver.log
           include-hidden-files: "true"
 
   # The same command the release publishes with, minus --dry-run. Catches slow

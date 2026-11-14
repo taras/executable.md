@@ -17,7 +17,7 @@ import {
 import process from "node:process";
 import { join } from "node:path";
 import { decodeLocation } from "../../../packages/cli/src/repl/route.ts";
-import type { Command, Launch, Point, WaitOptions } from "./protocol.ts";
+import type { DriverCommand, Launch, Point, WaitOptions } from "./protocol.ts";
 import { viewport } from "./screen.ts";
 
 interface Pty {
@@ -67,7 +67,7 @@ function reopenLocation(raw: string): string | null {
 
 export function useDriver(options: Launch) {
   return resource(function* (
-    provide: (value: { execute(command: Command): Operation<unknown> }) => Operation<void>,
+    provide: (value: { execute(command: DriverCommand): Operation<unknown> }) => Operation<void>,
   ) {
     const { directory, cwd, home } = options;
     let size = { columns: options.columns, rows: options.rows };
@@ -269,9 +269,7 @@ export function useDriver(options: Launch) {
 
     yield* provide({
       *execute(command) {
-        if (command.action !== "stop") {
-          step = command.action;
-        }
+        step = command.action;
         try {
           switch (command.action) {
             case "ready":
@@ -382,9 +380,6 @@ export function useDriver(options: Launch) {
               backend.resize(size.columns, size.rows);
               owned.terminal.resize(size.columns, size.rows);
               return null;
-            case "look":
-              yield* save();
-              return screen || lastFrame().text;
             case "screenshot": {
               const path = join(directory, `${command.name}.svg`);
               const { viewportTop, totalRows, screenRows } = backend.getScrollback();
@@ -410,9 +405,6 @@ export function useDriver(options: Launch) {
             }
             case "exit":
               return yield* exit();
-            case "stop":
-              yield* stop();
-              return null;
           }
         } catch (error) {
           throw new Error(

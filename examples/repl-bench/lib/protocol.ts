@@ -33,7 +33,6 @@ export const command = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("wait"), ...waitOptions.shape }),
   z.object({ action: z.literal("resize"), ...size.shape }),
-  z.object({ action: z.literal("look") }),
   z.object({
     action: z.literal("screenshot"),
     name: screenshotName,
@@ -62,6 +61,7 @@ export const launch = z.object({
 export const defaultSize = { columns: 160, rows: 36 };
 export const worktree = new URL("../../../", import.meta.url);
 export type Command = z.infer<typeof command>;
+export type DriverCommand = Exclude<Command, { action: "stop" }>;
 export type Launch = z.infer<typeof launch>;
 export type Point = z.infer<typeof point>;
 export type Size = z.infer<typeof size>;
