@@ -1177,15 +1177,19 @@ describe("Configure keyboard, retained values and window ownership", () => {
     }));
     page.repl.fake.configuration({ model: { selected: "model-1", choices: many }, effort: {} });
     yield* page.press("[configure scribe]");
-    yield* page.until("the advertised models", (one) => one.shows("Model 1"));
+    yield* page.until(
+      "the model choices and focused Agent field",
+      (one) => one.rows.some((row) => row.endsWith("( ) Model 1")) && one.shows(">> Agent: scribe"),
+    );
     expect(page.screen().shows("( ) Model 64")).toBe(false);
-    for (let at = 0; at < 64; at += 1) {
+    for (const choice of many) {
       yield* page.key("Alt+ArrowDown");
-      yield* sleep(30);
+      yield* page.until(`keyboard focus on ${choice.name}`, (one) =>
+        one.rows.some((row) => row.endsWith(`>   ( ) ${choice.name}`)),
+      );
     }
-    yield* page.until("keyboard reveal of Model 64", (one) => one.shows("( ) Model 64"));
-    yield* chooseOffered(page, "Model 64");
-    expect(page.screen().shows("(x) Model 64")).toBe(true);
+    yield* page.key("Enter");
+    yield* page.until("Model 64 selected by keyboard", (one) => one.shows("(x) Model 64"));
     yield* scrollDrawerTo(page, "[apply]");
     yield* applyConfigure(page);
     yield* configured(page);
