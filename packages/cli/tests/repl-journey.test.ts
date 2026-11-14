@@ -35,6 +35,7 @@ import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   composerHolds,
+  COMPOSER,
   COMPOSER_VALUE,
   intoComposer,
   selectPane,
@@ -417,31 +418,24 @@ describe("REPL original admission and terminal exit claims", () => {
     released(terminal);
   });
 
-  it("J1: starting with no location creates one execution and focuses an empty draft", function* () {
+  it("J1: starting with no location creates one execution and focuses Sidekick Message", function* () {
     const terminal = yield* scoped(function* () {
       const page = yield* referencePage();
       const files = yield* readdir(join(page.repl.root, PAIRED_DIRECTORY));
       expect(files).toHaveLength(1);
       expect(files[0]).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
       expect(yield* journalRecords(page)).toEqual([]);
-      for (const label of [
-        "TRANSCRIPT",
-        "(none retained)",
-        "Entries",
-        "No entry yet",
-        "Type here",
-      ]) {
+      for (const label of ["TRANSCRIPT", "(none retained)", "Entries", "No entry yet", COMPOSER]) {
         expect(page.screen().shows(label)).toBe(true);
       }
-      yield* page.type("startup draft");
+      yield* page.type("startup message");
       yield* page.until(
-        "the initial Draft taking the text",
-        (one) => one.found("startup draft", DRAFT_VALUE) === 1,
+        "Sidekick Message taking the first text",
+        (one) => one.found("startup message", COMPOSER_VALUE) === 1,
       );
-      expect(page.screen().found("startup draft", COMPOSER_VALUE)).toBe(0);
       const location = route(yield* leaveWithLocation(page));
       expect(location.execution).toBe(files[0]);
-      expect(location.draft).toBe("startup draft");
+      expect(location.draft ?? "").toBe("");
       expect(location.scopes).toEqual([]);
       return page.repl.terminal;
     });
@@ -479,6 +473,7 @@ describe("REPL original admission and terminal exit claims", () => {
 
   it("J1: no other chord ends it, so what leaves is the key and not the modifier", function* () {
     const page = yield* referencePage();
+    yield* intoDraft(page);
     yield* page.type("\x1ba\x08\x1b[15~");
     yield* page.type("z");
     yield* page.until("the following key arriving", (one) => one.found("z", DRAFT_VALUE) === 1);
@@ -488,6 +483,7 @@ describe("REPL original admission and terminal exit claims", () => {
 
   it("J1: a control chord inserts nothing into the draft", function* () {
     const page = yield* referencePage();
+    yield* intoDraft(page);
     yield* page.type("\x1ba\x08\x1b[15~");
     expect(route(yield* leaveWithLocation(page)).draft).toBeUndefined();
   });
@@ -962,6 +958,7 @@ describe("REPL original interaction costs and visible exit routes", () => {
 
   it("UI2: Enter on [exit] ends the command without touching the history", function* () {
     const page = yield* referencePage();
+    yield* intoDraft(page);
     const path = yield* executionJournal(page);
     const before = yield* readTextFile(path);
     yield* intoDraft(page, ["Backtab", "Backtab", "Backtab", "ArrowRight"]);
@@ -1605,6 +1602,7 @@ describe("REPL original first-use paths and question ownership", () => {
         : "UI8: the whole first-use path, using only what the screen says",
       function* () {
         const page = yield* useReplPage({ size });
+        yield* intoDraft(page);
         expect(directions(page.screen())).toBe(
           "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓",
         );
@@ -1783,6 +1781,7 @@ describe("REPL original completed-screen lifecycle", () => {
       { at: "max" },
     );
     const page = yield* referencePage();
+    yield* intoDraft(page);
     const terminal = page.repl.terminal;
     const top = page.screen().rows[0];
     const session = top.trim().split(/\s+/).at(-1) ?? "";
@@ -2261,6 +2260,7 @@ describe("REPL original visible guidance and controlled typing", () => {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
+        yield* intoDraft(page);
         expect(directions(page.screen())).toBe(
           "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓",
         );
@@ -2290,6 +2290,7 @@ describe("REPL original visible guidance and controlled typing", () => {
 
   it("UI9: typing at a control never reaches the draft, and the screen says why", function* () {
     const page = yield* useReplPage();
+    yield* intoDraft(page);
     yield* tab(page);
     yield* page.until("control guidance", (one) => !one.shows("Enter submits"));
     expect(page.screen().shows("Enter submits")).toBe(false);
@@ -2408,7 +2409,8 @@ describe("REPL original held reading and canonical startup", () => {
         expect(yield* journalRecords(page)).toEqual([]);
         expect(page.screen().shows("Entries")).toBe(true);
         expect(page.screen().shows("xmd://")).toBe(false);
-        expect(yield* leaveWithLocation(page)).toBe(`xmd://repl/${execution}/entries`);
+        const view = size.columns === 72 ? "?view=sidekick" : "";
+        expect(yield* leaveWithLocation(page)).toBe(`xmd://repl/${execution}/entries${view}`);
         released(page.repl.terminal);
       });
     }
