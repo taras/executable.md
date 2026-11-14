@@ -37,10 +37,11 @@ export function viewport(backend: TerminalBackend, size: Size) {
   const history = rows.findIndex((row) => /^ HISTORY\s/.test(row));
   const bodyBottom = history < 0 ? size.rows : history;
   // Document text can contain the label. The field sits inside the composer tray.
+  const hasFocusMarker = ({ row, column }: Point) => cells[row]?.[column - 2] === ">";
   const composerLabel = [...matches("› message the sidekick")].find(
     ({ row, column }) =>
       row < bodyBottom &&
-      background(row, column) === REPL_PALETTE.draftSurface &&
+      (background(row, column) === REPL_PALETTE.draftSurface || hasFocusMarker({ row, column })) &&
       background(row, column - 3) === REPL_PALETTE.composerSurface,
   );
   const transcriptTitle = rows.findIndex((row, index) => index < 4 && /^\s*TRANSCRIPT\s/.test(row));
@@ -83,8 +84,7 @@ export function viewport(backend: TerminalBackend, size: Size) {
     matches,
     bold: ({ row, column }: Point) => styled[row]?.[column]?.bold === true,
     composerLabel,
-    composerFocused:
-      composerLabel !== undefined && cells[composerLabel.row]?.[composerLabel.column - 2] === ">",
+    composerFocused: composerLabel !== undefined && hasFocusMarker(composerLabel),
     box(region?: Region): Box | undefined {
       switch (region) {
         case "sidekick-composer":
