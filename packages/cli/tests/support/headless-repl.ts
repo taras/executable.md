@@ -51,6 +51,12 @@ function* observeChildPasses() {
   const changed = createSignal<void, void>();
   let activeConnections = 0;
   const connections: ObservedConnection[] = [];
+  let heldFrame:
+    | {
+        acknowledged: ReturnType<typeof withResolvers<number>>;
+        release: ReturnType<typeof withResolvers<void>>;
+      }
+    | undefined;
   let heldAck:
     | {
         reached: ReturnType<typeof withResolvers<void>>;
@@ -80,6 +86,7 @@ function* observeChildPasses() {
             activeConnections += 1;
             const wire = yield* incoming;
             let connection: ObservedConnection | undefined;
+            let pendingSend: { sequence: number; gate: NonNullable<typeof heldFrame> } | undefined;
             yield* ensure(function* () {
               if (connection !== undefined) {
                 connection.ended = true;
@@ -128,6 +135,9 @@ function* observeChildPasses() {
                     }
                     if (acknowledgement.data.applied) {
                       connection.acknowledged = acknowledgement.data.sequence;
+                      if (pendingSend?.sequence === acknowledgement.data.sequence) {
+                        pendingSend.gate.acknowledged.resolve(pendingSend.sequence);
+                      }
                     }
                   }
                 }
@@ -137,8 +147,16 @@ function* observeChildPasses() {
                 const frame = presentation.safeParse(packet);
                 if (connection !== undefined && frame.success) {
                   connection.frame = { ...frame.data, bytes: [...frame.data.bytes] };
+                  if (heldFrame !== undefined) {
+                    pendingSend = { sequence: frame.data.sequence, gate: heldFrame };
+                    heldFrame = undefined;
+                  }
                 }
                 yield* wire.send(packet);
+                if (pendingSend !== undefined) {
+                  yield* pendingSend.gate.release.operation;
+                  pendingSend = undefined;
+                }
               },
               close() {
                 wire.close();
@@ -244,6 +262,12 @@ function* observeChildPasses() {
       const release = withResolvers<void>();
       heldAck = { reached, release };
       return { reached: reached.operation, release: release.resolve };
+    },
+    holdNextFrameSend() {
+      const acknowledged = withResolvers<number>();
+      const release = withResolvers<void>();
+      heldFrame = { acknowledged, release };
+      return { acknowledged: acknowledged.operation, release: release.resolve };
     },
   };
 }

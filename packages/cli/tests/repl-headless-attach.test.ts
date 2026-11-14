@@ -324,9 +324,9 @@ function gone(terminal: Terminal, text: string): Operation<void> {
 function* locate(
   terminal: Terminal,
   label: string,
-  appliedFrames: AppliedFrames,
+  appliedFrames?: AppliedFrames,
 ): Operation<{ row: number; column: number }> {
-  const applied = appliedFrames.get(terminal);
+  const applied = appliedFrames?.get(terminal);
   if (applied !== undefined) {
     yield* applied();
   }
@@ -341,24 +341,19 @@ function* locate(
   return matches[0];
 }
 
+function pointerPress(at: { row: number; column: number }): string {
+  return `\x1b[<0;${at.column + 1};${at.row + 1}M`;
+}
+
 function pressAt(terminal: Terminal, at: { row: number; column: number }): void {
-  terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
+  terminal.feed(pointerPress(at));
 }
 
 function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames): Operation<void> {
   pressAt(terminal, yield* locate(terminal, label, appliedFrames));
 }
 
-/** Press the one label inside the Bindings pane, at or right of its tab. */
-function* pressInBindings(
-  terminal: Terminal,
-  label: string,
-  appliedFrames: AppliedFrames,
-): Operation<void> {
-  const applied = appliedFrames.get(terminal);
-  if (applied !== undefined) {
-    yield* applied();
-  }
+function locateInBindings(terminal: Terminal, label: string): { row: number; column: number } {
   const rows = terminal.screen?.rows() ?? [];
   const header = rows.findIndex((text) => text.includes("BINDINGS"));
   const floor = header < 0 ? -1 : rows[header].indexOf("BINDINGS");
@@ -369,7 +364,7 @@ function* pressInBindings(
   if (matches.length !== 1 || matches[0] === undefined) {
     throw new Error(`Expected one ${label} in the Bindings pane: ${rows.join("\n")}`);
   }
-  pressAt(terminal, matches[0]);
+  return matches[0];
 }
 
 describe("headless renderer lifetime", () => {
@@ -566,8 +561,45 @@ describe("headless live UI", () => {
     yield* held.task.halt();
   });
 
+  it("waits for frame send completion after the terminal acknowledges it", function* () {
+    const held = yield* useHeadlessFixture();
+    const terminal = recordingTerminal();
+    const screen = terminal.terminal;
+    const gate = held.input.holdNextFrameSend();
+    yield* ensure(() => gate.release());
+    const ui = yield* spawn(function* () {
+      yield* terminal.install();
+      yield* attachChildUi(held.reference.sessionId);
+    });
+    const sequence = yield* race([
+      gate.acknowledged,
+      (function* (): Operation<never> {
+        yield* sleep(10000);
+        throw new Error("The host did not receive the held frame's acknowledgement.");
+      })(),
+    ]);
+    expect(sequence).toBe(1);
+
+    let ready = false;
+    const waiting = withResolvers<void>();
+    const click = yield* spawn(function* () {
+      waiting.resolve();
+      yield* held.input.ready(screen);
+      ready = true;
+      const at = yield* locate(screen, "BINDINGS");
+      yield* held.input.input(screen, pointerPress(at));
+    });
+    yield* waiting.operation;
+    expect(ready).toBe(false);
+    gate.release();
+    yield* click;
+    yield* gone(screen, "message the sidekick");
+    screen.end();
+    yield* ui;
+    yield* held.task.halt();
+  });
+
   it("H4/H5/J3: attached UI and capable ACP share the actual conditional question and permission owners", function* () {
-    const appliedFrames = new WeakMap<Terminal, () => Operation<void>>();
     const conditional = {
       type: "object",
       additionalProperties: false,
@@ -647,13 +679,17 @@ describe("headless live UI", () => {
         }),
       );
     const terminal = recordingTerminal();
+    const click = function* (label: string) {
+      yield* held.input.ready(terminal.terminal);
+      const at = yield* locate(terminal.terminal, label);
+      yield* held.input.input(terminal.terminal, pointerPress(at));
+    };
     let holdSubmit: { row: number; column: number } | undefined;
     const interceptedSubmit = withResolvers<z.infer<typeof physical>>();
     const releaseSubmit = withResolvers<void>();
     const deliveredSubmit = withResolvers<void>();
     const ui = yield* spawn(function* () {
       yield* terminal.install();
-      yield* observeAppliedFrames(terminal.terminal, appliedFrames);
       const transport = yield* SidekickTransport.expect();
       yield* SidekickTransport.set({
         ...transport,
@@ -689,7 +725,7 @@ describe("headless live UI", () => {
       });
       yield* attachChildUi(held.reference.sessionId);
     });
-    yield* visible(terminal.terminal, "[answer sidekick]", appliedFrames);
+    yield* visible(terminal.terminal, "[answer sidekick]");
     const retainedOutput = yield* requestAttachment(held.path, {
       method: "entry",
       entry: 1,
@@ -718,37 +754,36 @@ describe("headless live UI", () => {
       entry: 1,
       status: "completed",
     });
-    yield* press(terminal.terminal, "Entries", appliedFrames);
-    yield* visible(terminal.terminal, ">   1. [ok]", appliedFrames);
-    const selecting = terminal.terminal.drawn;
-    yield* press(terminal.terminal, "1. [ok]", appliedFrames);
-    yield* terminal.terminal.after(selecting);
-    yield* visible(terminal.terminal, "Enter submits · Type here", appliedFrames);
-    const switching = terminal.terminal.drawn;
-    yield* press(terminal.terminal, "BINDINGS", appliedFrames);
-    yield* terminal.terminal.after(switching);
+    yield* click("Entries");
+    yield* visible(terminal.terminal, ">   1. [ok]");
+    yield* click("1. [ok]");
+    yield* visible(terminal.terminal, "Enter submits · Type here");
+    yield* click("BINDINGS");
     // The entry's own result is its Output; the pane opens on its Input.
-    yield* visible(terminal.terminal, "entry-1 Input", appliedFrames);
-    yield* pressInBindings(terminal.terminal, "Output", appliedFrames);
-    yield* visible(terminal.terminal, "sharedToken =", appliedFrames);
-    yield* visible(terminal.terminal, "same-live-child-binding", appliedFrames);
-    yield* press(terminal.terminal, "SIDEKICK", appliedFrames);
-    yield* visible(terminal.terminal, "[answer sidekick]", appliedFrames);
+    yield* visible(terminal.terminal, "entry-1 Input");
+    yield* held.input.ready(terminal.terminal);
+    const outputTab = locateInBindings(terminal.terminal, "Output");
+    yield* held.input.input(terminal.terminal, pointerPress(outputTab));
+    yield* visible(terminal.terminal, "sharedToken =");
+    yield* visible(terminal.terminal, "same-live-child-binding");
+    yield* click("SIDEKICK");
+    yield* visible(terminal.terminal, "[answer sidekick]");
 
     expect((yield* attachmentDescriptor(held.path)).conversation).toBe(
       held.descriptor.conversation,
     );
-    yield* press(terminal.terminal, "[answer sidekick]", appliedFrames);
-    yield* visible(terminal.terminal, "[submit]", appliedFrames);
-    yield* visible(terminal.terminal, "Shared conditional question.", appliedFrames);
-    yield* visible(terminal.terminal, "Enter answers", appliedFrames);
-    yield* press(terminal.terminal, "( ) approve", appliedFrames);
-    yield* visible(terminal.terminal, "(x) approve", appliedFrames);
-    yield* press(terminal.terminal, "[submit]", appliedFrames);
-    yield* visible(terminal.terminal, "must have required property 'reason'", appliedFrames);
-    yield* visible(terminal.terminal, "Shared conditional question.", appliedFrames);
+    yield* click("[answer sidekick]");
+    yield* visible(terminal.terminal, "[submit]");
+    yield* visible(terminal.terminal, "Shared conditional question.");
+    yield* visible(terminal.terminal, "Enter answers");
+    yield* click("( ) approve");
+    yield* visible(terminal.terminal, "(x) approve");
+    yield* click("[submit]");
+    yield* visible(terminal.terminal, "must have required property 'reason'");
+    yield* visible(terminal.terminal, "Shared conditional question.");
     expect(held.root.session.elicitation.pending).toBe(pending);
-    const retainedSubmit = yield* locate(terminal.terminal, "[submit]", appliedFrames);
+    yield* held.input.ready(terminal.terminal);
+    const retainedSubmit = yield* locate(terminal.terminal, "[submit]");
     holdSubmit = retainedSubmit;
     pressAt(terminal.terminal, retainedSubmit);
     const lateUiPacket = yield* interceptedSubmit.operation;
@@ -760,10 +795,11 @@ describe("headless live UI", () => {
       throw answered.error;
     }
     expect(held.root.session.elicitation.pending).toBeUndefined();
-    yield* visible(terminal.terminal, "Shared question completed.", appliedFrames);
+    yield* visible(terminal.terminal, "Shared question completed.");
     const joinedOutput = z.string().parse(answered.value);
     const promptsBeforeLateUi = held.host.fake.prompts.length;
     const questionsBeforeLateUi = held.root.session.elicitation.asked;
+    yield* held.input.ready(terminal.terminal);
     const afterLate = terminal.terminal.drawn;
     releaseSubmit.resolve();
     yield* deliveredSubmit.operation;
@@ -774,10 +810,11 @@ describe("headless live UI", () => {
     expect(yield* asking.value.join()).toEqual(answered);
     expect(joinedOutput).toContain("Shared question completed.");
     expect(held.host.fake.prompts.at(-1)).toContain('"reason": "reviewed"');
+    yield* held.input.ready(terminal.terminal);
     const afterStaleTarget = terminal.terminal.drawn;
     pressAt(terminal.terminal, retainedSubmit);
     yield* terminal.terminal.after(afterStaleTarget);
-    yield* visible(terminal.terminal, "Shared question completed.", appliedFrames);
+    yield* visible(terminal.terminal, "Shared question completed.");
     expect(terminal.terminal.screen?.rows().join("\n")).not.toContain("[submit]");
     expect(held.root.session.elicitation.pending).toBeUndefined();
     const stale = XmdResponse.parse(
@@ -812,11 +849,11 @@ describe("headless live UI", () => {
         }),
       );
     expect(stalePermission.presentationId).not.toBe(permission.presentationId);
-    yield* visible(terminal.terminal, "asks: Write", appliedFrames);
-    yield* press(terminal.terminal, "asks: Write", appliedFrames);
-    yield* visible(terminal.terminal, "[Allow]", appliedFrames);
-    yield* visible(terminal.terminal, "Enter decides", appliedFrames);
-    terminal.terminal.feed("\r");
+    yield* visible(terminal.terminal, "asks: Write");
+    yield* click("asks: Write");
+    yield* visible(terminal.terminal, "[Allow]");
+    yield* visible(terminal.terminal, "Enter decides");
+    yield* held.input.input(terminal.terminal, "\r");
     const completed = yield* working.value.join();
     if (!completed.ok) {
       throw completed.error;
