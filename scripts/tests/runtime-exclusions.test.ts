@@ -157,9 +157,11 @@ describe("the applicable corpus", () => {
    * from a runtime by being named in that runtime's manifest.
    */
   it("runs each adversarial TypeScript-only test under every runtime", function* () {
-    const wrappers = ["adversarial-production-role", "adversarial-session-continuity"].map(
-      (name) => `packages/cli/tests/${name}.test.ts`,
-    );
+    const wrappers = [
+      "adversarial-diagnosis",
+      "adversarial-production-role",
+      "adversarial-session-continuity",
+    ].map((name) => `packages/cli/tests/${name}.test.ts`);
     expect(
       (yield* listTestFiles(ROOT)).filter((file) =>
         file.startsWith("packages/cli/tests/adversarial-"),
