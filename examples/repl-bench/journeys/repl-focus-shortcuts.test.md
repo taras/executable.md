@@ -7,6 +7,15 @@
       </Terminal.Region>
 
       <Terminal.Key key="Ctrl+G" />
+      <Terminal.Type text="4" />
+      <Terminal.Key key="2" />
+      <Terminal.Type text="-suffix" />
+      <Terminal.WaitForText text="message the sidekick" bold={true} />
+      <Terminal.Region name="sidekick-composer">
+        <Terminal.WaitForText text="startup-message42-suffix" />
+      </Terminal.Region>
+
+      <Terminal.Key key="Ctrl+G" />
       <Terminal.Key key="4" />
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.Type text="entry-draft" />
@@ -24,7 +33,7 @@
       <Terminal.WaitForText text="message the sidekick" bold={true} />
       <Terminal.Type text="-more" />
       <Terminal.Region name="sidekick-composer">
-        <Terminal.WaitForText text="startup-message-more" />
+        <Terminal.WaitForText text="startup-message42-suffix-more" />
         <Terminal.WaitForText text="entry-draft" present={false} />
       </Terminal.Region>
       <Terminal.WaitForText text="entry-draft" count={1} />

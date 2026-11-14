@@ -111,7 +111,9 @@ describe("shared Sidekick dispatch", () => {
       const payload = "first\n\n\t  é界🙂\nlast";
       const raw = new TextEncoder().encode(`\x1b[200~${payload.replaceAll("\n", "\r\n")}\x1b[201~`);
       const decoder = yield* useReplDecoder();
-      expect((yield* decoder.scan(raw)).events).toEqual([{ kind: "text", text: payload }]);
+      expect((yield* decoder.scan(raw)).events).toEqual([
+        { kind: "text", text: payload, pasted: true },
+      ]);
       const initial = yield* settledReading(page.repl);
       page.repl.terminal.bytes(raw);
       yield* page.until(

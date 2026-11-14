@@ -360,7 +360,7 @@ export function useReplDecoder(
                 const text = new TextDecoder()
                   .decode(Uint8Array.from(paste.slice(0, -closing.length)))
                   .replace(/\r\n|\r/g, "\n");
-                const event: ReplInputEvent = Object.freeze({ kind: "text", text });
+                const event: ReplInputEvent = Object.freeze({ kind: "text", text, pasted: true });
                 passes.push({
                   ordered: [{ kind: "input", event }],
                   events: [event],
