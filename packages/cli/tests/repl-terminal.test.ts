@@ -2010,7 +2010,7 @@ describe("REPL bracketed paste", () => {
   for (const separator of ["\r", "\n", "\r\n"]) {
     it(`keeps framed ${JSON.stringify(separator)} as text only`, function* () {
       expect(yield* decoded([framed(payload.replaceAll("\n", separator))])).toEqual([
-        { kind: "text", text: payload },
+        { kind: "text", text: payload, pasted: true },
       ]);
     });
   }
@@ -2019,11 +2019,11 @@ describe("REPL bracketed paste", () => {
     const bytes = framed(payload.replaceAll("\n", "\r\n"));
     for (let split = 0; split <= bytes.length; split += 1) {
       expect(yield* decoded([bytes.slice(0, split), bytes.slice(split)])).toEqual([
-        { kind: "text", text: payload },
+        { kind: "text", text: payload, pasted: true },
       ]);
     }
     expect(yield* decoded(Array.from(bytes, (byte) => Uint8Array.of(byte)))).toEqual([
-      { kind: "text", text: payload },
+      { kind: "text", text: payload, pasted: true },
     ]);
   });
 
