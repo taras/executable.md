@@ -190,12 +190,14 @@ function* observeChildPasses() {
   function wait(
     terminal: Terminal,
     input?: { connection: ObservedConnection; index: number },
+    onFirstCheck?: (ready: boolean) => void,
   ): Operation<ObservedConnection> {
     return race([
       (function* () {
         const changes = yield* changed;
+        let connection = matching(terminal);
+        onFirstCheck?.(connection !== undefined);
         while (true) {
-          const connection = matching(terminal);
           if (
             connection !== undefined &&
             (input === undefined ||
@@ -207,6 +209,7 @@ function* observeChildPasses() {
             return connection;
           }
           yield* changes.next();
+          connection = matching(terminal);
         }
       })(),
       (function* (): Operation<never> {
@@ -244,7 +247,8 @@ function* observeChildPasses() {
       }
       changed.send();
     },
-    ready: (terminal: Terminal) => wait(terminal),
+    ready: (terminal: Terminal, onFirstCheck?: (ready: boolean) => void) =>
+      wait(terminal, undefined, onFirstCheck),
     *input(terminal: Terminal, bytes: string) {
       const connection = yield* wait(terminal);
       const index = connection.inputs.length + 1;
