@@ -2714,7 +2714,12 @@ function* drive(
           if (focusPrefix) {
             continue;
           }
-          if (prefixed && delivered.kind === "text" && /^[0-9]$/.test(delivered.text)) {
+          if (
+            prefixed &&
+            delivered.kind === "text" &&
+            !delivered.pasted &&
+            /^[0-9]$/.test(delivered.text)
+          ) {
             yield* focusShortcut(delivered.text);
             continue;
           }
