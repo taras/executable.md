@@ -261,6 +261,8 @@ describe("adversarial problem-solver phase", () => {
       result: expanded,
     });
     const prompt = test.fake.prompts[0];
+    expect(prompt).toContain("## Design question");
+    expect(prompt).toContain("## Constraints");
     expect(prompt).toContain(context.question);
     expect(prompt).toContain(context.constraints[0]);
     expect(prompt).toContain(specSection.trimEnd());

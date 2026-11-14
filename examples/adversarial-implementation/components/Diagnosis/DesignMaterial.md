@@ -8,7 +8,6 @@ props:
   additionalProperties: false
 ---
 
-<Let as="assignment" value={props.assignment} />
 <Let as="submission">
 # Submit a design assessment
 
@@ -30,20 +29,20 @@ Return one JSON object. Keep any progress updates in plain prose.
 <Json value={props.resultSchema} />
 </Let>
 <Let as="instructions">
-Assess the design question using the assigned checkout at {assignment.revision}.
+Assess the design question using the assigned checkout at {props.assignment.revision}.
 Read the repository instructions. Use the supplied context and inspect the
 relevant source. Run focused probes in owned scratch space and join them before
 replying. Keep source, workflow records, and external systems read-only.
 
-Design question
+## Design question
 
-{assignment.question}
+{props.assignment.question}
 
-Constraints
+## Constraints
 
-<Json value={assignment.constraints} />
+<Json value={props.assignment.constraints} />
 
-<Diagnosis.SpecSections repository={assignment.repository} revision={assignment.revision} references={assignment.specs ?? []} />
+<Diagnosis.SpecSections repository={props.assignment.repository} revision={props.assignment.revision} references={props.assignment.specs ?? []} />
 
 Advise the Architect on the options and tradeoffs.
 </Let>
