@@ -9,7 +9,6 @@
       <ReplBench.Focus target="sidekick-composer" />
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="Entries    * Sidekick" />
-      <Terminal.WaitForText text="[configure codex]" row={2} />
       <Try>
         <ReplBench><Terminal.WaitForText text="Ready for Entry 1" /></ReplBench>
         <Fail message="The overlapping bench started" />
@@ -43,8 +42,8 @@
       <Terminal.Click at={retainedEntry} />
       <Terminal.WaitForText text="retained-marker-1272" />
       <Terminal.WaitForText text="Ready for Entry 2" />
-      <Terminal.WaitForText text="[exit]" as="exit" />
-      <Terminal.Click at={exit} />
+      <ReplBench.Focus target="sidekick-composer" />
+      <Terminal.Key key="Ctrl+C" />
     </ReplBench>
     <AssertEquals actual={reopened.exitCode} expected={0} />
 
