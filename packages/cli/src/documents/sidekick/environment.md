@@ -145,6 +145,14 @@ Capture or list that same copy in its read-only context:
 Outside AssetDir, `assets/mock ü.html` names the project's independent file.
 After either session scope ends, the enclosing cwd and permissions return.
 
+To see an imported PNG in your next turn, supply its path relative to the
+session assets directory. Request up to two images per response, at most
+2 MiB each.
+
+```xmd
+<REPL.InspectImage path="reference/mockup.png" />
+```
+
 ## Common mistake
 
 Writing an entry against a path, platform or capability you assumed rather than

@@ -3895,6 +3895,16 @@ response goes back with them, so the reply can continue from what already
 happened rather than repeating it, and the results that succeeded stay retained
 and are not sent again.
 
+In a session with an asset workspace, Sidekick can use
+`<REPL.InspectImage path="…" />` to inspect an imported PNG. Use a path
+relative to the session assets directory. Each response can inspect up to two
+regular PNG files of at most 2 MiB each. The reader requires Files read
+permission and refuses symbolic links. Each success retains the relative path and SHA-256
+in the control outcome and adds the corresponding PNG to the next live
+feedback prompt, in control order. Image bytes remain in the session assets
+and the live request. Recovered feedback gives the retained references and
+asks the agent to request the assets again if it needs to see them.
+
 One shared dispatch service owns a Sidekick message exchange through generation,
 control evaluation, automatic feedback and joined cleanup. UI Send and Retry
 preserve their existing input reduction and acknowledgement revisions. A dispatch
