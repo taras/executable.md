@@ -47,6 +47,21 @@ For Effection-based code, consult the
 
 ## Verification
 
+### Test design
+
+Prefer a few tests that exercise meaningful behavior through the normal entry
+point. Use controlled test doubles at dependency boundaries such as ACP, HTTP,
+or subprocesses. Keep the production logic that makes the decision under test
+in the execution path, and assert observable behavior. Use focused unit tests
+for edge cases that benefit from direct inputs and assertions.
+
+For example, to test reviewer fallback, connect the workflow to scripted ACP
+reviewers. Have the primary fail and the replacement wait for a release signal
+while a second command tries to resume the review. Check that the workflow
+contacts the replacement once and handles both commands as expected.
+
+### Running checks
+
 Verification happens at two boundaries. A **feedback commit** proves one exact
 commit against the settled plan or architecture with the smallest
 discriminating evidence. The **delivery gate** is merge readiness: the required
