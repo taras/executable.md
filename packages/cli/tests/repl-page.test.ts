@@ -19,6 +19,7 @@ import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenScope } from "./support/repl-page.ts";
 import { awaited } from "./support/mounted-repl.ts";
+import { intoDraft } from "./support/screen-journeys.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
@@ -90,6 +91,7 @@ describe("REPL page — two Sends, told apart by what is drawn beside them", () 
 
   it("survives content that echoes a control's label, and refuses one never drawn", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
 
     // A draft that quotes the control's own label. The echo is drawn on the
     // Draft's value rows, below its heading, so the screen now shows the label
@@ -124,6 +126,7 @@ describe("REPL page — two Sends, told apart by what is drawn beside them", () 
 describe("REPL page — resize, a modal, and writes that never land", () => {
   it("keeps the draft across every size and refuses a pane the size removed", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
     yield* typed(page, "keep this draft");
 
     // Narrow routes one surface: no tab row, no composer, one Send.
@@ -174,6 +177,7 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
 describe("REPL page — a column is a terminal cell, not a string offset", () => {
   it("locates a label after a wide glyph at the cell it is really drawn in", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
 
     // Three double-width glyphs, typed as a person types them. They land on
     // the Draft's own value row, which is the row the Sidekick's Send shares —
@@ -199,6 +203,7 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
 
   it("counts an anchor's own column in cells when a wide glyph precedes it", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
     yield* typed(page, "\u754c\u754c\u754c");
 
     // The scope floor comes from the anchor's own first cell, so a scope that
