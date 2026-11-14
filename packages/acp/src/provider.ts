@@ -34,7 +34,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import type { Operation, Result, Scope, Stream } from "effection";
+import type { Operation, Result, Scope, Stream, Task } from "effection";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -83,7 +83,7 @@ import {
   applySessionConfiguration,
   sessionUnusable,
 } from "./session-configuration.ts";
-import type { ConfigurationTarget } from "./session-configuration.ts";
+import type { ConfigurationConnection, ConfigurationTarget } from "./session-configuration.ts";
 import { allocatesIdentity, bindsBuild } from "./native-launch.ts";
 import type {
   BoundProviderReturnedAdapter,
@@ -103,6 +103,7 @@ import {
   createAgentRegistry,
   createRuntimeStore,
   resolveAgentCommand,
+  withColdSessionConfiguration,
 } from "./acpx-runtime.ts";
 import type {
   AcpAgentRegistry,
@@ -118,6 +119,7 @@ import type {
   AcpRuntimeUsageCost,
   AcpSessionRecord,
   AcpSessionStore,
+  ColdSessionConfigurationControl,
   SessionAgentOptions,
 } from "./acpx-runtime.ts";
 import {
@@ -549,6 +551,49 @@ function modelRequest(configuration: SessionConfiguration | undefined): {
   requestedModel?: string;
 } {
   return configuration?.model === undefined ? {} : { requestedModel: configuration.model };
+}
+
+/** Join a configuration effect before its caller moves on to recovery. */
+function configurationConnection(
+  control: ColdSessionConfigurationControl,
+  admit: () => void,
+  rejectedOnUnwind: (error: unknown) => void,
+): ConfigurationConnection {
+  function joinEffect(effect: () => Promise<void>): Operation<void> {
+    return scoped(function* () {
+      let pending: Promise<void> | undefined;
+      yield* ensure(function* () {
+        if (pending !== undefined) {
+          yield* until(pending.then(() => undefined, rejectedOnUnwind));
+        }
+      });
+      try {
+        pending = effect();
+        yield* until(pending);
+      } catch (error) {
+        pending = undefined;
+        throw error;
+      }
+      pending = undefined;
+    });
+  }
+  return {
+    readStatus: () => control.status(),
+    observedStatus: () => control.observedStatus(),
+    savedPreferences: () => control.savedPreferences(),
+    restorePreferences: (prior, affected) =>
+      joinEffect(() => control.restorePreferences(prior, affected)),
+    usable: () => control.usable(),
+    write: (optionId, value, started, restoring) =>
+      joinEffect(() =>
+        control.write(optionId, value, () => {
+          if (!restoring) {
+            admit();
+          }
+          started();
+        }),
+      ),
+  };
 }
 
 function asName(routed: string | Session | undefined): string | undefined {
@@ -1134,6 +1179,9 @@ function* useAcpxProviderState(
   dependencies?: AcpxProviderDependencies,
 ): Operation<AcpxProviderState> {
   const createRuntime = dependencies?.createRuntime ?? createAcpRuntime;
+  // Only the in-process runtime this package builds can carry one attempt's
+  // dependent writes on one connection; a substituted runtime writes singly.
+  const connectsConfiguration = dependencies?.createRuntime === undefined;
   const store =
     dependencies?.sessionStore ?? createRuntimeStore({ stateDir: join(homedir(), ".acpx") });
   const registry = dependencies?.agentRegistry ?? createAgentRegistry();
@@ -2948,7 +2996,118 @@ function* useAcpxProviderState(
           current.unusable = true;
         }
       },
+      ...(connectsConfiguration && entry.state === "existing"
+        ? {
+            connect: (modelOptionId, phase, body) =>
+              connectConfiguration(entry, modelOptionId, phase, configuration, body),
+            recordCleanupFailure: (error) => cleanupErrors.push(error),
+          }
+        : {}),
     };
+  }
+
+  /**
+   * Run one configuration attempt's body on one ACPX control connection.
+   *
+   * The body runs in this operation's scope and its outcome travels back as a
+   * `Result`, so a refusal reaches ACPX as the rejection that closes the
+   * connection rather than as a failure of this scope. The manager's Promise
+   * is joined before this settles, cancellation included: the close, and the
+   * save after it, belong to the attempt that opened the connection.
+   */
+  function connectConfiguration<T>(
+    entry: ManagedSession,
+    modelOptionId: string,
+    phase: "model" | "effort" | "recovery",
+    configuration: SessionConfiguration | undefined,
+    body: (connection: ConfigurationConnection) => Operation<T>,
+  ): Operation<{ declined: true } | { declined: false; value: T }> {
+    return scoped(function* () {
+      const scope = yield* useScope();
+      const cancelled = new Error("Configuration attempt cancelled");
+      type Outcome = { declined: true } | { declined: false; value: T };
+      let pending: Promise<Outcome> | undefined;
+      let callback: Task<Result<T>> | undefined;
+      let unwinding = false;
+      let observed = false;
+      let leafFailure: unknown;
+      function admit(): void {
+        if (unwinding) {
+          throw cancelled;
+        }
+      }
+
+      yield* ensure(function* () {
+        if (observed || pending === undefined) {
+          return;
+        }
+        try {
+          if (callback !== undefined) {
+            yield* callback.halt();
+          }
+        } catch (error) {
+          cleanupErrors.push(toError(error));
+        }
+        try {
+          yield* until(pending);
+        } catch (error) {
+          if (error !== cancelled) {
+            cleanupErrors.push(nativeIdentityRefusal(error) ?? toError(error));
+          }
+        }
+      });
+
+      try {
+        pending = withColdSessionConfiguration(
+          entry.runtime.runtime,
+          {
+            handle: entry.handle,
+            key: modelOptionId,
+            phase,
+            admit,
+            ...modelRequest(configuration),
+          },
+          (control) => {
+            admit();
+            callback = scope.run(function* (): Operation<Result<T>> {
+              try {
+                return Ok(
+                  yield* body(
+                    configurationConnection(control, admit, (error) => {
+                      leafFailure = error;
+                    }),
+                  ),
+                );
+              } catch (error) {
+                return Err(toError(error));
+              }
+            });
+            return callback.then(
+              (result) => {
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
+              },
+              (error: unknown) => {
+                if (unwinding && error instanceof Error && error.message === "halted") {
+                  throw leafFailure ?? cancelled;
+                }
+                throw error;
+              },
+            );
+          },
+        );
+        const outcome = yield* until(pending);
+        observed = true;
+        return outcome;
+      } catch (error) {
+        observed = true;
+        throw nativeIdentityRefusal(error) ?? error;
+      } finally {
+        unwinding = true;
+      }
+    });
   }
 
   /**
@@ -3141,6 +3300,7 @@ function* useAcpxProviderState(
         // waiting for one session's turn is not a reason to stop every other
         // session resolving.
         yield* turns.slot(resolved.sessionKey);
+        refuseIfUnusable(resolved.sessionKey);
         // Ownership before the turn, and before ensure: a prompt for an agent
         // whose sessions can be handed to a native UI is talking to a session
         // that UI may be in right now.
@@ -4927,12 +5087,12 @@ function* useAcpxProviderState(
         // client-native.
         const construction = yield* constructRoute(agentName, prepared);
         const resumeSessionId = construction?.resumeSessionId;
-        return yield* turns.withSlot(prepared.sessionKey, () =>
-          withSessionRoute(context, () =>
+        return yield* scoped(function* () {
+          // Join configuration and handle release before the successor receives the slot.
+          yield* turns.slot(prepared.sessionKey);
+          return yield* withSessionRoute(context, () =>
             scoped(function* (): Operation<Session> {
-              // Before the ensure that creates it, so nothing this scope takes
-              // outlives the scope — a handle held past this operation is a
-              // second owner of a session a native UI may take.
+              refuseIfUnusable(prepared.sessionKey);
               yield* ensure(() => releaseHandle(prepared.sessionKey));
               const entry = yield* ensureFromPrepared(agentName, prepared, {
                 ...(construction === undefined
@@ -4944,11 +5104,7 @@ function* useAcpxProviderState(
                   ? {}
                   : { requestedModel: setup.requestedModel }),
               });
-              // An existing session is reattached here: its route and its
-              // identity already exist, so this is a conversation that can be
-              // configured in place, and one that cannot refuses before
-              // anything prompts it. Settling the setup says how, and core
-              // applies it before the element's resolution returns.
+              // Finish the existing session's configuration before returning it.
               if (setup === undefined) {
                 return entry.session;
               }
@@ -4957,8 +5113,8 @@ function* useAcpxProviderState(
                 configure: configuringSession(agentName, entry),
               });
             }),
-          ),
-        );
+          );
+        });
       },
     );
   }

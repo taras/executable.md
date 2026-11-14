@@ -226,6 +226,63 @@ the old writer and passes on this writer, preserving the second publication.
 Injected I/O failures still fail. This establishes the demonstrated collision
 defect, not the cause of the historical live incident. No writer patch is added.
 
+## Cold session configuration (#1146)
+
+A resumed conversation that changes model and then effort used to start one
+cold control worker per write, because the public setter closes its client
+before returning. Effort's selector and choices come from the model write's
+answer, so the provider cannot predeclare both writes either.
+
+The `XMD cold session configuration:` seam adds a standalone
+`withColdSessionConfiguration` export, reached only through
+`packages/acp/src/acpx-runtime.ts`. An `AcpxRuntime` static block binds it to an
+ECMAScript-private method, so neither the runtime class type nor the package
+entrypoint gains a member. Under the record's existing operation lock, the
+manager declines when an active controller, retained or retiring owner, control
+record, close or pending materialization already holds the record, or when the
+session is not persistent. On compiled Linux the manager declines before it
+creates a control client because the standalone executable cannot run the
+process helper used to prove strict close. The provider uses ordinary model
+and effort controls on the same session. Remove this condition when the
+standalone Linux process observer can provide the strict close proof.
+For an admitted request, one strict-resume control client loads the exact
+session with the model write's existing replay exclusion and runs the caller's
+body. Exact reattachment checks a reported native identity against
+the retained assertion before replay or save, including on the split effort
+and recovery paths. Those paths read actual load selectors before preference
+replay. Each write uses the same selector resolution and response projection
+as `setConfigOption` and checkpoints the record before answering. Recovery
+uses observed selectors and restores the affected saved preference entries
+after the prior values are verified.
+
+The manager owns that client's single close. `withConnectedSession` skips its
+own close and process-interrupt race for this path. The manager joins startup
+or load that outlives a deadline. A strict-close client rejects its close when
+process or descendant ownership remains unresolved. Startup command probes
+stay in the client's ownership set until termination is proved. A rejected
+close or final checkpoint retains the client and checkpoint in `retiringSessionOwners` so
+the next operation retries the unfinished work first. When the body and
+finalization both fail, the body error remains primary in the aggregate. `runtime.js` owns the seam, `queue-owner-runtime-ucHvXJ33.js` the
+scoped finalization and strict close, and `runtime.d.ts` declares the internal
+export.
+
+Remove the seam when a published runtime offers dependent configuration on one
+connection with per-write durable acknowledgements, a joined close that reports
+unproved quiescence, and exact reattachment for recovery. The replacement must
+pass the cold configuration regressions in
+`packages/acp/tests/released-runtime.test.ts` and offline vendor verification.
+
+## Linux process observation under source Deno (#1146)
+
+The `XMD Linux process helper:` seam in `ipc-CQUNQ8QQ.js` runs the Linux
+process helper through CJS eval when the current executable is the source
+Deno CLI. The helper uses Deno's argument list on that path. The existing
+incarnation and process-table proof, timeout, byte bounds and environment
+apply to both invocations.
+
+Remove the seam when upstream supports the source Deno CLI with the same
+PID, namespace and process-incarnation proof.
+
 ## Packaging adaptations and maintenance
 
 Sibling declaration imports name their colocated `.d.ts` files; source-map
