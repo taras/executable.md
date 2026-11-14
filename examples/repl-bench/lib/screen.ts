@@ -38,12 +38,22 @@ export function viewport(backend: TerminalBackend, size: Size) {
   const bodyBottom = history < 0 ? size.rows : history;
   // Document text can contain the label. The field sits inside the composer tray.
   const hasFocusMarker = ({ row, column }: Point) => cells[row]?.[column - 2] === ">";
-  const composerLabel = [...matches("› message the sidekick")].find(
-    ({ row, column }) =>
-      row < bodyBottom &&
-      (background(row, column) === REPL_PALETTE.draftSurface || hasFocusMarker({ row, column })) &&
-      background(row, column - 3) === REPL_PALETTE.composerSurface,
-  );
+  const composerLabel = [...matches("› message the sidekick")].find((point) => {
+    const { row, column } = point;
+    if (row >= bodyBottom || background(row, column - 3) !== REPL_PALETTE.composerSurface) {
+      return false;
+    }
+    const surface = background(row, column);
+    // The focused field paints the inner width of the tray. Queue text
+    // inherits the tray surface and a focused TODO paints only its own control.
+    return (
+      surface === REPL_PALETTE.draftSurface ||
+      (hasFocusMarker(point) &&
+        surface !== undefined &&
+        surface !== REPL_PALETTE.composerSurface &&
+        surface === background(row, size.columns - 2))
+    );
+  });
   const transcriptTitle = rows.findIndex((row, index) => index < 4 && /^\s*TRANSCRIPT\s/.test(row));
   const composer = composerLabel && {
     left: composerLabel.column - 2,
