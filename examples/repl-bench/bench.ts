@@ -14,6 +14,8 @@ import {
 import { evidence, prepareRun, root } from "./lib/run.ts";
 import { serve, request, start } from "./lib/control-bun.ts";
 
+const invocation = "bun --no-install ./examples/repl-bench/bench.ts";
+
 function print(text: string): void {
   process.stdout.write(`${text}\n`);
 }
@@ -94,15 +96,17 @@ function* followup(action: string, directory: string, args: string[]): Operation
 
 main(function* ([action, ...args]) {
   if (action === undefined || ["-h", "--help", "help"].includes(action)) {
-    print(`repl-bench preflight [--size WxH]
-repl-bench start [--size WxH] [-- <repl args>]
-repl-bench focus <run>
-repl-bench type <run> <text>
-repl-bench send <run> <key>...
-repl-bench wait <run> <text>
-repl-bench resize <run> <WxH>
-repl-bench screenshot <run> <name>
-repl-bench look|status|exit|stop <run>`);
+    print(`Usage: ${invocation} <command>
+
+  preflight [--size WxH]
+  start [--size WxH] [-- <repl args>]
+  focus <run>
+  type <run> <text>
+  send <run> <key>...
+  wait <run> <text>
+  resize <run> <WxH>
+  screenshot <run> <name>
+  look|status|exit|stop <run>`);
     return;
   }
   if (action === "driver") {
@@ -122,7 +126,7 @@ repl-bench look|status|exit|stop <run>`);
     }
     if ((action === "preflight" && args.length > 0) || (args.length > 0 && args[0] !== "--")) {
       throw new Error(
-        `Usage: repl-bench ${action} [--size WxH]${action === "start" ? " [-- <repl args>]" : ""}`,
+        `Usage: ${invocation} ${action} [--size WxH]${action === "start" ? " [-- <repl args>]" : ""}`,
       );
     }
     if (action === "preflight") {
@@ -141,7 +145,7 @@ repl-bench look|status|exit|stop <run>`);
   }
   const id = args.shift() ?? "";
   if (!/^[a-zA-Z0-9-]+$/.test(id)) {
-    throw new Error("Specify a command and run ID. See repl-bench --help.");
+    throw new Error(`Specify a command and run ID. See ${invocation} --help.`);
   }
   try {
     yield* scoped(() => followup(action, join(evidence, id), args));
