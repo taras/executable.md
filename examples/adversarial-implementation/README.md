@@ -955,10 +955,10 @@ key, provider, ordered model choices, and reasoning effort. A fresh run can
 supply a fallback profile and an exact quota notice for the primary.
 A continuation uses the original recorded solver and resolved model.
 
-Fable starts the diagnosis. If its option inspection fails, its model is
+Fable starts the assignment. If its option inspection fails, its model is
 unavailable, or it returns a recognized usage-limit refusal, a fresh assignment
 can try Astra once. Each provider has its own attempt directory and conversation.
-Each diagnostic prompt has a 30-minute deadline.
+Each prompt has a 30-minute deadline.
 An uncertain turn, invalid reply, or failed continuation holds for reconciliation.
 
 The opening prompt points to `submission-guide.md`. Read that guide when preparing
@@ -983,3 +983,49 @@ bytes. The phase checks the original model and conversation before prompting
 and reserves one continuation per result. Preserve an interrupted attempt and
 its original receipt for reconciliation. To use an earlier Delivery conversation
 as context, supply its retained records as evidence and leave them in place.
+
+## Assess a design question
+
+Use the same problem-solver phase for a technical decision that needs a
+comparison grounded in the source. Give it a clean checkout at the exact
+revision, the question, the constraints, and at least one pinned spec section
+or captured input. The phase reads each named section from that revision and
+uses the same read-only provider, solver selection, and receipts as diagnosis.
+
+For example, to assess whether the CLI should route to REPL as a bundled
+plugin, save a request like this and replace the paths and revision.
+
+```json
+{
+  "role": "problem-solver",
+  "session": "cli-repl-boundary",
+  "attempt": "/absolute/path/to/records/design-1",
+  "inputPaths": ["/absolute/path/to/records/command-entry-inventory.txt"],
+  "assignment": {
+    "kind": "design",
+    "work": "CLI and REPL boundary",
+    "repository": "/absolute/path/to/source",
+    "revision": "1111111111111111111111111111111111111111",
+    "question": "Should the CLI route to REPL as a bundled plugin, and where should that boundary sit?",
+    "constraints": ["Preserve the installed CLI entry point and existing REPL invocations."]
+  }
+}
+```
+
+Use `specs` for repository-relative Markdown paths with unique heading
+anchors. With pinned sections alone, pass an empty `inputPaths` array.
+Run the phase with the same command as for diagnosis.
+
+The frozen submission guide defines the design result. A completed assessment
+returns `status: "design"` and a receipt with two to four options and their
+tradeoffs, sourced observations, a recommendation, evidence that would change
+it, and open questions. If missing evidence prevents a choice, the recommendation
+can name the next investigation. An incomplete result holds and preserves the
+raw reply for reconciliation. The Architect uses the advice to settle the
+implementation contract.
+
+To add evidence to a saved design result, keep the work, repository, revision,
+session, question, and constraints. Choose a new `attempt`, set `previous` to
+the returned attempt directory, and list the new files in `inputPaths`.
+Omitted spec references carry forward and the phase checks the saved solver
+and conversation before prompting.
