@@ -514,7 +514,7 @@ function sendComposed(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
-  it("M1: a fresh command shows its Sidekick, asks the agent nothing, and keeps focus on the draft", function* () {
+  it("M1: a fresh command shows its Sidekick, asks the agent nothing, and focuses Message", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const first = page.screen();
     for (const label of ["BINDINGS", "SIDEKICK", "No messages yet.", COMPOSER]) {
@@ -527,10 +527,10 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
       page.repl.fake.prompts,
       page.repl.fake.started,
     ]).toEqual([[], [], [], false]);
-    yield* typed(page, "startup draft");
+    yield* typed(page, "startup composer");
+    expect(composerHolds(page.screen(), "startup composer")).toBe(true);
+    yield* draftText(page, "startup draft");
     expect(draftHolds(page.screen(), "startup draft")).toBe(true);
-    expect(composerHolds(page.screen(), "startup draft")).toBe(false);
-    yield* compose(page, "startup composer");
     expect(composerHolds(page.screen(), "startup composer")).toBe(true);
     expect([page.repl.fake.ensured, page.repl.fake.prompts]).toEqual([[], []]);
     expect(yield* finishDraft(page)).toBe("startup draft");
@@ -1082,8 +1082,7 @@ describe("PV3/PV4: question and Configure editing", () => {
   it("keeps each value's middle caret across close and a held History drawer", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
-    yield* page.type("draft-kept");
-    yield* page.until("the Draft value", (one) => one.shows("draft-kept"));
+    yield* draftText(page, "draft-kept");
     yield* pendingQuestion(page);
     yield* openedQuestion(page);
     yield* page.type("ab界");
@@ -1603,6 +1602,7 @@ function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
   if (explicit) {
     yield* intoComposer(page);
   } else {
+    yield* intoDraft(page);
     for (let press = 0; press < 4; press += 1) {
       yield* page.key("Backtab");
     }
