@@ -1,4 +1,4 @@
-<Test name="a failed terminal preserves its own captures and leaves the other terminal usable">
+<Test name="a failed terminal preserves its own captures and leaves the other terminal usable" timeout="60s">
   <Cwd as="checkout" />
   <Terminal columns={160} rows={36}>
     <XMD.Repl expectExit={true} as="survivor">
