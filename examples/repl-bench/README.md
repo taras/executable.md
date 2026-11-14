@@ -5,7 +5,7 @@ screenshots with the requesting REPL session, and show the evidence in a pull
 request.
 
 The [bench reference](reference.md) covers the plugin components, acceptance
-journeys, and manual terminal controls.
+journeys, and saved evidence.
 
 ## Capture the same checkpoint in both builds
 

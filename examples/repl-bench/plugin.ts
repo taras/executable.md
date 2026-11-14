@@ -325,12 +325,12 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
       attachment,
     );
   }
-  const command = build === undefined ? yield* xmdCommand(["repl", ...args]) : undefined;
+  const implementation =
+    build === undefined ? { command: yield* xmdCommand(["repl", ...args]) } : { build };
   const { launch, revision } = yield* prepareRun(directory, terminal.dimensions, args, {
     home: resume?.home ?? home,
     scenario,
-    build,
-    command,
+    ...implementation,
   });
   yield* Stdio.around(
     {

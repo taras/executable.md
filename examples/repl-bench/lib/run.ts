@@ -12,7 +12,7 @@ import { z } from "zod";
 import { worktree } from "./protocol.ts";
 
 export const root = dirname(fileURLToPath(new URL("deno.json", worktree)));
-export const evidence = join(root, ".bench");
+const evidence = join(root, ".bench");
 
 const cachedDenoFlags = ["--cached-only", "--frozen", "--node-modules-dir=none"];
 const cliEntry = "packages/cli/src/deno.ts";
@@ -103,26 +103,25 @@ export function* prepareRun(
   cwd: string,
   size: Size,
   args: string[],
-  options?: { home?: string; scenario?: string; build?: PreparedBuild; command?: string[] },
+  options: { home?: string; scenario?: string } & (
+    | { build: PreparedBuild; command?: never }
+    | { build?: never; command: string[] }
+  ),
 ) {
   const checkout =
-    options?.build === undefined
-      ? options?.command === undefined
-        ? root
-        : undefined
-      : yield* until(realpath(options.build.checkout));
+    options.build === undefined ? undefined : yield* until(realpath(options.build.checkout));
   const actual =
     checkout === undefined
       ? undefined
-      : yield* checkoutState(checkout, options?.build?.expectedRevision);
+      : yield* checkoutState(checkout, options.build?.expectedRevision);
   const id = randomUUID();
   const directory = join(evidence, id);
   yield* ensureDir(directory);
-  let command = options?.command ?? denoCommand(["repl", ...args], checkout);
+  let command = options.command ?? denoCommand(["repl", ...args], checkout);
   const [executable, verb, permissions] = command;
   const isDenoSource = executable !== undefined && verb === "run" && permissions === "--allow-all";
   const denoDir = isDenoSource ? yield* denoCache(executable, checkout ?? root) : undefined;
-  if (options?.command !== undefined && isDenoSource) {
+  if (options.command !== undefined && isDenoSource) {
     // Preserve the source host's cache across the private home and forbid installs.
     command = [executable, verb, permissions, ...cachedDenoFlags, ...command.slice(3)];
   }
@@ -134,13 +133,13 @@ export function* prepareRun(
     denoDir,
     directory,
     cwd,
-    home: options?.home ?? join(directory, "home"),
-    scenario: options?.scenario,
+    home: options.home ?? join(directory, "home"),
+    scenario: options.scenario,
     args,
   };
   yield* writeTextFile(
     join(directory, "run.json"),
     JSON.stringify({ id, revision, dirty: actual?.dirty ?? null, ...launch }, null, 2),
   );
-  return { id, revision, launch };
+  return { revision, launch };
 }
