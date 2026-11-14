@@ -173,6 +173,8 @@ function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly
 
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
+  yield* page.key("Ctrl+G");
+  yield* page.key("4");
   yield* pasteDraft(page, source);
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
@@ -1776,6 +1778,8 @@ describe("accepted rendered scrolling guidance", () => {
         { length: 40 },
         (_, at) => `Help preview ${String(at).padStart(2, "0")}`,
       ).join("\n");
+      yield* page.key("Ctrl+G");
+      yield* page.key("4");
       yield* page.type(
         `<Elicit as="answer" schema={${JSON.stringify(schema)}}>${preview}</Elicit>`,
       );
