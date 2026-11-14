@@ -6,6 +6,7 @@ import {
   createChannel,
   each,
   ensure,
+  race,
   sleep,
   spawn,
   stream,
@@ -15,6 +16,9 @@ import {
 } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
+import { chmod } from "node:fs/promises";
+import process from "node:process";
+import { shellQuote } from "@executablemd/test-support/launch";
 import { join } from "node:path";
 import { z } from "zod";
 import { createAcpRuntime, resolveAgentCommand } from "../src/acpx-runtime.ts";
@@ -1207,7 +1211,11 @@ describe(
                   },
                   sessions: {
                     *requestSession() {
-                      return { sessionKey, cwd: current.dir, state: "existing" };
+                      return {
+                        sessionKey,
+                        cwd: current.dir,
+                        state: "existing",
+                      };
                     },
                     *recordSessionIdentity() {},
                   },
@@ -1323,8 +1331,23 @@ const configWrite = z.object({
  * An established persistent conversation whose backend settings outlive each
  * worker, configured afterwards through the default provider factory.
  */
-function* coldConfigurationWorld(flags: readonly string[]) {
+function* coldConfigurationWorld(flags: readonly string[], copilot = false) {
   const current = yield* world(true);
+  if (copilot) {
+    const windows = process.platform === "win32";
+    const shim = join(current.dir, windows ? "copilot.cmd" : "copilot");
+    const paths = [current.agent, current.dir];
+    yield* writeTextFile(
+      shim,
+      windows
+        ? `@echo off\r\nnode "${paths.join('" "')}" %*\r\n`
+        : `#!/bin/sh\nexec node ${paths.map(shellQuote).join(" ")} "$@"\n`,
+    );
+    if (!windows) {
+      yield* until(chmod(shim, 0o755));
+    }
+    current.registry.resolve = () => [shim, "--acp", "--stdio"];
+  }
   const mark = (name: string) => writeTextFile(join(current.dir, name), "enabled");
   for (const flag of ["persist-settings", ...flags]) {
     yield* mark(flag);
@@ -1355,6 +1378,7 @@ function* coldConfigurationWorld(flags: readonly string[]) {
   const processesAtSeed = (yield* readTextFile(join(current.dir, "processes.jsonl"))).length;
 
   let requested = 0;
+  let deferSetup = false;
   const factory = createAcpxProvider({
     sessionStore: current.store,
     agentRegistry: current.registry,
@@ -1366,7 +1390,7 @@ function* coldConfigurationWorld(flags: readonly string[]) {
     sessions: {
       *requestSession() {
         requested++;
-        return { sessionKey, cwd: current.dir, state: "existing" };
+        return { sessionKey, cwd: current.dir, state: deferSetup ? "new" : "existing" };
       },
       *recordSessionIdentity() {},
     },
@@ -1381,14 +1405,16 @@ function* coldConfigurationWorld(flags: readonly string[]) {
       options,
       createLaunchCoordinator({}, () => []),
     );
-    return function* session(configured: boolean) {
+    return function* session(configured: boolean, defer = false) {
       const issuance = openSessionRequest(undefined, "review");
       if (configured) {
         issuance.configure({ model: "selected", effort: "xhigh" });
       }
+      deferSetup = defer;
       try {
         return yield* Agent.operations.session(issuance.request);
       } finally {
+        deferSetup = false;
         issuance.close();
       }
     };
@@ -1460,10 +1486,19 @@ function* coldConfigurationWorld(flags: readonly string[]) {
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => z.object({ pid: z.number(), event: z.string() }).parse(JSON.parse(line)));
+        .map((line) =>
+          z
+            .object({
+              pid: z.number(),
+              event: z.string(),
+              helpProbe: z.boolean().optional(),
+            })
+            .parse(JSON.parse(line)),
+        );
       return {
         started: events.filter((event) => event.event === "start").map((event) => event.pid),
         exited: events.filter((event) => event.event === "exit").map((event) => event.pid),
+        helpProbes: events.filter((event) => event.helpProbe === true).map((event) => event.pid),
       };
     },
     *settings() {
@@ -1635,6 +1670,74 @@ describe(
       expect(new Set(workers.exited)).toEqual(new Set(workers.started));
     });
 
+    it("an already queued unconfigured Prompt refuses before touching a fenced session", function* () {
+      const current = yield* coldConfigurationWorld([
+        "model-effort-ids",
+        "hold-config-effort-selected",
+        "refuse-config-effort-selected",
+      ]);
+      const session = yield* current.sharedProvider();
+      const configured = yield* session(true, true);
+      let atRefusal: typeof current.storeCalls | undefined;
+      const first = yield* spawn(() =>
+        scoped(function* () {
+          const prompt = yield* Agent.operations.prompt("first", { session: configured });
+          try {
+            yield* prompt;
+            return undefined;
+          } catch (error) {
+            atRefusal = { ...current.storeCalls };
+            return error;
+          }
+        }),
+      );
+      const release = current.mark("release-config-effort-selected");
+      yield* ensure(() => release);
+      yield* current.waitFor("mutated-effort-selected");
+
+      let subscribed = false;
+      const successor = yield* spawn(() =>
+        scoped(function* () {
+          const prompt = yield* Agent.operations.prompt("queued", { session: "review" });
+          try {
+            const subscription = yield* prompt;
+            subscribed = true;
+            while (!(yield* subscription.next()).done) {}
+            return undefined;
+          } catch (error) {
+            return error;
+          }
+        }),
+      );
+      yield* ensure(() => release);
+      yield* current.waitForRequest(2);
+      expect(subscribed).toBe(false);
+      expect(yield* current.methods()).toEqual([
+        "session/load",
+        "model=selected",
+        "effort-selected=xhigh",
+      ]);
+
+      yield* current.mark("refuse-all-config");
+      yield* release;
+      expect(yield* first).toMatchObject({
+        message: expect.stringContaining("Controlled refusal of effort-selected after it applied"),
+        sessionUnusable: true,
+      });
+      expect(yield* successor).toMatchObject({
+        message: expect.stringContaining("after a failed restoration"),
+      });
+      expect(subscribed).toBe(false);
+      expect(current.storeCalls).toEqual(atRefusal);
+      expect(yield* current.sessionWorkers()).toEqual([
+        ["session/load", "model=selected", "effort-selected=xhigh", "model=initial"],
+        ["session/load"],
+      ]);
+      const workers = yield* current.processes();
+      expect(workers.started).toHaveLength(3);
+      expect(new Set(workers.exited)).toEqual(new Set(workers.started));
+    });
+
     it("cancellation during close joins the worker before a queued successor can act", function* () {
       const current = yield* coldConfigurationWorld(["model-effort-ids"]);
       const close = AcpClient.prototype.close;
@@ -1754,6 +1857,75 @@ describe(
       expect(yield* current.settings()).toEqual({ model: "initial", effort: "high" });
     });
 
+    it("reports the first restoration checkpoint failure after exact recovery succeeds", function* () {
+      const current = yield* coldConfigurationWorld([
+        "model-effort-ids",
+        "refuse-config-effort-selected",
+      ]);
+      const save = current.store.save;
+      const checkpointFailure = new Error("controlled restoration preference checkpoint failure");
+      let forwardSaved = false;
+      let rejected = false;
+      current.store.save = (record) => {
+        const restoredModel = record.acpx?.config_options?.find(
+          ({ id }) => id === "model",
+        )?.currentValue;
+        const restoredEffort = record.acpx?.config_options?.find(
+          ({ id }) => id === "effort-initial",
+        )?.currentValue;
+        forwardSaved ||= restoredModel === "selected";
+        if (
+          forwardSaved &&
+          !rejected &&
+          restoredModel === "initial" &&
+          restoredEffort === "high" &&
+          record.acpx?.session_options?.model === undefined
+        ) {
+          rejected = true;
+          return Promise.reject(checkpointFailure);
+        }
+        return save(record);
+      };
+      yield* ensure(() => {
+        current.store.save = save;
+      });
+      const [settled] = yield* allSettled([
+        scoped(function* () {
+          const session = yield* current.sharedProvider();
+          const [refused] = yield* allSettled([session(true)]);
+          expect(refused).toMatchObject({
+            ok: false,
+            error: {
+              message: expect.stringContaining(
+                "Controlled refusal of effort-selected after it applied",
+              ),
+            },
+          });
+          if (refused?.ok === false) {
+            expect(refused.error.message).not.toContain(checkpointFailure.message);
+            expect(refused.error.message).not.toContain("Restoring the prior configuration failed");
+          }
+          expect(rejected).toBe(true);
+          expect(yield* current.settings()).toEqual({ model: "initial", effort: "high" });
+          expect(yield* current.sessionWorkers()).toEqual([
+            [
+              "session/load",
+              "model=selected",
+              "effort-selected=xhigh",
+              "model=initial",
+              "effort-initial=high",
+            ],
+            ["session/load"],
+          ]);
+          expect((yield* session(false)).sessionKey).toBe(current.sessionKey);
+        }),
+      ]);
+      expect(settled?.ok).toBe(false);
+      if (settled?.ok === false) {
+        expect(settled.error).toBe(checkpointFailure);
+      }
+    });
+
     it("strict close retains an unproved descendant observation on the same client", function* () {
       const current = yield* coldConfigurationWorld([]);
       const close = AcpClient.prototype.close;
@@ -1787,6 +1959,95 @@ describe(
       const workers = yield* current.processes();
       expect(workers.exited).toHaveLength(workers.started.length);
       expect(new Set(workers.exited)).toEqual(new Set(workers.started));
+    });
+
+    it("strict close retains an unproved startup help probe until same-client retirement", function* () {
+      const current = yield* coldConfigurationWorld([], true);
+      const close = AcpClient.prototype.close;
+      const unresolved = ProcessDescendants.prototype.hasUnresolvedOwnership;
+      const scope = yield* useScope();
+      const retiring = withResolvers<void>();
+      const release = withResolvers<void>();
+      const closes: { client: unknown; probes: unknown[] }[] = [];
+      let probe: unknown;
+      let proved = false;
+      ProcessDescendants.prototype.hasUnresolvedOwnership = function () {
+        return (this === probe && !proved) || unresolved.call(this);
+      };
+      const start = AcpClient.prototype.start;
+      AcpClient.prototype.start = function (...args: Parameters<typeof start>) {
+        if (Reflect.get(this, "options").xmdStrictClose === true) {
+          const descendants = Reflect.get(this, "agentDescendants");
+          const set = descendants.set.bind(descendants);
+          descendants.set = (child: object, observation: unknown) => {
+            probe = observation;
+            return set(child, observation);
+          };
+        }
+        return start.apply(this, args);
+      };
+      AcpClient.prototype.close = function () {
+        if (Reflect.get(this, "options").xmdStrictClose === true) {
+          const children = Reflect.get(this, "commandProbes");
+          closes.push({ client: this, probes: [...children] });
+          if (closes.length === 2) {
+            retiring.resolve();
+            return scope.run(() => release.operation).then(() => close.call(this));
+          }
+        }
+        return close.call(this);
+      };
+      yield* ensure(() => {
+        AcpClient.prototype.start = start;
+        AcpClient.prototype.close = close;
+        ProcessDescendants.prototype.hasUnresolvedOwnership = unresolved;
+      });
+      const session = yield* current.sharedProvider();
+      const first = yield* spawn(function* () {
+        try {
+          yield* session(true);
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      });
+      yield* ensure(() => {
+        proved = true;
+        release.resolve();
+      });
+      // Also observe an unexpected early refusal, so a lost probe cannot hang the test.
+      yield* race([retiring.operation, first]);
+      expect(closes.map(({ probes }) => probes.length)).toEqual([1, 1]);
+      expect(closes[0]?.client).toBe(closes[1]?.client);
+      expect(closes[0]?.probes[0]).toBe(closes[1]?.probes[0]);
+      expect(yield* current.methods()).toEqual([]);
+
+      let advanced = false;
+      const next = yield* spawn(function* () {
+        const resolved = yield* session(false);
+        advanced = true;
+        return resolved;
+      });
+      yield* ensure(() => {
+        proved = true;
+        release.resolve();
+      });
+      yield* current.waitForRequest(2);
+      expect(advanced).toBe(false);
+      const held = yield* current.processes();
+      expect(held.helpProbes).toHaveLength(2);
+      expect(held.started).toHaveLength(3);
+
+      proved = true;
+      release.resolve();
+      expect(yield* first).toMatchObject({
+        message: expect.stringContaining("descendant ownership could not be proved settled"),
+      });
+      expect((yield* next).sessionKey).toBe(current.sessionKey);
+      expect(yield* current.methods()).toEqual([]);
+      const finished = yield* current.processes();
+      expect(finished.started).toEqual(held.started);
+      expect(new Set(finished.exited)).toEqual(new Set(finished.started));
     });
 
     it("a different native assertion refuses the exact load before changing durable state", function* () {
@@ -1859,6 +2120,24 @@ describe(
         "session/load",
         "effort-selected=xhigh",
         "session/prompt",
+      ]);
+      expect(yield* current.settings()).toEqual({ model: "selected", effort: "xhigh" });
+      const saved = yield* until(current.store.load(current.sessionKey));
+      expect(saved?.agentSessionId).toBe("native-fixed-session");
+    });
+
+    it("a legacy model acknowledgement and omitted load selectors use the saved stable effort id", function* () {
+      const current = yield* coldConfigurationWorld(["legacy-config-model", "omit-load-selectors"]);
+      const execute = yield* current.provider();
+      const configured = yield* execute(CONFIGURED);
+      if (!configured.result.ok) {
+        throw configured.result.error;
+      }
+      expect(configured.history).toContain("answer:after");
+      expect(yield* current.sessionWorkers()).toEqual([
+        ["session/load", "model=selected"],
+        ["session/load", "effort=xhigh"],
+        ["session/load", "effort=xhigh", "session/prompt"],
       ]);
       expect(yield* current.settings()).toEqual({ model: "selected", effort: "xhigh" });
       const saved = yield* until(current.store.load(current.sessionKey));

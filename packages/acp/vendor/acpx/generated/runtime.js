@@ -1491,7 +1491,7 @@ var AcpRuntimeManager = class {
 		const joined = attachment && await attachment;
 		// XMD cold session configuration: startup can produce a child while close is pending.
 		const lateClose = await settleAttempt(async () => {
-			if (closed && client.agent) {
+			if (closed && (client.agent || client.commandProbes.size)) {
 				closed = false;
 				await close();
 			}

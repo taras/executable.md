@@ -518,16 +518,8 @@ export function* applySessionConfiguration(
     phase: "model" | "effort",
   ): Operation<AgentOptionSelectors | undefined> {
     return scoped(function* () {
-      const live = observed(connection);
-      const loaded = live ?? readAgentOptions(connection.readStatus());
-      // A split load with no selectors cannot authorize a dependent write.
-      if (phase === "effort" && live === undefined) {
-        throw configurationFailure(
-          effortUnavailable(requestedModel),
-          "selector-unavailable",
-          "effort",
-        );
-      }
+      // Forward effort may use the saved selector when the exact load omits it.
+      const loaded = observed(connection) ?? readAgentOptions(connection.readStatus());
       collectSelectors(loaded, affected);
       let modelAddress = loaded.model?.optionId;
       let finished = false;
@@ -601,7 +593,7 @@ export function* applySessionConfiguration(
         if (!restored) {
           target.markUnusable();
         }
-        if (failure === undefined) {
+        if (restored || failure === undefined) {
           for (const error of recoveryErrors) {
             target.recordCleanupFailure?.(error);
           }

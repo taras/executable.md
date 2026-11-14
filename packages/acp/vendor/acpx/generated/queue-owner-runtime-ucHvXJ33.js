@@ -2977,9 +2977,11 @@ var AcpClient = class {
 		} finally {
 			try {
 				await this.terminateAgentProcess(child);
+				this.commandProbes.delete(child);
 			} finally {
 				capture.dispose();
-				this.commandProbes.delete(child);
+				// XMD cold session configuration: an unproved probe stays reachable for close.
+				if (!this.options.xmdStrictClose) this.commandProbes.delete(child);
 			}
 		}
 	}
@@ -3417,7 +3419,11 @@ var AcpClient = class {
 		} catch (error) {
 			failures.push(error);
 		}
-		const retired = await Promise.allSettled(owned.map((child) => this.terminateAgentProcess(child)));
+		// XMD cold session configuration: remove a retained probe only after proof.
+		const retired = await Promise.allSettled(owned.map(async (child) => {
+			await this.terminateAgentProcess(child);
+			this.commandProbes.delete(child);
+		}));
 		for (const result of retired) if (result.status === "rejected") failures.push(result.reason);
 		try {
 			this.closeConnection();

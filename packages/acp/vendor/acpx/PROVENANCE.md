@@ -253,8 +253,9 @@ after the prior values are verified.
 The manager owns that client's single close. `withConnectedSession` skips its
 own close and process-interrupt race for this path. The manager joins startup
 or load that outlives a deadline. A strict-close client rejects its close when
-process or descendant ownership remains unresolved. A rejected close or final
-checkpoint retains the client and checkpoint in `retiringSessionOwners` so
+process or descendant ownership remains unresolved. Startup command probes
+stay in the client's ownership set until termination is proved. A rejected
+close or final checkpoint retains the client and checkpoint in `retiringSessionOwners` so
 the next operation retries the unfinished work first. When the body and
 finalization both fail, the body error remains primary in the aggregate. `runtime.js` owns the seam, `queue-owner-runtime-ucHvXJ33.js` the
 scoped finalization and strict close, and `runtime.d.ts` declares the internal

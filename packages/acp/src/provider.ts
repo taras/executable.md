@@ -559,7 +559,7 @@ function configurationConnection(
   admit: () => void,
   rejectedOnUnwind: (error: unknown) => void,
 ): ConfigurationConnection {
-  function join(effect: () => Promise<void>): Operation<void> {
+  function joinEffect(effect: () => Promise<void>): Operation<void> {
     return scoped(function* () {
       let pending: Promise<void> | undefined;
       yield* ensure(function* () {
@@ -582,10 +582,10 @@ function configurationConnection(
     observedStatus: () => control.observedStatus(),
     savedPreferences: () => control.savedPreferences(),
     restorePreferences: (prior, affected) =>
-      join(() => control.restorePreferences(prior, affected)),
+      joinEffect(() => control.restorePreferences(prior, affected)),
     usable: () => control.usable(),
     write: (optionId, value, started, restoring) =>
-      join(() =>
+      joinEffect(() =>
         control.write(optionId, value, () => {
           if (!restoring) {
             admit();
@@ -3300,6 +3300,7 @@ function* useAcpxProviderState(
         // waiting for one session's turn is not a reason to stop every other
         // session resolving.
         yield* turns.slot(resolved.sessionKey);
+        refuseIfUnusable(resolved.sessionKey);
         // Ownership before the turn, and before ensure: a prompt for an agent
         // whose sessions can be handed to a native UI is talking to a session
         // that UI may be in right now.

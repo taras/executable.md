@@ -14,13 +14,18 @@ let sessionId;
 let model = "initial";
 let effort = "high";
 let remembered = "";
+const helpProbe = process.argv.includes("--help");
 // Control files make the backend outlive its worker and gate configuration.
 const control = name => Boolean(controlDirectory) && fs.existsSync(path.join(controlDirectory, name));
 const settingsFile = () => path.join(controlDirectory, "settings.json");
 if (control("persist-settings") && fs.existsSync(settingsFile())) ({model, effort} = JSON.parse(fs.readFileSync(settingsFile(), "utf8")));
 if (controlDirectory) {
-  fs.appendFileSync(path.join(controlDirectory, "processes.jsonl"), JSON.stringify({pid: process.pid, event: "start"}) + "\\n");
+  fs.appendFileSync(path.join(controlDirectory, "processes.jsonl"), JSON.stringify({pid: process.pid, event: "start", helpProbe}) + "\\n");
   process.on("exit", () => fs.appendFileSync(path.join(controlDirectory, "processes.jsonl"), JSON.stringify({pid: process.pid, event: "exit"}) + "\\n"));
+}
+if (helpProbe) {
+  console.log("--acp --stdio");
+  return;
 }
 const effortId = () => control("model-effort-ids") ? "effort-" + model : "effort";
 const options = () => [
@@ -75,7 +80,8 @@ function respond(request) {
         const changedIdentity = request.method === "session/load" && controlDirectory &&
           fs.existsSync(path.join(controlDirectory, "different-native-identity"));
         const agentSessionId = changedIdentity ? "another-conversation" : "native-" + sessionId;
-        reply(request.id, {sessionId, configOptions: options()${assertIdentity ? ', ...(control("omit-native-identity") ? {} : {_meta: {agentSessionId}})' : ""}});
+        const selectors = request.method === "session/load" && control("omit-load-selectors") ? {} : {configOptions: options()};
+        reply(request.id, {sessionId, ...selectors${assertIdentity ? ', ...(control("omit-native-identity") ? {} : {_meta: {agentSessionId}})' : ""}});
       };
       if (controlDirectory && request.method === "session/load") {
         fs.readFile(path.join(controlDirectory, "remembered"), "utf8", (_error, text) => { remembered = text ?? ""; ready(); });
