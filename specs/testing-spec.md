@@ -813,18 +813,24 @@ The Plugin supplies these components in a `<Test>` body:
 
 | Component | Contract |
 | --- | --- |
-| `ReplBench` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd. Optional `columns` and `rows` override the defaults. |
+| `Terminal` | A paired invocation establishes a viewport with the supplied `columns` and `rows`. Its body uses that viewport for sequential launches. A nested Terminal has its own viewport and launch. |
+| `ReplBench` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd and uses the nearest Terminal's current dimensions. A standalone bench supplies its own Terminal, with optional `columns` and `rows`. |
 | `ReplBench.SidekickPrompt` | Sends `text` over ACP and waits until the exchange joins, including any automatic entry feedback. On completion, `as` binds the exchange with `ending.joined`, `ending.outcome` and `output`. A failed or cancelled exchange fails this step. |
 | `ReplBench.SidekickStatus` | Binds the attachment status with `as`, including its submitted `messages` and `canonical` conversation counts. |
 | `ReplBench.EntryOutput` | Reads the final window of a submitted entry's output over ACP. `entry` is the one-based entry number and `as` binds the page, including its `status` and `text`. |
 | `ReplBench.Focus` | `target="sidekick-composer"` focuses the composer through visible controls and waits for its focus marker. |
-| `ReplBench.Type` | `text` is pasted into the focused field, preserving punctuation and line breaks. |
-| `ReplBench.Key` | `key` sends a named key to the current focus. |
-| `ReplBench.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
-| `ReplBench.Resize` | `columns` and `rows` resize both the PTY and its emulator. |
-| `ReplBench.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
-| `ReplBench.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
-| `ReplBench.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
+| `Terminal.Type` | `text` is pasted into the focused field, preserving punctuation and line breaks. |
+| `Terminal.Key` | `key` sends a named key to the current focus. |
+| `Terminal.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
+| `Terminal.Resize` | `columns` and `rows` resize the viewport. During a launch this resizes both the PTY and its emulator. Between launches it sets the size of the next launch. |
+| `Terminal.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
+| `Terminal.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
+| `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
+
+The terminal controls use the nearest Terminal without a handle. Input and
+screen inspection require an active launch. The `ReplBench.*` spellings for
+these seven terminal controls remain available. Set initial dimensions on
+`Terminal` when enclosing a bench.
 
 `waitTimeout` sets the default `WaitForText` duration for a `<ReplBench>` body,
 including nested regions. It defaults to five seconds. Each bench supplies its
@@ -844,15 +850,21 @@ The optional `include` and `mount` arrays pass repeated `--include` and
 syntax. `allowAbsolute={true}` passes `--allow-absolute`. These options belong
 to each launch, so a resumed bench supplies the options its new command uses.
 
-The bench invocation owns the driver. Failure or cancellation closes the
-child, its scripted worker, and the terminal. Failed steps retain their captures.
-The enclosing test owns the private home. With `expectExit={true}`, the body
-triggers a normal exit and `as` binds `{ exitCode, location, resume }` after PTY
-output drains. `location` is `null`
-when no reopen command is printed. `resume` is available after a clean exit
-with a location. Pass it to a later bench in the same test to reuse the home
-and last terminal size. The later invocation supplies its own contextual cwd.
-A bench stopped by teardown has null exit fields.
+Each Terminal hosts one active launch. The bench owns its driver, REPL
+process, attached Sidekick, and output capture. Its cleanup joins the child
+and drains its output before another bench can use that Terminal. Each launch
+starts with a fresh PTY screen. Failure or cancellation retains that launch's
+captures. The enclosing test owns the private home.
+
+With `expectExit={true}`, the body triggers a normal exit and `as` binds
+`{ exitCode, location, resume }` after PTY output drains. `location` is `null`
+when no reopen command is printed. `resume` is an opaque reference available
+after a clean exit with a location. Pass it to a later bench in the same test
+to reuse the session and home. An explicit Terminal supplies its current
+dimensions for both fresh and resumed launches. A standalone bench defaults
+to the last size of the resumed launch and otherwise to `160x36`. Each launch
+supplies its own contextual cwd. A bench stopped by teardown has null exit
+fields.
 
 With `entryPermissionFixture={true}`, the child loads the permission-wheel
 fixture provider for the entry to select as `wheel-permission-fixture`. The
