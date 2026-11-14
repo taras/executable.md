@@ -100,11 +100,13 @@
     <ReplBench.Key key="Escape" />
     <ReplBench.WaitForText text="[close]" present={false} />
     <ReplBench.Resize columns={72} rows={20} />
-    <ReplBench.WaitForText text="* Entries" />
+    <ReplBench.WaitForText text="* Entries" row={1} />
+    <ReplBench.WaitForText text="[exit]" row={18} />
     <ReplBench.WaitForText text="DRAFT" as="narrowDraft" />
     <ReplBench.WaitForText text="draft survives" at={{ row: narrowDraft.row + 1, column: narrowDraft.column - 2 }} />
     <ReplBench.Resize columns={160} rows={36} />
-    <ReplBench.WaitForText text="TRANSCRIPT" />
+    <ReplBench.WaitForText text="TRANSCRIPT" row={1} />
+    <ReplBench.WaitForText text="[exit]" row={34} />
     <ReplBench.WaitForText text="DRAFT" as="wideDraft" />
     <ReplBench.WaitForText text="draft survives" at={{ row: wideDraft.row + 1, column: wideDraft.column - 2 }} />
     <ReplBench.WaitForText text="stray input" present={false} />

@@ -95,8 +95,14 @@ export function* typed(page: ReplPage, text: string): Operation<void> {
   yield* page.until(`the screen showing ${JSON.stringify(text)}`, (one) => one.shows(text));
 }
 
-/** Follow the caller's known route back to the Draft. */
+/** Focus the Draft directly, or follow the caller’s explicit keyboard route. */
 export function* intoDraft(page: ReplPage, route: readonly PageKey[] = []): Operation<void> {
+  if (route.length === 0) {
+    yield* page.key("Ctrl+G");
+    yield* page.key("4");
+    yield* page.until("Draft focus", (one) => one.found("> DRAFT") === 1);
+    return;
+  }
   for (const name of route) {
     const before = page.screen().index;
     yield* page.key(name);
