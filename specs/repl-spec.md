@@ -1525,8 +1525,7 @@ what a cold process shows.
 One chord ends it, and it is the only one: Control-C. Raw mode clears `ISIG`, so
 no signal reaches this process and the byte is the whole of the notice — which is
 why dropping it with the other chords left the reflex every terminal program
-answers doing nothing, and saying nothing about why. Every other Control or Alt
-combination is still dropped whole.
+answers doing nothing, and saying nothing about why.
 
 The one place Control-C means something else is a focused Message that holds
 text, where it clears the message and the command goes on. Everywhere else no
@@ -3095,8 +3094,9 @@ Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
 keystroke never edits a field nobody is looking at, and the row above the surface
-says how to get back to the draft while that is the case. A Control or Alt chord is dropped whole rather than typed as its letter.
-The decoder names navigation keys, including Alt+Up/Down, separately. Control-J,
+says how to get back to the draft while that is the case. The decoder names
+navigation keys, including Alt+Up/Down and the Control-G focus prefix. Unassigned
+Control or Alt chords are discarded as a unit. Control-J,
 Enter carrying only Shift, and Enter carrying both Control and Alt — how
 Terminal.app sends Shift+Return as `ESC CR` — are text containing a newline on a
 press or repeat, and a release is nothing. Plain Enter stays Enter. Control-C is
