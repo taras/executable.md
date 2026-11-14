@@ -25,6 +25,8 @@ a complete `xmd://repl/…?view=sidekick&right=sidekick` location. Return the ru
 ID, revision, terminal size, exit status, and reopen location, with links to
 `run.json`, `screen.txt`, and `terminal.ansi` under the reported evidence path.
 Record the feature-specific commands and screen observations alongside them.
+For before-and-after evidence, follow the
+[visual verification guide](repl-bench-visual-verification.md).
 
 ## Step through a feature
 
