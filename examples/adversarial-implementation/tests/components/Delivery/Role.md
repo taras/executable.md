@@ -15,13 +15,14 @@ props: {type: object, properties: {delivery: {type: object}, revision: {type: st
 <Delivery.Response delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} attempt={props.attempt} raw={raw} dispatch={true} as="response" />
 <Else>
 <Let as="outcome" value={behavior === "unavailable" ? {...base,catalog:{...selected,state:"unavailable",model:null,advertised:["claude-opus"]}} : behavior === "refused" ? {...base,turn:{state:"failed",stage:"session",failure:"AcpConfigurationError: The agent does not offer the requested model.",partial:"",configuration:{reason:"selector-unavailable",setting:"model"},refusal:null,terminal:null}} : behavior === "turn-failed" ? {...base,turn:{state:"failed",stage:"turn",failure:"AgentPromptError: The provider turn failed.",partial:"",configuration:null,refusal:null,terminal:"failed"}} : behavior === "partial" ? {...base,turn:{state:"failed",stage:"turn",failure:"AgentPromptError: The provider turn failed.",partial:"{\"revision\":",configuration:null,refusal:null,terminal:"failed"}} : behavior === "outside" ? base : {...base,turn:{state:"reply",reply}}} />
+<Let as="call" value={{revision:props.revision,reviewer:props.reviewer,position:props.position,prompted:!["unavailable","refused","outside"].includes(behavior)}} />
 <Dir path={props.delivery.directory}><Glob include={["called.json"]} as="calledFiles" /></Dir>
 <Let as="prior" value={[]} />
 <If condition={calledFiles.length !== 0}>
 <Ticket.Text path={props.delivery.directory + "/called.json"} as="calledText" />
 <Parse schema={{type:"array"}} as="prior">{calledText}</Parse>
 </If>
-<Dir path={props.delivery.directory}><File path="called.json"><Json value={[...prior,{revision:props.revision,reviewer:props.reviewer,position:props.position,prompted:!["unavailable","refused","outside"].includes(behavior)}]} /></File></Dir>
+<Dir path={props.delivery.directory}><File path="called.json"><Json value={[...prior,call]} /></File></Dir>
 <If condition={behavior === "unjoined"}><Fail message="The original provider operation failed." /></If>
 <Dir path={props.attempt}><File path="outcome.json"><Json value={outcome} /></File></Dir>
 <If condition={behavior === "outside"}><Fail message="Workflow session identity changed. Reconcile the original conversation before prompting; its identity receipt is unchanged." /></If>
