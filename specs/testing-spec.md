@@ -1022,8 +1022,7 @@ matrix into one result behind its ID, so a shard that fails, is cancelled, times
 out, or unexpectedly skips makes that dependency non-success.
 
 The `repl-bench` matrix prepares a checkout with spaces in its path on macOS
-and Linux. It runs preflight, discovers the Markdown journeys under
-`examples/repl-bench/journeys`, and runs the concurrent-run isolation check.
+and Linux. It runs the [ReplBench example’s checks](../examples/repl-bench/reference.md#markdown-tests).
 This matrix owns those Markdown journeys outside the weighted runtime corpus.
 `green` requires the matrix result.
 

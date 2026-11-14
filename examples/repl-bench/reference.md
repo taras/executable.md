@@ -13,53 +13,29 @@ the visible result of each action, and the evidence to return. Use sizes
 `160x36`, `120x30`, and `72x20` to exercise the corresponding layouts in the
 [REPL specification](../../specs/repl-spec.md).
 
-For a narrow Sidekick composer exercise at the assigned revision, run:
+Run the [preflight journey](journeys/preflight.test.md) from the root of the
+prepared worktree:
 
-```sh
-bun --no-install ./examples/repl-bench/bench.ts preflight --size 72x20
+```text
+deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  packages/cli/src/deno.ts test examples/repl-bench/journeys/preflight.test.md
 ```
 
-Preflight defaults to `160x36`. It opens the Sidekick composer, types an unsent marker, checks the
-composer, clears it with Ctrl+C, and presses Ctrl+C again. Expect exit `0` and
-a complete `xmd://repl/…?view=sidekick&right=sidekick` location. Return the run
-ID, revision, terminal size, exit status, and reopen location, with links to
-`run.json`, `screen.txt`, and `terminal.ansi` under the reported evidence path.
-Record the feature-specific commands and screen observations alongside them.
-For before-and-after evidence, follow the
-[visual verification guide](README.md).
+Preflight exercises the Sidekick composer at `160x36` and `72x20`. It types
+and clears an unsent marker, checks for exit `0`, and prints the viewport and
+reopen location. Return those values with the exact revision, feature steps,
+and observed results. Use the [visual verification guide](README.md) to
+capture before-and-after evidence. Link to `run.json`, `screen.txt`, and
+`terminal.ansi` beside each screenshot.
 
-## Step through a feature
+## Read the evidence
 
-```sh
-run=$(bun --no-install ./examples/repl-bench/bench.ts start --size 160x36)
-bun --no-install ./examples/repl-bench/bench.ts focus "$run"
-bun --no-install ./examples/repl-bench/bench.ts type "$run" 'unsent text;'
-bun --no-install ./examples/repl-bench/bench.ts wait "$run" 'unsent text;'
-bun --no-install ./examples/repl-bench/bench.ts look "$run"
-bun --no-install ./examples/repl-bench/bench.ts resize "$run" 72x20
-bun --no-install ./examples/repl-bench/bench.ts wait "$run" 'Entries    * Sidekick'
-bun --no-install ./examples/repl-bench/bench.ts look "$run"
-bun --no-install ./examples/repl-bench/bench.ts screenshot "$run" narrow-sidekick
-bun --no-install ./examples/repl-bench/bench.ts stop "$run"
-```
-
-Use `send` for named keys such as `Tab`, `Shift+Tab`, `Enter`, or `Ctrl+C`.
-Use `type` for literal text. Each run owns a terminal and a test home. The
-tooling checkout’s `.bench/<run>/` holds launch details, including the revision,
-dirty status, working directory, and dimensions. `status <run>` prints those
-details. `look` records the readable screen, and `terminal.ansi` holds the raw
-PTY output. A failed action
-closes its driver and keeps the available evidence. To capture a normal exit,
-send the exit key and call `exit <run>` to collect the status and reopen location.
-Use `screenshot <run> <name>` after waiting for the expected state. It prints the
-path to `.bench/<run>/<name>.svg`, an image of the visible viewport with its
-terminal colors and styling. Use distinct names for before and after captures.
-
-Use `./examples/repl-bench/tmux.sh start` to open a terminal you can attach
-to. Pass the printed `tmux.…` ID to the same script’s `attach`, `look`,
-`tape`, `journal`, and `stop` subcommands. Use the
-[workbench document](workbench.md) to read a captured frame and copied journal. The journal gives document execution evidence. Screen cells,
-focus, and resize evidence come from the terminal capture.
+Each launch saves its viewport and terminal output in the tooling checkout’s
+`.bench/<run>/`. The readable screen is `screen.txt` and the raw PTY output is
+`terminal.ansi`. The launch record in `run.json` includes its ID, revision,
+dirty status, working directory, and dimensions. Failed launches keep their
+available evidence. `Terminal.Screenshot` saves the visible viewport and
+binds its path. Use separate names for the checkpoints you compare.
 
 ## Markdown tests
 
@@ -70,9 +46,10 @@ deno run --allow-all --cached-only --frozen --node-modules-dir=none \
 
 Run one document by passing its `*.test.md` path. Both forms use the plugin
 declared in `examples/repl-bench/xmd.json`. Run from the worktree root so the scripted
-scenarios resolve from that working directory. The isolation check runs
-[`timeout-controls.md`](journeys/timeout-controls.md) directly. Its intentional
-failures stay outside discovery of `*.test.md` files.
+scenarios resolve from that working directory. The [isolation journey](journeys/isolation.test.md) verifies that one failure
+leaves the other terminal usable. CI runs the intentional
+[`timeout-controls.md`](journeys/timeout-controls.md) failures through
+`check-teardown.ts`, which verifies that the REPL and scripted Sidekick exit.
 
 Use a composer region for a field-value
 check. A viewport match can also find the same text in the Draft or Transcript.
