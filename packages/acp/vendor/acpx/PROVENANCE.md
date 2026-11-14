@@ -267,6 +267,17 @@ unproved quiescence, and exact reattachment for recovery. The replacement must
 pass the cold configuration regressions in
 `packages/acp/tests/released-runtime.test.ts` and offline vendor verification.
 
+## Linux process observation under source Deno (#1146)
+
+The `XMD Linux process helper:` seam in `ipc-CQUNQ8QQ.js` runs the Linux
+process helper through CJS eval when the current executable is the source
+Deno CLI. The helper uses Deno's argument list on that path. The existing
+incarnation and process-table proof, timeout, byte bounds and environment
+apply to both invocations.
+
+Remove the seam when upstream supports the source Deno CLI with the same
+PID, namespace and process-incarnation proof.
+
 ## Packaging adaptations and maintenance
 
 Sibling declaration imports name their colocated `.d.ts` files; source-map

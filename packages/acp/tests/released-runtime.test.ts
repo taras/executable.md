@@ -16,7 +16,7 @@ import {
 } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
-import { chmod } from "node:fs/promises";
+import { chmod, readlink } from "node:fs/promises";
 import process from "node:process";
 import { shellQuote } from "@executablemd/test-support/launch";
 import { join } from "node:path";
@@ -56,7 +56,41 @@ import {
 } from "../vendor/acpx/generated/queue-owner-runtime-ucHvXJ33.js";
 
 import { STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
-import { _ as ProcessDescendants } from "../vendor/acpx/generated/ipc-CQUNQ8QQ.js";
+import {
+  E as observeProcessIncarnation,
+  _ as ProcessDescendants,
+} from "../vendor/acpx/generated/ipc-CQUNQ8QQ.js";
+
+if (process.platform === "linux") {
+  describe("Linux process incarnation", () => {
+    it("observes the current Linux process incarnation and rejects a different start tick", function* () {
+      const stat = yield* readTextFile("/proc/self/stat");
+      const startTicks = stat
+        .slice(stat.lastIndexOf(")") + 2)
+        .trim()
+        .split(/\s+/u)[19];
+      if (startTicks === undefined || !/^\d+$/u.test(startTicks)) {
+        throw new Error("The current process stat has no start tick");
+      }
+      const identity = {
+        kind: "linux-proc",
+        bootId: (yield* readTextFile("/proc/sys/kernel/random/boot_id")).trim(),
+        pidNamespace: yield* until(readlink("/proc/self/ns/pid")),
+        timeNamespace: yield* until(readlink("/proc/self/ns/time")),
+        startTicks,
+      };
+      expect(yield* until(observeProcessIncarnation(process.pid, identity))).toBe("matching");
+      expect(
+        yield* until(
+          observeProcessIncarnation(process.pid, {
+            ...identity,
+            startTicks: String(BigInt(startTicks) + 1n),
+          }),
+        ),
+      ).toBe("gone");
+    });
+  });
+}
 
 function* runtimeWorld() {
   const current = yield* world();

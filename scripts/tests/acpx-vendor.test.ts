@@ -43,6 +43,7 @@ const SEAMS: readonly string[] = [
   "XMD verified resume:",
   "XMD retained command:",
   "XMD cold session configuration:",
+  "XMD Linux process helper:",
 ];
 
 /** How far an introduced line may sit from one that names the seam. */

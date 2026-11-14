@@ -32,7 +32,7 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "8f30b0bd24e9276dd55d87e91f065cc3a3e96cf9183effc8c50f53f5463097b2"
+      "sha256": "61a3c129cc5867de4c7a3f34f5505f77953482edf89942d30696128361d7589b"
     },
     {
       "path": "generated/agent-registry-CxpAF3nI.js",
@@ -52,7 +52,7 @@
     {
       "path": "generated/ipc-CQUNQ8QQ.js",
       "kind": "generated",
-      "sha256": "d60bb2dff30c890540ef207496512f74b00fed6ec147a0a3b142f87abdec18b8"
+      "sha256": "d4e5b9ab6fb035820baf2bef386f237e92045280366cfc92fe18316553d9d49e"
     },
     {
       "path": "generated/queue-owner-runtime-ucHvXJ33.js",
