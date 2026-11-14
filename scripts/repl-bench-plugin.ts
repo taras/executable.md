@@ -10,7 +10,7 @@ import {
   type PropsSchema,
 } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
-import { cwd, parseDuration, realpath } from "@executablemd/runtime";
+import { command as xmdCommand, cwd, parseDuration, realpath } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import {
   createContext,
@@ -21,6 +21,7 @@ import {
   withResolvers,
   type Yielded,
 } from "effection";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -38,27 +39,34 @@ import {
   type Region,
   type Size,
 } from "./lib/repl-bench/protocol.ts";
-import { prepareRun, root } from "./lib/repl-bench/run.ts";
+import {
+  assertPinnedWorktree,
+  prepareRun,
+  root,
+  type PreparedBuild,
+} from "./lib/repl-bench/run.ts";
 import { attachSidekick } from "./lib/repl-bench/sidekick.ts";
 
 type Execute = (command: Command) => Operation<unknown>;
 
-function createTerminal(initial: Size) {
+function createTerminal(initial: Size, entryHome?: string) {
   let dimensions = initial;
   let active: { dispatch?: Execute } | undefined;
   function requireLaunch(): Execute {
     if (active?.dispatch === undefined) {
-      throw new Error("This terminal action needs an active <ReplBench> launch");
+      throw new Error("This terminal action needs an active <XMD.Repl> launch");
     }
     return active.dispatch;
   }
   return {
+    entryHome,
+    resumes: new WeakMap<object, Resume & { dimensions: Size }>(),
     get dimensions() {
       return dimensions;
     },
     *claim() {
       if (active !== undefined) {
-        throw new Error("This <Terminal> already has an active <ReplBench> launch");
+        throw new Error("This <Terminal> already has an active <XMD.Repl> launch");
       }
       const launch: { dispatch?: Execute } = {};
       active = launch;
@@ -83,6 +91,16 @@ function createTerminal(initial: Size) {
 }
 
 const TerminalContext = createContext<ReturnType<typeof createTerminal>>("xmd.repl-bench.terminal");
+const LaunchRevision = createContext<string | null>("xmd.repl-bench.launch-revision");
+const EntryBench = createContext("xmd.repl-bench.entry", false);
+const buildProps = z.object({
+  checkout: z.string().min(1),
+  expectedRevision: z
+    .string()
+    .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
+    .optional(),
+});
+const Build = createContext<PreparedBuild>("xmd.repl-bench.build");
 const RegionContext = createContext<Region | undefined>("xmd.repl-bench.region", undefined);
 const WaitTimeout = createContext<number | undefined>("xmd.repl-bench.wait-timeout", undefined);
 const Sidekick = createContext<Yielded<ReturnType<typeof attachSidekick>> | undefined>(
@@ -110,12 +128,13 @@ const bench = size.partial().extend({
   waitTimeout: z.string().optional(),
   scenario: z.string().min(1).optional(),
   entryPermissionFixture: z.boolean().default(false),
+  entryBenchFixture: z.boolean().default(false),
   include: z.array(z.string().min(1)).default([]),
   mount: z.array(z.string().min(1)).default([]),
   allowAbsolute: z.boolean().default(false),
 });
 
-function* connect(options: Launch): Operation<Execute> {
+function* connect(options: Launch) {
   const script = fileURLToPath(new URL("./repl-bench-bun.ts", import.meta.url));
   const child = yield* exec("bun", {
     cwd: root,
@@ -146,13 +165,18 @@ function* connect(options: Launch): Operation<Execute> {
     driverEnded = true;
     return { error: `Driver exited (${code ?? signal}). Evidence: ${options.directory}` };
   });
-  yield* ensure(function* () {
-    if (!driverEnded) {
+  let stopRequested = false;
+  function* close() {
+    if (!driverEnded && !stopRequested) {
+      stopRequested = true;
       child.stdin.send(`${JSON.stringify({ action: "stop" })}\n`);
-      yield* child.join();
     }
+    return yield* child.join();
+  }
+  yield* ensure(function* () {
+    yield* close();
   });
-  return function* (command) {
+  const dispatch: Execute = function* (command) {
     if (busy) {
       throw new Error("ReplBench actions run one at a time");
     }
@@ -169,29 +193,57 @@ function* connect(options: Launch): Operation<Execute> {
       busy = false;
     }
   };
+  return { dispatch, close };
 }
 
 const Terminal: FunctionComponent = function* (props, invocation) {
-  if (!invocation.hasContent() || (yield* Test.operations.testScope) === undefined) {
-    throw new Error("Use a paired <Terminal> inside <Test>");
+  if (!invocation.hasContent()) {
+    throw new Error("Use a paired <Terminal>");
   }
-  yield* TerminalContext.set(createTerminal(size.parse(props)));
+  const test = yield* Test.operations.testScope;
+  if (test === undefined && !(yield* EntryBench.expect())) {
+    throw new Error("<Terminal> needs an enclosing <Test> or a development REPL entry");
+  }
+  const initial = size.parse(props);
+  const home = test === undefined ? yield* useTempDirectory("xmd-repl-terminal-") : undefined;
+  yield* TerminalContext.set(createTerminal(initial, home));
   yield* Sidekick.set(undefined);
   yield* RegionContext.set(undefined);
   yield* WaitTimeout.set(undefined);
   return yield* content();
 };
 
-const ReplBench: FunctionComponent = function* (props, invocation) {
+const XmdBuild: FunctionComponent = function* (props, invocation) {
   if (!invocation.hasContent()) {
-    throw new Error("Use a paired <ReplBench> inside <Test>");
+    throw new Error("Use a paired <XMD.Build>");
+  }
+  const { checkout, expectedRevision } = buildProps.parse(props);
+  yield* Build.set({ checkout: resolve(yield* cwd(), checkout), expectedRevision });
+  return yield* content();
+};
+
+const XmdRepl: FunctionComponent = function* (props, invocation) {
+  if (!invocation.hasContent()) {
+    throw new Error("Use a paired <XMD.Repl>");
   }
   const test = yield* Test.operations.testScope;
-  if (test === undefined) {
-    throw new Error("<ReplBench> needs an enclosing <Test>");
+  if (test === undefined && !(yield* EntryBench.expect())) {
+    throw new Error("<XMD.Repl> needs an enclosing <Test> or a development REPL entry");
   }
   const directory = yield* cwd();
   const wanted = bench.parse(props);
+  const build = yield* Build.get();
+  if (
+    test === undefined &&
+    (wanted.entryBenchFixture ||
+      wanted.entryPermissionFixture ||
+      wanted.scenario !== undefined ||
+      wanted.include.length > 0 ||
+      wanted.mount.length > 0 ||
+      wanted.allowAbsolute)
+  ) {
+    throw new Error("Use scripted REPL fixtures and launch overrides inside <Test>");
+  }
   const enclosing = yield* TerminalContext.get();
   if (enclosing !== undefined && (wanted.columns !== undefined || wanted.rows !== undefined)) {
     throw new Error("Set viewport dimensions on the enclosing <Terminal>");
@@ -200,24 +252,32 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   const waitTimeout =
     wanted.waitTimeout === undefined
       ? undefined
-      : parseDuration(wanted.waitTimeout, "<ReplBench waitTimeout>");
+      : parseDuration(wanted.waitTimeout, "<XMD.Repl waitTimeout>");
   const captured = (yield* hasCapture("resume")) ? yield* capture("resume") : undefined;
-  const prepared = yield* test.eval(function* () {
+  const allocateTestHome = function* () {
     const resumes = (yield* Resumes.get()) ?? (yield* Resumes.set(new WeakMap()));
-    if (captured !== undefined) {
-      const resume =
-        typeof captured === "object" && captured !== null ? resumes.get(captured) : undefined;
-      if (resume === undefined) {
-        throw new Error("resume must come from a clean <ReplBench> exit in this test");
-      }
-      return { resumes, resume, home: undefined };
-    }
-    return { resumes, resume: undefined, home: yield* useTempDirectory("xmd-repl-test-") };
-  });
-  if (!prepared.ok) {
-    throw prepared.error;
+    return {
+      resumes,
+      home: captured === undefined ? yield* useTempDirectory("xmd-repl-test-") : undefined,
+    };
+  };
+  const allocation = test === undefined ? undefined : yield* test.eval(allocateTestHome);
+  if (allocation !== undefined && !allocation.ok) {
+    throw allocation.error;
   }
-  const { resumes, home, resume } = prepared.value;
+  const resumes = allocation?.value.resumes ?? enclosing?.resumes;
+  const resume =
+    typeof captured === "object" && captured !== null ? resumes?.get(captured) : undefined;
+  if (captured !== undefined && resume === undefined) {
+    throw new Error("resume must come from a clean <XMD.Repl> exit in this test or <Terminal>");
+  }
+  let home = allocation?.value.home;
+  if (test === undefined && resume === undefined) {
+    home =
+      enclosing?.entryHome === undefined
+        ? yield* useTempDirectory("xmd-repl-entry-")
+        : join(enclosing.entryHome, randomUUID());
+  }
   const terminal =
     enclosing ??
     createTerminal({
@@ -232,6 +292,12 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
         fileURLToPath(new URL("./lib/repl-bench/wheel-permission.ts", import.meta.url)),
       ]
     : ["--deny-all"];
+  if (wanted.entryBenchFixture) {
+    if (test === undefined || wanted.scenario === undefined) {
+      throw new Error("The ReplBench entry fixture needs a scripted <Test>");
+    }
+    args.push("--plugin", fileURLToPath(import.meta.url));
+  }
   if (resume !== undefined) {
     args.push(resume.location);
   }
@@ -264,17 +330,23 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
       attachment,
     );
   }
-  const { launch } = yield* prepareRun(directory, terminal.dimensions, args, {
+  const command = build === undefined ? yield* xmdCommand(["repl", ...args]) : undefined;
+  const { launch, revision } = yield* prepareRun(directory, terminal.dimensions, args, {
     home: resume?.home ?? home,
     scenario,
+    build,
+    command,
   });
-  yield* Stdio.around({
-    // deno-lint-ignore require-yield
-    *stdout() {
-      return;
+  yield* Stdio.around(
+    {
+      // deno-lint-ignore require-yield
+      *stdout() {
+        return;
+      },
     },
-  });
-  const dispatch = yield* connect(launch);
+    { at: "min" },
+  );
+  const { dispatch, close } = yield* connect(launch);
   yield* dispatch({ action: "ready" });
   let sidekick: Yielded<ReturnType<typeof attachSidekick>> | undefined;
   if (attachment !== undefined) {
@@ -287,20 +359,30 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   });
   yield* Sidekick.set(sidekick);
   yield* TerminalContext.set(terminal);
+  yield* LaunchRevision.set(revision);
   yield* RegionContext.set(undefined);
   yield* WaitTimeout.set(waitTimeout);
   const rendered = yield* content();
   const bind = yield* hasBinding();
-  if (!wanted.expectExit) {
+  const exit = wanted.expectExit
+    ? exitResult.parse(yield* dispatch({ action: "exit" }))
+    : undefined;
+  if (build?.expectedRevision !== undefined && launch.worktree !== undefined) {
+    const { code, signal } = yield* close();
+    if (code !== 0) {
+      throw new Error(`Driver exited (${code ?? signal}). Evidence: ${launch.directory}`);
+    }
+    yield* assertPinnedWorktree(launch.worktree, build.expectedRevision);
+  }
+  if (exit === undefined) {
     return bind ? closed : rendered;
   }
-  const exit = exitResult.parse(yield* dispatch({ action: "exit" }));
   const reference =
-    exit.exitCode === 0 && exit.location !== null
+    resumes !== undefined && exit.exitCode === 0 && exit.location !== null
       ? Object.freeze({ location: exit.location, home: launch.home })
       : null;
   if (reference !== null) {
-    resumes.set(reference, { ...reference, dimensions: terminal.dimensions });
+    resumes?.set(reference, { ...reference, dimensions: terminal.dimensions });
   }
   return bind ? { ...exit, resume: reference } : rendered;
 };
@@ -308,7 +390,7 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
 function* scriptedSidekick() {
   const sidekick = yield* Sidekick.get();
   if (sidekick === undefined) {
-    throw new Error("This action needs a <ReplBench> with a scenario.");
+    throw new Error("This action needs an <XMD.Repl> with a scenario.");
   }
   return sidekick;
 }
@@ -316,7 +398,7 @@ function* scriptedSidekick() {
 function* action(command: Command) {
   const terminal = yield* TerminalContext.get();
   if (terminal === undefined) {
-    throw new Error("Use terminal actions inside <Terminal> or <ReplBench>");
+    throw new Error("Use terminal actions inside <Terminal> or <XMD.Repl>");
   }
   return yield* terminal.execute(command);
 }
@@ -346,51 +428,59 @@ const cell = {
   additionalProperties: false,
 };
 const dimensions = { columns: integer, rows: integer };
-const registrations = [
-  registration("Terminal", Terminal, dimensions, ["columns", "rows"]),
+const replLaunch = {
+  ...registration("XMD.Repl", XmdRepl, {
+    ...dimensions,
+    expectExit: boolean,
+    waitTimeout: string,
+    scenario: string,
+    entryPermissionFixture: boolean,
+    entryBenchFixture: boolean,
+    include: strings,
+    mount: strings,
+    allowAbsolute: boolean,
+  }),
+  captures: ["resume"],
+};
+const launchActions = [
+  registration("XMD.Repl.Revision", function* () {
+    (yield* TerminalContext.expect()).requireLaunch();
+    return (yield* LaunchRevision.get()) ?? null;
+  }),
   registration(
-    "Terminal.Screenshot",
-    function* (props) {
-      const name = screenshotName.parse(props.name);
-      return z.string().parse(yield* action({ action: "screenshot", name }));
-    },
-    { name: string },
-    ["name"],
-  ),
-  {
-    ...registration("ReplBench", ReplBench, {
-      ...dimensions,
-      expectExit: boolean,
-      waitTimeout: string,
-      scenario: string,
-      entryPermissionFixture: boolean,
-      include: strings,
-      mount: strings,
-      allowAbsolute: boolean,
-    }),
-    captures: ["resume"],
-  },
-  registration(
-    "ReplBench.SidekickPrompt",
+    "XMD.Repl.SidekickPrompt",
     function* (props) {
       return yield* (yield* scriptedSidekick()).prompt(z.string().min(1).parse(props.text));
     },
     { text: string },
     ["text"],
   ),
-  registration("ReplBench.SidekickStatus", function* () {
+  registration("XMD.Repl.SidekickStatus", function* () {
     return yield* (yield* scriptedSidekick()).status();
   }),
   registration(
-    "ReplBench.EntryOutput",
+    "XMD.Repl.EntryOutput",
     function* (props) {
       return yield* (yield* scriptedSidekick()).output(z.int().positive().parse(props.entry));
     },
     { entry: integer },
     ["entry"],
   ),
+];
+
+const terminalActions = [
   registration(
-    "ReplBench.Focus",
+    "Terminal.Screenshot",
+    function* (props) {
+      const name = screenshotName.parse(props.name);
+      const format = z.enum(["png", "svg"]).optional().parse(props.format);
+      return z.string().parse(yield* action({ action: "screenshot", name, format }));
+    },
+    { name: string, format: { type: "string", enum: ["png", "svg"] } },
+    ["name"],
+  ),
+  registration(
+    "Terminal.Focus",
     function* (props) {
       z.literal("sidekick-composer").parse(props.target);
       yield* action({ action: "focus" });
@@ -398,9 +488,6 @@ const registrations = [
     { target: string },
     ["target"],
   ),
-];
-
-const terminalActions = [
   registration(
     "Terminal.Type",
     function* (props) {
@@ -494,10 +581,23 @@ const terminalActions = [
 
 export default Plugin({
   name: "repl-bench",
-  *install({ command }) {
-    if (command === "test") {
+  *install({ command }): Operation<undefined> {
+    if (command === "repl") {
+      yield* EntryBench.set(true);
+    }
+    if (command === "test" || command === "repl") {
       yield* registerComponents([
-        ...registrations,
+        registration("Terminal", Terminal, dimensions, ["columns", "rows"]),
+        registration("XMD.Build", XmdBuild, { checkout: string, expectedRevision: string }, [
+          "checkout",
+        ]),
+        replLaunch,
+        { ...replLaunch, name: "ReplBench" },
+        ...launchActions,
+        ...launchActions.map((entry) => ({
+          ...entry,
+          name: entry.name.replace("XMD.Repl.", "ReplBench."),
+        })),
         ...terminalActions,
         ...terminalActions.map((entry) => ({
           ...entry,
