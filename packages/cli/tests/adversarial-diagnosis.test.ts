@@ -240,6 +240,11 @@ describe("adversarial problem-solver phase", () => {
     const reply = JSON.stringify(expanded);
     const first = join(test.root, "design");
     const originalPath = join(first, "fable");
+    yield* expectRefusal(
+      test.run(first, undefined, [], context),
+      "Supply a relevant spec section or captured evidence",
+    );
+    expect(test.fake.prompts).toHaveLength(0);
     test.fake.script({ reply });
     expect(JSON.parse(yield* test.run(first, undefined, [], { ...context, specs }))).toMatchObject({
       status: "design",
