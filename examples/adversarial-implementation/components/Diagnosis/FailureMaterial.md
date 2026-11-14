@@ -8,7 +8,6 @@ props:
   additionalProperties: false
 ---
 
-<Let as="assignment" value={props.assignment} />
 <Let as="submission">
 # Submit a diagnosis result
 
@@ -28,17 +27,17 @@ Return one JSON object. Keep any progress updates in plain prose.
 <Json value={props.resultSchema} />
 </Let>
 <Let as="instructions">
-Diagnose the failure using the assigned checkout at {assignment.revision}. Read the repository instructions. Use the captured evidence and reuse the listed probes where they address the missing witness. Run focused commands in owned scratch space and join them before replying. Keep source, workflow records, and external systems read-only.
+Diagnose the failure using the assigned checkout at {props.assignment.revision}. Read the repository instructions. Use the captured evidence and reuse the listed probes where they address the missing witness. Run focused commands in owned scratch space and join them before replying. Keep source, workflow records, and external systems read-only.
 
-<Diagnosis.SpecSections repository={assignment.repository} revision={assignment.revision} references={assignment.spec === undefined ? [] : [assignment.spec]} />
+<Diagnosis.SpecSections repository={props.assignment.repository} revision={props.assignment.revision} references={props.assignment.spec === undefined ? [] : [props.assignment.spec]} />
 
-<If condition={assignment.failingRevision !== undefined}>Failing CI revision: {assignment.failingRevision}. Compare the relevant paths with the assigned checkout before attributing the failure.</If>
-<If condition={assignment.probes?.length > 0}>
+<If condition={props.assignment.failingRevision !== undefined}>Failing CI revision: {props.assignment.failingRevision}. Compare the relevant paths with the assigned checkout before attributing the failure.</If>
+<If condition={props.assignment.probes?.length > 0}>
 Reusable probes:
-<Json value={assignment.probes} />
+<Json value={props.assignment.probes} />
 </If>
 
-{assignment.request}
+{props.assignment.request}
 
 Report a confirmed cause with supporting evidence or the specific missing witness.
 </Let>

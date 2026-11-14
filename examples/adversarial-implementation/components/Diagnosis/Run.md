@@ -16,14 +16,14 @@ returns: {type: object}
 <If condition={request.assignment.kind === "design"}>
 <Diagnosis.Workflow request={request} solvers={solvers} contract={schema.design} as="result">
 <Diagnosis.DesignMaterial assignment={assignment} resultSchema={schema.design.reply.schema} />
-<Diagnosis.DesignContext slot="continuation" assignment={assignment} previous={priorAssignment} />
+<Diagnosis.DesignContext slot="continuation" assignment={request.assignment} previous={previous.assignment} />
 <Diagnosis.DesignContext slot="evidence" assignment={assignment} inputs={inputs} />
 </Diagnosis.Workflow>
 <Return value={result} />
 <Else>
 <Diagnosis.Workflow request={request} solvers={solvers} contract={schema.diagnosis} as="result">
 <Diagnosis.FailureMaterial assignment={assignment} resultSchema={schema.diagnosis.reply.schema} />
-<Diagnosis.FailureContinuation slot="continuation" assignment={assignment} previous={priorAssignment} />
+<Diagnosis.FailureContinuation slot="continuation" assignment={request.assignment} previous={previous.assignment} />
 </Diagnosis.Workflow>
 <Return value={result} />
 </Else>
