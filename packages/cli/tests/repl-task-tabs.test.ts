@@ -66,9 +66,9 @@ for (const size of [
       for (const icon of ["↑", "↓", "x"]) {
         const at = page.screen().locate(icon, { onRow: "done code" });
         expect(at.row).toBe(focused.row);
-        expect(page.repl.terminal.screen?.styleAt(at.column, at.row).background).toBe(
-          page.repl.terminal.screen?.styleAt(focused.column, focused.row).background,
-        );
+        const iconStyle = page.repl.terminal.screen?.styleAt(at.column, at.row);
+        expect(iconStyle?.background).toBe(REPL_PALETTE.composerSurface);
+        expect(iconStyle?.attrs).not.toContain(4);
       }
       capture(page, "completed-task-focused");
       yield* page.key("ArrowRight");
@@ -80,10 +80,15 @@ for (const size of [
       const actionStyle = page.repl.terminal.screen?.styleAt(action.column, action.row);
       expect(actionStyle?.background).toBe(REPL_PALETTE.focusSurface);
       expect(actionStyle?.attrs).toContain(4);
-      expect(page.repl.terminal.screen?.styleAt(label.column, label.row).attrs).not.toContain(4);
-      expect(page.repl.terminal.screen?.styleAt(action.column, action.row).background).toBe(
-        page.repl.terminal.screen?.styleAt(label.column, label.row).background,
-      );
+      const labelStyle = page.repl.terminal.screen?.styleAt(label.column, label.row);
+      expect(labelStyle?.background).toBe(REPL_PALETTE.composerSurface);
+      expect(labelStyle?.attrs).not.toContain(4);
+      for (const icon of ["↓", "x"]) {
+        const at = page.screen().locate(icon, { onRow: "done code" });
+        expect(page.repl.terminal.screen?.styleAt(at.column, at.row).background).toBe(
+          REPL_PALETTE.composerSurface,
+        );
+      }
       capture(page, "task-action-focused");
       yield* page.key("ArrowLeft");
       yield* page.until("task body focused again", (one) => one.shows("> ☑ done code"));

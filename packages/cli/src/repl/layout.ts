@@ -104,8 +104,6 @@ export interface ReplBox {
    * structure, and structure takes the surface of whatever it is inside.
    */
   readonly style: ReplRowStyle | undefined;
-  /** Controls that share this container's focus surface. */
-  readonly focusSurfaceKeys?: readonly string[];
   /**
    * The stretches this row's text is made of, where its characters mean
    * different things, or none where the whole row reads as one thing.
@@ -899,7 +897,6 @@ export function committedOps(
     },
     (id) => cells.get(id),
     focused,
-    (key) => nodeByKey.get(key),
   );
 }
 
@@ -908,7 +905,6 @@ function opsOf(
   idOf: (box: ReplBox) => string | undefined,
   textOf: (id: string) => string | undefined,
   focused: string | undefined,
-  nodeOf?: (key: string) => string | undefined,
 ): Op[] {
   const ops: Op[] = [];
   for (const box of boxes) {
@@ -917,14 +913,12 @@ function opsOf(
       continue;
     }
     const here = id === focused;
-    const shared =
-      focused !== undefined && box.focusSurfaceKeys?.some((key) => nodeOf?.(key) === focused);
-    ops.push(open(id, decorated(box, here || shared === true)));
+    ops.push(open(id, decorated(box, here)));
     const content = textOf(id) ?? box.text;
     if (content !== undefined && content !== "") {
       ops.push(...written(content, box, here));
     }
-    ops.push(...opsOf(box.children, idOf, textOf, focused, nodeOf));
+    ops.push(...opsOf(box.children, idOf, textOf, focused));
     ops.push(close());
   }
   return ops;
@@ -1064,7 +1058,6 @@ export function box(input: {
   readonly text?: string;
   readonly control?: boolean;
   readonly style?: ReplRowStyle;
-  readonly focusSurfaceKeys?: readonly string[];
   readonly runs?: readonly ReplTokenRun[];
   readonly children?: readonly ReplBox[];
 }): ReplBox {
@@ -1076,9 +1069,6 @@ export function box(input: {
     text: input.text,
     control: input.control === true,
     style: input.style,
-    ...(input.focusSurfaceKeys === undefined
-      ? {}
-      : { focusSurfaceKeys: Object.freeze([...input.focusSurfaceKeys]) }),
     runs: input.runs,
     children: Object.freeze(input.children === undefined ? [] : [...input.children]),
   });
