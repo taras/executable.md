@@ -1,7 +1,8 @@
 import { exists, writeTextFile } from "@effectionx/fs";
 import { timebox } from "@effectionx/timebox";
 import { env } from "@executablemd/runtime";
-import { sleep } from "effection";
+import { sleep, until } from "effection";
+import { appendFile } from "node:fs/promises";
 import { z } from "zod";
 
 export const props = {
@@ -39,7 +40,7 @@ export default function* ReviewDispatch(value: unknown) {
     .strictObject({ directory: z.string(), call: reviewCall })
     .parse(value);
   const evidence = `${directory}/overlap`;
-  yield* writeTextFile(`${evidence}/${actor}-${call.position}.json`, JSON.stringify(call));
+  yield* until(appendFile(`${evidence}/${actor}.jsonl`, `${JSON.stringify(call)}\n`));
   if (actor === "winner" && call.position === 1) {
     yield* writeTextFile(`${evidence}/ready`, "");
     if ((yield* waitForFile(`${evidence}/release`, 45_000)).timeout) {

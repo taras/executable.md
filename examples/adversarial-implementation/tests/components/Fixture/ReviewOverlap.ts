@@ -40,6 +40,18 @@ export default function* ReviewOverlap(value: unknown) {
       timeout,
     }).join();
 
+  function* dispatches(actor: "winner" | "contender" | "later") {
+    const path = `${evidence}/${actor}.jsonl`;
+    if (!(yield* exists(path))) {
+      return [];
+    }
+    const receipts = yield* readTextFile(path);
+    return receipts
+      .trimEnd()
+      .split("\n")
+      .map((line) => reviewCall.parse(JSON.parse(line)));
+  }
+
   const held = function* () {
     return (
       (yield* exists(`${replacement}/transition.json`)) &&
@@ -69,9 +81,15 @@ export default function* ReviewOverlap(value: unknown) {
     if (ready.timeout || !(yield* held())) {
       throw new Error("The winner did not reach the reserved replacement reviewer and stay there.");
     }
-    const call = reviewCall.parse(JSON.parse(yield* readTextFile(`${evidence}/winner-1.json`)));
-    if (call.position !== 1 || call.revision !== revision || !call.prompted) {
-      throw new Error(`The winner reached an unexpected review: ${JSON.stringify(call)}`);
+    const calls = yield* dispatches("winner");
+    const [call] = calls;
+    if (
+      calls.length !== 1 ||
+      call?.position !== 1 ||
+      call.revision !== revision ||
+      !call.prompted
+    ) {
+      throw new Error(`The winner reached unexpected reviews: ${JSON.stringify(calls)}`);
     }
 
     const contender = yield* review("contender", 30_000);
@@ -81,16 +99,6 @@ export default function* ReviewOverlap(value: unknown) {
     return { contender, wasHeld, winner: yield* first };
   });
 
-  const dispatches = (actor: "winner" | "contender" | "later") =>
-    scoped(function* () {
-      const positions = [];
-      for (const position of [0, 1]) {
-        if (yield* exists(`${evidence}/${actor}-${position}.json`)) {
-          positions.push(position);
-        }
-      }
-      return positions;
-    });
   const contenderCalls = yield* dispatches("contender");
   if (!wasHeld || contenderCalls.length !== 0) {
     throw new Error(
@@ -108,7 +116,7 @@ export default function* ReviewOverlap(value: unknown) {
     );
   }
   const winnerCalls = yield* dispatches("winner");
-  if (winner.code !== 0 || winnerCalls.length !== 1 || winnerCalls[0] !== 1) {
+  if (winner.code !== 0 || winnerCalls.length !== 1 || winnerCalls[0]?.position !== 1) {
     throw new Error(
       `Winner exited ${winner.code} with dispatches ${JSON.stringify(winnerCalls)}: ${winner.stderr} ${winner.stdout}`,
     );
