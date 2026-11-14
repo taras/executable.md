@@ -58,7 +58,14 @@ import {
 } from "@executablemd/git";
 import type { GitHostReconciliationRecord } from "@executablemd/git";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { allocate, settledEntry, showing, showingAcross, terminalDataHome } from "./pty.ts";
+import {
+  allocate,
+  focusPtyDraft,
+  settledEntry,
+  showing,
+  showingAcross,
+  terminalDataHome,
+} from "./pty.ts";
 import type { Pty } from "./pty.ts";
 import {
   ACT_MS,
@@ -277,6 +284,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
 
     const first = yield* allocate(open(["repl", "--deny-all", "--allow-absolute"]), home);
     yield* showing(first, "[exit]", REACH_MS);
+    yield* focusPtyDraft(first, REACH_MS);
     yield* first.type(entry());
     yield* sleep(500);
     yield* first.type("\r");
@@ -475,6 +483,7 @@ export function replUnsupportedPullRequest(repl: ReplCommand): Operation<void> {
       home,
     );
     yield* showing(pty, "[exit]", REACH_MS);
+    yield* focusPtyDraft(pty, REACH_MS);
     yield* pty.type(
       [
         "<PrintErrors>",
