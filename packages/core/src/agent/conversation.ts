@@ -93,6 +93,7 @@ import { AgentConversationProvider } from "./conversation-provider.ts";
 import type {
   AgentOptions,
   AgentOptionsRequest,
+  PromptImage,
   PromptOptions,
   Session,
   SessionConfiguration,
@@ -137,7 +138,11 @@ export interface AgentConversationRequest {
 /** One open conversation, for as long as the caller's scope holds it. */
 export interface AgentConversation {
   /** Send one journaled turn and return its successfully completed reply. */
-  prompt(input: string, configuration?: SessionConfiguration): Operation<Result<string>>;
+  prompt(
+    input: string,
+    configuration?: SessionConfiguration,
+    images?: readonly PromptImage[],
+  ): Operation<Result<string>>;
   /** Inspect the selected agent's advertised model and effort choices. */
   options(request?: AgentOptionsRequest): Operation<Result<AgentOptions>>;
   /**
@@ -207,6 +212,7 @@ interface PromptJob {
   readonly kind: "prompt";
   readonly input: string;
   readonly configuration?: SessionConfiguration;
+  readonly images?: readonly PromptImage[];
   readonly answer: Resolvers<Result<string>>;
   readonly cancelled: Resolvers<void>;
   readonly joined: Resolvers<void>;
@@ -443,7 +449,11 @@ function handle(
     );
 
   return {
-    prompt(input: string, configuration?: SessionConfiguration): Operation<Result<string>> {
+    prompt(
+      input: string,
+      configuration?: SessionConfiguration,
+      images?: readonly PromptImage[],
+    ): Operation<Result<string>> {
       return scoped(function* () {
         const admitted = admit();
         if (!admitted.ok) {
@@ -481,6 +491,9 @@ function handle(
           kind: "prompt",
           input,
           ...(configuration === undefined ? {} : { configuration }),
+          ...(images === undefined
+            ? {}
+            : { images: Object.freeze(images.map((image) => Object.freeze({ ...image }))) }),
           answer,
           cancelled,
           joined,
@@ -1146,7 +1159,11 @@ function conversationTurn(
               "been in. An established conversation is not reattached to another identity.",
           );
         }
-        const options: PromptOptions = { agent, session };
+        const options: PromptOptions = {
+          agent,
+          session,
+          ...(job.images === undefined ? {} : { images: job.images }),
+        };
         // The same provider, the same agent and the exact session that was
         // settled and checked above. The canonical runner is the one in
         // `function-components.ts` either way — one definition of what a turn

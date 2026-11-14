@@ -109,6 +109,21 @@ function* collectPrompt(
 }
 
 describe("Tier AP — ACPX provider", () => {
+  it("forwards ordered prompt images to the ACPX turn", function* () {
+    const harness = createFakeRuntime();
+    yield* installProvider(harness);
+    const images = [
+      { mediaType: "image/png", data: "iVBORw0KGgo=" },
+      { mediaType: "image/png", data: "iVBORw0KGgoA" },
+    ] satisfies NonNullable<PromptOptions["images"]>;
+
+    yield* collectPrompt("Compare the images", { images });
+
+    expect(harness.turns).toHaveLength(1);
+    expect(harness.turns[0]?.input.text).toBe("Compare the images");
+    expect(harness.turns[0]?.input.attachments).toEqual(images);
+  });
+
   it("workflow-role controls refuse retained sessions that lack their creation settings", function* () {
     const key = deriveSessionKey("scribe-cmd", CWD);
     const controls = {

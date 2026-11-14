@@ -3235,6 +3235,7 @@ function* useAcpxProviderState(
           const turn = entry.runtime.runtime.startTurn({
             handle: entry.handle,
             text: content,
+            ...(options?.images === undefined ? {} : { attachments: [...options.images] }),
             mode: "prompt",
             requestId,
             timeoutMs,

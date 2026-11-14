@@ -14,10 +14,13 @@ import {
   rm,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { allSettled, Ok, ensure, scoped, spawn, until, withResolvers, race } from "effection";
 import type { Operation } from "effection";
 import { Permissions } from "@executablemd/runtime/api";
 import { FsApi } from "@effectionx/fs";
+import { recoveredWork } from "../src/repl/sidekick/feedback.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { useNodeReplAssetImport } from "../src/node-repl-asset-import.ts";
 import { records, useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
@@ -137,6 +140,102 @@ function* importThroughOwner(bytes: Uint8Array, destination: string, deniedAbsol
   expect(io.reads).toBe(1);
   return { held, source: source.source, io };
 }
+
+describe("Sidekick image feedback", () => {
+  it("reads an arbitrary imported binary asset with a caller-supplied size bound", function* () {
+    yield* useNodeReplAssetImport();
+    const held = yield* useHarness();
+    const path = "reference/binary sample.bin";
+    const target = join(held.workspace, "assets", path);
+    yield* until(mkdir(dirname(target), { recursive: true }));
+    yield* until(writeFile(target, BINARY));
+
+    const [read, tooLarge, outside] = yield* allSettled([
+      ReplHost.operations.readAsset(held.workspace, path, BINARY.length),
+      ReplHost.operations.readAsset(held.workspace, path, BINARY.length - 1),
+      ReplHost.operations.readAsset(held.workspace, "../binary sample.bin", BINARY.length),
+    ]);
+    expect(read.ok && [...read.value]).toEqual([...BINARY]);
+    expect(!tooLarge.ok && tooLarge.error.message).toContain("at most");
+    expect(!outside.ok && outside.error.message).toContain("relative to the session's assets");
+  });
+
+  it("refuses an asset redirected outside the session assets", function* () {
+    yield* useNodeReplAssetImport();
+    const held = yield* useHarness();
+    const outside = yield* fixture(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
+    const path = "reference/redirect.bin";
+    const target = join(held.workspace, "assets", path);
+    yield* until(mkdir(dirname(target), { recursive: true }));
+    yield* until(symlink(outside.source, target));
+    try {
+      yield* ReplHost.operations.readAsset(held.workspace, path, 64);
+    } catch (error) {
+      expect(String(error)).toContain("stored under the session assets");
+      return;
+    }
+    throw new Error("The native asset reader followed a symlink");
+  });
+
+  it("sends both images with their ordered provenance and retains only the provenance", function* () {
+    const first = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]);
+    const second = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 2]);
+    const screenshots = new Map([
+      ["reference/first image.png", first],
+      ["reference/second image.png", second],
+    ]);
+    yield* useNodeReplAssetImport();
+    const held = yield* useHarness();
+    for (const [path, bytes] of screenshots) {
+      const source = yield* fixture(bytes);
+      scripted(held, source.source, `assets/${path}`);
+      const sending = yield* spawn(() => held.owner.message("Import screenshot"));
+      const approval = yield* question(held.owner.questions);
+      expect(approval.submit({ decision: "Import" }).kind).toBe("answered");
+      const imported = yield* sending;
+      if (!imported.ok) {
+        throw imported.error;
+      }
+    }
+    const firstComparisonTurn = held.fake.turns.length;
+    held.fake.script({
+      reply: [...screenshots.keys()]
+        .map((path) => `<REPL.InspectImage path="${path}" />`)
+        .join("\n"),
+    });
+    held.fake.script({ reply: "<Output>Looked at the images.</Output>" });
+    const result = yield* held.owner.message("Compare the screenshots");
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(held.fake.turns[firstComparisonTurn]?.attachments).toBeUndefined();
+    expect(held.fake.turns[firstComparisonTurn + 1]?.attachments).toEqual(
+      [...screenshots.values()].map((bytes) => ({
+        mediaType: "image/png",
+        data: bytes.toString("base64"),
+      })),
+    );
+    const retained = yield* records(held.execution);
+    const saved = JSON.stringify(retained);
+    const imageControl = retained.find(
+      (record) => record.kind === "control" && record.component === "REPL.InspectImage",
+    );
+    if (imageControl?.kind !== "control") {
+      throw new Error("Expected a retained image control");
+    }
+    const reopened = yield* held.repository.open(held.execution.id);
+    const recovered = recoveredWork(yield* records(reopened), imageControl);
+    expect(recovered).toContain("Use REPL.InspectImage again to view them.");
+    for (const [path, bytes] of screenshots) {
+      const observation = `${path} (SHA-256 ${createHash("sha256").update(bytes).digest("hex")})`;
+      expect(held.fake.turns[firstComparisonTurn + 1]?.text).toContain(observation);
+      expect(saved).toContain(observation);
+      expect(recovered).toContain(observation);
+      expect(recovered).not.toContain(bytes.toString("base64"));
+      expect(saved).not.toContain(bytes.toString("base64"));
+    }
+  });
+});
 
 describe("approved Sidekick asset import", () => {
   it("A2/A3: actual captured approval copies text and two independently known binary inputs", function* () {

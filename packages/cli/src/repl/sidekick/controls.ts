@@ -128,6 +128,7 @@ export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];
  */
 export interface SidekickRequests {
   readonly test?: ReplTesting;
+  inspectImage?(path: string): Operation<Result<string>>;
   importAsset(source: string, destination: string): Operation<Result<string>>;
   /** The acknowledged published root values, detached. */
   bindings(): Operation<Result<Json>>;
@@ -281,6 +282,7 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.Submit",
   "REPL.Test",
   "REPL.ImportAsset",
+  "REPL.InspectImage",
   "REPL.EntryOutput",
   ...ENTRY_INSPECTIONS,
   ELICIT_CONTROL,
@@ -548,6 +550,36 @@ export function sidekickObservations(
       },
     }),
   ];
+  const inspectImage = requests.inspectImage;
+  if (inspectImage !== undefined) {
+    observations.push(
+      reading("REPL.InspectImage", "InspectImage", {
+        kind: "function",
+        name: "REPL.InspectImage",
+        description:
+          "Read an imported PNG in your next turn. Supply its path relative to the session assets directory.",
+        props: {
+          type: "object",
+          properties: { path: { type: "string", minLength: 1 } },
+          required: ["path"],
+          additionalProperties: false,
+        },
+        *fn(props: Record<string, Json>) {
+          const path = props.path;
+          if (typeof path !== "string") {
+            throw new Error("REPL.InspectImage requires an asset path");
+          }
+          return yield* performed(
+            journal,
+            { component: "REPL.InspectImage", arguments: { path } },
+            () => inspectImage(path),
+            (description) => description,
+            (description) => description,
+          );
+        },
+      }),
+    );
+  }
   observations.push(...entryInspections(requests, journal));
   for (const chapter of GUIDE_CHAPTERS) {
     const name = `Guide.${chapter}`;

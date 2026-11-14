@@ -3030,6 +3030,31 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
     );
   });
 
+  it("refuses replacing a held turn's prompt images", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const images = [{ mediaType: "image/png", data: "iVBORw0KGgo=" }] satisfies NonNullable<
+      PromptOptions["images"]
+    >;
+    const replaceImages = composingInstallation(
+      "replace-images",
+      watching(),
+      (text) => text,
+      (options) => ({ ...options, images: [] }),
+    );
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      (chat) => chat.prompt("Compare the image", undefined, images),
+      "chat-1",
+      [replaceImages],
+    );
+
+    expect(replied(answered)).toContain("prompt images changed in transit");
+    expect(traffic.prompts).toHaveLength(0);
+  });
+
   it("DP6: the terminal refuses a composition that changed the checked call", function* () {
     const canary: Session = { sessionKey: "xmd:chat:v1:acpx:elsewhere", cwd: "/stub" };
     const cases: {

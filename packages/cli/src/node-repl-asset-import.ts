@@ -1,4 +1,6 @@
-import { copyFile, link, mkdir, mkdtemp, realpath } from "node:fs/promises";
+import { copyFile, link, mkdir, mkdtemp, open, realpath, type FileHandle } from "node:fs/promises";
+import { constants } from "node:fs";
+import { Buffer } from "node:buffer";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { lstat, rm, stat } from "@effectionx/fs";
 import { elicit, isJsonObject } from "@executablemd/core";
@@ -21,6 +23,7 @@ export function* useNodeReplAssetImport(native = nativeOperations): Operation<vo
   yield* ReplHost.around(
     {
       importAsset: ([request]) => importAsset(request, native),
+      readAsset: ([workspace, path, maxBytes]) => readAsset(workspace, path, maxBytes, native),
     },
     { at: "min" },
   );
@@ -253,4 +256,58 @@ function refused(error: unknown): Result<never> {
     return Err(error);
   }
   throw error;
+}
+
+function* readAsset(
+  workspace: string,
+  path: string,
+  maxBytes: number,
+  native: typeof nativeOperations,
+): Operation<Uint8Array> {
+  if (
+    path.includes("\\") ||
+    path.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new Error("Choose a path relative to the session's assets directory.");
+  }
+  if (!(yield* Permissions.operations.files("read"))) {
+    throw new Error("Reading a session asset requires Files read permission.");
+  }
+  const root = yield* joined(() => native.realpath(workspace));
+  const target = destinationTarget(root, join("assets", path));
+  const source = yield* joined(() => native.realpath(target));
+  if (source !== target) {
+    throw new Error("Choose an asset stored under the session assets directory without symlinks.");
+  }
+  return yield* scoped(function* () {
+    let pending: Promise<FileHandle> | undefined;
+    yield* ensure(function* () {
+      if (pending === undefined) {
+        return;
+      }
+      const handle = yield* until(pending.catch(() => undefined));
+      if (handle !== undefined) {
+        yield* until(handle.close());
+      }
+    });
+    pending = open(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const handle = yield* until(pending);
+    const info = yield* until(handle.stat());
+    if (!info.isFile() || info.size > maxBytes) {
+      throw new Error(`Choose a regular session asset of at most ${maxBytes} bytes.`);
+    }
+    const bytes = Buffer.alloc(info.size + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = yield* until(handle.read(bytes, offset, bytes.length - offset, offset));
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    if (offset !== info.size) {
+      throw new Error("The session asset size changed while reading it. Try again.");
+    }
+    return bytes.subarray(0, offset);
+  });
 }

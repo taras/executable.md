@@ -880,11 +880,16 @@ request still names no agent: an agent on it would be an agent anything holding
 it could read or replace.
 
 The handle is provided by a resource owned by the caller's scope and offers
-three members: `prompt(input, configuration?)`, which sends one journaled turn
+three members: `prompt(input, configuration?, images?)`, which sends one journaled turn
 and answers with its completed reply; `options(request?)`, which inspects the
 selected agent's advertised choices; and `evaluateGeneratedXmdRoot(request)`,
 which evaluates one complete generated root under this conversation's own
 execution. Stop is scope cancellation rather than a fourth member.
+
+A held prompt can carry a host-supplied ordered list of PNG images. The ACPX
+provider sends them as image content blocks with the prompt text. The backend's
+advertised image capability determines whether that turn can start. Core
+journals the text, and the caller supplies any durable references to the images.
 
 `prompt` returns source and runs none of it. A host that means to run what came
 back decides that itself and asks here, because a generated root is evaluated

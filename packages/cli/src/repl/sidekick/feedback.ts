@@ -332,6 +332,9 @@ export function recoveredWork(
     "A response in this conversation was interrupted before it finished. This is what it " +
       "actually did; it is not running any more, and nothing of it will be repeated:",
     ...items.map((item) => `## ${item.component}\n\n${item.body}`),
+    ...(items.some((item) => item.component === "REPL.InspectImage")
+      ? ["Recovered feedback includes image references. Use REPL.InspectImage again to view them."]
+      : []),
   ].join("\n\n");
 }
 

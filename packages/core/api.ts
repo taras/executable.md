@@ -63,6 +63,7 @@ export type {
   AgentOptionSet,
   AgentOptionsRequest,
   AgentPromptEvent,
+  PromptImage,
   PermissionMode,
   PermissionOption,
   PermissionOutcome,

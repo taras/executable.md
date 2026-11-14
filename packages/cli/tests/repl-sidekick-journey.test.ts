@@ -274,6 +274,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
       // with a different one would be a different configuration, which is a
       // refusal rather than a continuation.
       assembly: held.profile.sidekickAssembly,
+      workspace: held.workspace,
       chat: reopenedChat,
       // deno-lint-ignore require-yield
       *establish(): Operation<Result<PairedChatStorage>> {
@@ -408,6 +409,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     const reopenedChat = cold.chat as PairedChatStorage;
     const reopened = yield* useSidekickOwner({
       assembly: held.profile.sidekickAssembly,
+      workspace: held.workspace,
       chat: reopenedChat,
       // deno-lint-ignore require-yield
       *establish(): Operation<Result<PairedChatStorage>> {
@@ -480,6 +482,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     const reopenedChat = cold.chat as PairedChatStorage;
     const reopened = yield* useSidekickOwner({
       assembly: held.profile.sidekickAssembly,
+      workspace: held.workspace,
       chat: reopenedChat,
       // deno-lint-ignore require-yield
       *establish(): Operation<Result<PairedChatStorage>> {
@@ -1034,6 +1037,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     const chat = cold.chat as PairedChatStorage;
     const reopened = yield* useSidekickOwner({
       assembly: held.profile.sidekickAssembly,
+      workspace: held.workspace,
       chat,
       // deno-lint-ignore require-yield
       *establish(): Operation<Result<PairedChatStorage>> {
