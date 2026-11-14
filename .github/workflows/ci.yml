@@ -182,6 +182,7 @@ jobs:
         working-directory: repl bench checkout
         run: |
           deno task setup
+          bun --no-install ./examples/repl-bench/check-screen.ts
           bun --no-install ./examples/repl-bench/bench.ts preflight
           bun --no-install ./examples/repl-bench/bench.ts preflight --size 72x20
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
