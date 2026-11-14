@@ -1,4 +1,5 @@
 import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
+import { exec } from "@effectionx/process";
 import { keyToAnsi, parseKey, screenshotSvg } from "@termless/core";
 import { createXtermBackend } from "@termless/xtermjs";
 import {
@@ -17,7 +18,6 @@ import process from "node:process";
 import { join } from "node:path";
 import { decodeLocation } from "../../../packages/cli/src/repl/route.ts";
 import type { Command, Launch, Point, WaitOptions } from "./protocol.ts";
-import { denoCommand } from "./run.ts";
 import { viewport } from "./screen.ts";
 
 interface Pty {
@@ -144,13 +144,13 @@ export function useDriver(options: Launch) {
     });
     try {
       yield* ensureDir(home);
-      child = Bun.spawn(denoCommand(["repl", ...options.args]), {
+      child = Bun.spawn(options.command, {
         cwd,
         env: {
           ...process.env,
           HOME: home,
           XMD_SIDEKICK_SCENARIO: options.scenario,
-          DENO_DIR: options.denoDir,
+          ...(options.denoDir === undefined ? {} : { DENO_DIR: options.denoDir }),
           XDG_DATA_HOME: join(home, ".local", "share"),
           XDG_CONFIG_HOME: join(home, ".config"),
           XDG_STATE_HOME: join(home, ".local", "state"),
@@ -401,7 +401,12 @@ export function useDriver(options: Launch) {
                 }),
               });
               yield* writeTextFile(path, svg);
-              return path;
+              if (command.format !== "png") {
+                return path;
+              }
+              const png = join(directory, `${command.name}.png`);
+              yield* exec("rsvg-convert", { arguments: ["--output", png, path] }).expect();
+              return png;
             }
             case "exit":
               return yield* exit();

@@ -34,7 +34,11 @@ export const command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("wait"), ...waitOptions.shape }),
   z.object({ action: z.literal("resize"), ...size.shape }),
   z.object({ action: z.literal("look") }),
-  z.object({ action: z.literal("screenshot"), name: screenshotName }),
+  z.object({
+    action: z.literal("screenshot"),
+    name: screenshotName,
+    format: z.enum(["svg", "png"]).optional(),
+  }),
   z.object({ action: z.literal("exit") }),
   z.object({ action: z.literal("stop") }),
 ]);
@@ -48,8 +52,10 @@ export const launch = z.object({
   cwd: z.string(),
   home: z.string(),
   scenario: z.string().optional(),
-  entry: z.string(),
-  denoDir: z.string(),
+  entry: z.string().optional(),
+  worktree: z.string().optional(),
+  command: z.array(z.string()).min(1),
+  denoDir: z.string().optional(),
   ...size.shape,
   args: z.array(z.string()),
 });
