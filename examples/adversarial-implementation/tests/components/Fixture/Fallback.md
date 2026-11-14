@@ -260,7 +260,7 @@ Reopen with a replacement reservation whose outcome never joined.
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterHeld" />
 <AssertEquals actual={afterHeld.calls.length} expected={2} />
 
-Reopen the retained primary failure. Hold its replacement at reviewer entry so a second review action observes the active reservation.
+Remove the interrupted replacement and check that the retained primary failure admits a replacement again.
 
 <Let as="quotedReplacement" value={"'" + (attempt + "/replacement").replaceAll("'",quote) + "'"} />
 ```bash exec as="cut"
@@ -269,9 +269,12 @@ rm -r -- {quotedReplacement}
 <If condition={cut.exitCode !== 0}><Fail message={cut.stderr} /></If>
 <Delivery.Status delivery={delivery} number={7} as="resumable" />
 <AssertEquals actual={[resumable.status,resumable.nextAction]} expected={["review_pending","review"]} />
-<Fixture.ReviewOverlap command={props.runner + " " + entry} directory={delivery.directory} attempt={attempt} revision={revision} />
-<Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterOverlap" />
-<AssertEquals actual={afterOverlap.calls.map(call => call.position)} expected={[0,1]} />
+```bash exec as="resumedEntry"
+{props.runner} {entry} --props-action review
+```
+<If condition={resumedEntry.exitCode !== 0}><Fail message={resumedEntry.stderr + resumedEntry.stdout} /></If>
+<Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterResume" />
+<AssertEquals actual={afterResume.calls.map(call => call.position)} expected={[0,1,1]} />
 <Delivery.Status delivery={delivery} number={7} as="resumed" />
 <AssertEquals actual={resumed.status} expected="ready_for_merge" />
 <Fixture.Inventory directory={attempt} as="afterCut" />
