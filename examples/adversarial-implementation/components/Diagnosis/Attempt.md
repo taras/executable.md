@@ -30,10 +30,14 @@ returns: {type: object}
 
 Read this when preparing the final diagnosis, including a missing-witness result.
 
-For a confirmed cause, cite the captured evidence that distinguishes it. Give a
-regression command, its expected and observed behavior, and a bounded
-implementation handoff. If the evidence leaves multiple causes possible, name the specific
-missing witness and how to obtain it.
+Return `cause` only when the captured evidence distinguishes the cause from
+other plausible explanations. In `cause`, state the diagnosis and explain how
+the observations support it. In `evidence[]`, put only exact `path` values from
+the captured inputs. Copy each path verbatim. Give a regression command, its
+expected and observed behavior, and a bounded implementation handoff.
+
+If the evidence is inconclusive, return `missing_witness`. Use `witness` to name
+the specific missing observation and `howToObtain` to explain how to capture it.
 
 Return one JSON object. Keep any progress updates in plain prose.
 
