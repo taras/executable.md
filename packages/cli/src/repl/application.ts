@@ -13515,8 +13515,6 @@ function workspacePresentation(input: {
                         id: `box:${region}:${one.key}:row`,
                         region,
                         props: partsRowProps(1, 1, room),
-                        style: ORDINARY,
-                        focusSurfaceKeys: [one.key, ...controls.map((control) => control.key)],
                         children: [
                           box({
                             id: `box:${region}:${one.key}:text`,
