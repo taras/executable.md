@@ -141,7 +141,7 @@ import type { IdentityDomain } from "./invocation-identity.ts";
 import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { useNarrowedSyntax } from "./syntax-api.ts";
-import { InvocationTeardownError, withInvocation } from "./invocation.ts";
+import { terminalInvocationFailure, withInvocation } from "./invocation.ts";
 import { observeExpansion } from "./component-expansion.ts";
 import type { ObservedExpansion } from "./component-expansion.ts";
 import type { Invocation } from "./invocation.ts";
@@ -1845,6 +1845,7 @@ function* expandListSegments(
           break;
         }
 
+        const durability = (yield* DurableContext.get())?.durability;
         try {
           const codeResult = yield* withExecutingOutput(projectedFrame, function* () {
             if (inputParts.some((part) => typeof part !== "string")) {
@@ -1854,6 +1855,10 @@ function* expandListSegments(
             }
             return yield* applyModifiers(segment.modifiers, context);
           });
+
+          if (durability?.failure !== undefined) {
+            throw durability.failure;
+          }
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
@@ -1900,6 +1905,11 @@ function* expandListSegments(
             result.push(reached);
           }
         } catch (error) {
+          const terminal = durability?.failure ?? terminalInvocationFailure(error);
+          if (terminal !== undefined) {
+            recordTerminalFailure(checkedFailures, terminal);
+            throw terminal;
+          }
           const fatal = fatalCause(error);
           if (fatal !== undefined) {
             throw fatal;
@@ -2512,7 +2522,7 @@ function* expandIf(
 
 function recordTerminalFailure(ledger: CheckedFailures | undefined, error: unknown): void {
   const release = ledger?.release;
-  if (release === undefined || terminalTryFailure(error) === undefined) {
+  if (release === undefined || terminalInvocationFailure(error) === undefined) {
     return;
   }
   const current = asFailure(error);
@@ -2533,16 +2543,6 @@ function recordTerminalFailure(ledger: CheckedFailures | undefined, error: unkno
   if (release.failure !== undefined) {
     release.activate?.(release.failure);
   }
-}
-
-function terminalTryFailure(error: unknown): Error | undefined {
-  return (
-    durabilityFailure(error) ??
-    filesFatalFailure(error) ??
-    firstCause(error, (cause) =>
-      cause instanceof InvocationTeardownError ? asFailure(error) : undefined,
-    )
-  );
 }
 
 function* expandTry(
@@ -2674,7 +2674,7 @@ function* expandTry(
 
     yield* scoped(function* () {
       yield* ensure(function* () {
-        const terminal = terminalTryFailure(settledFailure());
+        const terminal = terminalInvocationFailure(settledFailure());
         if (terminal !== undefined) {
           throw terminal;
         }
@@ -2688,7 +2688,7 @@ function* expandTry(
         if (finalizerEntered && !finalizerCompleted && inherited?.cancellation?.() !== "terminal") {
           return;
         }
-        const fatal = terminalTryFailure(settledFailure());
+        const fatal = terminalInvocationFailure(settledFailure());
         if (fatal !== undefined) {
           throw fatal;
         }
@@ -2710,7 +2710,7 @@ function* expandTry(
       } catch (error) {
         pending = asFailure(error);
       }
-      if (release.failure !== undefined || terminalTryFailure(pending) !== undefined) {
+      if (release.failure !== undefined || terminalInvocationFailure(pending) !== undefined) {
         finished = true;
         return;
       }
@@ -2733,7 +2733,7 @@ function* expandTry(
         unchecked.push(attempt.failure);
       }
       finished = true;
-      if (terminalTryFailure(settledFailure()) !== undefined) {
+      if (terminalInvocationFailure(settledFailure()) !== undefined) {
         return;
       }
       if (structure.finalizer !== undefined) {
@@ -3386,7 +3386,7 @@ function retained(
       };
     } catch (error) {
       recordTerminalFailure(ledger, error);
-      if (terminalTryFailure(error) !== undefined) {
+      if (terminalInvocationFailure(error) !== undefined) {
         ledger?.publicationFailure?.(asFailure(error));
       }
       throw error;

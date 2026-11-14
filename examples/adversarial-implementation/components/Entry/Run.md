@@ -33,6 +33,30 @@ input or existing record you need to reconcile before another launch.
 git -C {repositoryPath} rev-parse --show-toplevel
 ```
 <If condition={source.exitCode !== 0}><Let as="work" value={{status:"hold",reason:"Prepare the existing source repository at " + task.repository + " before launch. " + source.stderr,history:[]}} /><Break /></If>
+<Let as="initialRole" value={task.scope.sharedApi.needed || !task.scope.implementation.ready ? "planner" : "implementor"} />
+<Let as="inspection" value={null} />
+<If condition={task.scope.migration === null}>
+<Let as="roles" value={{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}}} />
+<Let as="assignment" value={{phase:"implementation",work:task.work,repository:task.repository,revision:task.revision,priorRevision:null,request:task.request,assessment:task.assessment,changedPaths:[],artifacts:[],evidence:[],findings:[]}} />
+<If condition={initialRole === "planner"}>
+<Let as="assignment" value={{...assignment,phase:"discovery",request:"Prepare the missing ordinary implementation plan and focused evidence for this accepted work: " + task.request + "\nProduce plan/evidence only. Do not edit or commit source or build an API foundation. Necessary API work and consumers belong to one Implementor. Preserve existing product and architecture approval gates; return needs_decision for any unanswered material choice.",recipient:initialRole,continuation:{phase:"implementation",role:"implementor"}}} />
+</If>
+<Let as="provider" value={roles[initialRole].provider} />
+<Phase.Profile role={initialRole} assessment={assignment.assessment} plannerProvider={provider} implementationProvider={provider} as="profile" />
+<Phase.InspectionRecipe profile={profile} as="inspection" />
+<If condition={inspection !== null}>
+<Entry.CheckoutCheck root={source.stdout.trim()} as="checkCheckout" />
+<Try>
+
+```js eval
+const checkoutHold = yield* checkCheckout();
+```
+
+<Finally></Finally>
+</Try>
+<If condition={checkoutHold !== null}><Let as="work" value={{status:"hold",reason:checkoutHold,history:[]}} /><Break /></If>
+</If>
+</If>
 <Ticket.Checkout repository={task.repository} as="checkout" />
 <If condition={checkout.head !== task.revision || !checkout.clean}><Let as="work" value={{status:"hold",reason:"Source " + task.repository + " must be clean at task.revision " + task.revision + "; observed HEAD " + checkout.head + ". Preserve partial effects and prepare facts for the exact intended revision.",history:[]}} /><Break /></If>
 <Let as="parentPath" value={"'" + (task.directory.slice(0,task.directory.lastIndexOf("/")) || "/").replaceAll("'","'\"'\"'") + "'"} />
@@ -79,6 +103,18 @@ test -f {referencePath} -a -r {referencePath}
 </Loop>
 <If condition={unreadable.length !== 0}><Let as="work" value={{status:"hold",reason:"Prepare readable selected evidence and role-guide texts before launch: " + unreadable.join(", "),history:[]}} /><Break /></If>
 <If condition={task.scope.decisions.openQuestions.length !== 0}><Let as="work" value={{status:"hold",reason:"Resolve these material questions before launch: " + task.scope.decisions.openQuestions.join("; ") + ". Evidence: " + task.scope.decisions.evidence.join(", ") + ". Record accepted answers under fresh references and prepare the task again.",history:[]}} /><Break /></If>
+<If condition={inspection !== null}>
+<Entry.InspectionCheck repository={task.repository} recipe={inspection} as="checkInspection" />
+<Try>
+
+```js eval
+const admitted = yield* checkInspection();
+```
+
+<Finally></Finally>
+</Try>
+<If condition={!admitted}><Let as="work" value={{status:"hold",reason:inspection.displayName + " could not verify model " + inspection.model + " with effort " + inspection.effort + ". Correct the " + inspection.displayName + " profile or launch environment and explicitly submit the same fresh task again.",history:[]}} /><Break /></If>
+</If>
 <Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={[...task.inputs,...guidePaths]} as="retained" />
 <Ticket.Selected repository={task.repository} documents={retained} as="documents" />
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
@@ -95,11 +131,7 @@ mkdir -- {directoryPath}
 ```
 <If condition={reserved.exitCode !== 0}><Let as="work" value={{status:"hold",reason:"The fresh work directory could not be reserved: " + task.directory + ". Preserve any existing effects and reconcile the original record before retrying. " + reserved.stderr,history:[]}} /><Break /></If>
 <Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={delivery} /></File></Dir>
-<Let as="assignment" value={{phase:"implementation",work:task.work,repository:task.repository,revision:task.revision,priorRevision:null,request:task.request,assessment:task.assessment,changedPaths:[],artifacts:[],evidence:[],findings:[]}} />
-<If condition={task.scope.sharedApi.needed || !task.scope.implementation.ready}>
-<Let as="assignment" value={{...assignment,phase:"discovery",request:"Prepare the missing ordinary implementation plan and focused evidence for this accepted work: " + task.request + "\nProduce plan/evidence only. Do not edit or commit source or build an API foundation. Necessary API work and consumers belong to one Implementor. Preserve existing product and architecture approval gates; return needs_decision for any unanswered material choice.",recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}} />
-</If>
-<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles,acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
 <Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
 <If condition={work.status === "hold" && work.publication === "confirmed"}>

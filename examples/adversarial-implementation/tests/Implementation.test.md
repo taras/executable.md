@@ -42,3 +42,11 @@ printf '%s' "$XMD_EXAMPLE_TEST_COMMAND"
 {tester} {group}
 ```
 </Test>
+
+<Test name="fresh Codex admission checks a real child catalog and joins inspection" timeout="120s">
+<Let as="group" value={[root + "/examples/adversarial-implementation/tests/implementation-admission.md",profile[0],profile[1],profile[4],profile[5]].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
+```bash exec as="child"
+XMD_ADMISSION_FIXTURE_MARKER=fixture-private-environment {tester} {group}
+```
+<If condition={child.exitCode !== 0}><Fail message={child.stderr + child.stdout} /></If>
+</Test>

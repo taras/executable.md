@@ -151,7 +151,7 @@ export function* start(
 export function run(
   source: string,
   provider?: Provider,
-  stream = new InMemoryStream(),
+  stream: DurableStream = new InMemoryStream(),
   files: Record<string, string> = {},
 ) {
   return scoped(function* () {
@@ -163,6 +163,6 @@ export function run(
       chunks.push(next.value);
       next = yield* subscription.next();
     }
-    return { result: yield* execution, output: chunks.join(""), events: stream.snapshot() };
+    return { result: yield* execution, output: chunks.join(""), events: yield* stream.readAll() };
   });
 }

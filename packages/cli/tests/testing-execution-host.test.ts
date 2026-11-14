@@ -193,6 +193,30 @@ function repositoryComponent(prop: string, marker: string): string {
 }
 
 describe("nested execution under the production run host", () => {
+  it("compiles authored eval in an isolated run child", function* () {
+    const project = yield* useProject({
+      "child.md": doc(
+        "~~~js eval",
+        "const answer = 20 + 22;",
+        "~~~",
+        "",
+        "<Output><Json value={answer} /></Output>",
+      ),
+      "README.md": doc(
+        '<Test name="child eval">',
+        '<Execution host="run" target="child.md">',
+        '<CollectOutput as="output" />',
+        '<AssertEquals actual={output.trim()} expected="42" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project }).join();
+    expect({ code: result.code, output: result.stdout + result.stderr }).toMatchObject({
+      code: 0,
+    });
+  });
+
   it("runs referenced documents, targets and inline source as real roots", function* () {
     const project = yield* useProject({
       "reports/quarterly-summary.md": CHILD,
