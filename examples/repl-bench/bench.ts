@@ -2,7 +2,7 @@ import { exists, readTextFile } from "@effectionx/fs";
 import { exit, main, race, scoped, sleep, type Operation } from "effection";
 import { join } from "node:path";
 import process from "node:process";
-import { useDriver } from "./lib/repl-bench/driver-bun.ts";
+import { useDriver } from "./lib/driver-bun.ts";
 import {
   command,
   defaultSize,
@@ -10,9 +10,9 @@ import {
   launch as launchSchema,
   size,
   type Command,
-} from "./lib/repl-bench/protocol.ts";
-import { evidence, prepareRun, root } from "./lib/repl-bench/run.ts";
-import { serve, request, start } from "./lib/repl-bench/control-bun.ts";
+} from "./lib/protocol.ts";
+import { evidence, prepareRun, root } from "./lib/run.ts";
+import { serve, request, start } from "./lib/control-bun.ts";
 
 function print(text: string): void {
   process.stdout.write(`${text}\n`);
@@ -93,6 +93,18 @@ function* followup(action: string, directory: string, args: string[]): Operation
 }
 
 main(function* ([action, ...args]) {
+  if (action === undefined || ["-h", "--help", "help"].includes(action)) {
+    print(`repl-bench preflight [--size WxH]
+repl-bench start [--size WxH] [-- <repl args>]
+repl-bench focus <run>
+repl-bench type <run> <text>
+repl-bench send <run> <key>...
+repl-bench wait <run> <text>
+repl-bench resize <run> <WxH>
+repl-bench screenshot <run> <name>
+repl-bench look|status|exit|stop <run>`);
+    return;
+  }
   if (action === "driver") {
     const options = launchSchema.parse(JSON.parse(args[0] ?? ""));
     const driver = yield* useDriver(options);
@@ -128,7 +140,7 @@ main(function* ([action, ...args]) {
     return;
   }
   const id = args.shift() ?? "";
-  if (action === undefined || !/^[a-zA-Z0-9-]+$/.test(id)) {
+  if (!/^[a-zA-Z0-9-]+$/.test(id)) {
     throw new Error("Specify a command and run ID. See repl-bench --help.");
   }
   try {

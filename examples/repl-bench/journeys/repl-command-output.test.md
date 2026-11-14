@@ -1,5 +1,5 @@
 <Test name="both entry readings display captured control bytes as text" timeout="60s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-command-output.md" columns={160} rows={44}>
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-command-output.md" columns={160} rows={44}>
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Type text="Run the probe." />
     <ReplBench.Region name="sidekick-composer">

@@ -13,7 +13,7 @@ import {
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { useTempDirectory } from "../temp-directory.ts";
+import { useTempDirectory } from "../../../scripts/lib/temp-directory.ts";
 import { command, response, type Command, type Launch } from "./protocol.ts";
 
 declare const Bun: {
@@ -173,7 +173,7 @@ export function* request(directory: string, operation: Command): Operation<unkno
 }
 
 export function* start(options: Launch): Operation<void> {
-  const executable = fileURLToPath(new URL("../../repl-bench-bun.ts", import.meta.url));
+  const executable = fileURLToPath(new URL("../bench.ts", import.meta.url));
   const output = join(options.directory, "driver.log");
   const endpoint = join(options.directory, "endpoint");
   let child: ReturnType<typeof Bun.spawn> | undefined;

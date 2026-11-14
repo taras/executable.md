@@ -21,14 +21,14 @@
 
 
 <Test name="a scripted Sidekick mismatch fails the exact prompt step" timeout="60s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-scripted-sidekick.md">
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-scripted-sidekick.md">
     <ReplBench.SidekickPrompt text="Unexpected prompt." />
   </ReplBench>
 </Test>
 
 
 <Test name="a failed test closes the REPL during an active ACP prompt" timeout="60s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-ordered-reads.md">
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-ordered-reads.md">
     <ReplBench.SidekickPrompt text="What should I know?" />
     <ReplBench.Focus target="sidekick-composer" />
     <All>

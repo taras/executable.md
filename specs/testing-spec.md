@@ -795,96 +795,8 @@ supported. Gherkin syntax such as `Given`, `When`, and `Then` is not supported.
 
 ## Real-terminal REPL tests
 
-From a prepared checkout on macOS or Linux, the repository's
-`scripts/repl-bench.sh preflight` drives the Deno CLI in a private Bun PTY. It
-verifies typing and clearing an unsent Sidekick message, checks the exit code,
-and captures the quoted reopen location from the drained terminal output.
-The default size is `160x36`. Each launch writes its revision, dirty status,
-working directory, dimensions, last readable screen, and raw output under
-`.bench/<run>/`.
-While a run is active, `scripts/repl-bench.sh screenshot <run> <name>` saves
-the visible viewport from the terminal emulator as `<name>.svg` next to that
-evidence and prints the path.
-
-Explicitly load the repository’s ReplBench plugin to launch these components
-from a development REPL entry. `<XMD.Build checkout={path}>` selects a prepared
-source checkout for its nested launches. Relative paths resolve from the
-build element's contextual directory. Set `expectedRevision` to a full commit
-ID for a comparison. Each pinned launch verifies the checkout's root,
-preparation, revision, and clean state before starting and after the child
-stops. Untracked files count as changes. Without a build selection,
-`<XMD.Repl>` uses the current XMD host's command, and its recorded source
-revision is unknown. The launch runs in the directory selected by `<Dir>`
-and writes its captures to the tooling worktree's evidence directory.
-`<XMD.Repl.Revision as="revision" />` binds the observed commit or null.
-
-Run `xmd test packages/cli/tests/repl-bench` from the repository root to
-discover the acceptance documents, or pass the path to a single
-`*.test.md` document. Both use the Plugin in `packages/cli/xmd.json`.
-The shell harness selects `timeout-controls.md` directly. Its intentional
-failures stay outside the default discovery pattern.
-
-The plugin supplies these components to the bench:
-
-| Component | Contract |
-| --- | --- |
-| `Terminal` | A paired invocation establishes a viewport with the supplied `columns` and `rows`. Its body uses that viewport for sequential launches. A nested Terminal has its own viewport and launch. |
-| `XMD.Repl` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd and uses the nearest Terminal's current dimensions. A standalone bench supplies its own Terminal, with optional `columns` and `rows`. |
-| `XMD.Repl.SidekickPrompt` | Sends `text` over ACP and waits until the exchange joins, including any automatic entry feedback. On completion, `as` binds the exchange with `ending.joined`, `ending.outcome` and `output`. A failed or cancelled exchange fails this step. |
-| `XMD.Repl.SidekickStatus` | Binds the attachment status with `as`, including its submitted `messages` and `canonical` conversation counts. |
-| `XMD.Repl.EntryOutput` | Reads the final window of a submitted entry's output over ACP. `entry` is the one-based entry number and `as` binds the page, including its `status` and `text`. |
-| `Terminal.Focus` | `target="sidekick-composer"` focuses the composer through visible controls and waits for its focus marker. |
-| `Terminal.Type` | `text` is pasted into the focused field, preserving punctuation and line breaks. |
-| `Terminal.Key` | `key` sends a named key to the current focus. |
-| `Terminal.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
-| `Terminal.Resize` | `columns` and `rows` resize the viewport. During a launch this resizes both the PTY and its emulator. Between launches it sets the size of the next launch. |
-| `Terminal.Screenshot` | Saves the full visible viewport with its terminal colors and styling to `<name>.svg` in the active launch's evidence directory. Set `format="png"` to render a PNG with `rsvg-convert` and bind its path instead. `as` binds the absolute path. The name starts with a letter or digit and may contain letters, digits, hyphens, and underscores, up to 64 characters. Reusing a name replaces that image. |
-| `Terminal.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
-| `Terminal.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
-| `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
-
-The terminal controls use the nearest Terminal without a handle. Input and
-screen inspection require an active launch. The legacy `ReplBench` launch and `ReplBench.*` action spellings remain available. Set initial dimensions on
-`Terminal` when enclosing a bench.
-
-`waitTimeout` sets the default `WaitForText` duration for an `<XMD.Repl>` body,
-including nested regions. It defaults to five seconds. Each bench supplies its
-own duration, including when it uses `resume`. The enclosing `<Test>` deadline
-can end a wait earlier.
-
-Set `scenario` on a fresh bench to resolve a Markdown Test Agent behavior file
-from the invocation's contextual cwd. The child starts a private scripted
-Sidekick and the bench waits for its ACP attachment before running the body.
-The scenario starts with the attachment initialization prompt and progresses
-through each user prompt and the resulting entry feedback. ACP actions use
-the enclosing bench's attachment. Each scripted bench starts its own
-scenario and session. A scenario cannot be supplied with `resume`.
-
-The optional `include` and `mount` arrays pass repeated `--include` and
-`--mount` values in order. Each mount value uses the CLI's `SOURCE:TARGET`
-syntax. `allowAbsolute={true}` passes `--allow-absolute`. These options belong
-to each launch, so a resumed bench supplies the options its new command uses.
-
-Each Terminal hosts one active launch. The bench owns its driver, REPL
-process, attached Sidekick, and output capture. Its cleanup joins the child
-and drains its output before another bench can use that Terminal. Each launch
-starts with a fresh PTY screen. Failure or cancellation retains that launch's
-captures. The enclosing test or development Terminal owns the private home.
-
-With `expectExit={true}`, the body triggers a normal exit and `as` binds
-`{ exitCode, location, resume }` after PTY output drains. `location` is `null`
-when no reopen command is printed. `resume` is an opaque reference available
-after a clean exit with a location. Pass it to a later launch in the same test or development Terminal
-to reuse the session and home. An explicit Terminal supplies its current
-dimensions for both fresh and resumed launches. A standalone bench defaults
-to the last size of the resumed launch and otherwise to `160x36`. Each launch
-supplies its own contextual cwd. A bench stopped by teardown has null exit
-fields.
-
-With `entryPermissionFixture={true}`, the child loads the permission-wheel
-fixture provider for the entry to select as `wheel-permission-fixture`. The
-fixture answers no live agent requests and presents a synthetic permission
-request through the REPL's normal entry permission UI.
+The repository’s [ReplBench example](../examples/repl-bench/reference.md) owns
+its terminal tooling, component reference, and acceptance journeys.
 
 ## Repository Runtime Suites
 
@@ -1111,7 +1023,7 @@ out, or unexpectedly skips makes that dependency non-success.
 
 The `repl-bench` matrix prepares a checkout with spaces in its path on macOS
 and Linux. It runs preflight, discovers the Markdown journeys under
-`packages/cli/tests/repl-bench`, and runs the concurrent-run isolation check.
+`examples/repl-bench/journeys`, and runs the concurrent-run isolation check.
 This matrix owns those Markdown journeys outside the weighted runtime corpus.
 `green` requires the matrix result.
 

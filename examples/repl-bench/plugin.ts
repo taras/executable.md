@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { useTempDirectory } from "./lib/temp-directory.ts";
+import { useTempDirectory } from "../../scripts/lib/temp-directory.ts";
 import {
   defaultSize,
   exitResult,
@@ -38,14 +38,9 @@ import {
   type Launch,
   type Region,
   type Size,
-} from "./lib/repl-bench/protocol.ts";
-import {
-  assertPinnedWorktree,
-  prepareRun,
-  root,
-  type PreparedBuild,
-} from "./lib/repl-bench/run.ts";
-import { attachSidekick } from "./lib/repl-bench/sidekick.ts";
+} from "./lib/protocol.ts";
+import { assertPinnedWorktree, prepareRun, root, type PreparedBuild } from "./lib/run.ts";
+import { attachSidekick } from "./lib/sidekick.ts";
 
 type Execute = (command: Command) => Operation<unknown>;
 
@@ -135,7 +130,7 @@ const bench = size.partial().extend({
 });
 
 function* connect(options: Launch) {
-  const script = fileURLToPath(new URL("./repl-bench-bun.ts", import.meta.url));
+  const script = fileURLToPath(new URL("./bench.ts", import.meta.url));
   const child = yield* exec("bun", {
     cwd: root,
     arguments: ["--no-install", script, "driver", JSON.stringify(options)],
@@ -289,7 +284,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     ? [
         "--approve-reads",
         "--plugin",
-        fileURLToPath(new URL("./lib/repl-bench/wheel-permission.ts", import.meta.url)),
+        fileURLToPath(new URL("./lib/wheel-permission.ts", import.meta.url)),
       ]
     : ["--deny-all"];
   if (wanted.entryBenchFixture) {
@@ -323,7 +318,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     attachment = join(canonicalHome, "sidekick.json");
     args.push(
       "--plugin",
-      fileURLToPath(new URL("./lib/repl-bench/scripted-sidekick.ts", import.meta.url)),
+      fileURLToPath(new URL("./lib/scripted-sidekick.ts", import.meta.url)),
       "--sidekick-agent",
       "scripted",
       "--sidekick-acp",
@@ -411,7 +406,7 @@ function registration(
 ): ComponentRegistration {
   return {
     name,
-    origin: "scripts/repl-bench-plugin.ts",
+    origin: "examples/repl-bench/plugin.ts",
     props: { type: "object", properties, required, additionalProperties: false },
     fn,
   };

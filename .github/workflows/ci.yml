@@ -182,11 +182,11 @@ jobs:
         working-directory: repl bench checkout
         run: |
           deno task setup
-          ./scripts/repl-bench.sh preflight
-          ./scripts/repl-bench.sh preflight --size 72x20
+          bun --no-install ./examples/repl-bench/bench.ts preflight
+          bun --no-install ./examples/repl-bench/bench.ts preflight --size 72x20
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
-            packages/cli/src/deno.ts test packages/cli/tests/repl-bench
-          bash scripts/tests/repl-bench.sh
+            packages/cli/src/deno.ts test examples/repl-bench/journeys
+          bash examples/repl-bench/check-isolation.sh
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()

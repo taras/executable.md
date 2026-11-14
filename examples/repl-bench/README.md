@@ -4,10 +4,8 @@ Use this guide to run one keyboard journey on two revisions, keep its
 screenshots with the requesting REPL session, and show the evidence in a pull
 request.
 
-## Applies to
-
-Sidekick responses that coordinate a UI comparison, the entries that run the
-bench, and the agent that publishes the PR description.
+The [bench reference](reference.md) covers the plugin components, acceptance
+journeys, and manual terminal controls.
 
 ## Capture the same checkpoint in both builds
 
@@ -18,13 +16,14 @@ fixture, launch arguments, and keys. Start each build in a fresh bench run.
 Wait for a visible result before capturing a checkpoint. Choose waits that
 can complete on either version, then assert the new behavior on the candidate.
 
-The [executable XMD example](repl-bench-visual-check.md) focuses the
+The [executable XMD example](visual-check.md) focuses the
 Sidekick composer, types an unsent marker, waits for it inside the composer,
-and captures the `72×20` viewport. From the root of each prepared worktree,
-invoke that checkout's XMD CLI with the same absolute path to the document.
+and captures the `72×20` viewport. Run it from the root of the prepared tooling
+checkout to check that the bench can capture that checkpoint.
 
 ```text
-deno run --allow-all --cached-only --frozen --node-modules-dir=none packages/cli/src/deno.ts test --plugin ./scripts/repl-bench-plugin.ts /absolute/path/to/repl-bench-visual-check.md
+deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  packages/cli/src/deno.ts test examples/repl-bench/visual-check.md
 ```
 
 Each run emits JSON with the checkpoint, recorded revision, viewport size,
@@ -45,7 +44,8 @@ Open the development REPL from the prepared tooling checkout.
 Install `rsvg-convert` for PNG capture.
 
 ```text
-deno run --allow-all --cached-only --frozen --node-modules-dir=none packages/cli/src/deno.ts repl --plugin ./scripts/repl-bench-plugin.ts
+deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  packages/cli/src/deno.ts repl --plugin ./examples/repl-bench/plugin.ts
 ```
 
 Replace the example checkout paths and revisions and submit the Sidekick

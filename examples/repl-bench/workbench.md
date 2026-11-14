@@ -14,7 +14,7 @@ It exists because the REPL's own record cannot answer that question. A journal
 holds ordinary `DurableEvent`s — what a document imported, evaluated, asked and
 answered — and `specs/repl-spec.md` makes it a rule that no keystroke, focus move,
 drawer, resize or rendered cell ever reaches it. So a claim about the interface has
-to be read off a terminal, and `scripts/repl-bench.sh` allocates one.
+to be read off a terminal, and `examples/repl-bench/tmux.sh` allocates one.
 
 Every capture that matters arrives here as a **file**, never as command output.
 `Process.join()` may settle before the stdout pumps do, so bytes a child writes as
@@ -26,11 +26,11 @@ From the assigned worktree, start an interactive run and capture its screen
 and journal. Pass its printed `tmux.…` ID as `--props-run`.
 
 ```sh
-./scripts/repl-bench.sh start --tmux --size 160x36
+./examples/repl-bench/tmux.sh start --size 160x36
 read -r run  # Enter the printed tmux run ID.
-./scripts/repl-bench.sh look "$run" report
-./scripts/repl-bench.sh journal "$run"
-deno task xmd run scripts/repl-workbench.md --props-run "$run"
+./examples/repl-bench/tmux.sh look "$run" report
+./examples/repl-bench/tmux.sh journal "$run"
+deno task xmd run examples/repl-bench/workbench.md --props-run "$run"
 ```
 
 Keep this report outside a retained journal. Its output contains terminal content.
@@ -137,11 +137,11 @@ const journalReport = records.length > 0
 To reproduce a state before capturing it, rather than typing it each time:
 
 ```
-scripts/repl-bench.sh type "$run" '# an entry'     # literal text, through the paste path
-scripts/repl-bench.sh send "$run" Enter            # named keys: Tab BTab Enter Escape Backspace
-scripts/repl-bench.sh resize "$run" 72x20          # a real SIGWINCH
-scripts/repl-bench.sh tape "$run"                  # every frame captured, in order
-scripts/repl-bench.sh stop "$run"                  # kill this run's private server
+examples/repl-bench/tmux.sh type "$run" '# an entry'     # literal text, through the paste path
+examples/repl-bench/tmux.sh send "$run" Enter            # named keys: Tab BTab Enter Escape Backspace
+examples/repl-bench/tmux.sh resize "$run" 72x20          # a real SIGWINCH
+examples/repl-bench/tmux.sh tape "$run"                  # every frame captured, in order
+examples/repl-bench/tmux.sh stop "$run"                  # kill this run's private server
 ```
 
 `type` goes through tmux's paste buffer, not `send-keys`: tmux's parser eats a

@@ -1,5 +1,5 @@
 <Test name="Saved recovery stays visible through resize without a new prompt" timeout="90s">
-  <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-saved-recovery.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
+  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-saved-recovery.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Type text="Inspect output." />
     <ReplBench.Key key="Enter" />
