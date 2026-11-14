@@ -7,6 +7,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+// XMD cold session configuration: admission depends on the host process observer.
+import { platform } from "node:process";
 // src/runtime/public/errors.ts
 var AcpRuntimeError = class extends Error {
 	code;
@@ -1553,6 +1555,10 @@ var AcpRuntimeManager = class {
 	}
 	// XMD cold session configuration: only an established persistent record nobody holds.
 	acceptsColdSessionConfiguration(record, sessionMode) {
+		// XMD cold session configuration: compiled Linux cannot execute the strict process helper.
+		if (platform === "linux" && globalThis.Deno?.build?.standalone === true) {
+			return false;
+		}
 		const recordId = record.acpxRecordId;
 		return sessionMode === "persistent" && !this.shuttingDown && !this.activeControllers.has(recordId) && !this.retainedSessionOwners.has(recordId) && !this.controlSessionRecords.has(recordId) && !this.closingActiveRecords.has(recordId) && !sessionMaterializationPending(record) && ![...this.retiringSessionOwners].some((owner) => owner.recordId === recordId);
 	}

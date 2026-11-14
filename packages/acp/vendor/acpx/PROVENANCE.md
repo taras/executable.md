@@ -240,9 +240,14 @@ ECMAScript-private method, so neither the runtime class type nor the package
 entrypoint gains a member. Under the record's existing operation lock, the
 manager declines when an active controller, retained or retiring owner, control
 record, close or pending materialization already holds the record, or when the
-session is not persistent. Otherwise one strict-resume control client loads the
-exact session with the model write's existing replay exclusion and runs the
-caller's body. Exact reattachment checks a reported native identity against
+session is not persistent. On compiled Linux the manager declines before it
+creates a control client because the standalone executable cannot run the
+process helper used to prove strict close. The provider uses ordinary model
+and effort controls on the same session. Remove this condition when the
+standalone Linux process observer can provide the strict close proof.
+For an admitted request, one strict-resume control client loads the exact
+session with the model write's existing replay exclusion and runs the caller's
+body. Exact reattachment checks a reported native identity against
 the retained assertion before replay or save, including on the split effort
 and recovery paths. Those paths read actual load selectors before preference
 replay. Each write uses the same selector resolution and response projection
