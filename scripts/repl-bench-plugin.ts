@@ -31,6 +31,7 @@ import {
   point,
   region,
   response,
+  screenshotName,
   size,
   type Command,
   type Launch,
@@ -347,6 +348,15 @@ const cell = {
 const dimensions = { columns: integer, rows: integer };
 const registrations = [
   registration("Terminal", Terminal, dimensions, ["columns", "rows"]),
+  registration(
+    "Terminal.Screenshot",
+    function* (props) {
+      const name = screenshotName.parse(props.name);
+      return z.string().parse(yield* action({ action: "screenshot", name }));
+    },
+    { name: string },
+    ["name"],
+  ),
   {
     ...registration("ReplBench", ReplBench, {
       ...dimensions,

@@ -3,6 +3,10 @@ import { z } from "zod";
 export const size = z.object({ columns: z.int().min(1).max(500), rows: z.int().min(1).max(200) });
 export const point = z.object({ column: z.int().nonnegative(), row: z.int().nonnegative() });
 export const region = z.enum(["sidekick-composer", "transcript", "history"]);
+export const screenshotName = z
+  .string()
+  .max(64)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
 export const waitOptions = z.object({
   text: z.string().min(1),
   region: region.optional(),
@@ -30,6 +34,7 @@ export const command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("wait"), ...waitOptions.shape }),
   z.object({ action: z.literal("resize"), ...size.shape }),
   z.object({ action: z.literal("look") }),
+  z.object({ action: z.literal("screenshot"), name: screenshotName }),
   z.object({ action: z.literal("exit") }),
   z.object({ action: z.literal("stop") }),
 ]);

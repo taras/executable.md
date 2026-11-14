@@ -41,6 +41,17 @@ if grep -F 'bench-second;' ".bench/$first/screen.txt" || grep -F 'bench-first;' 
   exit 1
 fi
 
+first_image="$("$bench" screenshot "$first" composer)"
+second_image="$("$bench" screenshot "$second" composer)"
+[ "$first_image" = "$root/.bench/$first/composer.svg" ]
+[ "$second_image" = "$root/.bench/$second/composer.svg" ]
+grep -q '^<svg ' "$first_image"
+grep -qF 'bench-first;' "$first_image"
+grep -qF 'bench-second;' "$second_image"
+if grep -qF 'bench-second;' "$first_image" || grep -qF 'bench-first;' "$second_image"; then
+  exit 1
+fi
+
 if "$bench" wait "$first" 'missing-on-purpose' > "$log" 2>&1; then
   echo 'Expected the wait to fail' >&2
   exit 1
@@ -49,6 +60,7 @@ cat "$log"
 grep -F 'Timed out waiting for "missing-on-purpose"' "$log"
 grep -F 'bench-first;' ".bench/$first/screen.txt"
 test -s ".bench/$first/terminal.ansi"
+test -s "$first_image"
 test -f ".bench/$first/closed.json"
 test ! -e ".bench/$first/endpoint"
 ! kill -0 "$(cat ".bench/$first/pid")" 2>/dev/null

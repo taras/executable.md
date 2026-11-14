@@ -195,6 +195,7 @@ jobs:
           path: |
             repl bench checkout/.bench/*/run.json
             repl bench checkout/.bench/*/screen.txt
+            repl bench checkout/.bench/*/*.svg
             repl bench checkout/.bench/*/terminal.ansi
             repl bench checkout/.bench/*/closed.json
             repl bench checkout/.bench/*/driver.log

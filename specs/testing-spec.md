@@ -802,6 +802,9 @@ and captures the quoted reopen location from the drained terminal output.
 The default size is `160x36`. Each launch writes its revision, dirty status,
 working directory, dimensions, last readable screen, and raw output under
 `.bench/<run>/`.
+While a run is active, `scripts/repl-bench.sh screenshot <run> <name>` saves
+the visible viewport from the terminal emulator as `<name>.svg` next to that
+evidence and prints the path.
 
 Run `xmd test packages/cli/tests/repl-bench` from the repository root to
 discover the acceptance documents, or pass the path to a single
@@ -823,6 +826,7 @@ The Plugin supplies these components in a `<Test>` body:
 | `Terminal.Key` | `key` sends a named key to the current focus. |
 | `Terminal.Click` | Sends a primary-button press at the viewport cell supplied as `at={{ row, column }}`. |
 | `Terminal.Resize` | `columns` and `rows` resize the viewport. During a launch this resizes both the PTY and its emulator. Between launches it sets the size of the next launch. |
+| `Terminal.Screenshot` | Saves the full visible viewport with its terminal colors and styling to `<name>.svg` in the active launch's evidence directory. `as` binds the absolute path. The name starts with a letter or digit and may contain letters, digits, hyphens, and underscores, up to 64 characters. Reusing a name replaces that image. |
 | `Terminal.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
 | `Terminal.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
 | `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
