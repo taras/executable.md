@@ -130,15 +130,38 @@ function json(schema: z.ZodType) {
 }
 
 export default function* Schema() {
+  const sessionIdentity = json(identity);
   return {
     request: json(request),
     solvers: json(solvers),
-    result: json(result),
-    designResult: json(designResult),
-    prior: json(prior),
-    inputs: json(inputs),
-    designInputs: json(designInputs),
-    identity: json(identity),
-    receipt: json(z.union([receipt, designReceipt])),
+    diagnosis: {
+      records: {
+        prior: json(receipt.shape.assignment),
+        inputs: json(inputs),
+        receipt: json(receipt),
+        receiptLimit: 1_048_576,
+        identity: sessionIdentity,
+      },
+      reply: {
+        schema: json(result),
+        identity: sessionIdentity,
+        invalid:
+          "The saved reply does not match the diagnostic result contract or captured evidence.",
+      },
+    },
+    design: {
+      records: {
+        prior: json(designReceipt.shape.assignment),
+        inputs: json(designInputs),
+        receipt: json(designReceipt),
+        receiptLimit: 8_388_608,
+        identity: sessionIdentity,
+      },
+      reply: {
+        schema: json(designResult),
+        identity: sessionIdentity,
+        invalid: "The saved reply does not match the design result contract or assigned revision.",
+      },
+    },
   };
 }
