@@ -45,7 +45,15 @@ git -C {repositoryPath} rev-parse --show-toplevel
 <Phase.Profile role={initialRole} assessment={assignment.assessment} plannerProvider={provider} implementationProvider={provider} as="profile" />
 <Phase.InspectionRecipe profile={profile} as="inspection" />
 <If condition={inspection !== null}>
-<Entry.Checkout root={source.stdout.trim()} as="checkoutHold" />
+<Entry.CheckoutCheck root={source.stdout.trim()} as="checkCheckout" />
+<Try>
+
+```js eval
+const checkoutHold = yield* checkCheckout();
+```
+
+<Finally></Finally>
+</Try>
 <If condition={checkoutHold !== null}><Let as="work" value={{status:"hold",reason:checkoutHold,history:[]}} /><Break /></If>
 </If>
 </If>
@@ -96,7 +104,15 @@ test -f {referencePath} -a -r {referencePath}
 <If condition={unreadable.length !== 0}><Let as="work" value={{status:"hold",reason:"Prepare readable selected evidence and role-guide texts before launch: " + unreadable.join(", "),history:[]}} /><Break /></If>
 <If condition={task.scope.decisions.openQuestions.length !== 0}><Let as="work" value={{status:"hold",reason:"Resolve these material questions before launch: " + task.scope.decisions.openQuestions.join("; ") + ". Evidence: " + task.scope.decisions.evidence.join(", ") + ". Record accepted answers under fresh references and prepare the task again.",history:[]}} /><Break /></If>
 <If condition={inspection !== null}>
-<Entry.Admission repository={task.repository} recipe={inspection} as="admitted" />
+<Entry.InspectionCheck repository={task.repository} recipe={inspection} as="checkInspection" />
+<Try>
+
+```js eval
+const admitted = yield* checkInspection();
+```
+
+<Finally></Finally>
+</Try>
 <If condition={!admitted}><Let as="work" value={{status:"hold",reason:inspection.displayName + " could not verify model " + inspection.model + " with effort " + inspection.effort + ". Correct the " + inspection.displayName + " profile or launch environment and explicitly submit the same fresh task again.",history:[]}} /><Break /></If>
 </If>
 <Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={[...task.inputs,...guidePaths]} as="retained" />

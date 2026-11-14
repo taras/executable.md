@@ -1,3 +1,4 @@
+import { isJsonObject } from "@executablemd/core";
 import { exists, ensureDir, readTextFile, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { Component } from "@executablemd/core/api";
@@ -149,14 +150,15 @@ function* verdicts(workspace: string, settled: boolean) {
   expect(
     journal.flatMap((event) =>
       event.type === "yield" &&
-      ["entry-checkout-verdict", "entry-codex-verdict"].includes(event.description.name)
-        ? [[event.description.name, event.result]]
+      event.description.type === "eval" &&
+      event.result.status === "ok" &&
+      isJsonObject(event.result.value) &&
+      isJsonObject(event.result.value.value) &&
+      ("checkoutHold" in event.result.value.value || "admitted" in event.result.value.value)
+        ? [event.result.value.value]
         : [],
     ),
-  ).toEqual([
-    ["entry-checkout-verdict", { status: "ok", value: null }],
-    ["entry-codex-verdict", { status: "ok", value: true }],
-  ]);
+  ).toEqual([{ checkoutHold: null }, { admitted: true }]);
 }
 
 function* noManagedOutput(directory: string) {
@@ -325,6 +327,7 @@ main(function* () {
   });
 
   const legacyPaused = withResolvers<void>();
+  const legacySettled = withResolvers<void>();
   const legacyBefore = yield* events();
   const legacy = yield* scoped(function* () {
     yield* Component.around({
@@ -338,8 +341,10 @@ main(function* () {
     });
     return yield* withRepl(function* (repl) {
       const source = `\`\`\`bash exec as="legacyPrefix"\nprintf "%s" legacy\n\`\`\`
+<Entry.Checkout root={${JSON.stringify(repository)}} as="legacyCheckout" />
 <Entry.CodexAdmission repository={${JSON.stringify(repository)}} model="gpt-6.1-sol" effort="medium" as="legacyVerdict" />
-<Output><Json value={legacyVerdict} /></Output>`;
+<Cwd as="sentinel" />
+<Output><Json value={{ checkout: legacyCheckout, admitted: legacyVerdict }} /></Output>`;
       const submitted = value(yield* repl.session.submit(source));
       yield* within(legacyPaused.operation);
       expect(repl.session.model.entries.at(-1)).toMatchObject({
@@ -356,13 +361,23 @@ main(function* () {
       return { execution: repl.execution, entry: submitted.entry };
     });
   });
-  yield* withRepl(
-    function* (reopened) {
+  const legacyLocation = encodeLocation(initialState(legacy.execution).route);
+  yield* scoped(function* () {
+    yield* Component.around({
+      *expand([request], next) {
+        if (request.expansion.name === "Cwd") {
+          legacySettled.resolve();
+          yield* suspend();
+        }
+        return yield* next(request);
+      },
+    });
+    yield* withRepl(function* (reopened) {
+      yield* within(legacySettled.operation);
       expect(reopened.execution).toBe(legacy.execution);
-      value(yield* within(reopened.session.join()));
       expect(reopened.session.model.entries.at(-1)).toMatchObject({
         key: legacy.entry,
-        terminal: { status: "ok", output: "true" },
+        settled: false,
       });
       const journal = yield* entryJournal(reopened.workspace);
       const retained = journal.filter((event) => event.type === "yield");
@@ -375,12 +390,38 @@ main(function* () {
         description: { type: "delivery_review_observation", name: "entry-codex-verdict" },
         result: { status: "ok", value: true },
       });
-      const resumed = (yield* events()).slice(legacyBefore.length);
-      expect(resumed.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-      expect(resumed.filter(({ method }) => method === "turn/start")).toEqual([]);
-    },
-    encodeLocation(initialState(legacy.execution).route),
-  );
+    }, legacyLocation);
+  });
+  const legacyJoined = yield* events();
+  const resumed = legacyJoined.slice(legacyBefore.length);
+  expect(resumed.filter(({ method }) => method === "thread/start")).toHaveLength(1);
+  expect(resumed.filter(({ method }) => method === "turn/start")).toEqual([]);
+  const legacyGitFrontier = checkoutReads;
+  yield* rm(marker);
+  yield* withRepl(function* (reopened) {
+    value(yield* within(reopened.session.join()));
+    expect(reopened.execution).toBe(legacy.execution);
+    const entry = reopened.session.model.entries.at(-1);
+    expect(entry).toMatchObject({ key: legacy.entry, terminal: { status: "ok" } });
+    expect(JSON.parse(z.string().parse(entry?.terminal?.output))).toEqual({
+      checkout: null,
+      admitted: true,
+    });
+    const journal = yield* entryJournal(reopened.workspace);
+    expect(
+      journal.flatMap((event) =>
+        event.type === "yield" && event.description.type === "delivery_review_observation"
+          ? [[event.description.name, event.result]]
+          : [],
+      ),
+    ).toEqual([
+      ["entry-checkout-verdict", { status: "ok", value: null }],
+      ["entry-codex-verdict", { status: "ok", value: true }],
+    ]);
+    expect(checkoutReads).toBe(legacyGitFrontier);
+    expect(yield* events()).toEqual(legacyJoined);
+  }, legacyLocation);
+  yield* writeTextFile(marker, "authenticated");
 
   function* firstLaunch() {
     return yield* withRepl(function* (repl) {

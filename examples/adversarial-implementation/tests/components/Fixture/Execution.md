@@ -24,7 +24,7 @@ pwd -P
 <DiagnosticJournal />
 <CollectOutput as="stdout" />
 <CollectJournal as="journal" />
-<Json value={{exitCode:0,stdout,stderr:"",launchGates:journal.filter(event => event.type === "yield" && ["Entry.Checkout","Entry.Admission","Entry.CodexAdmission","entry-checkout-verdict","entry-codex-verdict"].includes(event.description.name)).map(event => event.description.name)}} />
+<Json value={{exitCode:0,stdout,stderr:"",launchGates:journal.filter(event => event.type === "yield" && ["Entry.Checkout","Entry.Admission","Entry.CheckoutCheck","Entry.InspectionCheck","Entry.CodexAdmission","entry-checkout-verdict","entry-codex-verdict"].includes(event.description.name)).map(event => event.description.name)}} />
 </Execution>
 </Dir>
 </Let>

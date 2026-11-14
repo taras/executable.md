@@ -1,3 +1,4 @@
+import { NestedRunCompiler } from "./testing-host.ts";
 import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
 /**
  * Bun source entrypoint.
@@ -113,6 +114,7 @@ if (isReplSubmit(process.argv.slice(2))) {
     // managed checkout with, so a Repository, Worktree, Git, Issue or PullRequest
     // operation reports an absent provider before a local or remote change could
     // happen. `xmd syntax` still describes one language everywhere.
+    yield* NestedRunCompiler.set(compileTempFile);
     yield* runXmd(
       args,
       useBunService,

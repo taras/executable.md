@@ -1,3 +1,4 @@
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
@@ -9,7 +10,7 @@ import {
   createDurableOperation,
   DurablePersistenceError,
 } from "@executablemd/durable-streams";
-import { API, FilesProviderUnavailableError } from "@executablemd/runtime";
+import { API, FilesInvariantError, FilesProviderUnavailableError } from "@executablemd/runtime";
 import { invokeFiles } from "../src/files.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -627,6 +628,114 @@ describe("Try owned lifetimes", () => {
       inner.snapshot().some((event) => event.type === "yield" && event.description.type === "exec"),
     ).toBe(false);
   });
+
+  for (const kind of ["release", "files", "durability", "append"]) {
+    it(`checked eval fences ${kind} before modifier reporting or recovery`, function* () {
+      yield* useTempFileCompiler();
+      const files = new FilesInvariantError("protocol");
+      const backing = new Error("fixture backing append failure");
+      const durability = new DurablePersistenceError("yield", backing);
+      const release = new Error("fixture owning release failure");
+      let attempts = 0;
+      let released = 0;
+      let swallowed: unknown;
+      let later = 0;
+      const inner = new InMemoryStream();
+      const stream = {
+        readAll: () => inner.readAll(),
+        *append(event: DurableEvent) {
+          if (event.type === "yield" && event.description.type === "eval") {
+            attempts++;
+            throw backing;
+          }
+          yield* inner.append(event);
+        },
+      };
+      yield* Component.around({
+        *applyModifiers(args, next) {
+          try {
+            return yield* next(...args);
+          } catch (error) {
+            swallowed = error;
+            return { output: "WRONG", exitCode: 0, stderr: "" };
+          }
+        },
+      });
+      yield* registerComponents([
+        {
+          name: "Owned",
+          origin: "eval-lifecycle",
+          props: noProps,
+          *fn() {
+            yield* ensure(() => {
+              released++;
+              if (kind === "release") {
+                throw release;
+              }
+              if (kind === "files") {
+                throw new AggregateError([release, files]);
+              }
+              if (kind === "durability") {
+                throw new AggregateError([files, durability]);
+              }
+            });
+            return "checked export";
+          },
+        },
+        {
+          name: "Later",
+          origin: "eval-lifecycle",
+          props: noProps,
+          *fn() {
+            later++;
+            return "WRONG";
+          },
+        },
+      ]);
+      const result = yield* run(
+        "<PrintErrors><Try><EvalOwner><Owned /></EvalOwner><Catch><Later /></Catch><Finally><Later /></Finally></Try><Later /></PrintErrors>",
+        undefined,
+        stream,
+        {
+          "components/EvalOwner.md": "~~~js eval\nconst exported = yield* renderChildren();\n~~~",
+        },
+      );
+      expect(released).toBe(1);
+      expect(later).toBe(0);
+      expect(result.output).not.toContain("WRONG");
+      expect(attempts).toBe(kind === "append" ? 1 : 0);
+      expect(
+        inner
+          .snapshot()
+          .some(
+            (event) =>
+              event.type === "close" ||
+              (event.type === "yield" && event.description.type === "eval"),
+          ),
+      ).toBe(false);
+      expect(result.result.ok).toBe(false);
+      if (!result.result.ok) {
+        expect(result.result.error).toBe(swallowed);
+        if (kind === "files") {
+          expect(result.result.error).toBe(files);
+        } else if (kind === "durability") {
+          expect(result.result.error).toBe(durability);
+        } else if (kind === "append") {
+          expect(result.result.error).toBeInstanceOf(DurablePersistenceError);
+          expect(result.result.error.cause).toBe(backing);
+        } else {
+          expect(
+            firstCause(result.result.error, (cause) => (cause === release ? release : undefined)),
+          ).toBe(release);
+          expect(
+            firstCause(result.result.error, (cause) =>
+              cause instanceof InvocationTeardownError ? cause : undefined,
+            ),
+          ).toBeDefined();
+        }
+      }
+    });
+  }
 
   for (const kind of ["files", "durability"]) {
     it(`A9: ${kind} failure beneath teardown wins by identity`, function* () {

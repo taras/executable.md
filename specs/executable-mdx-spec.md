@@ -2036,6 +2036,12 @@ Non-serializable bindings (functions, class instances, live objects) are
 omitted. They remain in `env.values` as live references during the current
 run but are absent from the diagnostic trace.
 
+Ordinary failures use the existing error record. Before appending a result,
+eval joins its owned work and applies the terminal failure rules for
+[Try settlement](#try-catch-and-finally-recover-after-clean-release).
+A terminal failure fences the run before an eval result is appended, even
+when a modifier handles the thrown error.
+
 #### The computed root data a result carries
 
 A binding is not an effect, and nothing here journals one. What an execution

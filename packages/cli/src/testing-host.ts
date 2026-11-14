@@ -33,7 +33,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { installWebElicitation } from "@executablemd/web";
-import { ensure, Err, Ok, until, useScope } from "effection";
+import { createContext, ensure, Err, Ok, until, useScope } from "effection";
 import type { Operation, Result, Scope } from "effection";
 import {
   agentIdentityComponents,
@@ -91,6 +91,10 @@ export interface ChildPlanDeclaration {
   observePlanWriter?(observation: PlanWriterObservation): Operation<void>;
 }
 
+export const NestedRunCompiler = createContext<typeof API.Env.operations.compile>(
+  "executablemd.cli.nested-run-compiler",
+);
+
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
   /**
@@ -104,6 +108,7 @@ export interface TestingHostSettings {
   readonly diagnostics?: TestDiagnostics;
   readonly fileAccess?: HostFilesAccess;
   readonly componentModuleLoader?: ComponentModuleLoader;
+  readonly compile?: typeof API.Env.operations.compile | undefined;
   /** The component search path this run resolves names through. */
   readonly includes: string[];
   /**
@@ -315,6 +320,13 @@ function* assembleChild(
 ): Operation<ChildSettlement> {
   const request = invocation.request;
   yield* ComponentModuleLoader.set(settings.componentModuleLoader);
+  const compile = settings.compile;
+  if (compile !== undefined) {
+    yield* API.Env.around(
+      { compile: ([source, options]) => compile(source, options) },
+      { at: "min" },
+    );
+  }
   if (request.host !== "run") {
     throw new Error(`the ${request.host} host profile is not available on this entrypoint`);
   }

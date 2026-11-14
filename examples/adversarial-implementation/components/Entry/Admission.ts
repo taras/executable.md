@@ -60,10 +60,12 @@ export default function* Admission(value: unknown): Operation<boolean> {
 }
 
 export function admit(repository: string, recipe: Recipe): Operation<boolean> {
-  return retainedVerdict("entry-codex-verdict", z.boolean(), () => observe(repository, recipe));
+  return retainedVerdict("entry-codex-verdict", z.boolean(), () =>
+    checkInspection(repository, recipe),
+  );
 }
 
-function* observe(repository: string, recipe: Recipe): Operation<boolean> {
+export function* checkInspection(repository: string, recipe: Recipe): Operation<boolean> {
   const { registration, agent, model, effort } = recipe;
   let bodyFailure: Error | undefined;
   function* inspect(): Operation<boolean> {
