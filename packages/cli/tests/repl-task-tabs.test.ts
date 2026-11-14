@@ -4,10 +4,11 @@ import { expect } from "@executablemd/test-support/expect";
 import { writeTextFile } from "@effectionx/fs";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
-import { composerHolds, intoComposer } from "./support/screen-journeys.ts";
+import { composerHolds, draftText, intoComposer } from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 
 function capture(page: ReplPage, name: string): void {
   const screen = page.repl.terminal.screen;
@@ -34,10 +35,9 @@ for (const size of [
   describe(`TODO/QUEUE tabs at ${size.columns}x${size.rows}`, () => {
     it("switches only on human selection and retains drafts, item controls and held queue work", function* () {
       const page = yield* useReplPage({ size });
-      yield* page.type("kept entry");
-      yield* page.until("entry draft", (one) => one.shows("kept entry"));
+      yield* draftText(page, "kept entry");
       if (size.columns < 120) {
-        yield* page.press("Sidekick");
+        yield* page.press("Sidekick", { onRow: "Sessions" });
       } else {
         yield* intoComposer(page);
       }
@@ -51,12 +51,18 @@ for (const size of [
       expect(page.screen().rows[first.row]).not.toContain("↓");
       expect(page.screen().locate("▾ TODO").row).toBe(page.screen().locate("QUEUE 0/16").row);
       expect(page.repl.terminal.screen?.styleAt(first.column, first.row).attrs).toContain(9);
+      expect(page.repl.terminal.screen?.styleAt(first.column, first.row).background).toBe(
+        REPL_PALETTE.composerSurface,
+      );
       capture(page, "composer-no-task-icons");
       yield* page.key("Backtab");
       yield* page.until("task tabs focused", (one) => one.shows("> ▾ TODO"));
       yield* page.key("ArrowDown");
       yield* page.until("completed task focused", (one) => one.shows("> ☑ done code"));
       const focused = page.screen().locate("done code");
+      const taskStyle = page.repl.terminal.screen?.styleAt(focused.column, focused.row);
+      expect(taskStyle?.background).toBe(REPL_PALETTE.focusSurface);
+      expect(taskStyle?.attrs).toContain(4);
       for (const icon of ["↑", "↓", "x"]) {
         const at = page.screen().locate(icon, { onRow: "done code" });
         expect(at.row).toBe(focused.row);
@@ -71,6 +77,10 @@ for (const size of [
       );
       const action = page.screen().locate("↑", { onRow: "done code" });
       const label = page.screen().locate("done code");
+      const actionStyle = page.repl.terminal.screen?.styleAt(action.column, action.row);
+      expect(actionStyle?.background).toBe(REPL_PALETTE.focusSurface);
+      expect(actionStyle?.attrs).toContain(4);
+      expect(page.repl.terminal.screen?.styleAt(label.column, label.row).attrs).not.toContain(4);
       expect(page.repl.terminal.screen?.styleAt(action.column, action.row).background).toBe(
         page.repl.terminal.screen?.styleAt(label.column, label.row).background,
       );

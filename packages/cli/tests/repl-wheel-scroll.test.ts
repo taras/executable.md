@@ -5,6 +5,7 @@ import type { Operation } from "effection";
 import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage, ScreenCell } from "./support/repl-page.ts";
+import { draftText, intoComposer, intoDraft } from "./support/screen-journeys.ts";
 
 function* key(page: ReplPage, name: PageKey): Operation<void> {
   const before = page.screen().index;
@@ -40,9 +41,7 @@ function turnLabel(turn: number): string {
 }
 
 function* eighteenTurns(page: ReplPage): Operation<void> {
-  for (let at = 0; at < 4; at += 1) {
-    yield* key(page, "Tab");
-  }
+  yield* intoComposer(page);
   for (let at = 0; at < 18; at += 1) {
     page.repl.fake.script({ reply: `<Output>Reply witness ${at}</Output>` });
     yield* typed(page, turnLabel(at));
@@ -88,6 +87,7 @@ describe("wheel real consumers", () => {
       requestsTool: explanation,
       manual: true,
     });
+    yield* intoDraft(page);
     yield* page.type('<Session name="permission"><Prompt text="permission-witness" /></Session>');
     yield* page.until("entry source ready", (one) => one.shows("</Session>"));
     yield* page.key("Enter");
@@ -127,6 +127,7 @@ describe("wheel real consumers", () => {
 
   it("selected work scrolls under Draft and keeps its exact keyboard route", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    yield* intoDraft(page);
     yield* page.type(Array.from({ length: 70 }, (_, at) => `Work row ${at}`).join("\n"));
     yield* page.until("source ready", (one) => one.shows("Work row 69"));
     yield* page.key("Enter");
@@ -213,9 +214,7 @@ describe("wheel real consumers", () => {
     page.repl.fake.script({
       reply: `<Elicit as="response" schema={{type:"object",properties:{value:{type:"string"}},required:["value"],additionalProperties:false}}>${preview}</Elicit>`,
     });
-    for (let at = 0; at < 4; at += 1) {
-      yield* key(page, "Tab");
-    }
+    yield* intoComposer(page);
     yield* typed(page, "question please");
     yield* page.key("Enter");
     yield* page.until("Sidekick waiting", (one) => one.shows("[answer sidekick]"));
@@ -309,6 +308,7 @@ describe("wheel real consumers", () => {
   it("retained binding reads both ends and reopens at its own position", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const value = Array.from({ length: 60 }, (_, at) => `Binding row ${at}`);
+    yield* intoDraft(page);
     yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
     yield* page.until("binding source ready", (one) => one.shows("Binding row 59"));
     yield* page.key("Enter");
@@ -354,6 +354,7 @@ describe("wheel real consumers", () => {
       "VALUE-BEGIN\n" +
       Array.from({ length: 180 }, (_, at) => `Value line ${at}`).join("\n") +
       "\nVALUE-END";
+    yield* intoDraft(page);
     yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
     yield* page.until("string source ready", (one) => one.shows("VALUE-END"));
     yield* page.key("Enter");
@@ -408,11 +409,8 @@ describe("wheel real consumers", () => {
   ]) {
     it(`Sidekick chat retains composer caret and follows only at the tail at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });
-      yield* typed(page, "draft-kept");
-      yield* key(page, "Tab");
-      yield* key(page, "Tab");
-      yield* key(page, "Tab");
-      yield* key(page, "Tab");
+      yield* draftText(page, "draft-kept");
+      yield* intoComposer(page);
       const rows = (from: number, to: number) =>
         Array.from({ length: to - from }, (_, at) => `Chat row ${from + at}`).join("\n");
       page.repl.fake.script({
@@ -486,6 +484,7 @@ describe("wheel real consumers", () => {
         required: ["decision", "final"],
         additionalProperties: false,
       };
+      yield* intoDraft(page);
       yield* page.type(
         `<Elicit as="response" schema={${JSON.stringify(schema)}}>${preview}</Elicit>`,
       );

@@ -18,20 +18,11 @@ import { fileURLToPath } from "node:url";
 import { platform } from "node:os";
 import { platformDataRoot } from "../src/repl-assembly.ts";
 import { projectRepl } from "../src/repl/model.ts";
-import { allocate, showing, showingAcross } from "./support/pty.ts";
+import { allocate, focusPtyDraft, showing, showingAcross } from "./support/pty.ts";
 import type { Pty } from "./support/pty.ts";
 
 const ACT_MS = 30_000;
 const REACH_MS = 180_000;
-
-/**
- * The draft row's own name, which is how a pointer finds it.
- *
- * The draft is a block now: its name and focus marker are one row and what
- * somebody typed is fitted into rows of its own beneath them. Clicking the name
- * is what puts the cursor in it.
- */
-const DRAFT_PROMPT = " DRAFT";
 
 function greeting(which: "First" | "Second"): string {
   return `---\ndescription: ${which} greeting contract.\nprops:\n  type: object\n  properties:\n    from${which}: { type: string }\n  required: [from${which}]\n  additionalProperties: false\n---\n\n${which} greeting rendered.\n`;
@@ -50,7 +41,7 @@ function* click(pty: Pty, label: string): Operation<void> {
 }
 
 function* submit(pty: Pty, source: string): Operation<void> {
-  yield* click(pty, DRAFT_PROMPT);
+  yield* focusPtyDraft(pty, ACT_MS);
   yield* pty.type(source);
   // Across the rows the column wrapped it onto: the draft is a block in a
   // column now, so a source longer than that column is on the screen without
@@ -134,7 +125,7 @@ function* refused(pty: Pty, history: string, name: string): Operation<void> {
   yield* submit(pty, `<${name} />`);
   yield* showing(pty, "this entry cannot run here", ACT_MS);
   expect(yield* readTextFile(history)).toBe(before);
-  yield* click(pty, DRAFT_PROMPT);
+  yield* focusPtyDraft(pty, ACT_MS);
   for (let at = 0; at < `<${name} />`.length; at += 1) {
     yield* pty.type("\x7f");
   }

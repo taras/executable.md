@@ -176,7 +176,7 @@ for (const size of [
     it("creates a shared task, wakes honestly without changing the composer, and collapses persistently", function* () {
       const page = yield* useReplPage({ size });
       if (size.columns < 120) {
-        yield* page.press("Sidekick");
+        yield* page.press("Sidekick", { onRow: "Sessions" });
       } else {
         yield* intoComposer(page);
       }
@@ -228,7 +228,7 @@ for (const size of [
     it("bounds wrapped rows and preserves keyboard access, collapse and external refresh", function* () {
       const page = yield* useReplPage({ size });
       if (size.columns < 120) {
-        yield* page.press("Sidekick");
+        yield* page.press("Sidekick", { onRow: "Sessions" });
       } else {
         yield* intoComposer(page);
       }

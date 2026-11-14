@@ -5,6 +5,7 @@ import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage, ScreenCell } from "./support/repl-page.ts";
 import {
+  intoDraft,
   sendMessage,
   openConfigure,
   replaceAgent,
@@ -110,6 +111,7 @@ describe("wheel remaining migration journeys", () => {
         kind: "allow_once",
       })),
     });
+    yield* intoDraft(page);
     yield* page.type('<Session name="permission"><Prompt text="many choices" /></Session>');
     yield* page.until("source", (one) => one.shows("</Session>"));
     yield* page.key("Enter");
@@ -131,6 +133,7 @@ describe("wheel remaining migration journeys", () => {
       size: { columns: 72, rows: 20 },
       includes: [REFERENCE_DIRECTORY],
     });
+    yield* intoDraft(page);
     for (let at = 1; at <= 8; at += 1) {
       const title =
         at === 1
@@ -232,6 +235,7 @@ describe("wheel remaining migration journeys", () => {
       required: ["value"],
       additionalProperties: false,
     };
+    yield* intoDraft(page);
     yield* page.type(
       `<Elicit as="response" schema={${JSON.stringify(schema)}}>Recorded question</Elicit>`,
     );
@@ -284,6 +288,7 @@ describe("wheel remaining migration journeys", () => {
   });
   it("resize refusal and a terminal burst preserve the independent reading and Draft", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
+    yield* intoDraft(page);
     yield* page.type(
       Array.from({ length: 90 }, (_, at) =>
         at === 3 ? "" : `Resize work ${String(at).padStart(2, "0")}`,
