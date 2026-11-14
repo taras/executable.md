@@ -19,7 +19,7 @@ For a narrow Sidekick composer exercise at the assigned revision, run:
 bun --no-install ./examples/repl-bench/bench.ts preflight --size 72x20
 ```
 
-Preflight opens the Sidekick composer, types an unsent marker, checks the
+Preflight defaults to `160x36`. It opens the Sidekick composer, types an unsent marker, checks the
 composer, clears it with Ctrl+C, and presses Ctrl+C again. Expect exit `0` and
 a complete `xmd://repl/…?view=sidekick&right=sidekick` location. Return the run
 ID, revision, terminal size, exit status, and reopen location, with links to
@@ -44,19 +44,21 @@ bun --no-install ./examples/repl-bench/bench.ts stop "$run"
 ```
 
 Use `send` for named keys such as `Tab`, `Shift+Tab`, `Enter`, or `Ctrl+C`.
-Use `type` for literal text. Each run owns a terminal, a test home, and
-`.bench/<run>/`. `status <run>` prints the launch details. `look` records a
-readable screen, and `terminal.ansi` holds the raw PTY output. A failed action
+Use `type` for literal text. Each run owns a terminal and a test home. The
+tooling checkout’s `.bench/<run>/` holds launch details, including the revision,
+dirty status, working directory, and dimensions. `status <run>` prints those
+details. `look` records the readable screen, and `terminal.ansi` holds the raw
+PTY output. A failed action
 closes its driver and keeps the available evidence. To capture a normal exit,
 send the exit key and call `exit <run>` to collect the status and reopen location.
 Use `screenshot <run> <name>` after waiting for the expected state. It prints the
 path to `.bench/<run>/<name>.svg`, an image of the visible viewport with its
 terminal colors and styling. Use distinct names for before and after captures.
 
-Use `./examples/repl-bench/tmux.sh start` when a person needs to attach to the terminal. Pass its
-printed `tmux.…` ID to `attach`, `look`, `tape`, `journal`, and `stop`. Use
-the [workbench document](workbench.md) to read a captured tmux frame and the copied journal
-from that run. The journal gives document execution evidence. Screen cells,
+Use `./examples/repl-bench/tmux.sh start` to open a terminal you can attach
+to. Pass the printed `tmux.…` ID to the same script’s `attach`, `look`,
+`tape`, `journal`, and `stop` subcommands. Use the
+[workbench document](workbench.md) to read a captured frame and copied journal. The journal gives document execution evidence. Screen cells,
 focus, and resize evidence come from the terminal capture.
 
 ## Markdown tests
@@ -68,7 +70,9 @@ deno run --allow-all --cached-only --frozen --node-modules-dir=none \
 
 Run one document by passing its `*.test.md` path. Both forms use the plugin
 declared in `examples/repl-bench/xmd.json`. Run from the worktree root so the scripted
-scenarios resolve from that working directory.
+scenarios resolve from that working directory. The isolation check runs
+[`timeout-controls.md`](journeys/timeout-controls.md) directly. Its intentional
+failures stay outside discovery of `*.test.md` files.
 
 Use a composer region for a field-value
 check. A viewport match can also find the same text in the Draft or Transcript.
@@ -90,7 +94,9 @@ retained session again to verify that the current viewport supplies the size.
 | Component | Contract |
 | --- | --- |
 | `Terminal` | A paired invocation establishes a viewport with the supplied `columns` and `rows`. Its body uses that viewport for sequential launches. A nested Terminal has its own viewport and launch. |
+| `XMD.Build` | `checkout` selects a prepared source checkout for nested launches. Relative paths resolve from this element’s contextual directory. `expectedRevision` takes a full commit ID. A pinned launch verifies the worktree root, preparation, revision, and clean state before launch and after the child stops. Untracked files count as changes. Evidence goes to the tooling checkout. |
 | `XMD.Repl` | A paired invocation runs its body once after the REPL is usable. The child starts in the invocation's contextual cwd and uses the nearest Terminal's current dimensions. Without an enclosing `XMD.Build`, it uses the current XMD host's command. A standalone bench supplies its own Terminal, with optional `columns` and `rows`. |
+| `XMD.Repl.Revision` | `as` binds the observed commit, or null when the launch uses the current XMD host’s command. |
 | `XMD.Repl.SidekickPrompt` | Sends `text` over ACP and waits until the exchange joins, including any automatic entry feedback. On completion, `as` binds the exchange with `ending.joined`, `ending.outcome` and `output`. A failed or cancelled exchange fails this step. |
 | `XMD.Repl.SidekickStatus` | Binds the attachment status with `as`, including its submitted `messages` and `canonical` conversation counts. |
 | `XMD.Repl.EntryOutput` | Reads the final window of a submitted entry's output over ACP. `entry` is the one-based entry number and `as` binds the page, including its `status` and `text`. |
@@ -137,8 +143,8 @@ With `expectExit={true}`, the body triggers a normal exit and `as` binds
 `{ exitCode, location, resume }` after PTY output drains. `location` is `null`
 when no reopen command is printed. `resume` is an opaque reference available
 after a clean exit with a location. Pass it to a later launch in the same
-test or development Terminal to reuse the session and home. An explicit Terminal supplies its current
-dimensions for both fresh and resumed launches. A standalone bench defaults
+test or development Terminal to reuse the session and home. An explicit
+Terminal supplies its current dimensions for both fresh and resumed launches. A standalone bench defaults
 to the last size of the resumed launch and otherwise to `160x36`. Each launch
 supplies its own contextual cwd. A bench stopped by teardown has null exit
 fields.
