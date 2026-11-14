@@ -119,6 +119,8 @@ export type ReplKey =
   | "Backtab"
   | "Backspace"
   | "Interrupt"
+  | "Ctrl+G"
+  | `Focus${number}`
   | "ArrowUp"
   | "ArrowDown"
   | "ArrowLeft"

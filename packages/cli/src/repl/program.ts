@@ -111,6 +111,7 @@ import {
   queueStatusLinesOf,
   stagedWorkspace,
   workspaceHeaderLines,
+  modalOpen,
   readsGeometry,
   reduceRepl,
   refusedView,
@@ -212,6 +213,7 @@ import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./r
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
 import { fields, readDescription } from "./description.ts";
+import { shortcutRegion, shortcutRoute } from "./screen-regions.ts";
 import type { ReplDescription, ReplInputEvent } from "./description.ts";
 import { FIELD, fieldLabel } from "./components/rows.ts";
 import { caretFor } from "./caret.ts";
@@ -973,6 +975,13 @@ interface SidekickRoot extends RootReading {
    * whatever was there before.
    */
   applyFills(): void;
+}
+
+function hasRegion(descriptions: readonly ReplDescription<ReplAction>[], region: string): boolean {
+  return descriptions.some((description) => {
+    const read = readDescription(description);
+    return read.navigation?.region.key === region || hasRegion(read.children, region);
+  });
 }
 
 /** Run the screen for one opened session. */
@@ -1892,6 +1901,33 @@ function* drive(
       }
     }
 
+    function* inputView(candidate: ReplState, at: ReplTerminalSize) {
+      return yield* build(
+        candidate,
+        reading,
+        current,
+        at,
+        focused,
+        preparingOf(admitting),
+        sidekickReading(candidate),
+        dispatch.queue,
+        follow,
+      );
+    }
+
+    function prepareInput(view: ReplView, renderer: ReplRenderer) {
+      return prepareFrame(
+        renderer,
+        view,
+        fits,
+        chatFits,
+        messageFits,
+        guidanceFits,
+        draftFits,
+        queueFits,
+      );
+    }
+
     /**
      * Mount the controls this screen now offers, without drawing a frame.
      *
@@ -1907,26 +1943,9 @@ function* drive(
      * what answers the second of them.
      */
     function* remount(): Operation<void> {
-      const at = yield* screen.size();
-      const ready = yield* prepareFrame(
+      const ready = yield* prepareInput(
+        yield* inputView(state, yield* screen.size()),
         yield* rendering(),
-        yield* build(
-          state,
-          reading,
-          current,
-          at,
-          focused,
-          preparingOf(admitting),
-          sidekickReading(state),
-          dispatch.queue,
-          follow,
-        ),
-        fits,
-        chatFits,
-        messageFits,
-        guidanceFits,
-        draftFits,
-        queueFits,
       );
       if (!ready.ok) {
         throw ready.error;
@@ -1938,6 +1957,50 @@ function* drive(
       if (!applied.ok) {
         throw applied.error;
       }
+    }
+
+    function* focusShortcut(digit: string, starting = false): Operation<void> {
+      const region = shortcutRegion(digit);
+      const at = yield* screen.size();
+      const profile = profileFor(at);
+      if (region === undefined || profile === "too-small" || broken !== undefined) {
+        return;
+      }
+      if (modalOpen(yield* inputView(state, at))) {
+        return;
+      }
+      const route = shortcutRoute(state.route, region, profile === "narrow");
+      if (
+        starting ||
+        route !== state.route ||
+        rendered?.size.columns !== at.columns ||
+        rendered.size.rows !== at.rows
+      ) {
+        const candidate = { ...state, route, restore: undefined };
+        const view = yield* inputView(candidate, at);
+        if (view.refusal !== undefined || modalOpen(view)) {
+          return;
+        }
+        const ready = yield* prepareInput(view, yield* rendering());
+        if (!ready.ok) {
+          throw ready.error;
+        }
+        const descriptions = ready.value.presentation.descriptions;
+        const size = yield* screen.size();
+        if (
+          size.columns !== at.columns ||
+          size.rows !== at.rows ||
+          !hasRegion(descriptions, region)
+        ) {
+          return;
+        }
+        const applied = yield* tree.apply(descriptions);
+        if (!applied.ok) {
+          throw applied.error;
+        }
+        state = candidate;
+      }
+      yield* act({ kind: "key", key: `Focus${Number(digit)}` });
     }
 
     /**
@@ -2541,6 +2604,9 @@ function* drive(
       observedPass++;
       observePass("start");
     }
+    if (liveScreen === undefined && options.location === undefined) {
+      yield* focusShortcut("1", true);
+    }
     const first = yield* draw();
     // Only a frame that finished presenting can have put a message box in front
     // of anybody; keys that arrived while it was being drawn still end here.
@@ -2565,6 +2631,7 @@ function* drive(
       observePass("complete");
     }
 
+    let focusPrefix = false;
     let formQuestion = current.overlay.question;
     while (true) {
       const taken = yield* wakes.take();
@@ -2580,6 +2647,7 @@ function* drive(
       if (liveScreen !== undefined && generation !== liveScreen.generation) {
         yield* releaseRenderer();
         generation = liveScreen.generation;
+        focusPrefix = false;
         rendered = undefined;
         presenting = undefined;
       }
@@ -2616,6 +2684,7 @@ function* drive(
         } else if (wake.event.kind === "resize") {
           renderer?.resize(wake.event.size);
         } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
+          focusPrefix = false;
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
           // all reach nothing, and the drop happens without an action.
@@ -2638,6 +2707,15 @@ function* drive(
         } else if (wake.event.kind === "input") {
           const delivered = wake.event.event;
           if (delivered === undefined) {
+            continue;
+          }
+          const prefixed = focusPrefix;
+          focusPrefix = delivered.kind === "key" && delivered.key === "Ctrl+G";
+          if (focusPrefix) {
+            continue;
+          }
+          if (prefixed && delivered.kind === "text" && /^[0-9]$/.test(delivered.text)) {
+            yield* focusShortcut(delivered.text);
             continue;
           }
           // Control-C through the tree, where only the focused message box
@@ -2729,6 +2807,7 @@ function* drive(
       if (liveScreen !== undefined && generation !== liveScreen.generation) {
         yield* releaseRenderer();
         generation = liveScreen.generation;
+        focusPrefix = false;
         rendered = undefined;
         presenting = undefined;
       }

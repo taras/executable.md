@@ -184,11 +184,9 @@ function backward(event: Extract<InputEvent, { type: "keydown" | "keyrepeat" }>)
  * the code would type the letter somebody pressed Control with, which is how an
  * editor ends up inserting a `c` when a person asked it to stop.
  *
- * Five chords are named before the rest are dropped, and they are the only
- * five: Control-J, which is the newline inside a paste, Control+Alt+Enter,
- * which is Terminal.app's Shift+Return, Control-C, which is an interrupt, and
- * Alt+Up and Alt+Down, which reach a field's neighbours. Every other Control or
- * Alt combination is dropped whole.
+ * Control-J and Control+Alt+Enter supply newline text. Control-C, Control-G,
+ * Alt+Up and Alt+Down supply named keys. Other Control or Alt combinations
+ * are dropped whole.
  */
 export function normalize(event: InputEvent): ReplNormalized {
   if (event.type === "keydown" || event.type === "keyrepeat") {
@@ -200,6 +198,9 @@ export function normalize(event: InputEvent): ReplNormalized {
     }
     if (event.ctrl === true && event.alt !== true && event.code === INTERRUPT_CHORD) {
       return { event: Object.freeze({ kind: "key", key: "Interrupt" }), at: undefined };
+    }
+    if (event.ctrl === true && event.alt !== true && event.shift !== true && event.code === "g") {
+      return { event: Object.freeze({ kind: "key", key: "Ctrl+G" }), at: undefined };
     }
     const neighbour = event.ctrl === true ? undefined : ALT_KEYS.get(event.code);
     if (event.alt === true && neighbour !== undefined) {

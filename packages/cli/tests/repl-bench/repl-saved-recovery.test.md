@@ -1,6 +1,7 @@
 <Test name="Saved recovery stays visible through resize without a new prompt" timeout="90s">
   <ReplBench scenario="scripts/tests/fixtures/repl-sidekick-saved-recovery.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
-    <ReplBench.Focus target="sidekick-composer" />
+    <Terminal.WaitForText text="SIDEKICK" row={1} as="sidekickTab" />
+    <Terminal.Click at={sidekickTab} />
     <ReplBench.Type text="Inspect output." />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="Entry saved. Feedback receipt unknown." />

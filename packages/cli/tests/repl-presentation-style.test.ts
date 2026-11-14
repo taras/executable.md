@@ -1307,7 +1307,7 @@ describe("REPL presentation: what one row's cells say it is", () => {
     const draft = placed(observed, "footer:input");
     expect(draft.width).toBe(WIDE.columns);
     for (let x = draft.x; x < draft.x + draft.width; x += 1) {
-      expect(grid.styleAt(x, draft.y).background).toBe(REPL_PALETTE.draftSurface);
+      expect(grid.styleAt(x, draft.y).background).toBe(REPL_PALETTE.focusSurface);
     }
     // The guidance above it is prose rather than metadata, and reads as prose.
     expect(inkOf(grid, placed(observed, "guidance")).foreground).toBe(REPL_PALETTE.source);
@@ -1424,11 +1424,11 @@ describe("REPL presentation: selection and focus are two different facts", () =>
     const { grid } = presenter;
 
     const selected = placed(observed, "entry:entry-1");
-    // The foreground is focus's; the surface is still selection's.
+    // The selected row keeps its marker and gains a distinct focus surface.
     expect(inkOf(grid, selected).foreground).toBe(REPL_PALETTE.focus);
     expect(inkOf(grid, selected).attrs).toContain(BOLD);
     for (let x = selected.x; x < selected.x + selected.width; x += 1) {
-      expect(grid.styleAt(x, selected.y).background).toBe(REPL_PALETTE.selectedSurface);
+      expect(grid.styleAt(x, selected.y).background).toBe(REPL_PALETTE.selectedFocusSurface);
     }
     expect(focusedRows(observed, grid)).toEqual(["entry:entry-1"]);
     expect(textOf(grid, selected)).toContain("*");
@@ -1558,6 +1558,8 @@ describe("REPL presentation: what an updated frame leaves behind", () => {
         const surfaces: readonly number[] = [
           REPL_PALETTE.drawerSurface,
           REPL_PALETTE.selectedSurface,
+          REPL_PALETTE.focusSurface,
+          REPL_PALETTE.selectedFocusSurface,
           REPL_PALETTE.historySurface,
           REPL_PALETTE.fieldSurface,
           REPL_PALETTE.draftSurface,
@@ -1856,7 +1858,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     expect(inkOf(grid, value).foreground).toBe(REPL_PALETTE.string);
     expect(inkOf(grid, value).foreground).not.toBe(REPL_PALETTE.heading);
     for (let x = value.x; x < value.x + value.width; x += 1) {
-      expect(grid.styleAt(x, value.y).background).toBe(REPL_PALETTE.fieldSurface);
+      expect(grid.styleAt(x, value.y).background).toBe(REPL_PALETTE.focusSurface);
     }
   });
 
@@ -1957,7 +1959,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     // reader can tell what acts from what explains before reading either.
     for (const key of ["drawer:close"]) {
       const bounds = placed(observed, key);
-      expect(grid.styleAt(bounds.x, bounds.y).background).toBe(REPL_PALETTE.draftSurface);
+      expect(grid.styleAt(bounds.x, bounds.y).background).toBe(REPL_PALETTE.focusSurface);
     }
     // And exactly one of them is the one a keystroke reaches.
     expect(focusedRows(observed, grid)).toEqual(["drawer:close"]);
@@ -2828,7 +2830,7 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     expect(inkOfSpan(grid, edited, "Northstar").foreground).toBe(SEMANTIC.out);
     // The row text goes into sits on the surface that says so, whole width.
     for (let x = edited.x; x < edited.x + edited.width; x += 1) {
-      expect(grid.styleAt(x, edited.y).background).toBe(SURFACE.field);
+      expect(grid.styleAt(x, edited.y).background).toBe(REPL_PALETTE.focusSurface);
     }
     // The second field's group reads the same way, with its own words.
     const second = placed(observed, "drawer:field:description");
@@ -2854,6 +2856,7 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     const own: readonly number[] = [
       SURFACE.drawer,
       RETAINED.selectedSurface,
+      REPL_PALETTE.focusSurface,
       SURFACE.field,
       SURFACE.input,
     ];
@@ -5354,6 +5357,10 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     // on the composer, which is not where the next keystroke lands.
     expect(focusKeyOf(presenter)).toBe("footer:input");
     expect(grid.styleAt(input.x, input.y).attrs.includes(BOLD)).toBe(true);
+    expect(grid.styleAt(input.x, input.y).attrs).toContain(4);
+    expect(grid.styleAt(input.x + input.width - 1, input.y).background).toBe(
+      REPL_PALETTE.focusSurface,
+    );
     const message = placed(observed, "sidekick:message");
     expect(grid.styleAt(message.x, message.y).attrs.includes(BOLD)).toBe(false);
     const value = cellOf(observed, grid, "box:draft", "<Checkout");
@@ -6066,6 +6073,8 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
 describe("REPL presentation: the screen says what is placed", () => {
   it("keeps the shell and its readable surfaces at the supported sizes", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     const wide = page.screen();
     expect(wide.shows("XMD REPL")).toBe(true);
     expect(wide.shows("TRANSCRIPT")).toBe(true);
@@ -6093,6 +6102,8 @@ describe("REPL presentation: the screen says what is placed", () => {
 
   it("keeps source text in the field that draws it", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     const source = "<Checkout />";
     yield* draftText(page, source);
     const reading = page.screen();
@@ -6103,6 +6114,8 @@ describe("REPL presentation: the screen says what is placed", () => {
 
   it("keeps a modal readable and leaves the Draft unchanged behind it", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* page.type("\x074");
+    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
     yield* draftText(page, "keep this draft");
     yield* openHistory(page);
     expect(page.screen().shows("History")).toBe(true);

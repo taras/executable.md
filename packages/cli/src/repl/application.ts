@@ -5759,11 +5759,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   /**
    * Which of the two right readings a wide or medium frame is showing.
    *
-   * Sidekick unless Bindings was asked for. A command whose default right pane
-   * is the inspector would open on the thing a person most often wants beside
-   * their work only by accident — but the default decides a *reading*, not
-   * focus: the draft still holds that, so a person who starts typing is typing
-   * their entry.
+   * Sidekick unless Bindings was asked for.
    *
    * Narrow routes one outlet instead, and the Sidekick is one of the three it
    * routes: an explicit `view=sidekick` selects it, and nothing else does.
@@ -7493,7 +7489,7 @@ function showingSidekick(view: ReplView): boolean {
  * Sidekick's opener, so an open permission request is never answered or
  * dismissed by something underneath it.
  */
-function modalOpen(view: ReplView): boolean {
+export function modalOpen(view: ReplView): boolean {
   return (
     view.selection.drawers.length > 0 ||
     presentedCatalog(view) ||
