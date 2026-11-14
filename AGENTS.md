@@ -47,6 +47,16 @@ For Effection-based code, consult the
 
 ## Verification
 
+### Test design
+
+- Prefer test doubles over stubs. Use controlled test doubles at dependency
+  boundaries such as ACP, HTTP, or subprocesses.
+- Exercise black boxes through realistic code paths.
+- Use unit tests only for simple input/output cases where type safety or
+  schemas are insufficient.
+
+### Running checks
+
 Verification happens at two boundaries. A **feedback commit** proves one exact
 commit against the settled plan or architecture with the smallest
 discriminating evidence. The **delivery gate** is merge readiness: the required
