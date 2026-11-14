@@ -847,8 +847,7 @@ export function drawerLayerProps(
  * The ops for the measurement pass, under structural ids and nothing else.
  *
  * Decorated by the same builder as the committed frame. Nothing holds focus
- * here — there is no mounted node to hold it — and that costs the measurement
- * nothing, because focus changes a foreground and never a width.
+ * here because there is no mounted node to hold it. Focus leaves widths intact.
  */
 export function skeletonOps(root: ReplBox): Op[] {
   return opsOf(
@@ -913,10 +912,11 @@ function opsOf(
     if (id === undefined) {
       continue;
     }
-    ops.push(open(id, decorated(box)));
+    const here = id === focused;
+    ops.push(open(id, decorated(box, here)));
     const content = textOf(id) ?? box.text;
     if (content !== undefined && content !== "") {
-      ops.push(...written(content, box, id === focused));
+      ops.push(...written(content, box, here));
     }
     ops.push(...opsOf(box.children, idOf, textOf, focused));
     ops.push(close());
@@ -932,11 +932,11 @@ function opsOf(
  * was given, and text only covers the cells it filled — so a selected row whose
  * label got shorter would otherwise be half selected.
  */
-function decorated(box: ReplBox): ReplBoxProps {
+function decorated(box: ReplBox, focused: boolean): ReplBoxProps {
   if (box.style === undefined) {
     return box.props;
   }
-  const surface = surfaceOf(box.style);
+  const surface = surfaceOf(box.style, focused);
   if (surface === undefined) {
     return box.props;
   }

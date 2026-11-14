@@ -2,6 +2,8 @@
   <Terminal columns={120} rows={30}>
     <XMD.Repl expectExit={true} as="closed">
       <Terminal.WaitForText text="Ready for Entry 1" />
+      <Terminal.Key key="Ctrl+G" />
+      <Terminal.Key key="4" />
       <Terminal.Type text="retained-marker-1272" />
       <Terminal.WaitForText text="retained-marker-1272" />
       <Terminal.Key key="Enter" />
