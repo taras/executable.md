@@ -67,3 +67,12 @@ scenarios resolve from that working directory.
 The [testing specification](../specs/testing-spec.md#real-terminal-repl-tests)
 describes the plugin and its scope. Use a composer region for a field-value
 check. A viewport match can also find the same text in the Draft or Transcript.
+
+Run `repl-shared-terminal.test.md` to check these launch transitions in one
+test. Start at `120x30`, submit the marker entry, and resize to `72x20` with
+Sidekick visible. A nested `160x36` Terminal opens an empty REPL. After the
+nested launch exits, the outer screen still shows its narrow Sidekick view.
+Exit that REPL and reopen it in the outer Terminal. Expect the same narrow
+view and the saved marker in Entry 1. The next fresh launch uses `72x20` and
+shows an empty history. Resize the idle Terminal to `120x30` and reopen the
+retained session again to verify that the current viewport supplies the size.

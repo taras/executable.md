@@ -41,14 +41,59 @@ import { prepareRun, root } from "./lib/repl-bench/run.ts";
 import { attachSidekick } from "./lib/repl-bench/sidekick.ts";
 
 type Execute = (command: Command) => Operation<unknown>;
-const Active = createContext<Execute>("xmd.repl-bench.active");
+
+function createTerminal(initial: Size) {
+  let dimensions = initial;
+  let active: { dispatch?: Execute } | undefined;
+  function requireLaunch(): Execute {
+    if (active?.dispatch === undefined) {
+      throw new Error("This terminal action needs an active <ReplBench> launch");
+    }
+    return active.dispatch;
+  }
+  return {
+    get dimensions() {
+      return dimensions;
+    },
+    *claim() {
+      if (active !== undefined) {
+        throw new Error("This <Terminal> already has an active <ReplBench> launch");
+      }
+      const launch: { dispatch?: Execute } = {};
+      active = launch;
+      // The launch registers its driver cleanup after this reservation.
+      yield* ensure(() => {
+        active = undefined;
+      });
+      return launch;
+    },
+    requireLaunch,
+    *execute(command: Command): Operation<unknown> {
+      const result =
+        active === undefined && command.action === "resize"
+          ? null
+          : yield* requireLaunch()(command);
+      if (command.action === "resize") {
+        dimensions = { columns: command.columns, rows: command.rows };
+      }
+      return result;
+    },
+  };
+}
+
+const TerminalContext = createContext<ReturnType<typeof createTerminal>>("xmd.repl-bench.terminal");
 const RegionContext = createContext<Region | undefined>("xmd.repl-bench.region", undefined);
 const WaitTimeout = createContext<number | undefined>("xmd.repl-bench.wait-timeout", undefined);
 const Sidekick = createContext<Yielded<ReturnType<typeof attachSidekick>> | undefined>(
   "xmd.repl-bench.sidekick",
   undefined,
 );
-const Homes = createContext<Set<object>>("xmd.repl-bench.homes");
+interface Resume {
+  location: string;
+  home: string;
+}
+const Resumes =
+  createContext<WeakMap<object, Resume & { dimensions: Size }>>("xmd.repl-bench.resumes");
 const closed = { exitCode: null, location: null, resume: null };
 const wait = z.object({
   text: z.string().min(1),
@@ -68,7 +113,6 @@ const bench = size.partial().extend({
   mount: z.array(z.string().min(1)).default([]),
   allowAbsolute: z.boolean().default(false),
 });
-const resumeReference = z.object({ location: z.string(), home: z.string(), ...size.shape });
 
 function* connect(options: Launch): Operation<Execute> {
   const script = fileURLToPath(new URL("./repl-bench-bun.ts", import.meta.url));
@@ -126,6 +170,17 @@ function* connect(options: Launch): Operation<Execute> {
   };
 }
 
+const Terminal: FunctionComponent = function* (props, invocation) {
+  if (!invocation.hasContent() || (yield* Test.operations.testScope) === undefined) {
+    throw new Error("Use a paired <Terminal> inside <Test>");
+  }
+  yield* TerminalContext.set(createTerminal(size.parse(props)));
+  yield* Sidekick.set(undefined);
+  yield* RegionContext.set(undefined);
+  yield* WaitTimeout.set(undefined);
+  return yield* content();
+};
+
 const ReplBench: FunctionComponent = function* (props, invocation) {
   if (!invocation.hasContent()) {
     throw new Error("Use a paired <ReplBench> inside <Test>");
@@ -136,29 +191,39 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   }
   const directory = yield* cwd();
   const wanted = bench.parse(props);
+  const enclosing = yield* TerminalContext.get();
+  if (enclosing !== undefined && (wanted.columns !== undefined || wanted.rows !== undefined)) {
+    throw new Error("Set viewport dimensions on the enclosing <Terminal>");
+  }
+  const reservation = enclosing === undefined ? undefined : yield* enclosing.claim();
   const waitTimeout =
     wanted.waitTimeout === undefined
       ? undefined
       : parseDuration(wanted.waitTimeout, "<ReplBench waitTimeout>");
   const captured = (yield* hasCapture("resume")) ? yield* capture("resume") : undefined;
   const prepared = yield* test.eval(function* () {
-    const homes = (yield* Homes.get()) ?? (yield* Homes.set(new Set<object>()));
+    const resumes = (yield* Resumes.get()) ?? (yield* Resumes.set(new WeakMap()));
     if (captured !== undefined) {
-      if (typeof captured !== "object" || captured === null || !homes.has(captured)) {
+      const resume =
+        typeof captured === "object" && captured !== null ? resumes.get(captured) : undefined;
+      if (resume === undefined) {
         throw new Error("resume must come from a clean <ReplBench> exit in this test");
       }
-      return { homes, resume: resumeReference.parse(captured), home: undefined };
+      return { resumes, resume, home: undefined };
     }
-    return { homes, resume: undefined, home: yield* useTempDirectory("xmd-repl-test-") };
+    return { resumes, resume: undefined, home: yield* useTempDirectory("xmd-repl-test-") };
   });
   if (!prepared.ok) {
     throw prepared.error;
   }
-  const { homes, home, resume } = prepared.value;
-  const initial = {
-    columns: wanted.columns ?? resume?.columns ?? defaultSize.columns,
-    rows: wanted.rows ?? resume?.rows ?? defaultSize.rows,
-  };
+  const { resumes, home, resume } = prepared.value;
+  const terminal =
+    enclosing ??
+    createTerminal({
+      columns: wanted.columns ?? resume?.dimensions.columns ?? defaultSize.columns,
+      rows: wanted.rows ?? resume?.dimensions.rows ?? defaultSize.rows,
+    });
+  const active = reservation ?? (yield* terminal.claim());
   const args = wanted.entryPermissionFixture
     ? [
         "--approve-reads",
@@ -198,7 +263,7 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
       attachment,
     );
   }
-  const { launch } = yield* prepareRun(directory, initial, args, {
+  const { launch } = yield* prepareRun(directory, terminal.dimensions, args, {
     home: resume?.home ?? home,
     scenario,
   });
@@ -209,22 +274,18 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
     },
   });
   const dispatch = yield* connect(launch);
-  let dimensions: Size = initial;
-  function* execute(command: Command) {
-    const value = yield* dispatch(command);
-    if (command.action === "resize") {
-      dimensions = { columns: command.columns, rows: command.rows };
-    }
-    return value;
-  }
-  yield* execute({ action: "ready" });
+  yield* dispatch({ action: "ready" });
   let sidekick: Yielded<ReturnType<typeof attachSidekick>> | undefined;
   if (attachment !== undefined) {
-    yield* execute({ action: "attachment-ready", path: attachment });
+    yield* dispatch({ action: "attachment-ready", path: attachment });
     sidekick = yield* attachSidekick(attachment, launch.directory);
   }
+  active.dispatch = dispatch;
+  yield* ensure(() => {
+    delete active.dispatch;
+  });
   yield* Sidekick.set(sidekick);
-  yield* Active.set(execute);
+  yield* TerminalContext.set(terminal);
   yield* RegionContext.set(undefined);
   yield* WaitTimeout.set(waitTimeout);
   const rendered = yield* content();
@@ -232,13 +293,13 @@ const ReplBench: FunctionComponent = function* (props, invocation) {
   if (!wanted.expectExit) {
     return bind ? closed : rendered;
   }
-  const exit = exitResult.parse(yield* execute({ action: "exit" }));
+  const exit = exitResult.parse(yield* dispatch({ action: "exit" }));
   const reference =
     exit.exitCode === 0 && exit.location !== null
-      ? Object.freeze({ location: exit.location, home: launch.home, ...dimensions })
+      ? Object.freeze({ location: exit.location, home: launch.home })
       : null;
   if (reference !== null) {
-    homes.add(reference);
+    resumes.set(reference, { ...reference, dimensions: terminal.dimensions });
   }
   return bind ? { ...exit, resume: reference } : rendered;
 };
@@ -252,8 +313,11 @@ function* scriptedSidekick() {
 }
 
 function* action(command: Command) {
-  const execute = yield* Active.expect();
-  return yield* execute(command);
+  const terminal = yield* TerminalContext.get();
+  if (terminal === undefined) {
+    throw new Error("Use terminal actions inside <Terminal> or <ReplBench>");
+  }
+  return yield* terminal.execute(command);
 }
 
 function registration(
@@ -263,7 +327,7 @@ function registration(
   required: string[] = [],
 ): ComponentRegistration {
   return {
-    name: `ReplBench${name}`,
+    name,
     origin: "scripts/repl-bench-plugin.ts",
     props: { type: "object", properties, required, additionalProperties: false },
     fn,
@@ -282,8 +346,9 @@ const cell = {
 };
 const dimensions = { columns: integer, rows: integer };
 const registrations = [
+  registration("Terminal", Terminal, dimensions, ["columns", "rows"]),
   {
-    ...registration("", ReplBench, {
+    ...registration("ReplBench", ReplBench, {
       ...dimensions,
       expectExit: boolean,
       waitTimeout: string,
@@ -296,18 +361,18 @@ const registrations = [
     captures: ["resume"],
   },
   registration(
-    ".SidekickPrompt",
+    "ReplBench.SidekickPrompt",
     function* (props) {
       return yield* (yield* scriptedSidekick()).prompt(z.string().min(1).parse(props.text));
     },
     { text: string },
     ["text"],
   ),
-  registration(".SidekickStatus", function* () {
+  registration("ReplBench.SidekickStatus", function* () {
     return yield* (yield* scriptedSidekick()).status();
   }),
   registration(
-    ".EntryOutput",
+    "ReplBench.EntryOutput",
     function* (props) {
       return yield* (yield* scriptedSidekick()).output(z.int().positive().parse(props.entry));
     },
@@ -315,7 +380,7 @@ const registrations = [
     ["entry"],
   ),
   registration(
-    ".Focus",
+    "ReplBench.Focus",
     function* (props) {
       z.literal("sidekick-composer").parse(props.target);
       yield* action({ action: "focus" });
@@ -323,8 +388,11 @@ const registrations = [
     { target: string },
     ["target"],
   ),
+];
+
+const terminalActions = [
   registration(
-    ".Type",
+    "Terminal.Type",
     function* (props) {
       yield* action({ action: "type", text: z.string().parse(props.text) });
     },
@@ -332,7 +400,7 @@ const registrations = [
     ["text"],
   ),
   registration(
-    ".Key",
+    "Terminal.Key",
     function* (props) {
       yield* action({ action: "key", key: z.string().min(1).parse(props.key) });
     },
@@ -340,7 +408,7 @@ const registrations = [
     ["key"],
   ),
   registration(
-    ".Resize",
+    "Terminal.Resize",
     function* (props) {
       yield* action({ action: "resize", ...size.parse(props) });
     },
@@ -348,12 +416,12 @@ const registrations = [
     ["columns", "rows"],
   ),
   registration(
-    ".Region",
+    "Terminal.Region",
     function* (props, invocation) {
       if (!invocation.hasContent()) {
-        throw new Error("Use a paired <ReplBench.Region>");
+        throw new Error("Use a paired <Terminal.Region>");
       }
-      yield* Active.expect();
+      (yield* TerminalContext.expect()).requireLaunch();
       yield* RegionContext.set(region.parse(props.name));
       return yield* content();
     },
@@ -361,7 +429,7 @@ const registrations = [
     ["name"],
   ),
   registration(
-    ".Click",
+    "Terminal.Click",
     function* (props) {
       yield* action({ action: "click", at: point.parse(props.at) });
     },
@@ -369,7 +437,7 @@ const registrations = [
     ["at"],
   ),
   registration(
-    ".Scroll",
+    "Terminal.Scroll",
     function* (props) {
       yield* action({
         action: "scroll",
@@ -382,12 +450,12 @@ const registrations = [
     ["delta"],
   ),
   registration(
-    ".WaitForText",
+    "Terminal.WaitForText",
     function* (props) {
       const { timeout, ...options } = wait.parse(props);
       const unique = yield* hasBinding();
       if (options.count !== undefined && (unique || options.present !== undefined)) {
-        throw new Error("ReplBench.WaitForText count cannot be combined with as or present");
+        throw new Error("WaitForText count cannot be combined with as or present");
       }
       const result = yield* action({
         action: "wait",
@@ -397,7 +465,7 @@ const registrations = [
         timeout:
           timeout === undefined
             ? yield* WaitTimeout.get()
-            : parseDuration(timeout, "<ReplBench.WaitForText timeout>"),
+            : parseDuration(timeout, "<Terminal.WaitForText timeout>"),
       });
       return point.nullable().parse(result);
     },
@@ -418,7 +486,14 @@ export default Plugin({
   name: "repl-bench",
   *install({ command }) {
     if (command === "test") {
-      yield* registerComponents(registrations);
+      yield* registerComponents([
+        ...registrations,
+        ...terminalActions,
+        ...terminalActions.map((entry) => ({
+          ...entry,
+          name: entry.name.replace("Terminal.", "ReplBench."),
+        })),
+      ]);
     }
     return undefined;
   },
