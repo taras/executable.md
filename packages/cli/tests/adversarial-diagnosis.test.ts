@@ -75,11 +75,18 @@ function* fixture() {
     attempt: string,
     previous?: string,
     inputPaths = [evidence],
-    context: {
-      spec?: string;
-      failingRevision?: string;
-      probes?: { command: string; setup?: string; artifacts?: string[] }[];
-    } = {},
+    context:
+      | {
+          spec?: string;
+          failingRevision?: string;
+          probes?: { command: string; setup?: string; artifacts?: string[] }[];
+        }
+      | {
+          kind: "design";
+          question: string;
+          constraints: string[];
+          specs?: string[];
+        } = {},
     solvers?: { primary: SolverProfile; fallback?: SolverProfile },
   ) {
     return scoped(function* () {
@@ -142,13 +149,17 @@ function* fixture() {
           },
         ]);
       };
+      const assignment = { repository, revision, work: "test" };
       const request = {
         role: "problem-solver",
         session: "diagnosis",
         attempt,
         ...(previous === undefined ? {} : { previous }),
         inputPaths,
-        assignment: { repository, revision, work: "test", request: "Find the cause.", ...context },
+        assignment:
+          "kind" in context
+            ? { ...assignment, ...context }
+            : { ...assignment, request: "Find the cause.", ...context },
       };
       const path = join(root, "request.json");
       yield* writeTextFile(path, JSON.stringify(request));
@@ -190,6 +201,112 @@ function offer(fake: ReturnType<typeof createFakeAcp>, models: string[]) {
 }
 
 describe("adversarial problem-solver phase", () => {
+  it("records design advice with pinned spec sections and continues with captured evidence", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const context = {
+      kind: "design" as const,
+      question: "Where should routing end and the bundled REPL plugin begin?",
+      constraints: ["Preserve the installed CLI entry point."],
+    };
+    const specs = [specPath + "#controller-and-worker", specPath + "#replay"];
+    const advice = {
+      outcome: "design",
+      revision: test.revision,
+      options: [
+        { option: "Route to a bundled plugin", tradeoffs: "Adds a plugin startup boundary." },
+        { option: "Keep the built-in command", tradeoffs: "Keeps startup in the CLI package." },
+      ],
+      observations: [{ source: specs[0], observation: "The worker owns its startup." }],
+      recommendation: "Try the plugin boundary because startup has a distinct owner.",
+      whatWouldChange: "A startup trace showing a required in-process dependency.",
+      openQuestions: ["Which package owns the plugin version?"],
+    };
+    const reply = JSON.stringify(advice);
+    const first = join(test.root, "design");
+    const originalPath = join(first, "fable");
+    test.fake.script({ reply });
+    expect(JSON.parse(yield* test.run(first, undefined, [], { ...context, specs }))).toMatchObject({
+      status: "design",
+      attempt: originalPath,
+    });
+    expect(JSON.parse(yield* readTextFile(join(originalPath, "inputs.json")))).toEqual([]);
+    const original = JSON.parse(yield* readTextFile(join(originalPath, "result.json")));
+    expect(original).toMatchObject({
+      schema: "diagnosis-result.v1",
+      assignment: { assignment: { ...context, specs, revision: test.revision } },
+      model: "fable",
+      result: advice,
+    });
+    const prompt = test.fake.prompts[0];
+    expect(prompt).toContain(context.question);
+    expect(prompt).toContain(context.constraints[0]);
+    expect(prompt).toContain(specSection.trimEnd());
+    expect(prompt).toContain("Unrelated replay section.");
+    expect(prompt).not.toContain("Unrelated preamble.");
+    expect(prompt).toContain(join(originalPath, "submission-guide.md"));
+    expect(prompt).not.toContain('"whatWouldChange"');
+    const guide = yield* readTextFile(join(originalPath, "submission-guide.md"));
+    expect(guide).toContain('"whatWouldChange"');
+    expect(guide).not.toContain('"regression"');
+
+    const next = join(test.root, "continue-design");
+    yield* expectRefusal(
+      test.run(next, originalPath, [test.evidence], {
+        ...context,
+        question: "Different boundary?",
+      }),
+      "design question or constraints differ",
+    );
+    test.fake.script({ reply });
+    expect(JSON.parse(yield* test.run(next, originalPath, [test.evidence], context))).toMatchObject(
+      {
+        status: "design",
+      },
+    );
+    const continued = JSON.parse(yield* readTextFile(join(next, "fable/result.json")));
+    expect(continued.identity.identity).toEqual(original.identity.identity);
+    expect(continued.assignment.assignment.specs).toEqual(specs);
+    expect(test.fake.prompts[1]).toContain(test.evidence);
+    expect(test.fake.prompts).toHaveLength(2);
+  });
+
+  it("holds incomplete design advice and retains the reply", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const attempt = join(test.root, "incomplete-design");
+    const directory = join(attempt, "fable");
+    const reply = JSON.stringify({
+      outcome: "design",
+      revision: test.revision,
+      options: [
+        { option: "Route to a plugin", tradeoffs: "Adds a startup boundary." },
+        { option: "Keep the command", tradeoffs: "Keeps startup in the CLI." },
+      ],
+      observations: [{ source: test.evidence, observation: "The worker owns startup." }],
+      recommendation: "Try the plugin boundary.",
+      openQuestions: [],
+    });
+    test.fake.script({ reply });
+    expect(
+      JSON.parse(
+        yield* test.run(attempt, undefined, [test.evidence], {
+          kind: "design",
+          question: "Where should startup live?",
+          constraints: [],
+        }),
+      ),
+    ).toMatchObject({
+      status: "hold",
+      reason: expect.stringContaining("design result contract"),
+    });
+    expect((yield* readTextFile(join(directory, "raw.txt"))).trim()).toBe(reply);
+    expect(yield* API.Fs.operations.stat(join(directory, "result.json"))).toMatchObject({
+      exists: false,
+    });
+    expect(test.fake.prompts).toHaveLength(1);
+  });
+
   it("accepts one diagnosis after progress text and holds an ambiguous reply", function* () {
     const test = yield* fixture();
     offer(test.fake, ["fable", "gpt-6-astra"]);

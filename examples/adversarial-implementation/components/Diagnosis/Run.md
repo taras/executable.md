@@ -12,6 +12,8 @@ returns: {type: object}
 
 <Diagnosis.Schema as="schema" />
 <Parse schema={schema.request} as="request"><Json value={props.request} /></Parse>
+<Let as="isDesign" value={request.assignment.kind === "design"} />
+<Let as="inputSchema" value={isDesign ? schema.designInputs : schema.inputs} />
 <Parse schema={schema.solvers} as="solvers"><Json value={props.solvers} /></Parse>
 <If condition={solvers.primary.key === solvers.fallback?.key}><Fail message="Primary and fallback solvers must use distinct keys." /></If>
 <Let as="previous" value={null} />
@@ -20,11 +22,12 @@ returns: {type: object}
 <If condition={request.previous !== undefined}>
 <Ticket.Read path={request.previous + "/assignment.json"} limit={1048576} as="saved" />
 <Parse schema={schema.prior} as="previous">{saved}</Parse>
-<If condition={previous.primarySession !== request.session || previous.assignment.repository !== request.assignment.repository || previous.assignment.revision !== request.assignment.revision || previous.assignment.work !== request.assignment.work}><Fail message="Continue the original diagnostic assignment at its recorded revision and session." /></If>
+<If condition={previous.primarySession !== request.session || previous.assignment.repository !== request.assignment.repository || previous.assignment.revision !== request.assignment.revision || previous.assignment.work !== request.assignment.work || previous.assignment.kind !== request.assignment.kind}><Fail message="Continue the original problem-solver assignment at its recorded revision and session." /></If>
+<If condition={isDesign && (previous.assignment.question !== request.assignment.question || JSON.stringify(previous.assignment.constraints) !== JSON.stringify(request.assignment.constraints))}><Fail message="The design question or constraints differ from the original assignment. Use a fresh assignment for a different decision." /></If>
 <If condition={previous.assignment.failingRevision !== undefined && request.assignment.failingRevision !== undefined && previous.assignment.failingRevision !== request.assignment.failingRevision}><Fail message="The failing revision differs from the original diagnostic assignment. Use a fresh assignment for a different failing revision." /></If>
 <Let as="request" value={{...request,assignment:{...previous.assignment,...request.assignment}}} />
 <Ticket.Read path={request.previous + "/inputs.json"} as="savedInputs" />
-<Parse schema={schema.inputs} as="inputs">{savedInputs}</Parse>
+<Parse schema={inputSchema} as="inputs">{savedInputs}</Parse>
 <Ticket.Fingerprint inputs={inputs} as="fingerprint" />
 <If condition={JSON.stringify(fingerprint) !== JSON.stringify(previous.evidence)}><Fail message="The saved diagnostic inputs differ from their recorded fingerprints." /></If>
 <Ticket.Capture as="readResult"><Ticket.Read path={request.previous + "/result.json"} limit={1048576} as="text" /><Json value={text} /></Ticket.Capture>
@@ -41,7 +44,8 @@ returns: {type: object}
 <Ticket.Checkout repository={request.assignment.repository} as="source" />
 <If condition={source.head !== request.assignment.revision || !source.clean}><Fail message="Select the clean diagnostic checkout at its exact assigned revision." /></If>
 <Diagnosis.Inputs repository={request.assignment.repository} paths={request.inputPaths} retained={inputs} as="captured" />
-<Parse schema={schema.inputs} as="inputs"><Json value={captured} /></Parse>
+<Parse schema={inputSchema} as="inputs"><Json value={captured} /></Parse>
+<If condition={isDesign && request.assignment.specs === undefined && inputs.length === 0}><Fail message="Supply a relevant spec section or captured evidence for the design assignment." /></If>
 <Ticket.ReserveDecision path={resolved.directory} as="reserved" />
 <If condition={!reserved}><Fail message="The diagnostic attempt is already reserved. Preserve it and reconcile before continuing." /></If>
 <If condition={previous !== null}>

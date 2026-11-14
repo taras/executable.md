@@ -176,7 +176,7 @@ qualifications.
 | Planner | a decision-complete plan and self-contained handoff | GPT | [.agents/planner.md](.agents/planner.md) |
 | Architect | coherent product contracts, boundaries and stacks — acts on system or software architecture, issue or milestone reconciliation, stack sequencing, or an architecture review of an implementation | GPT | [.agents/architect.md](.agents/architect.md) |
 | Reviewer | an independent correctness, minimalism and performance review | Fable | [.agents/reviewer.md](.agents/reviewer.md) |
-| Problem solver | a confirmed cause with a regression and handoff, or a missing witness | Fable, with Astra as backup | [.agents/problem-solver.md](.agents/problem-solver.md) |
+| Problem solver | a failure diagnosis or evidence-based design advice | Fable, with Astra as backup | [.agents/problem-solver.md](.agents/problem-solver.md) |
 
 An explicit role assignment in the task wins over these defaults. One agent may cross roles only when the user explicitly asks; independent architecture, planning and implementation reviews are otherwise preserved. Read the role's brief
 before acting in it. Running the target below prepares an Implementor session

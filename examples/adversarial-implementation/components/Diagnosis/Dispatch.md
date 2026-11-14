@@ -34,8 +34,9 @@ returns: {type: object}
 <Phase.Extract text={attempt.turn.reply} as="extracted" />
 <If condition={!extracted.ok}><Return value={{replace:false,result:{...hold,reason:extracted.rejection.message}}} />
 <Else>
-<SafeParse schema={schema.result} as="parsed">{extracted.json}</SafeParse>
-<If condition={!parsed.ok || parsed.value.revision !== revision || (parsed.value.outcome === "cause" && (parsed.value.regression.expected.trim() === parsed.value.regression.observed.trim() || parsed.value.evidence.some(path => !props.inputs.some(input => input.path === path))))}><Return value={{replace:false,result:{...hold,reason:"The saved reply does not match the diagnostic result contract or captured evidence."}}} />
+<Let as="isDesign" value={props.request.assignment.kind === "design"} />
+<SafeParse schema={isDesign ? schema.designResult : schema.result} as="parsed">{extracted.json}</SafeParse>
+<If condition={!parsed.ok || parsed.value.revision !== revision || (parsed.value.outcome === "cause" && (parsed.value.regression.expected.trim() === parsed.value.regression.observed.trim() || parsed.value.evidence.some(path => !props.inputs.some(input => input.path === path))))}><Return value={{replace:false,result:{...hold,reason:isDesign ? "The saved reply does not match the design result contract or assigned revision." : "The saved reply does not match the diagnostic result contract or captured evidence."}}} />
 <Else>
 <Ticket.Capture as="receipt"><Ticket.Read path={attempt.record.identities + "/" + encodeURIComponent(attempt.record.solver.session) + ".json"} limit={1048576} as="text" /><Json value={text} /></Ticket.Capture>
 <Let as="identityText" value={receipt.status === "completed" ? JSON.parse(receipt.output) : ""} />
