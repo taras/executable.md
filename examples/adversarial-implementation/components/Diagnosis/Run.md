@@ -30,7 +30,7 @@ returns: {type: object}
 <Parse schema={inputSchema} as="inputs">{savedInputs}</Parse>
 <Ticket.Fingerprint inputs={inputs} as="fingerprint" />
 <If condition={JSON.stringify(fingerprint) !== JSON.stringify(previous.evidence)}><Fail message="The saved diagnostic inputs differ from their recorded fingerprints." /></If>
-<Ticket.Capture as="readResult"><Ticket.Read path={request.previous + "/result.json"} limit={1048576} as="text" /><Json value={text} /></Ticket.Capture>
+<Ticket.Capture as="readResult"><Ticket.Read path={request.previous + "/result.json"} limit={isDesign ? 8388608 : 1048576} as="text" /><Json value={text} /></Ticket.Capture>
 <If condition={readResult.status !== "completed"}><Fail message="Reconcile the original diagnostic turn before continuing it." /></If>
 <Parse schema={schema.receipt} as="priorResult"><Json value={JSON.parse(JSON.parse(readResult.output))} /></Parse>
 <If condition={JSON.stringify(priorResult.assignment) !== JSON.stringify(previous) || priorResult.result.revision !== request.assignment.revision}><Fail message="The saved result does not match the original diagnostic assignment." /></If>

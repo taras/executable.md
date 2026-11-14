@@ -222,7 +222,22 @@ describe("adversarial problem-solver phase", () => {
       whatWouldChange: "A startup trace showing a required in-process dependency.",
       openQuestions: ["Which package owns the plugin version?"],
     };
-    const reply = JSON.stringify(advice);
+    const longText = "設".repeat(7_990);
+    const expanded = {
+      ...advice,
+      options: Array.from({ length: 4 }, (_, index) => ({
+        option: index + " " + longText,
+        tradeoffs: longText,
+      })),
+      observations: Array.from({ length: 12 }, (_, index) => ({
+        source: index + " " + longText,
+        observation: longText,
+      })),
+      recommendation: longText,
+      whatWouldChange: longText,
+      openQuestions: Array.from({ length: 12 }, () => longText),
+    };
+    const reply = JSON.stringify(expanded);
     const first = join(test.root, "design");
     const originalPath = join(first, "fable");
     test.fake.script({ reply });
@@ -231,12 +246,14 @@ describe("adversarial problem-solver phase", () => {
       attempt: originalPath,
     });
     expect(JSON.parse(yield* readTextFile(join(originalPath, "inputs.json")))).toEqual([]);
-    const original = JSON.parse(yield* readTextFile(join(originalPath, "result.json")));
+    const receipt = yield* readTextFile(join(originalPath, "result.json"));
+    expect(new TextEncoder().encode(receipt).length).toBeGreaterThan(1_048_576);
+    const original = JSON.parse(receipt);
     expect(original).toMatchObject({
       schema: "diagnosis-result.v1",
       assignment: { assignment: { ...context, specs, revision: test.revision } },
       model: "fable",
-      result: advice,
+      result: expanded,
     });
     const prompt = test.fake.prompts[0];
     expect(prompt).toContain(context.question);
@@ -258,7 +275,7 @@ describe("adversarial problem-solver phase", () => {
       }),
       "design question or constraints differ",
     );
-    test.fake.script({ reply });
+    test.fake.script({ reply: JSON.stringify(advice) });
     expect(JSON.parse(yield* test.run(next, originalPath, [test.evidence], context))).toMatchObject(
       {
         status: "design",
