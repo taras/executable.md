@@ -13,6 +13,7 @@ import { call, scoped, stream, until, type Operation, type Yielded } from "effec
 import { readFile, symlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { crc32 } from "node:zlib";
 import { z } from "zod";
 import { useCompositionComponents } from "../../../packages/git/src/composition/installation.ts";
 import { gitHubSource } from "../../../packages/git/src/deno/composition/github.ts";
@@ -463,6 +464,24 @@ describe("REPL UI evidence publication", () => {
       }),
     );
     yield* raised(run(input, host));
+    const corruptImage = images[0].slice();
+    const chunk = new DataView(corruptImage.buffer);
+    const idat = 33;
+    expect(chunk.getUint32(idat + 4)).toBe(0x49444154);
+    const checksum = idat + 8 + chunk.getUint32(idat);
+    corruptImage.fill(0, idat + 8, checksum);
+    chunk.setUint32(checksum, crc32(corruptImage.subarray(idat + 4, checksum)));
+    yield* until(writeFile(input.paths[0], corruptImage));
+    yield* writeTextFile(
+      input.path,
+      JSON.stringify({
+        ...original,
+        captures: [{ ...original.captures[0], sha256: sha256(corruptImage) }, original.captures[1]],
+      }),
+    );
+    yield* raised(run(input, host, "dry-run"));
+    expect(host.calls).toEqual([]);
+    yield* until(writeFile(input.paths[0], images[0]));
     const link = join(input.directory, "link.png");
     yield* until(symlink(input.paths[1], link));
     yield* writeTextFile(

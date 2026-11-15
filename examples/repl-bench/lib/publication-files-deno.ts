@@ -3,7 +3,7 @@ import { ensure, scoped, until, type Operation } from "effection";
 import { constants } from "node:fs";
 import { open, link, writeFile } from "node:fs/promises";
 import process from "node:process";
-import { crc32 } from "node:zlib";
+import { crc32, Inflate, inflateSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { useTempDirectory } from "../../../scripts/lib/temp-directory.ts";
 
@@ -94,6 +94,86 @@ export function recordDraft(path: string, value: string): Operation<void> {
   });
 }
 
+const MAX_FILTERED_PNG_BYTES = 64 * 1024 * 1024;
+
+const pngColorTypes: ReadonlyMap<number, { samples: number; depths: number[] }> = new Map([
+  [0, { samples: 1, depths: [1, 2, 4, 8, 16] }],
+  [2, { samples: 3, depths: [8, 16] }],
+  [3, { samples: 1, depths: [1, 2, 4, 8] }],
+  [4, { samples: 2, depths: [8, 16] }],
+  [6, { samples: 4, depths: [8, 16] }],
+]);
+
+const adam7 = [
+  [0, 0, 8, 8],
+  [4, 0, 8, 8],
+  [0, 4, 4, 8],
+  [2, 0, 4, 4],
+  [0, 2, 2, 4],
+  [1, 0, 2, 2],
+  [0, 1, 1, 2],
+];
+
+function validScanlines(header: DataView, compressed: Uint8Array): boolean {
+  const width = header.getUint32(16);
+  const height = header.getUint32(20);
+  const depth = header.getUint8(24);
+  const layout = pngColorTypes.get(header.getUint8(25));
+  const interlace = header.getUint8(28);
+  if (
+    layout === undefined ||
+    !layout.depths.includes(depth) ||
+    header.getUint8(26) !== 0 ||
+    header.getUint8(27) !== 0 ||
+    interlace > 1
+  ) {
+    return false;
+  }
+
+  let expected = 0;
+  const passes = [];
+  for (const [x, y, dx, dy] of interlace === 0 ? [[0, 0, 1, 1]] : adam7) {
+    if (x >= width || y >= height) {
+      continue;
+    }
+    const columns = Math.ceil((width - x) / dx);
+    const rows = Math.ceil((height - y) / dy);
+    const stride = 1 + Math.ceil((columns * layout.samples * depth) / 8);
+    if (rows > (MAX_FILTERED_PNG_BYTES - expected) / stride) {
+      return false;
+    }
+    passes.push({ rows, stride });
+    expected += rows * stride;
+  }
+
+  try {
+    const decoded: unknown = inflateSync(compressed, { maxOutputLength: expected, info: true });
+    if (
+      typeof decoded !== "object" ||
+      decoded === null ||
+      !("buffer" in decoded) ||
+      !(decoded.buffer instanceof Uint8Array) ||
+      !("engine" in decoded) ||
+      !(decoded.engine instanceof Inflate) ||
+      decoded.engine.bytesWritten !== compressed.length ||
+      decoded.buffer.length !== expected
+    ) {
+      return false;
+    }
+    let offset = 0;
+    for (const { rows, stride } of passes) {
+      for (let row = 0; row < rows; row++, offset += stride) {
+        if (decoded.buffer[offset] > 4) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function png(bytes: Uint8Array): boolean {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
   if (bytes.length < 45 || !signature.every((byte, index) => bytes[index] === byte)) {
@@ -108,7 +188,8 @@ export function png(bytes: Uint8Array): boolean {
   ) {
     return false;
   }
-  let hasImageData = false;
+  const compressed = new Uint8Array(bytes.length);
+  let compressedLength = 0;
   for (let at = 8; at + 12 <= bytes.length; ) {
     const length = view.getUint32(at);
     const type = view.getUint32(at + 4);
@@ -117,10 +198,16 @@ export function png(bytes: Uint8Array): boolean {
       return false;
     }
     if (type === 0x49444154 && length > 0) {
-      hasImageData = true;
+      compressed.set(bytes.subarray(at + 8, end - 4), compressedLength);
+      compressedLength += length;
     }
     if (type === 0x49454e44) {
-      return hasImageData && length === 0 && end === bytes.length;
+      return (
+        compressedLength > 0 &&
+        length === 0 &&
+        end === bytes.length &&
+        validScanlines(view, compressed.subarray(0, compressedLength))
+      );
     }
     at = end;
   }
