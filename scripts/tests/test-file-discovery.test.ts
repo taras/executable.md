@@ -1,8 +1,7 @@
 /**
- * Discovery is the one place the corpus comes from, and every runtime's shard
- * assignment is a partition of what it returns. A test file discovery cannot
- * see is therefore a test that runs nowhere — not under one runtime, but under
- * none — and nothing else in the repository would notice.
+ * Runtime discovery supplies all three sharded corpora. Dedicated CI jobs
+ * supply the test paths they run explicitly. The two sets must cover every
+ * native test file.
  *
  * So this walks the whole repository with Deno's own documented test-file
  * pattern and holds the two results to each other. It prunes what is outside
@@ -24,6 +23,7 @@ import { until } from "effection";
 import { listTestFiles, MARKDOWN_SUITES } from "../lib/test-files.ts";
 
 const ROOT = new URL("../../", import.meta.url);
+const REPL_BENCH_TESTS = "examples/repl-bench/tests/";
 
 /**
  * What `deno test` discovers with no path arguments: `*.test.*`, `*_test.*`,
@@ -87,8 +87,10 @@ function* repositoryTestFiles(): Operation<string[]> {
 }
 
 describe("the discovered corpus against the whole repository", () => {
-  it("matches Deno's test-file pattern exactly", function* () {
+  it("partitions Deno test files between the runtime corpus and the dedicated bench job", function* () {
     const walked = yield* repositoryTestFiles();
+    const bench = walked.filter((file) => file.startsWith(REPL_BENCH_TESTS));
+    const runtime = walked.filter((file) => !file.startsWith(REPL_BENCH_TESTS));
     const discovered = (yield* listTestFiles(ROOT)).filter((file) => file.endsWith(".ts"));
 
     // A walk that pruned too much would agree with discovery by finding
@@ -97,12 +99,13 @@ describe("the discovered corpus against the whole repository", () => {
     expect(walked.length).toBeGreaterThan(100);
 
     const selected = new Set(discovered);
-    const stranded = walked.filter((file) => !selected.has(file));
+    expect(bench.length).toBeGreaterThan(0);
+    const stranded = runtime.filter((file) => !selected.has(file));
     // A stranded file runs under no runtime, even when every discovered test passes.
     expect({ strandedFilesOutsideEveryRuntime: stranded }).toEqual({
       strandedFilesOutsideEveryRuntime: [],
     });
-    expect(walked).toEqual(discovered);
+    expect(runtime).toEqual(discovered);
   });
 
   it("recognizes every spelling Deno runs", function* () {

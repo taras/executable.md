@@ -690,6 +690,16 @@ describe("the conditional CI jobs", () => {
   });
 });
 
+describe("the dedicated ReplBench job", () => {
+  it("runs the TypeScript tests outside the runtime shards", function* () {
+    const bench = (yield* workflow())["repl-bench"];
+    const commands = bench?.steps.flatMap((step) => step.run?.split("\n") ?? []) ?? [];
+    expect(commands.some((line) => /^deno test .+ examples\/repl-bench\/tests$/.test(line))).toBe(
+      true,
+    );
+  });
+});
+
 describe("the CI workflow aggregate", () => {
   it("defines green", function* () {
     expect(green(yield* workflow())).toBeDefined();
