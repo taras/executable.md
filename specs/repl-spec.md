@@ -868,8 +868,12 @@ decoded length or on the decoded length of either file. An entry record longer
 than 536,870,888 UTF-16 code units including its newline refuses with the
 record number and the limit.
 
-An interactive cold reopen shows progress while it reads retained history. The
-entry journal is counted through EOF using the same entry boundaries and record
+An interactive cold reopen identifies the execution and shows its reopen
+command, elapsed time and the status and duration of each restore phase. The
+clock starts when the attempt begins and stops on failure or when the requested
+reading opens. Retry starts a new attempt with fresh timing.
+
+The entry journal is counted through EOF using the same entry boundaries and record
 decoder as the paged reader. The total covers the whole journal, including
 entries after the requested history position, and applies to the journal
 version and exact bytes being projected. When counting cannot establish a
@@ -885,9 +889,12 @@ successfully projected rounds and shows that restore stopped. A changed
 journal invalidates its total.
 
 When the rounds are done and saved Sidekick history is still being projected,
-the display shows the completed round count and reports that the Sidekick
-count is unknown. The requested route and its normal focus appear with the
-first live presentation. Counting and projection leave opportunities to
+the display shows the completed round count and explains that the retained
+conversation is still opening with an unknown count. The requested route and
+its normal focus appear with the first live presentation. The visible Sidekick
+conversation shows a notice with the restored round count and elapsed time for
+a nonempty restore. The notice disappears on interaction and is never saved
+with the conversation. Counting and projection leave opportunities to
 present updated progress and handle terminal input and resize. An empty or
 short reopen has no minimum display time. Attachment and headless startup
 keep their own paths.

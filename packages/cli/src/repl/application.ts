@@ -105,7 +105,8 @@ import {
   scrolled,
 } from "./layout-admission.ts";
 import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
-import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
+import { ORDINARY, REPL_PALETTE, styleOf, terminalColour } from "./presentation-style.ts";
+import type { EntryRestoreProgress } from "./paged-history.ts";
 import { placeScreen } from "./screen-regions.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
@@ -1346,8 +1347,26 @@ export interface ReplTransition {
   readonly intent: ReplIntent;
 }
 
-export interface ReplRestoreView {
-  readonly lines: readonly string[];
+const RESTORE_PHASES = {
+  resolve: "Resolve the location",
+  store: "Open the session store",
+  rounds: "Restore rounds",
+  sidekick: "Restore the Sidekick conversation",
+  repl: "Open the REPL",
+} as const;
+
+export interface ReplRestorePhase {
+  readonly phase: keyof typeof RESTORE_PHASES;
+  readonly started: number;
+  readonly finished?: number;
+}
+
+interface ReplRestoreView {
+  readonly started: number;
+  readonly at: number;
+  readonly phases: readonly ReplRestorePhase[];
+  readonly entries: EntryRestoreProgress | undefined;
+  readonly diagnostic: readonly string[];
   readonly stopped: boolean;
   readonly details: boolean;
 }
@@ -1355,6 +1374,7 @@ export interface ReplRestoreView {
 /** One complete reading of the product, ready to describe. */
 export interface ReplView {
   readonly restore?: ReplRestoreView;
+  readonly restorationNotice?: string;
   readonly detachable?: boolean;
   /** Digits on this route or reachable through a different route. */
   readonly focusHints?: ReadonlyMap<string, string | undefined>;
@@ -4253,6 +4273,7 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
   const reading = view.live.sidekick;
   const staging = chatStagingOf(view);
   const facts: (string | number | boolean | null | undefined)[] = [
+    view.restorationNotice,
     reading !== undefined,
     reading?.reading,
     reading?.agent,
@@ -4342,7 +4363,20 @@ export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPre
       ) {
         return Ok(held.sequence);
       }
-      const composed = sidekickComposedRows(view.live.sidekick, chatStagingOf(view));
+      const chat = sidekickComposedRows(view.live.sidekick, chatStagingOf(view));
+      const notice = view.restorationNotice;
+      const composed: readonly ReplChatComposed[] =
+        notice === undefined
+          ? chat
+          : [
+              ...chat,
+              {
+                kind: "text",
+                key: "sidekick:restored",
+                text: `  ${notice}`,
+                style: styleOf("metadata"),
+              },
+            ];
       const lines = composed.flatMap((one) =>
         one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
       );
@@ -5658,11 +5692,9 @@ interface DescribedScreen {
 }
 
 function restoreRows(view: ReplView, restore: ReplRestoreView): readonly Described[] {
-  const items: Described[] = restore.lines.map((text, index) =>
-    line(`refusal:restore:${index}`, text, styleOf("status")),
-  );
+  const items: Described[] = [];
   if (restore.details) {
-    items.unshift({
+    items.push({
       key: "refusal:details",
       style: styleOf("status"),
       description: describeNode<ReplAction>({
@@ -5672,19 +5704,136 @@ function restoreRows(view: ReplView, restore: ReplRestoreView): readonly Describ
         focus: true,
       }),
     });
-  } else if (restore.stopped) {
+    return [
+      ...items,
+      ...restore.diagnostic.map((text, index) =>
+        line(`refusal:diagnostic:${index}`, text, styleOf("source")),
+      ),
+    ];
+  }
+
+  const width = view.size.columns;
+  const elapsed = (started: number, finished = restore.at): string =>
+    `${(finished - started).toFixed(1)}s`;
+  const fit = (text: string, room: number): string =>
+    text.length <= room ? text : text.slice(0, room - 1) + "…";
+  function write(key: string, text: string, role: ReplPresentationRole): void {
+    items.push(line(`refusal:${key}`, text, styleOf(role)));
+  }
+
+  const time = `elapsed ${elapsed(restore.started)}`;
+  const heading = fit(
+    ` XMD REPL   resuming ${view.state.route.execution}`,
+    width - time.length - 3,
+  );
+  write("restore-header", heading.padEnd(width - time.length - 2) + time, "pane-heading");
+  const command = `xmd repl '${encodeLocation(view.state.route)}'`;
+  const commandWidth = width - 4;
+  if (width >= 85) {
+    write("before-command", " ", "metadata");
+  }
+  write("restore-command", "  " + command.slice(0, commandWidth), "metadata");
+  if (command.length > commandWidth) {
+    write(
+      "command-continuation",
+      "  " + fit(command.slice(commandWidth), commandWidth),
+      "metadata",
+    );
+  }
+  if (width >= 85) {
+    write("before-rounds", " ", "metadata");
+  }
+
+  const entries = restore.entries;
+  if (entries?.stage === "rounds") {
+    const { restored, total } = entries;
+    const complete = total !== undefined && total === restored && !restore.stopped;
+    const tone = restore.stopped
+      ? "failed-outcome"
+      : complete
+        ? "successful-outcome"
+        : "focus-marker";
+    const stopped = restore.stopped ? " · stopped" : "";
+    write(
+      "rounds-count",
+      `  ${complete ? "Restored" : "Restoring"} rounds · ${restored} / ${total ?? "unknown"}${stopped}`,
+      restore.stopped || complete ? tone : "output",
+    );
+    if (total !== undefined && total > 0) {
+      const room = 40;
+      const filled = Math.round((restored / total) * room);
+      write("rounds-bar", "  " + "━".repeat(filled) + "─".repeat(room - filled), tone);
+    }
+  } else if (entries?.stage === "counting") {
+    write("rounds-count", "  Counting retained rounds", "focus-marker");
+  }
+
+  if (width >= 85) {
+    write("before-phases", " ", "metadata");
+  }
+  const opening = restore.phases.at(-1)?.phase === "repl";
+  for (const phase of Object.keys(RESTORE_PHASES) as (keyof typeof RESTORE_PHASES)[]) {
+    const reading = restore.phases.find((one) => one.phase === phase);
+    if (reading === undefined) {
+      const absent = phase === "sidekick" && opening;
+      write(
+        `phase:${phase}`,
+        `  ·  ${absent ? "No saved Sidekick history" : RESTORE_PHASES[phase]}`,
+        "metadata",
+      );
+      continue;
+    }
+    const active = reading.finished === undefined;
+    const failed = active && restore.stopped;
+    const glyph = failed ? "×" : active ? "—" : "✓";
+    const role = failed ? "failed-outcome" : active ? "focus-marker" : "successful-outcome";
+    const label = phase === "repl" ? "Opening REPL" : RESTORE_PHASES[phase];
+    const mark = "  " + glyph;
+    const time = elapsed(reading.started, reading.finished);
+    const labelWidth = width - time.length - 4;
     items.push(
-      row("refusal:retry", "[Retry]", { select: "retry-restore" }, styleOf("action"), {
+      line(
+        `refusal:phase:${phase}`,
+        (mark + "  " + label).padEnd(labelWidth) + time,
+        styleOf(role),
+        [
+          { text: mark, token: role },
+          { text: `  ${label}`.padEnd(labelWidth - mark.length), token: failed ? role : "source" },
+          { text: time, token: "metadata" },
+        ],
+      ),
+    );
+    if (phase === "sidekick" && active && !failed) {
+      write("sidekick-count", "     Restoring Sidekick history · count not known yet", "metadata");
+      write(
+        "sidekick-explanation",
+        "     Saved messages are being read before the REPL can open.",
+        "metadata",
+      );
+    }
+  }
+
+  if (restore.stopped) {
+    const count =
+      entries?.stage === "rounds" && entries.total !== undefined && entries.restored < entries.total
+        ? `Round ${entries.restored + 1} of ${entries.total} could not be restored`
+        : "Session restoration stopped";
+    write("failure:summary", `× ${count}`, "failed-outcome");
+    for (const [index, text] of restore.diagnostic.entries()) {
+      write(`failure:diagnostic:${index}`, text, "source");
+    }
+    items.push(
+      row("refusal:failure:retry", "[Retry]", { select: "retry-restore" }, styleOf("action"), {
         here: view.focused,
       }),
       row(
-        "refusal:show-error",
+        "refusal:failure:show-error",
         "[Show error details]",
         { select: "show-restore-error" },
         styleOf("action"),
         { here: view.focused },
       ),
-      row("refusal:quit", "[Quit]", { select: "exit" }, styleOf("action"), {
+      row("refusal:failure:quit", "[Quit]", { select: "exit" }, styleOf("action"), {
         here: view.focused,
       }),
     );
@@ -10385,6 +10534,44 @@ export function presentationFor(
   }
 
   if (view.restore !== undefined) {
+    const rows: ReplBox[] = [];
+    const failure: ReplBox[] = [];
+    for (const candidate of candidatesOf(descriptions, styles, runs)) {
+      if (candidate.key.startsWith("refusal:failure:")) {
+        failure.push(rowBox(candidate, "refusal", size.columns - 6));
+      } else {
+        rows.push(
+          rowBox(
+            candidate,
+            "refusal",
+            size.columns,
+            candidate.key === "refusal:restore-header" ? REPL_PALETTE.paneHeaderSurface : undefined,
+          ),
+        );
+      }
+    }
+    if (failure.length > 0) {
+      const panel = stackProps("fit");
+      rows.push(
+        box({
+          id: "box:restore-failure",
+          region: "refusal",
+          props: {
+            ...panel,
+            layout: { ...panel.layout, padding: { left: 2, right: 2 } },
+            bg: terminalColour(REPL_PALETTE.restoreFailureSurface),
+            border: {
+              color: terminalColour(REPL_PALETTE.restoreFailureEdge),
+              top: 1,
+              bottom: 1,
+              left: 1,
+              right: 1,
+            },
+          },
+          children: failure,
+        }),
+      );
+    }
     return {
       descriptions,
       manifest: {
@@ -10393,9 +10580,7 @@ export function presentationFor(
         root: box({
           id: "box:root",
           props: rootProps(size),
-          children: candidatesOf(descriptions, styles, runs).map((candidate) =>
-            rowBox(candidate, "refusal", size.columns),
-          ),
+          children: rows,
         }),
         viewports: [],
         actions: undefined,

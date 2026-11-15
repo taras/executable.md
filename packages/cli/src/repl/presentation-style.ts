@@ -190,6 +190,8 @@ export const REPL_PALETTE = Object.freeze({
   punctuation: 0x7c868d,
   success: 0x5aa87c,
   failure: 0xc2766e,
+  restoreFailureSurface: 0x201517,
+  restoreFailureEdge: 0x65403c,
   waiting: 0xc99a3f,
   /** Where the next keystroke lands. */
   focus: 0x7fd3e8,
