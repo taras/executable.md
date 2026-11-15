@@ -1,0 +1,2246 @@
+{
+  "boundary": "Before submitting one character to the mounted terminal input through the completed emulator write showing the expected accumulated text in Message.",
+  "percentileMethod": "Median of retained samples. p95 is the nearest rank, rounded up.",
+  "reference": {
+    "issue": 1048,
+    "pullRequest": 1060,
+    "smallMedianMs": 11.82,
+    "smallP95Ms": 13.26,
+    "wrappingMedianMs": 15.15,
+    "wrappingP95Ms": 15.94
+  },
+  "pairs": [
+    {
+      "pair": "AB",
+      "workload": "small",
+      "baseline": {
+        "revision": "230c7352729a568c265e18a4e95f5130fbdbf280",
+        "run": "AB-baseline",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "small",
+          "rounds": 2,
+          "linesPerRound": 32
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 12.478458000000046,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 11.995916999999736,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 11.132540999999947,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 12.439124999999876,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 11.168416999999863,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 12.567792000000281,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 11.393459000000348,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 12.726958000000195,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 13.425250000000233,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 11.907208999999966,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 12.774665999999797,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 11.734124999999949,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 12.63295799999969,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 11.649042000000009,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 13.047541999999794,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 11.776499999999942,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 11.841416999999637,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 10.699749999999767,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 12.685500000000047,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 12.351000000000113,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 9.968583000000308,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 12.296041999999943,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 11.104125000000295,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 12.373167000000194,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 11.781334000000243,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 12.515707999999904,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 11.691709000000174,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 11.696833999999853,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 12.677250000000186,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 11.378333999999995,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 12.124791000000187,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 11.397500000000036,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 12.512709000000086,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 11.529708000000028,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 12.49212499999976,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 11.878124999999727,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 11.728000000000065,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 12.429875000000266,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 11.882540999999947,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 11.910167000000001,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 11.880332999999837,
+          "p95Ms": 12.774665999999797
+        }
+      },
+      "candidate": {
+        "revision": "f555c9baa72aef27594144e2d3448fefcdee318f",
+        "run": "AB-candidate",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "small",
+          "rounds": 2,
+          "linesPerRound": 32
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 11.35379200000034,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 11.41958300000033,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 13.251374999999825,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 10.782709000000068,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 12.217957999999726,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 12.638332999999875,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 11.119833000000199,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 13.065000000000055,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 12.3302920000001,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 12.200916999999663,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 11.141250000000127,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 12.57466599999998,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 11.480207999999948,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 12.514083000000028,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 10.587333999999828,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 12.070000000000164,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 11.932459000000108,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 11.707875000000058,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 11.897958000000017,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 12.739250000000084,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 12.469209000000319,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 11.537583999999697,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 12.531791999999768,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 12.042042000000038,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 11.280416999999943,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 12.487916999999925,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 11.462207999999919,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 11.957167000000027,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 12.993166000000201,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 11.76766699999962,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 11.227624999999989,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 12.47158300000001,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 10.956500000000233,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 11.290958000000046,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 12.574333000000024,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 12.343083000000206,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 12.000375000000076,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 11.374708000000282,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 12.95745799999986,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 10.302416999999878,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 11.944813000000067,
+          "p95Ms": 12.95745799999986
+        }
+      },
+      "deltaMs": {
+        "medianMs": 0.06448000000023058,
+        "p95Ms": 0.18279200000006313
+      }
+    },
+    {
+      "pair": "AB",
+      "workload": "wrapping",
+      "baseline": {
+        "revision": "230c7352729a568c265e18a4e95f5130fbdbf280",
+        "run": "AB-baseline",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "wrapping",
+          "rounds": 52,
+          "linesPerRound": 368
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 22.628790999995545,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 18.703750000000582,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 20.00066700000025,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 19.20479200000409,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 49.28366700001061,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 44.57108299998799,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 45.61445800001093,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 26.91937499999767,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 23.416874999995343,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 18.464624999993248,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 18.695082999998704,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 19.339000000007218,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 21.371334000010393,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 17.8851250000007,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 19.94716700000572,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 20.15495799999917,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 19.48020799999358,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 20.411707999999635,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 19.491583000009996,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 19.30729200001224,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 19.06624999998894,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 18.65291600000637,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 18.803665999992518,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 18.14604199999303,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 18.438958999991883,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 19.097000000008848,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 18.30600000001141,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 18.60549999999057,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 20.038667000000714,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 22.333499999993364,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 20.818249999996624,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 20.163375000003725,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 20.19399999998859,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 20.298792000001413,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 19.50037500000326,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 20.255083999989438,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 20.67079200000444,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 20.416041000004043,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 21.96858400000201,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 19.600167000011425,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 19.550271000007342,
+          "p95Ms": 21.96858400000201
+        }
+      },
+      "candidate": {
+        "revision": "f555c9baa72aef27594144e2d3448fefcdee318f",
+        "run": "AB-candidate",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "wrapping",
+          "rounds": 52,
+          "linesPerRound": 368
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 18.775208000006387,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 18.092166999995243,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 17.825666000004276,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 16.94412499999453,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 18.371083000005456,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 19.399583000005805,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 20.007582999998704,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 19.36112500001036,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 18.6304999999993,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 20.167874999999185,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 18.617500000007567,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 19.964208000004874,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 18.915959000005387,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 19.018541999990703,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 18.4720410000009,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 19.19920899999852,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 18.90229199999885,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 17.810249999994994,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 18.16083300000173,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 18.03729100000055,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 17.86441600001126,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 20.453374999997322,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 20.469833000010112,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 18.618625000002794,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 19.030584000007366,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 19.35166699999536,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 18.801957999996375,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 18.076542000009795,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 19.758457999996608,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 19.0714169999992,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 19.369625000006636,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 19.16316700000607,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 20.671791000000667,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 17.716125000006286,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 18.51583400000527,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 18.125124999991385,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 18.610874999998487,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 18.66279200000281,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 18.89491599999019,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 19.160875000001397,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 18.89860399999452,
+          "p95Ms": 20.469833000010112
+        }
+      },
+      "deltaMs": {
+        "medianMs": -0.6516670000128215,
+        "p95Ms": -1.4987509999918984
+      }
+    },
+    {
+      "pair": "BA",
+      "workload": "small",
+      "baseline": {
+        "revision": "230c7352729a568c265e18a4e95f5130fbdbf280",
+        "run": "BA-baseline",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "small",
+          "rounds": 2,
+          "linesPerRound": 32
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 11.818875000000162,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 12.378459000000248,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 11.91170800000009,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 12.426083000000062,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 11.371374999999944,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 12.393291999999747,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 12.287624999999935,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 12.141833000000133,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 12.70858300000009,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 11.097374999999829,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 12.679458000000068,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 12.110083000000031,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 12.315333999999893,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 12.241457999999966,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 11.94512500000019,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 11.670208000000002,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 12.455583000000388,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 10.865291999999954,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 11.51666699999987,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 12.278208000000177,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 11.756416000000172,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 12.430958999999802,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 10.266749999999774,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 12.24108299999989,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 12.383957999999893,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 11.765874999999596,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 10.654957999999624,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 11.589707999999973,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 12.291291999999885,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 11.212083999999777,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 13.069249999999556,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 12.309708000000228,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 12.997124999999869,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 11.49841699999979,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 12.493458000000373,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 11.739750000000186,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 11.621458999999959,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 10.91399999999976,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 11.22583399999985,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 10.966917000000194,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 11.855499999999893,
+          "p95Ms": 12.997124999999869
+        }
+      },
+      "candidate": {
+        "revision": "f555c9baa72aef27594144e2d3448fefcdee318f",
+        "run": "BA-candidate",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "small",
+          "rounds": 2,
+          "linesPerRound": 32
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 11.843833000000132,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 11.586166999999932,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 12.284499999999753,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 12.544791999999916,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 11.904999999999973,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 11.941625000000158,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 12.351916999999958,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 12.186958999999888,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 11.98929199999975,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 12.558333999999832,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 11.248665999999957,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 12.54049999999961,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 11.407791999999972,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 11.72808299999997,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 13.090458000000126,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 12.190374999999676,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 12.291875000000346,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 12.241750000000138,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 11.863292000000001,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 12.453791999999794,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 12.643207999999959,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 11.392457999999806,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 12.8125,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 10.801416999999674,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 12.166584000000057,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 11.891791000000012,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 11.63241700000026,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 12.081709000000046,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 11.274209000000155,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 11.758124999999836,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 11.66583300000002,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 12.858832999999777,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 12.865624999999909,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 12.154167000000143,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 11.939500000000407,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 11.283124999999927,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 12.8125,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 11.432291000000077,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 12.471583999999893,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 11.164084000000003,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 12.010604500000227,
+          "p95Ms": 12.865624999999909
+        }
+      },
+      "deltaMs": {
+        "medianMs": 0.15510450000033416,
+        "p95Ms": -0.13149999999995998
+      }
+    },
+    {
+      "pair": "BA",
+      "workload": "wrapping",
+      "baseline": {
+        "revision": "230c7352729a568c265e18a4e95f5130fbdbf280",
+        "run": "BA-baseline",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "wrapping",
+          "rounds": 52,
+          "linesPerRound": 368
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 19.0523749999993,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 19.193792000005487,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 19.980291999992914,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 21.21829199999047,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 17.786916999990353,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 18.077458999992814,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 18.206959000002826,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 18.196917000008398,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 19.017665999999736,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 20.51004200000898,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 18.816749999998137,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 19.764792000001762,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 20.182290999990073,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 19.041291999994428,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 20.742167000003974,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 19.681958000001032,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 18.704292000009445,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 20.62858299999789,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 20.148541000002297,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 20.440207999999984,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 19.418333000008715,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 18.876459000006435,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 18.412083000002895,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 19.005707999996957,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 20.245624999995925,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 20.337916000004043,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 20.44779199999175,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 19.83904100001382,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 19.613916000002064,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 20.18254199999501,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 19.750207999997656,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 19.815709000002244,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 21.630540999991354,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 20.3648749999993,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 19.492917000010493,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 19.748416999995243,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 18.560333000001265,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 18.82904199999757,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 18.63400000000547,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 19.237750000000233,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 19.74931249999645,
+          "p95Ms": 20.742167000003974
+        }
+      },
+      "candidate": {
+        "revision": "f555c9baa72aef27594144e2d3448fefcdee318f",
+        "run": "BA-candidate",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "wrapping",
+          "rounds": 52,
+          "linesPerRound": 368
+        },
+        "warmup": 10,
+        "providerCreationsDuringSampling": 0,
+        "providerPromptsDuringSampling": 0,
+        "samples": [
+          {
+            "edit": 1,
+            "character": "a",
+            "milliseconds": 19.595167000006768,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "character": "b",
+            "milliseconds": 19.280041999998502,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "character": "c",
+            "milliseconds": 19.985083000006853,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "character": "d",
+            "milliseconds": 18.82600000000093,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "character": "e",
+            "milliseconds": 18.788415999995777,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "character": "f",
+            "milliseconds": 20.159125000005588,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "character": "g",
+            "milliseconds": 18.23345800000243,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "character": "h",
+            "milliseconds": 20.52066599999671,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "character": "i",
+            "milliseconds": 17.962707999991835,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "character": "j",
+            "milliseconds": 18.387166999993497,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "character": "k",
+            "milliseconds": 19.02987500000745,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "character": "l",
+            "milliseconds": 17.928916000004392,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "character": "m",
+            "milliseconds": 18.571917000008398,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "character": "n",
+            "milliseconds": 19.780832999997074,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "character": "o",
+            "milliseconds": 18.80641600000672,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "character": "p",
+            "milliseconds": 19.21975000000384,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "character": "q",
+            "milliseconds": 19.391417000006186,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "character": "r",
+            "milliseconds": 20.49854200000118,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "character": "s",
+            "milliseconds": 20.47741700000188,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "character": "t",
+            "milliseconds": 19.22270800000115,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "character": "u",
+            "milliseconds": 20.619791999997688,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "character": "v",
+            "milliseconds": 19.28787499999453,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "character": "w",
+            "milliseconds": 18.928040999991936,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "character": "x",
+            "milliseconds": 19.922124999997322,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "character": "y",
+            "milliseconds": 17.791875000009895,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "character": "z",
+            "milliseconds": 18.72149999999965,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "character": "a",
+            "milliseconds": 18.53362499999639,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "character": "b",
+            "milliseconds": 17.718542000002344,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "character": "c",
+            "milliseconds": 19.613292000009096,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "character": "d",
+            "milliseconds": 18.837459000002127,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "character": "e",
+            "milliseconds": 19.65862499999639,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "character": "f",
+            "milliseconds": 20.528166000003694,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "character": "g",
+            "milliseconds": 20.169459000011557,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "character": "h",
+            "milliseconds": 20.55899999999383,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "character": "i",
+            "milliseconds": 19.221416000000318,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "character": "j",
+            "milliseconds": 18.940416999990703,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "character": "k",
+            "milliseconds": 19.40133400000923,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "character": "l",
+            "milliseconds": 18.175040999994962,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "character": "m",
+            "milliseconds": 19.607292000000598,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "character": "n",
+            "milliseconds": 19.483583000008366,
+            "writes": 1
+          }
+        ],
+        "statistics": {
+          "count": 30,
+          "medianMs": 19.25529149999784,
+          "p95Ms": 20.55899999999383
+        }
+      },
+      "deltaMs": {
+        "medianMs": -0.49402099999861093,
+        "p95Ms": -0.18316700001014397
+      }
+    }
+  ]
+}
