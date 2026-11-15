@@ -65,8 +65,6 @@ import process from "node:process";
 import { program, object, field, cli, commands } from "configliere";
 import { z } from "zod";
 import {
-  Agent,
-  AgentProviders,
   Config,
   asDocumentTargetError,
   execute,
@@ -74,13 +72,13 @@ import {
   formatDocumentReference,
   inlineSource,
   inspectDocument,
-  agentIdentityComponents,
-  installAgentComponents,
   retainedSource,
   rootSourcePath,
   useNormalizedOutput,
   useTerminalOutput,
 } from "@executablemd/core";
+import { Agent, AgentProviders } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, MarkdownComponent } from "@executablemd/core/host";
 import type {

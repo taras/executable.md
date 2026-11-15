@@ -19,8 +19,8 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, Scope } from "effection";
-import { Agent } from "@executablemd/core";
-import type { Session } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import type { Session } from "@executablemd/agent/api";
 import type { AcpPermissionRequest } from "../src/acpx-runtime.ts";
 import { createPermissionBridge } from "../src/permission-bridge.ts";
 

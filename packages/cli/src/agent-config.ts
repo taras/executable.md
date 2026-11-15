@@ -8,7 +8,7 @@
  * mapping can be asserted on its own.
  */
 
-import type { PermissionMode } from "@executablemd/core";
+import type { PermissionMode } from "@executablemd/agent/api";
 
 /** What settling who writes needs, and the whole of it. */
 export interface AuthorshipFlags {

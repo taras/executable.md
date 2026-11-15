@@ -32,12 +32,13 @@ import { z } from "npm:zod@^4";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TIMEOUT = 180_000;
 
-/** The workspace members a consumer of core has to resolve. */
-const MEMBERS = ["core", "runtime", "durable-streams", "acp"] as const;
+/** The workspace members a consumer of core and the Agent package has to resolve. */
+const MEMBERS = ["core", "agent", "runtime", "durable-streams", "acp"] as const;
 
-/** Every documentation asset the product ships, by package-relative path. */
+/** Every documentation asset the product ships, by package and package-relative path. */
 const ASSETS: Record<string, readonly string[]> = {
-  core: ["src/components/components.md", "src/agent/components.md"],
+  core: ["src/components/components.md"],
+  agent: ["src/components.md"],
 };
 
 /** A package manifest, only as far as this needs it. */
@@ -85,11 +86,15 @@ describe("Tier SYN — a staged JSR consumer", () => {
     // 1. The publish filter selects the assets. This is the payload claim, and
     //    it is checked against the real `deno publish` selection rather than
     //    against a directory listing.
-    const selected = yield* publishedFiles("core");
-    expect(selected.length).toBeGreaterThan(0);
-    for (const asset of ASSETS.core ?? []) {
-      const expected = path.join(ROOT, "packages/core", asset);
-      expect([asset, selected.includes(expected)]).toEqual([asset, true]);
+    const selected: Record<string, string[]> = {};
+    for (const [pkg, assets] of Object.entries(ASSETS)) {
+      const files = yield* publishedFiles(pkg);
+      expect(files.length).toBeGreaterThan(0);
+      for (const asset of assets) {
+        const expected = path.join(ROOT, "packages", pkg, asset);
+        expect([pkg, asset, files.includes(expected)]).toEqual([pkg, asset, true]);
+      }
+      selected[pkg] = files;
     }
 
     const staged = yield* until(mkdtemp(path.join(tmpdir(), "xmd-jsr-consumer-")));
@@ -104,7 +109,7 @@ describe("Tier SYN — a staged JSR consumer", () => {
     for (const member of MEMBERS) {
       const from = path.join(ROOT, "packages", member);
       const to = path.join(staged, member);
-      const files = member === "core" ? selected : yield* publishedFiles(member);
+      const files = selected[member] ?? (yield* publishedFiles(member));
       for (const file of files) {
         const relative = path.relative(from, file);
         if (relative.startsWith("..")) {
@@ -119,9 +124,11 @@ describe("Tier SYN — a staged JSR consumer", () => {
 
     // Every asset is in the staged tree because publish selected it, not
     // because a copy swept the directory.
-    for (const asset of ASSETS.core ?? []) {
-      const stagedAsset = path.join(staging.core ?? "", asset);
-      expect([asset, yield* exists(stagedAsset)]).toEqual([asset, true]);
+    for (const [pkg, assets] of Object.entries(ASSETS)) {
+      for (const asset of assets) {
+        const stagedAsset = path.join(staging[pkg] ?? "", asset);
+        expect([pkg, asset, yield* exists(stagedAsset)]).toEqual([pkg, asset, true]);
+      }
     }
 
     // 3. A consumer outside the repository, resolving the staged packages
@@ -135,11 +142,12 @@ describe("Tier SYN — a staged JSR consumer", () => {
       path.join(consumer, "main.ts"),
       [
         "// The public surface, assembled the way a consumer would: core's own",
-        "// registrations plus its Agent boundary, so the document can name a",
-        "// component from each of the two documentation assets. One call brings",
-        "// the Agent registrations and the documentation that describes them,",
-        "// which is the whole point of the bootstrap being one thing.",
-        'import { collect, useAgentComponents } from "@executablemd/core";',
+        "// registrations plus the Agent package's host boundary, so the document",
+        "// can name a component from each of the two documentation assets. One",
+        "// call brings the Agent registrations and the documentation that",
+        "// describes them, which is the whole point of the bootstrap being one thing.",
+        'import { collect } from "@executablemd/core";',
+        'import { useAgentComponents } from "@executablemd/agent/host";',
         "// The host boundary is its own entrypoint, and a consumer reaches it",
         "// the same way: `@executablemd/core/host`.",
         'import { executeInstalled } from "@executablemd/core/host";',

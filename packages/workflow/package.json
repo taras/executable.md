@@ -10,6 +10,7 @@
   "dependencies": {
     "@effectionx/context-api": "0.6.0",
     "@effectionx/fs": "0.3.0",
+    "@executablemd/agent": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",

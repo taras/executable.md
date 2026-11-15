@@ -18,7 +18,7 @@
 
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import type { AgentOption, AgentOptionSet, SessionConfiguration } from "@executablemd/core";
+import type { AgentOption, AgentOptionSet, SessionConfiguration } from "@executablemd/agent/api";
 import type { AcpRuntimeStatus } from "./acpx-runtime.ts";
 
 /** One selector this run recognized, and the ACP id a write names it by. */

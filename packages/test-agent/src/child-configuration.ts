@@ -32,11 +32,14 @@
  */
 
 import type { Operation } from "effection";
-import { hasContent, registerAgentProvider, tryContent } from "@executablemd/core";
-import type { AgentComponentsOptions, AgentProviderOptions, Json } from "@executablemd/core";
+import { hasContent, tryContent } from "@executablemd/core";
+import { registerAgentProvider } from "@executablemd/agent/api";
+import type { Json } from "@executablemd/core";
+import type { AgentProviderOptions } from "@executablemd/agent/api";
+import type { AgentComponentsOptions } from "@executablemd/agent/host";
 import { createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
-import { installInvocationAgentProvider } from "@executablemd/core/host";
+import { installInvocationAgentProvider } from "@executablemd/agent/host";
 import { installControlledLauncher } from "@executablemd/runtime";
 import type {
   ChildDeclaration,

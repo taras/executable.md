@@ -24,9 +24,9 @@ import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { isJsonObject } from "../json.ts";
+import { isJsonObject } from "@executablemd/core";
+import type { ApprovedMatch } from "@executablemd/core/host";
 import { AGENT_PROMPT, parsePromptRecord } from "./journal.ts";
-import type { ApprovedMatch } from "../secrets/secret-placement.ts";
 
 /** The durable effect an accepted reply is retained under. */
 export const AGENT_PROMPT_REPLY = "agent_prompt_reply";

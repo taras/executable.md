@@ -114,6 +114,37 @@ export function encodedOffset(field: Placed | undefined, index: number): number 
   return undefined;
 }
 
+/**
+ * Where each approved copy of a string field lands in `rendered`, the exact
+ * text `JSON.stringify(value, null, indent)` produced for the value holding
+ * those fields.
+ *
+ * Each match keeps its bytes and moves its offsets from the field's own value
+ * into `rendered`. A copy is kept only where `rendered` holds exactly its
+ * approved bytes at the projected range; any other copy, and every copy when
+ * the fields cannot be placed, is dropped rather than approximated.
+ */
+export function placeApprovedCopies(
+  rendered: string,
+  copies: readonly { readonly field: string; readonly match: ApprovedMatch }[],
+  indent?: number,
+): ApprovedMatch[] {
+  const names = [...new Set(copies.map(({ field }) => field))];
+  const placements = place(
+    `${rendered}\n`,
+    names.map((name) => [name]),
+    indent,
+  );
+  return copies.flatMap(({ field, match }) => {
+    const placement = placements?.[names.indexOf(field)];
+    const start = encodedOffset(placement, match.start);
+    const end = encodedOffset(placement, match.end);
+    return start === undefined || end === undefined || rendered.slice(start, end) !== match.bytes
+      ? []
+      : [{ ...match, start, end }];
+  });
+}
+
 /** Translate one serialized span into a field's own value coordinates. */
 export function within(
   placed: readonly Placed[],

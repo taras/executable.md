@@ -129,7 +129,8 @@ import {
   withoutAbsentEntry,
   withoutLiveDrawers,
 } from "./application.ts";
-import type { AgentOptions, Json, NormalizedIssue, SessionConfiguration } from "@executablemd/core";
+import type { Json, NormalizedIssue } from "@executablemd/core";
+import type { AgentOptions, SessionConfiguration } from "@executablemd/agent/api";
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import type { ReplQuestion } from "./elicitation.ts";
 import type {

@@ -15,7 +15,7 @@ import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { agentSessionKeyDigest } from "@executablemd/runtime";
 import type { AgentSessionKey } from "@executablemd/runtime";
-import type { ExecutableBuildBindingV1 } from "@executablemd/core";
+import type { ExecutableBuildBindingV1 } from "@executablemd/agent/api";
 
 /**
  * The exact V1 record.

@@ -11,7 +11,7 @@
  * without UUID validation or normalization.
  */
 
-import type { AgentPromptCheckpoint } from "@executablemd/core";
+import type { AgentPromptCheckpoint } from "@executablemd/agent/api";
 import type { AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 
 interface RecognizedNamespace {

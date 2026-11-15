@@ -16,13 +16,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, sleep, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import type { Session, SessionConfiguration } from "../src/agent/agent-api.ts";
-import { createSessionSetupOwner } from "../src/agent/session-setup.ts";
-import type { AgentSessionSetup, SessionSetupOwner } from "../src/agent/session-setup.ts";
-import { configureSessionRequest, openSessionRequest } from "../src/agent/session-request.ts";
-import type { AgentSessionRequest } from "../src/agent/session-request.ts";
-import type { ProviderSessionConfiguration } from "../src/agent/provider-configuration.ts";
-import { configurationOf, isSessionUse, sessionOf } from "../src/agent/session-use.ts";
+import type { Session, SessionConfiguration } from "../src/agent-api.ts";
+import { createSessionSetupOwner } from "../src/session-setup.ts";
+import type { AgentSessionSetup, SessionSetupOwner } from "../src/session-setup.ts";
+import { configureSessionRequest, openSessionRequest } from "../src/session-request.ts";
+import type { AgentSessionRequest } from "../src/session-request.ts";
+import type { ProviderSessionConfiguration } from "../src/provider-configuration.ts";
+import { configurationOf, isSessionUse, sessionOf } from "../src/session-use.ts";
 
 const SESSION: Session = { sessionKey: "stub:review", cwd: "/repo" };
 

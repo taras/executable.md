@@ -38,8 +38,9 @@
 import { ensure, Err, Ok, on, race, withResolvers } from "effection";
 import type { Operation, Result, Scope, Task } from "effection";
 import { z } from "zod";
-import { Agent, prepareElicitation, runPreparedElicitation } from "@executablemd/core";
-import type { PermissionOption, PermissionRequest, Session } from "@executablemd/core";
+import { prepareElicitation, runPreparedElicitation } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import type { PermissionOption, PermissionRequest, Session } from "@executablemd/agent/api";
 import type {
   AcpPermissionDecision,
   AcpPermissionRequest,

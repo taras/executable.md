@@ -18,12 +18,12 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute } from "../src/execute.ts";
-import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { Agent } from "../src/agent/agent-api.ts";
-import { isSessionUse, sessionOf } from "../src/agent/session-use.ts";
-import { isSessionRequest } from "../src/agent/session-request.ts";
-import type { ConfigureAgentSession } from "../src/agent/session-setup.ts";
+import { execute } from "../../core/src/execute.ts";
+import { useTempFileCompiler } from "../../core/src/temp-file-compiler.ts";
+import { Agent } from "../src/agent-api.ts";
+import { isSessionUse, sessionOf } from "../src/session-use.ts";
+import { isSessionRequest } from "../src/session-request.ts";
+import type { ConfigureAgentSession } from "../src/session-setup.ts";
 import type {
   AgentPromptEvent,
   PermissionOption,
@@ -32,20 +32,21 @@ import type {
   PromptOptions,
   Session,
   SessionConfiguration,
-} from "../src/agent/agent-api.ts";
-import { parsePromptFailure, AgentPromptError } from "../src/agent/errors.ts";
-import { executeInstalled, useAgentPromptPublisher } from "../host.ts";
-import { agentIdentityComponents } from "../src/agent/components.ts";
-import { installAgentComponents } from "../src/agent/components.ts";
-import { registerComponents } from "../src/components/registration.ts";
-import { AgentInternal } from "../src/agent/internal.ts";
-import { promptFailureFromRecord, parsePromptRecord } from "../src/agent/journal.ts";
-import { installApproveAll, installPromptFailurePolicy } from "../src/agent/permission.ts";
-import { inspectComponent } from "../src/inspect.ts";
-import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
-import type { Json } from "../src/types.ts";
-import { useSecretScannerFactory } from "../src/secrets/policy.ts";
-import { createSecretScanner } from "../src/secrets/scanner.ts";
+} from "../src/agent-api.ts";
+import { parsePromptFailure, AgentPromptError } from "../src/errors.ts";
+import { executeInstalled } from "@executablemd/core/host";
+import { useAgentPromptPublisher } from "../host.ts";
+import { agentIdentityComponents } from "../src/components.ts";
+import { installAgentComponents } from "../src/components.ts";
+import { registerComponents } from "../../core/src/components/registration.ts";
+import { AgentInternal } from "../src/internal.ts";
+import { promptFailureFromRecord, parsePromptRecord } from "../src/journal.ts";
+import { installApproveAll, installPromptFailurePolicy } from "../src/permission.ts";
+import { inspectComponent } from "../../core/src/inspect.ts";
+import type { AgentProviderFactory } from "../src/provider-api.ts";
+import type { Json } from "../../core/src/types.ts";
+import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
+import { createSecretScanner } from "../../core/src/secrets/scanner.ts";
 
 /** What the stub agent was asked to do, in order. */
 interface Trace {

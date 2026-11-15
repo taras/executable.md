@@ -1,7 +1,8 @@
 import { createContext, ensure, sleep } from "effection";
 import type { Operation } from "effection";
 import { content, contributeDocumentation, formDispatcher } from "@executablemd/core";
-import { AgentConversationProvider, Plugin } from "@executablemd/core/api";
+import { Plugin } from "@executablemd/core/api";
+import { AgentConversationProvider } from "@executablemd/agent/api";
 import type { ReplPluginInstallation } from "../../../api.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
 

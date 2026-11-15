@@ -20,7 +20,7 @@ import { useReplElicitation } from "../src/repl/elicitation.ts";
 import { action, until } from "effection";
 import { Elicitation } from "@executablemd/core";
 import type { Scope } from "effection";
-import type { AgentPromptEvent } from "@executablemd/core";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 
 const conditional = {
   type: "object",

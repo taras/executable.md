@@ -48,7 +48,7 @@ import {
   persistPreparation,
 } from "./launch-journal.ts";
 import type { LaunchIdentity } from "./launch-journal.ts";
-import { getExpansion } from "../expansion.ts";
+import { getExpansion } from "@executablemd/core";
 
 /** Where a launch's durable identity and normalized facts come from. */
 export interface LaunchSite {

@@ -31,10 +31,14 @@ import type {
 } from "../src/acpx-runtime.ts";
 import { createEmbeddedAdapters } from "../src/adapter-snapshots.ts";
 import type { EmbeddedAdapters } from "../src/adapter-snapshots.ts";
-import { Agent, sessionOf } from "@executablemd/core";
-import type { AgentLaunchCoordinator, Session, SessionConfiguration } from "@executablemd/core";
-import { openSessionRequest } from "../../core/src/agent/session-request.ts";
-import { createSessionSetupOwner } from "../../core/src/agent/session-setup.ts";
+import { Agent, sessionOf } from "@executablemd/agent/api";
+import type {
+  AgentLaunchCoordinator,
+  Session,
+  SessionConfiguration,
+} from "@executablemd/agent/api";
+import { openSessionRequest } from "../../agent/src/session-request.ts";
+import { createSessionSetupOwner } from "../../agent/src/session-setup.ts";
 import { createAcpxProvider } from "../src/provider.ts";
 import { makeCoordinator, makeRegistry, useFlatWorld } from "./helpers.ts";
 

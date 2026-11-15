@@ -20,7 +20,7 @@ import type { ReplCaret } from "./caret.ts";
 import type { MessageOrigin } from "./sidekick/history.ts";
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { AgentOption, AgentOptions, SessionConfiguration } from "@executablemd/core";
+import type { AgentOption, AgentOptions, SessionConfiguration } from "@executablemd/agent/api";
 
 import {
   describe as describeNode,

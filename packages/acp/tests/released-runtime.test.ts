@@ -28,14 +28,10 @@ import type {
 } from "../src/acpx-runtime.ts";
 import { retainedSession } from "../src/session-store.ts";
 import { createAcpxProvider } from "../src/provider.ts";
-import {
-  Agent,
-  agentIdentityComponents,
-  installAgentComponents,
-  useNormalizedOutput,
-  configurationOf,
-} from "@executablemd/core";
-import type { AgentPromptEvent, Session } from "@executablemd/core";
+import { useNormalizedOutput } from "@executablemd/core";
+import { Agent, configurationOf } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { applySessionConfiguration } from "../src/session-configuration.ts";
@@ -576,7 +572,7 @@ describe(
           mode: "prompt",
           requestId: text,
         });
-        const channel = createChannel<import("@executablemd/core").AgentPromptEvent, string>();
+        const channel = createChannel<import("@executablemd/agent/api").AgentPromptEvent, string>();
         const subscription = yield* channel;
         const checkpoints: unknown[] = [];
         yield* spawn(() =>

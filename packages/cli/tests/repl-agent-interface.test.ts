@@ -19,12 +19,9 @@ import { race, scoped, sleep, until as untilResolved, useScope, withResolvers } 
 import type { Operation, Result, Stream } from "effection";
 import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
 import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import {
-  Agent,
-  agentIdentityComponents,
-  installAgentComponents,
-  useTempFileCompiler,
-} from "@executablemd/core";
+import { useTempFileCompiler } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type {
   AgentPromptEvent,
   AgentProviderFactory,
@@ -34,7 +31,7 @@ import type {
   PermissionRequest,
   PromptOptions,
   Session,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";

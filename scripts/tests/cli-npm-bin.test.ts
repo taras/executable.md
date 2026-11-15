@@ -725,9 +725,9 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
 
     // The documentation assets travel with the package, and the emitted binary
     // resolves them from its own tree rather than from a checkout. `Prompt`
-    // lives in core's *agent* boundary rather than in its own `components.md`,
-    // so this exercises a second copied asset path: a build that copied only
-    // the first would still answer for core's own components and fail here.
+    // is documented by the Agent package's own `components.md` rather than
+    // core's, so this exercises a second copied asset path: a build that copied
+    // only core's would still answer for core's own components and fail here.
     const documented = yield* runEmittedBinIn(root, elsewhere, ["syntax", "Prompt"]);
     expect(documented.code).toBe(0);
     expect(documented.stdout).toContain("### `<Prompt>`");

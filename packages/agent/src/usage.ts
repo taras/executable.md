@@ -17,7 +17,7 @@
 
 import type { Json } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { retainsOptionalText } from "../secrets/policy.ts";
+import { retainsOptionalText } from "@executablemd/core/host";
 
 /** One build identity, where it was observed. */
 export interface UsageBuild {

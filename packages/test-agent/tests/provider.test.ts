@@ -7,7 +7,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, withResolvers, useScope, until } from "effection";
 import type { Operation } from "effection";
-import { Agent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
 import { createAcpRuntime } from "@executablemd/acp";
 import type { AcpRuntimeHandle, AcpRuntimeOptions, SessionRouteContext } from "@executablemd/acp";
 import { tmpdir } from "node:os";

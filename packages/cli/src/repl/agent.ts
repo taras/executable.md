@@ -57,21 +57,21 @@
 
 import { action, createSignal, ensure, resource, useScope } from "effection";
 import type { Operation, Scope, Stream } from "effection";
-import { Agent, denyPermission } from "@executablemd/core";
+import { Agent, denyPermission } from "@executablemd/agent/api";
 import type {
   AgentPromptEvent,
   PermissionMode,
   PermissionOption,
   PermissionOutcome,
   PermissionRequest,
-} from "@executablemd/core";
-import { useAgentPromptPublisher } from "@executablemd/core/host";
+} from "@executablemd/agent/api";
+import { useAgentPromptPublisher } from "@executablemd/agent/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
   AgentPromptHandle,
   AgentPromptPublication,
   AgentPromptPublisher,
-  ExecutionInstallation,
-} from "@executablemd/core/host";
+} from "@executablemd/agent/host";
 import type { ReplWaits } from "./lifecycle.ts";
 import { DurableContext } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";

@@ -82,6 +82,18 @@ Providers answer those operations. Runtime entrypoints install the appropriate a
 
 `@executablemd/git` owns repository composition, Git operations, Git-host behavior, issues, and pull requests. It extends Workflow through Workflow’s published boundaries; Workflow imports no Git feature.
 
+`@executablemd/agent` owns the Agent vocabulary over Core: the `Agent` Api,
+the Agent, Session and Prompt components, Prompt journaling, provider
+installation and held conversations. It depends on Core, durable-streams and
+runtime, and reaches Core only through Core's published entries; Core imports no
+Agent package and registers no Agent component by itself. Components and
+Plugins compose agent work through `@executablemd/agent/api`; a host installs
+the vocabulary, a provider and a held conversation through
+`@executablemd/agent/host`, and its generic `Plugin` and execution imports stay
+Core's. The components keep the origin `@executablemd/core` they had when Core
+shipped them, so authored documents and retained journals read the same. ACP,
+Workflow, Test Agent and the CLI import Agent's entries directly.
+
 An Agent provider supplies conversation behavior. The Agent proposes source; canonical generated evaluation admits and performs it. Provider conversation continuity has its own contract in the [ACP client specification](specs/acp-client-spec.md).
 
 Ordinary Agent Session placement is inert: a placed session contacts nothing

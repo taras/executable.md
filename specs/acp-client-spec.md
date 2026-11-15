@@ -1,10 +1,19 @@
 # Executable.md ACP Client
 
 The `Agent` Api, the Agent / Session / Prompt components, prompt journaling and
-replay, the provider-factory seam, and the `Config` timeouts are implemented in
-`@executablemd/core`. A provider is supplied through the `rootProvider` factory
-seam (§The provider-factory seam). This specification owns the public operations,
-configuration and retained record shapes.
+replay, and the provider-factory seam are implemented in `@executablemd/agent`,
+over the execution `@executablemd/core` owns; the `Config` timeouts are
+`@executablemd/runtime`'s (§Config). The Agent package has two entries.
+`@executablemd/agent/api` carries the `Agent` Api, `AgentConversationProvider`,
+`AgentProviders`, the Session accessors and the contracts a Plugin or a provider
+is written in. `@executablemd/agent/host` carries what a host installs and
+reads back: the components, permission and failure policies, provider
+installation, held conversations, reply review, Prompt publication and the
+retained Prompt and reply readers. Core by itself registers no Agent component;
+a host that installs this package's components supplies them. A provider is
+supplied through the `rootProvider` factory seam (§The provider-factory seam).
+This specification owns the public operations, configuration and retained
+record shapes.
 [Agent permissions and generated work](./workflow-workspace-spec.md#8-agents-inspect-xmd-mutates)
 own workflow isolation and mapping publication;
 [native Agent sessions](./native-agent-session-launch-spec.md#ownership-and-concurrency) own the shared
@@ -38,8 +47,8 @@ second statement of the rules.
 
 ## Components: the document surface
 
-`installAgentComponents()` registers six components for the installing scope
-(executable-mdx-spec §5.3): AgentProvider, Agent, Session.Launch, Prompt,
+`installAgentComponents()` from `@executablemd/agent/host` registers six
+components for the installing scope (executable-mdx-spec §5.3): AgentProvider, Agent, Session.Launch, Prompt,
 ApproveAll and AskPermission. Session is the seventh agent word and is supplied
 separately, because its implementation names durable work after its own
 invocation: a host declares it to the execution through the identity-bearing
@@ -54,6 +63,11 @@ engine owns their expression props, schema validation, `as` capture, content
 projection and invocation lifetime exactly as for any other `.ts` component.
 Props take string and boolean values, from a literal or from an expression that
 resolves to one.
+
+All seven, and the documentation that describes them, name the component
+origin `@executablemd/core`. They kept it when they moved from Core into the
+Agent package, because an origin is part of how canonical resolution, a
+retained journal and a documentation lookup identify a component.
 
 A canonical Markdown test may configure one nested `host="run"` execution with
 a direct TestAgent declaration (testing-spec.md). That declaration carries only
@@ -126,7 +140,7 @@ invocation boundary runs after the component has returned.
 
 ## The Agent Api
 
-`Agent` is an Effection Api (`@executablemd/core`) for stateful coding-agent
+`Agent` is an Effection Api (`@executablemd/agent/api`) for stateful coding-agent
 sessions, distinct from the stateless Sample Api. It has exactly six contextual
 operations:
 
@@ -311,8 +325,8 @@ call and carries no permission to construct, own or answer.
 ## Confirmed Session information
 
 Read `Session.identity` to record which conversation performed work without
-opening provider-private storage. Core exports `SessionIdentity` beside
-`Session` from `@executablemd/core/api` and its root type surface:
+opening provider-private storage. The Agent package exports `SessionIdentity`
+beside `Session` from `@executablemd/agent/api`:
 
 ```ts
 interface SessionIdentity {
@@ -629,7 +643,7 @@ interface AgentConversationProvider {
 
 A provider that serves saved conversations installs an
 `AgentConversationProvider` in its own provider scope, through the Context of
-that same name on `@executablemd/core/api`, alongside whatever `Agent`
+that same name on `@executablemd/agent/api`, alongside whatever `Agent`
 middleware it provides. The factory signature is unchanged. The object carries
 no coordinator, permission flag, configuration approval, history mapping or
 completion receipt: it is trusted behavior a conversation selects, and
@@ -849,7 +863,7 @@ Session and Prompt are written inside an expansion, with an element to name the
 session and a journal already around them. A host that discusses something with
 an agent has neither: a person is typing into a chat, the history outlives the
 process, and there is no document. `useAgentConversation()` on
-`@executablemd/core/host` is that conversation, and it is the genuine one — a
+`@executablemd/agent/host` is that conversation, and it is the genuine one — a
 canonical agent session, journaled turns, verified configuration, and an
 identity the provider reattaches to.
 
@@ -959,9 +973,12 @@ native identity, which only a turn's own canonical record establishes.
 coordinator are installed inside `Execution.document`, and a durable
 preparation precedes both, so a conversation opened there could reach neither.
 The conversation is a host-declared identity component in a synthetic root Core
-owns: canonical resolution selects it, hands its implementation the execution's
+executes: canonical resolution selects it, hands its implementation the execution's
 claimant, and the session is placed under the engine's own identity for that
-invocation. The `id` names the history and nothing else — it carries no
+invocation. The root's source is `<AgentConversationHost />` at the synthetic
+path `agent/conversation.md`, and the component registers under the origin
+`@executablemd/core`; a retained history is admitted against that source,
+so it is unchanged from when Core shipped the conversation. The `id` names the history and nothing else — it carries no
 claimant, establishes no native identity and overrides none.
 
 **Its root is never completed.** A durable root that records its terminal

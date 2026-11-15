@@ -35,7 +35,7 @@
 
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
-import type { FeedbackSlice } from "@executablemd/core/host";
+import type { FeedbackSlice } from "@executablemd/agent/host";
 
 import { DESIGNATED, DRAFT_FILLED, renderRead, renderReceipt } from "./controls.ts";
 import { acknowledgedControlOutcomes, controlSlot } from "./control-outcomes.ts";

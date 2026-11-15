@@ -4,7 +4,7 @@ import {
   questionFingerprint,
   retainsOptionalText,
 } from "@executablemd/core/host";
-import type { AgentReplyHold } from "@executablemd/core/host";
+import type { AgentReplyHold } from "@executablemd/agent/host";
 /**
  * The Sidekick's own questions, and how one reaches the response that asked it.
  *

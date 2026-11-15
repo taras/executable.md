@@ -1,6 +1,7 @@
-import { AgentPromptError } from "@executablemd/core";
-import { Agent, Component } from "@executablemd/core/api";
-import type { AgentPromptEvent } from "@executablemd/core/api";
+import { AgentPromptError } from "@executablemd/agent/api";
+import { Component } from "@executablemd/core/api";
+import { Agent } from "@executablemd/agent/api";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 import type { Operation, Stream } from "effection";
 import { z } from "zod";
 import {

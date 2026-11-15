@@ -32,12 +32,8 @@ import { scoped } from "effection";
 import { Component, Syntax } from "@executablemd/core/api";
 import { useSyntax } from "@executablemd/core/host";
 import type { Operation } from "effection";
-import {
-  agentIdentityComponents,
-  inspectSyntax,
-  renderSyntaxMarkdown,
-  useAgentComponents,
-} from "@executablemd/core";
+import { inspectSyntax, renderSyntaxMarkdown } from "@executablemd/core";
+import { agentIdentityComponents, useAgentComponents } from "@executablemd/agent/host";
 import type { SyntaxSymbols } from "@executablemd/core";
 import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";

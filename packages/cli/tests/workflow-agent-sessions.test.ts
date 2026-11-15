@@ -28,12 +28,8 @@ import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, relative as relativePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  registerComponents,
-  agentIdentityComponents,
-  collect,
-  retainedSource,
-} from "@executablemd/core";
+import { registerComponents, collect, retainedSource } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";

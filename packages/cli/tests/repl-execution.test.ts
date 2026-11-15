@@ -49,13 +49,8 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ExpansionController } from "../src/repl/expansion.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
-import {
-  Component,
-  DocumentOutput,
-  Elicitation,
-  Execution,
-  installAgentComponents,
-} from "@executablemd/core";
+import { Component, DocumentOutput, Elicitation, Execution } from "@executablemd/core";
+import { installAgentComponents } from "@executablemd/agent/host";
 import {
   REFERENCE_DIRECTORY,
   referenceEvents,

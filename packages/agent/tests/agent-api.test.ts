@@ -13,13 +13,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { Agent } from "../src/agent/agent-api.ts";
-import type {
-  AgentOptions,
-  PermissionRequest,
-  Session,
-  SessionConfiguration,
-} from "../src/agent/agent-api.ts";
+import { Agent } from "../api.ts";
+import type { AgentOptions, PermissionRequest, Session, SessionConfiguration } from "../api.ts";
 
 function assertNoProviderError(error: unknown): void {
   expect(error).toBeInstanceOf(Error);
@@ -195,5 +190,66 @@ describe("Tier AA — configuration and option discovery compose", () => {
     });
 
     expect(seen).toEqual([["review"], []]);
+  });
+});
+
+/**
+ * PA4 — the Agent Api a Plugin composes agent work through.
+ *
+ * A Plugin reaches agent work through `@executablemd/agent/api`, beside the
+ * generic Plugin surface on `@executablemd/core/api`, so what it can reach about
+ * a session is settled here: the Api itself, the choices an agent advertises,
+ * and the configuration a `<Session>` authored — all in the Agent package's own
+ * vocabulary. Whatever protocol the installed provider speaks does not appear.
+ * This suite imports the public entry rather than its module, so this
+ * exercises the name a Plugin actually imports.
+ */
+describe("PA4 — the Agent Api composes from the Plugin entrypoint", () => {
+  it("wraps options() and a configured session() the ordinary way", function* () {
+    const seen: unknown[][] = [];
+    const choices: AgentOptions = {
+      agent: "codex",
+      model: {
+        selected: "gpt-5.4",
+        options: [
+          {
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            description: "the current one",
+            group: { id: "frontier", name: "Frontier" },
+          },
+        ],
+      },
+      effort: null,
+    };
+
+    const composed = yield* scoped(function* (): Operation<[Session, AgentOptions]> {
+      yield* Agent.around(
+        {
+          // deno-lint-ignore require-yield
+          *session(args): Operation<Session> {
+            seen.push([...args]);
+            return { sessionKey: "plugin:review", cwd: "/repo" };
+          },
+          // deno-lint-ignore require-yield
+          *options(): Operation<AgentOptions> {
+            return choices;
+          },
+        },
+        { at: "min" },
+      );
+      yield* Agent.around({
+        *session(args, next): Operation<Session> {
+          return yield* next(...args);
+        },
+      });
+      return [yield* Agent.operations.session("review"), yield* Agent.operations.options("codex")];
+    });
+
+    // The request, and nothing else: no settings object travels this route.
+    expect(seen).toEqual([["review"]]);
+    expect(composed[0]).toEqual({ sessionKey: "plugin:review", cwd: "/repo" });
+    expect(composed[1].model?.options[0]?.group).toEqual({ id: "frontier", name: "Frontier" });
+    expect(composed[1].effort).toBe(null);
   });
 });

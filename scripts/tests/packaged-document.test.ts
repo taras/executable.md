@@ -86,9 +86,9 @@ function* packagedDocuments(): Operation<PackagedDocuments[]> {
  * Every `components.md` under a package's `src/`, at whatever depth it sits.
  *
  * Depth is the reason this is a walk rather than a per-package guess: core
- * ships two, one beneath `src/components/` and one beneath `src/agent/`,
- * because documentation lives beside the registration boundary it documents
- * rather than at a fixed path.
+ * ships one beneath `src/components/`, the Agent package one directly in
+ * `src/` and git one beneath `src/composition/`, because documentation lives
+ * beside the registration boundary it documents rather than at a fixed path.
  */
 function* packagedDocumentation(): Operation<string[]> {
   const found: string[] = [];

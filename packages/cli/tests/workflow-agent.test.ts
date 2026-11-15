@@ -37,7 +37,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowRequestBound } from "@executablemd/workflow/deno";
 import { executeInstalled } from "@executablemd/core/host";
-import { agentIdentityComponents } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";

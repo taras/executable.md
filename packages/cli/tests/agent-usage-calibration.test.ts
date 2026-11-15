@@ -30,7 +30,7 @@ import {
   codexNative,
   nativeComparison,
 } from "../../../examples/agent-usage/evidence.ts";
-import type { PromptUsage } from "@executablemd/core";
+import type { PromptUsage } from "@executablemd/agent/api";
 import { readdir as readdirOf, writeTextFile } from "@effectionx/fs";
 
 const CHECKOUT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");

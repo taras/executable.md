@@ -120,12 +120,6 @@ export type {
  * the same boundary core's own defaults do.
  */
 export { formDispatcher } from "./src/invocation-identity.ts";
-/**
- * The opaque session request a `<Session>` element routes. A handler reads its
- * descriptive name; only the delivered launch coordinator reads the engine identity.
- */
-export { AgentSessionProtocolError, isSessionRequest } from "./src/agent/session-request.ts";
-export type { AgentSessionRequest } from "./src/agent/session-request.ts";
 export { ContentError } from "./src/errors.ts";
 export { getExpansion } from "./src/expansion.ts";
 export type { Expansion } from "./src/expansion.ts";
@@ -237,7 +231,6 @@ export type { SelectedEntry } from "./src/syntax-markdown.ts";
  * the selection core's own component reaches.
  */
 export { documentationIndexFor, packageDocumentation } from "./src/component-documentation.ts";
-export { agentDocumentation } from "./src/agent/components.ts";
 export type {
   DocumentationContribution,
   DocumentationReader,
@@ -325,121 +318,6 @@ export {
 } from "./src/validate.ts";
 export type { NormalizedIssue } from "./src/validate.ts";
 export { validateParsed } from "./src/components/parse-schema.ts";
-
-// Agent components — <Agent>/<Session>/<Prompt> over a provider-factory seam.
-export {
-  AGENT_REGISTRATIONS,
-  agentIdentityComponents,
-  installAgentComponents,
-  useAgentComponents,
-} from "./src/agent/components.ts";
-export type { AgentComponentsOptions } from "./src/agent/components.ts";
-export { Agent } from "./src/agent/agent-api.ts";
-// The one deny decision, so a host writing its own permission policy reaches
-// the same rule the base handler and every built-in policy reach rather than
-// spelling "reject_once, then reject_always, otherwise cancel" again.
-export { denyPermission } from "./src/agent/agent-api.ts";
-export type {
-  AgentApi,
-  AgentOption,
-  AgentOptions,
-  AgentOptionSet,
-  AgentOptionsRequest,
-  AgentPromptEvent,
-  PromptImage,
-  LaunchOptions,
-  PermissionMode,
-  PermissionOption,
-  PermissionOutcome,
-  PermissionRequest,
-  PromptOptions,
-  Session,
-  SessionIdentity,
-  SessionConfiguration,
-  SessionLaunchResult,
-} from "./src/agent/agent-api.ts";
-export { AgentPromptError } from "./src/agent/errors.ts";
-// One authentic use of a conversation. Issuing one is `useConfiguredSession()`,
-// which is the only way one comes into being. These accessors read a value —
-// whether it claims to be a use, whether this build issued it, which session it
-// names and what it says — and refuse a claim nothing issued. Deciding whether
-// a use may act stays elsewhere: it belongs to the installation that issued it,
-// reached through the coordinator core delivers to the installed provider.
-export {
-  AgentSessionUseError,
-  claimsConfiguration,
-  configurationOf,
-  isSessionUse,
-  sessionOf,
-} from "./src/agent/session-use.ts";
-export type { AgentSessionUse } from "./src/agent/session-use.ts";
-export { useConfiguredSession } from "./src/agent/launch-install.ts";
-// Native session launch — the records one launch retains, and the request its
-// public route carries. What runs and retains a phase is not here
-// and is not anywhere: it is delivered to the selected provider.
-export { AgentLaunchError, sameExecutableBuild } from "./src/agent/launch.ts";
-export type {
-  DetachedLaunchRecord,
-  ExecutableBuildBindingV1,
-  ExitedLaunchRecord,
-  IdentityProvenance,
-  InstructionReconciliation,
-  LaunchFailure,
-  LaunchFailureClass,
-  LaunchPhase,
-  LaunchRecord,
-  MaterializationPlan,
-  MaterializationUsage,
-  MaterializedLaunchRecord,
-  PreparedLaunchRecord,
-} from "./src/agent/launch.ts";
-export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
-export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
-export type { AgentLaunchPhases, AgentLaunchCoordinator } from "./src/agent/launch-coordinator.ts";
-// What a provider reports through the coordinator's optional usage receiver,
-// and what a canonical Prompt record retains of it.
-export type {
-  PromptUsage,
-  PromptUsageReporter,
-  ReportedTokens,
-  UsageBuild,
-  UsageCoverage,
-  UsageProvenance,
-  UsageReading,
-} from "./src/agent/usage.ts";
-// What settles one session setup. A provider receives the handle through the
-// coordinator delivered to its factory; the types are here so it can name them.
-export type {
-  AgentSessionSetup,
-  AgentSessionSetupState,
-  ConfigureAgentSession,
-  ProviderSessionConfiguration,
-} from "./src/agent/session-setup.ts";
-// The checkpoint type, because the coordinator's signature names it. The carrier
-// itself is exported from nowhere: writing one is reachable only through a
-// delivered coordinator, and reading one only from the prompt core is running.
-export { AgentPromptCheckpointError } from "./src/agent/checkpoint.ts";
-export type { AgentPromptCheckpoint } from "./src/agent/checkpoint.ts";
-export { launchAgentSession } from "./src/agent/launch-install.ts";
-export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
-// `installAgentProvider` is deliberately absent: it takes a launch coordinator,
-// and a coordinator reachable by import is one every package and every
-// loaded copy can reach. An embedder installs a registered provider through
-// `useProviderInstallation()`, which mints one and delivers it privately to the
-// factory through this invocation's terminal.
-export { useProviderInstallation } from "./src/agent/launch-install.ts";
-export type {
-  AgentProviderApi,
-  AgentProviderFactory,
-  AgentProviderOptions,
-} from "./src/agent/provider-api.ts";
-export {
-  installApproveAll,
-  installApproveReads,
-  installAskPermission,
-  installPermissionMode,
-  installPromptFailurePolicy,
-} from "./src/agent/permission.ts";
 
 // Shared execution config — the run deadline, the exec and Fetch defaults, and
 // contextual verbosity, plus the one duration grammar the three timeouts are

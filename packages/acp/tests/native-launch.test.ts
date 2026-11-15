@@ -12,18 +12,18 @@
  * phases in order and keeps every record, so what a case reads is what the
  * provider produced. It deliberately validates no request — identity, lineage,
  * durability and settlement are core's half, and
- * `packages/core/tests/agent-session-launch.test.ts` owns them.
+ * `packages/agent/tests/agent-session-launch.test.ts` owns them.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { Agent, sameExecutableBuild } from "@executablemd/core";
-import type { ConfigureAgentSession, ProviderSessionConfiguration } from "@executablemd/core";
+import { Agent, sameExecutableBuild } from "@executablemd/agent/api";
+import type { ConfigureAgentSession, ProviderSessionConfiguration } from "@executablemd/agent/api";
 // The engine's own session-request machinery, used the way core uses it: these
 // suites stand in for an installation, so they open and read requests rather
 // than inventing a second shape for one.
-import { consumeSessionRequest, openSessionRequest } from "../../core/src/agent/session-request.ts";
+import { consumeSessionRequest, openSessionRequest } from "../../agent/src/session-request.ts";
 import type {
   AgentLaunchRequest,
   AgentLaunchCoordinator,
@@ -33,7 +33,7 @@ import type {
   PreparedLaunchRecord,
   Session,
   SessionConfiguration,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import {
   flushOutput,
   installControlledLauncher,
@@ -76,7 +76,7 @@ import type {
   FakeRuntimeHarness,
   ScriptedTurn,
 } from "./helpers.ts";
-import type { ExecutableBuildBindingV1 } from "@executablemd/core";
+import type { ExecutableBuildBindingV1 } from "@executablemd/agent/api";
 import type { AcpxSessionPolicy } from "../src/provider.ts";
 import type { ExecutableObserver } from "@executablemd/runtime";
 import type { AcpRuntimeEvent, AcpSessionRecord, AcpSessionStore } from "../src/acpx-runtime.ts";

@@ -47,8 +47,14 @@
  */
 
 import { createDurableOperation, ephemeral, serializeError } from "@executablemd/durable-streams";
-import type { AppendApprovals } from "../secrets/append-approval.ts";
-import type { ApprovedMatch } from "../secrets/secret-placement.ts";
+import type { SourcePosition } from "@executablemd/core";
+import {
+  durabilityFailure,
+  filesFatalFailure,
+  hasInvocationTeardown,
+  readSourceOwnerDescription,
+} from "@executablemd/core/host";
+import type { AppendApprovals, ApprovedMatch } from "@executablemd/core/host";
 import type {
   ActivateDurabilityFailure,
   DurableStream,
@@ -60,8 +66,6 @@ import type {
 import { createContext, ensure, scoped } from "effection";
 import type { Operation, Stream } from "effection";
 import { Agent } from "./agent-api.ts";
-import { InvocationTeardownError } from "../invocation.ts";
-import { durabilityFailure, filesFatalFailure, firstCause } from "../errors.ts";
 import type {
   AgentPromptEvent,
   PermissionOption,
@@ -77,7 +81,6 @@ import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
 import { HeldPromptInputRefusal, HostObservationFailure } from "./publication.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
-import { SourceOwner, sourceOwnerDescription } from "../source-owner.ts";
 import {
   canonicalUsage,
   promptUsageDestination,
@@ -85,7 +88,6 @@ import {
   serializePromptUsage,
 } from "./usage.ts";
 import type { PromptUsage, PromptUsageDestination, PromptUsageReporter } from "./usage.ts";
-import type { SourcePosition } from "../types.ts";
 
 /** The durable effect type every journaled Agent Prompt is recorded under. */
 export const AGENT_PROMPT = "agent_prompt";
@@ -534,7 +536,7 @@ export function* persistPrompt(
   begun: () => AgentPromptHandle = () => undefined,
   feedback?: FeedbackApproval,
 ): Workflow<PromptRecord> {
-  const sourceOwner = yield* ephemeral(SourceOwner.get());
+  const owned = yield* ephemeral(readSourceOwnerDescription(identity.position));
   // Held here, and handed to nothing but the live runner below: the pending
   // description belongs to this function, so composition can settle the input
   // without reaching the journal, a second record or the retained history.
@@ -542,7 +544,7 @@ export function* persistPrompt(
     type: AGENT_PROMPT,
     name: identity.name,
     input: identity.input,
-    ...sourceOwnerDescription(identity.position, sourceOwner),
+    ...owned,
   };
   const stored = yield createDurableOperation<Json>(
     description,
@@ -605,10 +607,7 @@ function promptPublication(
           throw error;
         }
         const fatal = durabilityFailure(error) ?? filesFatalFailure(error);
-        const teardown = firstCause(error, (cause) =>
-          cause instanceof InvocationTeardownError ? cause : undefined,
-        );
-        if (fatal !== undefined || teardown !== undefined) {
+        if (fatal !== undefined || hasInvocationTeardown(error)) {
           throw activateFailure(fatal ?? error);
         }
         if (error instanceof HostObservationFailure) {

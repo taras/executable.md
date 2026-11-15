@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent } from "@executablemd/durable-streams";
-import { AGENT_PROMPT } from "@executablemd/core/host";
+import { AGENT_PROMPT } from "@executablemd/agent/host";
 import { coldReservations, retainResolution } from "../src/repl/sidekick/admission.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";

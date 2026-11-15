@@ -35,12 +35,8 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { installWebElicitation } from "@executablemd/web";
 import { ensure, Err, Ok, until, useScope } from "effection";
 import type { Operation, Result, Scope } from "effection";
-import {
-  agentIdentityComponents,
-  fileSource,
-  inlineSource,
-  installAgentComponents,
-} from "@executablemd/core";
+import { fileSource, inlineSource } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type { RootDocumentSource } from "@executablemd/core";
 import { executeInstalled, installAnswerProvider } from "@executablemd/core/host";
 import { mkdir, rm } from "node:fs/promises";

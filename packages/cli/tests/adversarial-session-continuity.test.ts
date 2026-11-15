@@ -9,17 +9,11 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import {
-  Agent,
-  agentIdentityComponents,
-  collect,
-  configurationOf,
-  Elicitation,
-  installAgentComponents,
-  registerComponents,
-  useNormalizedOutput,
-} from "@executablemd/core";
-import type { AgentPromptEvent, Json, Session } from "@executablemd/core";
+import { collect, Elicitation, registerComponents, useNormalizedOutput } from "@executablemd/core";
+import { Agent, configurationOf } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import type { Json } from "@executablemd/core";
+import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { Permissions, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";

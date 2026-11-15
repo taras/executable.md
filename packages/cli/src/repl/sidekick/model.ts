@@ -37,15 +37,15 @@ import type { HumanStopFact, RecoveryDisposition } from "./recovery-state.ts";
 import type { MessageOrigin } from "./history.ts";
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
+import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import {
   acceptedReplies,
   AGENT_PROMPT,
   AGENT_PROMPT_REPLY,
   parsePromptRecord,
-  previewGeneratedXmdRoot,
-} from "@executablemd/core/host";
-import type { SessionConfiguration } from "@executablemd/core";
-import type { PromptRecord } from "@executablemd/core/host";
+} from "@executablemd/agent/host";
+import type { SessionConfiguration } from "@executablemd/agent/api";
+import type { PromptRecord } from "@executablemd/agent/host";
 import { projectUsage, type ReplUsage } from "../usage.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";

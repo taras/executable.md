@@ -51,7 +51,6 @@ import type { Operation, Result, Scope } from "effection";
 import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import {
-  agentIdentityComponents,
   content,
   DocumentOutput,
   retainedSource,
@@ -61,6 +60,7 @@ import {
   tryContent,
   validateDocumentStructure,
 } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import {
   classifyPlanResponse,
   generatedRequestRefusal,

@@ -1,5 +1,5 @@
 import { createAcpRuntime, createAcpxProvider, createAcpxSessionStore } from "@executablemd/acp";
-import { AgentProviders, registerAgentProvider } from "@executablemd/core";
+import { AgentProviders, registerAgentProvider } from "@executablemd/agent/api";
 import { Component, Plugin } from "@executablemd/core/api";
 import { API, command, env, readTextFile } from "@executablemd/runtime";
 import { useTestAgentController } from "@executablemd/test-agent";

@@ -23,8 +23,8 @@ import { applyTodoDiff, parseTodo, todoDiff, TodoEditError } from "./document.ts
 import type { TodoDocument, TodoItem } from "./document.ts";
 import { captureTodoSource } from "./source.ts";
 import { TodoSourceError } from "./source.ts";
-import { Agent } from "@executablemd/core";
-import type { AgentPromptEvent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 
 interface TodoObservation {
   readonly origin: "human" | "sidekick";

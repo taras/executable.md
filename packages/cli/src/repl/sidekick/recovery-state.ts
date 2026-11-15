@@ -1,6 +1,6 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { SidekickRecord } from "./history.ts";
 import type { SidekickRequest } from "./model.ts";

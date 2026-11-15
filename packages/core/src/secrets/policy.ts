@@ -238,12 +238,14 @@ export function* scanSecrets(content: string): Operation<SecretFinding[]> {
  * answer `false`. Only an execution whose host explicitly disabled detection
  * clears everything, without a scanner existing to invoke.
  *
- * Package-private, with two callers, both of them bridges out of an
- * execution's own source: the output bridge `execute()` owns, and the live
- * observation a canonical prompt offers an observing host. Each asks the same
- * question — may this leave — about the execution it is running in, which is
- * why neither may answer for the other. Exporting it publicly would advertise
- * a screen whose answer is worth nothing outside those bridges.
+ * It has two callers, both of them bridges out of an execution's own source:
+ * the output bridge `execute()` owns, and the live observation a canonical
+ * prompt offers an observing host. Each asks the same question — may this
+ * leave — about the execution it is running in, which is why neither may
+ * answer for the other. It crosses `./host` only, beside
+ * {@link retainsOptionalText}, so the Agent package's prompt bridge asks it;
+ * the root and `./api` omit it, because outside those bridges its answer is
+ * worth nothing.
  */
 export function* clearsLiveOutput(content: string): Operation<boolean> {
   let detection: ExecutionDetection;
@@ -273,7 +275,7 @@ export function* clearsLiveOutput(content: string): Operation<boolean> {
  * absent or unauthentic binding, a projection that changes the value, a finding
  * and a scanner that failed all answer `false`.
  *
- * Package-private, like {@link clearsLiveOutput}: it is a question about this
+ * Host-only, like {@link clearsLiveOutput}: it is a question about this
  * execution's own optional observations, answered inside that execution.
  */
 export function* retainsOptionalText(value: string): Operation<boolean> {

@@ -10,11 +10,9 @@ import { executeInstalled } from "../host.ts";
 import type { HostExecution } from "../host.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
-import { Agent } from "../src/agent/agent-api.ts";
-import type { AgentPromptEvent, Session } from "../src/agent/agent-api.ts";
-import { isSessionRequest } from "../src/agent/session-request.ts";
-import { installAgentComponents, agentIdentityComponents } from "../src/agent/components.ts";
-import { AgentPromptError } from "../src/agent/errors.ts";
+import { Agent, AgentPromptError, isSessionRequest } from "@executablemd/agent/api";
+import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 
 export function fixture(name: string): Operation<string> {
   return readTextFile(

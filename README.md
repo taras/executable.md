@@ -41,6 +41,11 @@ Locate the package that owns the behavior you are about to change:
 
 - `packages/core/` — the engine: the boundary scanner, component expansion,
   `exec` and `eval`, modifiers, and the `execute()` entry point.
+- `packages/agent/` — the Agent components (`<AgentProvider>`, `<Agent>`,
+  `<Session>`, `<Prompt>` and the permission regions), the `Agent` Api, Prompt
+  journaling and held conversations. A Plugin imports `Agent` from
+  `@executablemd/agent/api`; a host installs the components from
+  `@executablemd/agent/host`.
 - `packages/cli/` — the `xmd` command. `src/cli.ts` is runtime-neutral;
   `src/{deno,node,bun,compiled}.ts` install the host adapters each runtime needs.
 - `packages/runtime/` — the contextual host APIs — process, filesystem, env,

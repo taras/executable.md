@@ -16,17 +16,17 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { executeInstalled } from "../host.ts";
-import { agentIdentityComponents } from "../src/agent/components.ts";
-import { execute } from "../src/execute.ts";
-import { Agent } from "../src/agent/agent-api.ts";
-import { sessionOf } from "../src/agent/session-use.ts";
-import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
-import { AgentPromptError } from "../src/agent/errors.ts";
-import { readCompletedPrompts } from "../src/agent/journal.ts";
-import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
-import { installAgentComponents } from "../src/agent/components.ts";
-import { Component } from "../src/component-api.ts";
+import { executeInstalled } from "@executablemd/core/host";
+import { agentIdentityComponents } from "../src/components.ts";
+import { execute } from "../../core/src/execute.ts";
+import { Agent } from "../src/agent-api.ts";
+import { sessionOf } from "../src/session-use.ts";
+import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent-api.ts";
+import { AgentPromptError } from "../src/errors.ts";
+import { readCompletedPrompts } from "../src/journal.ts";
+import type { AgentProviderFactory } from "../src/provider-api.ts";
+import { installAgentComponents } from "../src/components.ts";
+import { Component } from "../../core/src/component-api.ts";
 import type { Json } from "@executablemd/core";
 
 interface StubResponse {

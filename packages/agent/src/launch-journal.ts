@@ -43,8 +43,8 @@ import { readConfiguration, serializeConfiguration } from "./configuration-recor
 import { readCheckpoint } from "./checkpoint.ts";
 import { persistPrompt } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
-import { sourceDescription } from "../source-position.ts";
-import type { SourcePosition } from "../types.ts";
+import { sourceDescription } from "@executablemd/core";
+import type { SourcePosition } from "@executablemd/core";
 import type { PermissionMode } from "./agent-api.ts";
 
 const AGENT_SESSION_LAUNCH = "agent_session_launch";

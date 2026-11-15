@@ -97,13 +97,10 @@ import {
 } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { PromptUsageHost } from "@executablemd/acp";
-import {
-  installAgentComponents,
-  installPermissionMode,
-  registerAgentProvider,
-} from "@executablemd/core";
-import type { AgentProviderFactory } from "@executablemd/core";
-import { useAgentPromptPublisher } from "@executablemd/core/host";
+import { registerAgentProvider } from "@executablemd/agent/api";
+import { installAgentComponents, installPermissionMode } from "@executablemd/agent/host";
+import type { AgentProviderFactory } from "@executablemd/agent/api";
+import { useAgentPromptPublisher } from "@executablemd/agent/host";
 import {
   agentSessionKey,
   createWorkflowPromptPublisher,

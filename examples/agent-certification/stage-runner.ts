@@ -1,4 +1,5 @@
-import { agentIdentityComponents, Agent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
 import type { HostExecution } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";

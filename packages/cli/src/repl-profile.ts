@@ -16,8 +16,9 @@ import { replTesting } from "./repl/sidekick/testing.ts";
 import type { ReplTesting } from "./repl/sidekick/testing.ts";
 
 import type { AcpxProviderDependencies } from "@executablemd/acp";
-import { agentIdentityComponents } from "@executablemd/core";
-import type { PermissionMode, SyntaxSymbols } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
+import type { SyntaxSymbols } from "@executablemd/core";
+import type { PermissionMode } from "@executablemd/agent/api";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { scoped, useScope } from "effection";

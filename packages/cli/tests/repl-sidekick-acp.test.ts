@@ -13,7 +13,8 @@ import { copyFile, ensureDir, exists, readTextFile, writeTextFile } from "@effec
 import { exec, ProcessApi, Stdio } from "@effectionx/process";
 import { selectJson } from "@executablemd/core/host";
 import { openReplSession } from "../src/repl/session.ts";
-import { Agent, Component, Execution } from "@executablemd/core";
+import { Component, Execution } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -114,7 +115,7 @@ import {
   parseEntryRecords,
   parseSidekickRecord,
 } from "../src/repl/sidekick/history.ts";
-import { AGENT_PROMPT, AGENT_PROMPT_REPLY } from "@executablemd/core/host";
+import { AGENT_PROMPT, AGENT_PROMPT_REPLY } from "@executablemd/agent/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import {
   Descriptor,

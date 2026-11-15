@@ -79,7 +79,6 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
   // what declares an asset shipped.
   for (const relative of [
     "src/components/components.md",
-    "src/agent/components.md",
     "src/components.md",
     "src/composition/components.md",
   ]) {

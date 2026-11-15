@@ -82,17 +82,26 @@ import type {
   Json as DurableJson,
 } from "@executablemd/durable-streams";
 
-import { executeInstalledWithApprovals } from "../execute.ts";
-import type { ExecutionApprovals, ExecutionInstallation, HostExecution } from "../execute.ts";
-import type { ApprovedElicitAnswer } from "../approved-generated-source.ts";
-import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "../generated-xmd.ts";
-import { durabilityFailure } from "../errors.ts";
-import { isJsonObject, parseJson } from "../json.ts";
-import { retainedSource } from "../root-source.ts";
-import { encodedOffset, place } from "../secrets/secret-placement.ts";
-import type { ApprovedMatch } from "../secrets/secret-placement.ts";
-import type { SecretSpan } from "../secrets/scanner.ts";
+import { isJsonObject, parseJson, retainedSource } from "@executablemd/core";
+import type { ComponentInvocation, Json } from "@executablemd/core";
+import {
+  durabilityFailure,
+  executeInstalledWithApprovals,
+  placeApprovedCopies,
+} from "@executablemd/core/host";
+import type {
+  ExecutionApprovals,
+  ExecutionInstallation,
+  HostExecution,
+  ApprovedElicitAnswer,
+  GeneratedXmdRequest,
+  GeneratedXmdRootResult,
+  ApprovedMatch,
+  SecretSpan,
+  IdentityClaimant,
+} from "@executablemd/core/host";
 import type { FeedbackSlice } from "./reply-review.ts";
+import { AGENT_ORIGIN } from "./origin.ts";
 import { AgentConversationProvider } from "./conversation-provider.ts";
 import type {
   AgentOptions,
@@ -128,8 +137,6 @@ import type {
 import { openSessionRequest } from "./session-request.ts";
 import type { SessionFacts } from "./session-request.ts";
 import { sessionOf } from "./session-use.ts";
-import type { ComponentInvocation, IdentityClaimant } from "../invocation-identity.ts";
-import type { Json } from "../types.ts";
 
 /** Why a host conversation cannot be opened, continued or inspected. */
 export class AgentConversationError extends Error {
@@ -716,7 +723,7 @@ function* serve(
     components: [
       {
         name: CONVERSATION_COMPONENT,
-        origin: "@executablemd/core",
+        origin: AGENT_ORIGIN,
         props: { type: "object", properties: {}, additionalProperties: false },
         description: "Hold one agent conversation open for the host that opened it.",
         factory: (claim) =>
@@ -1405,20 +1412,11 @@ function feedbackCopies(
     if (text.slice(slice.start, slice.end) !== rendered) {
       return [];
     }
-    const names = [...new Set(answer.copies.map(({ field }) => field))];
-    const placements = place(
-      `${rendered}\n`,
-      names.map((name) => [name]),
-      2,
-    );
-    return answer.copies.flatMap(({ field, match }) => {
-      const placement = placements?.[names.indexOf(field)];
-      const start = encodedOffset(placement, match.start);
-      const end = encodedOffset(placement, match.end);
-      return start === undefined || end === undefined || rendered.slice(start, end) !== match.bytes
-        ? []
-        : [{ ...match, start: slice.start + start, end: slice.start + end }];
-    });
+    return placeApprovedCopies(rendered, answer.copies, 2).map((match) => ({
+      ...match,
+      start: slice.start + match.start,
+      end: slice.start + match.end,
+    }));
   });
 }
 

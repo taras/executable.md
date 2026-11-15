@@ -571,7 +571,7 @@ const INSPECTION_PROBE = doc(
   '<AgentProvider name="acpx" defaultAgent="codex">',
   "",
   "```js ephemeral eval",
-  'import { Agent } from "@executablemd/core";',
+  'import { Agent } from "@executablemd/agent/api";',
   'const choices = yield* Agent.operations.options("codex", { model: "sol" });',
   'if (choices.agent !== "codex" || choices.model?.selected !== "sol" ||',
   '    choices.model?.options.map((choice) => choice.id).join(",") !== "small,sol" ||',

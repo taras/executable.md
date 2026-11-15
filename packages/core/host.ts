@@ -188,7 +188,32 @@ export {
   readElicitationAnswer,
   readElicitationSchema,
 } from "./src/elicit-journal.ts";
-export { retainsOptionalText } from "./src/secrets/policy.ts";
+export { clearsLiveOutput, retainsOptionalText } from "./src/secrets/policy.ts";
+
+/**
+ * What a package that owns its own canonical durable effects reads from core.
+ *
+ * The Agent package journals each Prompt as core does its own effects: it
+ * stops on the same durability and filesystem failures, tells an invocation's
+ * teardown failure apart from the work it tore down, and attributes a record to
+ * the source owner core has in effect. These answer those questions without
+ * handing out the Context or the failure classes behind them.
+ */
+export {
+  durabilityFailure,
+  filesFatalFailure,
+  hasCause,
+  hasInvocationTeardown,
+} from "./src/errors.ts";
+export { readSourceOwnerDescription } from "./src/source-owner.ts";
+/**
+ * Approved secret matches, and where approved copies of string fields land in
+ * the exact JSON text a host rendered for them. The scanner and the gate that
+ * enforce an approval stay core's own.
+ */
+export type { SecretSpan } from "./src/secrets/scanner.ts";
+export type { ApprovedMatch } from "./src/secrets/secret-placement.ts";
+export { placeApprovedCopies } from "./src/secrets/secret-placement.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 
@@ -196,7 +221,7 @@ export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/com
  * Exact Markdown a trusted host declares to an execution — see
  * `src/components/declared-markdown.ts`.
  *
- * The fifth act of infrastructure, and the same shape as the rest: plain
+ * Another act of infrastructure, and the same shape as the rest: plain
  * immutable data the host holds and passes. The host states the bytes, their
  * origin and their digest, and canonical core refuses the declaration if what
  * the host said about them is not what they say about themselves. `sourceDigest`
@@ -235,7 +260,7 @@ export type {
  * Structural syntax a trusted host declares to an execution — see
  * `src/execution-declarations.ts`.
  *
- * The seventh act of infrastructure, and the same shape as the rest: plain
+ * Another act of infrastructure, and the same shape as the rest: plain
  * immutable data the host holds and passes, beside the handler that expands it.
  * A declaration states a construct and the regions written directly inside it;
  * the installation that declares them supplies the one `expand` captured with
@@ -271,20 +296,6 @@ export type {
   StructuralInput,
 } from "./src/execution-declarations.ts";
 
-/**
- * Installing one Agent provider for the invocation that projects the content it
- * covers.
- *
- * The sixth act of infrastructure, and the narrowest: a trusted host component
- * that establishes a constrained ceiling around content it projects installs the
- * provider *in* that invocation, exactly as `<AgentProvider>` does, because a
- * provider installed in a frame nested inside it would be invisible to the very
- * content it was selected for. Kept here for the reason the rest of this module
- * is: nothing a document, a component or a middleware package reaches by
- * importing `@executablemd/core` can install a provider for a region it did not
- * author.
- */
-export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
 export { GeneratedXmdError } from "./src/generated-xmd.ts";
 
 /**
@@ -305,7 +316,7 @@ export { GeneratedXmdError } from "./src/generated-xmd.ts";
  *
  * There is no siteless form: a root is evaluated by the execution that captured
  * the selection it runs under, through `HostExecution.evaluateGeneratedXmdRoot`
- * or the same method on an `AgentConversation`.
+ * or the same method on an `AgentConversation` from `@executablemd/agent/host`.
  *
  * `GeneratedXmdRequest` is the whole of what a caller states: which evaluation
  * this is, the candidate bytes, which of the captured effect classes it may
@@ -330,12 +341,6 @@ export type {
   ElicitChoiceSelection,
 } from "./src/approved-generated-source.ts";
 export { HostExecutionError } from "./src/generated-root-owner.ts";
-export {
-  AgentConversationError,
-  AgentReplyWithheldError,
-  useAgentConversation,
-} from "./src/agent/conversation.ts";
-export type { AgentConversation, AgentConversationRequest } from "./src/agent/conversation.ts";
 
 /**
  * What an arriving generated root already says — see
@@ -365,30 +370,6 @@ export type { AgentConversation, AgentConversationRequest } from "./src/agent/co
 export { GeneratedXmdPreviewError, previewGeneratedXmdRoot } from "./src/generated-xmd-preview.ts";
 export type { GeneratedXmdRootPreview } from "./src/generated-xmd-preview.ts";
 
-/**
-
- * Where a completed Prompt publishes, for a host that retains something beside
- * it.
- *
- * The fourth act of infrastructure, and the same shape as the three above: a
- * value the host holds and passes. An ordinary run installs none and publishes
- * exactly as it always did. A host that installs one moves the `agent_prompt`
- * append inside the transaction it opened, so what it keeps beside that event
- * commits with the event or not at all.
- *
- * Kept here for the reason the rest of this module is: nothing a document, a
- * component or a middleware package reaches by importing `@executablemd/core`
- * can decide where a prompt is journaled.
- */
-export { useAgentPromptPublisher } from "./src/agent/publication.ts";
-export type {
-  AgentPromptAssociation,
-  AgentPromptHandle,
-  AgentPromptObservation,
-  AgentPromptPublication,
-  AgentPromptPublisher,
-} from "./src/agent/publication.ts";
-
 export { TestHarnessError } from "./src/test-harness.ts";
 export type {
   TestHarness,
@@ -396,51 +377,6 @@ export type {
   TestHarnessBinding,
   TestHarnessInstaller,
 } from "./src/test-harness.ts";
-
-/**
- * The durable Agent Prompt record, for a host that reads a retained journal.
- *
- * A sealed workflow artifact classifies each Agent session by what its retained
- * Prompts say, and the only thing that can answer that is the parser the live
- * run already records through. A second reading of the same durable value would
- * be a second contract, so the parser and the effect type it belongs to cross
- * the boundary instead.
- */
-export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
-export type { PromptRecord } from "./src/agent/journal.ts";
-
-/**
- * A withheld reply a local person accepted, and the one rule that joins it to
- * its turn.
- *
- * Readers of a held conversation's history — replay, a Sidekick's chat and
- * its passive projections — read a withheld turn followed by its acceptance as
- * that turn's successful reply. They read it through this reconciler rather
- * than their own, so they agree on which acceptances count.
- */
-export {
-  acceptedReplies,
-  AGENT_PROMPT_REPLY,
-  parsePromptReply,
-} from "./src/agent/reply-acceptance.ts";
-export type { PromptReplyRecord } from "./src/agent/reply-acceptance.ts";
-
-/**
- * The trusted foreground question about a withheld reply.
- *
- * Installed by a host with a person in front of it, beside its prompt
- * publisher, as one of a held conversation's installations. A host that
- * installs none keeps every withheld reply withheld. See
- * `src/agent/reply-review.ts`.
- */
-export { useAgentReplyReview } from "./src/agent/reply-review.ts";
-export type {
-  AgentReplyDecision,
-  AgentReplyFinding,
-  AgentReplyHold,
-  AgentReplyReviewer,
-} from "./src/agent/reply-review.ts";
-export type { FeedbackSlice } from "./src/agent/reply-review.ts";
 
 /**
  * `<Answers>` as detached configuration, for the host that installs it.

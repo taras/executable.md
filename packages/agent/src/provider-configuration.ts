@@ -20,8 +20,8 @@
  * admitted.
  */
 
-import type { Json, JsonObject } from "../types.ts";
-import { parseJson } from "../json.ts";
+import { parseJson } from "@executablemd/core";
+import type { Json, JsonObject } from "@executablemd/core";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 

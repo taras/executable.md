@@ -34,50 +34,51 @@ import type { Operation, Result, Stream } from "effection";
 
 // The pinned factories are core-internal, as main keeps them: there is no
 // public siteless evaluator and no public pinning surface.
-import { pinnedComponent, pinnedMutation } from "../src/generated-xmd.ts";
+import { pinnedComponent, pinnedMutation } from "../../core/src/generated-xmd.ts";
 import type {
   GeneratedMutation,
   GeneratedObservation,
   GeneratedXmdRequest,
-} from "../src/generated-xmd.ts";
+} from "../../core/src/generated-xmd.ts";
 import { parsePromptRecord, useAgentConversation } from "../host.ts";
-import type { AgentConversation, ExecutionInstallation, GeneratedXmdRootResult } from "../host.ts";
-import type { InvocationForm } from "../src/invocation-identity.ts";
-import type { FunctionComponentDefinition } from "../src/types.ts";
-import { useSelection } from "./support/generated-selection.ts";
-import { answerProvider } from "./support/answer-provider.ts";
-import { contributeDocumentation, Documentation } from "../src/documentation-api.ts";
-import { registerComponents } from "../src/components/registration.ts";
-import { InvocationTeardownError } from "../src/invocation.ts";
-import { durabilityFailure, firstCause } from "../src/errors.ts";
-import { Execution } from "../src/execute.ts";
-import type { Json } from "../src/types.ts";
-import { Agent } from "../src/agent/agent-api.ts";
+import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
+import type { AgentConversation } from "../host.ts";
+import type { InvocationForm } from "../../core/src/invocation-identity.ts";
+import type { FunctionComponentDefinition } from "../../core/src/types.ts";
+import { useSelection } from "../../core/tests/support/generated-selection.ts";
+import { answerProvider } from "../../core/tests/support/answer-provider.ts";
+import { contributeDocumentation, Documentation } from "../../core/src/documentation-api.ts";
+import { registerComponents } from "../../core/src/components/registration.ts";
+import { InvocationTeardownError } from "../../core/src/invocation.ts";
+import { durabilityFailure, firstCause } from "../../core/src/errors.ts";
+import { Execution } from "../../core/src/execute.ts";
+import type { Json } from "../../core/src/types.ts";
+import { Agent } from "../src/agent-api.ts";
 import type {
   AgentOptions,
   AgentPromptEvent,
   PromptOptions,
   Session,
   SessionConfiguration,
-} from "../src/agent/agent-api.ts";
-import { installAgentComponents } from "../src/agent/components.ts";
-import { AgentConversationProvider } from "../src/agent/conversation-provider.ts";
-import type { AgentSessionRequest } from "../src/agent/session-request.ts";
-import type { AgentSessionSetup } from "../src/agent/session-setup.ts";
-import { sessionOf } from "../src/agent/session-use.ts";
-import { useAgentPromptPublisher } from "../src/agent/publication.ts";
-import { secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
-import { createScannerWith } from "../src/secrets/scanner.ts";
-import type { SecretScanner } from "../src/secrets/scanner.ts";
-import { Elicitation } from "../src/elicitation-api.ts";
-import { getExpansion } from "../src/expansion.ts";
-import { elicitationEffectName, questionFingerprint } from "../src/elicit-journal.ts";
-import type { ElicitationRequest } from "../src/elicitation-api.ts";
+} from "../src/agent-api.ts";
+import { installAgentComponents } from "../src/components.ts";
+import { AgentConversationProvider } from "../src/conversation-provider.ts";
+import type { AgentSessionRequest } from "../src/session-request.ts";
+import type { AgentSessionSetup } from "../src/session-setup.ts";
+import { sessionOf } from "../src/session-use.ts";
+import { useAgentPromptPublisher } from "../src/publication.ts";
+import { secretPolicy, useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
+import { createScannerWith } from "../../core/src/secrets/scanner.ts";
+import type { SecretScanner } from "../../core/src/secrets/scanner.ts";
+import { Elicitation } from "../../core/src/elicitation-api.ts";
+import { getExpansion } from "../../core/src/expansion.ts";
+import { elicitationEffectName, questionFingerprint } from "../../core/src/elicit-journal.ts";
+import type { ElicitationRequest } from "../../core/src/elicitation-api.ts";
 import { acceptedReplies, AGENT_PROMPT_REPLY, useAgentReplyReview } from "../host.ts";
 import type { AgentReplyDecision, AgentReplyHold } from "../host.ts";
-import type { SecretFinding } from "../src/secrets/findings.ts";
-import type { AgentLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
-import type { ProviderSessionConfiguration } from "../src/agent/provider-configuration.ts";
+import type { SecretFinding } from "../../core/src/secrets/findings.ts";
+import type { AgentLaunchCoordinator } from "../src/launch-coordinator.ts";
+import type { ProviderSessionConfiguration } from "../src/provider-configuration.ts";
 
 const AGENT = "stub-agent";
 

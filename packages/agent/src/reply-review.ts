@@ -28,9 +28,8 @@ import type { Api } from "@effectionx/context-api";
 import { ensure } from "effection";
 import type { Operation } from "effection";
 import type { AgentPromptHandle } from "./publication.ts";
-import type { SecretSpan } from "../secrets/scanner.ts";
-import type { SourceRange } from "../document-targets.ts";
-import type { ElicitChoiceSelection } from "../approved-generated-source.ts";
+import type { SourceRange } from "@executablemd/core";
+import type { SecretSpan, ElicitChoiceSelection } from "@executablemd/core/host";
 
 /** Where feedback places an acknowledged answer from one question. */
 export interface FeedbackSlice extends SourceRange {

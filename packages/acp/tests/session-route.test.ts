@@ -39,7 +39,7 @@ import type {
   AgentSessionRouteV2,
   AgentSessionRouteV3,
 } from "../src/session-route.ts";
-import type { ExecutableBuildBindingV1 } from "@executablemd/core";
+import type { ExecutableBuildBindingV1 } from "@executablemd/agent/api";
 import { cliBase } from "@executablemd/test-support/launch";
 
 const KEY: AgentSessionKey = {

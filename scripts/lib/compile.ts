@@ -66,7 +66,7 @@ export const PACKAGED_DOCUMENTS = ["packages/cli/src/documents"];
  */
 export const PACKAGED_DOCUMENTATION = [
   "packages/core/src/components/components.md",
-  "packages/core/src/agent/components.md",
+  "packages/agent/src/components.md",
   "packages/cli/src/components.md",
   "packages/testing/src/components.md",
   "packages/web/src/components.md",

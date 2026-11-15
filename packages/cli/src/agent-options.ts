@@ -15,7 +15,7 @@
  * wrong.
  */
 
-import type { AgentOptions, AgentOptionSet } from "@executablemd/core";
+import type { AgentOptions, AgentOptionSet } from "@executablemd/agent/api";
 
 /** The one action this command takes, and the options it accepts. */
 export const AGENT_ACTION = "options";
