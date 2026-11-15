@@ -54,8 +54,10 @@ leaves the other terminal usable. CI runs the intentional
 Use a composer region for a field-value
 check. A viewport match can also find the same text in the Draft or Transcript.
 Use `<Terminal.Screenshot name="narrow-sidekick" as="image" />` inside an active
-bench to save the visible viewport and bind the image path. The bench CI jobs
-include saved screenshots in their failure artifacts.
+bench to save the visible viewport and bind the image path.
+
+The required macOS and Linux bench jobs run from a checkout whose path
+contains spaces. Their failure artifacts include saved screenshots.
 
 Run [repl-shared-terminal.test.md](journeys/repl-shared-terminal.test.md) to check these launch transitions in one
 test. Start at `120x30`, submit the marker entry, and resize to `72x20` with
