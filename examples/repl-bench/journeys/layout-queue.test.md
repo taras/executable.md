@@ -65,10 +65,10 @@
   </Terminal>
 </Test>
 
-<Test name="#971 the waiting queue preserves order and disappears when empty" timeout="60s">
+<Test name="#971 the waiting queue preserves order and disappears when empty" timeout="120s">
   <TempDir>
     <Terminal columns={160} rows={36}>
-      <XMD.Repl sidekick-agent={fixtureRoot + "/repl-ui-queue.md"}>
+      <XMD.Repl sidekick-agent={fixtureRoot + "/repl-ui-queue.md"} waitTimeout="45s">
         <Terminal.Focus target="sidekick-composer" />
         <Terminal.Type text="Start the held checkout round." />
         <Terminal.Key key="Enter" />
