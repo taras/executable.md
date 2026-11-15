@@ -202,7 +202,7 @@ function* world(options: Parameters<typeof useHarness>[1] = {}, install?: () => 
 }
 type World = ReturnType<typeof world> extends Operation<infer T> ? T : never;
 function sdk(
-  world: World,
+  world: Pick<World, "launch" | "home" | "descriptor">,
 ): Operation<{ connection: acp.ClientConnection; updates: acp.SessionNotification[] }> {
   return resource(function* (provide) {
     let child: ChildProcess | undefined;
@@ -223,7 +223,7 @@ function sdk(
       }
     });
     child = spawnChild(world.launch.command, world.launch.arguments, {
-      cwd: world.held.workspace,
+      cwd: world.descriptor.cwd,
       env: { PATH: process.env.PATH, DENO_DIR: process.env.DENO_DIR, HOME: world.home },
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -4625,7 +4625,7 @@ describe("Sidekick reply approval", () => {
   };
   const reply =
     `<Elicit schema={${JSON.stringify(choice)}} as="answer">Which value?</Elicit>\n\n` +
-    `<Output>Use ${secret} for the example.</Output>\n`;
+    `<Output>Use ${secret}</Output>\n`;
 
   /** Every byte this execution's two journals hold. */
   function* journalBytes(
@@ -4706,23 +4706,25 @@ describe("Sidekick reply approval", () => {
     host.fake.script({ reply: "<Output>Ready for attachment.</Output>" });
     const page = yield* useReplPage({ host, sidekickAcp: path });
     const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
-    const attached = attachResult.parse(
-      yield* requestAttachment(path, { method: "attach", cwd: descriptor.cwd }),
+    const { connection, updates } = yield* sdk({
+      descriptor,
+      home,
+      launch: cliCommand(["sidekick", "acp", "--attach", path]),
+    });
+    const session = yield* until(
+      connection.agent.request(acp.methods.agent.session.new, {
+        cwd: descriptor.cwd,
+        mcpServers: [],
+      }),
     );
     host.fake.script({ reply, held: true });
     host.fake.script({ reply: "<Output>Feedback received.</Output>" });
-    const updates: unknown[] = [];
     const prompting = yield* spawn(() =>
-      requestAttachment(
-        path,
-        {
-          method: "prompt",
-          attachment: attached.attachment,
-          text: "Pick the example value.",
-        },
-        function* (update) {
-          updates.push(update);
-        },
+      until(
+        connection.agent.request(acp.methods.agent.session.prompt, {
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text: "Pick the example value." }],
+        }),
       ),
     );
     yield* host.fake.startedTurns(2);
@@ -4803,7 +4805,7 @@ describe("Sidekick reply approval", () => {
     });
     yield* page.press("[accept reply]");
     yield* held.started();
-    expect(page.screen().shows(`Use ${secret} for the example.`)).toBe(false);
+    expect(page.screen().shows(`Use ${secret}`)).toBe(false);
     expect((yield* journalBytes(page, host)).includes(value)).toBe(false);
     held.release();
     yield* admitting.started();
@@ -4852,11 +4854,15 @@ describe("Sidekick reply approval", () => {
     expect(acknowledgedAnswer.chat.some((one) => one.kind === "control-outcome")).toBe(false);
     expect(host.fake.prompts).toHaveLength(2);
     responding.release();
-    const answer = exchangeSchema.parse(yield* prompting);
-    expect(answer.ending).toMatchObject({ joined: true, outcome: "completed" });
-    const outputs = z.object({ outputs: z.array(z.object({ text: z.string() })) }).parse(answer);
-    expect(outputs.outputs.map((one) => one.text)).toContain(`Use ${secret} for the example.`);
-    expect(answer.output).toBe("Feedback received.");
+    const answer = yield* prompting;
+    expect(answer.stopReason).toBe("end_turn");
+    expect(answer._meta?.["executablemd.sidekick-exchange/v1"]).toMatchObject({ joined: true });
+    const output = updates.flatMap(({ update }) =>
+      update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+        ? [update.content.text]
+        : [],
+    );
+    expect(output.join("")).toBe(`Use ${secret}Feedback received.`);
     yield* page.until("all Send work joined", sidekickIdle);
 
     // One provider turn for the reply — the same request and native turn —
@@ -4903,7 +4909,7 @@ describe("Sidekick reply approval", () => {
       { conversation: projection.value.active, turn: 3 },
     ]);
     const responses = read.chat.flatMap((one) => (one.kind === "response" ? [one] : []));
-    expect(responses.find((one) => one.turn === 2)?.output).toContain(`Use ${secret}`);
+    expect(responses.find((one) => one.turn === 2)?.output).toBe(`Use ${secret}`);
   });
 
   for (const choiceFirst of [false, true]) {

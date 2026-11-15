@@ -2837,11 +2837,13 @@ function outputCopies(
     const start = literals.get(segment);
     if (start !== undefined) {
       for (const match of approved) {
-        if (match.start >= start && match.end <= start + rendered.length) {
+        const end = Math.min(match.end, start + rendered.length);
+        if (match.start >= start && end > match.start) {
           copies.push({
             ...match,
             start: offset + match.start - start,
-            end: offset + match.end - start,
+            end: offset + end - start,
+            bytes: match.bytes.slice(0, end - match.start),
           });
         }
       }

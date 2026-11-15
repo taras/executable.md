@@ -2315,16 +2315,24 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
     });
   }
 
-  for (const partial of [false, true]) {
-    it(`CW13: refuses an independently produced match in ${partial ? "partial" : "completed"} selected Output`, function* () {
+  for (const [description, partial, crossing] of [
+    ["an independently produced match in completed", false, false],
+    ["an independently produced match in partial", true, false],
+    ["a match crossing the approved literal into independent", false, true],
+  ] as const) {
+    it(`CW13: refuses ${description} selected Output`, function* () {
       const stream = new InMemoryStream();
       const seen: AgentReplyHold[] = [];
       const traffic = fresh();
-      const source = `Context ${marker}.\n\n<Output><External /></Output>\n${partial ? "<Boom />" : ""}`;
+      const tail = "independent";
+      const source = crossing
+        ? `<Output>${marker}<External /></Output>`
+        : `Context ${marker}.\n\n<Output><External /></Output>\n${partial ? "<Boom />" : ""}`;
+      let scannedCrossing = false;
       const external = pinnedComponent(
         "External",
         definitionOf("External", "read", ["self-closing"], function* (): Operation<Json> {
-          return marker;
+          return crossing ? tail : marker;
         }),
         "component-answer",
       );
@@ -2332,7 +2340,17 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
       let release: unknown;
       try {
         yield* scoped(function* () {
-          yield* useRangedScanner();
+          yield* useRangedScanner((content, start) => {
+            const end = start + marker.length;
+            if (crossing && content.startsWith("<External", end)) {
+              return end + 1;
+            }
+            if (crossing && content.startsWith(tail, end)) {
+              scannedCrossing = true;
+              return end + 1;
+            }
+            return end;
+          });
           yield* withConversation(
             stream,
             stub(traffic, { respond: () => ({ deltas: [source] }) }),
@@ -2359,6 +2377,19 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
       expect(attempts).toEqual(["SecretDetectedError"]);
       expect(release instanceof Error && release.name).toBe("SecretDetectedError");
       expect(traffic.prompts).toHaveLength(1);
+      if (crossing) {
+        expect(scannedCrossing).toBe(true);
+        expect(release instanceof Error && release.message.includes(marker)).toBe(false);
+        const events = yield* stream.readAll();
+        expect(rootRecords(events)).toEqual([
+          "agent_prompt turn:1",
+          `${AGENT_PROMPT_REPLY} turn:1`,
+          "generated_xmd generated:reply-1",
+        ]);
+        expect(record(events, "turn:1")).toMatchObject({ withheld: true, text: "" });
+        const saved = acceptedReplies(events);
+        expect(saved.ok && saved.value.get("turn:1")?.text).toBe(source);
+      }
     });
   }
 });
