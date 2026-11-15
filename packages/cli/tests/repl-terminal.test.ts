@@ -83,7 +83,6 @@ import {
   pasteDraft,
   RAIL,
   railMark,
-  TYPING,
 } from "./support/screen-journeys.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
@@ -320,17 +319,16 @@ describe("REPL terminal: responsive semantic frames", () => {
       height: 33,
     });
     expect(bounds("box:draft")?.height).toBe(4);
-    // Full width and pinned to the bottom, at every size: one compact History
-    // row and one row of guidance.
+    // Full width at every size, with readiness followed by History.
     expect(bounds("box:history")).toEqual({
       x: 0,
-      y: 34,
+      y: 35,
       width: 160,
       height: 1,
     });
     expect(bounds("box:guidance")).toEqual({
       x: 0,
-      y: 35,
+      y: 34,
       width: 160,
       height: 1,
     });
@@ -375,13 +373,13 @@ describe("REPL terminal: responsive semantic frames", () => {
     }
     expect(bounds("box:history")).toEqual({
       x: 0,
-      y: 28,
+      y: 29,
       width: 120,
       height: 1,
     });
     expect(bounds("box:guidance")).toEqual({
       x: 0,
-      y: 29,
+      y: 28,
       width: 120,
       height: 1,
     });
@@ -403,17 +401,16 @@ describe("REPL terminal: responsive semantic frames", () => {
     for (const column of ["box:sidebar", "box:transcript", "box:inspection"]) {
       expect([column, frame.regionOf(column)]).toEqual([column, undefined]);
     }
-    // The same footer contract as the wide frame: full width, one History row
-    // and one row of guidance.
+    // Readiness and History keep their order at the narrowest width.
     expect(frame.regionOf("box:history")).toEqual({
       x: 0,
-      y: 18,
+      y: 19,
       width: 72,
       height: 1,
     });
     expect(frame.regionOf("box:guidance")).toEqual({
       x: 0,
-      y: 19,
+      y: 18,
       width: 72,
       height: 1,
     });
@@ -438,9 +435,9 @@ describe("REPL terminal: responsive semantic frames", () => {
     if (history === undefined || guidance === undefined) {
       throw new Error("the narrow drawer lost its History band or fitted help");
     }
-    expect(history).toEqual({ x: 0, y: guidance.y - 1, width: 72, height: 1 });
-    expect(guidance.y + guidance.height).toBe(NARROW.rows);
-    expect(layer.y + layer.height).toBeLessThanOrEqual(history.y);
+    expect(history).toEqual({ x: 0, y: NARROW.rows - 1, width: 72, height: 1 });
+    expect(guidance.y + guidance.height).toBe(history.y);
+    expect(layer.y + layer.height).toBeLessThanOrEqual(guidance.y);
     expect(opened.keys).toContain("footer:history");
   });
 
@@ -586,16 +583,15 @@ describe("REPL terminal: responsive semantic frames", () => {
         throw new Error("every drawable frame has a footer");
       }
 
-      // One row, full width, between the body and the guidance: never at the
-      // origin, which is the identity row's.
+      // One row, full width, directly below readiness at the foot of the frame.
       expect(history).toEqual({
         x: 0,
-        y: size.rows - 2,
+        y: size.rows - 1,
         width: size.columns,
         height: 1,
       });
       expect(history.y).toBeGreaterThan(frame.regionOf("box:identity")?.y ?? 0);
-      expect(history.y + 1).toBe(guidance.y);
+      expect(guidance.y + guidance.height).toBe(history.y);
       // And what the terminal actually holds on that row is the band's own
       // surface, for the full width of the footer: the controls it carries sit
       // inside it.
@@ -2282,19 +2278,14 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // moved focus forward would satisfy the assertions above and still be the
     // defect. So the keystroke is sent to the running command, which answers
     // with the control that holds focus afterwards.
-    // Where the keystrokes are going is read the way the product advertises it:
-    // its guidance row says the Draft is taking them, and says something else
-    // once it is not.
     const page = yield* useReplPage({ size: WIDE });
     yield* page.type("\x074");
     yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
-    expect(page.screen().shows(TYPING)).toBe(true);
 
     yield* page.key("Tab");
-    const forward = yield* page.until("focus moving forward", (one) => !one.shows(TYPING));
+    yield* page.until("focus moving forward", (one) => !one.shows("> DRAFT"));
     yield* page.key("Backtab");
-    yield* page.until("focus coming back", (one) => one.shows(TYPING));
-    expect(forward.shows(TYPING)).toBe(false);
+    yield* page.until("focus coming back", (one) => one.shows("> DRAFT"));
   });
 
   it("I1: going back inside a drawer stays inside it", function* () {
@@ -2330,8 +2321,6 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* page.type("\x074");
     yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
 
-    // The keystrokes are going to the draft line, which the guidance row says.
-    expect(page.screen().shows(TYPING)).toBe(true);
     yield* draftText(page, "é");
     expect(draftShows(page.screen(), "é")).toBe(true);
 
@@ -2363,7 +2352,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     );
     expect(settled.shows("éx")).toBe(true);
     yield* page.key("Tab");
-    yield* page.until("focus moving off the draft", (one) => !one.shows(TYPING));
+    yield* page.until("focus moving off the draft", (one) => !one.shows("> DRAFT"));
   });
 
   it("I1: text a row does not claim passes it on the way up", function* () {

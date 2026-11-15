@@ -131,7 +131,6 @@ import {
   draftText,
   openHistory,
   SIDEKICK_PANE,
-  TYPING,
   drawerLines,
   drawerOpen,
   entrySettles,
@@ -874,7 +873,7 @@ function groundsOf(observed: Observed, grid: TerminalGrid): (number | undefined)
   ];
 }
 
-/** The four rows every size keeps: the identity row, the body, History and guidance. */
+/** The four rows every size keeps: identity, body, readiness and History. */
 function chromeOf(observed: Observed): Record<string, ReplBounds> {
   return {
     identity: regionOf(observed, "box:identity"),
@@ -896,8 +895,8 @@ function expectChrome(presenter: Presenter, observed: Observed, size: ReplTermin
     chrome: {
       identity: { x: 0, y: 0, width: size.columns, height: 1 },
       body: { x: 0, y: 1, width: size.columns, height: size.rows - 3 },
-      history: { x: 0, y: size.rows - 2, width: size.columns, height: 1 },
-      guidance: { x: 0, y: size.rows - 1, width: size.columns, height: 1 },
+      guidance: { x: 0, y: size.rows - 2, width: size.columns, height: 1 },
+      history: { x: 0, y: size.rows - 1, width: size.columns, height: 1 },
     },
   });
   const rows = grid.rows();
@@ -969,10 +968,10 @@ function columnsOf(observed: Observed): Record<string, ReplBounds> {
   };
 }
 
-/** The Draft keeps four rows at the foot of its column, ending where History begins. */
+/** The Draft keeps four rows at the foot of its column, above readiness. */
 function expectDraft(observed: Observed, column: ReplBounds): void {
   const box = regionOf(observed, "box:draft");
-  expect([box.height, box.y + box.height]).toEqual([4, regionOf(observed, "box:history").y]);
+  expect([box.height, box.y + box.height]).toEqual([4, regionOf(observed, "box:guidance").y]);
   expect([box.x >= column.x, box.x + box.width <= column.x + column.width]).toEqual([true, true]);
 }
 
@@ -6106,7 +6105,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     const medium = yield* page.resize(MEDIUM);
     expect(medium.shows("XMD REPL")).toBe(true);
     expect(medium.shows("HISTORY")).toBe(true);
-    expect(medium.shows(TYPING)).toBe(true);
+    expect(medium.shows("> DRAFT")).toBe(true);
 
     const narrow = yield* page.resize(SMALL);
     expect(narrow.shows("XMD REPL")).toBe(true);

@@ -97,12 +97,12 @@
     <ReplBench.WaitForText text="[close]" present={false} />
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="* Entries" row={1} />
-    <ReplBench.WaitForText text="[exit]" row={18} />
+    <ReplBench.WaitForText text="[exit]" row={19} />
     <ReplBench.WaitForText text="DRAFT" as="narrowDraft" />
     <ReplBench.WaitForText text="draft survives" at={{ row: narrowDraft.row + 1, column: narrowDraft.column - 2 }} />
     <ReplBench.Resize columns={160} rows={36} />
     <ReplBench.WaitForText text="TRANSCRIPT" row={1} />
-    <ReplBench.WaitForText text="[exit]" row={34} />
+    <ReplBench.WaitForText text="[exit]" row={35} />
     <ReplBench.WaitForText text="DRAFT" as="wideDraft" />
     <ReplBench.WaitForText text="draft survives" at={{ row: wideDraft.row + 1, column: wideDraft.column - 2 }} />
     <ReplBench.WaitForText text="stray input" present={false} />
@@ -173,7 +173,7 @@
     <ReplBench.WaitForText text="Draft kept through resize" />
 
     <ReplBench.Resize columns={120} rows={30} />
-    <ReplBench.WaitForText text="Type here" row={29} />
+    <ReplBench.WaitForText text="HISTORY" row={29} />
     <ReplBench.WaitForText text="> DRAFT" as="medium" />
     <AssertEquals actual={medium.row < beforeResize.row} expected={true} />
     <ReplBench.WaitForText text="Draft kept through resize" row={medium.row+1} />
@@ -182,7 +182,6 @@
     <ReplBench.WaitForText text="* Entries" />
     <ReplBench.WaitForText text="> DRAFT" as="narrow" />
     <ReplBench.WaitForText text="Draft kept through resize" row={narrow.row+1} />
-    <ReplBench.WaitForText text="Type here" />
     <ReplBench.WaitForText text="[send]" as="narrowSend" />
     <ReplBench.WaitForText text="[send]" row={narrow.row} at={narrowSend} />
     <ReplBench.WaitForText text="SIDEKICK" present={false} />
@@ -202,7 +201,6 @@
     <ReplBench.WaitForText text="> Entries" />
     <ReplBench.Key key="Tab" />
     <ReplBench.WaitForText text="> DRAFT" />
-    <ReplBench.WaitForText text="Type here" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="HEAD · SETTLED" />
     <ReplBench.WaitForText text="✓ COMPLETED" />

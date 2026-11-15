@@ -64,9 +64,6 @@ export const DRAFT_VALUE: ScreenScope = { after: DRAFT };
  */
 export const SIDEKICK_CONTROLS: ScreenScope = { rightOf: COMPOSER };
 
-/** The guidance row says this while the Draft takes keystrokes, and not otherwise. */
-export const TYPING = "Type here";
-
 /** How the History rail marks an entry that reached each outcome. */
 export const RAIL: Readonly<Record<string, string>> = Object.freeze({
   ok: "✓",
