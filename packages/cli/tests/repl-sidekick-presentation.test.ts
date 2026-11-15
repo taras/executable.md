@@ -487,7 +487,7 @@ const TWO_STEP_ENTRY = [
   "<Output>{first}</Output>",
   "",
   "```js eval",
-  'const second = "the released step";',
+  'const second = "step-two";',
   "```",
   "",
   "<Output>{second}</Output>",
@@ -727,7 +727,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* pasteDraft(page, TWO_STEP_ENTRY);
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
-    yield* page.until("the entry output without input", (one) => one.shows("the released step"));
+    yield* page.until("the entry output without input", (one) => one.shows("step-two"));
     expect(page.repl.terminal.fed).toBe(fed);
     expect([page.repl.fake.ensured, page.repl.fake.prompts]).toEqual([[], []]);
   });
@@ -838,10 +838,10 @@ describe("Sidekick texts and reading across every profile", () => {
     yield* page.until("the second entry reported", (one) => one.shows("[S] Both ran."));
     expect(entryTrail(page.screen())).toContain("Entry 1");
     expect((yield* settledReading(page.repl)).model.entries).toHaveLength(2);
-    expect(page.screen().shows("the released step")).toBe(true);
+    expect(page.screen().shows("step-two")).toBe(true);
     yield* selectPane(page, "bindings");
     expect(entryTrail(page.screen())).toContain("Entry 1");
-    expect(page.screen().shows("the released step")).toBe(true);
+    expect(page.screen().shows("step-two")).toBe(true);
     expect(page.screen().shows(COMPOSER)).toBe(false);
     yield* intoComposer(page);
     expect(page.screen().shows("[S] Both ran.")).toBe(true);
@@ -1294,7 +1294,7 @@ function* chooseTurn(page: ReplPage, text: string): Operation<void> {
   if (row === undefined) {
     throw new Error(`no Transcript row says ${text}. ${page.describe()}`);
   }
-  yield* page.press(text, { onRow: row.trim() });
+  yield* page.press(row.trim());
 }
 
 function* newConversation(page: ReplPage): Operation<void> {
@@ -2316,7 +2316,8 @@ function composerRows(one: ScreenReading, anchor?: string): string[] {
   const prompt = one.locate(COMPOSER);
   const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
   const footer = one.locate("HISTORY");
-  return one.rows.slice(prompt.row + 1, footer.row).map((row) => row.slice(edge).trimEnd());
+  const end = one.size.columns === NARROW.columns ? footer.row - 1 : footer.row;
+  return one.rows.slice(prompt.row + 1, end).map((row) => row.slice(edge).trimEnd());
 }
 
 function* composerPaste(
@@ -2917,12 +2918,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     const rows = shownChat(page.screen()).map((row) => row.replace(/^\s*\[[US]\]\s/, "").trim());
     const at = rows.findIndex((row) => row.includes("Automatic feedback"));
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(
-      rows
-        .slice(at, at + 3)
-        .join(" ")
-        .trim(),
-    ).toBe("Automatic feedback · Turn saved; no evaluated reply recorded.");
+    expect(rows[at]).toBe("Automatic feedback · Turn saved; no evaluated reply recorded.");
     expect(sidekickShows(page.screen(), "First answer.")).toBe(true);
     expect(page.screen().shows("REPL.Bindings")).toBe(false);
     expect(cold.fake.created).toEqual([]);
@@ -2941,7 +2937,8 @@ describe("Sidekick original interrupted identities and native input routes", () 
     yield* page.key("Backtab");
     yield* page.key("Enter");
     yield* page.until("keyboard selecting Bindings", (one) => !one.shows(COMPOSER));
-    yield* page.key("ArrowRight");
+    yield* completedKey(page, "ArrowLeft");
+    yield* completedKey(page, "ArrowLeft");
     yield* page.key("Enter");
     yield* page.until("keyboard selecting Sidekick", (one) => one.shows(COMPOSER));
     expect(composerHolds(page.screen(), "kept question")).toBe(true);

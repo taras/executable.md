@@ -52,11 +52,11 @@
     <File path="repl-fixture.txt">scoped-repl-fixture</File>
     <ReplBench columns={160} rows={36}>
       <Repl.Focus.Draft />
-      <ReplBench.Type text={"<Cwd />\n\n<File path=\"repl-fixture.txt\" />"} />
+      <ReplBench.Type text={'<Cwd as="directory" />\n<Let as="basename" value={directory.split("/").at(-1)} />\n\nDir {basename}\n\n<File path="repl-fixture.txt" />'} />
       <ReplBench.WaitForText text="repl-fixture.txt" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="scoped-repl-fixture" />
-      <ReplBench.WaitForText text={directory.slice(-24)} />
+      <ReplBench.WaitForText text={directory.split("/").at(-1)} />
     </ReplBench>
   </TempDir>
 </Test>

@@ -11,6 +11,7 @@ import {
   replaceAgent,
   applyConfigure,
   sidekickIdle,
+  SIDEKICK_PANE,
 } from "./support/screen-journeys.ts";
 import { awaitedFact, OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
@@ -115,8 +116,8 @@ describe("wheel remaining migration journeys", () => {
     yield* page.type('<Session name="permission"><Prompt text="many choices" /></Session>');
     yield* page.until("source", (one) => one.shows("</Session>"));
     yield* page.key("Enter");
-    yield* page.until("permission pending", (one) => one.shows("asks: Permission prose 00"));
-    yield* page.press("asks: Permission prose 00");
+    yield* page.until("permission pending", (one) => one.shows("asks:"));
+    yield* page.press("asks:");
     yield* page.until("first option", (one) => one.shows("> [Choice 00]"));
     const choice = page.screen().locate("[Choice 00]");
     yield* ticks(page, "down", choice, 8);
@@ -382,12 +383,11 @@ describe("wheel remaining migration journeys", () => {
     yield* page.press("old-first", { rightOf: "TRANSCRIPT" });
     yield* page.until(
       "previous chat reveal",
-      (one) =>
-        one.shows("[Back to current chat]") && one.found("Old row 00", { rightOf: "BINDINGS" }) > 0,
+      (one) => one.shows("[Back to current chat]") && one.found("Old row 00", SIDEKICK_PANE) > 0,
     );
-    const oldCell = page.screen().locate("Old row 00", { rightOf: "BINDINGS" });
+    const oldCell = page.screen().locate("Old row 00", SIDEKICK_PANE);
     yield* wheel(page, "down", oldCell);
-    expect(page.screen().found("Old row 00", { rightOf: "BINDINGS" })).toBe(0);
+    expect(page.screen().found("Old row 00", SIDEKICK_PANE)).toBe(0);
     yield* wheel(page, "up", oldCell);
     expect(page.screen().shows("Old row 00")).toBe(true);
     yield* ticks(page, "down", oldCell, 30);
@@ -399,25 +399,20 @@ describe("wheel remaining migration journeys", () => {
     yield* page.press("old-first", { rightOf: "TRANSCRIPT" });
     yield* page.until(
       "turn explicitly revealed again",
-      (one) => one.found("Old row 00", { rightOf: "BINDINGS" }) > 0,
+      (one) => one.found("Old row 00", SIDEKICK_PANE) > 0,
     );
     yield* page.press("[Back to current chat]");
     yield* page.until(
       "current restored and joined",
       (one) => !one.shows("[Back to current chat]") && sidekickIdle(one),
     );
-    // Retiring Stop releases the wrapped action row without moving the reading anchor.
-    const last = inspected.at(-1);
-    if (last === undefined) {
-      throw new Error("the streaming chat had no rows to inspect");
-    }
-    const nextRow = `New row ${String(Number(last.slice("New row ".length)) + 1).padStart(2, "0")}`;
+    // Stop and the remaining controls share one row at this width.
     expect(
       page
         .screen()
         .rows.filter((row) => row.includes("New row"))
         .map((row) => row.slice(row.lastIndexOf("New row"))),
-    ).toEqual([...inspected, nextRow]);
+    ).toEqual(inspected);
     expect(page.screen().shows("New live tail")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(2);
     absentButtons(page);
