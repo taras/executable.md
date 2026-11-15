@@ -5147,14 +5147,13 @@ describe("1183 — a follow-up sent during live automatic feedback", () => {
     expect(held.model.entries.map((entry) => entry.terminal?.status)).toEqual(["ok"]);
     expect(held.chat.filter((record) => record.kind === "feedback")).toHaveLength(1);
 
-    yield* page.press("QUEUE");
     yield* sendMessage(page, FOLLOW_UP);
     yield* page.until(
       "the queued follow-up row and the cleared composer",
       (one) =>
         one.shows(FOLLOW_UP) &&
         one.found(FOLLOW_UP, COMPOSER_VALUE) === 0 &&
-        one.shows("QUEUE 1/16"),
+        one.shows("Waiting messages are kept only in this REPL."),
     );
     yield* intoComposer(page);
     yield* typed(page, "newer unsent text");

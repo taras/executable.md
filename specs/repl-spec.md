@@ -320,19 +320,17 @@ no change observation. Issued native work joins before mutation ordering or
 session shutdown releases it. Unknown replacement acknowledgement stays unknown;
 a later read establishes current contents only.
 
-TODO and QUEUE share one tab row with the selected list beneath it. Selecting
-another tab changes only the view; background task or message activity never
-selects a tab. Selecting TODO shows its retained state; activating its active
-header collapses or expands the checklist. `+` creates a task. Task Space checks or
-reopens; Enter edits. Down from the last task creates another. Enter saves the
-editor, Escape cancels, arrows edit its caret and Tab leaves the region. Tasks
-show ☐ when incomplete and ☑ when complete. Only the task with keyboard focus
+Selecting TODO shows the retained checklist in the Sidekick reading area.
+Background task or message activity preserves the selected tab. `+` creates a
+task. Task Space checks or reopens and Enter edits. Down from the last task
+creates another. Enter saves the editor, Escape cancels, arrows edit its caret
+and Tab leaves the region. Tasks show ☐ when incomplete and ☑ when complete. Only the task with keyboard focus
 on its label or an action shows ↑, ↓ and x beside its first displayed row for
 move up, move down and remove. These controls share the list background.
 Left/Right reaches them within the focused task row. Alt+Up/Down navigates locally
-without reordering. The TODO header is its fixed Tab and Backtab entry between
-the conversation and Message. Background changes preserve collapse, focus,
-composer text and reading positions.
+without reordering. The TODO tab is its fixed entry between the conversation
+and Message. Background changes preserve focus, composer text and reading
+positions.
 
 The list uses its natural displayed height up to eight, six and three task rows
 at 160x36, 120x30 and 72x20. Wrapped labels consume rows. Empty and short lists
@@ -853,10 +851,14 @@ same outcomes, the same selected entry and scope, the same binding values, the
 same transcript, the same generated source, the same recorded question and
 answer, the same History positions and the same terminal output.
 
-Settled entries are projected from the retained events without reading component
-source, compiling an `eval` block or asking anyone anything. A final entry the
-file shows as unfinished is different: opening this execution gives that entry
-back to the engine to continue and may perform unrecorded work. Passive Source
+Opening validates every entry before returning a view, including entries after
+the selected history position. The open session keeps settled entry summaries
+and the bindings in effect at the head. When a view needs settled binding
+values or a position inside a settled entry, it reads the corresponding
+journal ranges and verifies their exact bytes against the ranges validated at
+open. It reads no live component source, compiles no `eval` and asks nobody a
+question. Only the unfinished final entry's retained records return to the
+engine for continuation. That entry may perform work it had not yet recorded. Passive Source
 and Journal inspection does not open execution. It preserves uncertainty when
 no live host observation remains and never reconstructs an old joined verdict. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
@@ -1602,9 +1604,9 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | an identity row; three columns — the Transcript of agent work, the selected work with its own Draft, and Bindings/Sidekick — each with its own surface and the divider that starts it; the drawer layer; then one compact History row and one row of guidance |
-| `120x30` and larger | the same three columns, narrower |
-| `72x20` and larger | one routed surface — the one the route selected — under the Sessions, Entries and Sidekick surface controls, with the same drawer, History and guidance |
+| `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; then compact History and guidance |
+| `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
+| `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. The drawer and guidance remain available |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
@@ -1633,23 +1635,27 @@ the **Draft**: one field whose heading row carries its own Send — or Stop, whi
 an entry is running — and whose value takes the rows beneath. The Draft is always
 the next entry's text, and a blank row in it is a row.
 
-**Bindings** and **Sidekick** share the right column as two tabs. Above the
-Sidekick's composer, the trays this build offers sit on the left and the
-Follow checkbox and the Sidekick's own Stop, Send and held Resume controls on
-the right. Send remains available during an active exchange. Resume queue appears only while advancement
-is held and stays outside the scrolling window.
+The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO**, and
+**Bindings**. With open tasks, the TODO label includes their count, as in
+**TODO 2**. With zero open tasks it reads **TODO**. The TODO tab shows the
+shared checklist in the reading area, with Message and its actions below.
+Bindings is available at the two three-column sizes.
 
-**QUEUE** shows the waiting count out of sixteen. Each pending message shows its
-origin, text and `X`, accessible as *Remove message*. Placement expresses FIFO
-order without row numbers or repeated acknowledgements. X withdraws only its
-exact still-pending message; a stale X changes no active work. TODO edits the shared checklist above Message. Follow starts checked and keeps its live setting across
-rounds, navigation and resizing.
+Follow starts checked and keeps its live setting across rounds, navigation and
+resizing. Send stays available beside Stop during an active exchange. A held
+queue shows its reason and offers **Resume queue** beside the other fixed
+actions. When the actions cannot fit one row, each control stays whole.
 
-A fixed status states the hold reason. While messages wait, the tray says once:
-`Waiting messages are kept only in this REPL.` Both are fitted to the measured
-width before the queue window receives its height. When the action groups
-cannot share one row, the header gives Follow, Send/Stop and held Resume their
-own rows so each control stays whole.
+While messages wait, a list above the composer shows the notice
+`Waiting messages are kept only in this REPL.` and the messages in admission
+order. Each message shows its origin, text and `X`, accessible as *Remove
+message*. X withdraws its exact still-pending message. The list and notice
+collapse when the final message leaves. The queue has no tab or count.
+
+At 160, 120 and 72 columns the queue shows up to five, four and three fitted
+rows respectively, as constrained by the available height. Overflow scrolls
+within the list. The notice shows `↓ more` while later rows are below it and
+`↑ more` at the end when earlier rows are above it.
 
 Message is the fixed entry of its keyboard region. Follow, Send, Stop, Resume
 and the vertical group of pending X controls belong to that same region, adding no Tab
@@ -1897,7 +1903,11 @@ One execution admits entries in submission order, one at a time, into one
 append-only journal. There is no concurrent entry, no submission queue, no fork
 from a history position, no renaming, deleting, reordering, importing or
 exporting an entry, no snapshot and no sidecar file. Two processes writing one
-execution is unsupported.
+execution is unsupported. Before appending each entry record, the writer
+checks the journal against the acknowledged file identity and bytes and appends
+through the descriptor it checked. A detected change or unreadable historical
+range refuses further readings and appends in that session, including appends
+from an entry already running.
 
 An entry's segment begins at its root `import_component` admission and ends at
 that root's Close; only the final segment may be unfinished. Before projecting

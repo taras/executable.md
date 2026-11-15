@@ -2039,7 +2039,6 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
       retryOffered(one),
     );
     expect(retryOffered(failed)).toBe(true);
-    yield* page.press("QUEUE");
     yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));
@@ -2056,7 +2055,9 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     yield* repl.fake.holdingTurns(1);
     yield* page.until("active Retry", (one) => one.shows("[stop]"));
     yield* page.press("[retry]");
-    yield* page.until("Retry accepted while busy", (one) => one.shows("QUEUE 1/16"));
+    yield* page.until("Retry accepted while busy", (one) =>
+      one.shows("Waiting messages are kept only in this REPL."),
+    );
     expect(repl.fake.prompts).toHaveLength(2);
     repl.fake.releaseTurn();
     yield* page.until("the queued Retry being answered", (one) =>
@@ -2099,7 +2100,6 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // rather than a control that was never there.
     yield* page.until("the failed attempt and its retry", (one) => retryOffered(one));
 
-    yield* page.press("QUEUE");
     yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));

@@ -1074,29 +1074,10 @@ export function box(input: {
   });
 }
 
-/**
- * The staged workspace composition's column allocations at the wide profile.
- *
- * Each includes the one-cell divider that starts its column, and the centre
- * takes what the two leave — 66 at 160 columns. These are the #971 reference's
- * proportions, proposed for the Product Owner's image review rather than
- * accepted geometry.
- */
-export const WORKSPACE_TRANSCRIPT_COLUMNS = 36;
-export const WORKSPACE_CONVERSATION_COLUMNS = 58;
-
-/**
- * How wide the conversation column is at the medium profile.
- *
- * Thirty-two, which is what the selected work can spare. An entry reading
- * reserves its rail, two separators and a column as wide as the widest badge
- * it could ever hold — so the centre's declared width and its room for source
- * are far apart, and at the pinned medium proportion of fifty the centre's
- * thirty-four left seven cells of source. The conversation keeps its own rows
- * readable at thirty-two because they are wrapped prose rather than source
- * standing beside a reserved column.
- */
-export const WORKSPACE_CONVERSATION_MEDIUM = 32;
+const WORKSPACE_WIDE_TRANSCRIPT = 36;
+const WORKSPACE_WIDE_CONVERSATION = 70;
+const WORKSPACE_MEDIUM_TRANSCRIPT = 24;
+const WORKSPACE_MEDIUM_CONVERSATION = 56;
 
 /** The selected work's Draft: its heading row and three value rows. */
 export const WORKSPACE_DRAFT_ROWS = 4;
@@ -1110,16 +1091,11 @@ export const WORKSPACE_DRAFT_ROWS = 4;
  */
 export const WORKSPACE_DRAFT_GAP = 1;
 
-/**
- * The most rows the tray gives the messages waiting behind the exchange.
- *
- * A declared budget, like the Draft's rows: the conversation above it is the
- * reading somebody is having, and a tray sized by however many messages had
- * arrived would push that reading off its own column. A tray holding no more
- * than this shows all of it and keeps the appearance it was reviewed with; one
- * holding more is a window, with the two controls that move it.
- */
-export const WORKSPACE_QUEUE_ROWS = 8;
+/** Bound the queue's viewport in terminal rows. */
+export function workspaceQueueRows(size: ReplTerminalSize): number {
+  const profile = profileFor(size);
+  return profile === "wide" ? 5 : profile === "medium" ? 4 : 3;
+}
 
 /**
  * The rows the staged composition keeps around its body.
@@ -1143,16 +1119,19 @@ export function workspaceBodyRows(size: ReplTerminalSize): number {
  */
 export function workspaceTranscriptWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
-  return profile === "wide" || profile === "medium" ? WORKSPACE_TRANSCRIPT_COLUMNS : undefined;
+  if (profile === "wide") {
+    return WORKSPACE_WIDE_TRANSCRIPT;
+  }
+  return profile === "medium" ? WORKSPACE_MEDIUM_TRANSCRIPT : undefined;
 }
 
 /** How wide the staged conversation column is, or none at one outlet. */
 export function workspaceConversationWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
   if (profile === "wide") {
-    return WORKSPACE_CONVERSATION_COLUMNS;
+    return WORKSPACE_WIDE_CONVERSATION;
   }
-  return profile === "medium" ? WORKSPACE_CONVERSATION_MEDIUM : undefined;
+  return profile === "medium" ? WORKSPACE_MEDIUM_CONVERSATION : undefined;
 }
 
 /**

@@ -4,7 +4,7 @@ Use the ReplBench plugin to verify what a person sees in the REPL. Start from
 a tooling checkout prepared with `deno task setup`. The bench uses Bun with
 PTY support to drive the REPL.
 
-[Visual comparison](#compare-repl-builds-with-screenshots) · [UI handoff](#ui-handoff) · [Typing latency](#compare-mounted-typing-latency) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
+[Visual comparison](#compare-repl-builds-with-screenshots) · [UI handoff](#ui-handoff) · [Typing latency](#compare-mounted-typing-latency) · [Publish evidence](#publish-evidence-on-a-draft) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
 
 ## Compare REPL builds with screenshots
 
@@ -201,10 +201,130 @@ expected new Message value. The small and 52-round wrapping histories are
 generated with a scripted provider before sampling. The report retains all
 40 edits per workload and calculates median and p95 after the first 10.
 
-The Linux bench job attaches the paired report for pull requests that change
-REPL code, dependencies or tooling. It also runs the deterministic typing and
-render-work regression. Compare both revisions in each workload when
-investigating a timing change. Shared runners report deltas for review.
+Use the local paired report when publishing timing evidence on a draft.
+Compare the two revisions within each workload when investigating a change.
+
+## Publish evidence on a draft
+
+Use [publish-evidence.md](publish-evidence.md) to preview the screenshot and
+timing tables, then publish them to a pinned GitHub draft. Run it from the root
+of your prepared checkout using the Deno CLI and a GitHub CLI that supports
+`gh pr edit --attach`. The publish mode uses your existing Git and GitHub CLI
+authorization.
+
+Prepare a version 1 JSON receipt. Paths are relative to the receipt unless you
+supply absolute paths. In this example, replace the commit SHA and digest
+placeholders with the full lowercase hex values from your evidence. Use the
+build revisions recorded by the screenshot launches and the native JSON from
+the typing comparison. The test and acceptance entries identify the passing
+candidate rounds and their saved records.
+
+```json
+{
+  "version": 1,
+  "repository": "owner/repository",
+  "baseBranch": "main",
+  "headBranch": "ui-change",
+  "base": "<40-character base SHA>",
+  "head": "<40-character head SHA>",
+  "target": { "kind": "numbered", "number": 42 },
+  "previewBody": "description-snapshot.md",
+  "acceptance": [
+    {
+      "name": "Focused tests",
+      "kind": "test",
+      "status": "passed",
+      "revision": "<40-character head SHA>",
+      "source": "tests.txt"
+    },
+    {
+      "name": "Composer journey",
+      "kind": "acceptance",
+      "status": "passed",
+      "revision": "<40-character head SHA>",
+      "source": "acceptance.txt"
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "composer",
+      "fixture": "Scripted Sidekick",
+      "viewport": { "columns": 72, "rows": 20 },
+      "action": "Focus the composer"
+    }
+  ],
+  "captures": [
+    {
+      "checkpoint": "composer",
+      "role": "before",
+      "fixture": "Scripted Sidekick",
+      "viewport": { "columns": 72, "rows": 20 },
+      "action": "Focus the composer",
+      "revision": "<40-character base SHA>",
+      "path": "before.png",
+      "sha256": "<64-character PNG SHA-256>",
+      "synthetic": true,
+      "approved": true
+    },
+    {
+      "checkpoint": "composer",
+      "role": "after",
+      "fixture": "Scripted Sidekick",
+      "viewport": { "columns": 72, "rows": 20 },
+      "action": "Focus the composer",
+      "revision": "<40-character head SHA>",
+      "path": "after.png",
+      "sha256": "<64-character PNG SHA-256>",
+      "synthetic": true,
+      "approved": true
+    }
+  ],
+  "timingReport": "typing.json"
+}
+```
+
+Select one approved synthetic PNG per side of each required checkpoint. Copy the
+fixture, viewport and action from the checkpoint into both captures. The receipt
+accepts up to 25 checkpoints. Each PNG must be a regular file no larger than
+10 MiB and decode to at most 64 MiB of filtered image data. Record the SHA-256
+of the actual file, for example with
+`shasum -a 256 before.png after.png`. Save the unmodified native timing report
+with all its raw samples. The timing viewport comes from the benchmark and
+may differ from the screenshot viewport.
+
+```sh
+deno task xmd run examples/repl-bench/publish-evidence.md \
+  --include examples/repl-bench/components \
+  --props-mode dry-run --props-receipt /path/to/receipt.json
+```
+
+The preview JSON contains the proposed Markdown and ordered local paths to
+attach. `previewBody` supplies the surrounding text. If omitted, a numbered
+preview starts with an empty body, and a create preview uses its prepared prose.
+Publication reads the current body from GitHub.
+
+To create a draft, replace `target` with
+`{"kind":"create","title":"Prepared title","body":"Prepared prose","draftRecord":"draft.json"}`
+and run from the pinned head branch. The workflow pushes the branch and opens a
+draft with the supplied metadata. It writes the verified draft number, URL and
+pins to `draftRecord` before uploading images. Choose a new record path for
+each intended draft.
+
+```sh
+deno task xmd run examples/repl-bench/publish-evidence.md \
+  --include examples/repl-bench/components \
+  --props-mode publish --props-receipt /path/to/receipt.json
+```
+
+Keep the returned JSON with the source evidence. `complete` confirms the exact
+open draft, both revisions and all attachment bytes. `partial` means some slots
+are pending and may show generated relative filenames. Retry with the same
+evidence and a numbered target, using `draftRecord` to recover the number from
+a create attempt. The retry verifies existing links and uploads only pending
+images. If creation stops before the record exists and before upload, you can
+repeat the same create invocation to adopt the compatible draft. An
+`unverifiable` result calls for checking the target, section or flagged links
+before another attempt. The draft stays a draft throughout.
 
 ## Run the tests
 

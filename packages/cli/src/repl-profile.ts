@@ -245,6 +245,7 @@ export function* assembleReplProfile(
   const children = yield* useHeadlessChildren(function* (headless) {
     const profile = yield* assembleReplProfile(stack, plugins, facts);
     const outcome = yield* runReplProgram({
+      pagedHistory: true,
       profile,
       headless: {
         ...headless,

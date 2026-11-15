@@ -3742,7 +3742,12 @@ describe("Follow: joined mixed-origin queue handoff", () => {
         text: "ACP queued text",
       }),
     );
-    yield* page.until("two delivered waiting messages", (one) => one.shows("QUEUE 2/16"));
+    yield* page.until(
+      "two delivered waiting messages",
+      (one) =>
+        one.shows("Waiting messages are kept only in this REPL.") &&
+        one.rows.filter((row) => /\sX\s*$/.test(row)).length === 2,
+    );
     yield* intoComposer(page);
     yield* typed(page, "newer composer text");
     const before = yield* settledReading(page.repl);
@@ -4728,12 +4733,15 @@ describe("Sidekick reply approval", () => {
       ),
     );
     yield* host.fake.startedTurns(2);
-    yield* page.press("+", { onRow: "▾ TODO" });
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
+    yield* page.until("Add task is visible", (one) => one.shows("+"));
+    yield* page.press("+");
     yield* page.until("the new TODO editor", (one) => one.shows("Task:"));
     yield* page.type("Verify the composed input");
     yield* page.key("Enter");
     yield* page.until("the committed TODO edit", (one) => one.shows("☐ Verify the composed input"));
     expect(host.fake.prompts[1]).not.toContain("Verify the composed input");
+    yield* page.press("SIDEKICK", { onRow: "TODO" });
     host.fake.releaseTurn();
     yield* page.until("the withheld reply's question", (one) => one.shows("[accept reply]"));
 

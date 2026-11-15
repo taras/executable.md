@@ -26,12 +26,14 @@ describe("TODO logical runtime recovery", () => {
     const first = yield* useReplPage();
     yield* intoComposer(first);
     first.repl.fake.script({ reply: "incomplete", stopReason: "max_tokens" });
-    yield* first.press("+", { onRow: "TODO" });
+    yield* first.press("TODO", { onRow: "SIDEKICK" });
+    yield* first.until("add task", (one) => one.shows("+"));
+    yield* first.press("+");
     yield* first.until("editor", (one) => one.shows("Task:"));
     yield* first.type("saved before failure");
     yield* first.key("Enter");
     yield* first.repl.fake.startedTurns(1);
-    yield* first.press("QUEUE");
+    yield* first.press("SIDEKICK");
     yield* first.until("failed wake held", (one) => one.shows("Resume queue"));
     const read = yield* settledReading(first.repl);
     const file = pairedLocation(first.repl.root, read.execution).directory + "/todo.md";
@@ -48,10 +50,12 @@ describe("TODO logical runtime recovery", () => {
     yield* writeTextFile(file, "- [x] current after close\n");
     const reopened = yield* useReplPage({ host: first.repl, location: outcome.value.location });
     yield* intoComposer(reopened);
+    yield* reopened.press("TODO", { onRow: "SIDEKICK" });
     yield* reopened.until("saved checklist on reopen", (one) => one.shows("current after close"));
     expect(initialized).toBe(2);
     expect(reopened.repl.fake.prompts).toHaveLength(1);
     reopened.repl.fake.script({ reply: "<Output>explicit after reopen</Output>" });
+    yield* intoComposer(reopened);
     yield* sendMessage(reopened, "explicit after reopen");
     yield* reopened.until("explicit result", (one) => one.shows("[S] explicit after reopen"));
     expect(reopened.repl.fake.prompts[1]).not.toContain("fresh recovery state");
@@ -133,11 +137,14 @@ describe("TODO logical runtime recovery", () => {
         };
       },
     });
+    yield* ensure(() => release.resolve());
     yield* pasteDraft(page, "<Output>entry finished</Output>");
     yield* page.key("Enter");
     yield* cleaning.operation;
     yield* intoComposer(page);
-    yield* page.press("+", { onRow: "TODO" });
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
+    yield* page.until("add task", (one) => one.shows("+"));
+    yield* page.press("+");
     yield* page.until("task editor during entry cleanup", (one) => one.shows("Task:"));
     yield* page.type("pending during cleanup");
     yield* page.key("Enter");
@@ -150,6 +157,7 @@ describe("TODO logical runtime recovery", () => {
     yield* page.until("entry cleanup joined", (one) => one.shows("Ready for Entry 2"));
     expect(page.repl.fake.prompts).toEqual([]);
     page.repl.fake.script({ reply: "<Output>independently requested</Output>" });
+    yield* intoComposer(page);
     yield* sendMessage(page, "explicit after cleanup");
     yield* page.until("explicit response", (one) => one.shows("[S] independently requested"));
     expect(page.repl.fake.prompts[0]).toContain("+- [ ] pending during cleanup");

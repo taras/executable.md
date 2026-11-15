@@ -176,7 +176,8 @@ describe("REPL command routing, containment and history E2–E5", () => {
     const start = withResolvers<void>();
     const encoder = new TextEncoder();
     const controls = "\r\t\x1b[2J\x1b[H\x1b]0;owned\x07\x1b[?1049l\x9b";
-    const long = "LONG".repeat(90) + "LONG-END";
+    const tailMarker = "§";
+    const long = "LONG".repeat(90) + tailMarker;
     let calls = 0;
     yield* API.Process.around({
       *exec() {
@@ -216,7 +217,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
     yield* intoComposer(page);
     yield* page.type("message stays");
     yield* page.until("the preserved message", (one) => one.shows("message stays"));
-    const paneColumn = page.screen().locate("BINDINGS").column;
+    const paneColumn = page.screen().locate("SIDEKICK").column;
     const neighbor = page.screen().rows.map((row) => row.slice(paneColumn));
     start.resolve();
     yield* page.until("the controlled process emitting its chunks", () => emitted);
@@ -245,7 +246,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
       const before = page.screen().index;
       yield* page.wheel("down", at);
       const scrolled = yield* page.until("the reading scrolling", (one) => one.index > before);
-      tail = scrolled.shows("LONG-END");
+      tail = scrolled.shows(tailMarker);
     }
     expect(tail).toBe(true);
     release.resolve();

@@ -124,6 +124,7 @@ import {
 } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
+import type { ScreenReading } from "./support/repl-page.ts";
 import {
   composerHolds,
   draftHolds,
@@ -131,6 +132,7 @@ import {
   entrySettles,
   intoComposer,
   sendMessage,
+  SIDEKICK,
   typed,
 } from "./support/screen-journeys.ts";
 import { encodeLocation } from "../src/repl/route.ts";
@@ -5024,6 +5026,19 @@ describe("1269 — mounted retained recovery corrections", () => {
 describe("1311 — a completed reply that secret detection withholds", () => {
   const refused = 'authorization: "Use a separate approval for this example issue #34"';
 
+  function showsWithheldReply(screen: ScreenReading): boolean {
+    if (!screen.shows(SIDEKICK)) {
+      return false;
+    }
+    const tab = screen.locate(SIDEKICK);
+    return screen.rows
+      .slice(tab.row + 1)
+      .map((row) => row.slice(tab.column))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .includes("its reply was withheld by secret detection and not run.");
+  }
+
   /** The canonical Prompt records this history holds, in order, with their inputs. */
   function prompts(records: readonly SidekickRecord[]) {
     return records.flatMap((record) => {
@@ -5086,7 +5101,7 @@ describe("1311 — a completed reply that secret detection withholds", () => {
       yield* page.press("[withhold reply]");
       yield* page.until(
         "the withheld reply",
-        (one) => one.shows("withheld by secret detection") && !one.shows("[withhold reply]"),
+        (one) => showsWithheldReply(one) && !one.shows("[withhold reply]"),
       );
       clean(page.screen());
       expect(host.fake.prompts).toHaveLength(2);
@@ -5150,9 +5165,7 @@ describe("1311 — a completed reply that secret detection withholds", () => {
       right: "sidekick",
     });
     const page = yield* useReplPage({ host: { ...host, profile }, location });
-    yield* page.until("the reopened withheld turn", (one) =>
-      one.shows("withheld by secret detection"),
-    );
+    yield* page.until("the reopened withheld turn", showsWithheldReply);
     clean(page.screen());
     host.fake.script({ reply: "<Output>Still the same chat.</Output>" });
     yield* sendMessage(page, "One more plain question.");

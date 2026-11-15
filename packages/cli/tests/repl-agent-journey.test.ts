@@ -417,10 +417,8 @@ describe("C1 — the command line this REPL runs under", () => {
     yield* scoped(function* (): Operation<void> {
       const { page, hostRoot } = yield* beginJourney({ fake });
 
-      yield* submitted(page, "# A document that asks nobody anything", 1);
-      yield* page.until("the entry shown", (frame) =>
-        frame.shows("A document that asks nobody anything"),
-      );
+      yield* submitted(page, "# A local document", 1);
+      yield* page.until("the entry shown", (frame) => frame.shows("A local document"));
       yield* awaitedFact("the entry never settled", function* () {
         return (yield* journal(hostRoot)).some((event) => event.type === "close");
       });

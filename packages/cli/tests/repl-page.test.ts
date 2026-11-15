@@ -82,10 +82,9 @@ describe("REPL page — two Sends, told apart by what is drawn beside them", () 
     const ambiguous = yield* refusal(page.press("[send]"));
     expect(ambiguous).toContain("is shown 2 times in the whole screen");
 
-    // The composer is the Sidekick's, and it is drawn left of that tab's own
-    // first cell — so the tab's column is not the pane's left edge, and this
-    // scope says only what it says.
-    expect(shown.found(COMPOSER, SIDEKICK_SEND)).toBe(0);
+    // The composer begins between the Sidekick and Bindings tab labels.
+    expect(shown.found(COMPOSER, SIDEKICK_SEND)).toBe(1);
+    expect(shown.found(COMPOSER, { rightOf: "BINDINGS" })).toBe(0);
     expect(shown.occurrences(COMPOSER)).toBe(1);
   });
 

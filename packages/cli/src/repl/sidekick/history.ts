@@ -77,7 +77,7 @@ import type {
   RecoveryDecisionRecord,
   RecoveryReferenceRecord,
 } from "./recovery-record.ts";
-import { readRecords, RetainedReplStream } from "../journal.ts";
+import { openRetainedStream, readRecords, RetainedReplStream } from "../journal.ts";
 import type { MovableWriter, RetainedStream } from "../journal.ts";
 import { fileFingerprint, forEachLine, measureLines } from "../record-file.ts";
 import type { LinePrefix } from "../record-file.ts";
@@ -1442,9 +1442,16 @@ export interface Publication {
  * {@link upgradeExecution} instead, which copies that file's bytes between
  * these same two steps and names what it copied in the owner record.
  */
-export function* publishPair(root: string, execution: string): Operation<Publication> {
+export function* publishPair(
+  root: string,
+  execution: string,
+  paged = false,
+): Operation<Publication> {
   const location = yield* establishPair(root, execution);
-  return yield* acknowledgePair(location, execution, [], undefined);
+  const entries = paged
+    ? yield* openRetainedStream(location.entries, true)
+    : pairedEntryStream(location.entries, []);
+  return yield* acknowledgePair(location, execution, entries, undefined);
 }
 
 /** Create both files of a new pair, exclusively, and nothing else yet. */
@@ -1474,7 +1481,7 @@ function* establishPair(root: string, execution: string): Operation<PairedLocati
 function* acknowledgePair(
   location: PairedLocation,
   execution: string,
-  events: readonly DurableEvent[],
+  entries: RetainedStream,
   origin: RetainedOrigin | undefined,
 ): Operation<Publication> {
   const sidekick = new SidekickWriter(location.sidekick);
@@ -1486,7 +1493,7 @@ function* acknowledgePair(
   });
   yield* sidekick.append({ kind: "ready" });
 
-  return { location, entries: pairedEntryStream(location.entries, events), sidekick };
+  return { location, entries, sidekick };
 }
 
 /** How much copied text an upgrade gathers before appending it. */
@@ -1586,6 +1593,7 @@ export function* openPair(
   root: string,
   execution: string,
   legacyPath: string,
+  paged = false,
 ): Operation<{
   location: PairedLocation;
   owner: OwnerRecord;
@@ -1609,11 +1617,10 @@ export function* openPair(
     yield* verifyRetainedOrigin(owner.origin, legacyPath);
     yield* verifyCopiedPrefix(owner.origin, location.entries);
   }
-  const events = yield* readRecords(location.entries);
   return {
     location,
     owner,
-    entries: pairedEntryStream(location.entries, events),
+    entries: yield* openRetainedStream(location.entries, paged),
     sidekick: new SidekickWriter(location.sidekick, records),
     records,
   };
@@ -1679,18 +1686,37 @@ export function* upgradeExecution(
     // retained origin no longer matching the fingerprint taken from it, which
     // is what makes the execution refuse to reopen at all.
     yield* writer.hold();
-    // The events this process already retained, shared rather than parsed a
-    // second time: the writer is held, so they are the records the file holds.
-    const events = yield* writer.readAll();
+    // The held writer pins the acknowledged record count and page ranges.
+    // An unpaged stream carries its sealed records to the new writer.
+    const history = writer.history;
+    if (history !== undefined) {
+      yield* history.confirmVersion();
+    }
+    const events = history === undefined ? yield* writer.readAll() : [];
     const location = yield* establishPair(root, execution);
     // One snapshot, read once: what is fingerprinted, what is parsed for
     // validity and what is copied are the same bytes. Reading the file a second
     // time would let a record land between the reads and leave the owner record
     // describing neither of them.
-    const origin = yield* copyEntryRecords(legacyPath, location.entries, events.length);
-    const publication = yield* acknowledgePair(location, execution, events, origin);
-
-    writer.redirect(publication.entries);
+    const origin = yield* copyEntryRecords(
+      legacyPath,
+      location.entries,
+      history?.recordCount ?? events.length,
+    );
+    const target =
+      history === undefined
+        ? undefined
+        : yield* history.prepareRelocation(location.entries, origin.sha256);
+    if (history !== undefined) {
+      yield* history.confirmVersion();
+    }
+    const entries = new RetainedReplStream(location.entries, events, history);
+    const publication = yield* acknowledgePair(location, execution, entries, origin);
+    if (history !== undefined && target !== undefined) {
+      yield* history.confirmVersion();
+      history.relocate(location.entries, target);
+    }
+    writer.redirect(entries);
     return publication;
   });
 }

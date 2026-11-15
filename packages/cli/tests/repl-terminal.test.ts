@@ -310,13 +310,13 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(bounds("box:transcript")).toEqual({
       x: 36,
       y: 1,
-      width: 66,
+      width: 54,
       height: 33,
     });
     expect(bounds("box:inspection")).toEqual({
-      x: 102,
+      x: 90,
       y: 1,
-      width: 58,
+      width: 70,
       height: 33,
     });
     expect(bounds("box:draft")?.height).toBe(4);

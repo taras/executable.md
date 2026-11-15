@@ -356,9 +356,9 @@ function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames)
 function locateInBindings(terminal: Terminal, label: string): { row: number; column: number } {
   const rows = terminal.screen?.rows() ?? [];
   const header = rows.findIndex((text) => text.includes("BINDINGS"));
-  const floor = header < 0 ? -1 : rows[header].indexOf("BINDINGS");
+  const divider = header < 0 ? -1 : rows[header].lastIndexOf("│", rows[header].indexOf("BINDINGS"));
   const matches = rows.flatMap((text, row) => {
-    const column = row > header && floor >= 0 ? text.indexOf(label, floor) : -1;
+    const column = row > header && divider >= 0 ? text.indexOf(label, divider + 1) : -1;
     return column < 0 ? [] : [{ row, column }];
   });
   if (matches.length !== 1 || matches[0] === undefined) {

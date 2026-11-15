@@ -58,7 +58,9 @@
     <Terminal.Resize columns={120} rows={30} />
     <XMD.Repl resume={reopened.resume}>
       <Terminal.WaitForText text="TRANSCRIPT" row={1} />
-      <Terminal.WaitForText text="retained-marker-1272" />
+      <Terminal.WaitForText text="Output" as="output" />
+      <Terminal.WaitForText text="retained-mar" row={output.row + 1} />
+      <Terminal.WaitForText text="ker-1272" row={output.row + 2} />
     </XMD.Repl>
   </Terminal>
 </Test>

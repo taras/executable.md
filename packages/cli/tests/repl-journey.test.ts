@@ -1444,7 +1444,7 @@ describe("REPL original live output and entry lifecycle", () => {
       },
     });
     const page = yield* useReplPage({ host });
-    const printed = "the-last-thing-this-document-prints";
+    const printed = "live-output-marker";
     const source = `\`\`\`js eval\nconst schema = {type:"object", properties:{decision:{type:"string",enum:["yes"]}}, required:["decision"],additionalProperties:false};\n\`\`\`\n\n${printed}\n\n<Elicit schema={schema} as="answer">Decide?</Elicit>\n`;
     yield* runSource(page, source);
     yield* awaited("the unpublished question held", () => held);

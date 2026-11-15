@@ -14,7 +14,7 @@ const DESTINATIONS: Readonly<
   "2": { label: "Transcript", anchors: ["transcript:title", "transcript:heading"] },
   "3": { label: "Selected work", anchors: ["work:crumbs", "entries:heading"] },
   "4": { label: "Draft", anchors: ["footer:input"] },
-  "5": { label: "Tabs", anchors: ["tab:bindings"] },
+  "5": { label: "Tabs", anchors: ["tab:sidekick", "tab:bindings"] },
   "6": { label: "Reading pane", anchors: ["sidekick:heading:usage:", "binding:anchor"] },
   "7": { label: "TODO", anchors: ["todo:header"] },
   "8": { label: "History", anchors: ["footer:history"] },

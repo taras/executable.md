@@ -93,7 +93,7 @@ export interface PairedReplRepository extends ReplRepository {
   upgrade(execution: PairedReplExecution): Operation<PairedReplExecution>;
 }
 
-export function pairedReplRepository(root: string): PairedReplRepository {
+export function pairedReplRepository(root: string, paged = false): PairedReplRepository {
   return {
     *create(): Operation<PairedReplExecution> {
       // Published as a pair immediately. Its creator is the only writer that
@@ -101,7 +101,7 @@ export function pairedReplRepository(root: string): PairedReplRepository {
       // two processes racing for the same name is a refusal rather than a merge
       // — the same guarantee the single-file format took from exclusive create.
       const execution = yield* ReplHost.operations.identify();
-      const published = yield* publishPair(root, execution);
+      const published = yield* publishPair(root, execution, paged);
       return {
         id: execution,
         stream: movableWriter(published.entries),
@@ -124,7 +124,7 @@ export function pairedReplRepository(root: string): PairedReplRepository {
         // not become a legacy execution because its chat history disappeared,
         // and starting a second history beside a broken pair is how one history
         // becomes two.
-        const opened = yield* openPair(root, execution, legacy);
+        const opened = yield* openPair(root, execution, legacy, paged);
         return {
           id: execution,
           stream: movableWriter(opened.entries),
@@ -139,7 +139,7 @@ export function pairedReplRepository(root: string): PairedReplRepository {
       }
       // Opened exactly as it is, with no conversion, no append and nothing
       // asked of a provider.
-      const held = yield* openExecutionFile(root, execution);
+      const held = yield* openExecutionFile(root, execution, paged);
       return {
         id: held.id,
         stream: movableWriter(held.stream),

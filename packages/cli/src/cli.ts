@@ -3267,6 +3267,7 @@ function* dispatch(
         ...(scriptedSidekick === undefined ? {} : { scriptedSidekick }),
       });
       const ran = yield* runReplProgram({
+        pagedHistory: true,
         profile,
         startup,
         ...(command.config.sidekickAcp === undefined
@@ -3918,7 +3919,7 @@ function* runCommand(
         return;
       }
       if (selected.config.location !== undefined) {
-        startup = yield* prepareReplStartup(selected.config.location);
+        startup = yield* prepareReplStartup(selected.config.location, undefined, true, true);
         if (!startup.ok) {
           yield* refuseReplStartup(selected.config.location, startup.error.message);
           console.error("xmd repl: " + startup.error.message);

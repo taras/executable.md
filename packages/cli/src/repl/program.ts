@@ -286,6 +286,7 @@ export interface HeadlessReplRoot {
  */
 export interface ReplProgramOptions {
   readonly startup?: Result<ReplStartup>;
+  readonly pagedHistory?: boolean;
   readonly headless?: HeadlessReplRoot;
   readonly sidekickAcp?: string;
   /** The location to reopen, or none to start a fresh execution. */
@@ -317,6 +318,7 @@ export function* prepareReplStartup(
   location: string,
   root?: string,
   offer = true,
+  pagedHistory = false,
 ): Operation<Result<ReplStartup>> {
   try {
     const decoded = decodeLocation(location);
@@ -325,9 +327,12 @@ export function* prepareReplStartup(
     }
     const state = yield* stateOf(location);
     const directory = root ?? (yield* replRoot());
-    const execution = yield* pairedReplRepository(directory).open(decoded.value.execution);
+    const execution = yield* pairedReplRepository(directory, pagedHistory).open(
+      decoded.value.execution,
+    );
     const retained = {
-      entries: yield* bindRetainedPrefix(execution.stream.path),
+      entries:
+        execution.stream.history?.fingerprint ?? (yield* bindRetainedPrefix(execution.stream.path)),
       ...(execution.chat.form === "paired"
         ? { chat: yield* bindRetainedPrefix(execution.chat.location.sidekick) }
         : {}),
@@ -336,7 +341,8 @@ export function* prepareReplStartup(
     if (!reachable.ok) {
       return reachable;
     }
-    const projected = projectRepl(yield* execution.stream.readAll());
+    const projected =
+      execution.stream.history?.head() ?? projectRepl(yield* execution.stream.readAll());
     if (!projected.ok) {
       return projected;
     }
@@ -418,6 +424,9 @@ function* unchangedStartup(
     execution.chat.form === "paired"
       ? yield* bindRetainedPrefix(execution.chat.location.sidekick)
       : undefined;
+  if (execution.stream.history !== undefined) {
+    yield* execution.stream.history.confirmVersion();
+  }
   if (
     entries.records !== retained.entries.records ||
     entries.bytes !== retained.entries.bytes ||
@@ -558,7 +567,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     options.startup ??
     (options.location === undefined
       ? undefined
-      : yield* prepareReplStartup(options.location, options.root, false));
+      : yield* prepareReplStartup(options.location, options.root, false, options.pagedHistory));
   if (prepared !== undefined && !prepared.ok) {
     return options.headless === undefined ? yield* refuse(state, prepared.error.message) : prepared;
   }
@@ -567,7 +576,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     state = startup.state;
   }
   const root = startup?.root ?? options.root ?? (yield* useReplRoot());
-  const repository = pairedReplRepository(root);
+  const repository = pairedReplRepository(root, options.pagedHistory);
   const execution = startup?.execution ?? (yield* repository.create());
   if (startup === undefined) {
     state = initialState(execution.id);
@@ -613,7 +622,8 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
   let unresolved: readonly ColdReservation[] = [];
   let resumedWorkspaceEntry: string | undefined;
   if (execution.chat.form === "paired") {
-    const projected = projectRepl(yield* execution.stream.readAll());
+    const projected =
+      execution.stream.history?.head() ?? projectRepl(yield* execution.stream.readAll());
     if (!projected.ok) {
       return yield* refuse(state, projected.error.message);
     }
@@ -718,7 +728,11 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
  * retained records already hold.
  */
 function* resolvable(execution: PairedReplExecution, state: ReplState): Operation<Result<void>> {
-  const projected = projectRepl(yield* execution.stream.readAll(), state.route.at);
+  const history = execution.stream.history;
+  const projected =
+    history === undefined
+      ? projectRepl(yield* execution.stream.readAll(), state.route.at)
+      : yield* history.attend(state.route.at, state.route.scopes[0]);
   if (!projected.ok) {
     return projected;
   }
@@ -1024,6 +1038,13 @@ function* drive(
   // One prepared reading, never a model beside a navigation that arrived
   // separately. Everything below assigns both halves together or neither.
   let reading: ReplReading = { model: session.model, navigation: session.navigation };
+  if (session.attend !== undefined) {
+    const loaded = yield* session.attend(state.route.at, state.route.scopes[0]);
+    if (!loaded.ok) {
+      return yield* refuse(state, loaded.error.message);
+    }
+    reading = loaded.value;
+  }
   let rendered: ReplRendered | undefined;
   /**
    * The editable drawer and question owner presented by the frame on screen.
@@ -1891,7 +1912,9 @@ function* drive(
           continue;
         }
         if (report.kind === "admitted") {
-          reading = { model: current.model, navigation: current.navigation };
+          if (current.attend === undefined) {
+            reading = { model: current.model, navigation: current.navigation };
+          }
           // The entry exists now, so the draft that became it is finished — and
           // only the revision it was taken from. Somebody who typed while the
           // preflight was running keeps what they typed.
@@ -1913,9 +1936,16 @@ function* drive(
     }
 
     function* inputView(candidate: ReplState, at: ReplTerminalSize) {
+      const attended =
+        current.attend === undefined
+          ? undefined
+          : yield* current.attend(candidate.route.at, candidate.route.scopes[0]);
+      if (attended !== undefined && !attended.ok) {
+        return refusedView(candidate, attended.error.message, at);
+      }
       return yield* build(
         candidate,
-        reading,
+        attended?.value ?? reading,
         current,
         at,
         focused,
@@ -1985,13 +2015,15 @@ function* drive(
         return false;
       }
       const route = shortcutRoute(state.route, region, profile === "narrow");
+      const todoOpen = digit === "7" ? true : digit === "6" ? false : state.todoOpen;
       if (
         starting ||
         route !== state.route ||
+        todoOpen !== state.todoOpen ||
         rendered?.size.columns !== at.columns ||
         rendered.size.rows !== at.rows
       ) {
-        const candidate = { ...state, route, restore: undefined };
+        const candidate = { ...state, route, todoOpen, restore: undefined };
         const view = yield* inputView(candidate, at);
         if (view.refusal !== undefined || modalOpen(view)) {
           return false;
@@ -2031,14 +2063,19 @@ function* drive(
       const routes = new Map<string, readonly ReplDescription<ReplAction>[]>();
       for (const [digit, region] of FOCUS_SHORTCUTS) {
         const route = shortcutRoute(current, region, narrow);
-        if (route === current) {
+        const todoOpen = digit === "7" ? true : digit === "6" ? false : state.todoOpen;
+        const changeTab = (todoOpen === true) !== (state.todoOpen === true);
+        if (route === current && !changeTab) {
           hints.set(digit, undefined);
           continue;
         }
-        const key = JSON.stringify([route.surface, route.view, route.right]);
+        const key = JSON.stringify([route.surface, route.view, route.right, todoOpen]);
         let descriptions = routes.get(key);
         if (descriptions === undefined) {
-          const destination = yield* inputView({ ...state, route, restore: undefined }, view.size);
+          const destination = yield* inputView(
+            { ...state, route, todoOpen, restore: undefined },
+            view.size,
+          );
           descriptions = [];
           if (destination.refusal === undefined && !modalOpen(destination)) {
             const prepared = yield* prepareInput(destination, yield* rendering());
@@ -2050,7 +2087,14 @@ function* drive(
           routes.set(key, descriptions);
         }
         if (hasRegion(descriptions, region)) {
-          hints.set(digit, focusRouteHint(route, narrow));
+          hints.set(
+            digit,
+            route !== current
+              ? focusRouteHint(route, narrow)
+              : todoOpen
+                ? "switches to the TODO tab"
+                : "switches to the Sidekick tab",
+          );
         }
       }
       return hints;
@@ -2095,17 +2139,7 @@ function* drive(
       if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
           yield* rendering(),
-          yield* build(
-            state,
-            reading,
-            current,
-            yield* screen.size(),
-            focused,
-            preparingOf(admitting),
-            sidekickReading(state),
-            dispatch.queue,
-            follow,
-          ),
+          yield* inputView(state, yield* screen.size()),
           fits,
           chatFits,
           messageFits,
@@ -2738,7 +2772,14 @@ function* drive(
           }
         }
         if (wake.kind === "session") {
-          reading = { model: current.model, navigation: current.navigation };
+          if (current.attend === undefined) {
+            reading = { model: current.model, navigation: current.navigation };
+          } else {
+            const refreshed = yield* reproject(state, reading, current);
+            if (refreshed.broken === undefined) {
+              reading = refreshed.reading;
+            }
+          }
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {
@@ -2949,7 +2990,7 @@ function* drive(
       // The size read suspends, and a record can arrive while it does: content
       // taken before it and navigation taken after it would describe two
       // different files on one screen.
-      const attempted = reproject(state, reading, current);
+      const attempted = yield* reproject(state, reading, current);
       const drawnAt = yield* screen.size();
       // The whole file, including the part before the position asked for, is
       // unreadable. There is no prefix for a notice to stand beside, so what
@@ -3013,7 +3054,7 @@ function* drive(
         // kept and the reason is said beside it: unlike the refusal above,
         // there *is* a reading to stand beside.
         state = Object.freeze({ ...standing, refusal: built.error.message });
-        const back = reproject(state, reading, current);
+        const back = yield* reproject(state, reading, current);
         if (back.broken === undefined) {
           reading = back.reading;
         }
@@ -3087,16 +3128,19 @@ function exitLocation(state: ReplState): string {
  * the reason, so a caller can decide between adopting and restoring rather than
  * being handed a half-applied navigation.
  */
-function reproject(
+function* reproject(
   state: ReplState,
   reading: ReplReading,
   session: ReplSession,
-): {
+): Operation<{
   readonly state: ReplState;
   readonly reading: ReplReading;
   readonly broken: Error | undefined;
-} {
-  const read = session.reading(state.route.at);
+}> {
+  const read =
+    session.attend === undefined
+      ? session.reading(state.route.at)
+      : yield* session.attend(state.route.at, state.route.scopes[0]);
   // A file this process can no longer read is not a position to carry on at.
   // It is returned rather than folded into a route notice, because the two
   // are different screens: a notice stands beside a reading, and this has
@@ -5372,10 +5416,9 @@ export function* prepareFrame(
   //
   // Soft wrapping is display only: the string below is the one the person is
   // editing, and the cuts put no newline into it.
-  // The composer exists where the chat being read is the one being continued:
-  // an older chat is read-only and has none. The reading's own fact, not a
-  // second pane rule.
-  const composing = presentsChat && view.live.sidekick?.current === true;
+  // TODO replaces the chat viewport and leaves the composer mounted.
+  const inspection = profileFor(view.size) === "narrow" ? "content" : "inspection";
+  const composing = third.value.boundsOf(`box:${inspection}:sidekick:message`) !== undefined;
   const editors = new Map<string, ReplEditor>();
   const message =
     chatRoom < 1 || !composing
@@ -5394,7 +5437,11 @@ export function* prepareFrame(
   if (message.value !== undefined) {
     editors.set("sidekick:message", message.value);
   }
-  if (view.state.todoEditor !== undefined && chatRoom > 0) {
+  if (
+    view.state.todoEditor !== undefined &&
+    chatRoom > 0 &&
+    third.value.boundsOf(`box:${inspection}:todo:editor`) !== undefined
+  ) {
     const editor = view.state.todoEditor;
     const fitted = yield* fitEditor(
       renderer,
@@ -5414,7 +5461,8 @@ export function* prepareFrame(
   // label and exactly one value row — the minimum composer. Growing to `h`
   // value rows takes `h - 1` rows from the chat, so `h` at most `C` leaves it
   // one row. Six is the accepted cap, and the fitted rows may be fewer.
-  const capacity = capacityOf(third.value.boundsOf(sidekickViewportOf(measured.manifest)));
+  const messageRoom = presentsChat ? sidekickViewportOf(measured.manifest) : SIDEKICK_BODY;
+  const capacity = capacityOf(third.value.boundsOf(messageRoom));
   const fittedRows = message.value?.display.length ?? 0;
   const height =
     message.value === undefined

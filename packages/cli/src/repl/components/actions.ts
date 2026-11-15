@@ -35,8 +35,6 @@ export type ReplAction =
       readonly decision: string;
     }
   | { readonly kind: "recovery-reference"; readonly accept: boolean; readonly reference: string }
-  | { readonly kind: "select-task-tray"; readonly tray: "todo" | "queue" }
-  | { readonly kind: "todo-collapse" }
   | {
       readonly kind: "todo-edit";
       readonly source: string;
@@ -162,7 +160,7 @@ export type ReplAction =
    * selects it as the reading as well, and activating Bindings puts the saved
    * surface back. Two actions would be two places deciding one rule.
    */
-  | { readonly kind: "select-pane"; readonly pane: ReplPane }
+  | { readonly kind: "select-pane"; readonly pane: ReplPane | "todo" }
   /** Read the selected entry's Input or its Output in the Bindings pane. */
   | { readonly kind: "select-bindings-view"; readonly view: ReplBindingsView }
   /** Select a structural scope by its key path, outermost first. */

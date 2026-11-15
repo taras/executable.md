@@ -55,24 +55,9 @@ function* send(dispatch: SidekickDispatch, text: string): Operation<SidekickExch
 }
 
 function* queueComposer(page: Parameters<typeof sendMessage>[0]): Operation<void> {
-  yield* page.press("QUEUE");
-  if (page.screen().size.columns < 120) {
-    for (
-      let step = 0;
-      step < 8 && !page.screen().rows.some((row) => row.includes("> › message the sidekick"));
-      step += 1
-    ) {
-      const before = page.screen().index;
-      yield* page.key("Tab");
-      yield* page.until("Message region traversal", (one) => one.index > before);
-    }
-    expect(page.screen().rows.some((row) => row.includes("> › message the sidekick"))).toBe(true);
-  } else {
-    yield* intoComposer(page);
-    yield* page.until("Message focus after pane selection", (one) =>
-      one.rows.some((row) => row.includes("> › message the sidekick")),
-    );
-  }
+  yield* page.key("Ctrl+G");
+  yield* page.key("1");
+  yield* page.until("Message region", (one) => one.shows("> › message the sidekick"));
 }
 
 function* queueSend(page: Parameters<typeof sendMessage>[0], text: string): Operation<void> {
@@ -120,7 +105,7 @@ describe("shared Sidekick dispatch", () => {
         "pasted tail at the middle caret",
         (one) => one.found("lastafter", COMPOSER_VALUE) > 0,
       );
-      expect(page.screen().shows("QUEUE 0/16")).toBe(true);
+      expect(page.screen().shows("Waiting messages are kept only in this REPL.")).toBe(false);
       expect(page.repl.fake.prompts).toHaveLength(busy ? 1 : 0);
       const pasted = yield* settledReading(page.repl);
       expect(pasted.chat.filter((one) => one.kind === "message")).toEqual(
@@ -134,7 +119,7 @@ describe("shared Sidekick dispatch", () => {
           (one) => sidekickIdle(one) && one.shows("original joined"),
         );
         expect(page.screen().found("lastafter", COMPOSER_VALUE)).toBe(1);
-        expect(page.screen().shows("QUEUE 0/16")).toBe(true);
+        expect(page.screen().shows("Waiting messages are kept only in this REPL.")).toBe(false);
         expect(page.repl.fake.prompts).toHaveLength(1);
         expect(
           (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "message"),
@@ -231,7 +216,6 @@ describe("shared Sidekick dispatch", () => {
       "busy Send beside Stop",
       (one) => one.found("[send]", SIDEKICK_PANE) === 1 && one.found("[stop]", SIDEKICK_PANE) === 1,
     );
-    yield* page.press("QUEUE");
     yield* sendMessage(page, "waiting request");
     yield* page.key("Enter");
     yield* page.until(
@@ -272,9 +256,16 @@ describe("shared Sidekick dispatch", () => {
       yield* queueSend(page, "active request");
       yield* page.repl.fake.startedTurns(1);
       yield* queueSend(page, "withdraw me");
-      yield* page.until("first waiting row", (one) => one.shows("QUEUE 1/16"));
+      yield* page.until("first waiting row", (one) =>
+        one.shows("Waiting messages are kept only in this REPL."),
+      );
       yield* queueSend(page, "remaining request");
-      yield* page.until("two waiting rows", (one) => one.shows("QUEUE 2/16"));
+      yield* page.until(
+        "two waiting rows",
+        (one) =>
+          one.shows("withdraw me") &&
+          one.rows.some((row) => row.includes("remaining request") && /\sX\s*$/.test(row)),
+      );
       yield* page.press("[stop]");
       yield* page.until(
         "fixed Resume after Stop",
@@ -284,10 +275,12 @@ describe("shared Sidekick dispatch", () => {
       yield* page.press("X", { onRow: "withdraw me" });
       yield* page.until(
         "exact withdrawal",
-        (one) => one.shows("QUEUE 1/16") && !one.shows("withdraw me"),
+        (one) => one.shows("remaining request") && !one.shows("withdraw me"),
       );
       yield* queueSend(page, "appended while held");
-      yield* page.until("held append", (one) => one.shows("QUEUE 2/16"));
+      yield* page.until("held append", (one) =>
+        one.rows.some((row) => row.includes("appended while held") && /\sX\s*$/.test(row)),
+      );
       expect(page.repl.fake.prompts).toHaveLength(1);
       yield* queueComposer(page);
       yield* typed(page, "unsent newer text");
@@ -312,8 +305,12 @@ describe("shared Sidekick dispatch", () => {
     yield* queueSend(page, "active request");
     yield* page.repl.fake.startedTurns(1);
     for (let at = 0; at < 16; at += 1) {
-      yield* queueSend(page, `waiting-${String(at).padStart(2, "0")}`);
-      yield* page.until("queue count after acceptance", (one) => one.shows(`QUEUE ${at + 1}/16`));
+      const message = `waiting-${String(at).padStart(2, "0")}`;
+      yield* queueSend(page, message);
+      yield* page.until(
+        "the admitted text leaves Message",
+        (one) => one.found(message, COMPOSER_VALUE) === 0,
+      );
     }
     yield* queueSend(page, "refused seventeenth");
     yield* page.until("full queue refusal", (one) => one.shows("queue is full"));
@@ -328,11 +325,21 @@ describe("shared Sidekick dispatch", () => {
     yield* page.wheel("up", cell);
     yield* page.until("queue wheel return", (one) => one.shows("waiting-00"));
     yield* page.press("X", { onRow: "waiting-00" });
-    yield* page.until("first exact withdrawal", (one) => one.shows("QUEUE 15/16"));
+    yield* page.until(
+      "first exact withdrawal",
+      (one) => !one.shows("waiting-00") && one.shows("waiting-01"),
+    );
     yield* queueComposer(page);
-    yield* page.key("Backtab");
-    yield* page.until("task tray fixed entry", (one) => one.shows("> ▾ TODO"));
-    yield* page.key("ArrowDown");
+    for (
+      let step = 0;
+      step < 8 &&
+      !page.screen().rows.some((row) => row.includes("waiting-") && row.includes("> X"));
+      step += 1
+    ) {
+      const before = page.screen().index;
+      yield* page.key("Alt+ArrowUp");
+      yield* page.until("local focus step", (one) => one.index > before);
+    }
     yield* page.until("queue focus", (one) =>
       one.rows.some((row) => row.includes("waiting-") && row.includes("> X")),
     );
@@ -360,7 +367,7 @@ describe("shared Sidekick dispatch", () => {
     yield* page.key("Enter");
     yield* page.until(
       "keyboard exact withdrawal",
-      (one) => one.index > before && one.shows("QUEUE 14/16"),
+      (one) => one.index > before && !one.shows("waiting-15"),
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
     expect(page.screen().found("refused seventeenth", COMPOSER_VALUE)).toBe(1);
@@ -369,16 +376,21 @@ describe("shared Sidekick dispatch", () => {
     yield* page.press("[send]", { rightOf: "message the sidekick" });
     yield* page.until(
       "freed capacity accepts the previously refused text",
-      (one) => one.shows("QUEUE 15/16") && one.found("refused seventeenth", COMPOSER_VALUE) === 0,
+      (one) =>
+        one.found("refused seventeenth", COMPOSER_VALUE) === 0 &&
+        one.shows("Waiting messages are kept only in this REPL."),
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
     const visibleWaiting = () =>
       page.screen().rows.flatMap((row) => row.match(/waiting-\d+/)?.[0] ?? []);
     const beforeSwitch = visibleWaiting();
-    yield* page.press("▾ TODO");
-    yield* page.until("TODO hides queued rows", (one) => !one.shows("waiting-"));
-    yield* page.press("QUEUE");
-    yield* page.until("queue reading restored", (one) => one.shows("waiting-"));
+    yield* page.press("TODO");
+    yield* page.until("TODO opens without moving the queue", (one) => one.shows("> TODO"));
+    expect(visibleWaiting()).toEqual(beforeSwitch);
+    yield* page.press("SIDEKICK", { onRow: "TODO" });
+    yield* page.until("Message returns with the same queue", (one) =>
+      one.shows("> › message the sidekick"),
+    );
     expect(visibleWaiting()).toEqual(beforeSwitch);
   });
 
@@ -389,13 +401,17 @@ describe("shared Sidekick dispatch", () => {
     yield* queueSend(page, "fails once");
     yield* page.repl.fake.startedTurns(1);
     yield* queueSend(page, "next request");
-    yield* page.until("pending before failure", (one) => one.shows("QUEUE 1/16"));
+    yield* page.until("pending before failure", (one) =>
+      one.shows("Waiting messages are kept only in this REPL."),
+    );
     page.repl.fake.releaseTurn();
     yield* page.until("failure Resume", (one) => one.shows("[Resume queue]"));
     yield* queueSend(page, "blocked composer");
     yield* page.until(
       "blocked Send remains",
-      (one) => one.found("blocked composer", COMPOSER_VALUE) === 1 && one.shows("QUEUE 1/16"),
+      (one) =>
+        one.found("blocked composer", COMPOSER_VALUE) === 1 &&
+        one.shows("Waiting messages are kept only in this REPL."),
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
     yield* page.press("[Resume queue]");

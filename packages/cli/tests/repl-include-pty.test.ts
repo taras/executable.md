@@ -347,13 +347,15 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
       yield* pty.type(`\x1b[<0;${target.column + 1};${target.row + 1}m`);
       yield* sleep(150);
     }
-    /** Activate a label inside the Bindings pane, at or right of its tab. */
+    /** Activate a label inside the Bindings pane. */
     function* activateInBindings(pty: Pty, label: string): Operation<void> {
       const screen = yield* pty.shows();
       const header = screen.findIndex((line) => line.includes("BINDINGS"));
-      const floor = header < 0 ? -1 : screen[header].indexOf("BINDINGS");
+      const divider =
+        header < 0 ? -1 : screen[header].lastIndexOf("│", screen[header].indexOf("BINDINGS"));
+      const floor = divider + 1;
       const row = screen.findIndex((line, at) => at > header && line.indexOf(label, floor) >= 0);
-      if (floor < 0 || row < 0) {
+      if (divider < 0 || row < 0) {
         throw new Error(`nothing in the Bindings pane names ${label}`);
       }
       const column = screen[row].indexOf(label, floor);
