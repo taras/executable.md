@@ -244,21 +244,21 @@ retained session again to verify that the current viewport supplies the size.
 | `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
 
 For builds with numbered focus shortcuts, use the component for the region
-that should receive the next input. For example, use `<Terminal.Focus.Draft />`
+that should receive the next input. For example, use `<Repl.Focus.Draft />`
 before typing an entry. Each component sends the corresponding shortcut and
 follows the [REPL focus rules](../../specs/repl-spec.md#move-between-regions-and-edit-within-them).
 
 | Region | Component |
 | --- | --- |
-| Sidekick Message | `<Terminal.Focus.Message />` |
-| Transcript | `<Terminal.Focus.Transcript />` |
-| Selected work | `<Terminal.Focus.SelectedWork />` |
-| Draft | `<Terminal.Focus.Draft />` |
-| Tabs/Configure | `<Terminal.Focus.Tabs />` |
-| Right reading | `<Terminal.Focus.RightReading />` |
-| TODO | `<Terminal.Focus.Todo />` |
-| History | `<Terminal.Focus.History />` |
-| Narrow surface bar | `<Terminal.Focus.SurfaceBar />` |
+| Sidekick Message | `<Repl.Focus.Message />` |
+| Transcript | `<Repl.Focus.Transcript />` |
+| Selected work | `<Repl.Focus.SelectedWork />` |
+| Draft | `<Repl.Focus.Draft />` |
+| Tabs/Configure | `<Repl.Focus.Tabs />` |
+| Right reading | `<Repl.Focus.RightReading />` |
+| TODO | `<Repl.Focus.Todo />` |
+| History | `<Repl.Focus.History />` |
+| Narrow surface bar | `<Repl.Focus.SurfaceBar />` |
 
 The terminal controls use the nearest Terminal without a handle. Input and
 screen inspection require an active launch. The acceptance journeys also use

@@ -474,7 +474,7 @@ const focusActions = Object.entries({
   History: "8",
   SurfaceBar: "9",
 }).map(([area, key]) =>
-  registration(`Terminal.Focus.${area}`, function* () {
+  registration(`Repl.Focus.${area}`, function* () {
     yield* action({ action: "key", key: "Ctrl+G" });
     yield* action({ action: "key", key });
   }),

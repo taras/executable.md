@@ -1,6 +1,6 @@
 <Test name="Permission wheel preserves focus and keyboard reaches the final choice" timeout="60s">
   <ReplBench columns={120} rows={30} entryPermissionFixture={true}>
-    <Terminal.Focus.Draft />
+    <Repl.Focus.Draft />
     <ReplBench.Type text={'<AgentProvider name="wheel-permission-fixture" defaultAgent="fixture"><Session name="permission"><Prompt text="many choices" /></Session></AgentProvider>'} />
     <ReplBench.WaitForText text="many choices" />
     <ReplBench.Key key="Enter" />

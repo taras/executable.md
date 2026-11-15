@@ -88,28 +88,28 @@
 <Test name="named focus components enter the corresponding terminal regions">
   <Terminal columns={160} rows={36}>
     <XMD.Repl>
-      <Terminal.Focus.Transcript />
+      <Repl.Focus.Transcript />
       <Terminal.WaitForText text="> All sessions" />
-      <Terminal.Focus.SelectedWork />
+      <Repl.Focus.SelectedWork />
       <Terminal.WaitForText text="> Entries" />
-      <Terminal.Focus.Draft />
+      <Repl.Focus.Draft />
       <Terminal.WaitForText text="> DRAFT" />
-      <Terminal.Focus.Tabs />
+      <Repl.Focus.Tabs />
       <Terminal.WaitForText text="> BINDINGS" />
-      <Terminal.Focus.RightReading />
+      <Repl.Focus.RightReading />
       <Terminal.WaitForText text="No messages yet." bold={true} />
-      <Terminal.Focus.Todo />
+      <Repl.Focus.Todo />
       <Terminal.WaitForText text="> ▾ TODO" />
-      <Terminal.Focus.History />
+      <Repl.Focus.History />
       <Terminal.WaitForText text="> [history]" />
-      <Terminal.Focus.Message />
+      <Repl.Focus.Message />
       <Terminal.WaitForText text="> › message the sidekick" />
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="Sessions" row={1} />
-      <Terminal.Focus.Draft />
+      <Repl.Focus.Draft />
       <Terminal.WaitForText text="> DRAFT" />
-      <Terminal.Focus.SurfaceBar />
-      <Terminal.WaitForText text="Sessions" row={1} bold={true} />
+      <Repl.Focus.SurfaceBar />
+      <Terminal.WaitForText text=">   Sessions" row={1} />
     </XMD.Repl>
   </Terminal>
 </Test>
