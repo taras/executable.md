@@ -55,14 +55,15 @@ const ACTION_TIMEOUT = 5_000;
 const SCRIPTED_STOP_GRACE = 10_000;
 
 function reopenLocation(raw: string): string | null {
-  // A terminal wraps at display time. If a host inserts line breaks in the
-  // printed command, the closing quote still delimits the complete location.
-  const quoted = [...raw.matchAll(/xmd repl '(xmd:\/\/repl\/[^']+)'/g)].at(-1)?.[1];
-  if (quoted === undefined) {
-    return null;
-  }
-  const location = quoted.replace(/\r?\n[ \t]*/g, "");
-  return decodeLocation(location).ok ? location : null;
+  // The restore screen previews the command in the alternate buffer. The
+  // CLI prints the labelled reopen hint after releasing that buffer.
+  const restoreBuffer = "\u001b[?1049l";
+  const restoredAt = raw.lastIndexOf(restoreBuffer);
+  const output = restoredAt === -1 ? raw : raw.slice(restoredAt + restoreBuffer.length);
+  const hint =
+    /(?:^|\n)Reopen this view with:\r?\n  xmd repl '(xmd:\/\/repl\/[^'\r\n]+)'(?:\r?\n)?$/u;
+  const location = hint.exec(output)?.[1];
+  return location !== undefined && decodeLocation(location).ok ? location : null;
 }
 
 export function useDriver(options: Launch) {
