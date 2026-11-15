@@ -101,7 +101,7 @@ deno task test --related=packages/core/src/expand.ts  # tests importing one sour
 ```
 
 For a REPL UI verification handoff, follow the
-[REPL bench guide](examples/repl-bench/reference.md#ui-handoff) in the assigned worktree.
+[REPL bench guide](examples/repl-bench/README.md#ui-handoff) in the assigned worktree.
 
 Selection is transitive through imports only. When behavior crosses a boundary
 the module graph cannot see — a subprocess, fixture, generated file or dynamic
