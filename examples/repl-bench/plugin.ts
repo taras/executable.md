@@ -1,5 +1,5 @@
 import { ensureDir } from "@effectionx/fs";
-import { exec, Stdio } from "@effectionx/process";
+import { Stdio } from "@effectionx/process";
 import {
   capture,
   content,
@@ -13,15 +13,7 @@ import {
 import { Plugin } from "@executablemd/core/api";
 import { command as xmdCommand, cwd, parseDuration, realpath } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
-import {
-  createContext,
-  ensure,
-  type Operation,
-  race,
-  spawn,
-  withResolvers,
-  type Yielded,
-} from "effection";
+import { createContext, ensure, type Operation, type Yielded } from "effection";
 import { randomUUID } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,16 +24,15 @@ import {
   exitResult,
   point,
   region,
-  response,
   screenshotName,
   size,
   type Command,
-  type Launch,
   type Region,
   type Size,
 } from "./lib/protocol.ts";
 import { assertPinnedWorktree, prepareRun, root, type PreparedBuild } from "./lib/run.ts";
 import { attachSidekick } from "./lib/sidekick.ts";
+import { connectDriver } from "./lib/driver-client.ts";
 
 type Execute = (command: Command) => Operation<unknown>;
 
@@ -130,68 +121,6 @@ const bench = size.partial().extend({
   mount: z.array(z.string().min(1)).default([]),
   allowAbsolute: z.boolean().default(false),
 });
-
-function* connect(options: Launch) {
-  const script = fileURLToPath(new URL("./driver.ts", import.meta.url));
-  const child = yield* exec("bun", {
-    cwd: root,
-    arguments: ["--no-install", script, JSON.stringify(options)],
-  });
-  const decoder = new TextDecoder();
-  let pending = "";
-  let pendingReply = withResolvers<z.infer<typeof response>>();
-  let busy = false;
-  let driverEnded = false;
-  yield* spawn(function* () {
-    const stream = yield* child.stdout;
-    while (true) {
-      const part = yield* stream.next();
-      if (part.done) {
-        return;
-      }
-      pending += decoder.decode(part.value, { stream: true });
-      const lines = pending.split("\n");
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        pendingReply.resolve(response.parse(JSON.parse(line)));
-      }
-    }
-  });
-  const ended = yield* spawn(function* () {
-    const { code, signal } = yield* child.join();
-    driverEnded = true;
-    return { error: `Driver exited (${code ?? signal}). Evidence: ${options.directory}` };
-  });
-  let stopRequested = false;
-  function* close() {
-    if (!driverEnded && !stopRequested) {
-      stopRequested = true;
-      child.stdin.send(`${JSON.stringify({ action: "stop" })}\n`);
-    }
-    return yield* child.join();
-  }
-  yield* ensure(function* () {
-    yield* close();
-  });
-  const dispatch: Execute = function* (command) {
-    if (busy) {
-      throw new Error("ReplBench actions run one at a time");
-    }
-    busy = true;
-    try {
-      pendingReply = withResolvers<z.infer<typeof response>>();
-      child.stdin.send(`${JSON.stringify(command)}\n`);
-      const result = yield* race([pendingReply.operation, ended]);
-      if ("error" in result) {
-        throw new Error(result.error);
-      }
-      return result.value;
-    } finally {
-      busy = false;
-    }
-  };
-  return { dispatch, close };
-}
 
 const Terminal: FunctionComponent = function* (props, invocation) {
   if (!invocation.hasContent()) {
@@ -357,7 +286,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     },
     { at: "min" },
   );
-  const { dispatch, close } = yield* connect(launch);
+  const { dispatch, close } = yield* connectDriver(launch);
   yield* dispatch({ action: "ready" });
   let sidekick: Yielded<ReturnType<typeof attachSidekick>> | undefined;
   if (attachment !== undefined) {
