@@ -20,8 +20,7 @@ External-only rendered.
     <Let as="includes" value={["first",root+"/second"]} />
 
     <ReplBench include={includes} expectExit={true} as="closed">
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Terminal.Focus.Draft />
       <ReplBench.Type text={"<Greeting />\n<ExternalOnly />"} />
       <ReplBench.WaitForText text="<ExternalOnly />" />
       <ReplBench.Key key="Enter" />
@@ -74,8 +73,7 @@ External-only rendered.
     <Dir path="first"><File path="Greeting.md">First greeting rendered.</File></Dir>
     <Dir path="second"><File path="Greeting.md">Second greeting rendered.</File></Dir>
     <ReplBench include={[root+"/second","first"]}>
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Terminal.Focus.Draft />
       <ReplBench.Type text="<Greeting />" />
       <ReplBench.WaitForText text="<Greeting />" />
       <ReplBench.Key key="Enter" />
@@ -85,8 +83,7 @@ External-only rendered.
     </ReplBench>
 
     <ReplBench>
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Terminal.Focus.Draft />
       <ReplBench.Type text={"<WorkspaceOnly />\n<RootOnly />"} />
       <ReplBench.WaitForText text="<RootOnly />" />
       <ReplBench.Key key="Enter" />
@@ -142,8 +139,7 @@ pwd -P | tr -d '\n' > process-cwd.txt
 ````
     </Let>
     <ReplBench mount={initialMounts} allowAbsolute={true} expectExit={true} as="held">
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Terminal.Focus.Draft />
       <ReplBench.Type text={"<Dir path="+JSON.stringify(fixtureTarget)+">\n"+fixtureBody+"\n</Dir>\n\n<Dir path="+path+">\n"+body+"\n</Dir>"} />
       <ReplBench.WaitForText text="</Dir>" />
       <ReplBench.Key key="Enter" />
@@ -198,8 +194,7 @@ pwd -P | tr -d '\n' > process-cwd.txt
 fresh is {fresh}
 ```
       </Let>
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Terminal.Focus.Draft />
       <ReplBench.Type text={"<Dir path="+path+">\n"+freshBody+"\n</Dir>"} />
       <ReplBench.WaitForText text="</Dir>" />
       <ReplBench.Key key="Enter" />

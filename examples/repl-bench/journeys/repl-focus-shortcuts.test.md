@@ -84,3 +84,32 @@
     </ReplBench>
   </Terminal>
 </Test>
+
+<Test name="named focus components enter the corresponding terminal regions">
+  <Terminal columns={160} rows={36}>
+    <XMD.Repl>
+      <Terminal.Focus.Transcript />
+      <Terminal.WaitForText text="> All sessions" />
+      <Terminal.Focus.SelectedWork />
+      <Terminal.WaitForText text="> Entries" />
+      <Terminal.Focus.Draft />
+      <Terminal.WaitForText text="> DRAFT" />
+      <Terminal.Focus.Tabs />
+      <Terminal.WaitForText text="> BINDINGS" />
+      <Terminal.Focus.RightReading />
+      <Terminal.WaitForText text="No messages yet." bold={true} />
+      <Terminal.Focus.Todo />
+      <Terminal.WaitForText text="> ▾ TODO" />
+      <Terminal.Focus.History />
+      <Terminal.WaitForText text="> [history]" />
+      <Terminal.Focus.Message />
+      <Terminal.WaitForText text="> › message the sidekick" />
+      <Terminal.Resize columns={72} rows={20} />
+      <Terminal.WaitForText text="Sessions" row={1} />
+      <Terminal.Focus.Draft />
+      <Terminal.WaitForText text="> DRAFT" />
+      <Terminal.Focus.SurfaceBar />
+      <Terminal.WaitForText text="Sessions" row={1} bold={true} />
+    </XMD.Repl>
+  </Terminal>
+</Test>

@@ -463,6 +463,23 @@ const launchActions = [
   ),
 ];
 
+const focusActions = Object.entries({
+  Message: "1",
+  Transcript: "2",
+  SelectedWork: "3",
+  Draft: "4",
+  Tabs: "5",
+  RightReading: "6",
+  Todo: "7",
+  History: "8",
+  SurfaceBar: "9",
+}).map(([area, key]) =>
+  registration(`Terminal.Focus.${area}`, function* () {
+    yield* action({ action: "key", key: "Ctrl+G" });
+    yield* action({ action: "key", key });
+  }),
+);
+
 const terminalActions = [
   registration(
     "Terminal.Screenshot",
@@ -594,6 +611,7 @@ export default Plugin({
           name: entry.name.replace("XMD.Repl.", "ReplBench."),
         })),
         ...terminalActions,
+        ...focusActions,
         ...terminalActions.map((entry) => ({
           ...entry,
           name: entry.name.replace("Terminal.", "ReplBench."),

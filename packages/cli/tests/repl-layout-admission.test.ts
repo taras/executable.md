@@ -65,7 +65,7 @@ import { referenceEvents, agentReferenceEvents } from "./fixtures/repl/reference
 import { awaited } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
-import { entrySettles, pasteDraft } from "./support/screen-journeys.ts";
+import { entrySettles, intoDraft, pasteDraft } from "./support/screen-journeys.ts";
 
 /**
  * The two cells in front of a control's label that its focus marker draws in.
@@ -173,8 +173,7 @@ function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly
 
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
-  yield* page.key("Ctrl+G");
-  yield* page.key("4");
+  yield* intoDraft(page);
   yield* pasteDraft(page, source);
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
@@ -1778,8 +1777,7 @@ describe("accepted rendered scrolling guidance", () => {
         { length: 40 },
         (_, at) => `Help preview ${String(at).padStart(2, "0")}`,
       ).join("\n");
-      yield* page.key("Ctrl+G");
-      yield* page.key("4");
+      yield* intoDraft(page);
       yield* page.type(
         `<Elicit as="answer" schema={${JSON.stringify(schema)}}>${preview}</Elicit>`,
       );
