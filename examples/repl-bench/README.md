@@ -286,7 +286,8 @@ candidate rounds and their saved records.
 Select one approved synthetic PNG per side of each required checkpoint. Copy the
 fixture, viewport and action from the checkpoint into both captures. The receipt
 accepts up to 25 checkpoints. Each PNG must be a regular file no larger than
-10 MiB. Record the SHA-256 of the actual file, for example with
+10 MiB and decode to at most 64 MiB of filtered image data. Record the SHA-256
+of the actual file, for example with
 `shasum -a 256 before.png after.png`. Save the unmodified native timing report
 with all its raw samples. The timing viewport comes from the benchmark and
 may differ from the screenshot viewport.
