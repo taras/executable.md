@@ -40,7 +40,7 @@ import type {
   GeneratedObservation,
   GeneratedXmdRequest,
 } from "../src/generated-xmd.ts";
-import { useAgentConversation } from "../host.ts";
+import { parsePromptRecord, useAgentConversation } from "../host.ts";
 import type { AgentConversation, ExecutionInstallation, GeneratedXmdRootResult } from "../host.ts";
 import type { InvocationForm } from "../src/invocation-identity.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
@@ -745,8 +745,8 @@ describe("Tier PV — the live account of a canonical turn", () => {
     // Whole prefixes were scanned, not pieces: the last one contains the whole
     // candidate. Asserted by length and shape, never by printing it.
     expect(scanned[scanned.length - 1]?.length).toBeGreaterThan(seen[0]!.length);
-    // The journal's own gate is what decides persistence, and it refused this
-    // turn's record rather than this screen decision doing it.
+    // Persistence is not this screen's decision either: the completed turn is
+    // retained with its reply withheld, and the call answers a refusal.
     expect(answered.value.ok).toBe(false);
   });
 
@@ -1321,6 +1321,131 @@ function fresh(): Traffic {
     facts: [],
   };
 }
+
+/**
+ * Tier CW — a completed reply the execution's secret detection would refuse.
+ *
+ * The turn happened: the provider took its input and finished it in the native
+ * conversation this history names. What it said is the one thing that may not
+ * be kept, so the record keeps the turn and none of the reply, the call refuses
+ * with a fixed sentence, and the conversation goes on.
+ */
+describe("Tier CW — a completed reply secret detection withholds", () => {
+  // Assembled so no credential-shaped literal is committed.
+  const marker = ["tok", "en-", "WITHHELD"].join("");
+
+  function useScanner(mode: "flag" | "fail"): Operation<void> {
+    return useSecretScannerFactory(() => ({
+      // deno-lint-ignore require-yield
+      *scan(content: string): Operation<SecretFinding[]> {
+        if (!content.includes(marker)) {
+          return [];
+        }
+        if (mode === "fail") {
+          throw new Error("the detector failed");
+        }
+        return [
+          {
+            ruleId: "test-rule",
+            messageId: "TEST_SECRET",
+            location: { line: 1, column: 1 },
+            fingerprint: "test-fingerprint",
+          },
+        ];
+      },
+    }));
+  }
+
+  it("CW1: the turn is retained without its reply, refuses safely and the chat continues", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const answered = yield* scoped(function* () {
+      yield* useScanner("flag");
+      return yield* withConversation(
+        stream,
+        stub(traffic, {
+          respond: (content) =>
+            content === "first" ? { deltas: [`<Output>${marker}</Output>`] } : {},
+        }),
+        function* (chat) {
+          return { first: yield* chat.prompt("first"), second: yield* chat.prompt("second") };
+        },
+      );
+    });
+    if (!answered.ok) {
+      throw new Error(`the conversation did not open: ${answered.error.message}`);
+    }
+    const { first, second } = answered.value;
+    expect(first.ok).toBe(false);
+    if (first.ok) {
+      return;
+    }
+    expect(first.error.name).toBe("AgentReplyWithheldError");
+    for (const absent of [marker, "test-rule", "TEST_SECRET", "test-fingerprint"]) {
+      expect(first.error.message.includes(absent)).toBe(false);
+    }
+    expect(second.ok && second.value).toBe("[second]");
+    const events = yield* stream.readAll();
+    expect(JSON.stringify(events).includes(marker)).toBe(false);
+    const withheld = prompts(events)[0];
+    expect(withheld?.type === "yield" && withheld.description.input).toBe("first");
+    expect(record(events, "turn:1")).toMatchObject({
+      status: "completed",
+      text: "",
+      withheld: true,
+    });
+    expect(record(events, "turn:1")["error"]).toBeUndefined();
+    expect(record(events, "turn:2")["withheld"]).toBeUndefined();
+    expect(traffic.prompts.map((call) => call.sessionKey)).toEqual(["stub:chat-1", "stub:chat-1"]);
+
+    const again = fresh();
+    const continued = yield* withConversation(stream, stub(again), function* (chat) {
+      return yield* chat.prompt("third");
+    });
+    if (!continued.ok) {
+      throw new Error(`reopening refused: ${continued.error.message}`);
+    }
+    expect(continued.value.ok && continued.value.value).toBe("[third]");
+    expect(again.prompts.map((call) => call.content)).toEqual(["third"]);
+    expect(turnNames(yield* stream.readAll())).toEqual(["turn:1", "turn:2", "turn:3"]);
+  });
+
+  it("CW2: a withheld record that contradicts itself does not read back", function* () {
+    const complete = { sequence: 1, agent: AGENT, sessionKey: "k", status: "completed", text: "" };
+    expect(parsePromptRecord({ ...complete, withheld: true })?.withheld).toBe(true);
+    for (const contradicted of [
+      { ...complete, withheld: false },
+      { ...complete, text: "kept", withheld: true },
+      { ...complete, status: "failed", withheld: true },
+    ]) {
+      expect(parsePromptRecord(contradicted)).toBe(undefined);
+    }
+  });
+
+  for (const [label, mode, status] of [
+    ["a failed turn's partial reply", "flag", "failed"],
+    ["a scanner that fails", "fail", "completed"],
+  ] as const) {
+    it(`CW3: ${label} is still refused by the journal's own guard`, function* () {
+      const stream = new InMemoryStream();
+      const traffic = fresh();
+      const answered = yield* scoped(function* () {
+        yield* useScanner(mode);
+        return yield* withConversation(
+          stream,
+          stub(traffic, { respond: () => ({ status, deltas: [`<Output>${marker}</Output>`] }) }),
+          function* (chat) {
+            return yield* chat.prompt("first");
+          },
+        );
+      });
+      expect(answered.ok && !answered.value.ok).toBe(true);
+      const events = yield* stream.readAll();
+      expect(JSON.stringify(events).includes(marker)).toBe(false);
+      expect(JSON.stringify(events).includes('"withheld"')).toBe(false);
+    });
+  }
+});
 
 describe("Tier CV — a conversation is an execution the host keeps open", () => {
   it("CV1: two turns reach the same conversation and are retained in order", function* () {

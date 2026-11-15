@@ -4078,7 +4078,12 @@ happened. It claims no entry and reserves nothing.
 
 A response that asked for nothing and failed at nothing ends the exchange: the
 next move is the person's. A turn the provider did not finish ends it too,
-because a turn that produced nothing is not a reply to correct. There is no
+because a turn that produced nothing is not a reply to correct. A completed
+turn whose reply secret detection withheld ends it without pausing: its record
+establishes that the turn received what it was sent, so the feedback it carried
+is delivered, and nothing from the reply was saved, shown or evaluated. The chat
+shows that saved turn with this account, and the next message from the composer
+continues the same native conversation. There is no
 limit on how many turns one message may take: each one costs a provider turn, a
 response that asks for nothing ends it, and a provider failure pauses.
 

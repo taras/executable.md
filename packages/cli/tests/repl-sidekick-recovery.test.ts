@@ -73,7 +73,12 @@ import {
 } from "../src/repl/sidekick/history.ts";
 import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { designatedResults } from "../src/repl/sidekick/feedback.ts";
-import { projectHistory, projectSidekick, recoveryRequired } from "../src/repl/sidekick/model.ts";
+import {
+  projectHistory,
+  projectSidekick,
+  recoveryRequired,
+  REPLY_WITHHELD,
+} from "../src/repl/sidekick/model.ts";
 import { sidekickChatRows } from "../src/repl/program.ts";
 import type { ReplSidekickChatRow } from "../src/repl/application.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
@@ -4999,4 +5004,153 @@ describe("1269 — mounted retained recovery corrections", () => {
       expect(held.host.fake.prompts).toHaveLength(2);
     });
   }
+});
+
+describe("1311 — a completed reply that secret detection withholds", () => {
+  const refused = 'authorization: "Use a separate approval for this example issue #34"';
+
+  /** The canonical Prompt records this history holds, in order, with their inputs. */
+  function prompts(records: readonly SidekickRecord[]) {
+    return records.flatMap((record) => {
+      if (record.kind !== "event") {
+        return [];
+      }
+      const parsed = parseDurableEvent(record.event);
+      if (
+        !parsed.ok ||
+        parsed.value.type !== "yield" ||
+        parsed.value.description.type !== AGENT_PROMPT ||
+        parsed.value.result.status !== "ok"
+      ) {
+        return [];
+      }
+      const prompt = parsePromptRecord(parsed.value.result.value);
+      return prompt === undefined
+        ? []
+        : [{ name: parsed.value.description.name, input: parsed.value.description.input, prompt }];
+    });
+  }
+
+  function clean(screen: { shows(text: string): boolean }): void {
+    for (const absent of [
+      refused,
+      "authorization:",
+      "Feedback receipt unknown",
+      "[Start new chat]",
+      "secret detection rejected",
+      "secretlint",
+    ]) {
+      expect(screen.shows(absent)).toBe(false);
+    }
+  }
+
+  it("keeps the turn, withholds its reply and continues the same chat", function* () {
+    const host = yield* useMountedHost();
+    const profile = {
+      ...host.profile,
+      *finalize(workspace?: string, privateRoot?: string) {
+        const finalized = yield* host.profile.finalize(workspace, privateRoot);
+        return {
+          ...finalized,
+          sidekickAssembly: {
+            ...finalized.sidekickAssembly,
+            ownershipAdministration: administered("clean"),
+          },
+        };
+      },
+    };
+    let execution = "";
+    yield* scoped(function* () {
+      const page = yield* useReplPage({ host: { ...host, profile } });
+      host.fake.script({ reply: "<REPL.Bindings />" });
+      host.fake.script({ reply: `<Output>${refused}</Output>` });
+      yield* sendMessage(page, "Read the current bindings.");
+      yield* page.until("the withheld reply", (one) => one.shows("withheld by secret detection"));
+      clean(page.screen());
+      expect(host.fake.prompts).toHaveLength(2);
+      execution = yield* mountedExecution(page.repl);
+      const pair = yield* host.repository.open(execution);
+      if (pair.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      const records = yield* readSidekickRecords(pair.chat.location.sidekick);
+      expect(records.map(serializeSidekickRecord).join("")).not.toContain("authorization:");
+      // The feedback turn completed and kept the exact input it was sent, and
+      // nothing of what it answered: no text, no response and no control.
+      const [first, second, ...rest] = prompts(records);
+      expect(rest).toEqual([]);
+      expect(first?.prompt.withheld).toBeUndefined();
+      expect(second?.input).toBe(host.fake.prompts[1]);
+      expect(second?.prompt).toMatchObject({ status: "completed", text: "", withheld: true });
+      expect(second?.prompt.error).toBeUndefined();
+      const replies = records.flatMap((one) => (one.kind === "response" ? [one] : []));
+      expect(replies.map((one) => one.turn)).toEqual([1]);
+      expect(
+        records.filter(
+          (one) =>
+            one.kind === "control" && !replies.some((reply) => reply.response === one.response),
+        ),
+      ).toEqual([]);
+      const reading = project(records);
+      expect(reading.unestablished).toEqual([]);
+      expect(reading.delivered).toEqual([{ conversation: reading.active, turn: 2 }]);
+      expect(reading.chat.filter((one) => one.kind === "saved")).toEqual([
+        {
+          kind: "saved",
+          conversation: reading.active,
+          turn: 2,
+          automatic: true,
+          status: REPLY_WITHHELD,
+        },
+      ]);
+      expect(reading.turns.map((one) => one.withheld)).toEqual([undefined, true]);
+      expect(required(records, undefined)).toBe(false);
+
+      host.fake.script({ reply: "<Output>Continuing with the saved answer.</Output>" });
+      yield* sendMessage(page, "Summarize the saved result in plain prose.");
+      yield* page.until("a reply in the original chat", (one) =>
+        one.shows("Continuing with the saved answer."),
+      );
+      clean(page.screen());
+      expect(host.fake.prompts).toHaveLength(3);
+      expect(host.fake.prompts[2]).toContain("Summarize the saved result in plain prose.");
+      expect(host.fake.prompts[2]).not.toContain(host.fake.prompts[1]);
+      expect(host.fake.prompts[2]).not.toContain("authorization:");
+      page.repl.terminal.end();
+      yield* awaited("the original REPL joining", () => page.repl.outcome() !== undefined);
+    });
+
+    // Cold: a new owner over the same files reopens the same conversation and
+    // sends exactly one new turn into the native session the first turn named.
+    const location = encodeLocation({
+      ...initialState(execution).route,
+      view: "sidekick",
+      right: "sidekick",
+    });
+    const page = yield* useReplPage({ host: { ...host, profile }, location });
+    yield* page.until("the reopened withheld turn", (one) =>
+      one.shows("withheld by secret detection"),
+    );
+    clean(page.screen());
+    host.fake.script({ reply: "<Output>Still the same chat.</Output>" });
+    yield* sendMessage(page, "One more plain question.");
+    yield* page.until("the reopened reply", (one) => one.shows("Still the same chat."));
+    expect(host.fake.prompts).toHaveLength(4);
+    const key = host.fake.turns[0]?.handle.sessionKey;
+    expect(key).toBeDefined();
+    expect(host.fake.turns.map((one) => one.handle.sessionKey)).toEqual([key, key, key, key]);
+    const pair = yield* host.repository.open(execution);
+    if (pair.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const records = yield* readSidekickRecords(pair.chat.location.sidekick);
+    const saved = prompts(records);
+    expect(saved.map((one) => one.name)).toEqual(["turn:1", "turn:2", "turn:3", "turn:4"]);
+    expect(new Set(saved.map((one) => one.prompt.sessionKey))).toEqual(new Set([key]));
+    expect(new Set(saved.map((one) => one.prompt.agentSessionId)).size).toBe(1);
+    expect(records.map(serializeSidekickRecord).join("")).not.toContain("authorization:");
+    const reading = project(records);
+    expect(new Set(reading.chat.map((one) => one.conversation))).toEqual(new Set([reading.active]));
+    expect(reading.recoveries).toEqual([]);
+  });
 });

@@ -162,6 +162,16 @@ export interface PromptRecord {
    * keeps what was reported before it ended; its coverage says what is missing.
    */
   usage?: PromptUsage;
+  /**
+   * The provider completed this turn, and its reply was withheld in full
+   * because the execution's secret detection found a credential in it.
+   *
+   * Written only by a held conversation, and only on a completed record whose
+   * `text` is therefore empty: the record still proves the turn received its
+   * input and ran in its native conversation, and it holds nothing of what the
+   * provider answered. Absent on every other record.
+   */
+  withheld?: true;
 }
 
 /** The safe half of one request, before its decision has been made. */
@@ -735,6 +745,9 @@ function serializePromptRecord(record: PromptRecord): Json {
   if (record.usage !== undefined) {
     payload.usage = serializePromptUsage(record.usage);
   }
+  if (record.withheld === true) {
+    payload.withheld = true;
+  }
   return payload;
 }
 
@@ -889,6 +902,7 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
     raised,
     checkpoint,
     usage,
+    withheld,
   } = value;
   if (
     typeof sequence !== "number" ||
@@ -955,6 +969,14 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
       return undefined;
     }
     record.usage = read;
+  }
+  if (withheld !== undefined) {
+    // A withheld reply is a completed turn that kept nothing of what it said,
+    // so any other shape contradicts itself.
+    if (withheld !== true || record.status !== "completed" || record.text !== "") {
+      return undefined;
+    }
+    record.withheld = true;
   }
   return record;
 }
