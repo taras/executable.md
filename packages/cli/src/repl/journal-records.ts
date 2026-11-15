@@ -23,6 +23,7 @@ interface JournalScan {
   readonly observe?: LineOptions["observe"];
   readonly recordBytes?: LineOptions["recordBytes"];
   readonly segmentSharing?: boolean;
+  readonly retain?: boolean;
 }
 
 /**
@@ -86,9 +87,12 @@ export function* scanEntryRecords(
             `${count + 1}).`,
         );
       }
+      count += 1;
+      if (options.retain === false) {
+        return yield* visit(parsed.value);
+      }
       const recorded = bindings.share(sealEvent(parsed.value, share));
       bindings.remember(recorded);
-      count += 1;
       yield* visit(recorded);
       if (options.segmentSharing && recorded.type === "close" && recorded.coroutineId === "root") {
         share = stringSharing();

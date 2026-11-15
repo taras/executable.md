@@ -1,3 +1,4 @@
+import type { EntryRestoreObserver, EntryRestoreProgress } from "./paged-history.ts";
 import { turnUsage, usageDetails, usageSummary } from "./usage.ts";
 import { Repl } from "../repl-api.ts";
 import { join } from "node:path";
@@ -48,6 +49,7 @@ import { testForSidekick } from "./sidekick/admission.ts";
  */
 
 import {
+  createQueue,
   ensure,
   Err,
   type Operation,
@@ -195,7 +197,7 @@ import type { SidekickReading, SidekickSavedTurn } from "./sidekick/model.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
-import { useReplFrames } from "./frame.ts";
+import { ReplClock, useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
 import { focusHintOps, focusRouteHint } from "./focus-hints.ts";
@@ -284,6 +286,7 @@ export interface HeadlessReplRoot {
  */
 export interface ReplProgramOptions {
   readonly startup?: Result<ReplStartup>;
+  readonly coldTerminal?: ColdReplTerminal;
   readonly pagedHistory?: boolean;
   readonly headless?: HeadlessReplRoot;
   readonly sidekickAcp?: string;
@@ -312,11 +315,354 @@ export interface ReplStartup {
   readonly resumedProjectEntry?: string;
 }
 
+interface ScreenPresentation {
+  readonly screen: ReplScreen;
+  readonly renderer: ReplRenderer;
+  readonly frames: ReplFrames;
+}
+
+interface ColdReplTerminal extends ScreenPresentation {
+  takeOver(): Operation<void>;
+  close(): Operation<void>;
+}
+
+interface RestoreStartup {
+  readonly entries: EntryRestoreObserver;
+  sidekick(): Operation<void>;
+  placement(checking: boolean): void;
+  offer(original: string, launch: string, execution: string): Operation<boolean>;
+}
+
+interface RestoreReading {
+  readonly entries?: EntryRestoreProgress;
+  readonly sidekick?: boolean;
+  readonly ready?: boolean;
+  readonly failure?: string;
+}
+
+export function* withColdReplStartup(
+  location: string,
+  proceed: (startup: ReplStartup, terminal: ColdReplTerminal) => Operation<void>,
+): Operation<Result<void>> {
+  const decoded = stateFor(location);
+  if (!decoded.ok) {
+    return decoded;
+  }
+  const state = decoded.value;
+  return yield* scoped(function* () {
+    const presentation = withResolvers<ScreenPresentation>();
+    const owner = yield* spawn(function* () {
+      const screen = yield* useReplScreen();
+      const renderer = yield* useReplRenderer(yield* screen.size());
+      const frames = yield* useReplFrames();
+      presentation.resolve({ screen, renderer, frames });
+      yield* suspend();
+    });
+    const display = yield* presentation.operation;
+    const startupScope = yield* useScope();
+    let view: RestoreReading = {};
+    let wake: (() => void) | undefined;
+    let watching: Task<void> | undefined;
+    let requestHandoff: (() => void) | undefined;
+    function update(next: RestoreReading): void {
+      view = next;
+      wake?.();
+    }
+    function* takeOver(): Operation<void> {
+      const task = watching;
+      watching = undefined;
+      if (task !== undefined) {
+        requestHandoff?.();
+        requestHandoff = undefined;
+        yield* task;
+      }
+    }
+    const terminal: ColdReplTerminal = {
+      ...display,
+      takeOver,
+      *close() {
+        yield* takeOver();
+        yield* owner.halt();
+      },
+    };
+
+    while (true) {
+      const choice = withResolvers<"retry" | "leave">();
+      function* watch(): Operation<void> {
+        const handoff = withResolvers<void>();
+        requestHandoff = handoff.resolve;
+        watching = yield* startupScope.spawn(function* () {
+          const action = yield* restoreScreen(
+            state,
+            display,
+            () => view,
+            (notify) => {
+              wake = notify;
+            },
+            handoff.operation,
+          );
+          if (action !== "handoff") {
+            choice.resolve(action);
+          }
+        });
+      }
+      update({});
+      yield* watch();
+      let placement = false;
+      let declined = false;
+      const restored = yield* race([
+        prepareReplStartup(location, undefined, true, true, {
+          *entries(entries) {
+            update({ entries });
+            if (entries.stage === "rounds") {
+              yield* ReplClock.operations.wait(0);
+            }
+          },
+          *sidekick() {
+            update({ ...view, sidekick: true });
+            yield* ReplClock.operations.wait(0);
+          },
+          placement(checking) {
+            placement = checking;
+          },
+          *offer(original, launch, execution) {
+            yield* takeOver();
+            const accepted = yield* offerProject(original, launch, execution, display);
+            declined = !accepted;
+            if (accepted) {
+              yield* watch();
+            }
+            return accepted;
+          },
+        }),
+        choice.operation,
+      ]);
+
+      if (typeof restored === "string") {
+        return Err(new Error("Session restoration was interrupted."));
+      }
+      if (!restored.ok) {
+        if (declined) {
+          return restored;
+        }
+        if (placement) {
+          yield* takeOver();
+          yield* refuse(state, restored.error.message, display);
+          return restored;
+        }
+        update({ ...view, failure: restored.error.message });
+        const action = yield* choice.operation;
+        yield* takeOver();
+        if (action === "leave") {
+          return restored;
+        }
+        continue;
+      }
+
+      update({ ...view, sidekick: false, ready: true });
+      return yield* race([
+        (function* (): Operation<Result<void>> {
+          yield* proceed(restored.value, terminal);
+          return Ok(undefined);
+        })(),
+        (function* (): Operation<Result<void>> {
+          yield* choice.operation;
+          return Err(new Error("Session restoration was interrupted."));
+        })(),
+      ]);
+    }
+  });
+}
+
+function restoreReading(view: RestoreReading, columns: number): string[] {
+  const stopped = view.failure === undefined ? "" : " · stopped";
+  const lines: string[] = [];
+  const entries = view.entries;
+  if (entries?.stage === "rounds") {
+    const { restored, total } = entries;
+    const finished = stopped === "" && total !== undefined && total === restored;
+    lines.push(
+      `${finished ? "Restored" : "Restoring"} rounds · ${restored} / ${total ?? "unknown"}${stopped}`,
+    );
+    if (total !== undefined && total > 0) {
+      const width = Math.max(0, Math.min(52, columns - 4));
+      const filled = Math.round((restored / total) * width);
+      lines.push("█".repeat(filled) + "░".repeat(width - filled));
+    }
+    if (view.sidekick && stopped === "") {
+      lines.push("Restoring Sidekick history · count not known yet");
+    }
+    if (view.failure !== undefined && total !== undefined && restored < total) {
+      lines.push(`Round ${restored + 1} of ${total} could not be restored`);
+    }
+  } else {
+    lines.push(
+      entries?.stage === "counting"
+        ? `Counting retained rounds${stopped}`
+        : `Opening retained history${stopped}`,
+    );
+  }
+  if (view.ready) {
+    lines.push("Opening REPL");
+  }
+  return lines;
+}
+
+function* restoreScreen(
+  state: ReplState,
+  { screen, renderer, frames }: ScreenPresentation,
+  reading: () => RestoreReading,
+  listen: (notify: (() => void) | undefined) => void,
+  handoff: Operation<void>,
+): Operation<"retry" | "leave" | "handoff"> {
+  const tree = yield* useReplTree<ReplAction>();
+  const changes = createQueue<ReplScreenEvent | "draw" | "handoff", void>();
+  const events = yield* screen.events();
+  let queued = false;
+  function draw(): void {
+    if (!queued) {
+      queued = true;
+      changes.add("draw");
+    }
+  }
+  yield* ensure(() => listen(undefined));
+  listen(draw);
+  draw();
+  yield* spawn(function* () {
+    yield* handoff;
+    changes.add("handoff");
+  });
+  yield* spawn(function* () {
+    while (true) {
+      const event = yield* events.next();
+      if (event.done || event.value.kind === "eof") {
+        changes.close(undefined);
+        return;
+      }
+      changes.add(event.value);
+    }
+  });
+
+  let shown: ReplPainted | undefined;
+  let details = false;
+  let offset = 0;
+  let maximum = 0;
+  let page = 1;
+  const fits = createPlainFitStore();
+  const compose: ReplCompose = function* (size) {
+    const view = reading();
+    const stopped = view.failure !== undefined;
+    let lines = details ? [] : restoreReading(view, size.columns);
+    if (view.failure !== undefined && profileFor(size) !== "too-small") {
+      const diagnostic = yield* fitPlain(
+        renderer,
+        size,
+        view.failure.split("\n").map((text, index) => ({ key: String(index), text })),
+        size.columns - 1,
+        fits,
+      );
+      if (!diagnostic.ok) {
+        throw diagnostic.error;
+      }
+      if (details) {
+        page = size.rows - 1;
+        maximum = Math.max(0, diagnostic.value.length - page);
+        offset = Math.min(offset, maximum);
+        lines = diagnostic.value.slice(offset, offset + page).map((row) => row.text);
+      } else {
+        lines.push(...diagnostic.value.slice(0, 2).map((row) => row.text));
+      }
+    }
+    return {
+      ...refusedView(state, "", size, keyOfFocus(tree)),
+      restore: { lines, stopped, details },
+    };
+  };
+
+  while (true) {
+    const next = yield* changes.next();
+    if (next.done) {
+      return "leave";
+    }
+    const change = next.value;
+    if (change === "handoff") {
+      return change;
+    }
+    if (change === "draw" || change.kind === "resize") {
+      if (change === "draw") {
+        queued = false;
+      }
+      const focused = keyOfFocus(tree);
+      shown = yield* paint(frames, tree, renderer, screen, compose);
+      if (focused !== keyOfFocus(tree)) {
+        draw();
+      }
+      continue;
+    }
+    const input =
+      change.kind === "input"
+        ? change.event
+        : change.kind === "pointer" && shown !== undefined
+          ? resolvePointer(shown.rendered, change.at)
+          : undefined;
+    if (input === undefined) {
+      continue;
+    }
+    if (input.kind === "key" && input.key === "Interrupt") {
+      return "leave";
+    }
+    if (input.kind === "key" && input.key === "Escape") {
+      if (!details || profileFor(yield* screen.size()) === "too-small") {
+        return "leave";
+      }
+      details = false;
+      draw();
+      continue;
+    }
+    if (shown?.view.restore?.stopped !== true) {
+      continue;
+    }
+    const focused = keyOfFocus(tree);
+    const dispatched = yield* tree.dispatch(input);
+    if (dispatched.ok && dispatched.value.outcome === "action") {
+      const action = dispatched.value.action;
+      switch (action.kind) {
+        case "retry-restore":
+          return "retry";
+        case "exit":
+          return "leave";
+        case "show-restore-error":
+          details = true;
+          offset = 0;
+          draw();
+          break;
+        case "reading-key": {
+          const moved = {
+            ArrowUp: offset - 1,
+            ArrowDown: offset + 1,
+            PageUp: offset - page,
+            PageDown: offset + page,
+            Home: 0,
+            End: maximum,
+          }[action.key];
+          offset = Math.max(0, Math.min(maximum, moved));
+          draw();
+          break;
+        }
+      }
+    }
+    if (focused !== keyOfFocus(tree)) {
+      draw();
+    }
+  }
+}
+
 export function* prepareReplStartup(
   location: string,
   root?: string,
   offer = true,
   pagedHistory = false,
+  restore?: RestoreStartup,
 ): Operation<Result<ReplStartup>> {
   try {
     const decoded = decodeLocation(location);
@@ -325,7 +671,7 @@ export function* prepareReplStartup(
     }
     const state = yield* stateOf(location);
     const directory = root ?? (yield* replRoot());
-    const execution = yield* pairedReplRepository(directory, pagedHistory).open(
+    const execution = yield* pairedReplRepository(directory, pagedHistory, restore?.entries).open(
       decoded.value.execution,
     );
     const retained = {
@@ -335,7 +681,7 @@ export function* prepareReplStartup(
         ? { chat: yield* bindRetainedPrefix(execution.chat.location.sidekick) }
         : {}),
     };
-    const reachable = yield* resolvable(execution, state);
+    const reachable = yield* resolvable(execution, state, restore?.sidekick);
     if (!reachable.ok) {
       return reachable;
     }
@@ -370,6 +716,7 @@ export function* prepareReplStartup(
     if (final === undefined || final.settled || workspaceEntry === final.key) {
       return Ok({ root: directory, execution, state, retained, projectCwd: launch });
     }
+    restore?.placement(true);
     const placement = final.placement;
     if (placement === undefined) {
       return Err(
@@ -387,7 +734,9 @@ export function* prepareReplStartup(
           ),
         );
       }
-      if (!(yield* offerProject(placement.projectDirectory, launch, execution.id))) {
+      if (
+        !(yield* (restore?.offer ?? offerProject)(placement.projectDirectory, launch, execution.id))
+      ) {
         return Err(new Error("The entry was left unfinished. No session was started."));
       }
       yield* validateProjectPlacement(placement);
@@ -399,6 +748,7 @@ export function* prepareReplStartup(
       sidekick.value.submits.some(
         (intent) => intent.entry === final.key && intent.placement !== undefined,
       );
+    restore?.placement(false);
     yield* unchangedStartup(execution, retained);
     return Ok({
       root: directory,
@@ -439,7 +789,12 @@ function* unchangedStartup(
   }
 }
 
-function offerProject(original: string, launch: string, execution: string): Operation<boolean> {
+function offerProject(
+  original: string,
+  launch: string,
+  execution: string,
+  display?: ScreenPresentation,
+): Operation<boolean> {
   return scoped(function* () {
     const questions = yield* useReplElicitation();
     const changes = yield* questions.changes;
@@ -460,12 +815,11 @@ function offerProject(original: string, launch: string, execution: string): Oper
     if (question === undefined) {
       return false;
     }
-    const screen = yield* useReplScreen();
+    const screen = display?.screen ?? (yield* useReplScreen());
     const events = yield* screen.events();
     const tree = yield* useReplTree<ReplAction>();
-    const frames = yield* useReplFrames();
-    const size = yield* screen.size();
-    const renderer = yield* useReplRenderer(size);
+    const frames = display?.frames ?? (yield* useReplFrames());
+    const renderer = display?.renderer ?? (yield* useReplRenderer(yield* screen.size()));
     let state: ReplState = {
       ...initialState(execution),
       route: { ...initialState(execution).route, drawers: [{ kind: "live-elicit" }] },
@@ -569,6 +923,12 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
   if (prepared !== undefined && !prepared.ok) {
     return options.headless === undefined ? yield* refuse(state, prepared.error.message) : prepared;
   }
+  const refuseOpen = function* (reason: string): Operation<Result<ReplOutcome>> {
+    if (options.coldTerminal !== undefined) {
+      yield* options.coldTerminal.takeOver();
+    }
+    return yield* refuse(state, reason, options.coldTerminal);
+  };
   const startup = prepared?.value;
   if (startup !== undefined) {
     state = startup.state;
@@ -623,7 +983,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     const projected =
       execution.stream.history?.head() ?? projectRepl(yield* execution.stream.readAll());
     if (!projected.ok) {
-      return yield* refuse(state, projected.error.message);
+      return yield* refuseOpen(projected.error.message);
     }
     const cold = yield* coldReservations(
       execution.chat.records,
@@ -631,7 +991,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
       execution.chat.location.entries,
     );
     if (!cold.ok) {
-      return yield* refuse(state, blocking(cold.error));
+      return yield* refuseOpen(blocking(cold.error));
     }
     const placement = yield* coldWorkspaceEntry(
       execution.chat.records,
@@ -639,7 +999,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
       execution.chat.location.entries,
     );
     if (!placement.ok) {
-      return yield* refuse(state, blocking(placement.error));
+      return yield* refuseOpen(blocking(placement.error));
     }
     unresolved = cold.value;
     resumedWorkspaceEntry = placement.value;
@@ -699,7 +1059,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     }
     // A history that cannot be projected mounts the refusal and nothing else:
     // no provider, no observer, no execution task, and no append.
-    return yield* refuse(state, opened.error.message);
+    return yield* refuseOpen(opened.error.message);
   }
 
   // The repository goes with it. Establishing a pair for an execution still
@@ -725,7 +1085,11 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
  * selects, the scopes it walks and the drawers it opens are all answers the
  * retained records already hold.
  */
-function* resolvable(execution: PairedReplExecution, state: ReplState): Operation<Result<void>> {
+function* resolvable(
+  execution: PairedReplExecution,
+  state: ReplState,
+  projectChat?: () => Operation<void>,
+): Operation<Result<void>> {
   const history = execution.stream.history;
   const projected =
     history === undefined
@@ -740,6 +1104,9 @@ function* resolvable(execution: PairedReplExecution, state: ReplState): Operatio
   // selector naming a chat nobody ever held has to be answered here, where the
   // only cost of the wrong URL is being told so, rather than after resumption
   // has appended to somebody's history.
+  if (execution.chat.form === "paired" && projectChat !== undefined) {
+    yield* projectChat();
+  }
   const chat = coldSidekick(execution);
   const resolved = resolveLocation(projected.value, state.route, {
     ...NO_LIVE,
@@ -798,21 +1165,17 @@ function* stateOf(location: string): Operation<ReplState> {
  * A screen, because a refusal a caller cannot see is a command that exited
  * silently; and only a screen, because there is nothing behind it to act on.
  */
-export function* refuseReplStartup(
-  location: string,
+function* refuse(
+  state: ReplState,
   reason: string,
+  display?: ScreenPresentation,
 ): Operation<Result<ReplOutcome>> {
-  return yield* refuse(yield* stateOf(location), reason);
-}
-
-function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome>> {
   yield* scoped(function* (): Operation<void> {
-    const screen = yield* useReplScreen();
+    const screen = display?.screen ?? (yield* useReplScreen());
     const events: Subscription<ReplScreenEvent, void> = yield* screen.events();
     const tree = yield* useReplTree<ReplAction>();
-    const frames = yield* useReplFrames();
-    const size = yield* screen.size();
-    const renderer = yield* useReplRenderer({ columns: size.columns, rows: size.rows });
+    const frames = display?.frames ?? (yield* useReplFrames());
+    const renderer = display?.renderer ?? (yield* useReplRenderer(yield* screen.size()));
 
     // Drawn, then drawn again with where focus actually settled: the marker comes
     // from the tree's own answer, and the tree answers only after a commit.
@@ -1039,7 +1402,10 @@ function* drive(
   if (session.attend !== undefined) {
     const loaded = yield* session.attend(state.route.at, state.route.scopes[0]);
     if (!loaded.ok) {
-      return yield* refuse(state, loaded.error.message);
+      if (options.coldTerminal !== undefined) {
+        yield* options.coldTerminal.takeOver();
+      }
+      return yield* refuse(state, loaded.error.message, options.coldTerminal);
     }
     reading = loaded.value;
   }
@@ -1072,13 +1438,18 @@ function* drive(
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const liveScreen = options.headless?.view;
-    const screen = liveScreen?.screen ?? (yield* useReplScreen());
+    const coldTerminal = options.coldTerminal;
+    if (coldTerminal !== undefined) {
+      yield* coldTerminal.takeOver();
+    }
+    const screen = liveScreen?.screen ?? coldTerminal?.screen ?? (yield* useReplScreen());
     const events: Subscription<ReplScreenEvent, void> = yield* screen.events();
     const tree = yield* useReplTree<ReplAction>();
-    const frames = yield* useReplFrames();
+    const frames = coldTerminal?.frames ?? (yield* useReplFrames());
     const renderingOwner = yield* useScope();
     let renderer =
-      liveScreen === undefined ? yield* useReplRenderer(yield* screen.size()) : undefined;
+      coldTerminal?.renderer ??
+      (liveScreen === undefined ? yield* useReplRenderer(yield* screen.size()) : undefined);
     let renderingTask: Task<void> | undefined;
     let generation = liveScreen?.generation;
     function* rendering(): Operation<ReplRenderer> {
@@ -2652,6 +3023,9 @@ function* drive(
       const focusHints = focusPrefix && canShowHints ? yield* offeredShortcuts(view) : undefined;
       return {
         ...view,
+        // The inherited renderer has already drawn startup. The live tree still
+        // owns an initial focus claim until its first presentation succeeds.
+        ...(coldTerminal === undefined ? {} : { initialPresentation: presentedAt === undefined }),
         ...(liveScreen === undefined ? {} : { detachable: true }),
         ...(focusHints === undefined ? {} : { focusHints }),
       };
@@ -4973,7 +5347,10 @@ export function* prepareFrame(
   draftStore?: ReplPlainFitStore,
   queueStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
-  view = { ...view, initialPresentation: renderer.last() === undefined };
+  view = {
+    ...view,
+    initialPresentation: view.initialPresentation ?? renderer.last() === undefined,
+  };
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
   // takes its minimum from its widest child: one unbounded row would make the

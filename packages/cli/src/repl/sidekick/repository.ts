@@ -1,3 +1,4 @@
+import type { EntryRestoreObserver } from "../paged-history.ts";
 /**
  * Which of the two storage shapes an execution is in, and opening it as that.
  *
@@ -93,7 +94,11 @@ export interface PairedReplRepository extends ReplRepository {
   upgrade(execution: PairedReplExecution): Operation<PairedReplExecution>;
 }
 
-export function pairedReplRepository(root: string, paged = false): PairedReplRepository {
+export function pairedReplRepository(
+  root: string,
+  paged = false,
+  observe?: EntryRestoreObserver,
+): PairedReplRepository {
   return {
     *create(): Operation<PairedReplExecution> {
       // Published as a pair immediately. Its creator is the only writer that
@@ -124,7 +129,7 @@ export function pairedReplRepository(root: string, paged = false): PairedReplRep
         // not become a legacy execution because its chat history disappeared,
         // and starting a second history beside a broken pair is how one history
         // becomes two.
-        const opened = yield* openPair(root, execution, legacy, paged);
+        const opened = yield* openPair(root, execution, legacy, paged, observe);
         return {
           id: execution,
           stream: movableWriter(opened.entries),
@@ -139,7 +144,7 @@ export function pairedReplRepository(root: string, paged = false): PairedReplRep
       }
       // Opened exactly as it is, with no conversion, no append and nothing
       // asked of a provider.
-      const held = yield* openExecutionFile(root, execution, paged);
+      const held = yield* openExecutionFile(root, execution, paged, observe);
       return {
         id: held.id,
         stream: movableWriter(held.stream),

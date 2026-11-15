@@ -327,6 +327,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "close") {
     return { kind: "close-drawer" };
   }
+  if (select === "retry-restore" || select === "show-restore-error") {
+    return { kind: select };
+  }
   if (select === "exit") {
     return { kind: "exit" };
   }

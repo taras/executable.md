@@ -1,4 +1,4 @@
-import type { ReplStartup } from "./repl/program.ts";
+import type { ReplProgramOptions, ReplStartup } from "./repl/program.ts";
 import { useSecretInputs } from "@executablemd/core/host";
 import { runSessionOwnership } from "./session-ownership.ts";
 import { attachChildUi } from "./headless/ui.ts";
@@ -91,7 +91,7 @@ import type {
 } from "@executablemd/core";
 import { useAcpxProvider } from "@executablemd/acp";
 import { API, command as hostCommand, cwd, env, Permissions } from "@executablemd/runtime";
-import { runReplProgram, prepareReplStartup, refuseReplStartup } from "./repl/program.ts";
+import { runReplProgram, withColdReplStartup } from "./repl/program.ts";
 import { ReplTerminal } from "./repl/terminal.ts";
 import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
@@ -2917,6 +2917,11 @@ function* resolveRunProps(
  * supports it: every other invocation is handed nothing, which is what keeps a
  * run store from being inherited by omission.
  */
+interface ColdReplCommand {
+  readonly startup: ReplStartup;
+  readonly terminal: NonNullable<ReplProgramOptions["coldTerminal"]>;
+}
+
 function* dispatch(
   evalFlags: EvalFlags,
   helpRequest: { requested: boolean; args: string[] },
@@ -2936,7 +2941,7 @@ function* dispatch(
    */
   plugins: CommandPlugins,
   testPlugins: TestPlugins,
-  startup?: Result<ReplStartup>,
+  cold?: ColdReplCommand,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
   // is lifted out of argv early enough that a command's own grammar never sees
@@ -3169,6 +3174,9 @@ function* dispatch(
       const mountCwd = yield* cwd();
       const mounts = parseWorkspaceMounts(command.config.mount, mountCwd, { resolve });
       if (!mounts.ok) {
+        if (cold !== undefined) {
+          yield* cold.terminal.close();
+        }
         console.error(mounts.error.message);
         yield* exit(1);
         break;
@@ -3226,6 +3234,9 @@ function* dispatch(
           }
           scriptedSidekick = yield* prepareScriptedSidekick(fixture, testAgentWorker.value);
         } catch (error) {
+          if (cold !== undefined) {
+            yield* cold.terminal.close();
+          }
           console.error(`xmd repl: ${error instanceof Error ? error.message : String(error)}`);
           yield* exit(1);
           break;
@@ -3269,12 +3280,15 @@ function* dispatch(
       const ran = yield* runReplProgram({
         pagedHistory: true,
         profile,
-        startup,
+        ...(cold === undefined ? {} : { startup: Ok(cold.startup), coldTerminal: cold.terminal }),
         ...(command.config.sidekickAcp === undefined
           ? {}
           : { sidekickAcp: command.config.sidekickAcp }),
         ...(command.config.location === undefined ? {} : { location: command.config.location }),
       });
+      if (cold !== undefined) {
+        yield* cold.terminal.close();
+      }
       if (!ran.ok) {
         console.error(`xmd repl: ${ran.error.message}`);
         yield* exit(1);
@@ -3745,6 +3759,7 @@ function* withPlugins(
   selection: PluginSelection | undefined,
   loadPluginModule: PluginModuleLoader,
   body: (plugins: CommandPlugins) => Operation<void>,
+  beforeRefusal?: () => Operation<void>,
 ): Operation<void> {
   yield* scoped(function* () {
     if (selection === undefined) {
@@ -3758,6 +3773,9 @@ function* withPlugins(
         args: selection.args,
       });
     } catch (error) {
+      if (beforeRefusal !== undefined) {
+        yield* beforeRefusal();
+      }
       reportFailure(error instanceof Error ? error : new Error(String(error)));
       yield* exit(1);
       return;
@@ -3857,7 +3875,7 @@ function* runCommand(
   // code, and describing a command line is not a reason to run any.
   const selectedPlugins = selection.loads && selection.command !== "test" ? selection : undefined;
 
-  let startup: Result<ReplStartup> | undefined;
+  let coldLocation: string | undefined;
   if (selected?.name === "repl" && !helpRequest.requested && !selected.help) {
     if (
       selected.config.sidekickAcp !== undefined &&
@@ -3918,28 +3936,11 @@ function* runCommand(
         yield* exit(1);
         return;
       }
-      if (selected.config.location !== undefined) {
-        startup = yield* prepareReplStartup(selected.config.location, undefined, true, true);
-        if (!startup.ok) {
-          yield* refuseReplStartup(selected.config.location, startup.error.message);
-          console.error("xmd repl: " + startup.error.message);
-          yield* exit(1);
-          return;
-        }
-        const selectedDirectory = startup.value.projectCwd;
-        yield* API.Env.around(
-          {
-            *cwd() {
-              return selectedDirectory;
-            },
-          },
-          { at: "min" },
-        );
-      }
+      coldLocation = selected.config.location;
     }
   }
 
-  const run = (plugins: CommandPlugins): Operation<void> =>
+  const run = (plugins: CommandPlugins, cold?: ColdReplCommand): Operation<void> =>
     dispatch(
       evalFlags,
       helpRequest,
@@ -3952,16 +3953,42 @@ function* runCommand(
       replHost,
       plugins,
       (document) => installTestPlugins(document, selection, loadPluginModule),
-      startup,
+      cold,
     );
 
   // The typed configuration this command line settled, then the Plugins — so a
   // Plugin reads the same `Config` answers every other consumer reads, before
   // anything it installs can be asked for.
-  const configured = function* (): Operation<void> {
+  const configured = function* (cold?: ColdReplCommand): Operation<void> {
+    if (cold !== undefined) {
+      yield* API.Env.around(
+        {
+          *cwd() {
+            return cold.startup.projectCwd;
+          },
+        },
+        { at: "min" },
+      );
+    }
     yield* Config.around({ verbose: () => commandVerbosity(selected) }, { at: "min" });
-    yield* withPlugins(selectedPlugins, loadPluginModule, run);
+    yield* withPlugins(
+      selectedPlugins,
+      loadPluginModule,
+      (plugins) => run(plugins, cold),
+      cold?.terminal.close,
+    );
   };
+
+  if (coldLocation !== undefined) {
+    const restored = yield* withColdReplStartup(coldLocation, (startup, terminal) =>
+      configured({ startup, terminal }),
+    );
+    if (!restored.ok) {
+      console.error("xmd repl: " + restored.error.message);
+      yield* exit(1);
+    }
+    return;
+  }
 
   if (!bounded) {
     return yield* configured();

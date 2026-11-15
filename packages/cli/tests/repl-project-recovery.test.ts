@@ -377,7 +377,10 @@ describe("1113: project placement before live recovery", () => {
           },
         ),
       );
-      yield* awaited("the startup question", () => screen.terminal.drawn > 1);
+      yield* awaited(
+        "the startup question",
+        () => screen.terminal.screen?.rows().some((row) => row.includes("( ) Return to ")) === true,
+      );
       expect(loaded).toEqual([]);
       expect(installed).toBe(0);
       expect(selected).toBe(0);

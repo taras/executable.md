@@ -56,6 +56,8 @@ export type ReplAction =
       readonly key: "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End";
     }
   | { readonly kind: "noop" }
+  | { readonly kind: "retry-restore" }
+  | { readonly kind: "show-restore-error" }
   /**
    * Text for one named field, or for the entry draft when it names none.
    *

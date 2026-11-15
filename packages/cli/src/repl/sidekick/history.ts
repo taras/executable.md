@@ -1,3 +1,4 @@
+import type { EntryRestoreObserver } from "../paged-history.ts";
 import { parseEntryPlacement } from "../entry-placement.ts";
 import type { EntryPlacement } from "../entry-placement.ts";
 /**
@@ -1565,6 +1566,7 @@ export function* openPair(
   execution: string,
   legacyPath: string,
   paged = false,
+  observe?: EntryRestoreObserver,
 ): Operation<{
   location: PairedLocation;
   owner: OwnerRecord;
@@ -1591,7 +1593,7 @@ export function* openPair(
   return {
     location,
     owner,
-    entries: yield* openRetainedStream(location.entries, paged),
+    entries: yield* openRetainedStream(location.entries, paged, observe),
     sidekick: new SidekickWriter(location.sidekick, records),
     records,
   };

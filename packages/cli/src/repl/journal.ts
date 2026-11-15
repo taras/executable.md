@@ -43,7 +43,7 @@ import { readRecords, ReplJournalError } from "./journal-records.ts";
 export { readRecords } from "./journal-records.ts";
 import { RetainedBindings } from "./retained-bindings.ts";
 import { sealEvent } from "./retained-event.ts";
-import { PagedHistory } from "./paged-history.ts";
+import { PagedHistory, type EntryRestoreObserver } from "./paged-history.ts";
 import { isOpaqueExecution } from "./route.ts";
 
 /**
@@ -203,6 +203,7 @@ export function* openExecutionFile(
   root: string,
   execution: string,
   paged = false,
+  observe?: EntryRestoreObserver,
 ): Operation<ReplExecution> {
   const path = executionPath(root, execution);
 
@@ -214,12 +215,16 @@ export function* openExecutionFile(
     throw new ReplJournalError("this execution's history is not a file.");
   }
 
-  return { id: execution, stream: yield* openRetainedStream(path, paged) };
+  return { id: execution, stream: yield* openRetainedStream(path, paged, observe) };
 }
 
-export function* openRetainedStream(path: string, paged: boolean): Operation<RetainedReplStream> {
+export function* openRetainedStream(
+  path: string,
+  paged: boolean,
+  observe?: EntryRestoreObserver,
+): Operation<RetainedReplStream> {
   return paged
-    ? new RetainedReplStream(path, [], yield* PagedHistory.open(path))
+    ? new RetainedReplStream(path, [], yield* PagedHistory.open(path, observe))
     : new RetainedReplStream(path, yield* readRecords(path));
 }
 
