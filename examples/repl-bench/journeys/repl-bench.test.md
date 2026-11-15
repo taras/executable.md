@@ -10,7 +10,7 @@
       <ReplBench.WaitForText text="bench first;" as="first" />
       <ReplBench.Region name="transcript">
         <ReplBench.WaitForText text="bench first;" present={false} />
-        <ReplBench.WaitForText text="No retained turns" />
+        <ReplBench.WaitForText text="(none retained)" />
       </ReplBench.Region>
       <ReplBench.WaitForText text="bench first;" at={first} />
       <ReplBench.WaitForText text="bench second;" />
@@ -160,7 +160,7 @@
     <ReplBench.WaitForText text="[send]" at={sidekickSend} />
     <ReplBench.WaitForText text="No messages yet." />
     <ReplBench.Region name="transcript">
-      <ReplBench.WaitForText text="No retained turns" />
+      <ReplBench.WaitForText text="(none retained)" />
     </ReplBench.Region>
   </ReplBench>
 </Test>
