@@ -1,3 +1,4 @@
+import { ensureDir } from "@effectionx/fs";
 import { exec, Stdio } from "@effectionx/process";
 import {
   capture,
@@ -323,6 +324,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     if (resume !== undefined || home === undefined) {
       throw new Error("A scripted Sidekick requires a fresh REPL.");
     }
+    yield* ensureDir(home);
     const canonicalHome = yield* realpath(home);
     if (canonicalHome === undefined) {
       throw new Error("The scripted Sidekick's private home is missing.");
