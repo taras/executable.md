@@ -30,6 +30,10 @@ Next action: {status.nextAction}
 <If condition={status.review != null}>
 Independent review: {status.review.result.verdict}
 
+<If condition={status.reviewPublication?.state === "verified"}>
+Published review comment {status.reviewPublication.url}
+</If>
+
 {status.review.result.summary}
 
 <Each in={status.review.result.findings} let="finding">

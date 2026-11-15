@@ -34,7 +34,8 @@ returns: {type: object}
 <Json value={receipt} />
 </Ticket.Capture>
 <If condition={reading.status === "completed"}>
-<Parse schema={{type:"object"}} as="review">{reading.output}</Parse>
+<Parse schema={{type:"object"}} as="receipt">{reading.output}</Parse>
+<Let as="review" value={{attempt,result:receipt.result,reviewer:receipt.reviewer,model:receipt.model}} />
 <Let as="reviewState" value={review.result.verdict === "pass" ? "passed" : review.result.verdict === "changes_required" ? "repair_required" : "blocked"} />
 </If>
 </If>
@@ -43,7 +44,6 @@ returns: {type: object}
 <If condition={reviewState === "reconciliation_required" && selected.state.next === "replace" && selected.state.hold === null}><Let as="reviewState" value="review_pending" /></If>
 </If>
 <Delivery.Remote repository={policy.repository} number={props.number} as="remote" />
-<Ticket.Checkout repository={props.delivery.repository} as="afterRead" />
 <Dir path={props.delivery.repository}>
 ```bash exec as="branchRead"
 git symbolic-ref --quiet --short HEAD
@@ -51,13 +51,20 @@ git symbolic-ref --quiet --short HEAD
 </Dir>
 <Let as="branch" value={branchRead.stdout.trim()} />
 
+<Let as="sourceMatches" value={checkout.clean && feedback.revision === revision && remote.stable && remote.revision === revision && branchRead.exitCode === 0 && remote.branch === branch && remote.base === "main"} />
+<Let as="reviewPublication" value={null} />
+<If condition={sourceMatches && review !== null}>
+<Delivery.ReviewPublication target={{directory:props.delivery.directory,repository:policy.repository,number:props.number,branch,revision}} review={review} publish={false} as="reviewPublication" />
+</If>
+<Ticket.Checkout repository={props.delivery.repository} as="afterRead" />
+<Let as="sourceMatches" value={sourceMatches && afterRead.clean && afterRead.head === revision} />
+<Let as="publicationPending" value={reviewPublication?.state === "pending"} />
 <Let as="ciPassed" value={remote.ciGreen === true && remote.ci?.status === "completed" && remote.ci?.conclusion === "success"} />
 <Let as="mainPassed" value={remote.mainRepair || remote.main.run?.status === "completed" && remote.main.run?.conclusion === "success"} />
-<Let as="required" value={[{gate:"independent-review",state:reviewState},{gate:"required-ci",state:ciPassed ? "passed" : remote.ci?.status === "completed" ? "failed" : "pending"},{gate:"main-health",state:mainPassed ? "passed" : remote.main.run?.status === "completed" ? "failed" : "pending"}]} />
+<Let as="required" value={[{gate:"independent-review",state:publicationPending ? "publication_pending" : reviewState},{gate:"required-ci",state:ciPassed ? "passed" : remote.ci?.status === "completed" ? "failed" : "pending"},{gate:"main-health",state:mainPassed ? "passed" : remote.main.run?.status === "completed" ? "failed" : "pending"}]} />
 <Let as="remaining" value={required.filter(gate => gate.state !== "passed")} />
-<Let as="sourceMatches" value={checkout.clean && afterRead.clean && afterRead.head === revision && feedback.revision === revision && remote.stable && remote.revision === revision && branchRead.exitCode === 0 && remote.branch === branch && remote.base === "main"} />
-<Let as="status" value={!sourceMatches ? "source_changed" : reviewState === "reconciliation_required" ? reviewState : reviewState !== "passed" ? reviewState : remaining.some(gate => gate.state === "failed") ? "checks_failed" : remaining.length !== 0 ? "checks_pending" : remote.merged && /^[0-9a-f]{40}$/.test(remote.mergeRevision) ? "delivered" : remote.state !== "open" ? "closed_unmerged" : remote.draft ? "publication_pending" : "ready_for_merge"} />
-<Let as="nextAction" value={status === "review_pending" ? "review" : status === "repair_required" ? "request_approved_repair" : status === "reconciliation_required" ? "reconcile_original_review" : status === "checks_pending" ? "wait_for_checks" : status === "checks_failed" ? "repair_failed_check" : status === "publication_pending" ? "finish_pr_metadata" : status === "ready_for_merge" ? "await_authorized_merge" : status === "delivered" ? "report_delivery" : status === "blocked" ? "report_review_blocker" : status === "review_held" ? (selected.state.hold.answer === null ? "resolve_review_hold" : "report_review_hold") : "reconcile_source"} />
-<Return value={{work:props.delivery.work,revision,status,nextAction,required,remaining,review:review === null ? null : {attempt,result:review.result},reviewAttempts:selected.occupied ? {chain:selected.state.chain,selection:selected.state.selection,attempts:selected.state.attempts,effective:selected.state.effective,hold:selected.state.hold} : null,remote}} />
+<Let as="status" value={!sourceMatches ? "source_changed" : publicationPending ? "publication_pending" : reviewState === "reconciliation_required" ? reviewState : reviewState !== "passed" ? reviewState : remaining.some(gate => gate.state === "failed") ? "checks_failed" : remaining.length !== 0 ? "checks_pending" : remote.merged && /^[0-9a-f]{40}$/.test(remote.mergeRevision) ? "delivered" : remote.state !== "open" ? "closed_unmerged" : remote.draft ? "publication_pending" : "ready_for_merge"} />
+<Let as="nextAction" value={status === "review_pending" ? "review" : status === "repair_required" ? "request_approved_repair" : status === "reconciliation_required" ? "reconcile_original_review" : status === "checks_pending" ? "wait_for_checks" : status === "checks_failed" ? "repair_failed_check" : status === "publication_pending" ? (publicationPending ? "publish_review" : "finish_pr_metadata") : status === "ready_for_merge" ? "await_authorized_merge" : status === "delivered" ? "report_delivery" : status === "blocked" ? "report_review_blocker" : status === "review_held" ? (selected.state.hold.answer === null ? "resolve_review_hold" : "report_review_hold") : "reconcile_source"} />
+<Return value={{work:props.delivery.work,revision,status,nextAction,required,remaining,review,reviewPublication,reviewAttempts:selected.occupied ? {chain:selected.state.chain,selection:selected.state.selection,attempts:selected.state.attempts,effective:selected.state.effective,hold:selected.state.hold} : null,remote}} />
 </Else>
 </If>
