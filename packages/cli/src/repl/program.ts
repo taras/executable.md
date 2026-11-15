@@ -342,6 +342,8 @@ interface RestoreReading {
   readonly failure?: string;
 }
 
+const RESTORE_INTERRUPTED = "Session restoration was interrupted.";
+
 export function* withColdReplStartup(
   location: string,
   proceed: (startup: ReplStartup, terminal: ColdReplTerminal) => Operation<void>,
@@ -441,7 +443,7 @@ export function* withColdReplStartup(
       ]);
 
       if (typeof restored === "string") {
-        return Err(new Error("Session restoration was interrupted."));
+        return Err(new Error(RESTORE_INTERRUPTED));
       }
       if (!restored.ok) {
         if (declined) {
@@ -469,7 +471,7 @@ export function* withColdReplStartup(
         })(),
         (function* (): Operation<Result<void>> {
           yield* choice.operation;
-          return Err(new Error("Session restoration was interrupted."));
+          return Err(new Error(RESTORE_INTERRUPTED));
         })(),
       ]);
     }
@@ -517,146 +519,152 @@ function* restoreScreen(
   listen: (notify: (() => void) | undefined) => void,
   handoff: Operation<void>,
 ): Operation<"retry" | "leave" | "handoff"> {
-  const tree = yield* useReplTree<ReplAction>();
-  const changes = createQueue<ReplScreenEvent | "draw" | "handoff", void>();
+  const changes = createQueue<ReplScreenEvent | "draw" | "handoff", never>();
   const events = yield* screen.events();
-  let queued = false;
-  function draw(): void {
-    if (!queued) {
-      queued = true;
-      changes.add("draw");
-    }
-  }
-  yield* ensure(() => listen(undefined));
-  listen(draw);
-  draw();
-  yield* spawn(function* () {
-    yield* handoff;
-    changes.add("handoff");
-  });
-  yield* spawn(function* () {
+
+  // A terminal exit must still settle while the painter waits on a write or
+  // has a handoff queued. Both branches join before another owner can present.
+  function* read(): Operation<"leave"> {
     while (true) {
       const event = yield* events.next();
-      if (event.done || event.value.kind === "eof") {
-        changes.close(undefined);
-        return;
+      if (
+        event.done ||
+        event.value.kind === "eof" ||
+        (event.value.kind === "input" &&
+          event.value.event?.kind === "key" &&
+          event.value.event.key === "Interrupt")
+      ) {
+        return "leave";
       }
       changes.add(event.value);
     }
-  });
+  }
 
-  let shown: ReplPainted | undefined;
-  let details = false;
-  let offset = 0;
-  let maximum = 0;
-  let page = 1;
-  const fits = createPlainFitStore();
-  const compose: ReplCompose = function* (size) {
-    const view = reading();
-    const stopped = view.failure !== undefined;
-    let lines = details ? [] : restoreReading(view, size.columns);
-    if (view.failure !== undefined && profileFor(size) !== "too-small") {
-      const diagnostic = yield* fitPlain(
-        renderer,
-        size,
-        view.failure.split("\n").map((text, index) => ({ key: String(index), text })),
-        size.columns - 1,
-        fits,
-      );
-      if (!diagnostic.ok) {
-        throw diagnostic.error;
-      }
-      if (details) {
-        page = size.rows - 1;
-        maximum = Math.max(0, diagnostic.value.length - page);
-        offset = Math.min(offset, maximum);
-        lines = diagnostic.value.slice(offset, offset + page).map((row) => row.text);
-      } else {
-        lines.push(...diagnostic.value.slice(0, 2).map((row) => row.text));
+  function* present(): Operation<"retry" | "leave" | "handoff"> {
+    const tree = yield* useReplTree<ReplAction>();
+    let queued = false;
+    function draw(): void {
+      if (!queued) {
+        queued = true;
+        changes.add("draw");
       }
     }
-    return {
-      ...refusedView(state, "", size, keyOfFocus(tree)),
-      restore: { lines, stopped, details },
+    yield* ensure(() => listen(undefined));
+    listen(draw);
+    draw();
+    yield* spawn(function* () {
+      yield* handoff;
+      changes.add("handoff");
+    });
+
+    let shown: ReplPainted | undefined;
+    let details = false;
+    let offset = 0;
+    let maximum = 0;
+    let page = 1;
+    const fits = createPlainFitStore();
+    const compose: ReplCompose = function* (size) {
+      const view = reading();
+      const stopped = view.failure !== undefined;
+      let lines = details ? [] : restoreReading(view, size.columns);
+      if (view.failure !== undefined && profileFor(size) !== "too-small") {
+        const diagnostic = yield* fitPlain(
+          renderer,
+          size,
+          view.failure.split("\n").map((text, index) => ({ key: String(index), text })),
+          size.columns - 1,
+          fits,
+        );
+        if (!diagnostic.ok) {
+          throw diagnostic.error;
+        }
+        if (details) {
+          page = size.rows - 1;
+          maximum = Math.max(0, diagnostic.value.length - page);
+          offset = Math.min(offset, maximum);
+          lines = diagnostic.value.slice(offset, offset + page).map((row) => row.text);
+        } else {
+          lines.push(...diagnostic.value.slice(0, 2).map((row) => row.text));
+        }
+      }
+      return {
+        ...refusedView(state, "", size, keyOfFocus(tree)),
+        restore: { lines, stopped, details },
+      };
     };
-  };
 
-  while (true) {
-    const next = yield* changes.next();
-    if (next.done) {
-      return "leave";
-    }
-    const change = next.value;
-    if (change === "handoff") {
-      return change;
-    }
-    if (change === "draw" || change.kind === "resize") {
-      if (change === "draw") {
-        queued = false;
+    while (true) {
+      const { value: change } = yield* changes.next();
+      if (change === "handoff") {
+        return change;
+      }
+      if (change === "draw" || change.kind === "resize") {
+        if (change === "draw") {
+          queued = false;
+        }
+        const focused = keyOfFocus(tree);
+        shown = yield* paint(frames, tree, renderer, screen, compose);
+        if (focused !== keyOfFocus(tree)) {
+          draw();
+        }
+        continue;
+      }
+      const input =
+        change.kind === "input"
+          ? change.event
+          : change.kind === "pointer" && shown !== undefined
+            ? resolvePointer(shown.rendered, change.at)
+            : undefined;
+      if (input === undefined) {
+        continue;
+      }
+      if (input.kind === "key" && input.key === "Escape") {
+        if (!details || profileFor(yield* screen.size()) === "too-small") {
+          return "leave";
+        }
+        details = false;
+        draw();
+        continue;
+      }
+      if (shown?.view.restore?.stopped !== true) {
+        continue;
       }
       const focused = keyOfFocus(tree);
-      shown = yield* paint(frames, tree, renderer, screen, compose);
+      const dispatched = yield* tree.dispatch(input);
+      if (dispatched.ok && dispatched.value.outcome === "action") {
+        const action = dispatched.value.action;
+        switch (action.kind) {
+          case "retry-restore":
+            return "retry";
+          case "exit":
+            return "leave";
+          case "show-restore-error":
+            details = true;
+            offset = 0;
+            draw();
+            break;
+          case "reading-key": {
+            const moved = {
+              ArrowUp: offset - 1,
+              ArrowDown: offset + 1,
+              PageUp: offset - page,
+              PageDown: offset + page,
+              Home: 0,
+              End: maximum,
+            }[action.key];
+            offset = Math.max(0, Math.min(maximum, moved));
+            draw();
+            break;
+          }
+        }
+      }
       if (focused !== keyOfFocus(tree)) {
         draw();
       }
-      continue;
-    }
-    const input =
-      change.kind === "input"
-        ? change.event
-        : change.kind === "pointer" && shown !== undefined
-          ? resolvePointer(shown.rendered, change.at)
-          : undefined;
-    if (input === undefined) {
-      continue;
-    }
-    if (input.kind === "key" && input.key === "Interrupt") {
-      return "leave";
-    }
-    if (input.kind === "key" && input.key === "Escape") {
-      if (!details || profileFor(yield* screen.size()) === "too-small") {
-        return "leave";
-      }
-      details = false;
-      draw();
-      continue;
-    }
-    if (shown?.view.restore?.stopped !== true) {
-      continue;
-    }
-    const focused = keyOfFocus(tree);
-    const dispatched = yield* tree.dispatch(input);
-    if (dispatched.ok && dispatched.value.outcome === "action") {
-      const action = dispatched.value.action;
-      switch (action.kind) {
-        case "retry-restore":
-          return "retry";
-        case "exit":
-          return "leave";
-        case "show-restore-error":
-          details = true;
-          offset = 0;
-          draw();
-          break;
-        case "reading-key": {
-          const moved = {
-            ArrowUp: offset - 1,
-            ArrowDown: offset + 1,
-            PageUp: offset - page,
-            PageDown: offset + page,
-            Home: 0,
-            End: maximum,
-          }[action.key];
-          offset = Math.max(0, Math.min(maximum, moved));
-          draw();
-          break;
-        }
-      }
-    }
-    if (focused !== keyOfFocus(tree)) {
-      draw();
     }
   }
+
+  return yield* race([read(), present()]);
 }
 
 export function* prepareReplStartup(
@@ -3084,12 +3092,27 @@ function* drive(
         ...(focusHints === undefined ? {} : { focusHints }),
       };
     };
+    const interrupted = new Error(RESTORE_INTERRUPTED);
+    const presentationScreen: ReplScreen =
+      coldTerminal === undefined
+        ? screen
+        : {
+            ...screen,
+            *present(bytes, size) {
+              // The live reader may receive an interrupt left in the terminal stream
+              // by the startup reader. Check before handing the first frame to the host.
+              if (presentedAt === undefined && ending) {
+                throw interrupted;
+              }
+              yield* screen.present(bytes, size);
+            },
+          };
     function* paintCurrent() {
       return yield* paint(
         frames,
         tree,
         yield* rendering(),
-        screen,
+        presentationScreen,
         compose,
         fits,
         chatFits,
@@ -3128,7 +3151,15 @@ function* drive(
     if (liveScreen === undefined && options.location === undefined) {
       yield* focusShortcut("1", true);
     }
-    const first = yield* draw();
+    let first: ReplPainted | undefined;
+    try {
+      first = yield* draw();
+    } catch (error) {
+      if (error === interrupted) {
+        return Err(interrupted);
+      }
+      throw error;
+    }
     // Only a frame that finished presenting can have put a message box in front
     // of anybody; keys that arrived while it was being drawn still end here.
     if (first !== undefined) {
