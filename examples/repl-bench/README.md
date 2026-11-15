@@ -243,6 +243,23 @@ retained session again to verify that the current viewport supplies the size.
 | `Terminal.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
 | `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
 
+For builds with numbered focus shortcuts, use the component for the region
+that should receive the next input. For example, use `<Terminal.Focus.Draft />`
+before typing an entry. Each component sends the corresponding shortcut and
+follows the [REPL focus rules](../../specs/repl-spec.md#move-between-regions-and-edit-within-them).
+
+| Region | Component |
+| --- | --- |
+| Sidekick Message | `<Terminal.Focus.Message />` |
+| Transcript | `<Terminal.Focus.Transcript />` |
+| Selected work | `<Terminal.Focus.SelectedWork />` |
+| Draft | `<Terminal.Focus.Draft />` |
+| Tabs/Configure | `<Terminal.Focus.Tabs />` |
+| Right reading | `<Terminal.Focus.RightReading />` |
+| TODO | `<Terminal.Focus.Todo />` |
+| History | `<Terminal.Focus.History />` |
+| Narrow surface bar | `<Terminal.Focus.SurfaceBar />` |
+
 The terminal controls use the nearest Terminal without a handle. Input and
 screen inspection require an active launch. The acceptance journeys also use
 `ReplBench` and `ReplBench.*`. Set initial dimensions on the enclosing

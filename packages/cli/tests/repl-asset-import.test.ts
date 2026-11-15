@@ -404,6 +404,7 @@ import {
   sidekickIdle,
   formOpen,
   pasteDraft,
+  intoDraft,
 } from "./support/screen-journeys.ts";
 
 describe("mounted asset import", () => {
@@ -771,8 +772,7 @@ describe("asset import acknowledgement and independent owners", () => {
     const { source } = yield* fixture();
     const io = yield* instrument();
     const page = yield* useReplPage();
-    yield* page.key("Ctrl+G");
-    yield* page.key("4");
+    yield* intoDraft(page);
     yield* pasteDraft(
       page,
       '<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="answer">The entry is asking.</Elicit>',
