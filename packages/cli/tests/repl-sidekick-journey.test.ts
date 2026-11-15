@@ -2177,6 +2177,12 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     );
 
     const after = yield* settledReading(repl);
+    const feedback = yield* page.until(
+      "the prepared greetings feedback",
+      (one) => one.found("[X] REPL.EntryInput result sent to Sidekick", SIDEKICK_PANE) === 1,
+    );
+    expect(feedback.found("<REPL.EntryInput", SIDEKICK_PANE)).toBe(0);
+    expect(feedback.found("## REPL.EntryInput", SIDEKICK_PANE)).toBe(0);
 
     // A second message in the same conversation, revising the same names as a
     // table. It prepares and submits in one response, so nothing is held.
@@ -2257,7 +2263,6 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
 
     expect(ran.chatHas("Prepared the greetings.")).toBe(true);
     expect(ran.chatHas("Revised it as a table.")).toBe(true);
-    expect(ran.chatHas("[X] REPL.EntryInput result sent to Sidekick")).toBe(true);
     expect(ran.chatHas("<REPL.EntryInput")).toBe(false);
     expect(ran.chatHas("## REPL.EntryInput")).toBe(false);
   });
