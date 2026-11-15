@@ -793,11 +793,6 @@ removed with its scope.
 BDD syntax such as `describe`, `it`, `beforeEach`, and `beforeAll` is not
 supported. Gherkin syntax such as `Given`, `When`, and `Then` is not supported.
 
-## Real-terminal REPL tests
-
-The repository’s [ReplBench example](../examples/repl-bench/reference.md) owns
-its terminal tooling, component reference, and acceptance journeys.
-
 ## Repository Runtime Suites
 
 The sections above specify the Executable Markdown testing language. This one
@@ -1020,11 +1015,6 @@ only to its `Test` step, and keeps that runtime's own preparation unchanged and
 repeated per shard. `green` requires all three job IDs; GitHub collapses a
 matrix into one result behind its ID, so a shard that fails, is cancelled, times
 out, or unexpectedly skips makes that dependency non-success.
-
-The `repl-bench` matrix prepares a checkout with spaces in its path on macOS
-and Linux. It runs the [ReplBench example’s checks](../examples/repl-bench/reference.md#markdown-tests).
-This matrix owns those Markdown journeys outside the weighted runtime corpus.
-`green` requires the matrix result.
 
 Concurrency inside a shard is not enabled.
 
