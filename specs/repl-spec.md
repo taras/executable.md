@@ -1593,7 +1593,7 @@ selected entry, the conversation filter and the draft.
 | --- | --- |
 | `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; then compact History and guidance |
 | `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
-| `72x20` and larger | one full-width routed surface with Sessions, Entries and Sidekick controls. The controls sit below the Sidekick view and above the other views. The drawer, History and guidance remain available |
+| `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. The drawer and guidance remain available |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as

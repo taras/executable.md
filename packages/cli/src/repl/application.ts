@@ -5811,6 +5811,17 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       }),
     );
   }
+  if (workspace !== undefined && narrow && showSidekick) {
+    const entry = workspaceEntry(view);
+    const outcome = entry === undefined ? undefined : workState(entry, model, live);
+    items.push(
+      line(
+        "work:compact",
+        entry === undefined ? "No entry yet" : `Entry ${entry.order} · ${outcome?.word ?? ""}`,
+        outcome?.style ?? styleOf("metadata"),
+      ),
+    );
+  }
   if (
     workspace !== undefined &&
     showSidekick &&
@@ -9875,6 +9886,7 @@ function slotOf(key: string): ReplSlot | undefined {
     key === "work:crumbs" ||
     key.startsWith("work:crumb:") ||
     key === "work:state" ||
+    key === "work:compact" ||
     key === "draft:stop" ||
     key === "draft:send" ||
     key === "follow" ||
@@ -11646,6 +11658,12 @@ function workspaceChatComposed(
   return spaced;
 }
 
+function workspaceEntry(view: ReplView): ReplEntry | undefined {
+  return view.selection.entry === undefined
+    ? view.model.entries.at(-1)
+    : view.model.entries.find((one) => one.key === view.selection.entry?.key);
+}
+
 /**
  * The staged left column's own headings, and the selected work's.
  *
@@ -11724,10 +11742,7 @@ function workspaceHeadings(
       ),
     );
   }
-  const entry =
-    view.selection.entry === undefined
-      ? view.model.entries[view.model.entries.length - 1]
-      : view.model.entries.find((one) => one.key === view.selection.entry?.key);
+  const entry = workspaceEntry(view);
   if (entry === undefined) {
     items.push(line("work:crumbs", "› No entry yet", styleOf("metadata")));
     return items;
@@ -12728,7 +12743,8 @@ function trayAllocation(
         : 1;
   const composer = 1 + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
   const held = queueSequence(workspace, context.queue).length;
-  const column = workspaceBodyRows(view.size) - wrapped("conversation") - 1 - 1 - extras;
+  const outletRows = profileFor(view.size) === "narrow" ? 2 : 0;
+  const column = workspaceBodyRows(view.size) - wrapped("conversation") - 2 - extras - outletRows;
   const queue = Math.max(
     0,
     Math.min(workspaceQueueRows(view.size), column - wrapped("tray") - composer),
@@ -13504,7 +13520,6 @@ function workspacePresentation(input: {
                 inside,
               ),
               children: [
-                ...trayHeader,
                 ...queueStatus,
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
@@ -13520,6 +13535,7 @@ function workspacePresentation(input: {
                       }),
                     ]
                   : queueRows),
+                ...trayHeader,
                 ...composer.map((one) => rowBox(one, region, room)),
               ],
             }),
@@ -13553,7 +13569,11 @@ function workspacePresentation(input: {
         id: "box:content",
         region: "content",
         props: workspaceColumnProps(size.columns, REPL_PALETTE.applicationSurface, false),
-        children: showingSidekick(view) ? [...routedRows, surfaces] : [surfaces, ...routedRows],
+        children: [
+          surfaces,
+          ...routedRows,
+          ...byKey("work:compact").map((one) => rowBox(one, "content", size.columns, header)),
+        ],
       }),
     );
   } else {
