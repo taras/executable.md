@@ -139,7 +139,7 @@ export function evaluationGrant(input: {
   const positions = new Map<string, number>();
   let pending: CarriedAnswer | undefined;
   const schemas = new Map<number, SourceRange>();
-  const selections = new Map<string, ElicitChoiceSelection>();
+  const selections = new Map<string, Map<string, ElicitChoiceSelection>>();
   const admission = `generated:${input.id}`;
   const owns = (id: string): boolean =>
     coroutine !== undefined && (id === coroutine || id.startsWith(`${coroutine}.`));
@@ -150,7 +150,9 @@ export function evaluationGrant(input: {
         owns(selection.coroutineId) &&
         selection.index === (positions.get(selection.coroutineId) ?? 0)
       ) {
-        selections.set(selection.coroutineId, selection);
+        const fields = selections.get(selection.coroutineId) ?? new Map();
+        fields.set(selection.field, selection);
+        selections.set(selection.coroutineId, fields);
       }
     },
     published(event) {
@@ -183,10 +185,13 @@ export function evaluationGrant(input: {
       return owns(event.coroutineId) && event.description.type === "elicit";
     },
     admits(event, serialized, spans) {
-      if (event.type !== "yield" || event.result.status !== "ok") {
+      if (event.type !== "yield") {
         return false;
       }
       if (!admitted) {
+        if (event.result.status !== "ok") {
+          return false;
+        }
         const value = event.result.value;
         if (!isJsonObject(value) || value.source !== input.source) {
           return false;
@@ -230,16 +235,21 @@ export function evaluationGrant(input: {
       return false;
     }
     const leaves: Leaf[] = [];
-    const selected = selections.get(event.coroutineId);
+    const choices = selections.get(event.coroutineId);
     selections.delete(event.coroutineId);
-    const projection = readElicitationAnswer(event, positions.get(event.coroutineId) ?? 0);
-    if (!projection.ok) {
+    const index = positions.get(event.coroutineId) ?? 0;
+    const projection =
+      event.result.status === "ok" ? readElicitationAnswer(event, index) : undefined;
+    if (projection?.ok === false) {
       return false;
     }
-    const answer = projection.value;
+    const answer = projection?.value;
     const protectedReceipt = secretInputFields(schema).length > 0;
     for (const [name, property] of Object.entries(properties)) {
-      if (!isJsonObject(property) || property.type !== "string" || property.writeOnly === true) {
+      if (
+        !isJsonObject(property) ||
+        (projection !== undefined && (property.type !== "string" || property.writeOnly === true))
+      ) {
         continue;
       }
       const offered = Array.isArray(property.enum) ? property.enum : [];
@@ -249,12 +259,14 @@ export function evaluationGrant(input: {
           leaves.push({
             path: ["description", ELICITATION_SCHEMA_FIELD, "properties", name, "enum", index],
             origin,
-            carried: false,
           });
         }
       });
+      const selected = choices?.get(name);
       if (
-        selected?.field === name &&
+        selected !== undefined &&
+        property.type === "string" &&
+        property.writeOnly !== true &&
         selected.name === event.description.name &&
         selected.fingerprint === event.description.input &&
         isJsonObject(answer) &&
@@ -266,7 +278,7 @@ export function evaluationGrant(input: {
           const path = protectedReceipt
             ? ["result", "value", "executablemd.input", "members", name, "value"]
             : ["result", "value", name];
-          leaves.push({ path, origin, carried: true });
+          leaves.push({ path, origin, answerField: name });
         }
       }
     }
@@ -278,7 +290,7 @@ export function evaluationGrant(input: {
       return false;
     }
     const found: ApprovedMatch[] = [];
-    const text = JSON.stringify(answer, null, 2);
+    const text = answer === undefined ? undefined : JSON.stringify(answer, null, 2);
     for (const span of spans) {
       const at = within(placed, span);
       if (at === undefined) {
@@ -291,14 +303,11 @@ export function evaluationGrant(input: {
       ) {
         return false;
       }
-      if (leaf.carried) {
-        const field = selected?.field;
-        const fieldPlacement =
-          field === undefined ? undefined : place(`${text}\n`, [[field]], 2)?.[0];
-        const contentStart = fieldPlacement?.at;
+      if (leaf.answerField !== undefined && text !== undefined) {
+        const fieldPlacement = place(`${text}\n`, [[leaf.answerField]], 2)?.[0];
         const start = encodedOffset(fieldPlacement, at.start);
         const end = encodedOffset(fieldPlacement, at.end);
-        if (contentStart === undefined || start === undefined || end === undefined) {
+        if (start === undefined || end === undefined) {
           return false;
         }
         const bytes = at.value.slice(at.start, at.end);
@@ -308,8 +317,8 @@ export function evaluationGrant(input: {
         found.push({ ...span, bytes, start, end });
       }
     }
-    if (found.length > 0 && selected !== undefined) {
-      pending = { coroutineId: selected.coroutineId, index: selected.index, text, matches: found };
+    if (found.length > 0 && text !== undefined) {
+      pending = { coroutineId: event.coroutineId, index, text, matches: found };
     }
     return true;
 
@@ -418,7 +427,7 @@ type Path = readonly (string | number)[];
 interface Leaf {
   readonly path: Path;
   readonly origin: number;
-  readonly carried: boolean;
+  readonly answerField?: string;
 }
 
 /** One string field, where the event's serialization holds its literal. */

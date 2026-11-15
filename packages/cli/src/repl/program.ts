@@ -201,6 +201,7 @@ import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
 import { focusHintOps, focusRouteHint } from "./focus-hints.ts";
 import {
+  ReplFitRefusal,
   createFitStore,
   createPlainFitStore,
   fitCells,
@@ -3178,7 +3179,7 @@ function approvalNow(owner: SidekickOwner): ReplSidekickApproval | undefined {
       const revealed = asked.revealed === index;
       const shown = revealed ? (asked.reveal(index) ?? excerpt.masked) : excerpt.masked;
       return [
-        approvalText(`${messageId} (${ruleId}) · line ${line}, column ${column}`),
+        approvalText(`${messageId} · line ${line}, column ${column} (${ruleId})`),
         approvalText(revealed ? shown : excerpt.before + shown + excerpt.after),
       ];
     },
@@ -4262,7 +4263,7 @@ function* perform(
       // The schema decides, through the same compiled validator the request
       // carries, and the existing canonical operation writes the answer. This
       // reads no form and judges no value.
-      const outcome = asked.submit(intent.values, intent.selected);
+      const outcome = asked.submit(intent.values, intent.choices);
       return outcome.kind === "answered"
         ? { askingAnswered: true }
         : { askingMessages: reported(outcome) };
@@ -4770,24 +4771,11 @@ export function* commitReplFrame(
   for (const cell of tree.frame().cells) {
     cells.set(cell.node, cell.cell);
   }
-  const approval = view.live.sidekick?.approval;
-  if (approval !== undefined && presentedDrawer(view)?.kind === "reply-approval") {
-    const width = prepared.value.context.widths?.drawer ?? 0;
-    for (let index = 0; index < approval.findingCount; index += 1) {
-      const rule = nodeByKey.get(`drawer:reply-approval:rule:${index}`);
-      const excerpt = nodeByKey.get(`drawer:reply-approval:excerpt:${index}`);
-      if (rule === undefined && excerpt === undefined) {
-        continue;
-      }
-      const finding = approval.finding(index);
-      if (finding !== undefined) {
-        if (rule !== undefined) {
-          cells.set(rule, finding[0].padEnd(width, " "));
-        }
-        if (excerpt !== undefined) {
-          cells.set(excerpt, finding[1].padEnd(width, " "));
-        }
-      }
+  for (const [key, line] of presentation.approvalRows ?? []) {
+    const node = nodeByKey.get(key);
+    const cell = prepared.value.approvalCell?.(line);
+    if (node !== undefined && cell !== undefined) {
+      cells.set(node, cell);
     }
   }
   // Read after the reconcile that settled it and handed on, never stored: the
@@ -4853,6 +4841,7 @@ function sidekickViewportOf(manifest: ReplLayoutManifest): string {
 
 /** What one bounded preparation measured, and the frame it decided on. */
 export interface ReplPrepared {
+  readonly approvalCell?: (line: string) => string | undefined;
   readonly context: ReplPresentationContext;
   readonly presentation: ReplPresentation;
   readonly admission: ReplAdmission;
@@ -5313,20 +5302,43 @@ export function* prepareFrame(
   }
   // A drawer row is one displayed row: fitting the presented question or
   // permission text before admission keeps wrapped content reachable.
+  const approval =
+    presentedDrawer(view)?.kind === "reply-approval" ? view.live.sidekick?.approval : undefined;
+  const findingLines: { key: string; text: string }[] = [];
+  for (let index = 0; index < (approval?.findingCount ?? 0); index += 1) {
+    const finding = approval?.finding(index);
+    if (finding !== undefined) {
+      findingLines.push(
+        { key: `drawer:reply-approval:rule:${index}`, text: finding[0] },
+        { key: `drawer:reply-approval:excerpt:${index}`, text: finding[1] },
+      );
+    }
+  }
+  const fittedApproval = yield* fitPlain(renderer, view.size, findingLines, widths.drawer);
+  if (!fittedApproval.ok) {
+    return Err(new ReplFitRefusal("The reply approval text could not be fitted."));
+  }
+  // Only the terminal paint receives the fitted text. The mounted tree and its
+  // layout get the same row identities and lengths with empty cells.
+  const approvalCells = new Map(
+    fittedApproval.value.map((row) => [row.key, row.text.padEnd(widths.drawer, " ")]),
+  );
   const asked = previewedMessage(view);
   const preview =
-    asked === undefined || widths.drawer < 1
-      ? Ok(undefined)
-      : yield* fitPlain(
-          renderer,
-          view.size,
-          asked.split("\n").map((text, offset) => ({
-            key: `message:${offset}`,
-            text,
-            runs: sourceRuns(text),
-          })),
-          widths.drawer,
-        );
+    approval !== undefined
+      ? Ok(fittedApproval.value.map((row) => ({ ...row, text: "", runs: [] })))
+      : asked === undefined || widths.drawer < 1
+        ? Ok(undefined)
+        : yield* fitPlain(
+            renderer,
+            view.size,
+            asked.split("\n").map((text, offset) => ({
+              key: `message:${offset}`,
+              text,
+              runs: sourceRuns(text),
+            })),
+            widths.drawer,
+          );
   if (!preview.ok) {
     return preview;
   }
@@ -5638,7 +5650,12 @@ export function* prepareFrame(
   if (!edited.ok) {
     return edited;
   }
-  return Ok({ context, admission, presentation: presentationFor(view, context) });
+  return Ok({
+    context,
+    admission,
+    presentation: presentationFor(view, context),
+    ...(approval === undefined ? {} : { approvalCell: (line: string) => approvalCells.get(line) }),
+  });
 }
 
 /**

@@ -110,7 +110,7 @@ export interface ReplQuestion {
    * is still the question they are answering.
    */
   refuse?(error: ElicitationProviderError): void;
-  submit(values: Readonly<Record<string, string>>, selected?: string): ReplFormOutcome;
+  submit(values: Readonly<Record<string, string>>, choices?: readonly string[]): ReplFormOutcome;
 }
 
 /** What the application reads to draw the question, and to know there is one. */
@@ -490,7 +490,10 @@ export function* useReplElicitation(
                   reject(error);
                 }
               },
-              submit(values: Readonly<Record<string, string>>, selected?: string): ReplFormOutcome {
+              submit(
+                values: Readonly<Record<string, string>>,
+                choices?: readonly string[],
+              ): ReplFormOutcome {
                 if (settled) {
                   return { kind: "invalid", issues: [] };
                 }
@@ -526,8 +529,10 @@ export function* useReplElicitation(
                   return { kind: "invalid", issues: [] };
                 }
                 settled = true;
-                const field = form.fields.find((field) => field.name === selected);
-                if (field !== undefined && field.secret !== true) {
+                for (const field of form.fields) {
+                  if (!choices?.includes(field.name) || field.secret === true) {
+                    continue;
+                  }
                   const option = field.choices?.indexOf(values[field.name]) ?? -1;
                   if (option >= 0) {
                     onSelection?.(assembled, field.name, option);

@@ -117,7 +117,7 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
         readonly hold?: AgentReplyHold;
       }
     | undefined;
-  const selections = new WeakMap<object, { readonly field: string; readonly option: number }>();
+  const selections = new WeakMap<object, { readonly field: string; readonly option: number }[]>();
 
   yield* Elicitation.around({
     *elicit([request]: [ElicitationRequest], next) {
@@ -151,9 +151,9 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
         });
         const answer = yield* next(request);
         if (owner.hold !== undefined && typeof answer === "object" && answer !== null) {
-          const selection = selections.get(answer);
-          if (selection !== undefined) {
-            selections.delete(answer);
+          const chosen = selections.get(answer);
+          selections.delete(answer);
+          for (const selection of chosen ?? []) {
             owner.hold.selectedElicitation({ ...elicit, ...selection });
           }
         }
@@ -196,7 +196,7 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
   // No waits reading. `ReplWaits` counts what an *entry* is held on, and a
   // Sidekick question holds no entry: it holds the response that asked it.
   const questions = yield* useReplElicitation(undefined, (answer, field, option) => {
-    selections.set(answer, { field, option });
+    selections.set(answer, [...(selections.get(answer) ?? []), { field, option }]);
   });
 
   return {

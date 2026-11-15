@@ -790,6 +790,7 @@ export interface ReplFormMessage {
  */
 export interface ReplFormState {
   readonly carets?: Readonly<Record<string, ReplCaret>>;
+  readonly choices?: readonly string[];
   /** What has been typed into each field so far, by field name. */
   readonly values: Readonly<Record<string, string>>;
   /** Which field text and Backspace act on, or none yet. */
@@ -1066,6 +1067,7 @@ export interface ReplViewports {
   readonly permission: number;
   /** Rows the Configure drawer is scrolled by. */
   readonly configure: number;
+  readonly approval?: { readonly key: string; readonly offset: number };
   /**
    * Rows each retained drawer reading is scrolled by, one per reading.
    *
@@ -1294,7 +1296,7 @@ export type ReplIntent =
       readonly kind: "answer-sidekick";
       readonly question: string;
       readonly values: Readonly<Record<string, string>>;
-      readonly selected?: string;
+      readonly choices?: readonly string[];
     }
   /**
    * Ask this conversation's agent what it offers, explicitly.
@@ -3069,7 +3071,7 @@ export function reduceRepl(
       // The same meaning activation has in the entry's form: the value goes in
       // and the whole object is offered, because whether it is an answer is the
       // schema's to say.
-      const chosen = written(asking.held.form, action.field, action.option);
+      const chosen = written(asking.held.form, action.field, action.option, true);
       return {
         state: Object.freeze({
           ...state,
@@ -3080,7 +3082,7 @@ export function reduceRepl(
           kind: "answer-sidekick",
           question: asking.key,
           values: chosen.values,
-          selected: action.field,
+          choices: chosen.choices,
         },
       };
     }
@@ -3097,6 +3099,7 @@ export function reduceRepl(
           kind: "answer-sidekick",
           question: asking.key,
           values: asking.held.form.values,
+          choices: asking.held.form.choices,
         },
       };
     }
@@ -3326,6 +3329,17 @@ export function reduceRepl(
       });
     }
     case "scroll": {
+      const window = admission.windows.get(DRAWER_WINDOW);
+      if (approval !== undefined && window !== undefined) {
+        return settled({
+          ...state,
+          viewports: {
+            ...state.viewports,
+            approval: { key: approval.key, offset: scrolled(window, action.delta) },
+          },
+          refusal: undefined,
+        });
+      }
       const open = state.route.drawers[state.route.drawers.length - 1];
       if (open === undefined) {
         return refuse(state, "no drawer is open to scroll.");
@@ -3333,7 +3347,6 @@ export function reduceRepl(
       // The window the frame measured for the drawer that is open. One viewport
       // moves at a time, because one drawer is read at a time; which offset the
       // new position is stored in is decided by what is being read.
-      const window = admission.windows.get(DRAWER_WINDOW);
       if (open.kind === "live-permission") {
         const pending =
           state.permission === undefined ? undefined : offered(state, live, state.permission);
@@ -3784,12 +3797,15 @@ export function askingFor(state: ReplState, question: ReplSidekickQuestion | und
 }
 
 /** One field's value replaced, leaving every other field alone. */
-function written(form: ReplFormState, field: string, value: string): ReplFormState {
+function written(form: ReplFormState, field: string, value: string, choice = false): ReplFormState {
   const carets = { ...form.carets };
   delete carets[field];
   return Object.freeze({
-    carets,
     ...form,
+    carets,
+    choices: choice
+      ? Object.freeze([...(form.choices ?? []).filter((name) => name !== field), field])
+      : form.choices?.filter((name) => name !== field),
     values: Object.freeze({ ...form.values, [field]: value }),
     // A value that has changed makes the last verdict about the old one stale,
     // so the messages go rather than sitting under a form they no longer
@@ -4862,6 +4878,7 @@ function chunked(text: string, width: number): readonly string[] {
  */
 interface Described {
   readonly key: string;
+  readonly approvalLine?: string;
   readonly description: ReplDescription<ReplAction>;
   readonly style: ReplRowStyle;
   /**
@@ -5129,6 +5146,7 @@ export function focusSettled(
     if (claim.startsWith("drawer:")) {
       const from = admission.windows.get(DRAWER_WINDOW)?.from;
       if (from !== undefined) {
+        const approval = presentedApproval(view);
         const open = state.route.drawers.at(-1);
         const key = open === undefined ? undefined : readingKeyOf(state, open);
         return Object.freeze({
@@ -5138,6 +5156,8 @@ export function focusSettled(
             ...viewports,
             configure: presentedConfiguring(view) === undefined ? viewports.configure : from,
             permission: open?.kind === "live-permission" ? from : viewports.permission,
+            approval:
+              approval === undefined ? viewports.approval : { key: approval.key, offset: from },
             readings:
               key === undefined ? viewports.readings : { ...viewports.readings, [key]: from },
           },
@@ -7895,6 +7915,7 @@ function approvalContent(
   view: ReplView,
   approval: ReplSidekickApproval,
   width: number,
+  preview: readonly ReplFittedLine[] | undefined,
 ): DrawerContent {
   const content: DrawerRow[] = [];
   const line = (key: string, label: string) => {
@@ -7916,9 +7937,20 @@ function approvalContent(
       ),
     });
   };
+  let next = 0;
+  const pieces = preview ?? [];
   for (let index = 0; index < approval.findingCount; index += 1) {
-    line(`drawer:reply-approval:rule:${index}`, "");
-    line(`drawer:reply-approval:excerpt:${index}`, "");
+    const rule = `drawer:reply-approval:rule:${index}`;
+    const excerpt = `drawer:reply-approval:excerpt:${index}`;
+    while (pieces[next]?.line === rule || pieces[next]?.line === excerpt) {
+      const piece = pieces[next++];
+      content.push({
+        described: {
+          ...drawerLine(piece.key, "", width, styleOf("metadata")),
+          approvalLine: piece.key,
+        },
+      });
+    }
     if (!approval.accepting) {
       const verb = approval.revealed === index ? "hide" : "reveal";
       const suffix = approval.findingCount === 1 ? "" : ` ${index + 1}`;
@@ -7956,7 +7988,7 @@ function drawerContent(
   if (open === undefined) {
     const approval = presentedApproval(view);
     if (approval !== undefined) {
-      return approvalContent(view, approval, width);
+      return approvalContent(view, approval, width, preview);
     }
     // No route drawer, so this is one of the Sidekick's own two drawers if
     // anything is. Configure first: opening it hides the question form's
@@ -9773,6 +9805,7 @@ export interface ReplPresentationContext {
 
 /** One reading's descriptions, paired with where the engine places them. */
 export interface ReplPresentation {
+  readonly approvalRows?: ReadonlyMap<string, string>;
   readonly descriptions: readonly ReplDescription<ReplAction>[];
   readonly manifest: ReplLayoutManifest;
 }
@@ -10446,9 +10479,13 @@ export function presentationFor(
     requested !== undefined && containsRequest(placedDescriptions)
       ? placedDescriptions.map(requestedDescription)
       : placedDescriptions;
+  const approvalRows = new Map<string, string>();
   const styles = new Map<string, ReplRowStyle>();
   const runs = new Map<string, readonly ReplTokenRun[]>();
   for (const one of screen.rows) {
+    if (one.approvalLine !== undefined) {
+      approvalRows.set(one.key, one.approvalLine);
+    }
     styles.set(one.key, one.style);
     const edited = editorRuns(one.description, context);
     if (edited !== undefined || one.runs !== undefined) {
@@ -10813,18 +10850,21 @@ export function presentationFor(
 
   const workspace = staged(view);
   if (workspace !== undefined) {
-    return workspacePresentation({
-      view,
-      context,
-      descriptions,
-      candidates,
-      rail,
-      listColumn,
-      chatColumn,
-      viewports,
-      regions,
-      contents,
-    });
+    return {
+      ...workspacePresentation({
+        view,
+        context,
+        descriptions,
+        candidates,
+        rail,
+        listColumn,
+        chatColumn,
+        viewports,
+        regions,
+        contents,
+      }),
+      approvalRows,
+    };
   }
 
   const columns: ReplBox[] = [];
@@ -11054,6 +11094,7 @@ export function presentationFor(
 
   return {
     descriptions,
+    approvalRows,
     manifest: Object.freeze({
       profile,
       size: Object.freeze({ ...size }),
@@ -11459,6 +11500,11 @@ function offsetOf(view: ReplView, window: string): number {
   }
   if (window === ENTRIES_WINDOW) {
     return view.state.viewports.entries;
+  }
+  const approval = presentedApproval(view);
+  if (approval !== undefined) {
+    const held = view.state.viewports.approval;
+    return held?.key === approval.key ? held.offset : 0;
   }
   return drawerOffsetOf(view.state, view.state.route.drawers[view.state.route.drawers.length - 1]);
 }

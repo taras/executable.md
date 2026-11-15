@@ -1882,6 +1882,45 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
     `Choose.\n\n<Elicit schema={${JSON.stringify(CHOICE)}} as="answer">Pick one</Elicit>\n\n` +
     `<Output>\n${marker}\n</Output>\n`;
 
+  it("CW9: acknowledges an ordinary Elicit failure with an approved authored choice", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const seen: AgentReplyHold[] = [];
+    const ran = yield* scoped(function* () {
+      yield* useRangedScanner();
+      return yield* withQuestions(
+        stream,
+        stub(traffic, { respond: () => ({ deltas: [asking] }) }),
+        reviewing(() => "accept", seen),
+        () => {
+          throw new Error("Question refused by the test presenter.");
+        },
+        function* (chat) {
+          const first = yield* chat.prompt("first");
+          if (!first.ok) {
+            throw first.error;
+          }
+          return yield* chat.evaluateGeneratedXmdRoot(
+            { id: "reply-1", source: first.value, allow: ["read", "write"] },
+            seen[0],
+          );
+        },
+      );
+    });
+    expect(ran.ok && ran.value.ok).toBe(false);
+    const events = yield* stream.readAll();
+    const failed = events.find(
+      (event) => event.type === "yield" && event.description.type === "elicit",
+    );
+    if (failed?.type !== "yield") {
+      throw new Error("Expected an acknowledged elicitation refusal.");
+    }
+    expect(failed.result.status).toBe("err");
+    expect(JSON.stringify(failed.description)).toContain(marker);
+    expect(JSON.stringify(failed.result)).not.toContain(marker);
+    expect(traffic.prompts).toHaveLength(1);
+  });
+
   function* feedbackSlice(stream: InMemoryStream, text: string, start = 0) {
     const events = yield* stream.readAll();
     const answer = events.findLast(
