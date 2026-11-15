@@ -114,7 +114,7 @@ const adam7 = [
   [0, 1, 1, 2],
 ];
 
-function validScanlines(header: DataView, compressed: Uint8Array): boolean {
+function validScanlines(header: DataView, compressed: Uint8Array, finalIdatStart: number): boolean {
   const width = header.getUint32(16);
   const height = header.getUint32(20);
   const depth = header.getUint8(24);
@@ -155,7 +155,8 @@ function validScanlines(header: DataView, compressed: Uint8Array): boolean {
       !(decoded.buffer instanceof Uint8Array) ||
       !("engine" in decoded) ||
       !(decoded.engine instanceof Inflate) ||
-      decoded.engine.bytesWritten !== compressed.length ||
+      // PNG allows unused bytes only at the end of the final IDAT chunk.
+      decoded.engine.bytesWritten < finalIdatStart ||
       decoded.buffer.length !== expected
     ) {
       return false;
@@ -190,6 +191,7 @@ export function png(bytes: Uint8Array): boolean {
   }
   const compressed = new Uint8Array(bytes.length);
   let compressedLength = 0;
+  let finalIdatStart = 0;
   for (let at = 8; at + 12 <= bytes.length; ) {
     const length = view.getUint32(at);
     const type = view.getUint32(at + 4);
@@ -197,7 +199,8 @@ export function png(bytes: Uint8Array): boolean {
     if (end > bytes.length || crc32(bytes.subarray(at + 4, end - 4)) !== view.getUint32(end - 4)) {
       return false;
     }
-    if (type === 0x49444154 && length > 0) {
+    if (type === 0x49444154) {
+      finalIdatStart = compressedLength;
       compressed.set(bytes.subarray(at + 8, end - 4), compressedLength);
       compressedLength += length;
     }
@@ -206,7 +209,7 @@ export function png(bytes: Uint8Array): boolean {
         compressedLength > 0 &&
         length === 0 &&
         end === bytes.length &&
-        validScanlines(view, compressed.subarray(0, compressedLength))
+        validScanlines(view, compressed.subarray(0, compressedLength), finalIdatStart)
       );
     }
     at = end;

@@ -20,18 +20,30 @@ import {
 } from "./publication-markdown.ts";
 import { BODY_LIMIT, loadEvidence, type Evidence } from "./publication-receipt.ts";
 
+type Body = ReturnType<typeof inspectBody>;
+
+function renderDescription(evidence: Evidence, { before, after, slots }: Body): string {
+  const body = before + renderEvidence(evidence, slots) + after;
+  if (body.length > BODY_LIMIT) {
+    throw new Error("The proposed draft description exceeds the GitHub body limit.");
+  }
+  return body;
+}
+
 export function* preparePublication(path: string, mode: "dry-run" | "publish") {
   const evidence = yield* loadEvidence(resolve(yield* cwd(), path));
   yield* checkCli();
   const { target, pins, identity, sources } = evidence;
   if (mode === "publish") {
     if (target.kind === "create") {
-      yield* checkCheckout(evidence);
-      if (inspectBody(evidence, target.body).present) {
+      const prepared = inspectBody(evidence, target.body);
+      if (prepared.present) {
         throw new Error(
           "Supply prepared draft prose without an evidence section, or resume by PR number.",
         );
       }
+      renderDescription(evidence, prepared);
+      yield* checkCheckout(evidence);
     }
     return {
       kind: "publish",
@@ -50,7 +62,8 @@ export function* preparePublication(path: string, mode: "dry-run" | "publish") {
       : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
           yield* readRegular(resolve(evidence.directory, evidence.previewBody), BODY_LIMIT),
         );
-  const { before, after, slots } = inspectBody(evidence, body);
+  const proposed = inspectBody(evidence, body);
+  const { slots } = proposed;
   if (
     slots.some((url, index) => url !== pending(evidence.slots[index]) && !nativeAttachment(url))
   ) {
@@ -59,7 +72,7 @@ export function* preparePublication(path: string, mode: "dry-run" | "publish") {
   return {
     kind: "dry-run",
     identity,
-    markdown: before + renderEvidence(evidence, slots) + after,
+    markdown: renderDescription(evidence, proposed),
     images: evidence.slots.flatMap((slot, index) =>
       slots[index] === pending(slot) ? [slot.path] : [],
     ),
@@ -68,7 +81,6 @@ export function* preparePublication(path: string, mode: "dry-run" | "publish") {
   };
 }
 
-type Body = ReturnType<typeof inspectBody>;
 type SlotState = {
   id: string;
   sha256: string;
@@ -154,10 +166,7 @@ export function* publishEvidence(
         : {}),
     };
   }
-  const body = current.before + renderEvidence(evidence, current.slots) + current.after;
-  if (body.length > BODY_LIMIT) {
-    throw new Error("The proposed draft description exceeds the GitHub body limit.");
-  }
+  const body = renderDescription(evidence, current);
 
   const editExit = yield* scoped(function* () {
     const scratch = yield* useTempDirectory("xmd-repl-evidence-");
