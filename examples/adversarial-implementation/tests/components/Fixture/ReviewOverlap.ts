@@ -228,6 +228,18 @@ export default function* ReviewOverlap(value: unknown) {
       "A missing publication must take precedence over merge readiness.",
     );
     yield* rm(`${evidence}/stale`);
+    yield* writeTextFile(`${evidence}/comments-unavailable`, "");
+    const unavailable = yield* review("later", 25_000, "publish-review");
+    check(
+      unavailable.code === 0 &&
+        statusSchema.parse(JSON.parse(unavailable.stdout)).nextAction === "publish_review",
+      "Unavailable native comments granted readiness.",
+    );
+    check(
+      !(yield* exists(`${evidence}/later-posted`)),
+      "Unavailable native comments allowed a POST.",
+    );
+    yield* rm(`${evidence}/comments-unavailable`);
     yield* rm(`${replacement}/receipt.json`);
     yield* writeTextFile(`${evidence}/delay-post`, "");
     yield* scoped(function* () {

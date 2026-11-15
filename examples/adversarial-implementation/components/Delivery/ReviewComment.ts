@@ -6,17 +6,16 @@ import { createDirectory, digest } from "../Ticket/native-node.ts";
 import { clear, write } from "../Ticket/text-storage.ts";
 import { reviewerSchema } from "./records.ts";
 
-export const description =
-  'Verify a saved review comment or publish it from its validated receipt. Use <Delivery.ReviewPublication target={target} review={review} publish={false} as="publication" />.';
-
 export const props = {
   type: "object",
   properties: {
     target: { type: "object" },
     review: { type: "object" },
     publish: { type: "boolean" },
+    allowPost: { type: "boolean" },
+    comments: { type: "array" },
   },
-  required: ["target", "review", "publish"],
+  required: ["target", "review", "publish", "allowPost", "comments"],
   additionalProperties: false,
 };
 
@@ -41,22 +40,25 @@ const input = z.strictObject({
     }),
   }),
   publish: z.boolean(),
+  allowPost: z.boolean(),
+  comments: z.array(
+    z.object({
+      kind: z.enum(["conversation", "review"]),
+      id: z.string(),
+      url: z.string(),
+      body: z.string(),
+    }),
+  ),
 });
 const pulls = z.object({
   number: targetSchema.shape.number,
   base: z.object({ repo: z.object({ full_name: z.string() }) }),
   head: z.object({ ref: z.string(), sha }),
 });
-const comment = z.object({
-  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  issue_url: z.string(),
-  html_url: z.string(),
-  body: z.string(),
-});
 const saved = z.strictObject({
   revision: sha,
   bodySha256: z.string().regex(/^[0-9a-f]{64}$/),
-  id: comment.shape.id,
+  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   url: z.string(),
 });
 
@@ -118,45 +120,37 @@ function* readTarget(target: Target) {
   );
 }
 
-function verifiedComment(target: Target, value: z.infer<typeof comment>, body: string): Verified {
-  const { repository, number, revision } = target;
-  const validUrls = ["issues", "pull"].map((kind) =>
-    `https://github.com/${repository}/${kind}/${number}#issuecomment-${value.id}`.toLowerCase(),
+function findComment(
+  target: Target,
+  comments: z.infer<typeof input>["comments"],
+  marker: string,
+  body: string,
+): Verified | null {
+  const matches = comments.filter(
+    (item) => item.kind === "conversation" && item.body.split("\n", 1)[0] === marker,
   );
-  if (
-    value.body !== body ||
-    value.issue_url.toLowerCase() !==
-      `https://api.github.com/repos/${repository}/issues/${number}`.toLowerCase() ||
-    !validUrls.includes(value.html_url.toLowerCase())
-  ) {
-    throw new Error("The GitHub comment does not match the saved review.");
-  }
-  return {
-    revision,
-    bodySha256: digest(new TextEncoder().encode(body)),
-    id: value.id,
-    url: value.html_url,
-  };
-}
-
-function* findComment(target: Target, marker: string, body: string) {
-  const { exitCode, stdout } = yield* github(
-    "--paginate",
-    "--slurp",
-    `repos/${target.repository}/issues/${target.number}/comments?per_page=100`,
-  );
-  if (exitCode !== 0) {
-    throw new Error("Could not read GitHub review comments.");
-  }
-  const matches = z
-    .array(z.array(comment))
-    .parse(JSON.parse(stdout))
-    .flat()
-    .filter((item) => item.body.split("\n", 1)[0] === marker);
   if (matches.length > 1) {
     throw new Error("Multiple GitHub comments claim the same review revision.");
   }
-  return matches[0] === undefined ? null : verifiedComment(target, matches[0], body);
+  const [value] = matches;
+  if (value === undefined) {
+    return null;
+  }
+  const { repository, number, revision } = target;
+  const id = Number(value.id);
+  const urls = ["issues", "pull"].map((kind) =>
+    `https://github.com/${repository}/${kind}/${number}#issuecomment-${id}`.toLowerCase(),
+  );
+  if (
+    !Number.isSafeInteger(id) ||
+    id <= 0 ||
+    value.id !== String(id) ||
+    value.body !== body ||
+    !urls.includes(value.url.toLowerCase())
+  ) {
+    throw new Error("The GitHub comment does not match the saved review.");
+  }
+  return { revision, bodySha256: digest(new TextEncoder().encode(body)), id, url: value.url };
 }
 
 function* readSaved(directory: string) {
@@ -206,8 +200,8 @@ function* post(target: Target, reservation: string, body: string): Operation<voi
   });
 }
 
-export default function* ReviewPublication(value: unknown) {
-  const { target, review, publish } = input.parse(value);
+export default function* ReviewComment(value: unknown) {
+  const { target, review, publish, allowPost, comments } = input.parse(value);
   if (review.result.revision !== target.revision) {
     return pending("The retained review names a different revision.");
   }
@@ -235,12 +229,12 @@ export default function* ReviewPublication(value: unknown) {
       return pending("The current pull request does not match the reviewed revision.");
     }
 
-    let observed = yield* findComment(target, marker, body);
-    if (observed === null && publish && previous === null) {
+    const observed = findComment(target, comments, marker, body);
+    if (observed === null && publish && allowPost && previous === null) {
       yield* post(target, record, body);
-      observed = yield* findComment(target, marker, body);
+      return { state: "readback" };
     }
-    if (observed === null || !(yield* readTarget(target))) {
+    if (observed === null) {
       return pending(
         "The current review comment could not be verified. Retry publication from the saved receipt.",
       );
