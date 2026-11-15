@@ -89,6 +89,7 @@ import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "../generated-x
 import { durabilityFailure } from "../errors.ts";
 import { isJsonObject, parseJson } from "../json.ts";
 import { retainedSource } from "../root-source.ts";
+import { scanSecrets, secretPolicy } from "../secrets/policy.ts";
 import { AgentConversationProvider } from "./conversation-provider.ts";
 import type {
   AgentOptions,
@@ -107,6 +108,7 @@ import {
   persistPrompt,
   promptFailureFromRecord,
 } from "./journal.ts";
+import type { PromptRecord } from "./journal.ts";
 import { freezeJson, parseProviderConfiguration } from "./provider-configuration.ts";
 import type {
   AdmitProviderConfiguration,
@@ -1177,13 +1179,16 @@ function conversationTurn(
           // own terminal, so the text it finally delegates is settled inside
           // the live runner. `retain` is the journal's own; nothing the
           // composition can reach carries it.
-          (retain) =>
-            runPrompt(job.input, options, sequence, false, carried, {
-              provider,
-              agent,
-              session,
-              retain,
-            } satisfies DirectPromptTurn),
+          function* (retain): Operation<PromptRecord> {
+            return yield* withholdFlaggedReply(
+              yield* runPrompt(job.input, options, sequence, false, carried, {
+                provider,
+                agent,
+                session,
+                retain,
+              } satisfies DirectPromptTurn),
+            );
+          },
           () => carried.association,
           () => carried.begun,
         );
@@ -1214,6 +1219,10 @@ function conversationTurn(
           }
           observed.native = record.agentSessionId;
         }
+        if (record.withheld === true) {
+          job.answer.resolve(Err(new AgentReplyWithheldError()));
+          return;
+        }
         const failure = promptFailureFromRecord(record);
         job.answer.resolve(failure === undefined ? Ok(record.text) : Err(failure));
       });
@@ -1231,6 +1240,50 @@ function conversationTurn(
       );
     }
   })();
+}
+
+/**
+ * A completed turn's reply was withheld in full by secret detection.
+ *
+ * The message is fixed: it names no rule, position or fingerprint, because the
+ * one thing a refusal about a credential must not carry is anything about it.
+ */
+class AgentReplyWithheldError extends AgentConversationError {
+  override name = "AgentReplyWithheldError";
+  constructor() {
+    super(
+      "The agent finished this turn, and its reply was withheld because secret detection found " +
+        "a credential in it. Nothing from the reply was saved or run.",
+    );
+  }
+}
+
+/**
+ * Keep a completed turn whose reply the journal would refuse, without its reply.
+ *
+ * Asked before the record is appended, with the execution's own scanner over
+ * the reply as the serialized record holds it. A finding keeps the turn —
+ * that it completed, the input it received and the native conversation it ran
+ * in — and drops the whole reply. Everything else is left to the journal's own
+ * guard: a scanner that cannot answer, a policy that is not this execution's,
+ * and a credential anywhere else in the record still refuse the append exactly
+ * as they did.
+ */
+function* withholdFlaggedReply(record: PromptRecord): Operation<PromptRecord> {
+  if (record.status !== "completed" || record.text === "") {
+    return record;
+  }
+  try {
+    if (!(yield* secretPolicy()).enabled) {
+      return record;
+    }
+    if ((yield* scanSecrets(JSON.stringify(record.text))).length === 0) {
+      return record;
+    }
+  } catch {
+    return record;
+  }
+  return { ...record, text: "", withheld: true };
 }
 
 /**

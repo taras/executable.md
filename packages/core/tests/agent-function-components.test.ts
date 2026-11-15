@@ -2090,6 +2090,32 @@ describe("1039 saved Prompt diagnostics", () => {
       expect(JSON.stringify(run.events)).not.toContain('"fingerprint"');
     });
   }
+
+  it("A5: a document Prompt's flagged completed reply is refused, never withheld", function* () {
+    const reply = ["[", "probe", "-marker", "]"].join("");
+    const run = yield* runDoc('<Prompt text="probe-marker" />', {
+      *handler() {
+        yield* useSecretScannerFactory(() => ({
+          // deno-lint-ignore require-yield
+          *scan(content) {
+            return content.includes(reply)
+              ? [
+                  {
+                    ruleId: "t",
+                    messageId: "t",
+                    location: { line: 1, column: 0 },
+                    fingerprint: "f",
+                  },
+                ]
+              : [];
+          },
+        }));
+      },
+    });
+    expect(run.result.ok).toBe(false);
+    expect(JSON.stringify(run.events)).not.toContain(reply);
+    expect(JSON.stringify(run.events)).not.toContain('"withheld"');
+  });
 });
 
 describe("Try Prompt normalization", () => {

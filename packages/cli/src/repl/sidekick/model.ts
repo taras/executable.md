@@ -312,6 +312,8 @@ export interface SidekickSavedTurn {
    * an attempt and no account of one.
    */
   readonly incomplete: { readonly output: string; readonly failure: string } | undefined;
+  /** The turn completed and secret detection withheld its reply, so it has none. */
+  readonly withheld?: true;
 }
 
 /** One control a response ran, and what became of it. */
@@ -851,6 +853,13 @@ function literalOutput(source: string): string {
 export const SAVED_WITHOUT_REPLY = "Turn saved; no evaluated reply recorded.";
 
 /**
+ * What a completed turn whose reply secret detection withheld says about itself.
+ *
+ * The turn received its input and is saved; its reply is not, and it never ran.
+ */
+export const REPLY_WITHHELD = "Turn saved; its reply was withheld by secret detection and not run.";
+
+/**
  * The input a canonical description carries, as text.
  *
  * Core writes a Prompt's input beside its name, and for a conversation turn it
@@ -1056,6 +1065,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
     status: PromptRecord["status"];
     usage?: ReplUsage;
     incomplete: { output: string; failure: string } | undefined;
+    withheld: boolean;
   }[] = [];
   /** Each conversation's evaluated responses, by the turn they belong to. */
   const replies = new Map<string, ResponseRecord>();
@@ -1234,6 +1244,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
             prompt.status === "completed"
               ? undefined
               : { output: literalOutput(prompt.text), failure: incompleteFailure(prompt) },
+          withheld: prompt.withheld === true,
         });
         if (prompt.status === "completed") {
           // The description's input is what this turn was actually sent. Core
@@ -1441,7 +1452,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       conversation: one.conversation,
       turn: one.turn,
       automatic: request?.kind === "feedback",
-      status: SAVED_WITHOUT_REPLY,
+      status: one.withheld ? REPLY_WITHHELD : SAVED_WITHOUT_REPLY,
     });
   }
   // The file's own order, restored. Sorted by where each item's record sits
@@ -1486,6 +1497,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
               failure: reply.outcome.status === "err" ? reply.outcome.error.message : undefined,
             }),
       incomplete: one.incomplete === undefined ? undefined : Object.freeze(one.incomplete),
+      ...(one.withheld ? { withheld: true as const } : {}),
     });
   });
 

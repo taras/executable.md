@@ -185,7 +185,12 @@ import { SidekickContinuationUnavailable, useSidekickOwner } from "./sidekick/ow
 import { createSidekickAdmission, useSidekickDispatch } from "./sidekick/dispatch.ts";
 import type { SidekickDispatch } from "./sidekick/dispatch.ts";
 import type { SidekickLiveTurn, SidekickOwner, SidekickPreview } from "./sidekick/owner.ts";
-import { projectSidekick, retryable, SAVED_WITHOUT_REPLY } from "./sidekick/model.ts";
+import {
+  projectSidekick,
+  REPLY_WITHHELD,
+  retryable,
+  SAVED_WITHOUT_REPLY,
+} from "./sidekick/model.ts";
 import type { SidekickReading, SidekickSavedTurn } from "./sidekick/model.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
@@ -3409,14 +3414,15 @@ function titleOf(asked: "person" | "automatic" | undefined, title: string | unde
  * evaluated reply was recorded is the result they came for. And a completed
  * turn with no evaluated-response record is neither: the provider finished and
  * nothing says the program it returned was ever run, so the row says exactly
- * that rather than reporting a reply nobody recorded.
+ * that rather than reporting a reply nobody recorded — or, where secret
+ * detection withheld the reply, that it was withheld and never run.
  */
 function savedState(turn: SidekickSavedTurn): string {
   if (turn.status !== "completed") {
     return turn.status;
   }
   if (turn.reply === undefined) {
-    return SAVED_WITHOUT_REPLY;
+    return turn.withheld === true ? REPLY_WITHHELD : SAVED_WITHOUT_REPLY;
   }
   return turn.reply.failure === undefined ? "completed" : "reply failed";
 }

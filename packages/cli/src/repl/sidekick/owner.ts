@@ -260,6 +260,13 @@ interface Responded {
    */
   readonly answered: boolean;
   /**
+   * The provider completed this turn and secret detection withheld its reply.
+   *
+   * Not evaluated, and not a failure either: the turn received what it was
+   * sent and the conversation goes on, so the exchange simply ends here.
+   */
+  readonly withheld?: true;
+  /**
    * The exact text the next turn is to be sent, or none to stop.
    *
    * None means the exchange is over: the reply asked for nothing and failed at
@@ -2358,6 +2365,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             : Err(new SidekickOwnerError(responded.error.message, last));
         }
         const settled: SidekickTurn = responded.value.held;
+        if (responded.value.withheld === true) {
+          return Ok(settled);
+        }
         if (!responded.value.answered) {
           return last === undefined
             ? Ok(settled)
@@ -2810,6 +2820,35 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         yield* refresh();
         relinquish(asked);
         const attempted = yield* turnForRequest(paired, began, conversation);
+        if (attempted?.withheld === true) {
+          // Completed, so the delivery claim a completed turn makes is made,
+          // and the saved turn's own account replaces the live item. Nothing
+          // was evaluated and no further turn is owed.
+          if (deliveringInput !== undefined) {
+            yield* paired.writer.append({
+              kind: "feedback",
+              conversation,
+              response: deliveringInput,
+              turn: attempted.turn,
+              text: request,
+            });
+            yield* refresh();
+          }
+          unwatch();
+          return Ok({
+            held: {
+              conversation,
+              turn: attempted.turn,
+              response,
+              output: "",
+              hasOutput: false,
+              failure: undefined,
+            },
+            answered: false,
+            withheld: true,
+            next: undefined,
+          });
+        }
         // Kept as an attempt that did not finish, told which turn this
         // request's own records say it became. With none, it claims no turn, no
         // acceptance and no recorded failure; with one, the saved account of
@@ -3194,7 +3233,13 @@ function* turnForRequest(
   began: number | undefined,
   conversation: string,
 ): Operation<
-  { readonly turn: number; readonly status: string; readonly text: string } | undefined
+  | {
+      readonly turn: number;
+      readonly status: string;
+      readonly text: string;
+      readonly withheld: boolean;
+    }
+  | undefined
 > {
   if (began === undefined) {
     return undefined;
@@ -3228,7 +3273,12 @@ function* turnForRequest(
     }
     const saved = parsePromptRecord(parsed.value.result.value);
     if (saved !== undefined) {
-      return { turn: held.turn, status: saved.status, text: saved.text };
+      return {
+        turn: held.turn,
+        status: saved.status,
+        text: saved.text,
+        withheld: saved.withheld === true,
+      };
     }
   }
   return undefined;

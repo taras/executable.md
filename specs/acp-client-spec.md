@@ -1097,8 +1097,9 @@ successful.
 Each prompt is one durable operation (`agent_prompt`). The record carries the
 prompt's identity and input, the agent and session identity, terminal status,
 stop reason, text (including partial text on failure), any structured failure,
-one optional canonical `configuration`, one optional list of `permissions`, and
-one optional `usage` (see [Prompt usage](#prompt-usage)).
+one optional canonical `configuration`, one optional list of `permissions`,
+one optional `usage` (see [Prompt usage](#prompt-usage)), and the optional
+`withheld` marker of a held conversation's withheld reply.
 The configuration is retained only after the provider emits `started`: a turn
 that started is one the provider put under exactly those settings, while a
 configuration refusal started no turn and retains none. A prompt that starts
@@ -1114,6 +1115,21 @@ A turn that failed before reaching that boundary retains the input it
 attempted, which is not evidence that anything was sent. Completed replay
 restores the retained composed input and result without running composition,
 reaching a provider, calling `begin()` or reconstructing current state.
+
+A held conversation's completed turn whose reply the journal would refuse is
+retained without that reply. Before the record is appended, the execution's own
+scanner reads the reply as the record serializes it; a finding keeps the
+completed record — the delivered input, session and native identity,
+configuration, permissions and usage — with empty `text` and `withheld: true`.
+The call answers a fixed refusal naming no rule, position or fingerprint, and
+the conversation stays usable: the next turn continues the same native
+conversation, and a reopening replays this one from its record. Everything else
+still reaches the journal's own guard, which refuses the append as before: a
+scanner that cannot answer, a policy that is not the execution's, a failed or
+cancelled turn's partial text and a credential anywhere else in the record. A
+document's `<Prompt>` never withholds. A `withheld` that is not `true`, or that
+accompanies a status other than `completed` or nonempty text, does not read
+back.
 
 ### Saved Prompt failure details
 
