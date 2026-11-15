@@ -50,6 +50,8 @@ import { installIdentities } from "../src/invocation-identity.ts";
 import type { InvocationForm } from "../src/invocation-identity.ts";
 import { Documentation } from "../src/documentation-api.ts";
 import { Execution } from "../src/execute.ts";
+import { useSecretDetection } from "../src/secrets/policy.ts";
+import type { SecretDetection } from "../src/secrets/policy.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { HELD_ROOT_PATH, withHeldHost } from "./support/held-host.ts";
@@ -925,10 +927,12 @@ describe("Tier GRM — a record's marker is what authorizes the evaluation", () 
    */
   function boundRoot(
     observations: readonly GeneratedObservation[],
+    detection: SecretDetection,
   ): (request: GeneratedXmdRequest) => Operation<Result<GeneratedXmdRootResult>> {
     const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
     identity.activate();
     return bindGeneratedRootEvaluator({
+      detection,
       select: () => ({ observations, mutations: [], describing: [] }),
       componentRouting: identity.componentRouting,
       reference: undefined,
@@ -942,12 +946,19 @@ describe("Tier GRM — a record's marker is what authorizes the evaluation", () 
     performed: string[],
   ): Operation<Result<GeneratedXmdRootResult>> {
     return scoped(function* () {
+      const detection = yield* useSecretDetection(undefined, stream);
       const held: { answer?: Result<GeneratedXmdRootResult> } = {};
       yield* durableRun(
         function* (): Operation<void> {
-          held.answer = yield* boundRoot([countedProbe(performed)])({ id: ID, source: COMMON });
+          held.answer = yield* boundRoot(
+            [countedProbe(performed)],
+            detection,
+          )({
+            id: ID,
+            source: COMMON,
+          });
         },
-        { stream, coroutineId: COROUTINE },
+        { stream: detection.journal, coroutineId: COROUTINE },
       );
       if (held.answer === undefined) {
         throw new Error("the durable run recorded no root outcome");
@@ -1109,16 +1120,16 @@ describe("Tier GRM — a record's marker is what authorizes the evaluation", () 
     // definitions under one name is a malformed table, refused before
     // anything is admitted.
     const performed: string[] = [];
+    const detection = yield* useSecretDetection(undefined, new InMemoryStream());
     const held: { answer?: Result<GeneratedXmdRootResult> } = {};
     yield* durableRun(
       function* (): Operation<void> {
-        held.answer = yield* boundRoot([
-          countedProbe(performed),
-          // A second, different implementation under the same name.
-          countedProbe([]),
-        ])({ id: ID, source: COMMON });
+        held.answer = yield* boundRoot(
+          [countedProbe(performed), countedProbe([])],
+          detection,
+        )({ id: ID, source: COMMON });
       },
-      { stream: new InMemoryStream(), coroutineId: COROUTINE },
+      { stream: detection.journal, coroutineId: COROUTINE },
     );
 
     expect(held.answer?.ok).toBe(false);

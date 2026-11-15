@@ -37,6 +37,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
 import type { AdmittingSession } from "../src/repl/sidekick/admission.ts";
 import { stillAdmissible } from "../src/repl/sidekick/gate.ts";
+import { acknowledgedControlOutcomes } from "../src/repl/sidekick/control-outcomes.ts";
 import type { ControlJournal } from "../src/repl/sidekick/controls.ts";
 import type { ReplSubmission } from "../src/repl/session.ts";
 
@@ -99,7 +100,7 @@ import {
 } from "../src/repl/sidekick/history.ts";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
+import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
 
 /**
  * Real time for an assertion that something did not happen.
@@ -597,6 +598,20 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
   });
 });
 
+function elicitIntents(records: readonly SidekickRecord[]) {
+  return records.filter(
+    (record): record is ControlRecord => record.kind === "control" && record.component === "Elicit",
+  );
+}
+
+function elicitOutcomes(written: readonly SidekickRecord[]) {
+  const outcomes = acknowledgedControlOutcomes(written);
+  if (!outcomes.ok) {
+    throw outcomes.error;
+  }
+  return [...outcomes.value.values()].filter(({ intent }) => intent.elicit !== undefined);
+}
+
 /**
  * Tier R6 — the question the Sidekick owns (#883, J5).
  *
@@ -681,17 +696,6 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     return { text: item.text, failure: item.failure };
   }
 
-  /** Every control record this response wrote, by the component that wrote it. */
-  function pairs(
-    held: readonly unknown[],
-    kind: "control" | "control-outcome",
-  ): readonly Record<string, unknown>[] {
-    return held.filter((record) => (record as { kind: string }).kind === kind) as readonly Record<
-      string,
-      unknown
-    >[];
-  }
-
   it("R6: a reply's question is this owner's, asked once, and its answer comes back", function* () {
     const held = yield* useHarness();
     held.fake.script({
@@ -735,16 +739,15 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     // the next turn's input — alone, so it is the value itself.
     expect(JSON.parse(held.fake.prompts[1] ?? "")).toEqual({ decision: "approve" });
 
-    // Retained as the pair every control writes: the intent before the asking,
-    // naming the question, and the outcome holding the validated answer.
+    // The generated intent and its acknowledged Elicit Yield retain the answer.
     const written = yield* records(held.execution);
-    const intents = pairs(written, "control").filter((one) => one["component"] === "Elicit");
+    const intents = elicitIntents(written);
     expect(intents).toHaveLength(1);
-    expect(intents[0]?.["arguments"]).toMatchObject({ message: "Approve the plan?" });
-    const outcomes = pairs(written, "control-outcome").filter(
-      (one) => one["order"] === intents[0]?.["order"],
-    );
-    expect(outcomes[0]?.["observed"]).toEqual({ decision: "approve" });
+    expect(intents[0]?.arguments).toMatchObject({ message: "Approve the plan?" });
+    const outcomes = elicitOutcomes(written);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.intent).toEqual(intents[0]);
+    expect(outcomes[0]?.outcome.observed).toEqual({ decision: "approve" });
   });
 
   it("R6: an invalid answer answers nobody and leaves the same question pending", function* () {
@@ -769,9 +772,7 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     expect(held.owner.questions.pending).toBe(question);
     expect(held.owner.questions.asked).toBe(1);
     // And no outcome was retained: an answer nobody gave is not written down.
-    expect(
-      pairs(yield* records(held.execution), "control-outcome").filter((one) => one["order"] === 0),
-    ).toHaveLength(0);
+    expect(elicitOutcomes(yield* records(held.execution))).toHaveLength(0);
 
     expect(question.submit({ decision: "reject" }).kind).toBe("answered");
     const answered = yield* sent;
@@ -848,11 +849,9 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     // is what an operation that began and whose result nobody knows looks
     // like — an interruption is an absence, never a receipt saying so.
     const written = yield* records(held.execution);
-    const intents = pairs(written, "control").filter((one) => one["component"] === "Elicit");
+    const intents = elicitIntents(written);
     expect(intents).toHaveLength(1);
-    expect(
-      pairs(written, "control-outcome").filter((one) => one["order"] === intents[0]?.["order"]),
-    ).toHaveLength(0);
+    expect(elicitOutcomes(written)).toHaveLength(0);
     // No response record either: the root never finished.
     expect(written.filter((one) => (one as { kind: string }).kind === "response")).toHaveLength(0);
     // And the projection says so in the terms the rest of this history uses:
@@ -1610,33 +1609,17 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
     };
   }
 
-  /** Every Elicit record of one kind this history holds. */
-  function elicits(
-    chat: readonly SidekickRecord[],
-    kind: "control" | "control-outcome",
-  ): readonly SidekickRecord[] {
-    return chat.filter(
-      (record) =>
-        record.kind === kind && (record.kind === "control" ? record.component === "Elicit" : true),
-    );
-  }
-
   it("MQ2: an invalid answer keeps the question, and closing keeps what was typed", function* () {
     const done = yield* answeringJourney(true);
 
     // Exactly one question was asked and exactly one answer was retained: the
     // invalid attempts wrote nothing at all.
-    const intents = elicits(done.chat, "control");
+    const intents = elicitIntents(done.chat);
     expect(intents).toHaveLength(1);
-    const answers = done.chat.filter(
-      (record) =>
-        record.kind === "control-outcome" &&
-        intents.some((one) => one.kind === "control" && one.order === record.order),
-    );
+    const answers = elicitOutcomes(done.chat);
     expect(answers).toHaveLength(1);
-    expect(answers[0]).toMatchObject({
-      observed: { decision: "approve", message: "okay" },
-    });
+    expect(answers[0]?.intent).toEqual(intents[0]);
+    expect(answers[0]?.outcome.observed).toEqual({ decision: "approve", message: "okay" });
     // And it reached the reply that asked, as its own designated feedback.
     expect(JSON.parse(done.prompts[1] ?? "")).toEqual({
       decision: "approve",
@@ -1652,7 +1635,7 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
   it("MQ2: control — the same answer without closing or changing panes", function* () {
     const done = yield* answeringJourney(false);
 
-    expect(elicits(done.chat, "control")).toHaveLength(1);
+    expect(elicitIntents(done.chat)).toHaveLength(1);
     expect(JSON.parse(done.prompts[1] ?? "")).toEqual({
       decision: "approve",
       message: "okay",

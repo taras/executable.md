@@ -107,11 +107,9 @@ import type { ReplLive } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { resolvePointer } from "../src/repl/renderer.ts";
 import { usePresenter } from "./fixtures/repl/presentation.ts";
-import { ReplHost } from "../src/repl/host.ts";
 import {
   pairedLocation,
   PAIRED_DIRECTORY,
-  parseEntryRecords,
   parseSidekickRecord,
 } from "../src/repl/sidekick/history.ts";
 import { AGENT_PROMPT, AGENT_PROMPT_REPLY } from "@executablemd/core/host";
@@ -2065,34 +2063,20 @@ describe("minimal live Sidekick ACP attachment", () => {
     const a = attachResult.parse(
       yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
     );
-    let prompts = 0;
-    yield* ReplHost.around({
-      *appendRecord([file, text], next) {
-        const row = z
-          .object({ kind: z.string(), event: z.string().optional() })
-          .passthrough()
-          .parse(JSON.parse(text));
-        if (row.kind === "event" && row.event !== undefined) {
-          const events = parseEntryRecords(row.event);
-          if (
-            events.some(
-              (event) => event.type === "yield" && event.description.type === AGENT_PROMPT,
-            ) &&
-            ++prompts === 2
-          ) {
-            throw new Error("Controlled feedback acknowledgement loss.");
-          }
-        }
-        yield* next(file, text);
-      },
-    });
     one.held.fake.script({ reply: "<REPL.Bindings/>" });
-    one.held.fake.script({ reply: "<Output>Backend accepted feedback.</Output>" });
-    yield* requestAttachment(one.path, {
-      method: "prompt",
-      attachment: a.attachment,
-      text: "inspect",
+    one.held.fake.script({
+      reply: "partial feedback reply",
+      failure: "controlled provider failure",
     });
+    const ended = exchangeSchema.parse(
+      yield* requestAttachment(one.path, {
+        method: "prompt",
+        attachment: a.attachment,
+        text: "inspect",
+      }),
+    );
+    expect(ended.ending).toMatchObject({ joined: true, outcome: "failed" });
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
     const status = z
       .object({ feedbackUnestablished: z.number() })
       .passthrough()
