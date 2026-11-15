@@ -18,16 +18,9 @@ import { createContext, Err, Ok, spawn, suspend, useScope, withResolvers } from 
 import type { Operation, Result, Scope } from "effection";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
-import {
-  Component,
-  installPromptFailurePolicy,
-  getExpansion,
-  raise,
-  registerAgentProvider,
-  registerComponents,
-  tryContent,
-  useProviderInstallation,
-} from "@executablemd/core";
+import { Component, getExpansion, raise, registerComponents, tryContent } from "@executablemd/core";
+import { registerAgentProvider } from "@executablemd/agent/api";
+import { installPromptFailurePolicy, useProviderInstallation } from "@executablemd/agent/host";
 import type { ErrorSegment, Json, PropsSchema, Segment } from "@executablemd/core";
 import { createMemorySessionRouteStore, createPartitionedAcpxProvider } from "@executablemd/acp";
 import type {

@@ -27,7 +27,7 @@ import {
 import { useTesting, testHarnessInstallation } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "@executablemd/test-agent";
-import { installAgentComponents } from "@executablemd/core";
+import { installAgentComponents } from "@executablemd/agent/host";
 import { resolveTestTarget } from "../../test-target.ts";
 import type { ReplExecutionProfile } from "../../repl-profile.ts";
 

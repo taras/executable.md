@@ -1,7 +1,7 @@
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
-import type { AgentProviderFactory } from "@executablemd/core";
+import type { AgentProviderFactory } from "@executablemd/agent/api";
 import { scoped } from "effection";
 import { cwd, exec, platform, realpath, useQuietProcessOutput } from "@executablemd/runtime";
 

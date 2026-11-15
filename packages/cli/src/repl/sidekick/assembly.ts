@@ -25,9 +25,9 @@ import type { ReplPluginExtension } from "../../repl-api.ts";
  * a raw programmatic session gets.
  */
 
-import { installAgentComponents } from "@executablemd/core";
+import { installAgentComponents } from "@executablemd/agent/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { PermissionMode } from "@executablemd/core";
+import type { PermissionMode } from "@executablemd/agent/api";
 import type { Operation } from "effection";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";

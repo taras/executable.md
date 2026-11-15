@@ -1,4 +1,5 @@
-import { Agent, Component } from "@executablemd/core/api";
+import { Component } from "@executablemd/core/api";
+import { Agent } from "@executablemd/agent/api";
 import { ensureDir, rm } from "@effectionx/fs";
 import { z } from "zod";
 import { read, write } from "../../components/Ticket/text-storage.ts";

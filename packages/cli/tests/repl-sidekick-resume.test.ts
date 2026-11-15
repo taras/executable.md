@@ -18,9 +18,10 @@ import { expect } from "@executablemd/test-support/expect";
 import { Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { Agent } from "@executablemd/core";
-import { useAgentConversation } from "@executablemd/core/host";
-import type { AgentConversation, ExecutionInstallation } from "@executablemd/core/host";
+import { Agent } from "@executablemd/agent/api";
+import { useAgentConversation } from "@executablemd/agent/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { AgentConversation } from "@executablemd/agent/host";
 
 import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";

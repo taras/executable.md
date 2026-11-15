@@ -154,12 +154,13 @@ is discarded. Identity is object identity: a rebuilt look-alike, a superseded
 parent, a foreign request, or a second delegation of the same leaf describes the
 same ask and authorizes none of it.
 
-The right to run and retain a phase never travels on that chain. Core delivers
-one `AgentLaunchCoordinator` directly to the provider factory it installs, as an
-argument the factory closes over — there is no context holding one, no request
+The right to run and retain a phase never travels on that chain. The Agent package
+delivers one `AgentLaunchCoordinator` directly to the provider factory it
+installs, as an argument the factory closes over — there is no context holding one, no request
 member carrying one, and no reader for one. The coordinator validates the routed
 request and the provider's installation generation, runs each absent phase once,
-cross-checks the returned record against the request, retains it before the next
+cross-checks the returned record against the request, retains it under the
+component invocation identity Core issued the launching element before the next
 live effect, and derives the result. A provider supplies the work; it never
 supplies the verdict.
 
@@ -191,7 +192,7 @@ launch defines no default of its own.
 
 ## Prepared session request
 
-Core hands the provider a normalized request containing:
+The Agent package hands the provider a normalized request containing:
 
 ```text
 agent
@@ -267,7 +268,7 @@ configured refuses before the provider prepares anything.
 The configured use remains valid only while the provider-installation owner
 that issued it is live. The launch provider reads it through the coordinator
 delivered directly to that installation; a same-named Context, sibling run,
-retained post-teardown value or another loaded Core copy cannot supply that
+retained post-teardown value or another loaded Agent copy cannot supply that
 owner. Provider teardown invalidates lookup before a later launch can prepare
 anything. Finishing a session setup and its registration state do not participate in
 launch admission: `AgentLaunchRequest` remains the launch's one-use identity.
@@ -1102,11 +1103,11 @@ an **empty** `nativeSessionId`, the executable binding, and the exact
 materialization plan this launch owes. A preparation is not a report of the
 conversation's name.
 
-Core retains `prepared` *before* the turn starts. It then executes the turn and
+The coordinator retains `prepared` *before* the turn starts. It then executes the turn and
 retains it as a separate durable `agent_prompt` — an ordinary prompt record,
 because that is what it is, and the sending is what must never be re-run. Only
 the backend's explicit acceptance of that turn promotes the provider record and
-asserts the native identity. Core then retains `materialized`, and only after
+asserts the native identity. The coordinator then retains `materialized`, and only after
 that detaches ACP ownership and launches the native UI.
 
 An **already-established** provider-returned session takes none of that path.
@@ -1176,9 +1177,10 @@ instruction-file path, argv, environment, raw host message, credential or
 provider-private state.
 
 The provider does not write these records and cannot reach the thing that does.
-It offers each phase as live work to the coordinator core delivered it; the
-coordinator runs a phase only when the journal has none, retains what comes back
-before the next live effect, and cross-checks the preparation against the exact
+It offers each phase as live work to the coordinator the Agent package
+delivered it; the coordinator runs a phase only when the journal has none,
+retains what comes back under the launching element's Core-issued invocation
+identity before the next live effect, and cross-checks the preparation against the exact
 request that was routed — instructions and digest, agent, requested session,
 cwd, the V1 empty additional-directory list, and permission mode. A record that
 changed what was asked would make the journal describe a launch nobody
@@ -1512,7 +1514,7 @@ degrading:
   before any materialization turn, detach record or native process, and the
   successful preparation retains one canonical `configuration`. A launch that
   could not apply them refuses with `configuration-refused` and retains no
-  configuration. Core issued the frozen session use that carried both the exact
+  configuration. The Agent package issued the frozen session use that carried both the exact
   provider Session that finished its setup and these settings; the provider retains no
   desired-settings association, and a rebuilt use authorizes nothing. Middleware
   may route another whole Session, and the preparation describes only the final

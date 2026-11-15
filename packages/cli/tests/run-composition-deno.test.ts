@@ -24,14 +24,9 @@ import { join } from "node:path";
 import process from "node:process";
 import { API, NativeLauncher, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import {
-  Agent,
-  collect,
-  execute,
-  inlineSource,
-  installAgentComponents,
-  registerAgentProvider,
-} from "@executablemd/core";
+import { collect, execute, inlineSource } from "@executablemd/core";
+import { Agent, registerAgentProvider } from "@executablemd/agent/api";
+import { installAgentComponents } from "@executablemd/agent/host";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { deriveSessionKey, sessionCandidates } from "../../acp/src/session-key.ts";
 import { useCompositionComponents } from "@executablemd/git";

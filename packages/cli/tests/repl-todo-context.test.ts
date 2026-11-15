@@ -1,10 +1,11 @@
-import { Agent, isJsonObject, parseJson } from "@executablemd/core";
+import { isJsonObject, parseJson } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
 import { Plugin } from "@executablemd/core/api";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
-import type { AgentPromptEvent } from "@executablemd/core";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { writeTextFile } from "@effectionx/fs";
 import { useHostFiles } from "@executablemd/runtime";

@@ -16,6 +16,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
 import { ensure, scoped, until } from "effection";
 import { createApi } from "@effectionx/context-api";
+import * as sourceAgentApi from "@executablemd/agent/api";
+import * as sourceAgentHost from "@executablemd/agent/host";
 import * as sourceGitApi from "@executablemd/git/api";
 import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { createHash } from "node:crypto";
@@ -454,6 +456,67 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
   });
 
   /**
+   * The Agent package as npm consumers receive it, and Core without it.
+   *
+   * The dependency points one way: Core's emitted manifest names no Agent
+   * dependency, so a Core-only installation carries no Agent code. The Agent
+   * artifact publishes both of its entrypoints, which a Node consumer outside
+   * the checkout reaches by package name through the emitted export map — the
+   * route a Plugin or a host takes, and the one a Deno run cannot exercise
+   * because the workspace answers for it.
+   */
+  it("publishes the Agent package's /api and /host and keeps Agent out of Core", function* () {
+    const { root } = builtPackage();
+
+    const core: Manifest & Record<string, unknown> = JSON.parse(
+      yield* readTextFile(path.join(root, "packages/core/npm/package.json")),
+    );
+    const coreDependencies = [
+      "dependencies",
+      "peerDependencies",
+      "optionalDependencies",
+      "devDependencies",
+    ].flatMap((field) => Object.keys(Object(core[field] ?? {})));
+    // The positive control: a manifest that lost its dependencies would have
+    // no Agent entry by having no entries.
+    expect(coreDependencies).toContain("@executablemd/runtime");
+    expect(coreDependencies.filter((name) => name.startsWith("@executablemd/agent"))).toEqual([]);
+
+    const agent: Manifest & { name?: string; exports?: Record<string, unknown> } = JSON.parse(
+      yield* readTextFile(path.join(root, "packages/agent/npm/package.json")),
+    );
+    expect(agent.name).toBe("@executablemd/agent");
+    expect(Object.keys(agent.exports ?? {}).toSorted()).toEqual(["./api", "./host"]);
+
+    const consumer = yield* useTempDirectory("xmd-npm-agent-consumer-");
+    yield* until(
+      symlink(
+        path.join(root, PKG_DIR, "npm/node_modules"),
+        path.join(consumer, "node_modules"),
+        "dir",
+      ),
+    );
+    const probe = path.join(consumer, "agent-entries.mjs");
+    yield* writeTextFile(
+      probe,
+      [
+        'const api = await import("@executablemd/agent/api");',
+        'const host = await import("@executablemd/agent/host");',
+        "console.log(JSON.stringify({ api: Object.keys(api).toSorted(), host: Object.keys(host).toSorted() }));",
+      ].join("\n"),
+    );
+    const loaded = yield* exec("node", { arguments: [probe], cwd: consumer }).join();
+    expect({ code: loaded.code, stderr: loaded.stderr }).toMatchObject({ code: 0 });
+    const emitted: { api: string[]; host: string[] } = JSON.parse(loaded.stdout);
+    expect(emitted.api).toContain("Agent");
+    expect(emitted.host).toContain("installAgentComponents");
+    expect(emitted).toEqual({
+      api: Object.keys(sourceAgentApi).toSorted(),
+      host: Object.keys(sourceAgentHost).toSorted(),
+    });
+  });
+
+  /**
    * A program piped into the emitted bin, through a pipe that really closes.
    *
    * `xmd run -` reads standard input to end of file, and end of file is what a
@@ -725,9 +788,9 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
 
     // The documentation assets travel with the package, and the emitted binary
     // resolves them from its own tree rather than from a checkout. `Prompt`
-    // lives in core's *agent* boundary rather than in its own `components.md`,
-    // so this exercises a second copied asset path: a build that copied only
-    // the first would still answer for core's own components and fail here.
+    // is documented by the Agent package's own `components.md` rather than
+    // core's, so this exercises a second copied asset path: a build that copied
+    // only core's would still answer for core's own components and fail here.
     const documented = yield* runEmittedBinIn(root, elsewhere, ["syntax", "Prompt"]);
     expect(documented.code).toBe(0);
     expect(documented.stdout).toContain("### `<Prompt>`");

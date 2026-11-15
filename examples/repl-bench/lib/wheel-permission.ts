@@ -1,5 +1,5 @@
 import { createAcpxProvider } from "@executablemd/acp";
-import { registerAgentProvider } from "@executablemd/core";
+import { registerAgentProvider } from "@executablemd/agent/api";
 import { Plugin } from "@executablemd/core/api";
 import {
   createFakeAcp,

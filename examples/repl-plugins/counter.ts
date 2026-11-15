@@ -1,7 +1,8 @@
 import { createContext } from "effection";
 import type { Operation } from "effection";
 import { contributeDocumentation, packageDocumentation } from "@executablemd/core";
-import { AgentConversationProvider, Plugin } from "@executablemd/core/api";
+import { Plugin } from "@executablemd/core/api";
+import { AgentConversationProvider } from "@executablemd/agent/api";
 import type { ReplPluginInstallation } from "@executablemd/cli/api";
 
 const Counter = createContext<{ count: number }>("example.repl.counter");

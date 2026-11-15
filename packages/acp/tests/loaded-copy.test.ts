@@ -28,11 +28,11 @@ import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { mkdtemp } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { Agent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
 import type {
   AgentLaunchCoordinator,
   AgentSessionSetup,
@@ -40,7 +40,7 @@ import type {
   Session,
   SessionConfiguration,
   AgentProviderFactory,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { world } from "./released-peer.ts";
 import { retainedSession } from "../src/session-store.ts";
@@ -48,7 +48,7 @@ import { readTextFile } from "@effectionx/fs";
 import { createAcpxProvider } from "../src/provider.ts";
 // This run's own copy, for the case that needs a canonical owner to refuse a
 // foreign request.
-import { createSessionSetupOwner } from "../../core/src/agent/session-setup.ts";
+import { createSessionSetupOwner } from "../../agent/src/session-setup.ts";
 import {
   createFakeRuntime,
   makeRecord,
@@ -62,7 +62,7 @@ import type { FakeRuntimeHarness } from "./helpers.ts";
 
 const CWD = "/work";
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
-const CORE_AGENT = fileURLToPath(new URL("../../core/src/agent/", import.meta.url));
+const AGENT = fileURLToPath(new URL("../../agent/", import.meta.url));
 
 /**
  * What this suite asks of the other copy, and what it will accept as an answer.
@@ -331,10 +331,10 @@ function useForeignCore(): Operation<ForeignCore> {
       entry,
       [
         `export { openSessionRequest } from ${JSON.stringify(
-          join(CORE_AGENT, "session-request.ts"),
+          join(AGENT, "src/session-request.ts"),
         )};`,
         `export { createSessionSetupOwner } from ${JSON.stringify(
-          join(CORE_AGENT, "session-setup.ts"),
+          join(AGENT, "src/session-setup.ts"),
         )};`,
         "",
       ].join("\n"),
@@ -454,6 +454,44 @@ function refusalOf(operation: () => Operation<unknown>): Operation<string> {
   })();
 }
 
+/**
+ * Core's terminal renderer, which the Agent package's public entries reach
+ * through Core's root.
+ *
+ * `deno bundle` cannot bundle it: its emoji dependency loads JSON through an
+ * extensionless `require`. So the consumer bundle leaves it external, and the
+ * one import of it is pointed at the npm specifier Core's own manifest names,
+ * which this frozen workspace already resolves. Agent and Core themselves are
+ * still bundled, so the Session capability is still a separate copy.
+ */
+const TERMINAL_RENDERER = "marked-terminal";
+
+function* loadRendererFromItsPackage(bundle: string): Operation<void> {
+  const manifest: unknown = JSON.parse(
+    yield* readTextFile(join(REPOSITORY, "packages/core/deno.json")),
+  );
+  const imports =
+    typeof manifest === "object" && manifest !== null
+      ? Reflect.get(manifest, "imports")
+      : undefined;
+  const specifier =
+    typeof imports === "object" && imports !== null
+      ? Reflect.get(imports, TERMINAL_RENDERER)
+      : undefined;
+  if (typeof specifier !== "string" || !specifier.startsWith("npm:")) {
+    throw new Error(`packages/core/deno.json names no npm specifier for ${TERMINAL_RENDERER}`);
+  }
+  const external = `from ${JSON.stringify(TERMINAL_RENDERER)};`;
+  const text = yield* readTextFile(bundle);
+  const occurrences = text.split(external).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      `the consumer bundle imports ${TERMINAL_RENDERER} ${occurrences} times, not once`,
+    );
+  }
+  yield* writeTextFile(bundle, text.replace(external, `from ${JSON.stringify(specifier)};`));
+}
+
 function useForeignPublicConsumer(): Operation<
   (
     factory: AgentProviderFactory,
@@ -471,21 +509,23 @@ function useForeignPublicConsumer(): Operation<
     yield* ensure(() => rm(directory, { recursive: true, force: true }));
     const entry = join(directory, "entry.ts");
     const bundle = join(directory, "core.js");
-    for (const path of ["components/components.md", "agent/components.md"]) {
-      const target = join(directory, path);
-      yield* ensureDir(join(directory, path.split("/")[0]!));
-      yield* writeTextFile(
-        target,
-        yield* readTextFile(join(REPOSITORY, "packages/core/src", path)),
-      );
+    // A bundle's `import.meta.url` is the bundle's own, so each package's
+    // documentation is staged where its module looks beside that file: core's
+    // beneath `components/`, the Agent package's directly beside it.
+    for (const [source, staged] of [
+      ["packages/core/src/components/components.md", "components/components.md"],
+      ["packages/agent/src/components.md", "components.md"],
+    ] as const) {
+      const target = join(directory, staged);
+      yield* ensureDir(dirname(target));
+      yield* writeTextFile(target, yield* readTextFile(join(REPOSITORY, source)));
     }
     yield* writeTextFile(
       entry,
       `
-      import { Agent } from ${JSON.stringify(join(CORE_AGENT, "agent-api.ts"))};
-      import { installAgentComponents, agentIdentityComponents } from ${JSON.stringify(join(CORE_AGENT, "components.ts"))};
+      import { Agent, configurationOf } from ${JSON.stringify(join(AGENT, "api.ts"))};
+      import { installAgentComponents, agentIdentityComponents } from ${JSON.stringify(join(AGENT, "host.ts"))};
       import { useNormalizedOutput } from ${JSON.stringify(join(REPOSITORY, "packages/core/src/output/normalize.ts"))};
-      import { configurationOf } from ${JSON.stringify(join(CORE_AGENT, "session-use.ts"))};
       import { executeInstalled } from ${JSON.stringify(join(REPOSITORY, "packages/core/host.ts"))};
       export function* run(factory, path, journal, observe) {
         yield* installAgentComponents({ defaultAgent: "scribe", rootProvider: {
@@ -528,6 +568,7 @@ function useForeignPublicConsumer(): Operation<
         "--frozen",
         "--node-modules-dir=none",
         "--external=@effectionx/process",
+        `--external=${TERMINAL_RENDERER}`,
         entry,
         "--output",
         bundle,
@@ -537,6 +578,7 @@ function useForeignPublicConsumer(): Operation<
     if (built.code !== 0) {
       throw new Error(`could not bundle the public Core consumer: ${built.stdout}${built.stderr}`);
     }
+    yield* loadRendererFromItsPackage(bundle);
     const run = methodOf<Operation<void>>(yield* until(import(`file://${bundle}`)), "run");
     if (run === undefined) {
       throw new Error("the other Core copy exports no public consumer");

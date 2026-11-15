@@ -409,6 +409,25 @@ function isRecoveredContent(error: object): boolean {
 }
 
 /**
+ * Whether dismantling an invocation failed anywhere in `error`'s causes.
+ *
+ * The same traversal {@link firstCause} makes, answering one question: a
+ * caller outside core that owns a component invocation tells its own teardown
+ * failure apart from the work it was tearing down.
+ */
+export function hasInvocationTeardown(error: unknown): boolean {
+  return (
+    firstCause(error, (cause) => (cause instanceof InvocationTeardownError ? true : undefined)) ===
+    true
+  );
+}
+
+/** Whether `cause` itself is `error` or one of its causes, by identity. */
+export function hasCause(error: unknown, cause: unknown): boolean {
+  return firstCause(error, (candidate) => (candidate === cause ? true : undefined)) === true;
+}
+
+/**
  * The first failure in this one's cause graph that `select` recognises, skipping
  * whatever `opaque` declares out of scope.
  *

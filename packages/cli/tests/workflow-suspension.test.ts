@@ -58,13 +58,10 @@ import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { withWorkflowWorkspace, WORKSPACE_FILE } from "@executablemd/workflow/deno";
-import { Agent, installAgentComponents, sessionOf } from "@executablemd/core";
-import type {
-  AgentPromptEvent,
-  Json as CoreJson,
-  PromptOptions,
-  Session,
-} from "@executablemd/core";
+import { Agent, sessionOf } from "@executablemd/agent/api";
+import { installAgentComponents } from "@executablemd/agent/host";
+import type { Json as CoreJson } from "@executablemd/core";
+import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/agent/api";
 import type { Stream } from "effection";
 import { createHash } from "node:crypto";
 import { establishDefinition } from "../src/workflow-definition.ts";
@@ -820,7 +817,7 @@ decision: {decision.proceed}
  * asserts all three appear among the effect types the run actually journaled,
  * so a renamed effect fails the case rather than silently counting zero.
  */
-const PROMPT_EFFECT = "agent_prompt"; // packages/core/src/agent/journal.ts
+const PROMPT_EFFECT = "agent_prompt"; // packages/agent/src/journal.ts
 const EVALUATION_EFFECT = "generated_xmd"; // packages/core/src/generated-xmd.ts
 const FILE_EFFECT = WORKSPACE_FILE;
 

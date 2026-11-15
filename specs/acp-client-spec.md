@@ -1,10 +1,19 @@
 # Executable.md ACP Client
 
 The `Agent` Api, the Agent / Session / Prompt components, prompt journaling and
-replay, the provider-factory seam, and the `Config` timeouts are implemented in
-`@executablemd/core`. A provider is supplied through the `rootProvider` factory
-seam (§The provider-factory seam). This specification owns the public operations,
-configuration and retained record shapes.
+replay, and the provider-factory seam are implemented in `@executablemd/agent`,
+over the execution `@executablemd/core` owns; the `Config` timeouts are
+`@executablemd/runtime`'s (§Config). The Agent package has two entries.
+`@executablemd/agent/api` carries the `Agent` Api, `AgentConversationProvider`,
+`AgentProviders`, the Session accessors and the contracts a Plugin or a provider
+is written in. `@executablemd/agent/host` carries what a host installs and
+reads back: the components, permission and failure policies, provider
+installation, held conversations, Prompt publication and the retained Prompt
+reader. Core by itself registers no Agent component;
+a host that installs this package's components supplies them. A provider is
+supplied through the `rootProvider` factory seam (§The provider-factory seam).
+This specification owns the public operations, configuration and retained
+record shapes.
 [Agent permissions and generated work](./workflow-workspace-spec.md#8-agents-inspect-xmd-mutates)
 own workflow isolation and mapping publication;
 [native Agent sessions](./native-agent-session-launch-spec.md#ownership-and-concurrency) own the shared
@@ -20,8 +29,8 @@ second statement of the rules.
 - **Agent** — a resolvable agent name (a string, an ACP agent command).
   Resolution and defaults: §The Agent Api.
 - **Session** — the value naming one conversation:
-  `{ sessionKey; cwd; agentSessionId?; readonly identity? }`. Issued by the installed provider; a configured use is Core-issued. §Sessions: ownership, routes and attachment.
-- **Configured use** — `AgentSessionUse`, a Core-issued opaque carrier of one
+  `{ sessionKey; cwd; agentSessionId?; readonly identity? }`. Issued by the installed provider; a configured use is Agent-issued. §Sessions: ownership, routes and attachment.
+- **Configured use** — `AgentSessionUse`, an Agent-issued opaque carrier of one
   configured use of a conversation. §Session configuration.
 - **Turn** — one journaled prompt: one subscription of the cold stream
   `prompt()` returns. §The Agent Api, §Journaling and replay.
@@ -38,8 +47,8 @@ second statement of the rules.
 
 ## Components: the document surface
 
-`installAgentComponents()` registers six components for the installing scope
-(executable-mdx-spec §5.3): AgentProvider, Agent, Session.Launch, Prompt,
+`installAgentComponents()` from `@executablemd/agent/host` registers six
+components for the installing scope (executable-mdx-spec §5.3): AgentProvider, Agent, Session.Launch, Prompt,
 ApproveAll and AskPermission. Session is the seventh agent word and is supplied
 separately, because its implementation names durable work after its own
 invocation: a host declares it to the execution through the identity-bearing
@@ -54,6 +63,11 @@ engine owns their expression props, schema validation, `as` capture, content
 projection and invocation lifetime exactly as for any other `.ts` component.
 Props take string and boolean values, from a literal or from an expression that
 resolves to one.
+
+All seven, and the documentation that describes them, name the component
+origin `@executablemd/core`. They kept it when they moved from Core into the
+Agent package, because an origin is part of how canonical resolution, a
+retained journal and a documentation lookup identify a component.
 
 A canonical Markdown test may configure one nested `host="run"` execution with
 a direct TestAgent declaration (testing-spec.md). That declaration carries only
@@ -126,7 +140,7 @@ invocation boundary runs after the component has returned.
 
 ## The Agent Api
 
-`Agent` is an Effection Api (`@executablemd/core`) for stateful coding-agent
+`Agent` is an Effection Api (`@executablemd/agent/api`) for stateful coding-agent
 sessions, distinct from the stateless Sample Api. It has exactly six contextual
 operations:
 
@@ -311,8 +325,8 @@ call and carries no permission to construct, own or answer.
 ## Confirmed Session information
 
 Read `Session.identity` to record which conversation performed work without
-opening provider-private storage. Core exports `SessionIdentity` beside
-`Session` from `@executablemd/core/api` and its root type surface:
+opening provider-private storage. The Agent package exports `SessionIdentity`
+beside `Session` from `@executablemd/agent/api`:
 
 ```ts
 interface SessionIdentity {
@@ -326,7 +340,7 @@ association. ACPX reports `acpx.agentSessionId` for an asserted native
 identity, otherwise `acpx.acpSessionId` for the confirmed ACP loading target.
 Values keep the provider's exact opaque spelling. Native assertion takes
 precedence when both exist; `agentSessionId` remains native-only. Other
-providers may omit the property and Core defines no closed kind catalog.
+providers may omit the property and the Agent package defines no closed kind catalog.
 
 Each read observes the latest confirmation for that exact Session. Its returned
 pair is frozen: `const saved = session.identity` keeps that reading even if the
@@ -344,7 +358,7 @@ declare `agentIdentityComponents()`, and execute an Agent element named
 Prompt. Ordinary `Agent.around` middleware can retain the resolved Session
 before the first Prompt. At that Prompt's actual `started` event, the same
 configured use exposes confirmation and verified settings, including when the
-installing Core is a separate loaded copy:
+installing Agent package is a separate loaded copy:
 
 ```ts
 const saved = session.identity;
@@ -385,9 +399,9 @@ model the conversation is already on.
 
 Configuration is not an `Agent.session()` argument. Session middleware receives
 only a name or opaque request and returns the Session selected by its final
-route. The request's Core-private issuance carries its frozen configuration;
+route. The request's Agent-private issuance carries its frozen configuration;
 only the coordinator delivered directly to the provider factory can read that
-issuance and complete it with the provider's exact Session. Core issues a
+issuance and complete it with the provider's exact Session. The Agent package issues a
 configured use only from that completion.
 
 `request.with({ name })` keeps the same issuance and configuration.
@@ -406,11 +420,11 @@ that request, and closes it in `finally`. The result is an `AgentSessionUse`
 only when the final route finished a configured request; middleware may instead
 select an unconfigured route.
 
-`AgentSessionUse` is an opaque nominal subtype of `Session`: one Core-issued
+`AgentSessionUse` is an opaque nominal subtype of `Session`: one Agent-issued
 configured use of a conversation, carrying the exact provider Session that
-finished the final opaque request and its configuration in Core-owned identity
+finished the final opaque request and its configuration in Agent-owned identity
 state. One configured Session element issues one use and selects that same
-object for its nested operations. Core freezes the carrier and its copied
+object for its nested operations. The Agent package freezes the carrier and its copied
 configuration; it does not copy or freeze the provider Session. `sessionOf()`,
 `configurationOf()` and `isSessionUse()` inspect an authentic value. No public
 operation wraps an existing Session with arbitrary settings, so a structural
@@ -424,7 +438,7 @@ use. A first `started` event keeps that final routed configured use rather than
 substituting its raw provider Session to expose confirmation.
 
 The settings travel inside that frozen use when a prompt or launch names the
-conversation. Only Core and the installed provider can read them — a spread, a
+conversation. Only the Agent package and the installed provider can read them — a spread, a
 descriptor copy, the real Session presented as configured, or a use from
 another installation or loaded copy refuses rather than being treated as
 configured. Middleware may inspect, delegate or replace the whole Session. The
@@ -505,8 +519,8 @@ is written back through the existing replay, and the steps above verify it.
 Repeated operations under an unchanged selection therefore add no model write,
 while a genuine change is written once and verified before the next prompt.
 
-The configured-session carrier is issued by Core after `session()` resolves an
-exact value registered by the installed provider. A Core-owned
+The configured-session carrier is issued by the Agent package after `session()` resolves an
+exact value registered by the installed provider. An Agent-owned
 resolve-and-issue operation supplies the programmatic path; middleware can
 inspect, delegate or reroute the resulting use but cannot mint or rebuild one.
 The private context used by Session only selects the enclosing lexical use for
@@ -563,8 +577,9 @@ nothing".
 ## The provider-factory seam
 
 A provider is a factory that installs `Agent` middleware for its scope, and —
-if it serves saved conversations — one provider object for them. Core delivers
-its coordinator directly to the factory; it never travels through Agent
+if it serves saved conversations — one provider object for them. The Agent package
+delivers its coordinator directly to the factory, beside the component invocation
+identity Core issues each element,; it never travels through Agent
 middleware:
 
 ```ts
@@ -629,11 +644,11 @@ interface AgentConversationProvider {
 
 A provider that serves saved conversations installs an
 `AgentConversationProvider` in its own provider scope, through the Context of
-that same name on `@executablemd/core/api`, alongside whatever `Agent`
+that same name on `@executablemd/agent/api`, alongside whatever `Agent`
 middleware it provides. The factory signature is unchanged. The object carries
 no coordinator, permission flag, configuration approval, history mapping or
 completion receipt: it is trusted behavior a conversation selects, and
-everything it is held to stays with Core. How a held turn routes through it is
+everything it is held to stays with the Agent package. How a held turn routes through it is
 owned by §A conversation a trusted host holds open.
 
 Each of the four operations takes explicitly what the public chain supplied
@@ -676,7 +691,7 @@ historical coordinates, never a command to execute — and the latest nonempty
 `sessionKey` its Prompt records name. Both are `undefined` for an ordinary
 setup and for a history that does not yet hold them; `sessionKey` alone is
 optional, absent until a Prompt records a placement. Its presence locates state
-and asserts neither native creation nor acceptance. Core takes both as
+and asserts neither native creation nor acceptance. The Agent package takes both as
 detached, immutable snapshots when the request opens and delivers them only
 through this setup; they are not request members, Session properties or Context
 state, and possessing them authorizes no provider work. The structural adapter
@@ -725,7 +740,7 @@ issuance. Middleware may transfer that whole route but cannot read, edit, copy
 or reattach its configuration. The owner and configuration operation are
 reachable through no Context, module registry, public Agent operation,
 middleware-readable member, return value or Session property. Another loaded
-provider copy composes through the coordinator it received; another loaded Core
+provider copy composes through the coordinator it received; another loaded Agent
 copy cannot manufacture a request or use this owner admits.
 
 A provider partition is one complete, independently owned agent-provider state —
@@ -849,7 +864,7 @@ Session and Prompt are written inside an expansion, with an element to name the
 session and a journal already around them. A host that discusses something with
 an agent has neither: a person is typing into a chat, the history outlives the
 process, and there is no document. `useAgentConversation()` on
-`@executablemd/core/host` is that conversation, and it is the genuine one — a
+`@executablemd/agent/host` is that conversation, and it is the genuine one — a
 canonical agent session, journaled turns, verified configuration, and an
 identity the provider reattaches to.
 
@@ -888,7 +903,7 @@ execution. Stop is scope cancellation rather than a fourth member.
 
 A held prompt can carry a host-supplied ordered list of PNG images. The ACPX
 provider sends them as image content blocks with the prompt text. The backend's
-advertised image capability determines whether that turn can start. Core
+advertised image capability determines whether that turn can start. The Agent package
 journals the text, and the caller supplies any durable references to the images.
 
 `prompt` returns source and runs none of it. A host that means to run what came
@@ -896,7 +911,7 @@ back decides that itself and asks here, because a generated root is evaluated
 by the execution whose captured package documentation and canonical protected
 dispatch it reads — and that execution is this conversation's. Evaluating sends
 no provider prompt and changes no configuration. The element obtains the actual
-method on its own execution's handle through a Core-private readiness bridge
+method on its own execution's handle through an Agent-private readiness bridge
 before the conversation is announced ready, so a handle that reports itself
 open is open for all three things it offers; the bridge carries that bound
 operation and nothing behind it, and `AgentConversationHost` stays an ordinary
@@ -946,11 +961,11 @@ configuration record, prompt record or root terminal follows from the refusal.
 Ordinary Session and Prompt elements keep composing through `Agent` exactly as
 before.
 
-Core keeps what it already owned. The one-use request is opened and closed by
+The Agent package keeps what it already owned. The one-use request is opened and closed by
 the conversation, the configuration requirement travels inside its issuance,
 and the conversation retains private evidence of the exact `Session` settling
 that request produced: a provider that answers with a session it never settled,
-or with another after settling, is refused before Core asks for a prompt
+or with another after settling, is refused before the conversation asks for a prompt
 stream. That check is not the configuration check — `activate()` still happens
 inside the provider before any native effect — and neither is evidence of
 native identity, which only a turn's own canonical record establishes.
@@ -959,9 +974,12 @@ native identity, which only a turn's own canonical record establishes.
 coordinator are installed inside `Execution.document`, and a durable
 preparation precedes both, so a conversation opened there could reach neither.
 The conversation is a host-declared identity component in a synthetic root Core
-owns: canonical resolution selects it, hands its implementation the execution's
+executes: canonical resolution selects it, hands its implementation the execution's
 claimant, and the session is placed under the engine's own identity for that
-invocation. The `id` names the history and nothing else — it carries no
+invocation. The root's source is `<AgentConversationHost />` at the synthetic
+path `agent/conversation.md`, and the component registers under the origin
+`@executablemd/core`; a retained history is admitted against that source,
+so it is unchanged from when Core shipped the conversation. The `id` names the history and nothing else — it carries no
 claimant, establishes no native identity and overrides none.
 
 **Its root is never completed.** A durable root that records its terminal
@@ -1015,8 +1033,8 @@ never rewritten. The record is configuration, not identity: an absent Prompt
 outcome is never permission to replace it, and the native identity remains the
 canonical assertion a turn records.
 
-**Where its provider state is.** Each turn's setup carries two snapshots Core
-takes from the history when that turn opens its request (§The provider-factory
+**Where its provider state is.** Each turn's setup carries two snapshots the
+Agent package takes from the history when that turn opens its request (§The provider-factory
 seam): the native conversation the history's Prompt records assert, and the
 initial record's provider and command with the latest nonempty `sessionKey` a
 Prompt record names — a failed turn's placement included, since the provider
@@ -1138,7 +1156,7 @@ back.
 ### Saved Prompt failure details
 
 A failed owning stream release is terminal before ordinary failure
-serialization and publication. Core preserves initiating work and teardown
+serialization and publication. The Agent package preserves initiating work and teardown
 failures separately and activates the existing live publication failure path
 without a recoverable failed-turn record. Authored Catch therefore starts
 neither replacement work nor an unentered finalizer after failed release.
@@ -1167,7 +1185,7 @@ message-only upstream failure remains undiagnosed. Diagnostics establish
 neither backend acceptance nor a successful retry and never enter the agent's
 reply text.
 
-Core selects these optional facts before constructing the saved failure. With
+The Agent package selects these optional facts before constructing the saved failure. With
 secret detection enabled, it screens each optional textual field in its
 retained JSON representation, omits offending fields, then screens the complete
 selected diagnostic. Unsafe secondary text does not discard a safe protocol
@@ -1322,7 +1340,7 @@ canonical Prompt authors, may be observed but is retained nowhere and lends its
 usage to no neighbouring Prompt. Native-launch materialization keeps its own
 `MaterializationUsage` on its own record.
 
-Core selects the retained value under the producing execution's protection
+The Agent package selects the retained value under the producing execution's protection
 before the record is serialized. Each optional string — identities, build
 versions and digests, model names, currency — is withheld on its own when it
 fails the secret scanner or matches a protected input, which a scanner opt-out
@@ -1337,7 +1355,7 @@ reaching a provider, refreshing a measurement or recording more spend.
 
 #### How a provider reports it
 
-The coordinator Core delivers to an installed provider carries one optional
+The coordinator the Agent package delivers to an installed provider carries one optional
 member:
 
 ```ts
@@ -1347,7 +1365,7 @@ promptUsage?(): Operation<PromptUsageReporter | undefined>;
 
 A provider calls it once when its stream is actually subscribed, before any
 native work, and keeps the receiver for that turn. The receiver belongs to that
-one subscription: Core opens it when the subscription starts, keeps it open
+one subscription: the Agent package opens it when the subscription starts, keeps it open
 through the subscription's joined teardown and seals it afterwards, so a
 retained receiver records nothing later and two subscriptions of one cold stream
 never share one. A canonical turn whose stream was subscribed more than once
@@ -1357,7 +1375,7 @@ outcome. An absent member, an undefined receiver and a report that never came
 all leave usage unknown and refuse nothing.
 
 The same delivered coordinator carries an optional `promptUsage()` receiver, the one
-route by which a provider's turn readings reach the Prompt that consumed them. Core
+route by which a provider's turn readings reach the Prompt that consumed them. The Agent package
 creates one usage destination per actual stream subscription inside the audited
 stream that already carries the permission ledger, opens it before the provider's own
 subscription and seals it after that subscription's teardown joins; the canonical
@@ -1771,7 +1789,7 @@ ends the whole authorship execution, so a turn that streamed text and then
 failed presents nothing.
 
 Those refusals are installed on a scope holding the document execution and
-nothing else, so what the ceiling covers is what it says it covers. It cannot tell the host's own acts from the document's on its own: a call carries no mark saying who made it, and a provider's work happens inside the execution that reached it — core constructs a root provider from within the document — so a refusal over that scope covers both parties. Two things the command
+nothing else, so what the ceiling covers is what it says it covers. It cannot tell the host's own acts from the document's on its own: a call carries no mark saying who made it, and a provider's work happens inside the execution that reached it — the Agent package constructs a root provider from within the document — so a refusal over that scope covers both parties. Two things the command
 does are the host's, and both run a command: installing this build's adapter,
 and opening the review form in a browser. The command therefore takes its own
 scope before it installs the ceiling and states those two acts as its own; they

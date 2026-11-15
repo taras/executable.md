@@ -39,19 +39,19 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { parseJson } from "@executablemd/core";
 import {
   Agent,
   claimsConfiguration,
   isSessionUse,
-  parseJson,
   sameExecutableBuild,
   sessionOf,
-} from "@executablemd/core";
-import { AgentConversationProvider } from "@executablemd/core/api";
+} from "@executablemd/agent/api";
+import { AgentConversationProvider } from "@executablemd/agent/api";
+import type { JsonObject } from "@executablemd/core";
 import type {
   ExecutableBuildBindingV1,
   AgentOptions,
-  JsonObject,
   ProviderSessionConfiguration,
   AgentOptionsRequest,
   AgentSessionRequest,
@@ -77,7 +77,7 @@ import type {
   SessionConfiguration,
   SessionLaunchResult,
   UsageBuild,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import {
   AcpConfigurationError,
   applySessionConfiguration,

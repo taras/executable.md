@@ -15,13 +15,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-  agentIdentityComponents,
-  Component,
-  Elicitation,
-  installAgentComponents,
-  parseTemplate,
-} from "@executablemd/core";
+import { Component, Elicitation, parseTemplate } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import { installAnswerProvider } from "@executablemd/core/host";
 import type { AnswerConfiguration } from "@executablemd/core/host";
 import { executeInstalled } from "@executablemd/core/host";

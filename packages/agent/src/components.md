@@ -1,11 +1,13 @@
-Long-form documentation for the Agent components canonical core registers.
+Long-form documentation for the Agent components the `@executablemd/agent`
+package registers.
 
 These are the components a document uses to talk to a coding agent: which agent
 and session to use, how to prompt it, how to answer the permission requests it
-makes, and how to hand it the terminal. They register under
-`@executablemd/core`, beside the components in `../components/components.md`,
-and are documented here because this is the registration boundary they belong
-to.
+makes, and how to hand it the terminal. They register under the origin
+`@executablemd/core`, which they kept when they moved out of core into this
+package, so authored documents, retained journals and documentation lookups name
+them as before. They are documented here because this package is the
+registration boundary they belong to.
 
 Most of them are *regions*: they establish something for the content inside them
 and restore what was there on the way out. That is what lets one document use two

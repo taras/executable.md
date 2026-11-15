@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import process from "node:process";
-import { parsePromptRecord } from "@executablemd/core/host";
+import { parsePromptRecord } from "@executablemd/agent/host";
 
 const BINARY = path.join(process.cwd(), "dist", "xmd");
 const FAKE_CLAUDE = path.join(process.cwd(), "packages/acp/tests/fixtures/fake-claude-cli.cjs");

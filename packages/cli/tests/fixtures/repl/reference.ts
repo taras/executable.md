@@ -17,15 +17,17 @@ import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { Agent, collect, Elicitation, installAgentComponents } from "@executablemd/core";
+import { collect, Elicitation } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { installAgentComponents } from "@executablemd/agent/host";
+import type { ElicitationRequest } from "@executablemd/core";
 import type {
   AgentPromptEvent,
   AgentProviderFactory,
-  ElicitationRequest,
   PermissionOption,
   PromptOptions,
   Session,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { inlineSource } from "@executablemd/core";
 import type { Operation, Stream } from "effection";

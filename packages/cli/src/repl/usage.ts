@@ -1,4 +1,4 @@
-import type { PromptRecord } from "@executablemd/core/host";
+import type { PromptRecord } from "@executablemd/agent/host";
 import { inertCommandText } from "./command-output.ts";
 
 type Usage = NonNullable<PromptRecord["usage"]>;

@@ -25,7 +25,7 @@ import type {
   UsageBuild,
   UsageProvenance,
   UsageReading,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import type {
   AcpRuntimeEvent,
   AcpRuntimeQuotaTokens,

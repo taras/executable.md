@@ -1,6 +1,6 @@
 import process from "node:process";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
-import { Agent, AgentProviders } from "@executablemd/core";
+import { Agent, AgentProviders } from "@executablemd/agent/api";
 import { API } from "@executablemd/runtime";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";

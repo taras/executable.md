@@ -8,10 +8,11 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { Agent, claimsConfiguration, Config, sessionOf } from "@executablemd/core";
-import type { ConfigureAgentSession } from "@executablemd/core";
-import { openSessionRequest } from "../../core/src/agent/session-request.ts";
-import { createSessionSetupOwner } from "../../core/src/agent/session-setup.ts";
+import { Config } from "@executablemd/core";
+import { Agent, claimsConfiguration, sessionOf } from "@executablemd/agent/api";
+import type { ConfigureAgentSession } from "@executablemd/agent/api";
+import { openSessionRequest } from "../../agent/src/session-request.ts";
+import { createSessionSetupOwner } from "../../agent/src/session-setup.ts";
 import type {
   AgentLaunchRequest,
   AgentPromptEvent,
@@ -22,7 +23,7 @@ import type {
   SessionConfiguration,
   PromptUsage,
   UsageBuild,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import {
   AcpxSessionPolicyError,
   createAcpxProvider,

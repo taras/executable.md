@@ -97,6 +97,29 @@ main(function* (args) {
     return;
   }
 
+  // The Agent components are documented by a second asset, the Agent
+  // package's own, and their metadata still names the origin they kept. A
+  // binary that embedded core's documentation and not that one documents
+  // `<TempDir>` and fails here.
+  const prompt = yield* ask(binary, ["syntax", "Prompt", "--include", include], elsewhere);
+  if (prompt.code !== 0) {
+    yield* fail(
+      prompt.stderr.includes(MISSING_ASSET)
+        ? `the binary carries no Agent documentation: ${prompt.stderr.trim()}`
+        : `xmd syntax Prompt exited ${prompt.code}: ${prompt.stderr.trim()}`,
+    );
+    return;
+  }
+  const missingPrompt = absent(prompt.stdout, [
+    "### `<Prompt>`",
+    "**Origin:** `@executablemd/core`",
+    "Sends a prompt and renders the reply",
+  ]);
+  if (missingPrompt.length > 0) {
+    yield* fail(`xmd syntax Prompt rendered no ${JSON.stringify(missingPrompt)}`);
+    return;
+  }
+
   const typo = yield* ask(binary, ["syntax", "TemdDir", "--include", include], elsewhere);
   if (typo.code === 0) {
     yield* fail("xmd syntax TemdDir succeeded, so the name lookup admits anything");
@@ -139,7 +162,7 @@ main(function* (args) {
   }
 
   console.log(
-    "documentation smoke: one component documented, an unknown one refused, two rendered " +
+    "documentation smoke: core's and the Agent package's components documented, an unknown one refused, two rendered " +
       "from a directory that is not the checkout",
   );
 });

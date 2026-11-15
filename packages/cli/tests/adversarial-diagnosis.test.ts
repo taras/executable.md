@@ -6,12 +6,8 @@ import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { join, resolve } from "node:path";
 import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
-import {
-  collect,
-  agentIdentityComponents,
-  registerComponents,
-  useNormalizedOutput,
-} from "@executablemd/core";
+import { collect, registerComponents, useNormalizedOutput } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import { API, cwd, Permissions, realpath, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { z } from "zod";

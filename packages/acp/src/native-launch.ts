@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { IdentityProvenance } from "@executablemd/core";
+import type { IdentityProvenance } from "@executablemd/agent/api";
 
 /**
  * What an adapter knows about the build behind its executable.

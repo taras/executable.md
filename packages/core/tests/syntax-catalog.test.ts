@@ -26,8 +26,6 @@ import { API } from "@executablemd/runtime";
 import type { DirectoryEntry, LinkStatResult, StatResult } from "@executablemd/runtime";
 import { repositoryComponentName } from "../src/components/candidates.ts";
 import {
-  AGENT_REGISTRATIONS,
-  agentIdentityComponents,
   CORE_COMPONENT_NAMES,
   inspectComponent,
   inspectSyntax,
@@ -37,6 +35,7 @@ import {
   RESERVED_STRUCTURAL,
   STRUCTURAL_DECLARATIONS,
 } from "../mod.ts";
+import { AGENT_REGISTRATIONS, agentIdentityComponents } from "@executablemd/agent/host";
 import type {
   CompleteComponentSyntaxEntry,
   InstalledStructuralSyntaxEntry,

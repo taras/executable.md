@@ -1,7 +1,7 @@
 import { createAcpxProvider, createAcpxSessionStore } from "@executablemd/acp";
 import { Plugin } from "@executablemd/core/api";
-import { registerAgentProvider } from "@executablemd/core";
-import { installInvocationAgentProvider } from "@executablemd/core/host";
+import { registerAgentProvider } from "@executablemd/agent/api";
+import { installInvocationAgentProvider } from "@executablemd/agent/host";
 import type { ReplPluginInstallation } from "@executablemd/cli/api";
 import { env, readTextFile } from "@executablemd/runtime";
 import { useTestAgentController } from "@executablemd/test-agent";

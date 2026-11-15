@@ -2,7 +2,7 @@
  * Tier HC — one host conversation over the canonical ACP provider.
  *
  * `useAgentConversation()` is proven against a stub provider in
- * `packages/core/tests/agent-conversation.test.ts`, where a stub is the right
+ * `packages/agent/tests/agent-conversation.test.ts`, where a stub is the right
  * instrument: those rows are about what the conversation does with what a
  * provider says. One thing a stub cannot show is the *order* the canonical
  * provider commits in — the adapter accepts the session, the provider's own
@@ -33,10 +33,14 @@ import {
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { Agent, Component, installAgentComponents } from "@executablemd/core";
-import type { FunctionComponentDefinition, Json, Session } from "@executablemd/core";
-import { useAgentConversation } from "@executablemd/core/host";
-import type { AgentConversation, ExecutionInstallation } from "@executablemd/core/host";
+import { Component } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { installAgentComponents } from "@executablemd/agent/host";
+import type { FunctionComponentDefinition, Json } from "@executablemd/core";
+import type { Session } from "@executablemd/agent/api";
+import { useAgentConversation } from "@executablemd/agent/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { AgentConversation } from "@executablemd/agent/host";
 
 import { createAcpxSessionStore } from "../src/session-store.ts";
 import { withCertificationFixture } from "./certification-fixture.ts";
@@ -55,7 +59,7 @@ import type { NativeAdapter } from "../src/native-launch.ts";
 import { createMemorySessionRouteStore } from "../src/session-route.ts";
 import type { AgentSessionRouteStore } from "../src/session-route.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
-import type { AgentSessionRequest } from "@executablemd/core/api";
+import type { AgentSessionRequest } from "@executablemd/agent/api";
 import {
   createFakeObserver,
   createFakeRuntime,

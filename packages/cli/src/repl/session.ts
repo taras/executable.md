@@ -81,7 +81,8 @@ import {
 } from "effection";
 import type { Operation, Result, Stream, Task } from "effection";
 import { Component, INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
-import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
+import type { DocumentValidationDiagnostic, Json } from "@executablemd/core";
+import type { PermissionMode } from "@executablemd/agent/api";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import { API, Permissions } from "@executablemd/runtime";
 import { Stdio } from "@effectionx/process";

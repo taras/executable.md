@@ -13,7 +13,8 @@ import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec, ProcessApi, Stdio } from "@effectionx/process";
 import { selectJson } from "@executablemd/core/host";
 import { openReplSession } from "../src/repl/session.ts";
-import { Agent, Component, Execution } from "@executablemd/core";
+import { Component, Execution } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -84,7 +85,7 @@ import { awaitedFact } from "./support/mounted-repl.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
-import { AGENT_PROMPT } from "@executablemd/core/host";
+import { AGENT_PROMPT } from "@executablemd/agent/host";
 import {
   Descriptor,
   Request,

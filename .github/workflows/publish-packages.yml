@@ -30,7 +30,7 @@ jobs:
       - name: Validate the manifests declare this version
         run: |
           VERSION="${{ steps.resolve.outputs.value }}"
-          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/workflow/deno.json packages/git/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/cli/deno.json; do
+          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/agent/deno.json packages/acp/deno.json packages/workflow/deno.json packages/git/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/cli/deno.json; do
             declared="$(jq -r .version "$f")"
             if [ "$declared" != "$VERSION" ]; then
               echo "::error::$f declares $declared, not $VERSION — the tag does not match the manifests"
@@ -82,15 +82,22 @@ jobs:
       package: packages/core
       version: ${{ needs.version.outputs.value }}
 
+  agent:
+    needs: [version, core, durable-streams, runtime]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: packages/agent
+      version: ${{ needs.version.outputs.value }}
+
   acp:
-    needs: [version, core, runtime]
+    needs: [version, agent, core, runtime]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/acp
       version: ${{ needs.version.outputs.value }}
 
   workflow:
-    needs: [version, core, durable-streams, runtime]
+    needs: [version, agent, core, durable-streams, runtime]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/workflow
@@ -111,7 +118,7 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   test-agent:
-    needs: [version, acp, core, durable-streams, runtime, testing]
+    needs: [version, acp, agent, core, durable-streams, runtime, testing]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/test-agent
@@ -125,7 +132,7 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   cli:
-    needs: [version, acp, core, durable-streams, git, runtime, test-agent, testing, web, workflow]
+    needs: [version, acp, agent, core, durable-streams, git, runtime, test-agent, testing, web, workflow]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/cli

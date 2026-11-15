@@ -152,6 +152,12 @@ The bump touches nothing else.
   package, ordered with `needs:` so dependencies publish before dependents
   (leaves run in parallel), plus one `jsr` job for the whole workspace.
 
+  `@executablemd/agent` publishes after `core`, `durable-streams` and
+  `runtime`, which it depends on, and before `acp`, `workflow`, `test-agent`
+  and `cli`, which declare it. Those edges come from the manifests like every
+  other, so a package that starts importing Agent gains its edge at the next
+  regeneration.
+
   That ordering is a publication guarantee, not a build one. Each job builds its
   own closure from the tag's checkout, so no job waits for another's artifact to
   reach npm. What the edges still buy is that a failed upstream publish
@@ -686,7 +692,10 @@ The checks that hold this together, each proving a different build:
 - `scripts/tests/cli-npm-bin.test.ts` builds the real package, asserts every
   emitted `esm/src/documents/` asset is byte-identical to the source, checks
   that the emitted core and runtime manifests publish `./api` and that the
-  module behind it was emitted, runs the built bin with a `--plugin` an operator
+  module behind it was emitted, checks that the emitted core manifest declares
+  no Agent dependency while a Node consumer outside the checkout imports
+  `@executablemd/agent/api` and `@executablemd/agent/host` by package name and
+  receives the source entrypoints' exports, runs the built bin with a `--plugin` an operator
   would write, and then asks the built bin — from a directory that is not the
   package — which Plan `<Plan>` Component source it would let a document write. The answer carries the
   origin and the SHA-256 of those bytes, so a build that shipped different ones, or none,
@@ -740,6 +749,10 @@ maintained:
 - `PACKAGED_DOCUMENTATION` — each package's `components.md`, named individually
   because the directories they sit in are package source, and embedding those
   whole would carry the TypeScript into the binary a second time.
+  The Agent components' file is `packages/agent/src/components.md`. It moved
+  with them out of `packages/core/src/agent/`, and its prose still documents
+  the `@executablemd/core` origin they register under. `scripts/build-npm.ts`
+  copies the same `src/components.md` into the Agent npm package.
 
 `compileArguments()` builds the complete argv from them and refuses an unknown
 `--target` before anything is spawned. `scripts/compile.ts` is the command a
@@ -776,6 +789,9 @@ the checkout and with a component search path of its own, so neither the working
 directory nor `--include` can answer for the product's own documentation:
 
 - `xmd syntax TempDir` renders the registry metadata *and* the long-form prose;
+- `xmd syntax Prompt` does the same from the Agent package's own
+  `components.md`, a second asset, with the `@executablemd/core` origin its
+  components keep;
 - `xmd syntax TemdDir` reaches the ordinary unknown-name refusal with empty
   stdout — the half that makes the probe evidence, because a binary missing its
   assets fails both lookups the same way, so a passing first case alone would

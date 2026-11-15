@@ -1,0 +1,18 @@
+{
+  "name": "@executablemd/agent",
+  "version": "0.14.1",
+  "description": "Agent sessions, prompts and held conversations for executable.md documents.",
+  "type": "module",
+  "exports": {
+    "./api": "./api.ts",
+    "./host": "./host.ts"
+  },
+  "dependencies": {
+    "@effectionx/context-api": "0.6.0",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "effection": "4.1.0",
+    "zod": "^4.3.6"
+  }
+}

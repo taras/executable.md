@@ -27,7 +27,7 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import type { SessionConfiguration } from "./agent-api.ts";
-import type { Json } from "../types.ts";
+import type { Json } from "@executablemd/core";
 
 /** The member a record carries, and the only one this build writes. */
 export const CONFIGURATION_MEMBER = "configuration";

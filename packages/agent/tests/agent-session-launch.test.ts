@@ -19,13 +19,13 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute } from "../src/execute.ts";
-import { executeInstalled } from "../host.ts";
-import { agentIdentityComponents } from "../src/agent/components.ts";
-import { Agent } from "../src/agent/agent-api.ts";
-import { sessionOf } from "../src/agent/session-use.ts";
-import { isSessionRequest } from "../src/agent/session-request.ts";
-import type { Session, SessionConfiguration, SessionLaunchResult } from "../src/agent/agent-api.ts";
+import { execute } from "../../core/src/execute.ts";
+import { executeInstalled } from "@executablemd/core/host";
+import { agentIdentityComponents } from "../src/components.ts";
+import { Agent } from "../src/agent-api.ts";
+import { sessionOf } from "../src/session-use.ts";
+import { isSessionRequest } from "../src/session-request.ts";
+import type { Session, SessionConfiguration, SessionLaunchResult } from "../src/agent-api.ts";
 import type {
   ExecutableBuildBindingV1,
   ExitedLaunchRecord,
@@ -33,12 +33,12 @@ import type {
   MaterializationPlan,
   MaterializedLaunchRecord,
   PreparedLaunchRecord,
-} from "../src/agent/launch.ts";
-import { sameExecutableBuild } from "../src/agent/launch.ts";
-import { parseMaterialized, parsePrepared } from "../src/agent/launch-journal.ts";
-import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
-import { installAgentComponents } from "../src/agent/components.ts";
-import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
+} from "../src/launch.ts";
+import { sameExecutableBuild } from "../src/launch.ts";
+import { parseMaterialized, parsePrepared } from "../src/launch-journal.ts";
+import type { AgentLaunchRequest } from "../src/launch-request.ts";
+import { installAgentComponents } from "../src/components.ts";
+import type { AgentProviderFactory } from "../src/provider-api.ts";
 import {
   API,
   installControlledLauncher,
@@ -48,7 +48,7 @@ import {
   useHostFiles,
 } from "@executablemd/runtime";
 import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
-import type { Json } from "../src/types.ts";
+import type { Json } from "../../core/src/types.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -1128,7 +1128,7 @@ describe("Tier FS — the final public launch surface", () => {
   it("FS8: core no longer publishes a launch journal to compose around", function* () {
     // The mechanism itself is gone, not hidden. A public phase journal is what
     // made the forgery durable, so its absence is part of the contract.
-    const core = yield* until(import("../mod.ts"));
+    const core = yield* until(import("@executablemd/core"));
 
     expect(Object.keys(core)).not.toContain("AgentLaunchJournal");
     expect(Object.keys(core)).not.toContain("AgentLaunchJournalApi");

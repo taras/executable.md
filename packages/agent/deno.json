@@ -1,0 +1,12 @@
+{
+  "name": "@executablemd/agent",
+  "version": "0.14.1",
+  "exports": {
+    "./api": "./api.ts",
+    "./host": "./host.ts"
+  },
+  "imports": {
+    "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",
+    "zod": "npm:zod@^4.3.6"
+  }
+}

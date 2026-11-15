@@ -2,8 +2,10 @@ import { childRuntime } from "./runtime.ts";
 import { ensure, Err, Ok, scoped, suspend, useScope, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 import { ensureDir } from "@effectionx/fs";
-import { Agent, content, hasContent } from "@executablemd/core";
-import type { AgentProviderFactory, Json } from "@executablemd/core";
+import { content, hasContent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import type { Json } from "@executablemd/core";
+import type { AgentProviderFactory } from "@executablemd/agent/api";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import {
   createAcpRuntime,

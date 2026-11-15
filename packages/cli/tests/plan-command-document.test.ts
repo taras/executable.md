@@ -28,12 +28,8 @@ import { ensureDir, rm } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  agentIdentityComponents,
-  installAgentComponents,
-  retainedSource,
-  useNormalizedOutput,
-} from "@executablemd/core";
+import { retainedSource, useNormalizedOutput } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type {
   DocumentValidation,
   ElicitationRequest,

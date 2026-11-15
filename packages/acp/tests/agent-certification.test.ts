@@ -6,13 +6,10 @@ import { writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import { settleStage } from "../../../examples/agent-certification/stage-runner.ts";
 import { randomUUID } from "node:crypto";
-import {
-  Agent,
-  agentIdentityComponents,
-  installAgentComponents,
-  useNormalizedOutput,
-} from "@executablemd/core";
-import type { AgentPromptEvent } from "@executablemd/core";
+import { useNormalizedOutput } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createAcpRuntime, createAcpxProvider, createAcpxSessionStore } from "../mod.ts";

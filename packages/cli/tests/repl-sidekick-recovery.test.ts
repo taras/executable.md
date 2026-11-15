@@ -56,8 +56,8 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
-import { Agent } from "@executablemd/core";
-import type { AgentPromptEvent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import type { AgentSessionOwnershipAdministration } from "@executablemd/runtime";
@@ -73,7 +73,7 @@ import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { ScriptedTurn } from "./support/fake-acp.ts";
 import { useTempFileCompiler, Elicitation } from "@executablemd/core";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
 import {

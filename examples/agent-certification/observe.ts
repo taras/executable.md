@@ -1,6 +1,7 @@
 import { nativeAdapterFor } from "@executablemd/acp";
-import { Agent, Component, configurationOf, sessionOf } from "@executablemd/core";
-import type { AgentPromptEvent } from "@executablemd/core";
+import { Component } from "@executablemd/core";
+import { Agent, configurationOf, sessionOf } from "@executablemd/agent/api";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 import { scoped, Err, Ok, useScope, spawn, sleep } from "effection";
 import type { Result, Operation, Stream, Task } from "effection";
 import {

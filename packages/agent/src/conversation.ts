@@ -82,14 +82,23 @@ import type {
   Json as DurableJson,
 } from "@executablemd/durable-streams";
 
-import { executeInstalled } from "../execute.ts";
-import type { ExecutionInstallation, HostExecution } from "../execute.ts";
-import type { BoundRootEvaluator } from "../generated-root-owner.ts";
-import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "../generated-xmd.ts";
-import { durabilityFailure } from "../errors.ts";
-import { isJsonObject, parseJson } from "../json.ts";
-import { retainedSource } from "../root-source.ts";
-import { scanSecrets, secretPolicy } from "../secrets/policy.ts";
+import {
+  isJsonObject,
+  parseJson,
+  retainedSource,
+  scanSecrets,
+  secretPolicy,
+} from "@executablemd/core";
+import type { ComponentInvocation, Json } from "@executablemd/core";
+import { durabilityFailure, executeInstalled } from "@executablemd/core/host";
+import type {
+  ExecutionInstallation,
+  HostExecution,
+  GeneratedXmdRequest,
+  GeneratedXmdRootResult,
+  IdentityClaimant,
+} from "@executablemd/core/host";
+import { AGENT_ORIGIN } from "./origin.ts";
 import { AgentConversationProvider } from "./conversation-provider.ts";
 import type {
   AgentOptions,
@@ -117,8 +126,6 @@ import type {
 import { openSessionRequest } from "./session-request.ts";
 import type { SessionFacts } from "./session-request.ts";
 import { sessionOf } from "./session-use.ts";
-import type { ComponentInvocation, IdentityClaimant } from "../invocation-identity.ts";
-import type { Json } from "../types.ts";
 
 /** Why a host conversation cannot be opened, continued or inspected. */
 export class AgentConversationError extends Error {
@@ -645,7 +652,7 @@ function* serve(
     components: [
       {
         name: CONVERSATION_COMPONENT,
-        origin: "@executablemd/core",
+        origin: AGENT_ORIGIN,
         props: { type: "object", properties: {}, additionalProperties: false },
         description: "Hold one agent conversation open for the host that opened it.",
         factory: (claim) =>
@@ -1302,6 +1309,9 @@ function* withholdFlaggedReply(
   }
   return { ...record, text: "", withheld: true };
 }
+
+/** The operation a trusted host handle exposes to evaluate one generated root. */
+type BoundRootEvaluator = HostExecution["evaluateGeneratedXmdRoot"];
 
 /**
  * The bound evaluator on one execution's handle, read once.
