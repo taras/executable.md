@@ -1490,6 +1490,7 @@ function* drive(
     // time.
     const wakes = queued();
     const shutdown = withResolvers<void>();
+    const firstLiveInterrupt = coldTerminal === undefined ? undefined : withResolvers<void>();
     let ending = false;
     // Until a screen's first frame is presented, Control-C has no focused message
     // box to clear and leaves. After that the loop decides, through the tree. A
@@ -1518,6 +1519,7 @@ function* drive(
           presentedAt !== showing();
         if (early) {
           unpresented.add(next.value);
+          firstLiveInterrupt?.resolve();
         }
         if (next.value.kind === "eof" || early) {
           if (liveScreen === undefined) {
@@ -3094,17 +3096,29 @@ function* drive(
     };
     const interrupted = new Error(RESTORE_INTERRUPTED);
     const presentationScreen: ReplScreen =
-      coldTerminal === undefined
+      firstLiveInterrupt === undefined
         ? screen
         : {
             ...screen,
             *present(bytes, size) {
-              // The live reader may receive an interrupt left in the terminal stream
-              // by the startup reader. Check before handing the first frame to the host.
-              if (presentedAt === undefined && ending) {
+              if (presentedAt !== undefined) {
+                return yield* screen.present(bytes, size);
+              }
+              if (ending) {
                 throw interrupted;
               }
-              yield* screen.present(bytes, size);
+              // EOF during the write still allows an ordinary exit. Only an
+              // early Control-C cancels this presentation.
+              yield* race([
+                (function* () {
+                  yield* firstLiveInterrupt.operation;
+                  throw interrupted;
+                })(),
+                (function* () {
+                  yield* screen.present(bytes, size);
+                  presentedAt = showing();
+                })(),
+              ]);
             },
           };
     function* paintCurrent() {
