@@ -37,7 +37,7 @@
     <XMD.Repl resume={closed.resume} expectExit={true} as="reopened">
       <Terminal.WaitForText text="Entries    * Sidekick" />
       <Terminal.WaitForText text="message the sidekick" />
-      <Terminal.WaitForText text="Entries    * Sidekick" as="entriesTab" />
+      <Terminal.WaitForText text="Entries" row={1} as="entriesTab" />
       <Terminal.Click at={entriesTab} />
       <Terminal.WaitForText text="1. [ok]" as="retainedEntry" />
       <Terminal.Click at={retainedEntry} />
@@ -49,7 +49,7 @@
     <AssertEquals actual={reopened.exitCode} expected={0} />
 
     <XMD.Repl>
-      <Terminal.WaitForText text="SIDEKICK" row={1} />
+      <Terminal.WaitForText text="Sidekick" row={1} />
       <Terminal.WaitForText text="TRANSCRIPT" row={1} present={false} />
       <Terminal.WaitForText text="HEAD · EMPTY" />
       <Terminal.WaitForText text="Ready for Entry 1" />
@@ -58,7 +58,9 @@
     <Terminal.Resize columns={120} rows={30} />
     <XMD.Repl resume={reopened.resume}>
       <Terminal.WaitForText text="TRANSCRIPT" row={1} />
-      <Terminal.WaitForText text="retained-marker-1272" />
+      <Terminal.WaitForText text="Output" as="output" />
+      <Terminal.WaitForText text="retained-mar" row={output.row + 1} />
+      <Terminal.WaitForText text="ker-1272" row={output.row + 2} />
     </XMD.Repl>
   </Terminal>
 </Test>

@@ -19,9 +19,10 @@
       <Terminal.WaitForText text="SIDEKICK" row={1} as="mediumTab" />
       <Terminal.Click at={mediumTab} />
       <Terminal.Resize columns={72} rows={20} />
-      <Terminal.WaitForText text="* Sidekick" as="switcher" />
+      <Terminal.WaitForText text="* Sidekick" row={1} />
       <Terminal.WaitForText text="message the sidekick" as="composer" />
-      <AssertEquals actual={switcher.row > composer.row} expected={true} />
+      <Terminal.WaitForText text="No entry yet" as="round" />
+      <AssertEquals actual={round.row > composer.row} expected={true} />
       <Terminal.WaitForText text="TRANSCRIPT" row={1} present={false} />
       <Terminal.WaitForText text="HISTORY" row={18} />
       <Terminal.Screenshot name="layout-narrow" />
