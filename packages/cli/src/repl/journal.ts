@@ -40,6 +40,7 @@ import type { DurableEvent, DurableStream } from "@executablemd/durable-streams"
 
 import { ReplHost } from "./host.ts";
 import { forEachLine } from "./record-file.ts";
+import { RetainedBindings } from "./retained-bindings.ts";
 import { sealEvent, stringSharing } from "./retained-event.ts";
 import { isOpaqueExecution } from "./route.ts";
 
@@ -59,6 +60,8 @@ export class ReplJournalError extends Error {
  * filesystem being part of what is under test.
  */
 export interface RetainedStream extends DurableStream {
+  /** Deliver the acknowledged record to the appending segment. */
+  append(event: DurableEvent, retained?: (event: DurableEvent) => void): Operation<void>;
   /** Called after each append has been retained, with what was retained. */
   onAppend: ((event: DurableEvent) => void) | null;
 }
@@ -82,13 +85,18 @@ export interface RetainedStream extends DurableStream {
 export class RetainedReplStream implements RetainedStream {
   readonly path: string;
   private events: DurableEvent[];
+  private readonly bindings = new RetainedBindings();
 
   /** Called after each append has reached the file, with what reached it. */
   onAppend: ((event: DurableEvent) => void) | null = null;
 
   constructor(path: string, retained: readonly DurableEvent[] = []) {
     this.path = path;
-    this.events = retained.map((event) => sealEvent(event));
+    this.events = retained.map((event) => {
+      const recorded = this.bindings.share(sealEvent(event));
+      this.bindings.remember(recorded);
+      return recorded;
+    });
   }
 
   // deno-lint-ignore require-yield
@@ -96,13 +104,15 @@ export class RetainedReplStream implements RetainedStream {
     return this.events.slice();
   }
 
-  *append(event: DurableEvent): Operation<void> {
-    const recorded = sealEvent(event);
+  *append(event: DurableEvent, retained?: (event: DurableEvent) => void): Operation<void> {
+    const recorded = this.bindings.share(sealEvent(event));
 
     yield* ReplHost.operations.appendRecord(this.path, serializeDurableEvent(recorded));
 
+    this.bindings.remember(recorded);
     this.events.push(recorded);
     this.onAppend?.(recorded);
+    retained?.(recorded);
   }
 }
 
@@ -213,6 +223,7 @@ export function* readRecords(
 ): Operation<DurableEvent[]> {
   const events: DurableEvent[] = [];
   const share = stringSharing();
+  const bindings = new RetainedBindings();
   yield* forEachLine(
     path,
     {
@@ -241,7 +252,9 @@ export function* readRecords(
             `${events.length + 1}).`,
         );
       }
-      events.push(sealEvent(parsed.value, share));
+      const recorded = bindings.share(sealEvent(parsed.value, share));
+      bindings.remember(recorded);
+      events.push(recorded);
     },
   );
   return events;
@@ -339,7 +352,7 @@ export function movableWriter(initial: RetainedStream): MovableWriter {
     *readAll(): Operation<DurableEvent[]> {
       return yield* target.readAll();
     },
-    *append(event: DurableEvent): Operation<void> {
+    *append(event: DurableEvent, retained?: (event: DurableEvent) => void): Operation<void> {
       // Held first, and in a loop: a record released by one handoff must not
       // slip past a second one that started while it was being woken.
       while (holding) {
@@ -351,7 +364,7 @@ export function movableWriter(initial: RetainedStream): MovableWriter {
       // and a count says truthfully whether one is.
       appending += 1;
       try {
-        yield* target.append(event);
+        yield* target.append(event, retained);
       } finally {
         appending -= 1;
         release();
