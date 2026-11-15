@@ -1,3 +1,4 @@
+import type { ScreenReading } from "./support/repl-page.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
@@ -96,18 +97,18 @@ describe("REPL focus regions: the normal screen", () => {
     const page = yield* useReplPage({ size: WIDE });
     yield* draftFocus(page);
     yield* key(page, "Tab");
-    yield* key(page, "ArrowRight");
-    yield* key(page, "ArrowRight");
-    yield* page.key("ArrowRight");
-    yield* page.key("ArrowDown");
     yield* key(page, "ArrowLeft");
-    yield* key(page, "ArrowLeft");
+    expect(page.screen().shows("> SIDEKICK")).toBe(true);
+    yield* key(page, "ArrowRight");
+    expect(page.screen().shows("> BINDINGS")).toBe(true);
     expect(page.screen().shows("message the sidekick")).toBe(true);
     expect(page.screen().shows("[refresh]")).toBe(false);
     yield* page.key("Enter");
     yield* page.until("Bindings selected", (one) => !one.shows("message the sidekick"));
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
+    for (let at = 0; at < 5 && !page.screen().shows("> [history]"); at++) {
+      yield* key(page, "Tab");
+    }
+    expect(page.screen().shows("> [history]")).toBe(true);
     yield* key(page, "ArrowRight");
     expect(page.repl.terminal.ending).toBe(undefined);
     yield* key(page, "ArrowLeft");
@@ -191,9 +192,13 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* key(page, "Alt+ArrowDown");
     yield* key(page, "Alt+ArrowDown");
     yield* key(page, "End");
-    yield* page.until("the reading's final row", (one) => one.shows("Reading row 49"));
+    const readingContains = (one: ScreenReading, row: number) =>
+      one.rows.some(
+        (line, at) => line.includes("│  Reading row") && one.rows[at + 1]?.includes(`│  ${row} `),
+      );
+    yield* page.until("the reading's final row", (one) => readingContains(one, 49));
     yield* key(page, "Home");
-    yield* page.until("the reading's first row", (one) => one.shows("Reading row 0"));
+    yield* page.until("the reading's first row", (one) => readingContains(one, 0));
     yield* key(page, "PageDown");
     yield* key(page, "ArrowUp");
     yield* key(page, "Enter");
@@ -706,7 +711,7 @@ describe("REPL focus regions: one committed TODO replacement", () => {
     let source = THIRTEEN_TASKS;
     let state: ReplState = reduceRepl(
       initialState("owned"),
-      { kind: "select-pane", pane: "sidekick" },
+      { kind: "select-pane", pane: "todo" },
       model,
       IDLE,
     ).state;
