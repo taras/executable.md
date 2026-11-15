@@ -237,7 +237,7 @@ function screenPlacement(
   if (key === "sessions:all" || key.startsWith("sessions:conversation:")) {
     return { region: transcript, groups: [CHOICES] };
   }
-  if (key.startsWith("sessions:request:")) {
+  if (key.startsWith("sessions:request:") || (turn !== undefined && key === `${turn}:text`)) {
     return turn === undefined
       ? { region: transcript, groups: [TURNS] }
       : { region: transcript, groups: [TURNS, vertical(`turn:${turn}`)] };
@@ -273,6 +273,9 @@ function screenPlacement(
   }
   if (
     key === "sidekick:back" ||
+    key.startsWith("sidekick:chat:") ||
+    key.startsWith("sidekick:work:") ||
+    key.startsWith("sidekick:feedback:") ||
     key.startsWith("sidekick:retry:") ||
     key.startsWith("binding:") ||
     key.startsWith("bindings-view:") ||
@@ -351,12 +354,13 @@ export function placeScreen<Action>(
     const children = read.children.map((child) => place(child, modal || read.modal));
     let navigation: ReplPlacement | undefined;
     if (control(description)) {
-      if (!modal && turnRow(read.key)) {
+      if (!modal && turnRow(read.key) && read.key !== `${turn}:text`) {
         turn = read.key;
       }
-      navigation = modal
-        ? drawerPlacement(read.key, read.input)
-        : screenPlacement(read.key, facts, turn);
+      navigation =
+        modal || read.key.startsWith("drawer:")
+          ? drawerPlacement(read.key, read.input)
+          : screenPlacement(read.key, facts, turn);
     }
     if (navigation === undefined && children.every((child, at) => child === read.children[at])) {
       return description;

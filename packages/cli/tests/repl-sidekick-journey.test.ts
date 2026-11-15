@@ -2255,11 +2255,11 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     // the same output it settled with.
     expect(ran.greetingAfter).toEqual(ran.greeting);
 
-    // The chat is what the replies selected, not the source they captured or
-    // the envelope their feedback came in.
     expect(ran.chatHas("Prepared the greetings.")).toBe(true);
     expect(ran.chatHas("Revised it as a table.")).toBe(true);
-    expect(ran.chatHas("REPL.EntryInput")).toBe(false);
+    expect(ran.chatHas("[X] REPL.EntryInput result sent to Sidekick")).toBe(true);
+    expect(ran.chatHas("<REPL.EntryInput")).toBe(false);
+    expect(ran.chatHas("## REPL.EntryInput")).toBe(false);
   });
 
   it("TE1: changing one published name changes the greetings and the table", function* () {

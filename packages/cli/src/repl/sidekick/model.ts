@@ -481,6 +481,7 @@ export interface SidekickReading {
    * is that turn existing and having completed.
    */
   readonly delivered: readonly { readonly conversation: string; readonly turn: number }[];
+  readonly feedback: readonly SidekickFeedback[];
   /**
    * Feedback this history states it sent and cannot establish.
    *
@@ -522,6 +523,15 @@ export interface SidekickReading {
     /** The saved message ID of that person request. */
     readonly message: number;
   }[];
+}
+
+/** The full canonical input that delivered one response's retained feedback. */
+export interface SidekickFeedback {
+  readonly conversation: string;
+  readonly response: string;
+  readonly turn: number;
+  readonly source: number;
+  readonly text: string;
 }
 
 /**
@@ -1086,6 +1096,27 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
   const observed = new Set<string>();
   let preferences: SidekickPreferences | undefined;
   const delivered = new Map<string, number>();
+  const feedback = new Map<string, SidekickFeedback>();
+  const readingRequest = new Map<string, SidekickRequest>();
+  const responses = new Map<string, number>();
+  function acceptedFeedback(
+    record: Pick<SidekickFeedback, "conversation" | "response" | "text">,
+    turn: number,
+  ) {
+    const source = responses.get(`${record.conversation}\u0000${record.response}`);
+    if (source !== undefined && source < turn) {
+      feedback.set(
+        `${record.conversation}\u0000${record.response}\u0000${turn}`,
+        Object.freeze({
+          conversation: record.conversation,
+          response: record.response,
+          turn,
+          source,
+          text: record.text,
+        }),
+      );
+    }
+  }
   const unestablished: { conversation: string; turn: number | null; at: number }[] = [];
   /**
    * Feedback text this history retained and never acknowledged, in record order.
@@ -1098,6 +1129,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
     response: string;
     text: string;
     at: number;
+    request: SidekickRequest | undefined;
   }[] = [];
 
   for (const [index, record] of records.entries()) {
@@ -1114,6 +1146,10 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
           ),
         );
       }
+    }
+    const request = began.get(index);
+    if (request !== undefined) {
+      readingRequest.set(request.conversation, request);
     }
     switch (record.kind) {
       case "owner":
@@ -1284,6 +1320,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
           );
         }
         replies.set(`${record.conversation}\u0000${record.turn}`, record);
+        responses.set(`${record.conversation}\u0000${record.response}`, record.turn);
         chatAt.push(index);
         chat.push({
           kind: "reply",
@@ -1352,6 +1389,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
             response: record.response,
             text: record.text,
             at: index,
+            request: readingRequest.get(record.conversation),
           });
           break;
         }
@@ -1362,6 +1400,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
         // that carried something else did not carry this.
         if (conversations.get(record.conversation)!.completed.get(record.turn) === record.text) {
           delivered.set(record.conversation, record.turn);
+          acceptedFeedback(record, record.turn);
         } else {
           unestablished.push({ conversation: record.conversation, turn: record.turn, at: index });
         }
@@ -1384,13 +1423,21 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
   // though an agent had been told something it may never have been sent, and
   // dropping it would lose the fact that a turn may already have been accepted
   // — which is exactly the state a blind resend must not be argued from.
-  for (const feedback of retainedFeedback) {
-    const held = conversations.get(feedback.conversation)!;
+  for (const retained of retainedFeedback) {
+    const held = conversations.get(retained.conversation)!;
+    const bounded = retained.request?.turn;
+    if (
+      bounded !== undefined &&
+      (held.at.get(bounded) ?? -1) > retained.at &&
+      held.completed.get(bounded) === retained.text
+    ) {
+      acceptedFeedback(retained, bounded);
+    }
     let owner: number | undefined;
     let owningAt = Number.POSITIVE_INFINITY;
     for (const [turn, input] of held.completed) {
       const at = held.at.get(turn);
-      if (at === undefined || at < feedback.at || input !== feedback.text) {
+      if (at === undefined || at < retained.at || input !== retained.text) {
         continue;
       }
       if (at < owningAt) {
@@ -1399,10 +1446,10 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       }
     }
     if (owner === undefined) {
-      unestablished.push({ conversation: feedback.conversation, turn: null, at: feedback.at });
+      unestablished.push({ conversation: retained.conversation, turn: null, at: retained.at });
       continue;
     }
-    delivered.set(feedback.conversation, owner);
+    delivered.set(retained.conversation, owner);
   }
 
   // Intents with no outcome, in the order they were written. These are the
@@ -1559,6 +1606,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       delivered: Object.freeze(
         [...delivered].map(([conversation, turn]) => Object.freeze({ conversation, turn })),
       ),
+      feedback: Object.freeze([...feedback.values()]),
       unestablished: Object.freeze(
         unestablished.map((held) =>
           Object.freeze({ conversation: held.conversation, turn: held.turn }),

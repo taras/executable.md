@@ -174,6 +174,13 @@ export type ReplAction =
   /** Select a structural scope by its key path, outermost first. */
   | { readonly kind: "select-scope"; readonly scopes: readonly string[] }
   | { readonly kind: "open-drawer"; readonly drawer: ReplDrawerRef }
+  | {
+      readonly kind: "inspect-sidekick";
+      readonly target: "feedback" | "exchange" | "person" | "entry";
+      readonly key: string;
+    }
+  | { readonly kind: "inspect-saved-turn"; readonly turn: number | null }
+  | { readonly kind: "toggle-recorded-feedback" }
   /** Close the innermost open drawer. Never an answer to anything. */
   | { readonly kind: "close-drawer" }
   /** Freeze the view at one history position. */
