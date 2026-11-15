@@ -22,10 +22,10 @@ import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { open, stat } from "node:fs/promises";
+import { constants, open, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import type { BigIntStats } from "node:fs";
+
+type BigIntStats = Extract<Awaited<ReturnType<typeof stat>>, { size: bigint }>;
 
 /** How much of a file is read at once. */
 export const READ_CHUNK = 1 << 20;

@@ -1221,6 +1221,10 @@ function* start(
      * entry the file happened to hold rather than about the one that asked.
      */
     function admits(key: string): boolean {
+      if (history !== undefined) {
+        const head = history.head();
+        return head.ok && head.value.entries.at(-1)?.key === key;
+      }
       return (
         memo !== undefined &&
         memo.projected.ok &&

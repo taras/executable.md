@@ -27,7 +27,7 @@ import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { awaited, useMountedHost } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
-import { pasteDraft } from "./support/screen-journeys.ts";
+import { DRAFT_VALUE, pasteDraft } from "./support/screen-journeys.ts";
 
 function admission(content: string): DurableEvent {
   return {
@@ -282,7 +282,11 @@ describe("Paged REPL history", () => {
     );
     yield* page.key("Enter");
     yield* waiting.operation;
-    yield* page.until("the running third entry", (screen) => screen.shows("Entry 3 running"));
+    yield* page.until(
+      "the running third entry with its submitted Draft cleared",
+      (screen) =>
+        screen.shows("Entry 3 running") && screen.found("Hold for navigation.", DRAFT_VALUE) === 0,
+    );
     yield* page.press("BINDINGS");
     yield* page.until("the first entry Input", (screen) => screen.shows("entry-1 Input"));
     yield* page.press("Output", { rightOf: "BINDINGS" });
