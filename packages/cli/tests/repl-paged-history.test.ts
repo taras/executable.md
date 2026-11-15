@@ -27,7 +27,7 @@ import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { awaited, useMountedHost } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
-import { DRAFT_VALUE, pasteDraft } from "./support/screen-journeys.ts";
+import { DRAFT_VALUE, pasteDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
 
 function admission(content: string): DurableEvent {
   return {
@@ -289,7 +289,7 @@ describe("Paged REPL history", () => {
     );
     yield* page.press("BINDINGS");
     yield* page.until("the first entry Input", (screen) => screen.shows("entry-1 Input"));
-    yield* page.press("Output", { rightOf: "BINDINGS" });
+    yield* page.press("Output", SIDEKICK_PANE);
     yield* page.until("the first entry Output", (screen) => screen.shows("older value"));
 
     const terminal = page.repl.terminal;
