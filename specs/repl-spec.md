@@ -851,10 +851,11 @@ back to the engine to continue and may perform unrecorded work. Passive Source
 and Journal inspection does not open execution. It preserves uncertainty when
 no live host observation remains and never reconstructs an old joined verdict. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
-refuses whole — with nothing appended and no execution started. So does a
-history longer than 536,870,888 UTF-16 code units, newlines included, and its
-refusal names that limit. A running execution can grow its history past it;
-the history is left as it is, and further work starts in a new execution.
+refuses whole, with nothing appended and no execution started. The entry and
+Sidekick histories are read record by record, with no limit on their combined
+decoded length or on the decoded length of either file. An entry record longer
+than 536,870,888 UTF-16 code units including its newline refuses with the
+record number and the limit.
 
 You may supply the include options again when reopening a location. Completed
 entries show their retained output and submitted entry source even after included

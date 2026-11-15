@@ -14,8 +14,8 @@
  *   physical stream keep the same graph rather than one copy each.
  * - **Incremental reading.** Records are read a chunk at a time, split at the
  *   newline byte and decoded per line, so multi-byte text split across a chunk
- *   boundary reads exactly as a whole-file read did. A history past the
- *   supported length is refused by a sentence naming the limit.
+ *   boundary reads exactly as a whole-file read did. The decoded limit applies
+ *   to each record independently.
  * - **Exact bytes.** The Sidekick's prefix bindings and the single-file-to-pair
  *   upgrade measure and copy the file's own bytes through the same reader.
  * - **Bounded reading of a long value.** What the screen says a binding is
@@ -51,12 +51,7 @@ import type { ReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { committedContext, useMeasuringRenderer } from "./fixtures/repl/presentation.ts";
 import { ReplHost } from "../src/repl/host.ts";
-import {
-  HISTORY_LIMIT,
-  openExecutionFile,
-  readRecords,
-  RetainedReplStream,
-} from "../src/repl/journal.ts";
+import { openExecutionFile, readRecords, RetainedReplStream } from "../src/repl/journal.ts";
 import { EntrySegmentStream, ROOT_IMPORT } from "../src/repl/entries.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import { READ_CHUNK } from "../src/repl/record-file.ts";
@@ -420,25 +415,23 @@ describe("#992 — a history is read a record at a time", () => {
     );
   });
 
-  it("H3: the limit is in UTF-16 code units with newlines, and refusing it names it", function* () {
+  it("H3: the decoded limit applies to each record, including its newline", function* () {
     const directory = yield* useTempDirectory("xmd-limit-");
     const path = join(directory, "limit.jsonl");
-    // Three-byte characters, so a byte count and a code-unit count disagree and
-    // a limit that confused them would refuse a file that fits.
-    const text = line(record("one", "—".repeat(400))) + line(record("two", "x".repeat(300)));
+    const short = line(record("one", "x".repeat(300)));
+    const long = line(record("two", "—".repeat(400)));
+    const text = short + long;
     yield* until(writeFile(path, text));
-    expect(bytesOf(text)).toBeGreaterThan(text.length);
+    expect(bytesOf(long)).toBeGreaterThan(long.length);
+    expect(short.length).toBeLessThan(long.length);
 
-    expect(yield* readRecords(path, text.length)).toEqual(wholeFile(text));
-    const refused = yield* refusal(() => readRecords(path, text.length - 1));
+    expect(yield* readRecords(path, long.length)).toEqual(wholeFile(text));
+    const refused = yield* refusal(() => readRecords(path, long.length - 1));
     expect(refused).toBe(
-      `this execution's history exceeds the supported limit of ` +
-        `${(text.length - 1).toLocaleString("en-US")} UTF-16 code units. Start a new execution ` +
-        "with `xmd repl` for further work; this history was left unchanged.",
+      `this execution's history holds a record that exceeds ` +
+        `${(long.length - 1).toLocaleString("en-US")} UTF-16 code units (record 2).`,
     );
-    // Refusing leaves the history exactly as it was.
     expect(yield* until(readFile(path, "utf8"))).toBe(text);
-    expect(HISTORY_LIMIT).toBe(0x1fffffe8);
   });
 });
 
@@ -460,6 +453,40 @@ function linesOf(text: string): string[] {
     .split("\n")
     .map((each) => `${each}\n`);
 }
+
+describe("#992 — Sidekick histories are read one record at a time", () => {
+  it("reads a UTF-8 character split between chunks and preserves record order", function* () {
+    const directory = yield* useTempDirectory("xmd-sidekick-chunks-");
+    const path = join(directory, SIDEKICK_FILE);
+    const owner = { kind: "owner", version: 1, execution: "chat" };
+    const ready = { kind: "ready" };
+    const prefix = `${JSON.stringify(owner)}\n${JSON.stringify(ready)}\n`;
+    const conversation = {
+      kind: "conversation",
+      conversation: "chat",
+      phase: "prepared",
+      agent: "MARK",
+    };
+    const at = prefix.length + JSON.stringify(conversation).indexOf("MARK");
+    conversation.agent = "x".repeat(READ_CHUNK - at - 1) + "😀";
+    yield* until(writeFile(path, `${prefix}${JSON.stringify(conversation)}\n`));
+    expect(yield* readSidekickRecords(path)).toEqual([owner, ready, conversation]);
+  });
+
+  it("preserves the refusal for an unfinished tail after a malformed record", function* () {
+    const directory = yield* useTempDirectory("xmd-sidekick-tail-");
+    const path = join(directory, SIDEKICK_FILE);
+    yield* until(writeFile(path, '{"kind":"ready"}\n{"secret":"do not repeat"}\n{'));
+    expect(yield* refusal(() => readSidekickRecords(path))).toBe(
+      "this execution's chat history ends in a record that was never finished writing.",
+    );
+
+    yield* until(appendFile(path, "}\n"));
+    expect(yield* refusal(() => readSidekickRecords(path))).toBe(
+      "this execution's chat history holds a record this version cannot read (record 2).",
+    );
+  });
+});
 
 describe("#992 — Sidekick prefixes and the upgrade use the file's own bytes", () => {
   it("H4: a bound and a measured prefix are the digest of exactly those bytes", function* () {
@@ -507,7 +534,8 @@ describe("#992 — Sidekick prefixes and the upgrade use the file's own bytes", 
     const reordered =
       '{"result":{"status":"ok","value":"— reordered"},"coroutineId":"root",' +
       '"description":{"name":"reordered","type":"test_effect"},"type":"yield"}\n';
-    const text = longHistory() + reordered;
+    const largeRecord = line(record("large", "x".repeat(5 * READ_CHUNK)));
+    const text = longHistory() + largeRecord + reordered;
     const legacy = join(root, "long-legacy.jsonl");
     yield* until(writeFile(legacy, text));
     const repository = pairedReplRepository(root);

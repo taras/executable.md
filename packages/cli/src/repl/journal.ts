@@ -16,8 +16,7 @@
  * Reading is also incremental. The file is read a record at a time and never
  * held as one string, and the records keep one instance of each large string
  * they repeat — a root close hands on every value it inherited, so the same
- * captured output recurs in every later close. A history past
- * {@link HISTORY_LIMIT} is refused by name rather than by the engine.
+ * captured output recurs in every later close.
  *
  * Nothing here chooses a runtime. Reading, existence, kind and directory
  * creation are `@effectionx/fs` operations; the two this repository's portable
@@ -196,16 +195,8 @@ export function* openExecutionFile(root: string, execution: string): Operation<R
   return { id: execution, stream: new RetainedReplStream(path, yield* readRecords(path)) };
 }
 
-/**
- * The most text a history may decode to and still be reopened, in UTF-16 code units.
- *
- * V8's longest string, which is what reading a history as one string used to
- * run into. Reading no longer builds that string, but this stays the supported
- * bound: a history past it is refused with a sentence that names it, rather
- * than read into a heap it may not fit. It bounds reopening only — a running
- * history can grow past it, and it is this reader that then refuses.
- */
-export const HISTORY_LIMIT = 0x1fffffe8;
+/** V8's maximum string length, applied to a single serialized record. */
+const MAX_RECORD_UNITS = 0x1fffffe8;
 
 /**
  * Every record one file holds, in append order.
@@ -214,25 +205,23 @@ export const HISTORY_LIMIT = 0x1fffffe8;
  * record was still being written, and reading around it would present a prefix
  * as the whole of what happened.
  *
- * `limit` is {@link HISTORY_LIMIT} everywhere but a test that has to reach it
- * without writing half a gigabyte.
+ * The limit can be set lower to exercise the record boundary in tests.
  */
 export function* readRecords(
   path: string,
-  limit: number = HISTORY_LIMIT,
+  maxRecordUnits = MAX_RECORD_UNITS,
 ): Operation<DurableEvent[]> {
   const events: DurableEvent[] = [];
   const share = stringSharing();
   yield* forEachLine(
     path,
     {
-      limit: {
-        units: limit,
-        exceeded: () =>
+      recordLimit: {
+        units: maxRecordUnits,
+        exceeded: (record) =>
           new ReplJournalError(
-            `this execution's history exceeds the supported limit of ` +
-              `${limit.toLocaleString("en-US")} UTF-16 code units. Start a new execution with ` +
-              "`xmd repl` for further work; this history was left unchanged.",
+            `this execution's history holds a record that exceeds ` +
+              `${maxRecordUnits.toLocaleString("en-US")} UTF-16 code units (record ${record}).`,
           ),
       },
       refusals: {
