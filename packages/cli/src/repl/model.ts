@@ -15,12 +15,9 @@ import type { EntryPlacement } from "./entry-placement.ts";
  * one scope comes back as `Err`. Attaching data to a guessed owner would put a
  * binding in the wrong scope and a wrong answer on the screen; refusing says so.
  *
- * Projection is pure in both directions. Every value the model retains is
- * *detached* from the event that carried it — copied, then frozen — so the model
- * cannot be changed by whoever still holds the events, and the events are
- * neither frozen nor modified by having been read. A projector that froze its
- * input would make a caller's own data immutable as a side effect of being
- * looked at.
+ * Projection shares immutable retained bindings. It copies and freezes other
+ * values it keeps, so a caller can still edit its own input without changing
+ * the projected view.
  *
  * A marker addresses a prefix rather than a stored sequence number. It is
  * derived from protocol identity — which coroutine, and how many durable yields
@@ -50,6 +47,7 @@ import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-str
 
 import { entryKey, entryMarker, partitionEntrySegments } from "./entries.ts";
 import type { EntrySegment } from "./entries.ts";
+import { plainFrozenJson } from "./retained-bindings.ts";
 
 /** The first entry's key, and the root scope key every existing location names. */
 export const ENTRY_SCOPE = entryKey(1);
@@ -684,9 +682,20 @@ function build(
   const chronology: ReplAgentTurn[] = [];
   /** What the root environment holds after the entries read so far. */
   let inherited: readonly ReplBinding[] = Object.freeze([]);
+  const shared = new WeakSet<object>();
+  const readBinding = (value: Json): Json => {
+    if (value === null || typeof value !== "object" || shared.has(value)) {
+      return value;
+    }
+    if (!plainFrozenJson(value)) {
+      return detach(value);
+    }
+    shared.add(value);
+    return value;
+  };
 
   for (const segment of segments) {
-    const read = buildEntry(segment, markers.slice(segment.start, segment.end));
+    const read = buildEntry(segment, markers.slice(segment.start, segment.end), readBinding);
     if (!read.ok) {
       return read;
     }
@@ -786,7 +795,11 @@ interface EntryReading {
  * the whole history spells them, so every position this reading retains is one a
  * location can name.
  */
-function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<EntryReading> {
+function buildEntry(
+  segment: EntrySegment,
+  markers: readonly string[],
+  readBinding: (value: Json) => Json,
+): Result<EntryReading> {
   const events = segment.events;
   const transcript: ReplRow[] = [];
   const checkpoints: ReplCheckpoint[] = [];
@@ -866,7 +879,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         transcript.push({ kind: "effect", marker, type: "close", status: event.result.status });
         continue;
       }
-      const settled = readTerminal(event);
+      const settled = readSettlement(event, readBinding);
       if (settled === undefined) {
         return Err(
           new ReplProjectionError(
@@ -971,7 +984,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         transcript.push({ kind: "effect", marker, type: "eval", status: event.result.status });
         continue;
       }
-      const read = readExports(event);
+      const read = readExports(event, readBinding);
       if (!read.ok) {
         return read;
       }
@@ -1249,7 +1262,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
  * Read from the same range the entry was read from, and told what a Prompt and
  * the root close mean by the readings that already parsed them: a turn is
  * matched by the marker it was retained under rather than by parsing its record
- * a second time, and the root close takes the outcome `readTerminal` produced.
+ * a second time, and the root close takes the outcome `readSettlement` produced.
  * Every other effect reports the protocol outcome its result states, which is
  * the only thing that record says about itself.
  */
@@ -1814,14 +1827,10 @@ function readRetainedSource(event: Yield): { path: string; content: string } | u
   return { path, content };
 }
 
-/**
- * The names a recorded evaluation published, and the output it rendered.
- *
- * Each published value is detached as it is read, so what the model goes on to
- * hold is never the object the event holds.
- */
+/** The names a recorded evaluation published, and the output it rendered. */
 function readExports(
   event: Yield,
+  readBinding: (value: Json) => Json,
 ): Result<{ bindings: [string, Json][]; output: string | undefined }> {
   if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
     return Err(new ReplProjectionError(UNREADABLE_EXPORTS));
@@ -1855,7 +1864,7 @@ function readExports(
         ),
       );
     }
-    bindings.push([name, detach(value)]);
+    bindings.push([name, readBinding(value)]);
   }
   return Ok({ bindings, output });
 }
@@ -1887,11 +1896,6 @@ function readAdmission(event: Yield): Omit<ReplGenerated, "marker"> | undefined 
   return undefined;
 }
 
-/** What the root coroutine's close records, read as the document outcome. */
-function readTerminal(event: Close): ReplTerminal | undefined {
-  return readSettlement(event);
-}
-
 /**
  * The retained outcome of one entry, with the root data its result carries.
  *
@@ -1901,7 +1905,10 @@ function readTerminal(event: Close): ReplTerminal | undefined {
  * close, a cancelled close — simply has none to report, which is a different
  * thing from reporting an empty environment.
  */
-function readSettlement(event: Close): ReplTerminal | undefined {
+function readSettlement(
+  event: Close,
+  readBinding: (value: Json) => Json,
+): ReplTerminal | undefined {
   if (event.result.status === "cancelled") {
     return { status: "cancelled", output: "", message: undefined };
   }
@@ -1922,7 +1929,7 @@ function readSettlement(event: Close): ReplTerminal | undefined {
   // Read whole or not at all: a member this version cannot read refuses the
   // outcome rather than being dropped, because dropping it would hand a later
   // entry a smaller environment than the record describes.
-  const bindings = readResultBindings(record["bindings"]);
+  const bindings = readResultBindings(record["bindings"], readBinding);
   if (bindings === MALFORMED) {
     return undefined;
   }
@@ -1951,6 +1958,7 @@ function readSettlement(event: Close): ReplTerminal | undefined {
  */
 function readResultBindings(
   carried: Json | undefined,
+  readBinding: (value: Json) => Json,
 ): ReplBindingMap | undefined | typeof MALFORMED {
   if (carried === undefined) {
     return undefined;
@@ -1967,7 +1975,7 @@ function readResultBindings(
     if (!binding.ok || binding.value !== name) {
       return MALFORMED;
     }
-    held.push([name, detach(value)]);
+    held.push([name, readBinding(value)]);
   }
   return Object.freeze(held.map(([name, value]) => freeze({ name, value })));
 }

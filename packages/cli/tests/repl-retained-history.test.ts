@@ -351,6 +351,188 @@ describe("#992 — retained events are kept once and shared", () => {
   });
 });
 
+function bindingAdmission(): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: ROOT_IMPORT },
+    result: {
+      status: "ok",
+      value: { kind: "repository", path: INLINE_SOURCE_PATH, content: "A retained entry" },
+    },
+  };
+}
+
+function bindingClose(payload: Json): DurableEvent {
+  return {
+    type: "close",
+    coroutineId: "root",
+    result: {
+      status: "ok",
+      value: { status: "ok", output: "", bindings: { payload } },
+    },
+  };
+}
+
+function bindingIn(event: DurableEvent | undefined, field = "bindings"): Json {
+  const result = event?.result;
+  if (
+    result?.status !== "ok" ||
+    result.value === null ||
+    typeof result.value !== "object" ||
+    Array.isArray(result.value)
+  ) {
+    throw new Error("Expected a successful binding record.");
+  }
+  const members = result.value[field];
+  if (
+    members === null ||
+    typeof members !== "object" ||
+    Array.isArray(members) ||
+    !Object.hasOwn(members, "payload")
+  ) {
+    throw new Error("Expected the payload binding.");
+  }
+  return members["payload"]!;
+}
+
+describe("#992 — frozen binding values are shared across records and views", () => {
+  it("reuses a binding in the eval, root closes, projections and an acknowledged append", function* () {
+    const directory = yield* useTempDirectory("xmd-binding-sharing-");
+    yield* useHost("shared-bindings");
+    const path = join(directory, "shared-bindings.jsonl");
+    const payload = { rows: [{ id: 1, tags: ["one"] }] };
+    const evaluation: DurableEvent = {
+      type: "yield",
+      coroutineId: "root",
+      description: {
+        type: "eval",
+        name: "eval:eval:root:0",
+        "executablemd.source-position": { path: INLINE_SOURCE_PATH, offset: 0, line: 1, column: 1 },
+        "executablemd.source-owner": { coroutineId: "root", index: 0 },
+      },
+      result: { status: "ok", value: { value: { payload } } },
+    };
+    const opening = [
+      bindingAdmission(),
+      evaluation,
+      bindingClose(payload),
+      bindingAdmission(),
+      bindingClose(payload),
+    ]
+      .map(line)
+      .join("");
+    yield* until(writeFile(path, opening));
+    const repository = pairedReplRepository(directory);
+    const execution = yield* repository.open("shared-bindings");
+    const retained = yield* execution.stream.readAll();
+    const shared = bindingIn(retained[2]);
+    expect(bindingIn(retained[1], "value")).toBe(shared);
+    expect(bindingIn(retained[4])).toBe(shared);
+
+    const projected = projectRepl(retained);
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    for (const entry of projected.value.entries) {
+      expect(entry.bindings.find(({ name }) => name === "payload")?.value).toBe(shared);
+      expect(entry.terminal?.bindings?.find(({ name }) => name === "payload")?.value).toBe(shared);
+    }
+    expect(frozenThroughout(shared)).toBe(true);
+
+    const upgraded = yield* repository.upgrade(execution);
+    const observed: DurableEvent[] = [];
+    upgraded.stream.onAppend = (event) => {
+      observed.push(event);
+    };
+    const segment = new EntrySegmentStream(upgraded.stream);
+    const fresh = bindingClose(payload);
+    yield* segment.append(bindingAdmission());
+    yield* segment.append(fresh);
+    const saved = (yield* upgraded.stream.readAll()).at(-1);
+    expect(bindingIn(saved)).toBe(shared);
+    expect((yield* segment.readAll())[1]).toBe(saved);
+    expect(observed[1]).toBe(saved);
+    expect(Object.isFrozen(payload)).toBe(false);
+    expect(bindingIn(fresh)).toBe(payload);
+
+    const copy = join(directory, PAIRED_DIRECTORY, "shared-bindings", ENTRIES_FILE);
+    expect(yield* until(readFile(copy, "utf8"))).toBe(
+      opening + line(bindingAdmission()) + line(fresh),
+    );
+  });
+
+  it("keeps changed member order and values distinct, with the original bytes", function* () {
+    const directory = yield* useTempDirectory("xmd-binding-order-");
+    yield* useHost("binding-order");
+    const path = join(directory, "binding-order.jsonl");
+    const first = bindingClose({ nested: { a: 1, b: 2 } });
+    const reordered = bindingClose({ nested: { b: 2, a: 1 } });
+    const changed = bindingClose({ nested: { b: 2, a: 3 } });
+    yield* until(writeFile(path, line(first)));
+    const { stream } = yield* openExecutionFile(directory, "binding-order");
+    yield* stream.append(reordered);
+    yield* stream.append(changed);
+    yield* stream.append(changed);
+    const events = yield* stream.readAll();
+
+    expect(bindingIn(events[0])).not.toBe(bindingIn(events[1]));
+    expect(bindingIn(events[1])).not.toBe(bindingIn(events[2]));
+    expect(bindingIn(events[2])).toBe(bindingIn(events[3]));
+    const bytes = line(first) + line(reordered) + line(changed) + line(changed);
+    expect(events.map(line).join("")).toBe(bytes);
+    expect(yield* until(readFile(path, "utf8"))).toBe(bytes);
+  });
+
+  it("a rejected append leaves the acknowledged binding available for reuse", function* () {
+    const directory = yield* useTempDirectory("xmd-binding-retry-");
+    const path = join(directory, "binding-retry.jsonl");
+    let blocked = true;
+    yield* useHost("binding-retry", () => {
+      if (blocked) {
+        blocked = false;
+        // deno-lint-ignore require-yield
+        return (function* (): Operation<void> {
+          throw new Error("append refused");
+        })();
+      }
+    });
+    const first = bindingClose({ rows: [1] });
+    yield* until(writeFile(path, line(first)));
+    const { stream } = yield* openExecutionFile(directory, "binding-retry");
+    const shared = bindingIn((yield* stream.readAll())[0]);
+
+    expect(yield* refusal(() => stream.append(bindingClose({ rows: [2] })))).toBe("append refused");
+    yield* stream.append(first);
+    const events = yield* stream.readAll();
+    expect(events).toHaveLength(2);
+    expect(bindingIn(events[1])).toBe(shared);
+    expect(yield* until(readFile(path, "utf8"))).toBe(line(first) + line(first));
+  });
+
+  it("does not expose extra properties from an externally frozen operand in a view", function* () {
+    const directory = yield* useTempDirectory("xmd-binding-frozen-");
+    yield* useHost("binding-frozen");
+    const stream = new RetainedReplStream(join(directory, "binding-frozen.jsonl"));
+    const value = { ordinary: "kept" };
+    Object.defineProperty(value, "hidden", { value: "caller only" });
+    Object.freeze(value);
+    yield* stream.append(bindingAdmission());
+    yield* stream.append(bindingClose(value));
+    const projected = projectRepl(yield* stream.readAll());
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    const binding = projected.value.entries[0]?.terminal?.bindings?.[0]?.value;
+    expect(binding).toEqual({ ordinary: "kept" });
+    expect(binding).not.toBe(value);
+    if (binding === null || typeof binding !== "object") {
+      throw new Error("Expected a projected object binding.");
+    }
+    expect(Object.hasOwn(binding, "hidden")).toBe(false);
+  });
+});
+
 describe("#992 — a history is read a record at a time", () => {
   it("H2: text split across a chunk boundary reads exactly as a whole-file read does", function* () {
     const directory = yield* useTempDirectory("xmd-chunks-");
