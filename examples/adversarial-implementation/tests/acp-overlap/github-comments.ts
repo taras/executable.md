@@ -1,4 +1,5 @@
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { PullRequestAPI } from "@executablemd/git/api";
 import { API } from "@executablemd/runtime";
 import { z } from "zod";
 import { waitForFile } from "./receipts.ts";
@@ -6,6 +7,16 @@ import { waitForFile } from "./receipts.ts";
 const repository = "taras/executable.md";
 const pr = `repos/${repository}/pulls/7`;
 const comments = `repos/${repository}/issues/7/comments`;
+const url = `https://github.com/${repository}/pull/7`;
+const evidence = z.strictObject({
+  kind: z.literal("conversation"),
+  id: z.string(),
+  url: z.string(),
+  author: z.string(),
+  body: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
 const reply = (stdout: string, exitCode = 0) => ({ stdout, stderr: "", exitCode });
 
 export function* installGitHub(directory: string, checkout: string, actor: string) {
@@ -14,6 +25,20 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
   const payload = z.strictObject({ body: z.string() });
   const tracked = `${directory}/comment.json`;
 
+  yield* PullRequestAPI.around({
+    *read([target, options]) {
+      if (target !== url || options.kind !== "comments") {
+        throw new Error("Unexpected pull request evidence read.");
+      }
+      if (lost || (yield* exists(`${directory}/comments-unavailable`))) {
+        throw new Error("The pull request comments are unavailable.");
+      }
+      const items = (yield* exists(tracked))
+        ? [evidence.parse(JSON.parse(yield* readTextFile(tracked)))]
+        : [];
+      return { kind: "comments", items };
+    },
+  });
   yield* API.Process.around({
     *exec([options], next) {
       const [tool, ...args] = options.command;
@@ -37,13 +62,6 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
           }),
         );
       }
-      if (rest.join(" ") === `--paginate --slurp ${comments}?per_page=100`) {
-        if (lost) {
-          return reply("", 1);
-        }
-        const page = (yield* exists(tracked)) ? [JSON.parse(yield* readTextFile(tracked))] : [];
-        return reply(JSON.stringify([[], page]));
-      }
       if (
         rest.length !== 6 ||
         rest.slice(0, 5).join(" ") !== `--include --method POST ${comments} --input`
@@ -62,12 +80,15 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
       if (yield* exists(tracked)) {
         throw new Error("GitHub received a duplicate review write.");
       }
-      const saved = {
-        id: 42,
-        html_url: `https://github.com/${repository}/pull/7#issuecomment-42`,
-        issue_url: `https://api.github.com/repos/${repository}/issues/7`,
+      const saved = evidence.parse({
+        kind: "conversation",
+        id: "42",
+        url: `${url}#issuecomment-42`,
+        author: "workflow",
+        createdAt: "2026-11-15T00:00:00Z",
+        updatedAt: "2026-11-15T00:00:00Z",
         body,
-      };
+      });
       yield* writeTextFile(tracked, JSON.stringify(saved));
       lost = delayed;
       return delayed ? reply("", 1) : reply("HTTP/2.0 201 Created\r\n\r\n" + JSON.stringify(saved));
