@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { Err, Ok } from "effection";
+import { Err, Ok, sleep } from "effection";
+import { entryBoundary, settlesRoot } from "./entries.ts";
 import type { Operation, Result } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { scanEntryRecords } from "./journal-records.ts";
@@ -51,6 +52,58 @@ function archive(entry: ReplEntry): ReplEntry {
   });
 }
 
+export type EntryRestoreProgress =
+  | { readonly stage: "counting" }
+  | { readonly stage: "rounds"; readonly restored: number; readonly total: number | undefined };
+
+export type EntryRestoreObserver = (progress: EntryRestoreProgress) => Operation<void>;
+
+function* countEntryRanges(
+  path: string,
+  version: JournalVersion,
+): Operation<{ total: number; sha256: string } | undefined> {
+  const hash = createHash("sha256");
+  let open = false;
+  let total = 0;
+  let records = 0;
+  let bytes = 0;
+  try {
+    yield* scanEntryRecords(
+      path,
+      {
+        retain: false,
+        observe(chunk) {
+          bytes += chunk.length;
+          hash.update(chunk);
+        },
+      },
+      function* (event) {
+        const boundary = entryBoundary(event, open, total > 0);
+        if (!boundary.ok) {
+          throw boundary.error;
+        }
+        if (boundary.value === "close") {
+          total += 1;
+          open = false;
+        } else if (boundary.value !== undefined) {
+          open = true;
+        }
+        records += 1;
+        if (records % 128 === 0) {
+          yield* sleep(0);
+        }
+      },
+    );
+  } catch {
+    // Projection preserves the canonical refusal and the ranges it could read.
+    return undefined;
+  }
+  if (BigInt(bytes) !== version.size) {
+    throw new JournalChangedError();
+  }
+  return { total: total + Number(open), sha256: hash.digest("hex") };
+}
+
 /** The catalog and byte ranges for one validated, acknowledged entry journal. */
 export class PagedHistory {
   private readonly pages: Page[] = [];
@@ -72,31 +125,84 @@ export class PagedHistory {
     private version: JournalVersion,
   ) {}
 
-  static *open(path: string): Operation<PagedHistory> {
+  static *open(path: string, observe?: EntryRestoreObserver): Operation<PagedHistory> {
     const version = yield* journalVersion(path);
     const history = new PagedHistory(path, version);
-    yield* scanEntryRecords(
-      path,
-      {
-        recordBytes: (bytes) => history.count(bytes),
-        segmentSharing: true,
-      },
-      // deno-lint-ignore require-yield
-      function* (event) {
-        history.tail.push(event);
-        history.records += 1;
-        if (settles(event)) {
-          history.projectTail();
-        }
-      },
-    );
-    if (history.tail.length > 0) {
-      history.projectTail();
+    let counted: { total: number; sha256: string } | undefined;
+    let restored = 0;
+    const progress = function* (): Operation<void> {
+      if (observe !== undefined) {
+        yield* observe({ stage: "rounds", restored, total: counted?.total });
+      }
+    };
+    const confirm = function* (): Operation<void> {
+      try {
+        yield* history.confirmVersion();
+      } catch (error) {
+        counted = undefined;
+        yield* progress();
+        throw error;
+      }
+    };
+
+    if (observe !== undefined) {
+      yield* observe({ stage: "counting" });
+      counted = yield* countEntryRanges(path, version);
+      yield* confirm();
+      yield* progress();
+      yield* confirm();
     }
+
+    const project = function* (): Operation<void> {
+      history.projectTail();
+      restored += 1;
+      if (counted !== undefined && restored > counted.total) {
+        counted = undefined;
+        yield* progress();
+        throw new JournalChangedError();
+      }
+      yield* progress();
+    };
+
+    try {
+      yield* scanEntryRecords(
+        path,
+        {
+          recordBytes: (bytes) => history.count(bytes),
+          segmentSharing: true,
+        },
+        function* (event) {
+          history.tail.push(event);
+          history.records += 1;
+          if (settlesRoot(event)) {
+            yield* project();
+          } else if (observe !== undefined && history.records % 128 === 0) {
+            yield* sleep(0);
+          }
+        },
+      );
+      if (history.tail.length > 0) {
+        yield* project();
+      }
+    } catch (error) {
+      if (counted !== undefined) {
+        const fingerprint = yield* fileFingerprint(path);
+        if (fingerprint.sha256 !== counted.sha256) {
+          counted = undefined;
+          yield* progress();
+          throw new JournalChangedError();
+        }
+        yield* confirm();
+      }
+      throw error;
+    }
+    yield* confirm();
     if (
-      !sameJournal(version, yield* journalVersion(path)) ||
-      BigInt(history.end) !== version.size
+      BigInt(history.end) !== version.size ||
+      (counted !== undefined && (history.digest !== counted.sha256 || restored !== counted.total))
     ) {
+      counted = undefined;
+      yield* progress();
       throw new JournalChangedError();
     }
     return history;
@@ -437,8 +543,4 @@ export class PagedHistory {
     this.requireReadable();
     return events;
   }
-}
-
-function settles(event: DurableEvent): boolean {
-  return event.type === "close" && event.coroutineId === "root";
 }

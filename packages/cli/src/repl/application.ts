@@ -1346,8 +1346,15 @@ export interface ReplTransition {
   readonly intent: ReplIntent;
 }
 
+export interface ReplRestoreView {
+  readonly lines: readonly string[];
+  readonly stopped: boolean;
+  readonly details: boolean;
+}
+
 /** One complete reading of the product, ready to describe. */
 export interface ReplView {
+  readonly restore?: ReplRestoreView;
   readonly detachable?: boolean;
   /** Digits on this route or reachable through a different route. */
   readonly focusHints?: ReadonlyMap<string, string | undefined>;
@@ -2159,6 +2166,8 @@ export function reduceRepl(
       }
     }
     case "noop":
+    case "retry-restore":
+    case "show-restore-error":
       return settled(state);
     case "viewport-wheel": {
       const window = admission.windows.get(action.window);
@@ -5658,9 +5667,48 @@ interface DescribedScreen {
   readonly rows: readonly Described[];
 }
 
+function restoreRows(view: ReplView, restore: ReplRestoreView): readonly Described[] {
+  const items: Described[] = restore.lines.map((text, index) =>
+    line(`refusal:restore:${index}`, text, styleOf("status")),
+  );
+  if (restore.details) {
+    items.unshift({
+      key: "refusal:details",
+      style: styleOf("status"),
+      description: describeNode<ReplAction>({
+        key: "refusal:details",
+        component: READING,
+        input: { label: "Restore error details · Escape to return", reading: "drawer" },
+        focus: true,
+      }),
+    });
+  } else if (restore.stopped) {
+    items.push(
+      row("refusal:retry", "[Retry]", { select: "retry-restore" }, styleOf("action"), {
+        here: view.focused,
+      }),
+      row(
+        "refusal:show-error",
+        "[Show error details]",
+        { select: "show-restore-error" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+      row("refusal:quit", "[Quit]", { select: "exit" }, styleOf("action"), {
+        here: view.focused,
+      }),
+    );
+  }
+  return items;
+}
+
 function described(view: ReplView, context: ReplPresentationContext): DescribedScreen {
   if (profileFor(view.size) === "too-small") {
     return { items: [], rows: [] };
+  }
+  if (view.restore !== undefined) {
+    const items = restoreRows(view, view.restore);
+    return { items, rows: items };
   }
   if (view.refusal !== undefined) {
     // A reason as long as its sentence, over rows that fit: a refusal is the only
@@ -10343,6 +10391,28 @@ export function presentationFor(
         contents: Object.freeze([]),
         history: rail ?? EMPTY_BAND,
       }),
+    };
+  }
+
+  if (view.restore !== undefined) {
+    return {
+      descriptions,
+      manifest: {
+        profile,
+        size,
+        root: box({
+          id: "box:root",
+          props: rootProps(size),
+          children: candidatesOf(descriptions, styles, runs).map((candidate) =>
+            rowBox(candidate, "refusal", size.columns),
+          ),
+        }),
+        viewports: [],
+        actions: undefined,
+        regions: [],
+        contents: [],
+        history: EMPTY_BAND,
+      },
     };
   }
 

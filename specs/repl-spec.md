@@ -868,6 +868,30 @@ decoded length or on the decoded length of either file. An entry record longer
 than 536,870,888 UTF-16 code units including its newline refuses with the
 record number and the limit.
 
+An interactive cold reopen shows progress while it reads retained history. The
+entry journal is counted through EOF using the same entry boundaries and record
+decoder as the paged reader. The total covers the whole journal, including
+entries after the requested history position, and applies to the journal
+version and exact bytes being projected. When counting cannot establish a
+total, the display shows the projected count with the total unknown and
+omits determinate fill. A publication refusal before entry open shows the
+failed stage without a round count.
+
+The bar advances when an entry range projects successfully. An entry with a
+recorded failure or cancellation counts, as does the unfinished final entry
+once its retained prefix projects. Viewing a saved range again or continuing
+an unfinished entry adds no round. A refusal preserves the number of
+successfully projected rounds and shows that restore stopped. A changed
+journal invalidates its total.
+
+When the rounds are done and saved Sidekick history is still being projected,
+the display shows the completed round count and reports that the Sidekick
+count is unknown. The requested route and its normal focus appear with the
+first live presentation. Counting and projection leave opportunities to
+present updated progress and handle terminal input and resize. An empty or
+short reopen has no minimum display time. Attachment and headless startup
+keep their own paths.
+
 You may supply the include options again when reopening a location. Completed
 entries show their retained output and submitted entry source even after included
 files change or disappear; inspecting them reads no live component source,
@@ -1558,11 +1582,19 @@ control at all and offers Escape besides; and the one shown for a location this
 command cannot show, which does place a control. Before the first frame is
 presented there is no focused Message, and Control-C leaves.
 
-Leaving that second one is still a refusal. The reason is reported, the status is
-non-zero and no reopen command is printed, because a history that could not be
-read is not a view anybody can be handed back — which is exactly what its own
-Escape produces, and why this is one ending answered in two loops rather than two
-different endings.
+A stopped cold restore offers **Retry**, **Show error details**, and **Quit**
+when the terminal fits the controls. Retry joins the failed passive read and
+starts a fresh attempt for the same location. It resets the count and
+diagnostics and checks the retained history, publication and applicable project
+consent again. Plugin assembly and live admission keep their existing failure
+outcomes. The details view shows the safe diagnostic in a scrollable reading.
+Escape from details returns to the stopped count.
+
+Quit or Escape from a stopped restore joins input and gives back the terminal
+before reporting the same diagnostic on stderr. It exits nonzero without a
+reopen command. Leaving during restoration joins the active attempt and
+prevents a live frame from that attempt. The history refusal remains whole,
+including when part of the journal projected before the failure.
 
 `[exit]` stays on the action row regardless, because leaving has to be a control a
 person can see rather than a key they have to know — and because a pointer reaches

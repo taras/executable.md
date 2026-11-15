@@ -115,8 +115,58 @@ function rootAdmission(event: DurableEvent): Yield | undefined {
 }
 
 /** Whether this event settles a root coroutine. */
-function settlesRoot(event: DurableEvent): boolean {
+export function settlesRoot(event: DurableEvent): boolean {
   return event.type === "close" && event.coroutineId === ROOT_COROUTINE;
+}
+
+/** Recognize one record against the shared entry-boundary grammar. */
+export function entryBoundary(
+  event: DurableEvent,
+  open: boolean,
+  previouslySettled: boolean,
+): Result<Yield | "close" | undefined> {
+  const admission = rootAdmission(event);
+  if (admission !== undefined) {
+    if (admission.coroutineId !== ROOT_COROUTINE) {
+      return Err(
+        new ReplSegmentError(
+          "this journal admits an entry from inside work another entry had already started. " +
+            "An entry's source is the first thing its own history decides.",
+        ),
+      );
+    }
+    if (open) {
+      return Err(
+        new ReplSegmentError(
+          "this journal admits a second entry before the first one settled. One entry runs at " +
+            "a time, and the entry before it ends with its own outcome.",
+        ),
+      );
+    }
+    const placement = admissionPlacement(admission);
+    return placement.ok ? Ok(admission) : placement;
+  }
+  if (settlesRoot(event)) {
+    return open
+      ? Ok("close")
+      : Err(
+          new ReplSegmentError(
+            "this journal records an entry settling that it never admitted. An entry's source is " +
+              "admitted before anything it does.",
+          ),
+        );
+  }
+  return open
+    ? Ok(undefined)
+    : Err(
+        new ReplSegmentError(
+          previouslySettled
+            ? "this journal records work after the entry settled and before another was " +
+                "admitted. A settled entry is the end of its own history."
+            : "this journal records work before it admitted its entry. The entry's source is the " +
+                "first thing an execution decides.",
+        ),
+      );
 }
 
 /**
@@ -126,9 +176,6 @@ function settlesRoot(event: DurableEvent): boolean {
  * comes back as `Err` with no segments at all, because a partial partition is a
  * catalog that omits whichever entry stopped parsing, and a reader cannot tell
  * that from a history that never held it.
- *
- * Every refusal names what the records say rather than quoting them. A history
- * holds whatever a person's own documents held.
  */
 export function partitionEntrySegments(
   events: readonly DurableEvent[],
@@ -136,65 +183,16 @@ export function partitionEntrySegments(
   const segments: EntrySegment[] = [];
   let open: { readonly start: number; readonly admission: Yield } | undefined;
 
-  for (let index = 0; index < events.length; index++) {
-    const event = events[index];
-    const admission = rootAdmission(event);
-
-    if (admission !== undefined) {
-      if (admission.coroutineId !== ROOT_COROUTINE) {
-        // An entry's root document runs on the root coroutine. A root admitted
-        // from inside somebody's work is an entry nested in an entry, which is
-        // not a boundary this history could have been written with.
-        return Err(
-          new ReplSegmentError(
-            "this journal admits an entry from inside work another entry had already started. " +
-              "An entry's source is the first thing its own history decides.",
-          ),
-        );
-      }
-      if (open !== undefined) {
-        return Err(
-          new ReplSegmentError(
-            "this journal admits a second entry before the first one settled. One entry runs at " +
-              "a time, and the entry before it ends with its own outcome.",
-          ),
-        );
-      }
-      const placement = admissionPlacement(admission);
-      if (!placement.ok) {
-        return placement;
-      }
-      open = { start: index, admission };
-      continue;
+  for (const [index, event] of events.entries()) {
+    const boundary = entryBoundary(event, open !== undefined, segments.length > 0);
+    if (!boundary.ok) {
+      return boundary;
     }
-
-    if (settlesRoot(event)) {
-      if (open === undefined) {
-        return Err(
-          new ReplSegmentError(
-            "this journal records an entry settling that it never admitted. An entry's source is " +
-              "admitted before anything it does.",
-          ),
-        );
-      }
+    if (boundary.value === "close" && open !== undefined) {
       segments.push(segment(events, segments.length + 1, open, index + 1, true));
       open = undefined;
-      continue;
-    }
-
-    if (open === undefined) {
-      // Two different damaged histories, and a reader repairing one needs to
-      // know which they have: nothing has ever been admitted here, or something
-      // was and the record landed past its outcome.
-      return Err(
-        new ReplSegmentError(
-          segments.length === 0
-            ? "this journal records work before it admitted its entry. The entry's source is the " +
-                "first thing an execution decides."
-            : "this journal records work after the entry settled and before another was " +
-                "admitted. A settled entry is the end of its own history.",
-        ),
-      );
+    } else if (boundary.value !== undefined && boundary.value !== "close") {
+      open = { start: index, admission: boundary.value };
     }
   }
 
