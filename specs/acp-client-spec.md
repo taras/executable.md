@@ -1121,11 +1121,15 @@ retained without that reply. Before the record is appended, the execution's own
 scanner reads the reply as the record serializes it; a finding keeps the
 completed record — the delivered input, session and native identity,
 configuration, permissions and usage — with empty `text` and `withheld: true`.
-The call answers a fixed `AgentReplyWithheldError`, exported from the host
-surface and naming no rule, position or fingerprint; it is the only answer that
-identifies a withheld completion, so a host acts on it rather than on finding a
-withheld record. The conversation stays usable: the next turn continues the same
-native conversation, and a reopening replays this one from its record.
+The default answer is `AgentReplyWithheldError`, exported from the host
+surface with a fixed message. In a foreground REPL the same Prompt call can
+await a local decision after the withheld completion is durable. Withhold,
+dismissal and interruption leave that completion in force. Accept appends
+`agent_prompt_reply` under the same Prompt name in the same root sequence,
+then the call returns the original reply as its successful text. The record
+adds no provider Prompt, request receipt or native conversation. Reopening
+restores the resulting turn from the recorded sequence. Before an acceptance
+append succeeds, the withheld completion remains the saved result.
 Everything else still reaches the journal's own guard, which refuses the append
 as before: a scanner that cannot answer, a policy that is not the execution's, a
 failed or cancelled turn's partial text, a credential anywhere else in the
@@ -2113,6 +2117,12 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   saved.
 
 ## The CLI Sidekick attachment as an ACP backend
+
+An attached exchange can wait on the local REPL's reply approval. Public
+updates may report the pending status. Only the local foreground can see and
+answer the review. Accept allows standard assistant text from the acknowledged
+evaluation of that saved reply. An acceptance with evaluation still absent
+has no assistant Output to deliver.
 
 The headless XMD child backend uses the same live dispatch and original input
 owners through its separately admitted child connection. `xmd repl --attach

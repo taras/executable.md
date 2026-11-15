@@ -159,6 +159,36 @@ export function evaluateDataExpression(text: string, values: Record<string, unkn
   return interpret(parsed(text), values);
 }
 
+/** The value and content offset of an unchanged string literal at a data path. */
+export function dataStringLiteral(
+  text: string,
+  path: readonly (string | number)[],
+): { value: string; start: number } | undefined {
+  let node = parsed(text);
+  for (const member of path) {
+    if (!isNode(node)) {
+      return undefined;
+    }
+    if (typeof member === "number" && node.type === "ArrayExpression") {
+      node = elements(node)[member];
+    } else if (typeof member === "string" && node.type === "ObjectExpression") {
+      node = properties(node).findLast((property) => key(property) === member)?.value;
+    } else {
+      return undefined;
+    }
+  }
+  if (
+    !isNode(node) ||
+    node.type !== "Literal" ||
+    !("value" in node) ||
+    typeof node.value !== "string" ||
+    text.slice(node.start + 1, node.end - 1) !== node.value
+  ) {
+    return undefined;
+  }
+  return { value: node.value, start: node.start + 1 };
+}
+
 function binding(name: string): string {
   return `a generated expression names \`${name}\`, which is not one of the fragment's bindings.`;
 }

@@ -5,6 +5,8 @@ import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { SidekickRecord } from "./history.ts";
 import type { SidekickRequest } from "./model.ts";
 import type { RecoveryDecisionRecord, RecoveryReferenceRecord } from "./recovery-record.ts";
+import { acknowledgedControlOutcomes, controlSlot } from "./control-outcomes.ts";
+import type { ControlOutcome } from "./control-outcomes.ts";
 
 export interface HumanStopFact {
   readonly at: number;
@@ -84,7 +86,13 @@ export function recoveryFacts(
 ): Result<{
   readonly dispositions: readonly RecoveryDisposition[];
   readonly stops: readonly HumanStopFact[];
+  readonly outcomes: ReadonlyMap<string, ControlOutcome>;
 }> {
+  const joined = acknowledgedControlOutcomes(records);
+  if (!joined.ok) {
+    return joined;
+  }
+  const outcomes = joined.value;
   const decisions = new Map<string, RecoveryDisposition>();
   const stops: HumanStopFact[] = [];
   const messages = new Set<string>();
@@ -112,20 +120,19 @@ export function recoveryFacts(
           one.decision.controls.map((control) => `${control.response}\0${control.order}`),
         ),
     );
-    return prefix.flatMap((one) =>
-      one.kind === "control" &&
-      one.conversation === conversation &&
-      !previouslyRetired.has(`${one.response}\0${one.order}`) &&
-      !prefix.some(
-        (outcome) =>
-          outcome.kind === "control-outcome" &&
-          outcome.conversation === one.conversation &&
-          outcome.response === one.response &&
-          outcome.order === one.order,
-      )
-        ? [{ response: one.response, order: one.order }]
-        : [],
-    );
+    return prefix.flatMap((one) => {
+      if (
+        one.kind !== "control" ||
+        one.conversation !== conversation ||
+        previouslyRetired.has(`${one.response}\0${one.order}`)
+      ) {
+        return [];
+      }
+      const outcome = outcomes.get(controlSlot(conversation, one.response, one.order));
+      return outcome !== undefined && outcome.at < index
+        ? []
+        : [{ response: one.response, order: one.order }];
+    });
   }
   for (const [index, record] of records.entries()) {
     if (record.kind === "human-stop") {
@@ -245,7 +252,7 @@ export function recoveryFacts(
       }
     }
   }
-  return Ok({ dispositions: [...decisions.values()], stops });
+  return Ok({ dispositions: [...decisions.values()], stops, outcomes });
 }
 
 export function recoveryBlocked(

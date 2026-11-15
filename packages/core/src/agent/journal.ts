@@ -73,7 +73,7 @@ import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
-import { HostObservationFailure } from "./publication.ts";
+import { HeldPromptInputRefusal, HostObservationFailure } from "./publication.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
 import { SourceOwner, sourceOwnerDescription } from "../source-owner.ts";
 import {
@@ -590,6 +590,9 @@ function promptPublication(
       try {
         result = { status: "ok", value: yield* execute() };
       } catch (error) {
+        if (error instanceof HeldPromptInputRefusal) {
+          throw error;
+        }
         const fatal = durabilityFailure(error) ?? filesFatalFailure(error);
         const teardown = firstCause(error, (cause) =>
           cause instanceof InvocationTeardownError ? cause : undefined,

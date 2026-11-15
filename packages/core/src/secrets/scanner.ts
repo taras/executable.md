@@ -24,6 +24,50 @@ export interface SecretScanner {
   scan(content: string): Operation<SecretFinding[]>;
 }
 
+/**
+ * Where one detection matched, in the coordinates of the scanned text.
+ *
+ * Core-private and never journaled, rendered or attached to an error: a range
+ * over text that holds a credential is a pointer at that credential. It
+ * exists so the one owner that may present or approve a reply's findings can
+ * say exactly which bytes it presented and approved.
+ */
+export interface SecretSpan {
+  readonly ruleId: string;
+  readonly messageId: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+class RangedScanner implements SecretScanner {
+  readonly scan: SecretScanner["scan"];
+  readonly #ranges: (content: string) => Operation<SecretSpan[]>;
+
+  constructor(scan: SecretScanner["scan"], ranges: (content: string) => Operation<SecretSpan[]>) {
+    this.scan = scan;
+    this.#ranges = ranges;
+  }
+
+  static locate(scanner: SecretScanner, content: string): Operation<SecretSpan[]> | undefined {
+    return #ranges in scanner ? scanner.#ranges(content) : undefined;
+  }
+}
+
+/**
+ * Where `scanner` finds credentials in `content`, or nothing when this module
+ * did not build it.
+ *
+ * Fails closed exactly as `scan()` does: a detector that throws is a
+ * {@link SecretScannerError} carrying no source.
+ */
+export function* locateSecrets(
+  scanner: SecretScanner,
+  content: string,
+): Operation<SecretSpan[] | undefined> {
+  const locate = RangedScanner.locate(scanner, content);
+  return locate === undefined ? undefined : yield* locate;
+}
+
 /** The subset of a Secretlint message a finding is built from. */
 interface LintMessage {
   ruleId: string;
@@ -89,7 +133,15 @@ export function createSecretScanner(filePath = "/journal.jsonl"): SecretScanner 
 export function createScannerWith(detect: LintFn, filePath = "/journal.jsonl"): SecretScanner {
   const fingerprint = createFingerprinter();
 
-  return {
+  function* detected(content: string): Operation<readonly LintMessage[]> {
+    try {
+      return (yield* until(detect(content, filePath))).messages;
+    } catch {
+      throw new SecretScannerError("scanning");
+    }
+  }
+
+  const scanner: SecretScanner = {
     *scan(content: string): Operation<SecretFinding[]> {
       if (content.length === 0) {
         return [];
@@ -119,4 +171,27 @@ export function createScannerWith(detect: LintFn, filePath = "/journal.jsonl"): 
       }
     },
   };
+  return new RangedScanner(scanner.scan, function* (content: string): Operation<SecretSpan[]> {
+    if (content.length === 0) {
+      return [];
+    }
+    const messages = yield* detected(content);
+    try {
+      return messages.map((message) => {
+        const [start, end] = message.range;
+        if (
+          !Number.isInteger(start) ||
+          !Number.isInteger(end) ||
+          start < 0 ||
+          end <= start ||
+          end > content.length
+        ) {
+          throw new Error("range");
+        }
+        return Object.freeze({ ruleId: message.ruleId, messageId: message.messageId, start, end });
+      });
+    } catch {
+      throw new SecretScannerError("normalizing findings");
+    }
+  });
 }

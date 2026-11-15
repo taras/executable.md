@@ -108,7 +108,7 @@ import type { FilesystemExpansion } from "./filesystem-placement.ts";
  */
 
 import { createDurableOperation } from "@executablemd/durable-streams";
-import type { Json as DurableJson } from "@executablemd/durable-streams";
+import type { Json as DurableJson, Yield } from "@executablemd/durable-streams";
 import { ensure, Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 
@@ -138,7 +138,10 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
 import { capturedBinding } from "./invocation-rules.ts";
-import { renderSegments } from "./render.ts";
+import { renderSegment, renderSegments } from "./render.ts";
+import type { ApprovedMatch, evaluationGrant } from "./secrets/reply-grant.ts";
+import type { SecretDetection } from "./secrets/policy.ts";
+import type { SourceRange } from "./document-targets.ts";
 import { scanSegments } from "./scanner.ts";
 import { readsBinding } from "./generated-interpolation.ts";
 import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
@@ -697,6 +700,8 @@ export class GeneratedXmdRootError extends Error {
 
 /** Where a root's rendering goes, and what the admitted source said about it. */
 interface RootRendering {
+  readonly literalOffsets?: WeakMap<Segment, number>;
+  readonly schemas?: Map<number, SourceRange>;
   readonly owner: Segment[];
   /** Called once, with what the admitted source declared. */
   readonly declared: (hasOutput: boolean) => void;
@@ -712,6 +717,7 @@ interface RootRendering {
  * hands it over across one Core-private call and keeps it.
  */
 export interface GeneratedRootBinding {
+  readonly detection: SecretDetection;
   readonly filesystem?: FilesystemExpansion;
   /**
    * The execution's captured selection, resolved for the classes one root asks
@@ -730,6 +736,11 @@ export interface GeneratedRootBinding {
   readonly reference: SyntaxReference | undefined;
   /** Whether the captured implementations still belong to a live execution. */
   readonly live: () => boolean;
+}
+
+export interface AcceptedRootReply {
+  readonly approved: readonly ApprovedMatch[];
+  readonly grant: ReturnType<typeof evaluationGrant>;
 }
 
 /**
@@ -1607,6 +1618,8 @@ function* preflight(
   source: string,
   table: ReadonlyMap<string, Entry[]>,
   language: AdmissionLanguage,
+  literalOffsets?: WeakMap<Segment, number>,
+  schemas?: Map<number, SourceRange>,
 ): Operation<Preflight> {
   const named: Planned[] = [];
   // Scanned as the fragment it is: generated text has no path, so every
@@ -1614,7 +1627,16 @@ function* preflight(
   // reader of the history say which fragment performed an effect — and it is
   // decided here, in the scan preflight runs, rather than by anything watching
   // the expansion afterwards.
-  const segments = scanSegments(source, { generatedSource: id, baseOffset: 0, baseLine: 1 });
+  const segments = scanSegments(
+    source,
+    { generatedSource: id, baseOffset: 0, baseLine: 1 },
+    undefined,
+    undefined,
+    undefined,
+    0,
+    literalOffsets,
+    schemas,
+  );
   // A generated fragment starts with no bindings: it imports none from the
   // document that admitted it, and exports none back to it.
   yield* walk(segments, table, named, new Set<string>(), topLevelLexical(language));
@@ -2187,6 +2209,20 @@ const REVOKED_IMPLEMENTATIONS =
 const FRAGMENT_RECORD = 4;
 const ROOT_RECORD = 5;
 
+/** The admitted source of a retained generated root for the named response. */
+export function readGeneratedRootAdmission(event: Yield, response: string): string | undefined {
+  if (
+    event.description.type !== GENERATED_XMD ||
+    event.description.name !== `generated:${response}` ||
+    event.result.status !== "ok" ||
+    event.result.value === undefined
+  ) {
+    return undefined;
+  }
+  const admission = readAdmission(event.result.value, ROOT_RECORD);
+  return admission?.decision === "admitted" ? admission.source : undefined;
+}
+
 /** Which of the two a record is expected to be, at the result and its policy. */
 type RecordMarker = typeof FRAGMENT_RECORD | typeof ROOT_RECORD;
 
@@ -2339,6 +2375,7 @@ function expand(
    */
   owner: Segment[] | undefined,
   filesystem?: FilesystemExpansion,
+  literalOffsets?: WeakMap<Segment, number>,
 ): Operation<string> {
   return scoped(function* () {
     yield* SourceOwner.set(undefined);
@@ -2431,6 +2468,16 @@ function expand(
         undefined,
         undefined,
         filesystem,
+        literalOffsets === undefined
+          ? undefined
+          : {
+              source: path,
+              declared: true,
+              active: false,
+              private: false,
+              marks: new WeakMap(),
+              replyLiteralOffsets: literalOffsets,
+            },
       );
       return renderSegments(owner ?? []);
     }
@@ -2592,7 +2639,14 @@ function* evaluateGenerated(
 
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
-  const restored = yield* preflight(request.id, decided.source, table, language);
+  const restored = yield* preflight(
+    request.id,
+    decided.source,
+    table,
+    language,
+    rendering?.literalOffsets,
+    rendering?.schemas,
+  );
   // Read from the admitted segments, which is the same reading `expand` selects
   // regions with, and reported before the first effect so a failure partway
   // still describes the root truthfully.
@@ -2609,6 +2663,7 @@ function* evaluateGenerated(
     reference,
     rendering?.owner,
     filesystem,
+    rendering?.literalOffsets,
   );
 }
 
@@ -2688,12 +2743,22 @@ function safeDiagnostic(error: unknown): string {
 function* evaluateRoot(
   request: GeneratedXmdRequest,
   binding: GeneratedRootBinding,
+  accepted?: AcceptedRootReply,
 ): Operation<Result<GeneratedXmdRootResult>> {
   // Allocated out here, so a failure partway leaves this frame holding exactly
   // what the root rendered before it. The flag is read from the source core
   // admitted rather than from the caller's copy, and it is the same reading
   // `expand` selects regions with.
   const owner: Segment[] = [];
+  const literalOffsets = accepted === undefined ? undefined : new WeakMap<Segment, number>();
+  if (accepted !== undefined) {
+    yield* ensure(binding.detection.allowReplyCopies(accepted.grant));
+  }
+  const check = (output: string) =>
+    binding.detection.checkReplyText(
+      output,
+      outputCopies(owner, literalOffsets, accepted?.approved ?? []),
+    );
   let hasOutput = false;
   try {
     // Resolved inside the boundary, and once. Once, because the tables this
@@ -2722,6 +2787,8 @@ function* evaluateRoot(
         undefined,
         {
           owner,
+          literalOffsets,
+          schemas: accepted?.grant.schemas,
           declared: (value) => {
             hasOutput = value;
           },
@@ -2735,6 +2802,9 @@ function* evaluateRoot(
         binding.filesystem,
       );
     });
+    if (hasOutput) {
+      yield* check(output);
+    }
     return Ok({ output, hasOutput });
   } catch (error) {
     if (!ordinaryGeneratedFailure(error)) {
@@ -2745,8 +2815,40 @@ function* evaluateRoot(
     // something that never happened.
     const partial: GeneratedXmdRootResult | undefined =
       hasOutput || owner.length > 0 ? { output: renderSegments(owner), hasOutput } : undefined;
+    if (partial?.hasOutput) {
+      yield* check(partial.output);
+    }
     return Err(new GeneratedXmdRootError(safeDiagnostic(error), partial));
   }
+}
+
+function outputCopies(
+  selected: readonly Segment[],
+  literals: WeakMap<Segment, number> | undefined,
+  approved: readonly ApprovedMatch[],
+): ApprovedMatch[] {
+  const copies: ApprovedMatch[] = [];
+  if (literals === undefined) {
+    return copies;
+  }
+  let offset = 0;
+  for (const segment of selected) {
+    const rendered = renderSegment(segment);
+    const start = literals.get(segment);
+    if (start !== undefined) {
+      for (const match of approved) {
+        if (match.start >= start && match.end <= start + rendered.length) {
+          copies.push({
+            ...match,
+            start: offset + match.start - start,
+            end: offset + match.end - start,
+          });
+        }
+      }
+    }
+    offset += rendered.length;
+  }
+  return copies;
 }
 
 /**
@@ -2766,6 +2868,9 @@ function* evaluateRoot(
  */
 export function bindGeneratedRootEvaluator(
   binding: GeneratedRootBinding,
-): (request: GeneratedXmdRequest) => Operation<Result<GeneratedXmdRootResult>> {
-  return (request) => evaluateRoot(request, binding);
+): (
+  request: GeneratedXmdRequest,
+  accepted?: AcceptedRootReply,
+) => Operation<Result<GeneratedXmdRootResult>> {
+  return (request, accepted) => evaluateRoot(request, binding, accepted);
 }

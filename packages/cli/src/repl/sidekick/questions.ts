@@ -1,4 +1,10 @@
-import { projectElicitationAnswer } from "@executablemd/core/host";
+import {
+  elicitationEffectName,
+  projectElicitationAnswer,
+  questionFingerprint,
+  retainsOptionalText,
+} from "@executablemd/core/host";
+import type { AgentReplyHold } from "@executablemd/core/host";
 /**
  * The Sidekick's own questions, and how one reaches the response that asked it.
  *
@@ -61,8 +67,9 @@ import { projectElicitationAnswer } from "@executablemd/core/host";
 
 import { ensure, Ok, scoped } from "effection";
 import type { Operation } from "effection";
-import { Elicitation, ElicitationProviderError } from "@executablemd/core";
-import type { ElicitationRequest } from "@executablemd/core";
+import { Elicitation, ElicitationProviderError, getExpansion } from "@executablemd/core";
+import type { ElicitationRequest, Expansion } from "@executablemd/core";
+import { durablePosition } from "@executablemd/durable-streams";
 
 import { useReplElicitation } from "../elicitation.ts";
 import type { ReplElicitations } from "../elicitation.ts";
@@ -84,7 +91,12 @@ export interface SidekickAsking {
    * Scoped, so the previous journal is restored however the work ends —
    * including a Stop that halts it mid-question.
    */
-  answering<T>(journal: ControlJournal, work: () => Operation<T>): Operation<T>;
+  answering<T>(
+    response: string,
+    journal: ControlJournal,
+    hold: AgentReplyHold | undefined,
+    work: () => Operation<T>,
+  ): Operation<T>;
 }
 
 /**
@@ -98,12 +110,19 @@ export interface SidekickAsking {
  */
 export function* useSidekickQuestions(): Operation<SidekickAsking> {
   /** The response being evaluated right now, and therefore asking. */
-  let current: ControlJournal | undefined;
+  let current:
+    | {
+        readonly response: string;
+        readonly journal: ControlJournal;
+        readonly hold?: AgentReplyHold;
+      }
+    | undefined;
+  const selections = new WeakMap<object, { readonly field: string; readonly option: number }>();
 
   yield* Elicitation.around({
     *elicit([request]: [ElicitationRequest], next) {
-      const journal = current;
-      if (journal === undefined) {
+      const owner = current;
+      if (owner === undefined) {
         // Fails closed, and before anybody is asked. A question whose answer
         // has nowhere to be recorded is a question the reply that asked it
         // would never be told the answer to, so asking it would waste a
@@ -112,6 +131,33 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
           "this Sidekick asks questions on behalf of a reply it is evaluating, and it is " +
             "evaluating none — so there is no response for an answer to belong to.",
         );
+      }
+      const { journal, response } = owner;
+      const expansion = yield* questionExpansion();
+      if (expansion?.name === ELICIT_CONTROL && expansion.position?.generatedSource === response) {
+        const position = yield* durablePosition();
+        const message = (yield* retainsOptionalText(request.message))
+          ? request.message
+          : "The original elicitation message was withheld.";
+        const elicit = {
+          ...position,
+          name: elicitationEffectName(expansion.position),
+          fingerprint: questionFingerprint(request),
+        };
+        yield* journal.began({
+          component: ELICIT_CONTROL,
+          arguments: { message },
+          elicit,
+        });
+        const answer = yield* next(request);
+        if (owner.hold !== undefined && typeof answer === "object" && answer !== null) {
+          const selection = selections.get(answer);
+          if (selection !== undefined) {
+            selections.delete(answer);
+            owner.hold.selectedElicitation({ ...elicit, ...selection });
+          }
+        }
+        return answer;
       }
       // Before the asking. A question waiting when a process stops has an
       // intent and no outcome, which is exactly what an interrupted operation
@@ -149,14 +195,21 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
 
   // No waits reading. `ReplWaits` counts what an *entry* is held on, and a
   // Sidekick question holds no entry: it holds the response that asked it.
-  const questions = yield* useReplElicitation();
+  const questions = yield* useReplElicitation(undefined, (answer, field, option) => {
+    selections.set(answer, { field, option });
+  });
 
   return {
     questions,
-    answering<T>(journal: ControlJournal, work: () => Operation<T>): Operation<T> {
+    answering<T>(
+      response: string,
+      journal: ControlJournal,
+      hold: AgentReplyHold | undefined,
+      work: () => Operation<T>,
+    ): Operation<T> {
       return scoped(function* () {
         const previous = current;
-        current = journal;
+        current = { response, journal, hold };
         yield* ensure(() => {
           current = previous;
         });
@@ -164,4 +217,12 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
       });
     },
   };
+}
+
+function* questionExpansion(): Operation<Expansion | undefined> {
+  try {
+    return yield* getExpansion();
+  } catch {
+    return undefined;
+  }
 }

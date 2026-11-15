@@ -44,6 +44,7 @@ import type { Operation } from "effection";
 import { content } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 import {
+  elicitationLocation,
   persistElicitation,
   persistProtectedElicitation,
   questionFingerprint,
@@ -51,7 +52,6 @@ import {
 } from "../elicit-journal.ts";
 import { prepareElicitation, runPreparedElicitation } from "../elicit.ts";
 import type { Json, PropsSchema, ReturnsSchema } from "../types.ts";
-import type { Expansion } from "../expansion.ts";
 
 export const props = {
   type: "object",
@@ -97,7 +97,7 @@ export default function* Elicit(props: Record<string, Json>): Operation<unknown>
 
   const expansion = yield* getExpansion();
   const identity = {
-    location: formatLocation(expansion),
+    location: elicitationLocation(expansion.position),
     fingerprint: questionFingerprint({ schema: prepared.schema, message }),
     schema: prepared.schema,
     position: expansion.position,
@@ -111,14 +111,4 @@ export default function* Elicit(props: Record<string, Json>): Operation<unknown>
     return yield* persistProtectedElicitation(identity, prepared, message);
   }
   return yield* persistElicitation(identity, () => runPreparedElicitation(prepared, message));
-}
-
-/** `path:line:column`, `line:column`, or `unknown` — the durable identity. */
-function formatLocation(metadata: Expansion): string {
-  const position = metadata.position;
-  if (!position) {
-    return "unknown";
-  }
-  const at = `${position.line}:${position.column}`;
-  return position.path ? `${position.path}:${at}` : at;
 }

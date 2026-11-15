@@ -1,6 +1,8 @@
 import { durablePosition } from "@executablemd/durable-streams";
 import { inputValues } from "./secrets/inputs.ts";
 import { parseInputRecord } from "./secrets/input-record.ts";
+import type { RecordedInputValue } from "./secrets/input-record.ts";
+import { INPUT_REPLACEMENT, secretInputFields } from "./secrets/input-schema.ts";
 import { prepareElicitation, runPreparedElicitation, ElicitValidationError } from "./elicit.ts";
 import type { PreparedElicitation } from "./elicit.ts";
 import { validateParsed } from "./components/parse-schema.ts";
@@ -40,8 +42,10 @@ import type {
   EffectDescription,
   Json as DurableJson,
   Workflow,
+  Yield,
 } from "@executablemd/durable-streams";
-import type { Operation } from "effection";
+import { Err, Ok } from "effection";
+import type { Operation, Result } from "effection";
 
 import { canonicalFingerprint } from "./canonical.ts";
 import { isJsonObject, parseJson } from "./json.ts";
@@ -82,6 +86,18 @@ function recordName(location: string): string {
   return `elicit:${location}`;
 }
 
+export function elicitationLocation(position: Readonly<SourcePosition> | undefined): string {
+  if (position === undefined) {
+    return "unknown";
+  }
+  const at = `${position.line}:${position.column}`;
+  return position.path ? `${position.path}:${at}` : at;
+}
+
+export function elicitationEffectName(position: Readonly<SourcePosition> | undefined): string {
+  return recordName(elicitationLocation(position));
+}
+
 /** A stable name for what was asked. */
 export function questionFingerprint(question: ElicitationQuestion): string {
   return canonicalFingerprint({ schema: question.schema, message: question.message });
@@ -98,6 +114,63 @@ export function questionFingerprint(question: ElicitationQuestion): string {
 export function readElicitationSchema(description: EffectDescription): JsonObject | undefined {
   const field = description[ELICITATION_SCHEMA_FIELD];
   return isJsonObject(field) ? field : undefined;
+}
+
+/** Read a canonical Elicit answer for display without restoring live input. */
+export function readElicitationAnswer(event: Yield, index: number): Result<Json> {
+  try {
+    const schema = readElicitationSchema(event.description);
+    if (event.description.type !== ELICIT || event.result.status !== "ok" || schema === undefined) {
+      throw new Error();
+    }
+    const fields = secretInputFields(schema);
+    const answer = parseJson(event.result.value);
+    if (fields.length === 0) {
+      return Ok(answer);
+    }
+    if (!isJsonObject(answer) || Object.keys(answer).length !== 1) {
+      throw new Error();
+    }
+    const receipt = parseInputRecord(answer["executablemd.input"]);
+    if (receipt.kind !== "object") {
+      throw new Error();
+    }
+    return Ok(
+      Object.fromEntries(
+        Object.entries(receipt.members).map(([name, member]) => {
+          if (!fields.includes(name)) {
+            return [name, readPublicInput(member)];
+          }
+          if (
+            member.kind !== "input" ||
+            member.field.coroutine !== event.coroutineId ||
+            member.field.index !== index ||
+            member.field.field !== name
+          ) {
+            throw new Error();
+          }
+          return [name, INPUT_REPLACEMENT];
+        }),
+      ),
+    );
+  } catch {
+    return Err(new Error("The retained elicitation answer cannot be safely read."));
+  }
+}
+
+function readPublicInput(member: RecordedInputValue): Json {
+  switch (member.kind) {
+    case "json":
+      return member.value;
+    case "array":
+      return member.items.map(readPublicInput);
+    case "object":
+      return Object.fromEntries(
+        Object.entries(member.members).map(([name, child]) => [name, readPublicInput(child)]),
+      );
+    case "input":
+      throw new Error("Invalid protected elicitation field identity.");
+  }
 }
 
 /**

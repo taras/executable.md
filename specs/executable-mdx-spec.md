@@ -11217,7 +11217,7 @@ identity, its locks and its evidence do not reach its parent or a sibling.
 
 Explicit Elicit protection is mandatory and precedes heuristic scanning at publication boundaries. The scanner retains its existing decisions for other content, including when an unmarked value resembles a credential. Scanner opt-out never reveals marked input.
 
-Every execution refuses to persist a durable event that carries a credential.
+Every execution checks durable events for credentials.
 `execute` selects its journal before the durable run starts, so the root
 component import is already covered, and the same policy holds for every later
 yield and close.
@@ -11234,8 +11234,8 @@ ordinary error handling: the region the effect was written in decides, so a
 continues, while an effect at a plain root, and a rejection during the root
 import, fail the run. Either way the offending event is absent, and a later close is a
 separate append that crosses the policy on its own — so a rejection never
-implies an empty journal. There is no allowlist, sanitization, repair, or
-approval: a finding is a code or data-flow defect to fix.
+implies an empty journal. The foreground REPL can authorize the scoped
+Sidekick reply described below.
 
 Rendered output is held to the same policy before it leaves the execution. A
 live chunk the execution's scanner cannot clear — a finding, or a scan that
@@ -11254,6 +11254,32 @@ A host may still wrap its stream with `guardDurableStream(stream, gate)` from
 about credentials; it runs whatever gate it is given. XMD's policy is one such
 gate, installed by default. See the durable-streams README for the decorator's
 contract.
+
+##### Accepted Sidekick replies
+
+The REPL can ask about a located finding in one completed Sidekick reply
+after the canonical withheld Prompt is acknowledged. Its trusted foreground
+decision reaches Core through the still-live continuation of that turn. Core
+publishes a distinct acceptance immediately after that Prompt in the same
+root sequence, carrying the exact original reply and an audit of approved
+rule, message and ranges. The original Prompt and its receipt stand. The
+acceptance uses no new turn ordinal. Replay restores the pair without
+recovering a live approval or contacting a provider.
+
+The same execution scans the complete serialization at each append. Its
+one-use exception applies to the acceptance's text field, the same Send's
+generated admission for the accepted source and approved byte ranges whose
+provenance remains known through evaluation and ordinary automatic feedback.
+Core clears the actual selected Output, including selected partial Output,
+before the Sidekick response writer or ACP receives it. An unchanged literal
+in selected rendering can carry its approved range. A normalized Elicit enum
+choice can carry its authored range into the acknowledged answer when the
+foreground form selected that choice in the same field. The next feedback
+turn verifies the exact composed input before retaining an intent or reaching
+the provider. Appended context preserves approval for exact ranges in the
+unchanged original feedback prefix. The scanner applies ordinary detection to
+findings in appended context, across the join, and in the next reply.
+Explicitly protected input keeps its mandatory projection throughout.
 
 ##### At the command line
 

@@ -381,6 +381,19 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "sidekick-question-close") {
     return { kind: "close-sidekick-question" };
   }
+  if (select === "sidekick-approval") {
+    const approval = named["approval"];
+    const decision = named["decision"];
+    return typeof approval === "string" &&
+      (decision === "reveal" || decision === "withhold" || decision === "accept")
+      ? {
+          kind: "review-sidekick-reply",
+          approval,
+          decision,
+          finding: typeof named["finding"] === "number" ? named["finding"] : undefined,
+        }
+      : undefined;
+  }
   if (select === "sidekick-form-field") {
     const question = named["question"];
     const field = named["field"];

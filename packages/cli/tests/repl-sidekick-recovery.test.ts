@@ -5080,7 +5080,14 @@ describe("1311 — a completed reply that secret detection withholds", () => {
       host.fake.script({ reply: "<REPL.Bindings />" });
       host.fake.script({ reply: `<Output>${refused}</Output>` });
       yield* sendMessage(page, "Read the current bindings.");
-      yield* page.until("the withheld reply", (one) => one.shows("withheld by secret detection"));
+      // The foreground person is asked, with the match masked, and withholds.
+      yield* page.until("the withheld reply's question", (one) => one.shows("[withhold reply]"));
+      expect(page.screen().shows("Use a separate approval for this example issue #34")).toBe(false);
+      yield* page.press("[withhold reply]");
+      yield* page.until(
+        "the withheld reply",
+        (one) => one.shows("withheld by secret detection") && !one.shows("[withhold reply]"),
+      );
       clean(page.screen());
       expect(host.fake.prompts).toHaveLength(2);
       execution = yield* mountedExecution(page.repl);

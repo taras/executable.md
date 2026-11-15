@@ -1116,6 +1116,21 @@ Permission composition runs outermost first: core's audit observer, this
 session's authoritative policy, document/provider composition, then base denial.
 One private grant ledger belongs to each inherited Prompt scope.
 
+### Review a withheld Sidekick reply
+
+When secret detection withholds a completed Sidekick reply, the local REPL
+offers a foreground drawer for that Send. It shows the rule and reply
+position with masked excerpts. Reveal draws the matched text locally.
+Withhold and close settle the question as withheld. Accept saves the original
+reply and permits ordinary ACP Output and automatic feedback. The drawer
+identifies this disclosure before a person accepts.
+
+The mounted frame and the waiting question identify each action. Pending
+reply text and excerpts exist only in the foreground presentation. Attached
+clients can see pending status. The live question belongs to the local
+foreground user, independent of provider permissions and authored questions.
+The Send stays busy until its continuation and owned cleanup join.
+
 ## Move between regions and edit within them
 
 From Draft, one Tab enters the tabs at Bindings without selecting it. Continue
@@ -3657,11 +3672,17 @@ and a reply that asked a question has to be told the answer. Canonical syntax
 self-description is the one exception — its return is the reply's to render or
 capture — and an ordinary component return is never intercepted.
 
-A question's answer is retained the way every other operation's is: an intent
-before anybody is asked and an outcome once they have answered. So a question
-still waiting when a process stops is readable as an operation that began and
-whose result nobody knows, and it is reported as that rather than re-asked or
-given an answer nobody gave.
+A generated Elicit intent is acknowledged before the form opens. It names the
+canonical Elicit effect, question fingerprint and yield coordinate in the
+response's admitted evaluation. Live feedback, display and recovery derive
+the outcome from the matching acknowledged Elicit Yield in that prefix.
+Each child counts its own yields. A later intent at the same coordinate takes
+over that live interval. A committed refusal is a settled operation.
+Interruption before the Yield leaves the intent unfinished. A protected
+receipt supplies public siblings and a redaction for marked fields. Recovery
+describes the committed operation and withholds any answer that the ordinary
+scanner cannot clear for a new Prompt. Existing intent and outcome pairs
+remain readable.
 
 Each answer is in its own terms, read back from what was retained. The binding
 map is the map itself, with no provenance or status put inside it. A filled
@@ -4088,14 +4109,16 @@ happened. It claims no entry and reserves nothing.
 A response that asked for nothing and failed at nothing ends the exchange: the
 next move is the person's. A turn the provider did not finish ends it too,
 because a turn that produced nothing is not a reply to correct. A completed
-turn whose reply secret detection withheld ends it without pausing: its record
-establishes that the turn received what it was sent, so the feedback it carried
-and the TODO changes the turn selected are delivered. Nothing from the reply is
-saved or evaluated. A live preview may have shown a prefix the disclosure policy
-cleared before the credential arrived; the finding withdraws that preview, as
-the live preview rule under [Who owns what](#who-owns-what) states, and the chat
-then shows the saved turn with this account. The next message from the composer continues the same native
-conversation. A turn that names a native conversation other than the one this
+turn whose reply secret detection withholds first saves a completed turn with
+empty reply text. The save establishes delivery of the feedback and TODO
+changes the turn selected. The live preview is withdrawn. The local REPL can
+then wait for [reply approval](#review-a-withheld-sidekick-reply). Withhold,
+close, Stop, process exit and a reopen with only the withheld turn preserve
+that saved outcome. The next explicit message continues the same native
+conversation. Accept acknowledges the original source before evaluating it
+within the same Send. A reopen after acceptance restores the saved turn and
+any separately acknowledged Output. Evaluation still absent at reopen stays
+absent. A turn that names a native conversation other than the one this
 chat established is not withheld: it keeps the refusal any other credential in
 a record receives, records no completion and delivers nothing. There is no
 limit on how many turns one message may take: each one costs a provider turn, a

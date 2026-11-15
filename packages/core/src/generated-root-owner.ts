@@ -53,7 +53,11 @@ import type { Operation, Queue, Result } from "effection";
 import { durableRun, preserveJournalProvenance, retainEvents } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 
-import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "./generated-xmd.ts";
+import type {
+  AcceptedRootReply,
+  GeneratedXmdRequest,
+  GeneratedXmdRootResult,
+} from "./generated-xmd.ts";
 
 /** Why this execution could not take the root evaluation it was asked for. */
 export class HostExecutionError extends Error {
@@ -63,6 +67,7 @@ export class HostExecutionError extends Error {
 /** One execution's bound root evaluator, as the owner and the handle hold it. */
 export type BoundRootEvaluator = (
   request: GeneratedXmdRequest,
+  accepted?: AcceptedRootReply,
 ) => Operation<Result<GeneratedXmdRootResult>>;
 
 /** What canonical execution hands its owner once both exist. */
@@ -137,6 +142,7 @@ export interface GeneratedRootOwner {
 /** What one caller asked this execution to evaluate. */
 interface RootJob {
   readonly request: GeneratedXmdRequest;
+  readonly accepted?: AcceptedRootReply;
   readonly answer: Resolvers<Settled>;
   readonly cancelled: Resolvers<void>;
   readonly joined: Resolvers<void>;
@@ -306,7 +312,10 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
     return Ok(undefined);
   }
 
-  function evaluate(request: GeneratedXmdRequest): Operation<Result<GeneratedXmdRootResult>> {
+  function evaluate(
+    request: GeneratedXmdRequest,
+    accepted?: AcceptedRootReply,
+  ): Operation<Result<GeneratedXmdRootResult>> {
     return scoped(function* () {
       // Before readiness, so two calls that arrive while the runner is still
       // starting are one admitted call and one refusal rather than two waiters.
@@ -344,7 +353,7 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
       if (!started.ok) {
         return started;
       }
-      jobs.add({ request, answer, cancelled, joined });
+      jobs.add({ request, accepted, answer, cancelled, joined });
       sent = true;
       // Raced against the execution closing, because a halted worker answers
       // nobody: the work it was doing has joined by the time this resolves, and
@@ -504,7 +513,7 @@ function* attempt(
     // journal: a read that fails is this caller's failure to be handed and this
     // execution's outcome, not an availability answer about a run that is still
     // open.
-    job.answer.resolve({ value: yield* sequence(inputs, job.request, yield* address()) });
+    job.answer.resolve({ value: yield* sequence(inputs, job, yield* address()) });
     return undefined;
   } catch (error) {
     // The caller is handed the same object with the same classification, and
@@ -527,15 +536,16 @@ function* attempt(
  */
 function sequence(
   inputs: GeneratedRootInputs,
-  request: GeneratedXmdRequest,
+  job: RootJob,
   order: number,
 ): Operation<Result<GeneratedXmdRootResult>> {
   return scoped(function* () {
     const settled: { outcome?: Result<GeneratedXmdRootResult> } = {};
     const coroutineId = sequenceName(order);
+    job.accepted?.grant.bind(coroutineId);
     yield* durableRun(
       function* (): Operation<void> {
-        settled.outcome = yield* inputs.evaluator(request);
+        settled.outcome = yield* inputs.evaluator(job.request, job.accepted);
       },
       { stream: evaluationJournal(inputs.journal, order), coroutineId },
     );

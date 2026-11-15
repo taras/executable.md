@@ -3301,6 +3301,7 @@ function* executeDocument(
               );
             }
           : bindGeneratedRootEvaluator({
+              detection,
               filesystem,
               // The selection this execution captured, resolved per evaluation
               // through the one machinery the authored site also goes through, and
@@ -4785,10 +4786,20 @@ function initialRootBindings(
  * host holds and passes, so a separately loaded workflow package composes by
  * handing its closure over rather than by agreeing on a name.
  */
-export function* executeInstalled(
+export function executeInstalled(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   initialization?: ExecutionInitialization,
+): Operation<HostExecution> {
+  return executeInstalledBound(options, installations, initialization);
+}
+
+/** Hand the canonical evaluator directly to the held conversation. */
+export function* executeInstalledBound(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+  initialization?: ExecutionInitialization,
+  bindEvaluator?: (evaluate: BoundRootEvaluator) => void,
 ): Operation<HostExecution> {
   const invoked = yield* runInvocation(
     options,
@@ -4803,6 +4814,7 @@ export function* executeInstalled(
     },
   });
   const { execution } = invoked;
+  bindEvaluator?.(invoked.evaluateGeneratedXmdRoot);
   const clearDisclosure = invoked.computed.disclose;
   // Assembled here, at the trusted boundary, and nowhere else. The document
   // handle this delegates to is the authoritative one: the consumer's own
@@ -4813,7 +4825,7 @@ export function* executeInstalled(
     *[Symbol.iterator]() {
       return yield* execution;
     },
-    evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
+    evaluateGeneratedXmdRoot: (request) => invoked.evaluateGeneratedXmdRoot(request),
     bindings: invoked.computed.read,
     disclose(data) {
       return clearDisclosure(data, disclosure.operations.disclose);

@@ -456,6 +456,29 @@ export interface ReplSidekickSubmit {
   readonly admitted: boolean;
 }
 
+/**
+ * A completed reply secret detection withheld, as the foreground screen asks
+ * about it.
+ *
+ * The findings are rule, position and a masked excerpt. The matched text is
+ * not a member: `reveal` answers it to the renderer, only while the question
+ * is waiting, and only when this screen's own state says the person asked to
+ * see it — so it is never part of a state, a location or a reading anything
+ * else is handed.
+ */
+export interface ReplSidekickApproval {
+  /** This screen's own name for the question, never reused. */
+  readonly key: string;
+  /** The saved withheld turn. */
+  readonly turn: number;
+  readonly findingCount: number;
+  /** Whether Accept was chosen and the acceptance is being saved. */
+  readonly accepting: boolean;
+  /** Whether the person asked this screen to show the matched text. */
+  readonly revealed: number | undefined;
+  finding(index: number): readonly [description: string, excerpt: string] | undefined;
+}
+
 export interface ReplSidekickReading {
   readonly usageTotal?: string;
   readonly inspectUsage?: boolean;
@@ -528,6 +551,13 @@ export interface ReplSidekickReading {
    * component holding it would be a second way to answer, answerable to nobody.
    */
   readonly question: ReplSidekickQuestion | undefined;
+  /**
+   * The withheld reply waiting for the person's decision, or none.
+   *
+   * Local to the foreground screen that draws it: a headless or attached
+   * presentation is never given one.
+   */
+  readonly approval?: ReplSidekickApproval;
   /** The conversation these facts are about, for a control that names it. */
   readonly conversation: string | undefined;
   /**
@@ -1197,6 +1227,16 @@ export interface ReplState {
 /** What the root must perform, because a component cannot. */
 export type ReplIntent =
   | { readonly kind: "start-new-chat"; readonly conversation: string; readonly decision: string }
+  /**
+   * Show or hide the matched text of the withheld reply this key names, or
+   * decide it once, if it is still waiting.
+   */
+  | {
+      readonly kind: "decide-sidekick-reply";
+      readonly approval: string;
+      readonly decision: "reveal" | "withhold" | "accept";
+      readonly finding?: number;
+    }
   | { readonly kind: "recovery-reference"; readonly accept: boolean; readonly reference: string }
   | {
       readonly kind: "todo-save";
@@ -1254,6 +1294,7 @@ export type ReplIntent =
       readonly kind: "answer-sidekick";
       readonly question: string;
       readonly values: Readonly<Record<string, string>>;
+      readonly selected?: string;
     }
   /**
    * Ask this conversation's agent what it offers, explicitly.
@@ -2074,6 +2115,10 @@ export function reduceRepl(
   // drawer holding focus is where the keys a person presses are going — and
   // whether Escape is addressed to this drawer.
   const configuring = presented?.kind === "configure" && state.configuring.open;
+  const approval =
+    presented?.kind === "reply-approval" && presented.key === live.sidekick?.approval?.key
+      ? live.sidekick.approval
+      : undefined;
 
   switch (action.kind) {
     case "use-saved-recovery": {
@@ -2501,6 +2546,20 @@ export function reduceRepl(
       );
     }
     case "close-drawer": {
+      if (approval !== undefined && !approval.accepting) {
+        return reduceRepl(
+          state,
+          {
+            kind: "review-sidekick-reply",
+            approval: approval.key,
+            decision: "withhold",
+          },
+          model,
+          live,
+          admission,
+          presented,
+        );
+      }
       if (state.route.drawers.length === 0 && state.catalog) {
         return settled({ ...state, catalog: false });
       }
@@ -2948,6 +3007,23 @@ export function reduceRepl(
         refusal: undefined,
       });
     }
+    case "review-sidekick-reply": {
+      const pending = approval;
+      if (pending === undefined || pending.key !== action.approval || pending.accepting) {
+        // Drawn for a question that has been decided, withdrawn or replaced:
+        // it reaches nothing, and the question now waiting is not this one.
+        return refuse(state, "that withheld reply is no longer waiting for a decision.");
+      }
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "decide-sidekick-reply",
+          approval: pending.key,
+          decision: action.decision,
+          finding: action.finding,
+        },
+      };
+    }
     case "close-sidekick-question": {
       if (state.asking === undefined || !state.asking.open) {
         return refuse(state, "the Sidekick's question form is not open.");
@@ -3000,7 +3076,12 @@ export function reduceRepl(
           asking: Object.freeze({ ...asking.held, form: chosen }),
           refusal: undefined,
         }),
-        intent: { kind: "answer-sidekick", question: asking.key, values: chosen.values },
+        intent: {
+          kind: "answer-sidekick",
+          question: asking.key,
+          values: chosen.values,
+          selected: action.field,
+        },
       };
     }
     case "answer-sidekick": {
@@ -4289,6 +4370,9 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     reading?.inspectUsage,
     reading?.setup?.phase,
     reading?.setup?.failure,
+    reading?.approval?.key,
+    reading?.approval?.revealed,
+    reading?.approval?.accepting,
     staging !== undefined,
   ];
   for (const one of reading?.chat ?? []) {
@@ -5779,7 +5863,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
    * needs are reparented into the form, exactly as `[history]` and `[exit]`
    * already are — described once, in the active focus root.
    */
-  const covered = presentedAsking(view) !== undefined;
+  const covered = presentedAsking(view) !== undefined || presentedApproval(view) !== undefined;
   // The staged composition draws the Transcript of agent work on the left and
   // reaches the catalog through the selected work's breadcrumbs, so the two
   // surface headings and the catalog's own rows have no region in it.
@@ -7422,9 +7506,14 @@ function currentChat(view: ReplView): boolean {
 export type ReplPresented =
   | { readonly kind: "entry-question"; readonly question: ReplQuestion }
   | { readonly kind: "question"; readonly question: string }
-  | { readonly kind: "configure" };
+  | { readonly kind: "configure" }
+  | { readonly kind: "reply-approval"; readonly key: string };
 
 export function presentedDrawer(view: ReplView): ReplPresented | undefined {
+  const approval = presentedApproval(view);
+  if (approval !== undefined) {
+    return { kind: "reply-approval", key: approval.key };
+  }
   if (
     !view.state.heldHistory &&
     view.selection.drawers.at(-1)?.kind === "live-elicit" &&
@@ -7491,11 +7580,18 @@ function showingSidekick(view: ReplView): boolean {
  * Sidekick's opener, so an open permission request is never answered or
  * dismissed by something underneath it.
  */
+function presentedApproval(view: ReplView): ReplSidekickApproval | undefined {
+  return view.selection.drawers.length === 0 && !presentedCatalog(view) && currentChat(view)
+    ? view.live.sidekick?.approval
+    : undefined;
+}
+
 export function modalOpen(view: ReplView): boolean {
   return (
     view.selection.drawers.length > 0 ||
     presentedCatalog(view) ||
     presentedAsking(view) !== undefined ||
+    presentedApproval(view) !== undefined ||
     presentedConfiguring(view) !== undefined
   );
 }
@@ -7526,7 +7622,9 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   // a reading of the whole execution rather than of one pane, so a pane-local
   // rectangle would put the list of every entry inside the Sidekick's column.
   const rect =
-    view.selection.drawers.length > 0 || presentedCatalog(view)
+    view.selection.drawers.length > 0 ||
+    presentedCatalog(view) ||
+    presentedApproval(view) !== undefined
       ? (context.drawer ?? drawerRect(view.size, workspace))
       : presentedAsking(view) !== undefined || presentedConfiguring(view) !== undefined
         ? sidekickDrawerRect(view.size, workspace)
@@ -7641,7 +7739,11 @@ function drawerFor(
       ),
     );
   }
-  if ((asking !== undefined || configuring) && view.live.sidekick?.busy === true) {
+  const approval = presentedApproval(view);
+  if (
+    (approval !== undefined || asking !== undefined || configuring) &&
+    view.live.sidekick?.busy === true
+  ) {
     rows.push(
       row("drawer:sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("action"), {
         here: view.focused,
@@ -7658,21 +7760,23 @@ function drawerFor(
     row(
       "drawer:close",
       "[close]",
-      dismissing !== undefined
-        ? { select: "permission-dismiss", request: dismissing }
-        : catalog
-          ? // Putting the catalog away chooses nothing: the scope being read,
-            // the marker, the filter and both drafts stand.
-            { select: "catalog-close" }
-          : // Closing one of the Sidekick's own drawers is not what closing the
-            // entry's means. The question form keeps its question and its
-            // values; Configure discards what was chosen and not applied, and
-            // saves and changes nothing.
-            configuring
-            ? { select: "configure-close" }
-            : asking === undefined
-              ? { select: "close" }
-              : { select: "sidekick-question-close" },
+      approval !== undefined
+        ? { select: "sidekick-approval", approval: approval.key, decision: "withhold" }
+        : dismissing !== undefined
+          ? { select: "permission-dismiss", request: dismissing }
+          : catalog
+            ? // Putting the catalog away chooses nothing: the scope being read,
+              // the marker, the filter and both drafts stand.
+              { select: "catalog-close" }
+            : // Closing one of the Sidekick's own drawers is not what closing the
+              // entry's means. The question form keeps its question and its
+              // values; Configure discards what was chosen and not applied, and
+              // saves and changes nothing.
+              configuring
+              ? { select: "configure-close" }
+              : asking === undefined
+                ? { select: "close" }
+                : { select: "sidekick-question-close" },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -7787,6 +7891,57 @@ function messageRows(
   return question.message.split("\n").map((text) => ({ text, runs: sourceRuns(text) }));
 }
 
+function approvalContent(
+  view: ReplView,
+  approval: ReplSidekickApproval,
+  width: number,
+): DrawerContent {
+  const content: DrawerRow[] = [];
+  const line = (key: string, label: string) => {
+    content.push({ described: drawerLine(key, label, width, styleOf("metadata")) });
+  };
+  const control = (decision: "reveal" | "accept" | "withhold", label: string, finding?: number) => {
+    content.push({
+      described: row(
+        `drawer:reply-approval:${decision}${finding === undefined ? "" : `:${finding}`}`,
+        padControl(label, width),
+        {
+          select: "sidekick-approval",
+          approval: approval.key,
+          decision,
+          ...(finding === undefined ? {} : { finding }),
+        },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    });
+  };
+  for (let index = 0; index < approval.findingCount; index += 1) {
+    line(`drawer:reply-approval:rule:${index}`, "");
+    line(`drawer:reply-approval:excerpt:${index}`, "");
+    if (!approval.accepting) {
+      const verb = approval.revealed === index ? "hide" : "reveal";
+      const suffix = approval.findingCount === 1 ? "" : ` ${index + 1}`;
+      control("reveal", `[${verb} match${suffix}]`, index);
+    }
+  }
+  line("drawer:reply-approval:disclosure", "Accept saves the original and permits ACP Output");
+  line("drawer:reply-approval:feedback", "and automatic feedback.");
+  if (approval.accepting) {
+    line("drawer:reply-approval:saving", "Saving the accepted reply…");
+  } else {
+    control("withhold", "[withhold reply]");
+    control("accept", "[accept reply]");
+  }
+  return {
+    title: `Reply withheld · turn ${approval.turn}`,
+    titleStyle: styleOf("question-title"),
+    dismissing: undefined,
+    entering: false,
+    content,
+  };
+}
+
 function drawerContent(
   view: ReplView,
   width: number,
@@ -7799,6 +7954,10 @@ function drawerContent(
     return catalogContent(view, width);
   }
   if (open === undefined) {
+    const approval = presentedApproval(view);
+    if (approval !== undefined) {
+      return approvalContent(view, approval, width);
+    }
     // No route drawer, so this is one of the Sidekick's own two drawers if
     // anything is. Configure first: opening it hides the question form's
     // presentation, so both are never open at once.

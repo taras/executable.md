@@ -144,6 +144,7 @@ import type {
   ReplPresentationContext,
   ReplPresented,
   ReplSidekickChatRow,
+  ReplSidekickApproval,
   ReplSidekickQuestion,
   ReplSidekickReading,
   ReplSidekickSetup,
@@ -1451,6 +1452,9 @@ function* drive(
      */
     const sidekick: SidekickOwner = yield* useSidekickOwner({
       follow: () => follow,
+      // Only a foreground terminal has a person who may decide about a reply
+      // secret detection withheld. A headless root keeps every one withheld.
+      reviewsReplies: options.headless === undefined,
       assembly: options.profile.sidekickAssembly,
       projectCwd: options.profile.projectCwd,
       workspace,
@@ -1815,7 +1819,7 @@ function* drive(
      * a route is being validated at has to be the reading that route names.
      */
     function sidekickReading(held: ReplState): ReplSidekickReading {
-      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick);
+      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick, approvalNow(sidekick));
     }
 
     /**
@@ -3150,6 +3154,42 @@ function setupOf(
   return Object.freeze({ phase: found.phase, failure: found.failure });
 }
 
+/** The withheld reply waiting on this screen's person, as the screen draws it. */
+function approvalNow(owner: SidekickOwner): ReplSidekickApproval | undefined {
+  const asked = owner.approval;
+  if (asked === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    key: asked.key,
+    turn: asked.turn,
+    findingCount: asked.findings.length,
+    accepting: asked.accepting,
+    revealed: asked.revealed,
+    finding(index: number): readonly [string, string] | undefined {
+      if (owner.approval !== asked) {
+        return undefined;
+      }
+      const finding = asked.findings[index];
+      if (finding === undefined) {
+        return undefined;
+      }
+      const { ruleId, messageId, line, column, excerpt } = finding;
+      const revealed = asked.revealed === index;
+      const shown = revealed ? (asked.reveal(index) ?? excerpt.masked) : excerpt.masked;
+      return [
+        approvalText(`${messageId} (${ruleId}) · line ${line}, column ${column}`),
+        approvalText(revealed ? shown : excerpt.before + shown + excerpt.after),
+      ];
+    },
+  });
+}
+
+function approvalText(text: string): string {
+  // deno-lint-ignore no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "�");
+}
+
 /**
  * What the Sidekick says, as detached rows the screen can draw.
  *
@@ -3176,6 +3216,8 @@ function sidekickReadingOf(
    * names a chat this history actually holds.
    */
   selected: string | undefined,
+  /** The withheld reply waiting on this screen's person, as the screen names it. */
+  approval?: ReplSidekickApproval,
 ): ReplSidekickReading {
   const read = owner.reading;
   if (!read.ok) {
@@ -3249,6 +3291,8 @@ function sidekickReadingOf(
     agent: read.value.conversations.find((one) => one.id === reading)?.agent ?? owner.agent,
     refusal: undefined,
     question,
+    // Only for the current chat, which is the only one anybody is asked about.
+    ...(approval === undefined || reading !== active ? {} : { approval }),
     // What was asked for, read back out of the history rather than out of
     // anything this process remembered.
     requested: requestedBy(read.value, active),
@@ -3381,7 +3425,9 @@ export function sidekickTurnRows(
             ? "asking"
             : live.phase === "generating"
               ? "generating"
-              : "evaluating the reply",
+              : live.phase === "reviewing"
+                ? "awaiting reply approval"
+                : "evaluating the reply",
         running: true,
         failed: false,
         sessionKey: live.sessionKey,
@@ -4024,6 +4070,19 @@ function* perform(
     case "start-new-chat":
       chat.startNewChat(intent.conversation);
       return {};
+    case "decide-sidekick-reply": {
+      // The question this key names, and only while it is still the one
+      // waiting: a decision drawn for an earlier question decides nothing.
+      const asked = chat.owner.approval;
+      if (asked === undefined || asked.key !== intent.approval) {
+        return { refusal: "that withheld reply is no longer waiting for a decision." };
+      }
+      const done =
+        intent.decision === "reveal"
+          ? intent.finding !== undefined && asked.toggleReveal(intent.finding)
+          : asked.decide(intent.decision);
+      return done ? {} : { refusal: "that withheld reply is no longer waiting for a decision." };
+    }
     case "recovery-reference":
       chat.reference(intent.accept, intent.reference);
       return {};
@@ -4203,7 +4262,7 @@ function* perform(
       // The schema decides, through the same compiled validator the request
       // carries, and the existing canonical operation writes the answer. This
       // reads no form and judges no value.
-      const outcome = asked.submit(intent.values);
+      const outcome = asked.submit(intent.values, intent.selected);
       return outcome.kind === "answered"
         ? { askingAnswered: true }
         : { askingMessages: reported(outcome) };
@@ -4710,6 +4769,26 @@ export function* commitReplFrame(
   const cells = new Map<string, string>();
   for (const cell of tree.frame().cells) {
     cells.set(cell.node, cell.cell);
+  }
+  const approval = view.live.sidekick?.approval;
+  if (approval !== undefined && presentedDrawer(view)?.kind === "reply-approval") {
+    const width = prepared.value.context.widths?.drawer ?? 0;
+    for (let index = 0; index < approval.findingCount; index += 1) {
+      const rule = nodeByKey.get(`drawer:reply-approval:rule:${index}`);
+      const excerpt = nodeByKey.get(`drawer:reply-approval:excerpt:${index}`);
+      if (rule === undefined && excerpt === undefined) {
+        continue;
+      }
+      const finding = approval.finding(index);
+      if (finding !== undefined) {
+        if (rule !== undefined) {
+          cells.set(rule, finding[0].padEnd(width, " "));
+        }
+        if (excerpt !== undefined) {
+          cells.set(excerpt, finding[1].padEnd(width, " "));
+        }
+      }
+    }
   }
   // Read after the reconcile that settled it and handed on, never stored: the
   // tree owns focus, and decoration is the one thing that needs to know where it

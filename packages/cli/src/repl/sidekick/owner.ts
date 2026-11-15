@@ -106,19 +106,26 @@ import {
 } from "effection";
 import type { Operation, Result, Stream, Task } from "effection";
 import {
+  acceptedReplies,
   AGENT_PROMPT,
   AgentReplyWithheldError,
   GeneratedXmdRootError,
   parsePromptRecord,
   previewGeneratedXmdRoot,
   useAgentPromptPublisher,
+  useAgentReplyReview,
 } from "@executablemd/core/host";
 import type {
   AgentPromptHandle,
   AgentPromptPublisher,
+  AgentReplyDecision,
+  AgentReplyFinding,
+  AgentReplyHold,
+  FeedbackSlice,
   ExecutionInstallation,
   GeneratedXmdRootResult,
 } from "@executablemd/core/host";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { serializeError } from "@executablemd/durable-streams";
 import { useAgentConversation } from "@executablemd/core/host";
 import type { AgentConversation } from "@executablemd/core/host";
@@ -239,6 +246,7 @@ type Sending =
         readonly response: string;
         readonly text: string;
         readonly images?: readonly PromptImage[];
+        readonly carry?: Carry;
       };
     }
   | {
@@ -246,7 +254,19 @@ type Sending =
       readonly of: string;
       readonly text: string;
       readonly images?: readonly PromptImage[];
+      readonly carry?: Carry;
     };
+
+/**
+ * Where a feedback text carries an accepted reply's selected answer.
+ *
+ * The hold the person accepted through, and the slices of `text` this owner
+ * itself placed that answer in. Core decides whether it carries anything.
+ */
+interface Carry {
+  readonly hold: AgentReplyHold;
+  readonly slices: readonly FeedbackSlice[];
+}
 
 /** One turn's own outcome, and what the turn after it owes. */
 interface Responded {
@@ -276,6 +296,8 @@ interface Responded {
   readonly next: string | undefined;
   readonly images?: readonly PromptImage[];
   readonly round?: string;
+  /** Where `next` carries an accepted reply's selected answer, when it does. */
+  readonly carry?: Carry;
 }
 
 /**
@@ -297,6 +319,8 @@ interface Watching {
   begun: boolean;
   /** Whether its provider turn answered and its root is being run. */
   evaluating: boolean;
+  /** Whether its withheld reply is waiting for the person's decision. */
+  reviewing: boolean;
   /** The key this turn's own publication association named, or none. */
   sessionKey: string | undefined;
   shown: string;
@@ -304,6 +328,42 @@ interface Watching {
   revoked: boolean;
   /** The saved turn this became, once this request's records say so. */
   turn: number | null;
+}
+
+/**
+ * One withheld reply the person in front of this REPL is being asked about.
+ *
+ * Process-local, and nothing in it is a serializable reading: the findings'
+ * excerpts and a revealed match are drawn by the foreground renderer straight
+ * from here. Its identity is the object itself, so a decision addressed to an
+ * earlier question reaches nothing.
+ */
+export interface SidekickApproval {
+  readonly key: string;
+  readonly conversation: string;
+  readonly response: string;
+  /** The saved turn the withheld completion is. */
+  readonly turn: number;
+  readonly findings: readonly AgentReplyFinding[];
+  /** The matched text of one finding, while this question is waiting. */
+  reveal(finding: number): string | undefined;
+  /**
+   * Decide this question, once.
+   *
+   * Answers false for a question that is no longer waiting or was already
+   * decided, and changes nothing then.
+   */
+  decide(decision: AgentReplyDecision): boolean;
+  /** Whether Accept was chosen and the acceptance is being saved. */
+  readonly accepting: boolean;
+  /**
+   * Whether the person asked to see the matched text on this screen.
+   *
+   * A local presentation fact: it decides nothing and is never written.
+   */
+  readonly revealed: number | undefined;
+  /** Show or hide the matched text, while the question is waiting. */
+  toggleReveal(index: number): boolean;
 }
 
 /** Which response a control belongs to, as the history addresses it. */
@@ -413,10 +473,13 @@ export interface SidekickLiveTurn {
    *
    * `pending` is a request assembled and not yet begun canonically, `generating`
    * is a turn the canonical boundary began, and `evaluating` is a provider turn
-   * that answered and whose root is being run. None of them names a saved
-   * record: progress and recording are separate facts.
+   * that answered and whose root is being run. `reviewing` is a completed
+   * turn whose reply secret detection withheld, waiting for the person in
+   * front of this REPL to decide about it: its withheld completion is already
+   * saved, and the reply itself is not part of this reading. None of them
+   * names a saved record: progress and recording are separate facts.
    */
-  readonly phase: "pending" | "generating" | "evaluating";
+  readonly phase: "pending" | "generating" | "reviewing" | "evaluating";
   /**
    * The provider conversation an exact publication association named, or none.
    *
@@ -436,6 +499,15 @@ export interface SidekickLiveTurn {
 /** What the owner needs, and nothing it could reach the rest of the root with. */
 export interface SidekickOwnerInput {
   readonly projectCwd?: string;
+  /**
+   * Whether a person is in front of this owner who can decide about a reply
+   * secret detection withheld.
+   *
+   * Only the foreground terminal can. A detached or headless root, an attached
+   * client and a replay have no such authority, so without this every
+   * withheld reply simply stays withheld.
+   */
+  readonly reviewsReplies?: boolean;
   readonly test?: ReplTesting;
   follow?(): boolean;
   readonly workspace?: string;
@@ -543,6 +615,13 @@ export interface SidekickOwner {
    * was. Whoever draws them reads two handles for that reason.
    */
   readonly questions: ReplElicitations;
+  /**
+   * The withheld reply waiting for the person's decision, where one is.
+   *
+   * Live and local: it is never part of {@link SidekickOwner.reading}, never
+   * written anywhere, and gone the moment its turn stops waiting.
+   */
+  readonly approval: SidekickApproval | undefined;
   /**
    * What this history says, as it stands.
    *
@@ -909,6 +988,23 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     let preparingInput:
       | { readonly at: ResponseAt; prepare(text: string): Operation<void> }
       | undefined;
+    /**
+     * The request whose withheld reply may be reviewed, and how its delivery
+     * is settled first.
+     *
+     * Registered beside `preparingInput`, for the same request slot, and asked
+     * only by the review of the turn that slot's `begin()` handle names.
+     */
+    let reviewingInput:
+      | {
+          readonly at: ResponseAt;
+          settle(): Operation<number | undefined>;
+          accepted(hold: AgentReplyHold): void;
+        }
+      | undefined;
+    /** The question waiting on the person, where one is. */
+    let approval: SidekickApproval | undefined;
+    let approvalOrder = 0;
     /** Which response each begun turn belongs to, by the handle it began with. */
     const begun = new WeakMap<object, ResponseAt>();
 
@@ -929,7 +1025,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         asked: watching.asked,
         origin: watching.origin,
         title: watching.title,
-        phase: watching.evaluating ? "evaluating" : watching.begun ? "generating" : "pending",
+        phase: watching.evaluating
+          ? "evaluating"
+          : watching.reviewing
+            ? "reviewing"
+            : watching.begun
+              ? "generating"
+              : "pending",
         sessionKey: watching.sessionKey,
         turn: watching.turn,
         output: watching.shown,
@@ -1094,6 +1196,94 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     }
 
     /**
+     * This conversation's local reviewer for a reply secret detection withheld.
+     *
+     * Asked by Core from the turn's own task, after the withheld completion is
+     * saved. It answers only for the turn its own `begin()` handle names, and
+     * only with a person in front of it: anything else returns without a
+     * decision, which leaves the reply withheld. Before the person is asked, the
+     * delivery that completion establishes is settled — the receipt, the TODO
+     * batch, the live row — so a Stop, a close or a lost process while the
+     * question waits leaves exactly what a withheld turn always leaves.
+     */
+    function* reviewer(): Operation<void> {
+      yield* useAgentReplyReview({
+        *review(hold, decide): Operation<void> {
+          const slot =
+            typeof hold.begun === "object" && hold.begun !== null
+              ? begun.get(hold.begun)
+              : undefined;
+          const owed = reviewingInput;
+          if (
+            input.reviewsReplies !== true ||
+            slot === undefined ||
+            owed === undefined ||
+            owed.at !== slot ||
+            watching === undefined ||
+            watching.at !== slot
+          ) {
+            return;
+          }
+          reviewingInput = undefined;
+          const turn = yield* owed.settle();
+          if (turn === undefined) {
+            return;
+          }
+          const decided = withResolvers<AgentReplyDecision>();
+          let waiting = true;
+          let accepting = false;
+          let revealed: number | undefined;
+          const asked: SidekickApproval = Object.freeze({
+            key: `sidekick-approval:${++approvalOrder}`,
+            conversation: slot.conversation,
+            response: slot.response,
+            turn,
+            findings: hold.findings,
+            reveal: (finding: number) => (waiting ? hold.reveal(finding) : undefined),
+            decide(decision: AgentReplyDecision): boolean {
+              if (!waiting || approval !== asked) {
+                return false;
+              }
+              waiting = false;
+              accepting = decision === "accept";
+              decided.resolve(decision);
+              moved();
+              return true;
+            },
+            get accepting() {
+              return accepting;
+            },
+            get revealed() {
+              return waiting ? revealed : undefined;
+            },
+            toggleReveal(index: number): boolean {
+              if (!waiting || approval !== asked || hold.findings[index] === undefined) {
+                return false;
+              }
+              revealed = revealed === index ? undefined : index;
+              moved();
+              return true;
+            },
+          });
+          yield* ensure(() => {
+            waiting = false;
+            if (approval === asked) {
+              approval = undefined;
+              moved();
+            }
+          });
+          approval = asked;
+          moved();
+          const decision = yield* decided.operation;
+          if (decision === "accept") {
+            owed.accepted(hold);
+          }
+          yield* decide(decision);
+        },
+      });
+    }
+
+    /**
      * Re-read this history.
      *
      * From the writer rather than from the snapshot the storage was opened
@@ -1185,7 +1375,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           // installs. It goes inside the conversation's execution because that
           // is where its turns run: installed around `message()` instead, it
           // would be in a scope the saved conversation does not execute in.
-          installations: [privacy, ...installations, capturing, { install: () => watcher() }],
+          installations: [
+            privacy,
+            ...installations,
+            capturing,
+            { install: () => watcher() },
+            { install: () => reviewer() },
+          ],
         });
         ready.resolve(opened);
         if (!opened.ok) {
@@ -2400,6 +2596,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
                 response: settled.response,
                 text: responded.value.next,
                 images: responded.value.images,
+                ...(responded.value.carry === undefined ? {} : { carry: responded.value.carry }),
               },
             };
             continue;
@@ -2413,6 +2610,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           of: settled.response,
           text: responded.value.next,
           images: responded.value.images,
+          ...(responded.value.carry === undefined ? {} : { carry: responded.value.carry }),
         };
       }
     }
@@ -2471,11 +2669,18 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       let pairs = 0;
       let importFailure: Error | undefined;
       const imports = new Set<number>();
+      function* checkSidekickText(value: unknown): Operation<void> {
+        const cleared = yield* handle.checkSidekickText(JSON.stringify(value));
+        if (!cleared.ok) {
+          throw cleared.error;
+        }
+      }
       const journal: ControlJournal = {
         *began(occurrence, reserved): Operation<number> {
           pairs += 1;
           let order: number;
           try {
+            yield* checkSidekickText({ arguments: occurrence.arguments, source: reserved?.source });
             order = yield* written.began(occurrence, reserved);
           } catch (error) {
             if (occurrence.component === "REPL.ImportAsset") {
@@ -2490,6 +2695,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         },
         *settled(order, outcome, observed): Operation<void> {
           try {
+            yield* checkSidekickText({
+              outcome: outcome.ok ? undefined : failedOutcome(outcome.error),
+              observed,
+            });
             yield* written.settled(order, outcome, observed);
           } catch (error) {
             if (imports.has(order)) {
@@ -2572,6 +2781,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       };
 
       let request = sending.text;
+      let carryAt: number | undefined = sending.kind === "feedback" ? 0 : undefined;
       /**
        * Where this request's records begin, once its first record is written.
        *
@@ -2642,19 +2852,34 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           sending.options.recovery === undefined
             ? yield* unaccounted(paired, current.value, conversation)
             : undefined;
-        const recovered =
-          held === undefined
-            ? undefined
-            : recoveredWork(yield* paired.writer.readAll(), held, designated);
-        request = turnRequest({
+        let recovered: string | undefined;
+        if (held !== undefined) {
+          const records = yield* paired.writer.readAll();
+          const withheld = new Set<number>();
+          for (const outcome of designatedResults(records, held, [], designated)) {
+            if (!(yield* handle.checkSidekickText(outcome.text)).ok) {
+              withheld.add(outcome.order);
+            }
+          }
+          recovered = recoveredWork(records, held, designated, withheld);
+        }
+        const recoveryParts = [sending.options.recovery?.account, recovered].filter(
+          (part) => part !== undefined,
+        );
+        const composed = turnRequest({
           context,
           recovered:
-            [sending.options.recovery?.account, recovered, sending.finished?.text]
+            [...recoveryParts, sending.finished?.text]
               .filter((part) => part !== undefined)
               .join("\n\n") || undefined,
           draft: input.draft(),
           message: sending.text,
         });
+        request = composed.text;
+        if (sending.finished !== undefined && composed.recoveredAt !== undefined) {
+          carryAt =
+            composed.recoveredAt + recoveryParts.reduce((n, part) => n + part.length + 2, 0);
+        }
         const delivering =
           sending.finished?.response ?? (recovered === undefined ? undefined : held?.response);
         if (delivering !== undefined) {
@@ -2716,6 +2941,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         title: sending.kind === "message" ? sending.text : undefined,
         begun: false,
         evaluating: false,
+        reviewing: false,
         sessionKey: undefined,
         shown: "",
         incomplete: false,
@@ -2795,23 +3021,117 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           todo?.finishPrompt(false);
         }
       });
+      /**
+       * The withheld completion whose delivery was settled before its question,
+       * and the hold an acceptance went through — set only by this request's own
+       * review.
+       */
+      let reviewed: { turn: number; hold?: AgentReplyHold } | undefined;
+      const reviewing = {
+        at,
+        *settle(): Operation<number | undefined> {
+          const saved = yield* turnForRequest(paired, began, conversation);
+          if (saved?.withheld !== true) {
+            return undefined;
+          }
+          // What a withheld completion settles, settled now rather than after
+          // the decision: the TODO batch it carried was delivered, and so was
+          // whatever input it carried, under its own turn.
+          todo?.finishPrompt(true);
+          confirmed = true;
+          relinquish(asked);
+          if (deliveringInput !== undefined) {
+            yield* paired.writer.append({
+              kind: "feedback",
+              conversation,
+              response: deliveringInput,
+              turn: saved.turn,
+              text: request,
+            });
+          }
+          reviewed = { turn: saved.turn };
+          yield* refresh();
+          if (watching === live) {
+            // The saved withheld turn is this row now, and nothing of its reply
+            // is shown while the person decides.
+            live.turn = saved.turn;
+            live.shown = "";
+            live.reviewing = true;
+            moved();
+          }
+          return saved.turn;
+        },
+        accepted(hold: AgentReplyHold): void {
+          if (reviewed !== undefined) {
+            reviewed.hold = hold;
+          }
+        },
+      };
+      reviewingInput = reviewing;
+      yield* ensure(() => {
+        if (reviewingInput === reviewing) {
+          reviewingInput = undefined;
+        }
+      });
+      // Where this text carries an accepted reply's selected answer, said to
+      // Core before the turn is sent; Core decides whether it carries anything.
+      const carry = sending.kind === "feedback" ? sending.carry : sending.finished?.carry;
+      if (carry !== undefined && carryAt !== undefined) {
+        const base = carryAt;
+        carry.hold.carry(
+          request,
+          carry.slices.map((slice) => ({
+            ...slice,
+            start: base + slice.start,
+            end: base + slice.end,
+          })),
+        );
+      }
       const replied = yield* handle.prompt(
         request,
         desired(settings.value, conversation),
         sending.kind === "feedback" ? sending.images : sending.finished?.images,
+        deliveringInput !== undefined,
       );
       // A withheld reply is a completion the provider made, so the TODO batch
       // it carried was delivered — but only where Core said so with its own
       // refusal and this request's saved turn agrees. A withheld record beside
       // any other refusal proves nothing about this turn, and that turn's
       // batch stays pending for recovery like every other failure.
+      if (
+        reviewed !== undefined &&
+        !replied.ok &&
+        replied.error instanceof AgentReplyWithheldError
+      ) {
+        // Asked, and not accepted: the withheld completion whose delivery was
+        // settled before the question is this exchange's whole outcome. That is
+        // so whatever ended the asking — Withhold, a close, or an acceptance
+        // that could not be saved.
+        yield* refresh();
+        unwatch();
+        return Ok({
+          held: {
+            conversation,
+            turn: reviewed.turn,
+            response,
+            output: "",
+            hasOutput: false,
+            failure: undefined,
+          },
+          answered: false,
+          withheld: true,
+          next: undefined,
+        });
+      }
       const withheld =
         !replied.ok && replied.error instanceof AgentReplyWithheldError
           ? yield* turnForRequest(paired, began, conversation)
           : undefined;
       const completedWithheld = withheld?.withheld === true ? withheld : undefined;
-      todo?.finishPrompt(replied.ok || completedWithheld !== undefined);
-      confirmed = true;
+      if (!confirmed) {
+        todo?.finishPrompt(replied.ok || completedWithheld !== undefined);
+        confirmed = true;
+      }
       if (!replied.ok) {
         // No control runs: a partial, failed or cancelled response is source
         // nobody completed, and evaluating it would perform effects from a
@@ -2919,11 +3239,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // next is the evaluation — which is a different fact from the turn
         // having been saved and is reported as one.
         live.turn = actual;
+        live.reviewing = false;
         live.evaluating = true;
         moved();
       }
       const delivering = sending.kind === "feedback" ? sending.of : carried;
-      if (delivering !== undefined) {
+      // An accepted reply's delivery was settled before its question, under
+      // this same turn, so it is not claimed twice.
+      if (delivering !== undefined && reviewed === undefined) {
         // The turn accepted it, so now the claim can be made — and it names the
         // exact text, because a delivery is established by a completed turn
         // having been sent *this*.
@@ -2945,7 +3268,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // It also ends with the call. A question is only pending while the root
       // that asked it is suspended, so once this returns — answered, failed or
       // halted and joined — there is nothing left that could be filed.
-      const evaluated = yield* asking.answering(journal, () =>
+      const evaluated = yield* asking.answering(response, journal, reviewed?.hold, () =>
         // Named for the length of this one evaluation, and given up only once
         // the evaluation and everything it registered have joined — so the
         // controls that ran file their pairs under this response and a control
@@ -2953,11 +3276,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // table: what this root may write is the selection its execution
         // captured when the conversation opened.
         servingThrough(responding, () =>
-          handle.evaluateGeneratedXmdRoot({
-            id: response,
-            source: replied.value,
-            allow: [...ceiling.allow],
-          }),
+          handle.evaluateGeneratedXmdRoot(
+            { id: response, source: replied.value, allow: [...ceiling.allow] },
+            reviewed?.hold,
+          ),
         ),
       );
       if (contributedFailure !== undefined) {
@@ -2986,12 +3308,16 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // chat message nobody wrote, and it would show an agent's scratch work as
       // though it were an answer.
       const output = hasOutput ? (rendered?.output ?? "") : "";
+      const outcome = evaluated.ok ? { status: "ok" as const } : failedOutcome(evaluated.error);
+      if (outcome.status === "err") {
+        yield* checkSidekickText(outcome);
+      }
       yield* paired.writer.append({
         kind: "response",
         conversation,
         turn: actual,
         response,
-        outcome: evaluated.ok ? { status: "ok" } : failedOutcome(evaluated.error),
+        outcome,
         hasOutput,
         output,
       });
@@ -3007,7 +3333,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // act on: an ordinary failure is a correction the agent can make, and
       // sending it is how the agent gets to make it.
       const results = designatedResults(yield* paired.writer.readAll(), at, refused, designated);
-      let next = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
+      const sealed = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
+      let next = sealed?.text;
+      const acceptedHold = reviewed?.hold;
+      const carryNext: Carry | undefined =
+        acceptedHold !== undefined && sealed !== undefined && sealed.slices.length > 0
+          ? { hold: acceptedHold, slices: sealed.slices }
+          : undefined;
       if (submitted !== undefined) {
         const round = finishedRound(root, submitted);
         if (!round.ok) {
@@ -3028,6 +3360,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         ...(submitted === undefined ? {} : { round: submitted.entry }),
         next,
         ...(images.length === 0 ? {} : { images }),
+        ...(carryNext === undefined || next === undefined ? {} : { carry: carryNext }),
       });
     }
 
@@ -3054,6 +3387,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         return selection();
       },
       questions: asking.questions,
+      get approval(): SidekickApproval | undefined {
+        return approval;
+      },
       changes: changed,
       options,
       configure,
@@ -3266,30 +3602,44 @@ function* turnForRequest(
   if (held?.turn === undefined) {
     return undefined;
   }
-  // Its saved input and outcome, from the record that turn is saved in.
+  // Its saved input and outcome, from the record that turn is saved in — and,
+  // for a withheld turn, from the acceptance the shared reconciler joins to it.
+  const events: DurableEvent[] = [];
   for (const record of records) {
     if (record.kind !== "event" || record.conversation !== conversation) {
       continue;
     }
     const parsed = parseDurableEvent(record.event);
-    if (!parsed.ok || parsed.value.type !== "yield") {
+    if (parsed.ok) {
+      events.push(parsed.value);
+    }
+  }
+  const accepted = acceptedReplies(events);
+  if (!accepted.ok) {
+    throw accepted.error;
+  }
+  for (const event of events) {
+    if (event.type !== "yield") {
       continue;
     }
-    const description = parsed.value.description;
+    const description = event.description;
     if (description.type !== AGENT_PROMPT || turnOrder(description.name) !== held.turn) {
       continue;
     }
-    if (parsed.value.result.status !== "ok") {
+    if (event.result.status !== "ok") {
       continue;
     }
-    const saved = parsePromptRecord(parsed.value.result.value);
+    const saved = parsePromptRecord(event.result.value);
     if (saved !== undefined) {
-      return {
-        turn: held.turn,
-        status: saved.status,
-        text: saved.text,
-        withheld: saved.withheld === true,
-      };
+      const reply = saved.withheld === true ? accepted.value.get(description.name) : undefined;
+      return reply === undefined
+        ? {
+            turn: held.turn,
+            status: saved.status,
+            text: saved.text,
+            withheld: saved.withheld === true,
+          }
+        : { turn: held.turn, status: "completed", text: reply.text, withheld: false };
     }
   }
   return undefined;

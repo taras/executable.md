@@ -180,7 +180,14 @@ export { props as elicitProps, returns as elicitReturns } from "./src/components
  * the description is journal data, and a schema that merely looked plausible
  * would reach a form as one.
  */
-export { ELICITATION_SCHEMA_FIELD, readElicitationSchema } from "./src/elicit-journal.ts";
+export {
+  ELICITATION_SCHEMA_FIELD,
+  elicitationEffectName,
+  questionFingerprint,
+  readElicitationAnswer,
+  readElicitationSchema,
+} from "./src/elicit-journal.ts";
+export { retainsOptionalText } from "./src/secrets/policy.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 
@@ -306,7 +313,7 @@ export { GeneratedXmdError } from "./src/generated-xmd.ts";
  * selection its execution already captured, so a caller has nothing to say
  * about those. `GeneratedEffectClass` is here because that request names it.
  */
-export { GeneratedXmdRootError } from "./src/generated-xmd.ts";
+export { GeneratedXmdRootError, readGeneratedRootAdmission } from "./src/generated-xmd.ts";
 export type {
   GeneratedEffectClass,
   GeneratedXmdRequest,
@@ -392,6 +399,39 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
 export type { PromptRecord } from "./src/agent/journal.ts";
+
+/**
+ * A withheld reply a local person accepted, and the one rule that joins it to
+ * its turn.
+ *
+ * Readers of a held conversation's history — replay, a Sidekick's chat and
+ * its passive projections — read a withheld turn followed by its acceptance as
+ * that turn's successful reply. They read it through this reconciler rather
+ * than their own, so they agree on which acceptances count.
+ */
+export {
+  acceptedReplies,
+  AGENT_PROMPT_REPLY,
+  parsePromptReply,
+} from "./src/agent/reply-acceptance.ts";
+export type { PromptReplyRecord } from "./src/agent/reply-acceptance.ts";
+
+/**
+ * The trusted foreground question about a withheld reply.
+ *
+ * Installed by a host with a person in front of it, beside its prompt
+ * publisher, as one of a held conversation's installations. A host that
+ * installs none keeps every withheld reply withheld. See
+ * `src/agent/reply-review.ts`.
+ */
+export { useAgentReplyReview } from "./src/agent/reply-review.ts";
+export type {
+  AgentReplyDecision,
+  AgentReplyFinding,
+  AgentReplyHold,
+  AgentReplyReviewer,
+} from "./src/agent/reply-review.ts";
+export type { FeedbackSlice } from "./src/secrets/reply-grant.ts";
 
 /**
  * `<Answers>` as detached configuration, for the host that installs it.

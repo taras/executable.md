@@ -13,6 +13,7 @@ conformance belong to [the language specification](executable-mdx-spec.md).
 | --- | --- |
 | Mixed durable expansion and intentionally non-durable Operations | [DEC-015](#dec-015-generated-continuation--root-basis-membership-and-an-operation-evaluator) partially supersedes [DEC-001](#dec-001-workflowt-vs-operationt--the-type-boundary) and [DEC-002](#dec-002-expansion-generators-are-workflows); [DEC-034](../packages/durable-streams/specs/DECISIONS.md#dec-034-ephemeral--explicit-escape-hatch-for-non-durable-operations-in-workflows) still governs genuinely non-durable work. Current [generated admission](../architecture.md#agent-permissions-and-generated-xmd) preserves both rules. |
 | Plan information-request delivery | [DEC-017](#dec-017-plan-information-requests--delivery-history) records sequencing; [Plan architecture](../architecture.md#plan-information-requests) and [the Plan interface](plan-command-spec.md) own current behavior. |
+| Foreground approval of a withheld Sidekick reply | [DEC-018](#dec-018-foreground-sidekick-reply-approval); [language](executable-mdx-spec.md#accepted-sidekick-replies), [ACP](acp-client-spec.md#journaling-and-replay) and [REPL](repl-spec.md#review-a-withheld-sidekick-reply) own current behavior. |
 | Main health and verification ownership | [DEC-013](#dec-013-a-red-main-is-reported-as-an-issue-and-gates-pull-requests-no-merge-queue), [DEC-014](#dec-014-composability-proves-ownership-not-correctness-a-second-time), and [contribution verification](../AGENTS.md#verification). |
 | Withdrawn terminal-grid surface | [DEC-016](#dec-016-withdraw-the-unimplemented-terminal-grid-surface); [installed structural syntax](../architecture.md#the-installed-structural-syntax-boundary) remains the extension boundary. |
 | Host-installed Codex CLI for the carried adapter | [Decision record 004](decisions/004-host-installed-codex-cli.md); [ACP Availability](acp-client-spec.md#availability), [Adapter snapshots](acp-client-spec.md#adapter-snapshots) and [the maintained Codex adapter](release-process-spec.md#maintained-codex-adapter) own current behavior. |
@@ -885,3 +886,21 @@ selection and user-approval escalation policy. Existing host containment remains
 in force with its stable-namespace limitation; #227 owns concurrent
 path-replacement hardening. Deferring those decisions does not defer File or
 Glob reads. #679 remains separate evaluation work after product delivery.
+
+## DEC-018: Foreground Sidekick reply approval
+
+The Product Owner approved a one-reply exception in Issue 1311. Accept keeps
+the exact completed reply and allows its ordinary ACP Output and automatic
+feedback. The foreground drawer explains those effects before acceptance.
+
+The first acknowledged Prompt is a completed withholding. It settles earlier
+delivery while the local decision is pending and remains the outcome on
+dismissal, Stop or process loss before acceptance. A separate acknowledgement
+saves the accepted reply in the same turn. The live exception follows exact
+producing occurrences into selected Output and feedback. Retained history
+restores the saved turn without recreating authority for a new send.
+
+Canonical Elicit publication establishes the control answer. The accepted
+ordering amendment uses a reference in the earlier intent and derives the
+answer from the same journal's acknowledged prefix. This gives live, Stop
+and cold recovery readers the same boundary.

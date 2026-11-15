@@ -44,10 +44,12 @@ import {
   serializeDurableEvent,
 } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
-import { SecretDetectedError } from "./findings.ts";
+import { SecretDetectedError, SecretScannerError } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
-import { createSecretScanner } from "./scanner.ts";
-import type { SecretScanner } from "./scanner.ts";
+import { createSecretScanner, locateSecrets } from "./scanner.ts";
+import type { SecretScanner, SecretSpan } from "./scanner.ts";
+import { boundariesOf } from "./reply-grant.ts";
+import type { ApprovedMatch, ReplyCopyGrant } from "./reply-grant.ts";
 import type { JsonObject } from "../types.ts";
 
 /**
@@ -92,11 +94,24 @@ class EnabledDetection extends ExecutionDetection {
   readonly enabled = true;
   readonly scanner: SecretScanner;
   readonly inputs: InputValues | undefined;
+  /**
+   * The live allowances for an accepted reply's exact copies.
+   *
+   * The same object the journal gate closes over, so a grant added here is
+   * one this execution's own gate consults — and nothing a document binds
+   * under the policy's name can add to or read from it.
+   */
+  readonly grants: Set<ReplyCopyGrant>;
 
-  constructor(scanner: SecretScanner, inputs: InputValues | undefined) {
+  constructor(
+    scanner: SecretScanner,
+    inputs: InputValues | undefined,
+    grants: Set<ReplyCopyGrant>,
+  ) {
     super();
     this.scanner = scanner;
     this.inputs = inputs;
+    this.grants = grants;
     Object.freeze(this);
   }
 }
@@ -398,15 +413,28 @@ export function* useSecretDetection(
     };
   if (requested === false) {
     yield* CurrentDetection.set(new DisabledDetection(inputs));
-    return { journal: stream, disclose: projectedDisclosure(discloseFreely) };
+    return {
+      journal: stream,
+      disclose: projectedDisclosure(discloseFreely),
+      checkReplyText: replyTextCheck(undefined, inputs),
+      allowReplyCopies: () => () => {},
+    };
   }
 
   const create = (yield* CurrentScannerFactory.get()) ?? createSecretScanner;
   const scanner = create();
-  yield* CurrentDetection.set(new EnabledDetection(scanner, inputs));
+  const grants = new Set<ReplyCopyGrant>();
+  yield* CurrentDetection.set(new EnabledDetection(scanner, inputs, grants));
   return {
-    journal: guardWithSecretDetection(stream, scanner),
+    journal: guardWithSecretDetection(stream, scanner, grants),
     disclose: projectedDisclosure(discloseThrough(scanner)),
+    checkReplyText: replyTextCheck(scanner, inputs),
+    allowReplyCopies(grant) {
+      grants.add(grant);
+      return () => {
+        grants.delete(grant);
+      };
+    },
   };
 }
 
@@ -422,6 +450,61 @@ export function* useSecretDetection(
 export interface SecretDetection {
   readonly journal: DurableStream;
   readonly disclose: SecretDisclosure;
+  readonly checkReplyText: ReplyTextCheck;
+  allowReplyCopies(grant: ReplyCopyGrant): () => void;
+}
+
+export type ReplyTextCheck = (text: string, copies: readonly ApprovedMatch[]) => Operation<void>;
+
+export function* captureReplyTextCheck(): Operation<ReplyTextCheck> {
+  const detection = yield* currentDetection();
+  return replyTextCheck(
+    detection instanceof EnabledDetection ? detection.scanner : undefined,
+    detection.inputs,
+  );
+}
+
+function replyTextCheck(
+  scanner: SecretScanner | undefined,
+  inputs: InputValues | undefined,
+): ReplyTextCheck {
+  return function* (text, copies) {
+    if (inputs !== undefined) {
+      const projected = inputs.display(text);
+      if (!projected.ok || projected.value !== text || inputs.contains(text)) {
+        throw new SecretScannerError("protected input in generated output");
+      }
+    }
+    if (scanner === undefined) {
+      return;
+    }
+    const serialized = JSON.stringify(text);
+    const findings = yield* scanner.scan(serialized);
+    if (findings.length === 0) {
+      return;
+    }
+    const spans = copies.length === 0 ? undefined : yield* locateSecrets(scanner, serialized);
+    const offsets = boundariesOf(text);
+    if (
+      spans === undefined ||
+      spans.length !== findings.length ||
+      offsets === undefined ||
+      !spans.every((span) => {
+        const start = offsets.get(span.start - 1);
+        const end = offsets.get(span.end - 1);
+        return copies.some(
+          (copy) =>
+            copy.start === start &&
+            copy.end === end &&
+            copy.ruleId === span.ruleId &&
+            copy.messageId === span.messageId &&
+            text.slice(copy.start, copy.end) === copy.bytes,
+        );
+      })
+    ) {
+      throw new SecretDetectedError(findings);
+    }
+  };
 }
 
 /**
@@ -473,14 +556,118 @@ function discloseThrough(scanner: SecretScanner): SecretDisclosure {
  * filtered run still publishes into the journal its provider selected. An
  * ordinary guard elsewhere produces an unproven wrapper.
  */
-function guardWithSecretDetection(stream: DurableStream, scanner: SecretScanner): DurableStream {
+function guardWithSecretDetection(
+  stream: DurableStream,
+  scanner: SecretScanner,
+  grants: ReadonlySet<ReplyCopyGrant>,
+): DurableStream {
   const guarded = guardDurableStream(stream, function* (event) {
     const serialized = serializeDurableEvent(event);
     const findings = yield* scanner.scan(serialized);
 
-    if (findings.length > 0) {
+    if (findings.length > 0 && !(yield* granted(event, serialized, findings.length))) {
       throw new SecretDetectedError(findings);
     }
   });
-  return preserveJournalProvenance(stream, guarded);
+  return preserveJournalProvenance(stream, {
+    readAll: () => guarded.readAll(),
+    *append(event) {
+      yield* guarded.append(event);
+      for (const grant of grants) {
+        grant.published?.(event);
+      }
+    },
+  });
+
+  /**
+   * Whether one live grant accounts for every finding in this event.
+   *
+   * Asked only when there are findings and a grant is live. The spans are the
+   * same detector's over the same serialized text, and must be as many as the
+   * findings: a grant judges every match, never a subset.
+   */
+  function* granted(event: DurableEvent, serialized: string, count: number): Operation<boolean> {
+    const claiming = [...grants].find((grant) => grant.claims(event));
+    if (claiming === undefined) {
+      return false;
+    }
+    const spans = yield* locateSecrets(scanner, serialized);
+    if (spans === undefined || spans.length !== count) {
+      return false;
+    }
+    return claiming.admits(event, serialized, spans);
+  }
+}
+
+/**
+ * Add one allowance for an accepted reply's exact copies to this execution's
+ * own gate, and answer how to retire it.
+ *
+ * Core-private: only the held conversation that accepted the reply adds one,
+ * from inside the execution whose gate it changes. Outside an execution, or
+ * where detection is off, nothing is added — off already admits everything,
+ * and a missing policy admits nothing.
+ */
+export function* grantReplyCopies(grant: ReplyCopyGrant): Operation<() => void> {
+  const detection = yield* currentDetection();
+  if (!(detection instanceof EnabledDetection)) {
+    return () => {};
+  }
+  detection.grants.add(grant);
+  return () => {
+    detection.grants.delete(grant);
+  };
+}
+
+/**
+ * Where this execution's scanner finds credentials in one completed reply, in
+ * the reply's own coordinates — or nothing when it cannot say exactly.
+ *
+ * Scanned the way the journal will hold it, as a JSON string, so a span is a
+ * span of what the gate refused. A reply that holds a protected input, a
+ * scanner this module did not build, a range that falls inside an escape, and
+ * a scanner that fails all answer nothing: the reply stays withheld and is
+ * never offered for approval.
+ */
+export function* locateReplySecrets(text: string): Operation<readonly SecretSpan[] | undefined> {
+  let detection: ExecutionDetection;
+  try {
+    detection = yield* currentDetection();
+  } catch {
+    return undefined;
+  }
+  if (!(detection instanceof EnabledDetection)) {
+    return undefined;
+  }
+  const inputs = detection.inputs;
+  if (inputs !== undefined) {
+    const shown = inputs.display(text);
+    if (inputs.contains(text) || !shown.ok || shown.value !== text) {
+      return undefined;
+    }
+  }
+  let spans: SecretSpan[] | undefined;
+  try {
+    spans = yield* locateSecrets(detection.scanner, JSON.stringify(text));
+  } catch {
+    return undefined;
+  }
+  if (spans === undefined || spans.length === 0) {
+    return undefined;
+  }
+  const offsets = boundariesOf(text);
+  if (offsets === undefined) {
+    return undefined;
+  }
+  const mapped: SecretSpan[] = [];
+  for (const span of spans) {
+    // One past the literal's opening quote is the value's first unit.
+    const start = offsets.get(span.start - 1);
+    const end = offsets.get(span.end - 1);
+    if (start === undefined || end === undefined || end <= start) {
+      return undefined;
+    }
+    mapped.push(Object.freeze({ ...span, start, end }));
+  }
+  return Object.freeze(mapped);
 }
