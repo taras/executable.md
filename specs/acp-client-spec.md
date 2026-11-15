@@ -1121,12 +1121,16 @@ retained without that reply. Before the record is appended, the execution's own
 scanner reads the reply as the record serializes it; a finding keeps the
 completed record — the delivered input, session and native identity,
 configuration, permissions and usage — with empty `text` and `withheld: true`.
-The call answers a fixed refusal naming no rule, position or fingerprint, and
-the conversation stays usable: the next turn continues the same native
-conversation, and a reopening replays this one from its record. Everything else
-still reaches the journal's own guard, which refuses the append as before: a
-scanner that cannot answer, a policy that is not the execution's, a failed or
-cancelled turn's partial text and a credential anywhere else in the record. A
+The call answers a fixed `AgentReplyWithheldError`, exported from the host
+surface and naming no rule, position or fingerprint; it is the only answer that
+identifies a withheld completion, so a host acts on it rather than on finding a
+withheld record. The conversation stays usable: the next turn continues the same
+native conversation, and a reopening replays this one from its record.
+Everything else still reaches the journal's own guard, which refuses the append
+as before: a scanner that cannot answer, a policy that is not the execution's, a
+failed or cancelled turn's partial text, a credential anywhere else in the
+record, and a turn whose record names a native conversation other than the one
+the history established. A
 document's `<Prompt>` never withholds. A `withheld` that is not `true`, or that
 accompanies a status other than `completed` or nonempty text, does not read
 back.

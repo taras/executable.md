@@ -4090,9 +4090,14 @@ next move is the person's. A turn the provider did not finish ends it too,
 because a turn that produced nothing is not a reply to correct. A completed
 turn whose reply secret detection withheld ends it without pausing: its record
 establishes that the turn received what it was sent, so the feedback it carried
-is delivered, and nothing from the reply was saved, shown or evaluated. The chat
-shows that saved turn with this account, and the next message from the composer
-continues the same native conversation. There is no
+and the TODO changes the turn selected are delivered. Nothing from the reply is
+saved or evaluated. A live preview may have shown a prefix the disclosure policy
+cleared before the credential arrived; the finding withdraws that preview, as
+the live preview rule under [Who owns what](#who-owns-what) states, and the chat
+then shows the saved turn with this account. The next message from the composer continues the same native
+conversation. A turn that names a native conversation other than the one this
+chat established is not withheld: it keeps the refusal any other credential in
+a record receives, records no completion and delivers nothing. There is no
 limit on how many turns one message may take: each one costs a provider turn, a
 response that asks for nothing ends it, and a provider failure pauses.
 

@@ -1445,6 +1445,47 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
       expect(JSON.stringify(events).includes('"withheld"')).toBe(false);
     });
   }
+
+  it("CW4: a flagged reply from another native conversation is not kept as this one's", function* () {
+    const stream = new InMemoryStream();
+    const opened = yield* withConversation(
+      stream,
+      stub(fresh(), { asserts: () => "native-1" }),
+      function* (chat) {
+        return yield* chat.prompt("first");
+      },
+    );
+    expect(opened.ok && opened.value.ok).toBe(true);
+
+    // Set up against the established conversation, then reported, with a
+    // flagged reply, as having run in another one.
+    const late = fresh();
+    const answered = yield* scoped(function* () {
+      yield* useScanner("flag");
+      return yield* withConversation(
+        stream,
+        stub(late, {
+          assertsAtSetup: "native-1",
+          asserts: () => "native-late",
+          respond: () => ({ deltas: [`<Output>${marker}</Output>`] }),
+        }),
+        function* (chat) {
+          return yield* chat.prompt("second");
+        },
+      );
+    });
+    expect(late.prompts.map((call) => call.content)).toEqual(["second"]);
+    const second = answered.ok ? answered.value : undefined;
+    expect(second?.ok).toBe(false);
+    expect(second !== undefined && !second.ok && second.error.name).not.toBe(
+      "AgentReplyWithheldError",
+    );
+    const events = yield* stream.readAll();
+    expect(JSON.stringify(events).includes(marker)).toBe(false);
+    expect(JSON.stringify(events).includes('"withheld"')).toBe(false);
+    expect(JSON.stringify(events).includes("native-late")).toBe(false);
+    expect(turnNames(events)).toEqual(["turn:1"]);
+  });
 });
 
 describe("Tier CV — a conversation is an execution the host keeps open", () => {

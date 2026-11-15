@@ -314,7 +314,11 @@ export type {
 } from "./src/generated-xmd.ts";
 export type { HostExecution } from "./src/execute.ts";
 export { HostExecutionError } from "./src/generated-root-owner.ts";
-export { AgentConversationError, useAgentConversation } from "./src/agent/conversation.ts";
+export {
+  AgentConversationError,
+  AgentReplyWithheldError,
+  useAgentConversation,
+} from "./src/agent/conversation.ts";
 export type { AgentConversation, AgentConversationRequest } from "./src/agent/conversation.ts";
 
 /**
