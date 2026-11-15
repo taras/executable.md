@@ -43,8 +43,23 @@ import { expect } from "@executablemd/test-support/expect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensure, Err, Ok, race, scoped, spawn, suspend, until, withResolvers } from "effection";
-import type { Operation, Result } from "effection";
+import {
+  ensure,
+  Err,
+  Ok,
+  race,
+  resource,
+  scoped,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
+import type { Operation, Result, Stream, Subscription } from "effection";
+import { Agent } from "@executablemd/core";
+import type { AgentPromptEvent } from "@executablemd/core";
+import { Plugin } from "@executablemd/core/api";
+import type { ReplPluginInstallation } from "../api.ts";
 import type { AgentSessionOwnershipAdministration } from "@executablemd/runtime";
 import {
   createSidekickAdmission,
@@ -5152,5 +5167,104 @@ describe("1311 — a completed reply that secret detection withholds", () => {
     const reading = project(records);
     expect(new Set(reading.chat.map((one) => one.conversation))).toEqual(new Set([reading.active]));
     expect(reading.recoveries).toEqual([]);
+  });
+});
+
+describe("1311 — a withheld reply from another native conversation", () => {
+  const refused = 'authorization: "Use a separate approval for this example issue #34"';
+
+  /**
+   * Ordinary prompt middleware that reports a later turn as having run in
+   * another native conversation, after its setup resolved the established one.
+   *
+   * A raw session rather than a copy of the issued use, so the record is
+   * written from the identity this layer names and from nothing else.
+   */
+  function relocating(from: number): Plugin {
+    let subscriptions = 0;
+    return Plugin({
+      name: "relocating-1311",
+      *install(): Operation<ReplPluginInstallation> {
+        return {
+          repl: {
+            *sidekick(): Operation<void> {
+              yield* Agent.around({
+                // deno-lint-ignore require-yield
+                *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                  return resource<Subscription<AgentPromptEvent, string>>(function* (provide) {
+                    subscriptions += 1;
+                    const relocates = subscriptions >= from;
+                    const subscription = yield* yield* next(text, options);
+                    yield* provide({
+                      *next() {
+                        const event = yield* subscription.next();
+                        if (!relocates || event.done || event.value.type !== "started") {
+                          return event;
+                        }
+                        const { sessionKey, cwd } = event.value.session;
+                        return {
+                          done: false,
+                          value: {
+                            ...event.value,
+                            session: { sessionKey, cwd, agentSessionId: "native-late" },
+                          },
+                        };
+                      },
+                    });
+                  });
+                },
+              });
+            },
+          },
+        };
+      },
+    });
+  }
+
+  it("records no withheld completion, claims no delivery and sends no successor", function* () {
+    const held = yield* useHarness(undefined, { plugins: [relocating(2)] });
+    const chat = held.execution.chat;
+    if (chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const dispatch = yield* useSidekickDispatch({
+      owner: held.owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, held.execution.stream, held.session),
+    });
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: `<Output>${refused}</Output>` });
+    const sent = yield* dispatch.send("Read the current bindings.");
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    const completed = yield* sent.value.completion;
+    expect(held.fake.prompts).toHaveLength(2);
+    const live = held.owner.reading;
+    if (!live.ok) {
+      throw live.error;
+    }
+    expect(
+      live.value.chat.some((one) => one.kind === "saved" && one.status === REPLY_WITHHELD),
+    ).toBe(false);
+
+    const saved = yield* chat.writer.readAll();
+    const serialized = saved.map(serializeSidekickRecord).join("");
+    expect(serialized).not.toContain("authorization:");
+    expect(serialized).not.toContain('"withheld"');
+    expect(serialized).not.toContain("native-late");
+    // No feedback record names the turn that carried it.
+    expect(saved.filter((one) => one.kind === "feedback" && one.turn !== null)).toEqual([]);
+    const reading = project(saved);
+    expect(reading.delivered).toEqual([]);
+    expect(reading.chat.some((one) => one.kind === "saved" && one.status === REPLY_WITHHELD)).toBe(
+      false,
+    );
+    expect(reading.turns.some((one) => one.withheld === true)).toBe(false);
+    expect(required(saved, undefined)).toBe(true);
+    expect(completed.ok).toBe(false);
   });
 });

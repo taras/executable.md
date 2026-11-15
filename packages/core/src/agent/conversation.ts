@@ -1187,6 +1187,7 @@ function conversationTurn(
                 session,
                 retain,
               } satisfies DirectPromptTurn),
+              established,
             );
           },
           () => carried.association,
@@ -1247,8 +1248,11 @@ function conversationTurn(
  *
  * The message is fixed: it names no rule, position or fingerprint, because the
  * one thing a refusal about a credential must not carry is anything about it.
+ * It is the only answer that says the turn's record is a withheld completion,
+ * so a host tells that outcome apart from every other refusal by this class
+ * rather than by what the history holds.
  */
-class AgentReplyWithheldError extends AgentConversationError {
+export class AgentReplyWithheldError extends AgentConversationError {
   override name = "AgentReplyWithheldError";
   constructor() {
     super(
@@ -1267,10 +1271,23 @@ class AgentReplyWithheldError extends AgentConversationError {
  * in — and drops the whole reply. Everything else is left to the journal's own
  * guard: a scanner that cannot answer, a policy that is not this execution's,
  * and a credential anywhere else in the record still refuse the append exactly
- * as they did.
+ * as they did. So does a turn that names a native conversation other than the
+ * `established` one: it is not this conversation's turn to keep, and a
+ * withheld record of it would be a completion the history then holds against
+ * the wrong conversation.
  */
-function* withholdFlaggedReply(record: PromptRecord): Operation<PromptRecord> {
+function* withholdFlaggedReply(
+  record: PromptRecord,
+  established: string | undefined,
+): Operation<PromptRecord> {
   if (record.status !== "completed" || record.text === "") {
+    return record;
+  }
+  if (
+    established !== undefined &&
+    record.agentSessionId !== undefined &&
+    record.agentSessionId !== established
+  ) {
     return record;
   }
   try {

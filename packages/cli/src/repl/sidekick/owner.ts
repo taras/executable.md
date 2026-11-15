@@ -107,6 +107,7 @@ import {
 import type { Operation, Result, Stream, Task } from "effection";
 import {
   AGENT_PROMPT,
+  AgentReplyWithheldError,
   GeneratedXmdRootError,
   parsePromptRecord,
   previewGeneratedXmdRoot,
@@ -2799,7 +2800,17 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         desired(settings.value, conversation),
         sending.kind === "feedback" ? sending.images : sending.finished?.images,
       );
-      todo?.finishPrompt(replied.ok);
+      // A withheld reply is a completion the provider made, so the TODO batch
+      // it carried was delivered — but only where Core said so with its own
+      // refusal and this request's saved turn agrees. A withheld record beside
+      // any other refusal proves nothing about this turn, and that turn's
+      // batch stays pending for recovery like every other failure.
+      const withheld =
+        !replied.ok && replied.error instanceof AgentReplyWithheldError
+          ? yield* turnForRequest(paired, began, conversation)
+          : undefined;
+      const completedWithheld = withheld?.withheld === true ? withheld : undefined;
+      todo?.finishPrompt(replied.ok || completedWithheld !== undefined);
       confirmed = true;
       if (!replied.ok) {
         // No control runs: a partial, failed or cancelled response is source
@@ -2819,8 +2830,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // correct, so the next move is a person's.
         yield* refresh();
         relinquish(asked);
-        const attempted = yield* turnForRequest(paired, began, conversation);
-        if (attempted?.withheld === true) {
+        if (completedWithheld !== undefined) {
           // Completed, so the delivery claim a completed turn makes is made,
           // and the saved turn's own account replaces the live item. Nothing
           // was evaluated and no further turn is owed.
@@ -2829,7 +2839,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
               kind: "feedback",
               conversation,
               response: deliveringInput,
-              turn: attempted.turn,
+              turn: completedWithheld.turn,
               text: request,
             });
             yield* refresh();
@@ -2838,7 +2848,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           return Ok({
             held: {
               conversation,
-              turn: attempted.turn,
+              turn: completedWithheld.turn,
               response,
               output: "",
               hasOutput: false,
@@ -2849,6 +2859,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             next: undefined,
           });
         }
+        const attempted = withheld ?? (yield* turnForRequest(paired, began, conversation));
         // Kept as an attempt that did not finish, told which turn this
         // request's own records say it became. With none, it claims no turn, no
         // acceptance and no recorded failure; with one, the saved account of

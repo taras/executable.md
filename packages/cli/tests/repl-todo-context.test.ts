@@ -252,6 +252,33 @@ describe("TODO context on independently admitted prompts", () => {
     expect(canonicalInputs(yield* records(host.execution))).toEqual(host.fake.prompts);
   });
 
+  it("retires the batch a withheld reply's completed turn delivered and stays on delta input", function* () {
+    const { host, todo, dispatch } = yield* setup();
+    yield* todo.save("", "- [ ] delivered-1311\n");
+    expect(todo.pending).toHaveLength(1);
+    host.fake.script({
+      reply: '<Output>authorization: "Use a separate approval for this example issue #34"</Output>',
+    });
+    const withheld = yield* send(dispatch, "carry the edit");
+    yield* withheld.completion;
+    expect(host.fake.prompts[0]).toContain("+- [ ] delivered-1311");
+    const saved = yield* records(host.execution);
+    expect(JSON.stringify(saved)).toContain('\\"withheld\\":true');
+    expect(JSON.stringify(saved)).not.toContain("authorization:");
+    expect(todo.pending).toEqual([]);
+    expect(todo.recovery).toBe(false);
+    yield* todo.save("- [ ] delivered-1311\n", "- [x] delivered-1311\n");
+    host.fake.script({ reply: "<Output>next</Output>" });
+    const next = yield* send(dispatch, "explicit next");
+    expect((yield* next.completion).ok).toBe(true);
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(host.fake.prompts[1]).toContain("Committed TODO changes");
+    expect(host.fake.prompts[1]).toContain("+- [x] delivered-1311");
+    expect(host.fake.prompts[1]).not.toContain("+- [ ] delivered-1311");
+    expect(host.fake.prompts[1]).not.toContain("fresh recovery state");
+    expect(todo.pending).toEqual([]);
+  });
+
   it("keeps edits outside all sixteen queue slots and retains them after Stop", function* () {
     const { host, todo, dispatch } = yield* setup();
     host.fake.script({ reply: "", manual: true });
