@@ -120,6 +120,8 @@ export interface ReplGenerated {
  * needs no separate flag saying so.
  */
 export interface ReplScope {
+  /** Its binding values are available through an attended reading. */
+  readonly archived?: true;
   readonly key: string;
   readonly kind: "entry" | "component" | "generated";
   readonly name: string;
@@ -359,6 +361,10 @@ export type ReplRow =
  * retained is a value a cold reopen would not have.
  */
 export interface ReplEntry {
+  /** A catalog reading whose binding data has been released. */
+  readonly archived?: true;
+  /** Exact Input loaded with a paged reading. */
+  readonly pagedInput?: readonly ReplBinding[];
   readonly placement?: EntryPlacement;
   /** Its admission-order key: `entry-1`, `entry-2`, and so on. */
   readonly key: string;
@@ -549,7 +555,9 @@ export function entryInitialBindings(
   // entry before `order` is at `order - 2`, and the first entry has none.
   const before =
     entry === undefined ? model.entries[model.entries.length - 1] : model.entries[entry.order - 2];
-  for (const binding of before?.bindings ?? []) {
+  const bindings =
+    entry === undefined ? (before?.bindings ?? NO_BINDINGS) : entryInputBindings(model, entry);
+  for (const binding of bindings) {
     Object.defineProperty(record, binding.name, {
       value: binding.value,
       enumerable: true,
@@ -568,7 +576,14 @@ export function entryInitialBindings(
  * entry published anything, so neither it nor a later entry can change them.
  */
 export function entryInputBindings(model: ReplModel, entry: ReplEntry): readonly ReplBinding[] {
-  return model.entries[entry.order - 2]?.bindings ?? NO_BINDINGS;
+  if (entry.pagedInput !== undefined) {
+    return entry.pagedInput;
+  }
+  const before = model.entries[entry.order - 2];
+  if (entry.archived || before?.archived) {
+    throw new ReplProjectionError("this entry's binding values have not been loaded.");
+  }
+  return before?.bindings ?? NO_BINDINGS;
 }
 
 const NO_BINDINGS: readonly ReplBinding[] = Object.freeze([]);
@@ -677,13 +692,23 @@ function build(
   head: boolean,
 ): Result<ReplModel> {
   const entries: ReplEntry[] = [];
-  const transcript: ReplRow[] = [];
-  const checkpoints: ReplCheckpoint[] = [];
-  const chronology: ReplAgentTurn[] = [];
-  /** What the root environment holds after the entries read so far. */
   let inherited: readonly ReplBinding[] = Object.freeze([]);
+  const readBinding = bindingReader();
+  for (const segment of segments) {
+    const read = buildEntry(segment, markers.slice(segment.start, segment.end), readBinding);
+    if (!read.ok) {
+      return read;
+    }
+    const entry = entryFromSegment(segment, read.value, inherited);
+    entries.push(entry);
+    inherited = entry.bindings;
+  }
+  return Ok(modelFromEntries(entries, selection, head));
+}
+
+function bindingReader(): (value: Json) => Json {
   const shared = new WeakSet<object>();
-  const readBinding = (value: Json): Json => {
+  return (value) => {
     if (value === null || typeof value !== "object" || shared.has(value)) {
       return value;
     }
@@ -693,52 +718,78 @@ function build(
     shared.add(value);
     return value;
   };
+}
 
-  for (const segment of segments) {
-    const read = buildEntry(segment, markers.slice(segment.start, segment.end), readBinding);
-    if (!read.ok) {
-      return read;
-    }
-    const reading = read.value;
-    const bindings = inEffectAfter(inherited, reading.scope.bindings);
-    inherited = bindings;
-    entries.push(
-      freeze({
-        placement: segment.placement,
-        key: segment.key,
-        order: segment.order,
-        source: reading.scope.source,
-        path: reading.scope.path,
-        scope: reading.scope,
-        transcript: reading.transcript,
-        checkpoints: reading.checkpoints,
-        terminal: reading.terminal,
-        settled: reading.terminal !== undefined,
-        bindings,
-        turns: reading.turns,
-        records: reading.records,
-      }),
-    );
-    transcript.push(...reading.transcript);
-    checkpoints.push(...reading.checkpoints);
-    chronology.push(...reading.turns);
+function entryFromSegment(
+  segment: EntrySegment,
+  reading: EntryReading,
+  inherited: readonly ReplBinding[],
+): ReplEntry {
+  return freeze({
+    placement: segment.placement,
+    key: segment.key,
+    order: segment.order,
+    source: reading.scope.source,
+    path: reading.scope.path,
+    scope: reading.scope,
+    transcript: reading.transcript,
+    checkpoints: reading.checkpoints,
+    terminal: reading.terminal,
+    settled: reading.terminal !== undefined,
+    bindings: inEffectAfter(inherited, reading.scope.bindings),
+    turns: reading.turns,
+    records: reading.records,
+  });
+}
+
+/** Project one already-delimited range at its actual admission order. */
+export function projectEntryRange(
+  events: readonly DurableEvent[],
+  order: number,
+  inherited: readonly ReplBinding[],
+): Result<ReplEntry> {
+  const divided = partitionEntrySegments(events);
+  if (!divided.ok) {
+    return divided;
   }
+  const first = divided.value[0];
+  if (first === undefined || divided.value.length !== 1) {
+    return Err(new ReplProjectionError("this journal range does not hold exactly one entry."));
+  }
+  const segment = { ...first, key: entryKey(order), order };
+  const markers = globalMarkers([segment], events.length);
+  const repeated = firstDuplicate(markers);
+  if (repeated !== undefined) {
+    return Err(
+      new ReplProjectionError(
+        `this journal records ${repeated} twice, so one position in its history names two ` +
+          "events. A coroutine closes once.",
+      ),
+    );
+  }
+  const read = buildEntry(segment, markers, bindingReader());
+  return read.ok ? Ok(entryFromSegment(segment, read.value, inherited)) : read;
+}
 
+/** Combine validated entry readings without reading their durable records again. */
+export function modelFromEntries(
+  entries: readonly ReplEntry[],
+  selection: string | undefined,
+  head: boolean,
+): ReplModel {
   const last = entries[entries.length - 1];
-  const ordered = Object.freeze(chronology);
-  return Ok(
-    freeze({
-      selection,
-      head,
-      entries: Object.freeze(entries),
-      settled: last?.terminal !== undefined,
-      terminal: last?.terminal,
-      checkpoints: Object.freeze(checkpoints),
-      transcript: Object.freeze(transcript),
-      turns: ordered,
-      sessions: conversationsOf(ordered),
-    }),
-  );
+  const turns = Object.freeze(entries.flatMap((entry) => entry.turns));
+  return freeze({
+    selection,
+    head,
+    entries: Object.freeze([...entries]),
+    settled: last?.terminal !== undefined,
+    terminal: last?.terminal,
+    checkpoints: Object.freeze(entries.flatMap((entry) => entry.checkpoints)),
+    transcript: Object.freeze(entries.flatMap((entry) => entry.transcript)),
+    turns,
+    sessions: conversationsOf(turns),
+  });
 }
 
 /**

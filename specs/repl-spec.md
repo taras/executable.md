@@ -853,10 +853,14 @@ same outcomes, the same selected entry and scope, the same binding values, the
 same transcript, the same generated source, the same recorded question and
 answer, the same History positions and the same terminal output.
 
-Settled entries are projected from the retained events without reading component
-source, compiling an `eval` block or asking anyone anything. A final entry the
-file shows as unfinished is different: opening this execution gives that entry
-back to the engine to continue and may perform unrecorded work. Passive Source
+Opening validates every entry before returning a view, including entries after
+the selected history position. The open session keeps settled entry summaries
+and the bindings in effect at the head. When a view needs settled binding
+values or a position inside a settled entry, it reads the corresponding
+journal ranges and verifies their exact bytes against the ranges validated at
+open. It reads no live component source, compiles no `eval` and asks nobody a
+question. Only the unfinished final entry's retained records return to the
+engine for continuation. That entry may perform work it had not yet recorded. Passive Source
 and Journal inspection does not open execution. It preserves uncertainty when
 no live host observation remains and never reconstructs an old joined verdict. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
@@ -1882,7 +1886,11 @@ One execution admits entries in submission order, one at a time, into one
 append-only journal. There is no concurrent entry, no submission queue, no fork
 from a history position, no renaming, deleting, reordering, importing or
 exporting an entry, no snapshot and no sidecar file. Two processes writing one
-execution is unsupported.
+execution is unsupported. Before appending each entry record, the writer
+checks the journal against the acknowledged file identity and bytes and appends
+through the descriptor it checked. A detected change or unreadable historical
+range refuses further readings and appends in that session, including appends
+from an entry already running.
 
 An entry's segment begins at its root `import_component` admission and ends at
 that root's Close; only the final segment may be unfinished. Before projecting

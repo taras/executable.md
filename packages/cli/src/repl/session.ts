@@ -118,6 +118,7 @@ import { EntrySegmentStream, entryKey, partitionEntrySegments } from "./entries.
 import { useExpansionController } from "./expansion.ts";
 import type { ExpansionController, ExpansionState } from "./expansion.ts";
 import type { ReplExecution } from "./journal.ts";
+import { JournalChangedError } from "./record-file.ts";
 import { entryInitialBindings, projectRepl } from "./model.ts";
 import { headOf, navigationOf, NO_NAVIGATION } from "./navigation.ts";
 import type { ReplHeadState, ReplHistoryNavigation, ReplNavigationPoint } from "./navigation.ts";
@@ -369,6 +370,8 @@ export interface ReplSession {
    * beside a prefix that still looks plausible is the worst of both.
    */
   reading(at: string | undefined): Result<ReplReading>;
+  /** Load the bindings and range for the next frame before publishing it. */
+  attend?(at: string | undefined, entry: string | undefined): Operation<Result<ReplReading>>;
   /** Everything about this process that the model deliberately does not hold. */
   readonly overlay: ReplOverlay;
   /** What expansion is doing. Always readable, never actionable. */
@@ -713,8 +716,9 @@ function* start(
   } = options;
   const stream = execution.stream;
 
-  const events = yield* stream.readAll();
-  const projection = projectRepl(events, selection);
+  const history = stream.history;
+  const events = history === undefined ? yield* stream.readAll() : history.activeEvents;
+  const projection = history?.reading(selection, false) ?? projectRepl(events, selection);
   if (!projection.ok) {
     return projection;
   }
@@ -723,7 +727,7 @@ function* start(
   // The live head as well as the selected prefix. Which entries exist, which one
   // is unfinished and what a successor inherits are facts about the file, and a
   // reader standing at a historical position has changed none of them.
-  const atHead = selection === undefined ? projection : projectRepl(events);
+  const atHead = history?.head() ?? (selection === undefined ? projection : projectRepl(events));
   if (!atHead.ok) {
     return atHead;
   }
@@ -761,10 +765,19 @@ function* start(
 
   /** The one unfinished final entry this session resumes, and its range. */
   const finalSegment = segments[segments.length - 1];
-  const resumed =
+  let pendingResume =
     submitted === undefined && last !== undefined && !last.settled && finalSegment !== undefined
-      ? { entry: last, segment: finalSegment }
+      ? {
+          key: last.key,
+          source: last.source,
+          events: finalSegment.events,
+          bindings: history?.resumeBindings() ?? entryInitialBindings(head, last),
+        }
       : undefined;
+  const newEntry =
+    submitted === undefined
+      ? undefined
+      : { key: entryKey(head.entries.length + 1), bindings: entryInitialBindings(head) };
 
   if (submitted !== undefined) {
     const validated = yield* preflight(submitted, includes, installations);
@@ -891,7 +904,24 @@ function* start(
      * earlier marker: the alternative is stale navigation standing beside a
      * prefix that still looks plausible.
      */
-    function readingAt(at: string | undefined): Result<ReplReading> {
+    function readingAt(at: string | undefined, resident = true): Result<ReplReading> {
+      if (history !== undefined) {
+        const prefix = history.reading(at, resident);
+        if (!prefix.ok) {
+          return prefix;
+        }
+        const whole = history.head();
+        if (!whole.ok) {
+          return whole;
+        }
+        return Ok({
+          model: prefix.value,
+          navigation: Object.freeze({
+            checkpoints: navigationOf(whole.value.checkpoints, "empty").checkpoints,
+            head: headNow(whole.value.entries.length, whole.value.settled),
+          }),
+        });
+      }
       // One acknowledged array answers both halves. The stream is the one
       // writer, so `retained` is what the file holds; projecting the whole of
       // it and the requested prefix from the same slice is what makes the
@@ -927,7 +957,7 @@ function* start(
      * which is why this is no longer the only way a reading is built.
      */
     function reproject(): void {
-      const read = readingAt(selection);
+      const read = readingAt(selection, false);
       if (!read.ok) {
         // A history this process wrote and can no longer read is a refusal,
         // not a stale view: the alternative is a screen that keeps describing
@@ -943,7 +973,11 @@ function* start(
       // The whole file's own facts, from the same projection the reading above
       // came from. Reaching for them separately would be the second snapshot
       // this whole change exists to remove.
-      if (memo !== undefined && memo.projected.ok) {
+      const whole = history?.head();
+      if (whole?.ok) {
+        admitted = whole.value.entries.length;
+        outcome = whole.value.settled;
+      } else if (memo !== undefined && memo.projected.ok) {
         const { whole } = memo.projected.value;
         admitted = whole.entries.length;
         outcome = whole.entries[whole.entries.length - 1]?.terminal !== undefined;
@@ -1001,6 +1035,23 @@ function* start(
       reading(at: string | undefined): Result<ReplReading> {
         return readingAt(at);
       },
+      ...(history === undefined
+        ? {}
+        : {
+            *attend(
+              at: string | undefined,
+              entry: string | undefined,
+            ): Operation<Result<ReplReading>> {
+              const loaded = yield* history.attend(at, entry);
+              if (!loaded.ok) {
+                if (loaded.error instanceof JournalChangedError) {
+                  refuse(loaded.error);
+                }
+                return loaded;
+              }
+              return readingAt(at);
+            },
+          }),
       get overlay(): ReplOverlay {
         return {
           // The recorded outcome wins the moment there is one: after the root
@@ -1255,7 +1306,7 @@ function* start(
       // Any retained terminal, not only a cancelled one: a normal ending whose
       // append had already begun keeps the ending it was writing, and a stop
       // that joined it stopped this entry exactly as truthfully.
-      const settlement = projectRepl(retained);
+      const settlement = history?.head() ?? projectRepl(retained);
       if (!settlement.ok) {
         admitting = false;
         return settlement;
@@ -1375,7 +1426,7 @@ function* start(
           ),
         );
       }
-      const prefix = projectRepl(retained);
+      const prefix = history?.head() ?? projectRepl(retained);
       if (!prefix.ok) {
         return prefix;
       }
@@ -1766,7 +1817,7 @@ function* start(
           yield* started.task.halt();
           const stopped = started.stopped === undefined ? undefined : yield* started.stopped;
           const output = started.output();
-          const entry = projectRepl(retained);
+          const entry = history?.head() ?? projectRepl(retained);
           const cancelled =
             entry.ok &&
             entry.value.entries.find((one) => one.key === key)?.terminal?.status === "cancelled";
@@ -2099,13 +2150,15 @@ function* start(
     // The stream is the one writer, so what it acknowledges is what the file
     // holds. Reprojection reads that acknowledged array rather than
     // accumulating a second copy of the history beside it.
-    const retained = yield* stream.readAll();
+    const retained = history === undefined ? yield* stream.readAll() : [];
     // The positions this history already holds, before anything is appended.
     // `start` validated the same bytes; this derives the thin summary from
     // them so a session that never appends still shows its rail.
     reproject();
     const observe = (event: DurableEvent): void => {
-      retained.push(event);
+      if (history === undefined) {
+        retained.push(event);
+      }
       // One transition, and nothing suspends inside it: the record joins the
       // history, the live overlay it completed is removed, and only then does
       // anything announce. No observable snapshot holds one turn twice, and
@@ -2182,29 +2235,31 @@ function* start(
       }
     });
 
+    const resumed = pendingResume;
+    pendingResume = undefined;
     if (resumed !== undefined) {
       // Only the one segment that never finished, and only ever that one. A
       // settled range is read by the projector and handed to nobody: replaying
       // it would re-run work the file already records, and correlate one entry's
       // coroutines against another's.
       begin(
-        resumed.entry.key,
-        resumed.entry.source,
-        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
-        entryInitialBindings(head, resumed.entry),
+        resumed.key,
+        resumed.source,
+        new EntrySegmentStream(stream, { retained: resumed.events, final: true }),
+        resumed.bindings,
         undefined,
-        options.resumedWorkspaceEntry === resumed.entry.key
+        options.resumedWorkspaceEntry === resumed.key
           ? true
-          : options.resumedProjectEntry === resumed.entry.key
+          : options.resumedProjectEntry === resumed.key
             ? "project"
             : undefined,
       );
-    } else if (submitted !== undefined) {
+    } else if (submitted !== undefined && newEntry !== undefined) {
       begin(
-        entryKey(head.entries.length + 1),
+        newEntry.key,
         submitted,
         new EntrySegmentStream(stream, { placement: options.placement }),
-        entryInitialBindings(head),
+        newEntry.bindings,
       );
     } else {
       // Nothing to run. Every entry this history holds has settled, so the
