@@ -173,26 +173,25 @@ for (const size of [
   { columns: 72, rows: 20 },
 ]) {
   describe(`Shared TODO terminal at ${size.columns}x${size.rows}`, () => {
-    it("creates a shared task, wakes honestly without changing the composer, and collapses persistently", function* () {
+    it("creates a shared task and keeps it when switching tabs", function* () {
       const page = yield* useReplPage({ size });
       if (size.columns < 120) {
         yield* page.press("Sidekick", { onRow: "Sessions" });
       } else {
         yield* intoComposer(page);
       }
-      yield* page.until("TODO header", (one) => one.shows("TODO"));
+      yield* page.until("TODO tab", (one) => one.shows("TODO 0"));
+      yield* page.press("TODO", { onRow: "SIDEKICK" });
       capture(page, "empty");
       page.repl.fake.script({ reply: "<Output>Reviewed task.</Output>" });
-      yield* page.press("+", { onRow: "▾ TODO" });
+      yield* page.until("Add task is visible", (one) => one.shows("+"));
+      yield* page.press("+");
       yield* page.until("task editor", (one) => one.shows("Task:"));
       const start = performance.now();
       yield* page.type("**one** `code` [label](https://example.com)");
       yield* page.key("Enter");
-      yield* page.until(
-        "committed task and answer",
-        (one) => one.shows("one") && one.shows("Reviewed task."),
-      );
-      yield* page.until("task review joins", sidekickIdle);
+      yield* page.until("committed task", (one) => one.shows("☐ one") && one.shows("TODO 1"));
+      yield* page.repl.fake.startedTurns(1);
       capture(page, "short", [performance.now() - start]);
       expect(page.repl.fake.prompts).toHaveLength(1);
       expect(page.repl.fake.prompts[0]).toContain(TODO_WAKE);
@@ -203,15 +202,18 @@ for (const size of [
       expect(yield* readTextFile(document)).toBe(
         "- [ ] **one** `code` [label](https://example.com)\n",
       );
-      yield* page.press("▾ TODO");
-      yield* page.until("collapsed", (one) => !one.shows("☐ one"));
-      capture(page, "collapsed");
-      expect(page.screen().shows("Remove task")).toBe(false);
-      yield* page.press("+", { onRow: "▸ TODO" });
+      yield* page.press("SIDEKICK");
       yield* page.until(
-        "creation expands checklist",
-        (one) => one.shows("▾ TODO") && one.shows("Task:"),
+        "Sidekick tab restores the answer",
+        (one) => !one.shows("☐ one") && one.shows("Reviewed task."),
       );
+      capture(page, "sidekick-selected");
+      expect(page.screen().shows("Remove task")).toBe(false);
+      yield* page.press("TODO", { onRow: "SIDEKICK" });
+      yield* page.until("Add task is visible", (one) => one.shows("+"));
+      yield* page.press("+");
+      yield* page.until("checklist editor", (one) => one.shows("Task:"));
+
       yield* page.key("Escape");
       yield* page.until("creation cancelled", (one) => !one.shows("Task:"));
       expect(yield* readTextFile(document)).toBe(
@@ -225,14 +227,15 @@ for (const size of [
       expect(page.repl.outcome()?.ok).toBe(true);
     });
 
-    it("bounds wrapped rows and preserves keyboard access, collapse and external refresh", function* () {
+    it("bounds wrapped rows and preserves keyboard access, tab selection and external refresh", function* () {
       const page = yield* useReplPage({ size });
       if (size.columns < 120) {
         yield* page.press("Sidekick", { onRow: "Sessions" });
       } else {
         yield* intoComposer(page);
       }
-      yield* page.until("TODO header", (one) => one.shows("TODO"));
+      yield* page.until("TODO tab", (one) => one.shows("TODO 0"));
+      yield* page.press("TODO", { onRow: "SIDEKICK" });
       const read = yield* settledReading(page.repl);
       const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";
       const source =
@@ -245,8 +248,8 @@ for (const size of [
       yield* page.until("external task rows", (one) => one.shows("task-0"));
       expect(page.repl.fake.prompts).toHaveLength(0);
       capture(page, "overflow-wrapped");
-      const header = page.screen().locate("▾ TODO");
-      const composer = page.screen().locate("message the sidekick");
+      const header = page.screen().locate("TODO", { onRow: "SIDEKICK" });
+      const composer = page.screen().locate("Follow");
       const actions = page.screen().locate("task-0");
       const bodyRows = page
         .screen()
@@ -261,16 +264,16 @@ for (const size of [
       yield* page.until("editing preserves source", (one) => one.shows("Task:"));
       yield* page.key("Escape");
       yield* page.until("editor cancelled", (one) => !one.shows("Task:"));
-      yield* page.press("▾ TODO");
-      yield* page.until("collapsed", (one) => !one.shows("task-0"));
+      yield* page.press("SIDEKICK");
+      yield* page.until("Sidekick hides the checklist", (one) => !one.shows("task-0"));
       yield* replaceOutside(file, source.replace("task-0", "background-0"));
       const before = page.screen().index;
       yield* page.until("collapsed refresh", (one) => one.index > before);
       expect(page.screen().shows("background-0")).toBe(false);
       capture(page, "collapsed-background-change");
-      yield* page.press("▸ TODO");
+      yield* page.press("TODO", { onRow: "SIDEKICK" });
       yield* page.until("expanded current tasks", (one) => one.shows("background-0"));
-      yield* page.until("expanded header owns focus", (one) => one.shows("> ▾ TODO"));
+      yield* page.until("expanded header owns focus", (one) => one.shows("> TODO"));
       const timings: number[] = [];
       let navigationInputs = 0;
       for (let taskIndex = 0; taskIndex < 13; taskIndex++) {
@@ -311,7 +314,7 @@ for (const size of [
       const taskText = page
         .screen()
         .rows.slice(
-          page.screen().locate("▾ TODO").row + 1,
+          page.screen().locate("TODO", { onRow: "SIDEKICK" }).row + 1,
           page.screen().locate("message the sidekick").row,
         )
         .map((row) =>
@@ -421,11 +424,7 @@ for (const size of [
       );
       const visibleRows = (one: ScreenReading) =>
         one.rows
-          .slice(
-            one.locate("message the sidekick").row -
-              (one.size.columns >= 160 ? 8 : one.size.columns >= 120 ? 6 : 3),
-            one.locate("message the sidekick").row,
-          )
+          .slice(one.locate("TODO", { onRow: "SIDEKICK" }).row + 1, one.locate("Follow").row)
           .map((row) =>
             row
               .replace(/> (?=[☐☑])/, "  ")
@@ -433,18 +432,18 @@ for (const size of [
               .trimEnd(),
           );
       const beforeSwitch = visibleRows(page.screen());
-      yield* page.press("QUEUE");
+      yield* page.press("SIDEKICK");
       yield* page.until("queue hides checklist", (one) => !one.shows("<Sidekick.Tod"));
-      yield* page.press("▾ TODO");
+      yield* page.press("TODO", { onRow: "SIDEKICK" });
       yield* page.until(
         "checklist reading restored",
-        (one) => one.shows("<Sidekick.Tod") && one.shows("> ▾ TODO"),
+        (one) => one.shows("<Sidekick.Tod") && one.shows("> TODO"),
       );
       expect(visibleRows(page.screen())).toEqual(beforeSwitch);
       yield* page.key("Tab");
       yield* page.until("Message fixed entry", (one) => one.shows("> › message the sidekick"));
       yield* page.key("Backtab");
-      yield* page.until("TODO reverse fixed entry", (one) => one.shows("> ▾ TODO"));
+      yield* page.until("TODO reverse fixed entry", (one) => one.shows("> TODO"));
       capture(page, "keyboard-navigation", timings);
       expect(yield* readTextFile(file)).toBe(changed);
       expect(page.repl.fake.prompts).toHaveLength(0);
@@ -463,9 +462,11 @@ describe("TODO human semantic actions", () => {
     const page = yield* useReplPage();
     let inputCount = 0;
     yield* intoComposer(page);
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
     page.repl.fake.script({ reply: "<Output>review complete</Output>", held: true });
     inputCount++;
-    yield* page.press("+", { onRow: "▾ TODO" });
+    yield* page.until("Add task is visible", (one) => one.shows("+"));
+    yield* page.press("+");
     yield* page.until("new task editor", (one) => one.shows("Task:"));
     inputCount++;
     yield* page.type("**rich** `code` [label](https://example.com)");
@@ -481,7 +482,8 @@ describe("TODO human semantic actions", () => {
     for (const text of inputs) {
       const start = performance.now();
       inputCount++;
-      yield* page.press("+", { onRow: "▾ TODO" });
+      yield* page.until("Add task is visible", (one) => one.shows("+"));
+      yield* page.press("+");
       yield* page.until("append editor", (one) => one.shows("Task:"));
       inputCount++;
       yield* page.type(text);
@@ -515,14 +517,11 @@ describe("TODO human semantic actions", () => {
     inputCount++;
     yield* page.press("[close]");
     yield* page.until("task editor returns", (one) => one.shows("Task:") && !one.shows("Agent:"));
-    inputCount++;
-    yield* page.key("Tab");
-    yield* sleep(30);
-    yield* sleep(30);
-    inputCount++;
-    yield* page.key("Tab");
-    yield* sleep(30);
-    yield* page.until("TODO after modal", (one) => one.shows("> ▾ TODO"));
+    inputCount += 2;
+    yield* page.key("Ctrl+G");
+    yield* page.until("TODO shortcut", (one) => one.shows("[7]"));
+    yield* page.key("7");
+    yield* page.until("TODO after modal", (one) => one.shows("> TODO"));
     for (let at = 0; at < 10 && !page.screen().shows("> Task:"); at++) {
       const before = page.screen().index;
       inputCount++;
@@ -543,10 +542,13 @@ describe("TODO human semantic actions", () => {
     yield* sleep(30);
     yield* page.until("renamed task", (one) => one.shows("☐ renamed rich code label"));
     inputCount++;
-    yield* page.press("▾ TODO");
-    yield* page.until("collapsed before task navigation", (one) => one.shows("▸ TODO"));
+    yield* page.press("SIDEKICK");
+    yield* page.until(
+      "Sidekick hides task before navigation",
+      (one) => !one.shows("☐ renamed rich code label"),
+    );
     inputCount++;
-    yield* page.press("▸ TODO");
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
     yield* page.until("expanded for keyboard", (one) => one.shows("☐ renamed rich code label"));
     for (
       let attempt = 0;
@@ -589,10 +591,10 @@ describe("TODO human semantic actions", () => {
     expect(yield* readTextFile(file)).toBe("- [ ] duplicate\n- [ ] duplicate\n");
     expect(page.repl.fake.prompts).toHaveLength(1);
     inputCount++;
-    yield* page.press("▾ TODO");
-    yield* page.until("collapse after remove", (one) => one.shows("▸ TODO"));
+    yield* page.press("SIDEKICK");
+    yield* page.until("Sidekick hides list after remove", (one) => !one.shows("☐ duplicate"));
     inputCount++;
-    yield* page.press("▸ TODO");
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
     yield* page.until("expand after remove", (one) => one.shows("☐ duplicate"));
     for (let at = 0; at < 10 && !page.screen().shows("Task:"); at++) {
       const before = page.screen().index;
@@ -622,6 +624,7 @@ describe("TODO human semantic actions", () => {
       }),
     );
     page.repl.fake.releaseTurn();
+    yield* page.press("SIDEKICK");
     yield* page.until("held review complete", (one) => one.shows("review complete"));
     expect(page.repl.fake.prompts).toHaveLength(1);
     page.repl.terminal.end();
@@ -635,13 +638,13 @@ describe("TODO background task focus", () => {
   it("keeps the surviving target and its local actions after an external prepend", function* () {
     const page = yield* useReplPage();
     yield* intoComposer(page);
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
     const read = yield* settledReading(page.repl);
     const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";
     const source = "- [ ] first\n- [ ] target\n- [ ] last\n";
     yield* replaceOutside(file, source);
     yield* page.until("initial tasks", (one) => one.shows("☐ target"));
-    yield* page.key("Backtab");
-    yield* page.until("TODO header focus", (one) => one.shows("> ▾ TODO"));
+    yield* page.until("TODO header focus", (one) => one.shows("> TODO"));
     for (let attempt = 0; attempt < 10 && !page.screen().shows("> ☐ target"); attempt++) {
       const before = page
         .screen()

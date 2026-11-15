@@ -1323,7 +1323,6 @@ function* twoChats(page: ReplPage, withOlderFailure = false): Operation<void> {
   }
   yield* newConversation(page);
   if (withOlderFailure) {
-    yield* page.press("QUEUE");
     yield* page.until("failure hold after agent replacement", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure hold release", (one) => !one.shows("[Resume queue]"));

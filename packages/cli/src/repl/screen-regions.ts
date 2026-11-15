@@ -282,18 +282,14 @@ function screenPlacement(
   ) {
     return { region: reading };
   }
-  if (
-    key.startsWith("todo:") ||
-    key === "tray:queue" ||
-    (key.startsWith("queue:") && key.endsWith(":remove"))
-  ) {
+  if (key.startsWith("todo:")) {
     const task = key.startsWith("todo:task:")
       ? key.replace(/:action:(up|down|remove)$/, "")
       : undefined;
     return {
       region: TODO_REGION,
       ...(key === "todo:header" ? { entry: 0 } : {}),
-      ...(key === "todo:header" || key === "tray:queue" || key === "todo:add"
+      ...(key === "todo:header" || key === "todo:add"
         ? { groups: [{ key: "task-tabs", axis: "horizontal" }] }
         : task === undefined
           ? {}

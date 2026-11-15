@@ -79,7 +79,9 @@ export interface ScreenReading {
 export type PageKey =
   | "Enter"
   | "Ctrl+G"
+  | "1"
   | "4"
+  | "7"
   | "Escape"
   | "Tab"
   | "Backtab"
@@ -98,7 +100,9 @@ export type PageKey =
 const KEYS: Readonly<Record<PageKey, string>> = Object.freeze({
   Enter: "\r",
   "Ctrl+G": "\x07",
+  "1": "1",
   "4": "4",
+  "7": "7",
   Escape: "\x1b",
   Tab: "\t",
   Backtab: "\x1b[Z",

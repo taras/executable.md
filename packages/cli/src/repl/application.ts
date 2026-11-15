@@ -76,7 +76,7 @@ import {
   WORKSPACE_DRAFT_GAP,
   WORKSPACE_DRAFT_ROWS,
   WORKSPACE_LIST_GUTTER,
-  WORKSPACE_QUEUE_ROWS,
+  workspaceQueueRows,
   workspaceBodyRows,
   TAB_GAP,
   workspaceBlockProps,
@@ -1065,8 +1065,7 @@ export const AT_TOP: ReplViewports = Object.freeze({
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
-  readonly taskTray?: "todo" | "queue";
-  readonly todoCollapsed?: boolean;
+  readonly todoOpen?: boolean;
   readonly todoOffset?: number;
   readonly todoSelected?: string;
   readonly todoEditor?: {
@@ -1430,15 +1429,6 @@ export interface ReplWorkspace {
    * drawing it unchecked would say this execution had turned something off.
    */
   readonly follow?: boolean;
-  /**
-   * Which trays this execution offers, in the order they are named.
-   *
-   * Absent is TODO alone, which is what a build without the shared queue
-   * holds. A tab for a queue that does not exist is a tab a reader can select
-   * and find nothing behind.
-   */
-  readonly trays?: readonly ("todo" | "queue")[];
-  readonly tray: "todo" | "queue";
   readonly queued: readonly ReplQueuedMessage[];
   /** The live queue hold, without an execution handle. */
   readonly queueHeld?: { readonly kind: "stopped" | "failure"; readonly reason: string };
@@ -1480,8 +1470,6 @@ export function workspaceOf(
 ): ReplWorkspace {
   return Object.freeze({
     ...(follow === undefined ? {} : { follow }),
-    tray: "queue" as const,
-    trays: Object.freeze(["todo", "queue"] as const),
     queued: Object.freeze((queue?.pending ?? []).map((one) => Object.freeze({ ...one }))),
     ...(queue?.held === undefined ? {} : { queueHeld: queue.held }),
     work: associatedWork(model, sidekick),
@@ -1580,31 +1568,21 @@ function associatedWork(
   return Object.freeze(found);
 }
 
-/** The trays one execution offers, which is TODO alone unless it says more. */
-function traysOf(workspace: ReplWorkspace): readonly ("todo" | "queue")[] {
-  return workspace.trays ?? ["todo"];
-}
-
-/** Whether this execution offers the shared queue's tray at all. */
-function offersQueue(workspace: ReplWorkspace): boolean {
-  return traysOf(workspace).includes("queue");
-}
-
-/**
- * Whether this view is drawn as the staged workspace composition.
- *
- * At every profile this product draws at, and only with a reading to draw: a
- * refusal is the whole of its own screen, and below the minimum there is no
- * frame to compose at all. The wide proportions are accepted; the medium and
- * narrow ones are proposals under image review.
- */
+/** The workspace is available once the screen has a reading and room to draw it. */
 function staged(view: ReplView): ReplWorkspace | undefined {
   if (view.refusal !== undefined || profileFor(view.size) === "too-small") {
     return undefined;
   }
-  return view.workspace?.todo === undefined
-    ? view.workspace
-    : Object.freeze({ ...view.workspace, tray: view.state.taskTray ?? "todo" });
+  return view.workspace;
+}
+
+function showingTodo(view: ReplView): boolean {
+  return (
+    view.state.todoOpen === true &&
+    showingSidekick(view) &&
+    currentChat(view) &&
+    staged(view)?.todo !== undefined
+  );
 }
 
 /** The staged presentation one view carries, for a caller outside this module. */
@@ -2110,30 +2088,9 @@ export function reduceRepl(
       return live.sidekick?.current !== true || state.recovering?.reference !== action.reference
         ? settled(state)
         : { state, intent: action };
-    case "select-task-tray":
-      return settled({
-        ...state,
-        taskTray: action.tray,
-        restore: { kind: "reveal", key: action.tray === "todo" ? "todo:header" : "tray:queue" },
-      });
-    case "todo-collapse":
-      if (state.taskTray === "queue") {
-        return settled({
-          ...state,
-          taskTray: "todo",
-          restore: { kind: "reveal", key: "todo:header" },
-        });
-      }
-      return settled({
-        ...state,
-        todoCollapsed: !state.todoCollapsed,
-        todoEditor: undefined,
-        restore: { kind: "reveal", key: "todo:header" },
-      });
     case "todo-edit":
       return settled({
         ...state,
-        todoCollapsed: false,
         todoEditor: { source: action.source, index: action.index, text: action.text },
         restore: { kind: "reveal", key: "todo:editor" },
       });
@@ -2389,22 +2346,30 @@ export function reduceRepl(
       // Bindings is a pane and not a reading, so selecting it puts the saved
       // surface back in front of whoever was reading the Sidekick rather than
       // leaving them on a reading they just navigated away from.
+      const sidekick = action.pane !== "bindings";
       const moved = navigate(
         hidingAsking(state),
         model,
         {
           ...state.route,
-          right: action.pane,
-          view: action.pane === "sidekick" ? "sidekick" : undefined,
+          right: sidekick ? "sidekick" : "bindings",
+          view: sidekick ? "sidekick" : undefined,
         },
         live,
       );
       // Somebody who activated the Sidekick is about to type into it. The
       // claim is made only for that activation, and only when the navigation
       // actually happened: a refused route leaves focus where it was.
-      return action.pane === "sidekick" && moved.state.route.right === "sidekick"
-        ? settled({ ...moved.state, restore: { kind: "message" } })
-        : moved;
+      if (!sidekick || moved.state.route.right !== "sidekick") {
+        return moved;
+      }
+      return action.pane === "todo"
+        ? settled({
+            ...moved.state,
+            todoOpen: true,
+            restore: { kind: "reveal", key: "todo:header" },
+          })
+        : settled({ ...moved.state, todoOpen: false, restore: { kind: "message" } });
     }
     case "select-bindings-view":
       return settled(Object.freeze({ ...state, bindingsView: action.view }));
@@ -5846,7 +5811,12 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       }),
     );
   }
-  if (workspace !== undefined && showSidekick && live.sidekick?.usageTotal !== undefined) {
+  if (
+    workspace !== undefined &&
+    showSidekick &&
+    !showingTodo(view) &&
+    live.sidekick?.usageTotal !== undefined
+  ) {
     items.push(
       ...usageSessionRows(
         "sidekick:heading:usage",
@@ -5922,31 +5892,46 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     if (workspace === undefined) {
       items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
     }
-    // Both tabs, always, and they are the right column's heading: the pane named
-    // itself above them until the two names together said Sidekick twice when the
-    // Sidekick was the reading. One row, each name once, and which of them is
-    // selected carried by the styling the two have always differed by.
-    // Described in the wide and medium frames only — a narrow frame routes one
-    // outlet and reaches the Sidekick through its own surface control.
-    for (const pane of ["bindings", "sidekick"] as const) {
-      const here = pane === "sidekick" ? showSidekick : !showSidekick;
+  }
+  if (!narrow || (workspace !== undefined && showSidekick)) {
+    const todo = workspace?.todo;
+    const tabs = [
+      {
+        key: "tab:sidekick",
+        pane: "sidekick",
+        label: workspace === undefined ? "Sidekick" : "SIDEKICK",
+        active: showSidekick && !showingTodo(view),
+      },
+      ...(todo === undefined || !currentChat(view)
+        ? []
+        : [
+            {
+              key: "todo:header",
+              pane: "todo",
+              label: `TODO ${todo.document?.openItems ?? 0}`,
+              active: showingTodo(view),
+            },
+          ]),
+      ...(narrow
+        ? []
+        : [
+            {
+              key: "tab:bindings",
+              pane: "bindings",
+              label: workspace === undefined ? "Bindings" : "BINDINGS",
+              active: !showSidekick,
+            },
+          ]),
+    ];
+    for (const tab of workspace === undefined ? [...tabs].reverse() : tabs) {
+      const waiting =
+        tab.pane === "sidekick" && !tab.active && live.sidekick?.question !== undefined;
       items.push(
         row(
-          `tab:${pane}`,
-          // The name alone: it is the heading of the reading it selects, and a
-          // heading that spelled out its own selection would say in the text
-          // what the row's own styling already says. Which one is selected is
-          // the active style, and keyboard focus stays the separate mark it is.
-          // And whether the Sidekick is waiting on an answer, said on the tab
-          // while its pane is the hidden one: a question nobody can see
-          // announced is a question nobody knows to go and answer.
-          `${pane === "sidekick" ? (workspace === undefined ? "Sidekick" : "SIDEKICK") : workspace === undefined ? "Bindings" : "BINDINGS"}${
-            pane === "sidekick" && !here && live.sidekick?.question !== undefined
-              ? " (question)"
-              : ""
-          }`,
-          { select: "pane", pane },
-          styleOf(here ? "pane-heading" : "metadata"),
+          tab.key,
+          waiting ? `${tab.label} (question)` : tab.label,
+          { select: "pane", pane: tab.pane },
+          styleOf(tab.active ? "pane-heading" : "metadata"),
           { here: view.focused },
         ),
       );
@@ -5972,7 +5957,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     if (live.sidekick === undefined) {
       items.push(line("sidekick:absent", "  This screen has no Sidekick.", styleOf("metadata")));
     } else {
-      items.push(...anchored(chatWindow(view, context), "sidekick:anchor", "chat", view.focused));
+      if (!showingTodo(view)) {
+        items.push(...anchored(chatWindow(view, context), "sidekick:anchor", "chat", view.focused));
+      }
       items.push(
         ...(workspace === undefined
           ? sidekickControls(state, live.sidekick, view, claim, context)
@@ -9893,7 +9880,7 @@ function slotOf(key: string): ReplSlot | undefined {
     key === "follow" ||
     key.startsWith("draft:value:") ||
     key.startsWith("todo:") ||
-    key.startsWith("tray:") ||
+    key === "queue-overflow" ||
     key.startsWith("queue:") ||
     key.startsWith("queue-status:")
   ) {
@@ -12064,22 +12051,6 @@ function workspaceControls(
       ),
     );
   }
-  const queueTab = offersQueue(workspace)
-    ? workspace.todo === undefined
-      ? line("tray:queue", `QUEUE ${workspace.queued.length}/16`, styleOf("pane-heading"))
-      : row(
-          "tray:queue",
-          `QUEUE ${workspace.queued.length}/16`,
-          { select: "select-task-tray", tray: "queue" },
-          styleOf(workspace.tray === "queue" ? "pane-heading" : "metadata", {
-            selected: workspace.tray === "queue",
-          }),
-          { here: view.focused, claim },
-        )
-    : undefined;
-  if (workspace.todo === undefined && queueTab !== undefined) {
-    items.push(queueTab);
-  }
   if (workspace.follow !== undefined) {
     items.push(
       row(
@@ -12105,7 +12076,7 @@ function workspaceControls(
       here: view.focused,
     }),
   );
-  if (workspace.queueHeld !== undefined && workspace.tray === "queue") {
+  if (workspace.queueHeld !== undefined) {
     items.push(
       row(
         "sidekick:resume",
@@ -12116,29 +12087,21 @@ function workspaceControls(
       ),
     );
   }
-  for (const [at, one] of (workspace.tray === "queue"
-    ? (context.queueStatus ?? [])
-    : []
-  ).entries()) {
+  const queueWindow = context.admission.windows.get(QUEUE_WINDOW);
+  for (const [at, one] of (context.queueStatus ?? []).entries()) {
     items.push(line(`queue-status:${at}`, one.text, styleOf("metadata")));
-  }
-  if (workspace.todo !== undefined) {
-    const document = workspace.todo.document;
-    items.push(
-      row(
-        "todo:header",
-        `${state.todoCollapsed ? "▸" : "▾"} TODO`,
-        { select: "todo-collapse" },
-        styleOf(workspace.tray === "todo" ? "pane-heading" : "metadata", {
-          selected: workspace.tray === "todo",
-        }),
-        { here: view.focused, claim },
-      ),
-    );
-    if (queueTab !== undefined) {
-      items.push(queueTab);
+    if (
+      one.line === "queue-loss" &&
+      queueWindow !== undefined &&
+      (queueWindow.less || queueWindow.more)
+    ) {
+      const more = queueWindow.more ? "↓ more" : "↑ more";
+      items.push(line("queue-overflow", more, styleOf("metadata")));
     }
-    if (document !== undefined && workspace.tray === "todo") {
+  }
+  if (workspace.todo !== undefined && showingTodo(view)) {
+    const document = workspace.todo.document;
+    if (document !== undefined) {
       items.push(
         row(
           "todo:add",
@@ -12149,10 +12112,10 @@ function workspaceControls(
         ),
       );
     }
-    if (workspace.tray === "todo" && workspace.todo.error !== undefined) {
+    if (workspace.todo.error !== undefined) {
       items.push(line("todo:error", workspace.todo.error, styleOf("failed-outcome")));
     }
-    if (workspace.tray === "todo" && !state.todoCollapsed && document !== undefined) {
+    if (document !== undefined) {
       const fitted = context.todo ?? [];
       const cap = Math.min(
         view.size.columns >= 160 ? 8 : view.size.columns >= 120 ? 6 : 3,
@@ -12225,7 +12188,7 @@ function workspaceControls(
         }
       }
     }
-    const editor = workspace.tray === "todo" ? state.todoEditor : undefined;
+    const editor = state.todoEditor;
     if (editor !== undefined) {
       items.push(
         field("todo:editor", " Task: ", editor.text, "todo", styleOf("field-value"), {
@@ -12236,8 +12199,8 @@ function workspaceControls(
       );
     }
   }
-  if (workspace.tray === "queue" && offersQueue(workspace)) {
-    const window = context.admission.windows.get(QUEUE_WINDOW);
+  if (workspace.queued.length > 0) {
+    const window = queueWindow;
     // Rows rather than messages. The window counts fitted rows, so the
     // description selects the same fitted rows: a slice of messages would put
     // more rows in the tray than it measured room for.
@@ -12754,7 +12717,7 @@ function trayAllocation(
   extras: number,
 ): { readonly tray: number; readonly queue: number } | undefined {
   const workspace = staged(view);
-  if (workspace === undefined || workspace.tray !== "queue" || !offersQueue(workspace)) {
+  if (workspace === undefined || workspace.queued.length === 0) {
     return undefined;
   }
   const wrapped = (id: string): number =>
@@ -12766,7 +12729,10 @@ function trayAllocation(
   const composer = 1 + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
   const held = queueSequence(workspace, context.queue).length;
   const column = workspaceBodyRows(view.size) - wrapped("conversation") - 1 - 1 - extras;
-  const queue = Math.max(0, Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - composer));
+  const queue = Math.max(
+    0,
+    Math.min(workspaceQueueRows(view.size), column - wrapped("tray") - composer),
+  );
   if (held <= queue) {
     return undefined;
   }
@@ -12849,7 +12815,7 @@ const WORKSPACE_HEADERS: readonly {
   Object.freeze({
     id: "conversation",
     gap: TAB_GAP,
-    left: Object.freeze(["tab:bindings", "tab:sidekick"]),
+    left: Object.freeze(["tab:sidekick", "todo:header", "tab:bindings"]),
     right: Object.freeze(["sidekick:configure"]),
   }),
   Object.freeze({
@@ -12859,7 +12825,7 @@ const WORKSPACE_HEADERS: readonly {
     // describe — a tray this execution does not offer, a Follow it does not
     // have — contributes no part, so the row is built from what is actually
     // there rather than from what a wider build would have put there.
-    left: Object.freeze(["todo:header", "tray:queue", "todo:add"]),
+    left: Object.freeze([]),
     right: Object.freeze(["follow", "sidekick:stop", "sidekick:send", "sidekick:resume"]),
   }),
 ]);
@@ -13092,7 +13058,6 @@ function workspacePresentation(input: {
       props:
         candidate.key === "todo:header" ||
         candidate.key === "todo:add" ||
-        candidate.key === "tray:queue" ||
         /^todo:task:.*:action:(up|down|remove)$/.test(candidate.key)
           ? statedPartProps(candidate.text.length)
           : fittedPartProps(surface),
@@ -13349,12 +13314,12 @@ function workspacePresentation(input: {
     inside?: number,
   ): readonly ReplBox[] => {
     const showing = showingSidekick(view);
+    const todo = showingTodo(view);
     if (showing) {
       contents.push({ region, id: body, kind: "body" });
     }
     const room = context.widths?.body;
     const tray = [
-      ...startingWith("tray:"),
       ...byKey("follow"),
       ...byKey("sidekick:stop"),
       ...byKey("sidekick:send"),
@@ -13366,15 +13331,19 @@ function workspacePresentation(input: {
     // reports its whole rectangle even where the window clipped it, and the
     // row after it is then placed over the control below.
     const described = candidates.filter((one) => one.key.startsWith("queue:"));
+    const removals = new Map(
+      described.filter((one) => one.key.endsWith(":remove")).map((one) => [one.key, one]),
+    );
     let named = false;
     const queueRows: ReplBox[] = [];
-    for (const [at, one] of described.entries()) {
+    for (const one of described) {
       if (one.key.endsWith(":remove")) {
         continue;
       }
-      const after = described[at + 1];
-      const control =
-        after !== undefined && after.key.endsWith(":remove") ? [part(after, region)] : [];
+      const remove = one.key.endsWith(":row:0")
+        ? removals.get(one.key.slice(0, -":row:0".length) + ":remove")
+        : undefined;
+      const control = remove === undefined ? [] : [part(remove, region)];
       // The first text box this frame draws is the one the preparation asks
       // how wide a queued message's text may be; the rest carry their own ids.
       const heading = !named;
@@ -13413,12 +13382,7 @@ function workspacePresentation(input: {
     const extras =
       byKey("sidekick:back").length + recovery.length + byKey("sidekick:answer").length;
     const allocation = trayAllocation(view, context, extras);
-    if (
-      held !== undefined &&
-      held.tray === "queue" &&
-      offersQueue(held) &&
-      (allocation !== undefined || queueRows.length > 0)
-    ) {
+    if ((held?.queued.length ?? 0) > 0 && (allocation !== undefined || queueRows.length > 0)) {
       viewports.push(
         Object.freeze({
           id: queueViewport,
@@ -13428,12 +13392,27 @@ function workspacePresentation(input: {
         }),
       );
     }
-    if ((context.todo?.length ?? 0) > 0 && !view.state.todoCollapsed) {
+    if (todo && (context.todo?.length ?? 0) > 0) {
       viewports.push({ id: "box:todo:viewport", region, window: "todo", owner: "viewport:todo" });
     }
     const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
     const trayHeader = headerRows("tray", region, REPL_PALETTE.composerSurface);
     const statusRows = startingWith("queue-status:");
+    const overflow = byKey("queue-overflow")[0];
+    const queueStatus = statusRows.map((one, index) =>
+      overflow === undefined || index !== statusRows.length - 1
+        ? rowBox(one, region, room)
+        : box({
+            id: "box:queue:status",
+            region,
+            props: partsRowProps(1, WORKSPACE_DRAFT_GAP, room),
+            children: [
+              part(one, region),
+              spacer("box:queue:status:gap", region),
+              part(overflow, region),
+            ],
+          }),
+    );
     // Recovery adds reading controls while the chat body grows. Keep its tray
     // on whole rows using the same admitted parts this manifest places.
     const trayRows =
@@ -13454,7 +13433,57 @@ function workspacePresentation(input: {
             region,
             props: paneContentProps(),
             children: [
-              ...input.chatColumn(region),
+              ...(todo
+                ? [
+                    ...byKey("todo:add").map((one) => part(one, region)),
+                    ...byKey("todo:error").map((one) => rowBox(one, region, room)),
+                    box({
+                      id: "box:todo:viewport",
+                      region,
+                      props: viewportProps(
+                        Math.min(
+                          view.size.columns >= 160 ? 8 : view.size.columns >= 120 ? 6 : 3,
+                          context.todo?.length ?? 0,
+                        ),
+                      ),
+                      children: candidates
+                        .filter(
+                          (one) =>
+                            (one.key.startsWith("todo:task:") &&
+                              !/:action:(up|down|remove)$/.test(one.key)) ||
+                            one.key.startsWith("todo:continuation:"),
+                        )
+                        .map((one) => {
+                          const controls = candidates.filter((other) =>
+                            other.key.startsWith(`${one.key}:action:`),
+                          );
+                          return box({
+                            id: `box:${region}:${one.key}:row`,
+                            region,
+                            props: partsRowProps(1, 1, room),
+                            children: [
+                              box({
+                                id: `box:${region}:${one.key}:text`,
+                                region,
+                                props: statedPartProps(
+                                  Math.max(1, (context.widths?.inspection ?? 18) - 16),
+                                ),
+                                children: [
+                                  rowBox(
+                                    one,
+                                    region,
+                                    Math.max(1, (context.widths?.inspection ?? 18) - 16),
+                                  ),
+                                ],
+                              }),
+                              ...controls.map((control) => part(control, region)),
+                            ],
+                          });
+                        }),
+                    }),
+                    ...byKey("todo:editor").map((one) => rowBox(one, region, room)),
+                  ]
+                : input.chatColumn(region)),
               ...byKey("sidekick:back").map((one) => rowBox(one, region, room)),
               ...byKey("sidekick:answer").map((one) => rowBox(one, region, room)),
             ],
@@ -13476,12 +13505,11 @@ function workspacePresentation(input: {
               ),
               children: [
                 ...trayHeader,
-                ...statusRows.map((one) => rowBox(one, region, room)),
+                ...queueStatus,
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.
-                ...(held?.tray === "queue" &&
-                offersQueue(held) &&
+                ...((held?.queued.length ?? 0) > 0 &&
                 (allocation !== undefined || queueRows.length > 0)
                   ? [
                       box({
@@ -13492,52 +13520,6 @@ function workspacePresentation(input: {
                       }),
                     ]
                   : queueRows),
-                ...byKey("todo:error").map((one) => rowBox(one, region, room)),
-                box({
-                  id: "box:todo:viewport",
-                  region,
-                  props: viewportProps(
-                    Math.min(
-                      view.size.columns >= 160 ? 8 : view.size.columns >= 120 ? 6 : 3,
-                      context.todo?.length ?? 0,
-                    ),
-                  ),
-                  children: candidates
-                    .filter(
-                      (one) =>
-                        (one.key.startsWith("todo:task:") &&
-                          !/:action:(up|down|remove)$/.test(one.key)) ||
-                        one.key.startsWith("todo:continuation:"),
-                    )
-                    .map((one) => {
-                      const controls = candidates.filter((other) =>
-                        other.key.startsWith(`${one.key}:action:`),
-                      );
-                      return box({
-                        id: `box:${region}:${one.key}:row`,
-                        region,
-                        props: partsRowProps(1, 1, room),
-                        children: [
-                          box({
-                            id: `box:${region}:${one.key}:text`,
-                            region,
-                            props: statedPartProps(
-                              Math.max(1, (context.widths?.inspection ?? 18) - 16),
-                            ),
-                            children: [
-                              rowBox(
-                                one,
-                                region,
-                                Math.max(1, (context.widths?.inspection ?? 18) - 16),
-                              ),
-                            ],
-                          }),
-                          ...controls.map((control) => part(control, region)),
-                        ],
-                      });
-                    }),
-                }),
-                ...byKey("todo:editor").map((one) => rowBox(one, region, room)),
                 ...composer.map((one) => rowBox(one, region, room)),
               ],
             }),
@@ -13556,26 +13538,22 @@ function workspacePresentation(input: {
       : routed === "sessions"
         ? transcriptColumn("content", SIDEBAR_BODY, size.columns)
         : workColumn("content", TRANSCRIPT_BODY, size.columns);
+    const surfaces = box({
+      id: "box:content:surfaces",
+      region: "content",
+      props: workspaceHeaderProps(header, TAB_GAP),
+      children: parts(
+        ["sessions:heading", "entries:heading", "surface:sidekick"],
+        "content",
+        header,
+      ),
+    });
     columns.push(
       box({
         id: "box:content",
         region: "content",
-        // The whole terminal, stated: a growing outlet takes its minimum from
-        // its own content, and a breadcrumb or a control is content.
         props: workspaceColumnProps(size.columns, REPL_PALETTE.applicationSurface, false),
-        children: [
-          box({
-            id: "box:content:surfaces",
-            region: "content",
-            props: workspaceHeaderProps(header, TAB_GAP),
-            children: parts(
-              ["sessions:heading", "entries:heading", "surface:sidekick"],
-              "content",
-              header,
-            ),
-          }),
-          ...routedRows,
-        ],
+        children: showingSidekick(view) ? [...routedRows, surfaces] : [surfaces, ...routedRows],
       }),
     );
   } else {
@@ -13831,12 +13809,7 @@ export function queueLinesOf(
   view: ReplView,
 ): readonly { readonly key: string; readonly text: string }[] | undefined {
   const workspace = staged(view);
-  if (
-    workspace === undefined ||
-    workspace.tray !== "queue" ||
-    !offersQueue(workspace) ||
-    !showingSidekick(view)
-  ) {
+  if (workspace === undefined || !showingSidekick(view)) {
     return undefined;
   }
   return workspace.queued.map((message) => ({
@@ -13903,9 +13876,6 @@ export function queueStatusLinesOf(
   if (workspace === undefined) {
     return [];
   }
-  if (workspace.tray !== "queue") {
-    return [];
-  }
   return [
     ...(workspace.queueHeld === undefined
       ? []
@@ -13920,12 +13890,7 @@ export function todoLinesOf(
   view: ReplView,
 ): readonly { key: string; text: string; runs: readonly ReplTokenRun[] }[] {
   const document = staged(view)?.todo?.document;
-  if (
-    document === undefined ||
-    staged(view)?.tray !== "todo" ||
-    !showingSidekick(view) ||
-    view.state.todoCollapsed
-  ) {
+  if (document === undefined || !showingTodo(view)) {
     return [];
   }
   const keys = todoTaskKeys(document);
