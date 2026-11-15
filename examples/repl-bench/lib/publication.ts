@@ -71,6 +71,7 @@ export function* preparePublication(path: string, mode: "dry-run" | "publish") {
   }
   return {
     kind: "dry-run",
+    visualSignOff: "pending",
     identity,
     markdown: renderDescription(evidence, proposed),
     images: evidence.slots.flatMap((slot, index) =>
@@ -117,6 +118,10 @@ function status(slots: SlotState[]) {
   return slots.some((slot) => slot.state === "pending") ? "partial" : "complete";
 }
 
+function visualSignOff(evidence: Evidence, slots: SlotState[]) {
+  return evidence.comparisonsResolved && status(slots) === "complete" ? "ready" : "pending";
+}
+
 export function* publishEvidence(
   receipt: string,
   identity: string,
@@ -134,6 +139,7 @@ export function* publishEvidence(
     identity,
     sources: evidence.sources,
     screenshots: evidence.slots.map(({ id, path }) => ({ id, path })),
+    visualSignOff: "pending",
   };
   const unknown = (reason: string, exitCode: number | null = null) => ({
     ...unchanged,
@@ -159,6 +165,7 @@ export function* publishEvidence(
     return {
       ...unchanged,
       status: status(held),
+      visualSignOff: visualSignOff(evidence, held),
       exitCode: null,
       slots: held,
       ...(status(held) === "unverifiable"
@@ -237,6 +244,7 @@ export function* publishEvidence(
   return {
     ...unchanged,
     status: status(slots),
+    visualSignOff: visualSignOff(evidence, slots),
     exitCode: editExit,
     slots,
     ...(status(slots) === "unverifiable"

@@ -10,6 +10,8 @@ returns:
 # Publish REPL UI evidence
 
 The receipt pins the checkout, acceptance rounds, screenshots and timing report.
+Version 2 also records the design reference and visual comparison for each
+designed checkpoint.
 See [Publish evidence on a draft](README.md#publish-evidence-on-a-draft) for the
 receipt format and recovery steps.
 

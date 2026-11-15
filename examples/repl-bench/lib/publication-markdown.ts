@@ -4,7 +4,7 @@ import type { Evidence } from "./publication-receipt.ts";
 
 const marker = "<!-- xmd-repl-ui-evidence:";
 const end = "<!-- /xmd-repl-ui-evidence -->";
-const start = (identity: string) => `${marker}v1 ${identity} -->`;
+const start = ({ identity, version }: Evidence) => `${marker}v${version} ${identity} -->`;
 const parser = remark();
 type Slot = Evidence["slots"][number];
 type MarkdownNode = ReturnType<typeof parser.parse>["children"][number];
@@ -28,7 +28,7 @@ function label(text: string): string {
 }
 
 function slotAlt(slot: Slot): string {
-  return `${slot.role === "before" ? "Before" : "After"} ${slot.checkpoint}`;
+  return `${slot.role[0].toUpperCase()}${slot.role.slice(1)} ${slot.checkpoint}`;
 }
 
 function imageCell(slot: Slot, destination: string): string {
@@ -44,17 +44,46 @@ function regexLiteral(part: string): string {
 }
 
 export function renderEvidence(evidence: Evidence, destinations: readonly string[]): string {
-  const { identity, checkpoints, slots, timing } = evidence;
+  const { version, checkpoints, slots, timing } = evidence;
+  const cells = new Map(
+    slots.map((slot, index) => [slot.id, imageCell(slot, destinations[index])]),
+  );
+  const headers = ["Checkpoint", "Fixture", "Viewport", "Action"];
+  if (version === 2) {
+    headers.push("Reference");
+  }
+  headers.push("Before", "After");
+  if (version === 2) {
+    headers.push("Comparison");
+  }
   return [
-    start(identity),
+    start(evidence),
     "",
     "## REPL UI evidence",
     "",
-    "| Checkpoint | Fixture | Viewport | Action | Before | After |",
-    "| --- | --- | --- | --- | --- | --- |",
-    ...checkpoints.map(({ id, fixture, viewport, action }, index) => {
-      const before = index * 2;
-      return `| ${id} | ${label(fixture)} | ${viewport.columns} × ${viewport.rows} | ${label(action)} | ${imageCell(slots[before], destinations[before])} | ${imageCell(slots[before + 1], destinations[before + 1])} |`;
+    `| ${headers.join(" | ")} |`,
+    `| ${headers.map(() => "---").join(" | ")} |`,
+    ...checkpoints.map((check) => {
+      const { id, fixture, viewport, action } = check;
+      const row = [id, label(fixture), `${viewport.columns} × ${viewport.rows}`, label(action)];
+      const reference = "reference" in check ? check.reference : undefined;
+      if (reference?.kind === "design") {
+        row.push(cells.get(`${id}-reference`) ?? "");
+      } else if (reference?.kind === "none") {
+        row.push(label(reference.reason));
+      }
+      row.push(cells.get(`${id}-before`) ?? "", cells.get(`${id}-after`) ?? "");
+      if (reference?.kind === "design") {
+        const { comparison } = reference;
+        const notes =
+          comparison.disposition === "match"
+            ? []
+            : comparison.differences.map(({ note }) => label(note));
+        row.push([comparison.disposition, ...notes].join(" · "));
+      } else if (reference?.kind === "none") {
+        row.push("—");
+      }
+      return `| ${row.join(" | ")} |`;
     }),
     "",
     "### Mounted typing latency",
@@ -107,7 +136,7 @@ export function inspectBody(evidence: Evidence, body: string) {
       .children.some(
         (node) =>
           node.type === "html" &&
-          node.value === start(evidence.identity) &&
+          node.value === start(evidence) &&
           node.position?.start.offset === first,
       )
   ) {

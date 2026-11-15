@@ -176,6 +176,14 @@ and observed results. Use the [visual comparison](#compare-repl-builds-with-scre
 capture before-and-after evidence. Link to `run.json`, `screen.txt`, and
 `terminal.ansi` beside each screenshot.
 
+For each designed checkpoint, give the Sidekick or reviewer the approved design
+asset and its source, version, state, viewport and SHA-256. Ask them to compare
+it with the After capture at the same viewport and corresponding state.
+Retain their comparison, including the exact candidate commit and After digest.
+Record each material difference and its explicit acceptance or open disposition.
+For checkpoints without a design, record why. Use these records in the
+[publication receipt](#publish-evidence-on-a-draft).
+
 ## Read the evidence
 
 Each launch saves its viewport and terminal output in the tooling checkout’s
@@ -212,7 +220,7 @@ of your prepared checkout using the Deno CLI and a GitHub CLI that supports
 `gh pr edit --attach`. The publish mode uses your existing Git and GitHub CLI
 authorization.
 
-Prepare a version 1 JSON receipt. Paths are relative to the receipt unless you
+Prepare a version 2 JSON receipt. Paths are relative to the receipt unless you
 supply absolute paths. In this example, replace the commit SHA and digest
 placeholders with the full lowercase hex values from your evidence. Use the
 build revisions recorded by the screenshot launches and the native JSON from
@@ -221,13 +229,16 @@ candidate rounds and their saved records.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "repository": "owner/repository",
   "baseBranch": "main",
   "headBranch": "ui-change",
   "base": "<40-character base SHA>",
   "head": "<40-character head SHA>",
-  "target": { "kind": "numbered", "number": 42 },
+  "target": {
+    "kind": "numbered",
+    "number": 42
+  },
   "previewBody": "description-snapshot.md",
   "acceptance": [
     {
@@ -247,13 +258,71 @@ candidate rounds and their saved records.
   ],
   "checkpoints": [
     {
+      "id": "restore",
+      "fixture": "Scripted restore",
+      "viewport": { "columns": 160, "rows": 36 },
+      "action": "Reveal round 42",
+      "reference": {
+        "kind": "design",
+        "source": "Restore mockup",
+        "version": "v8",
+        "state": "round 42 settled",
+        "viewport": { "columns": 160, "rows": 36 },
+        "path": "restore-reference.png",
+        "sha256": "<64-character reference PNG SHA-256>",
+        "approval": "design-approval.txt",
+        "comparison": {
+          "actor": {
+            "role": "reviewer",
+            "id": "reviewer-handle"
+          },
+          "record": "visual-comparison.txt",
+          "checkpoint": "restore",
+          "state": "round 42 settled",
+          "viewport": { "columns": 160, "rows": 36 },
+          "referenceSha256": "<64-character reference PNG SHA-256>",
+          "candidate": "<40-character head SHA>",
+          "afterSha256": "<64-character restore After PNG SHA-256>",
+          "disposition": "match"
+        }
+      }
+    },
+    {
       "id": "composer",
       "fixture": "Scripted Sidekick",
       "viewport": { "columns": 72, "rows": 20 },
-      "action": "Focus the composer"
+      "action": "Focus the composer",
+      "reference": {
+        "kind": "none",
+        "reason": "No approved design for composer focus"
+      }
     }
   ],
   "captures": [
+    {
+      "checkpoint": "restore",
+      "role": "before",
+      "fixture": "Scripted restore",
+      "viewport": { "columns": 160, "rows": 36 },
+      "action": "Reveal round 42",
+      "revision": "<40-character base SHA>",
+      "path": "restore-before.png",
+      "sha256": "<64-character restore Before PNG SHA-256>",
+      "synthetic": true,
+      "approved": true
+    },
+    {
+      "checkpoint": "restore",
+      "role": "after",
+      "fixture": "Scripted restore",
+      "viewport": { "columns": 160, "rows": 36 },
+      "action": "Reveal round 42",
+      "revision": "<40-character head SHA>",
+      "path": "restore-after.png",
+      "sha256": "<64-character restore After PNG SHA-256>",
+      "synthetic": true,
+      "approved": true
+    },
     {
       "checkpoint": "composer",
       "role": "before",
@@ -292,14 +361,27 @@ of the actual file, for example with
 with all its raw samples. The timing viewport comes from the benchmark and
 may differ from the screenshot viewport.
 
+Keep the design approval, comparison record and any deviation approvals with
+the receipt and images. Use stable identifiers for those records. The
+comparison repeats the checkpoint ID, design state and viewport, reference
+digest, candidate SHA and After digest so the publisher can verify the binding.
+Use `sidekick` or `reviewer` as the actor role and identify the person or session
+that made the comparison. A `match` records agreement without material
+differences. For `accepted-deviation`, supply a `differences` array of
+`{"note":"Shorter status label","approval":"label-approval.txt"}` entries.
+For `unresolved`, use entries with a `note` describing each open difference.
+The publisher checks the declarations and attachment bytes. The retained
+comparison and approvals supply the visual judgment.
+
 ```sh
 deno task xmd run examples/repl-bench/publish-evidence.md \
   --include examples/repl-bench/components \
   --props-mode dry-run --props-receipt /path/to/receipt.json
 ```
 
-The preview JSON contains the proposed Markdown and ordered local paths to
-attach. `previewBody` supplies the surrounding text. If omitted, a numbered
+The preview JSON contains the proposed Markdown, ordered local paths to
+attach, and verified reference asset paths and digests in `sources.references`.
+Designed rows show Reference, Before and After in that order. `previewBody` supplies the surrounding text. If omitted, a numbered
 preview starts with an empty body, and a create preview uses its prepared prose.
 Publication reads the current body from GitHub.
 
@@ -316,7 +398,8 @@ deno task xmd run examples/repl-bench/publish-evidence.md \
   --props-mode publish --props-receipt /path/to/receipt.json
 ```
 
-Keep the returned JSON with the source evidence. `complete` confirms the exact
+Keep the returned JSON with the source evidence. Attachment `status` of
+`complete` confirms the exact
 open draft, both revisions and all attachment bytes. `partial` means some slots
 are pending and may show generated relative filenames. Retry with the same
 evidence and a numbered target, using `draftRecord` to recover the number from
@@ -325,6 +408,23 @@ images. If creation stops before the record exists and before upload, you can
 repeat the same create invocation to adopt the compatible draft. An
 `unverifiable` result calls for checking the target, section or flagged links
 before another attempt. The draft stays a draft throughout.
+
+Preview reports `visualSignOff: "pending"`. Publication reports `"ready"`
+only after complete readback with a resolved comparison or a declared absence
+of design for every checkpoint. Open differences keep sign-off pending even
+when the attachments are complete. Correct missing or mismatched local
+evidence before retrying.
+
+Version 1 receipts retain their original identity, table and attachment
+filenames. Use the same version 1 receipt to resume an interrupted version 1
+upload. Its visual sign-off stays pending. To migrate, keep the pins, captures
+and timing report, then author version 2 declarations from the retained design
+and comparison records. Preview the new section with the surrounding prose.
+If the draft already has a managed section for a different receipt identity,
+including a version 1 section, the publisher reports `unverifiable` and leaves
+the body intact. Have the coordinator reconcile the old managed section while
+preserving the surrounding prose, then publish the version 2 receipt to the
+same pinned draft.
 
 ## Run the tests
 
