@@ -19,6 +19,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import { Err, type Operation, type Result } from "effection";
+import type { JournalAppend } from "./record-file.ts";
 
 /** No host installed this operation, so the REPL cannot perform it. */
 export class ReplHostError extends Error {
@@ -90,6 +91,8 @@ export interface ReplHostApi {
    * not reached the file has not happened, and nothing downstream may see it.
    */
   appendRecord(path: string, record: string): Operation<void>;
+  /** Append to the exact journal version this execution has acknowledged. */
+  appendEntryRecord(path: string, record: string, check: JournalAppend): Operation<void>;
 }
 
 export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
@@ -118,5 +121,9 @@ export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
   // deno-lint-ignore require-yield
   *appendRecord(_path: string, _record: string): Operation<void> {
     throw new ReplHostError("appending to an execution's history");
+  },
+  // deno-lint-ignore require-yield
+  *appendEntryRecord(_path: string, _record: string, _check: JournalAppend): Operation<void> {
+    throw new ReplHostError("appending to a validated entry history");
   },
 });

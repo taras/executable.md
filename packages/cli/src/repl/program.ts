@@ -284,6 +284,7 @@ export interface HeadlessReplRoot {
  */
 export interface ReplProgramOptions {
   readonly startup?: Result<ReplStartup>;
+  readonly pagedHistory?: boolean;
   readonly headless?: HeadlessReplRoot;
   readonly sidekickAcp?: string;
   /** The location to reopen, or none to start a fresh execution. */
@@ -315,6 +316,7 @@ export function* prepareReplStartup(
   location: string,
   root?: string,
   offer = true,
+  pagedHistory = false,
 ): Operation<Result<ReplStartup>> {
   try {
     const decoded = decodeLocation(location);
@@ -323,9 +325,12 @@ export function* prepareReplStartup(
     }
     const state = yield* stateOf(location);
     const directory = root ?? (yield* replRoot());
-    const execution = yield* pairedReplRepository(directory).open(decoded.value.execution);
+    const execution = yield* pairedReplRepository(directory, pagedHistory).open(
+      decoded.value.execution,
+    );
     const retained = {
-      entries: yield* bindRetainedPrefix(execution.stream.path),
+      entries:
+        execution.stream.history?.fingerprint ?? (yield* bindRetainedPrefix(execution.stream.path)),
       ...(execution.chat.form === "paired"
         ? { chat: yield* bindRetainedPrefix(execution.chat.location.sidekick) }
         : {}),
@@ -334,7 +339,8 @@ export function* prepareReplStartup(
     if (!reachable.ok) {
       return reachable;
     }
-    const projected = projectRepl(yield* execution.stream.readAll());
+    const projected =
+      execution.stream.history?.head() ?? projectRepl(yield* execution.stream.readAll());
     if (!projected.ok) {
       return projected;
     }
@@ -416,6 +422,9 @@ function* unchangedStartup(
     execution.chat.form === "paired"
       ? yield* bindRetainedPrefix(execution.chat.location.sidekick)
       : undefined;
+  if (execution.stream.history !== undefined) {
+    yield* execution.stream.history.confirmVersion();
+  }
   if (
     entries.records !== retained.entries.records ||
     entries.bytes !== retained.entries.bytes ||
@@ -556,7 +565,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     options.startup ??
     (options.location === undefined
       ? undefined
-      : yield* prepareReplStartup(options.location, options.root, false));
+      : yield* prepareReplStartup(options.location, options.root, false, options.pagedHistory));
   if (prepared !== undefined && !prepared.ok) {
     return options.headless === undefined ? yield* refuse(state, prepared.error.message) : prepared;
   }
@@ -565,7 +574,7 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     state = startup.state;
   }
   const root = startup?.root ?? options.root ?? (yield* useReplRoot());
-  const repository = pairedReplRepository(root);
+  const repository = pairedReplRepository(root, options.pagedHistory);
   const execution = startup?.execution ?? (yield* repository.create());
   if (startup === undefined) {
     state = initialState(execution.id);
@@ -611,7 +620,8 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
   let unresolved: readonly ColdReservation[] = [];
   let resumedWorkspaceEntry: string | undefined;
   if (execution.chat.form === "paired") {
-    const projected = projectRepl(yield* execution.stream.readAll());
+    const projected =
+      execution.stream.history?.head() ?? projectRepl(yield* execution.stream.readAll());
     if (!projected.ok) {
       return yield* refuse(state, projected.error.message);
     }
@@ -716,7 +726,11 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
  * retained records already hold.
  */
 function* resolvable(execution: PairedReplExecution, state: ReplState): Operation<Result<void>> {
-  const projected = projectRepl(yield* execution.stream.readAll(), state.route.at);
+  const history = execution.stream.history;
+  const projected =
+    history === undefined
+      ? projectRepl(yield* execution.stream.readAll(), state.route.at)
+      : yield* history.attend(state.route.at, state.route.scopes[0]);
   if (!projected.ok) {
     return projected;
   }
@@ -1022,6 +1036,13 @@ function* drive(
   // One prepared reading, never a model beside a navigation that arrived
   // separately. Everything below assigns both halves together or neither.
   let reading: ReplReading = { model: session.model, navigation: session.navigation };
+  if (session.attend !== undefined) {
+    const loaded = yield* session.attend(state.route.at, state.route.scopes[0]);
+    if (!loaded.ok) {
+      return yield* refuse(state, loaded.error.message);
+    }
+    reading = loaded.value;
+  }
   let rendered: ReplRendered | undefined;
   /**
    * The editable drawer and question owner presented by the frame on screen.
@@ -1886,7 +1907,9 @@ function* drive(
           continue;
         }
         if (report.kind === "admitted") {
-          reading = { model: current.model, navigation: current.navigation };
+          if (current.attend === undefined) {
+            reading = { model: current.model, navigation: current.navigation };
+          }
           // The entry exists now, so the draft that became it is finished — and
           // only the revision it was taken from. Somebody who typed while the
           // preflight was running keeps what they typed.
@@ -1908,9 +1931,16 @@ function* drive(
     }
 
     function* inputView(candidate: ReplState, at: ReplTerminalSize) {
+      const attended =
+        current.attend === undefined
+          ? undefined
+          : yield* current.attend(candidate.route.at, candidate.route.scopes[0]);
+      if (attended !== undefined && !attended.ok) {
+        return refusedView(candidate, attended.error.message, at);
+      }
       return yield* build(
         candidate,
-        reading,
+        attended?.value ?? reading,
         current,
         at,
         focused,
@@ -2090,17 +2120,7 @@ function* drive(
       if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
           yield* rendering(),
-          yield* build(
-            state,
-            reading,
-            current,
-            yield* screen.size(),
-            focused,
-            preparingOf(admitting),
-            sidekickReading(state),
-            dispatch.queue,
-            follow,
-          ),
+          yield* inputView(state, yield* screen.size()),
           fits,
           chatFits,
           messageFits,
@@ -2733,7 +2753,14 @@ function* drive(
           }
         }
         if (wake.kind === "session") {
-          reading = { model: current.model, navigation: current.navigation };
+          if (current.attend === undefined) {
+            reading = { model: current.model, navigation: current.navigation };
+          } else {
+            const refreshed = yield* reproject(state, reading, current);
+            if (refreshed.broken === undefined) {
+              reading = refreshed.reading;
+            }
+          }
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {
@@ -2944,7 +2971,7 @@ function* drive(
       // The size read suspends, and a record can arrive while it does: content
       // taken before it and navigation taken after it would describe two
       // different files on one screen.
-      const attempted = reproject(state, reading, current);
+      const attempted = yield* reproject(state, reading, current);
       const drawnAt = yield* screen.size();
       // The whole file, including the part before the position asked for, is
       // unreadable. There is no prefix for a notice to stand beside, so what
@@ -3008,7 +3035,7 @@ function* drive(
         // kept and the reason is said beside it: unlike the refusal above,
         // there *is* a reading to stand beside.
         state = Object.freeze({ ...standing, refusal: built.error.message });
-        const back = reproject(state, reading, current);
+        const back = yield* reproject(state, reading, current);
         if (back.broken === undefined) {
           reading = back.reading;
         }
@@ -3082,16 +3109,19 @@ function exitLocation(state: ReplState): string {
  * the reason, so a caller can decide between adopting and restoring rather than
  * being handed a half-applied navigation.
  */
-function reproject(
+function* reproject(
   state: ReplState,
   reading: ReplReading,
   session: ReplSession,
-): {
+): Operation<{
   readonly state: ReplState;
   readonly reading: ReplReading;
   readonly broken: Error | undefined;
-} {
-  const read = session.reading(state.route.at);
+}> {
+  const read =
+    session.attend === undefined
+      ? session.reading(state.route.at)
+      : yield* session.attend(state.route.at, state.route.scopes[0]);
   // A file this process can no longer read is not a position to carry on at.
   // It is returned rather than folded into a route notice, because the two
   // are different screens: a notice stands beside a reading, and this has

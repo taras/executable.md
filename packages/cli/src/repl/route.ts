@@ -698,6 +698,9 @@ function openDrawer(
         new ReplRouteError("a binding drawer opens over the scope that published the name."),
       );
     }
+    if (scope.archived) {
+      return Err(new ReplRouteError("this scope's binding values have not been loaded."));
+    }
     const binding = scope.bindings.find((candidate) => candidate.name === reference.name);
     if (binding === undefined) {
       return Err(
@@ -787,16 +790,16 @@ function openEntryValue(
   if (entry === undefined) {
     return Err(new ReplRouteError(`an ${view} value opens over the entry that holds it.`));
   }
-  let bindings = entryInputBindings(model, entry);
-  if (view === "output") {
-    const output = entryOutput(entry);
-    if (output.state !== "ok") {
-      return Err(
-        new ReplRouteError(`${entry.key} has no successful Output at this history position.`),
-      );
-    }
-    bindings = output.bindings;
+  if (entry.archived) {
+    return Err(new ReplRouteError("this entry's binding values have not been loaded."));
   }
+  const output = view === "output" ? entryOutput(entry) : undefined;
+  if (output !== undefined && output.state !== "ok") {
+    return Err(
+      new ReplRouteError(`${entry.key} has no successful Output at this history position.`),
+    );
+  }
+  const bindings = output?.bindings ?? entryInputBindings(model, entry);
   const binding = bindings.find((candidate) => candidate.name === name);
   if (binding === undefined) {
     return Err(

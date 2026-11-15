@@ -13,6 +13,8 @@
  * off the path of `xmd run`.
  */
 
+import { appendCheckedRecord } from "./repl/record-file.ts";
+import type { JournalAppend } from "./repl/record-file.ts";
 import { type Operation, until } from "effection";
 import { ReplHost } from "./repl/host.ts";
 import type { ReplHostFact } from "./repl/host.ts";
@@ -78,6 +80,9 @@ export function* installReplHost(host: ReplHostCapabilities): Operation<void> {
       },
       *appendRecord([path, record]: [string, string]): Operation<void> {
         yield* until(host.appendRecord(path, record));
+      },
+      *appendEntryRecord([path, record, check]: [string, string, JournalAppend]): Operation<void> {
+        yield* appendCheckedRecord(path, record, check);
       },
     },
     { at: "min" },

@@ -769,12 +769,12 @@ describe("direct headless submission", () => {
   it("D: retains a pre-agent fatal persistence failure and refuses successors", function* () {
     let armed = false;
     yield* ReplHost.around({
-      *appendRecord([path, text], next) {
+      *appendEntryRecord([path, text, check], next) {
         const record = z.object({ type: z.string() }).passthrough().safeParse(JSON.parse(text));
         if (armed && record.success && record.data.type === "close") {
           throw new Error("Controlled fatal terminal persistence failure.");
         }
-        yield* next(path, text);
+        yield* next(path, text, check);
       },
     });
     const fixture = yield* useHeadlessFixture();
@@ -785,9 +785,15 @@ describe("direct headless submission", () => {
       kind: "finished",
       submission: { entry: "entry-1" },
       outcome: "failed",
-      journal: "unfinished",
+      journal: "unavailable",
     });
     expect(yield* deadline(command(fixture, HOLD).run)).toBe(1);
+    // The live session is fenced. A fresh reader can still verify the saved prefix.
+    const execution = yield* fixture.host.repository.open(child(fixture).session.execution);
+    const retained = yield* execution.stream.readAll();
+    expect(retained.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
+      false,
+    );
     expect(child(fixture).session.model.entries).toHaveLength(1);
     expect(fixture.host.fake.prompts).toHaveLength(0);
   });

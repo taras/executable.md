@@ -35,22 +35,16 @@ import { withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, stat } from "@effectionx/fs";
 import { join } from "node:path";
-import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 
 import { ReplHost } from "./host.ts";
-import { forEachLine } from "./record-file.ts";
+import { readRecords, ReplJournalError } from "./journal-records.ts";
+export { readRecords } from "./journal-records.ts";
 import { RetainedBindings } from "./retained-bindings.ts";
-import { sealEvent, stringSharing } from "./retained-event.ts";
+import { sealEvent } from "./retained-event.ts";
+import { PagedHistory } from "./paged-history.ts";
 import { isOpaqueExecution } from "./route.ts";
-
-/** What the REPL could not read or write, and nothing of what it held. */
-export class ReplJournalError extends Error {
-  constructor(message: string, options?: { cause: unknown }) {
-    super(message, options);
-    this.name = "ReplJournalError";
-  }
-}
 
 /**
  * An append-only stream that says when a record has actually been retained.
@@ -60,6 +54,7 @@ export class ReplJournalError extends Error {
  * filesystem being part of what is under test.
  */
 export interface RetainedStream extends DurableStream {
+  readonly history?: PagedHistory | undefined;
   /** Deliver the acknowledged record to the appending segment. */
   append(event: DurableEvent, retained?: (event: DurableEvent) => void): Operation<void>;
   /** Called after each append has been retained, with what was retained. */
@@ -69,18 +64,12 @@ export interface RetainedStream extends DurableStream {
 /**
  * One execution's retained stream.
  *
- * The events are held in memory because this process is the only writer: what is
- * in hand is what the file holds. An append reaches the file first and is only
- * then acknowledged — remembered and announced — so nothing downstream ever sees
- * a record that a crash would have lost.
- *
- * Every event is held once, as a frozen graph, and every reader is handed that
- * graph: `readAll()` answers with a fresh array of the same events, and the
- * observer is told the event that was retained. Nobody can change what another
- * reader sees, because nobody can change it at all — and the history is not
- * copied once per reader. What an append is handed is copied before the write
- * suspends, so a caller that edits its own object afterwards edits nothing
- * retained.
+ * An append reaches the file before its frozen record reaches the history,
+ * observer or owning segment. File-backed sessions delegate retained ranges
+ * to their validated catalog. An explicit full read reconstructs their events
+ * from the journal. Unpaged streams retain sealed events for their readers.
+ * Sealing before the write suspends keeps later caller edits out of the file
+ * and every reading.
  */
 export class RetainedReplStream implements RetainedStream {
   readonly path: string;
@@ -90,7 +79,11 @@ export class RetainedReplStream implements RetainedStream {
   /** Called after each append has reached the file, with what reached it. */
   onAppend: ((event: DurableEvent) => void) | null = null;
 
-  constructor(path: string, retained: readonly DurableEvent[] = []) {
+  constructor(
+    path: string,
+    retained: readonly DurableEvent[] = [],
+    readonly history?: PagedHistory,
+  ) {
     this.path = path;
     this.events = retained.map((event) => {
       const recorded = this.bindings.share(sealEvent(event));
@@ -99,18 +92,33 @@ export class RetainedReplStream implements RetainedStream {
     });
   }
 
-  // deno-lint-ignore require-yield
   *readAll(): Operation<DurableEvent[]> {
-    return this.events.slice();
+    return this.history === undefined ? this.events.slice() : yield* this.history.readAll();
   }
 
   *append(event: DurableEvent, retained?: (event: DurableEvent) => void): Operation<void> {
     const recorded = this.bindings.share(sealEvent(event));
 
-    yield* ReplHost.operations.appendRecord(this.path, serializeDurableEvent(recorded));
+    const text = serializeDurableEvent(recorded);
+    try {
+      if (this.history === undefined) {
+        yield* ReplHost.operations.appendRecord(this.path, text);
+      } else {
+        yield* ReplHost.operations.appendEntryRecord(this.path, text, this.history.checkAppend());
+      }
+    } catch (cause) {
+      if (this.history !== undefined) {
+        throw this.history.fence(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+      throw cause;
+    }
 
     this.bindings.remember(recorded);
-    this.events.push(recorded);
+    if (this.history === undefined) {
+      this.events.push(recorded);
+    } else {
+      this.history.acknowledge(recorded, text);
+    }
     this.onAppend?.(recorded);
     retained?.(recorded);
   }
@@ -191,7 +199,11 @@ export function* createExecutionFile(root: string, execution: string): Operation
  * Nothing is projected here: this answers what the file says, and deciding
  * whether what it says is a possible history belongs to the projector.
  */
-export function* openExecutionFile(root: string, execution: string): Operation<ReplExecution> {
+export function* openExecutionFile(
+  root: string,
+  execution: string,
+  paged = false,
+): Operation<ReplExecution> {
   const path = executionPath(root, execution);
 
   if (!(yield* exists(path))) {
@@ -202,62 +214,13 @@ export function* openExecutionFile(root: string, execution: string): Operation<R
     throw new ReplJournalError("this execution's history is not a file.");
   }
 
-  return { id: execution, stream: new RetainedReplStream(path, yield* readRecords(path)) };
+  return { id: execution, stream: yield* openRetainedStream(path, paged) };
 }
 
-/** V8's maximum string length, applied to a single serialized record. */
-const MAX_RECORD_UNITS = 0x1fffffe8;
-
-/**
- * Every record one file holds, in append order.
- *
- * A missing final newline is a refusal rather than a shorter history: the last
- * record was still being written, and reading around it would present a prefix
- * as the whole of what happened.
- *
- * The limit can be set lower to exercise the record boundary in tests.
- */
-export function* readRecords(
-  path: string,
-  maxRecordUnits = MAX_RECORD_UNITS,
-): Operation<DurableEvent[]> {
-  const events: DurableEvent[] = [];
-  const share = stringSharing();
-  const bindings = new RetainedBindings();
-  yield* forEachLine(
-    path,
-    {
-      recordLimit: {
-        units: maxRecordUnits,
-        exceeded: (record) =>
-          new ReplJournalError(
-            `this execution's history holds a record that exceeds ` +
-              `${maxRecordUnits.toLocaleString("en-US")} UTF-16 code units (record ${record}).`,
-          ),
-      },
-      refusals: {
-        unterminated: () =>
-          new ReplJournalError(
-            "this execution's history ends in a record that was never finished writing.",
-          ),
-      },
-    },
-    function* (line): Operation<void> {
-      const parsed = parseDurableEvent(line);
-      if (!parsed.ok) {
-        // The record's own text stays out of this: a history holds whatever a
-        // person's document held.
-        throw new ReplJournalError(
-          `this execution's history holds a record this version cannot read (record ` +
-            `${events.length + 1}).`,
-        );
-      }
-      const recorded = bindings.share(sealEvent(parsed.value, share));
-      bindings.remember(recorded);
-      events.push(recorded);
-    },
-  );
-  return events;
+export function* openRetainedStream(path: string, paged: boolean): Operation<RetainedReplStream> {
+  return paged
+    ? new RetainedReplStream(path, [], yield* PagedHistory.open(path))
+    : new RetainedReplStream(path, yield* readRecords(path));
 }
 
 /**
@@ -339,6 +302,9 @@ export function movableWriter(initial: RetainedStream): MovableWriter {
     },
     get path(): string {
       return (target as { path?: string }).path ?? "";
+    },
+    get history(): PagedHistory | undefined {
+      return target.history;
     },
     get appending(): boolean {
       return appending > 0;

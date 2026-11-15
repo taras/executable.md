@@ -146,7 +146,7 @@ The [Workflow Workspace specification](specs/workflow-workspace-spec.md) owns st
 
 The REPL retains successive entries in one physical journal, giving each execution a private view of its own segment. Settled entries are projected for reading; only the unfinished final entry is continued.
 
-History projection shares immutable retained bindings and copies other values before freezing them for views. The live session owns current execution state. Views receive observations rather than a journal writer or execution capability.
+History validates the complete journal at open. The live session holds the unfinished segment, the current bindings and settled entry summaries. Views load older values from verified journal ranges. They receive frozen observations while the session owns execution and the journal writer.
 
 Replay restores recorded results without restoring the whole host environment. New work uses the live environment, subject to the REPL’s placement, permission, and effect-specific checks.
 
