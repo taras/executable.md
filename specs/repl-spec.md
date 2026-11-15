@@ -1121,7 +1121,11 @@ Transcript -> Selected work -> Draft -> Tabs/Configure
  History <- Message <- TODO <- Right reading <-----+
 ```
 
-Ctrl+G followed by a digit enters a region at the same fixed control as Tab.
+Ctrl+G shows a numbered focus hint near each displayed shortcut destination.
+It lists destinations the shortcut can reveal with the route each digit opens.
+The hints appear without moving focus or changing either draft or the selection.
+Escape or Ctrl+G again dismisses them and keeps focus. An offered digit enters
+the region at the same fixed control as Tab and dismisses the hints.
 
 | Digit | Region |
 | --- | --- |
@@ -1136,9 +1140,10 @@ Ctrl+G followed by a digit enters a region at the same fixed control as Tab.
 | 9 | Narrow surface bar |
 
 A shortcut reveals the destination's outlet when needed. It preserves both
-drafts and the selected entry and conversation. An unavailable destination
-leaves focus and values intact. A modal keeps focus in its own branch. The
-prefix and digit are consumed without entering either field.
+drafts and the selected entry and conversation. Unavailable digits are omitted
+and pressing one leaves the hints open. A modal keeps focus in its own branch
+and suppresses focus hints. The prefix and digit are consumed without entering
+either field.
 
 Arrows move between local controls along their group's axis. Right enters a
 vertical group from its anchor; Left returns to that anchor. A group always

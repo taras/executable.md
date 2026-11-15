@@ -1350,6 +1350,8 @@ export interface ReplTransition {
 /** One complete reading of the product, ready to describe. */
 export interface ReplView {
   readonly detachable?: boolean;
+  /** Digits on this route or reachable through a different route. */
+  readonly focusHints?: ReadonlyMap<string, string | undefined>;
   readonly state: ReplState;
   readonly model: ReplModel;
   /**
