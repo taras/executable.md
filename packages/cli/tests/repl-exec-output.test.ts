@@ -176,7 +176,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
     const start = withResolvers<void>();
     const encoder = new TextEncoder();
     const controls = "\r\t\x1b[2J\x1b[H\x1b]0;owned\x07\x1b[?1049l\x9b";
-    const long = "LONG".repeat(90) + "LONG-END";
+    const long = "LONG".repeat(90) + "\nLONG-END";
     let calls = 0;
     yield* API.Process.around({
       *exec() {

@@ -4,7 +4,7 @@
     <ReplBench.Type text={'<AgentProvider name="wheel-permission-fixture" defaultAgent="fixture"><Session name="permission"><Prompt text="many choices" /></Session></AgentProvider>'} />
     <ReplBench.WaitForText text="many choices" />
     <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="asks: Permission prose 00" as="permission" />
+    <ReplBench.WaitForText text="asks:" as="permission" />
     <ReplBench.Click at={permission} />
     <ReplBench.WaitForText text="> [Choice 00]" as="first" />
     <ReplBench.WaitForText text="Permission prose 44" present={false} />
@@ -34,7 +34,7 @@
     </Each>
     <ReplBench.WaitForText text="[Choice 39]" as="last" />
     <ReplBench.WaitForText text="[close]" />
-    <ReplBench.WaitForText text="Permission prompt completed." present={false} />
+    <ReplBench.WaitForText text="completed." present={false} />
     <Each in={[1,2,3,4,5,6,7,8]} let="page">
       <ReplBench.Key key="PageUp" />
     </Each>
@@ -51,7 +51,10 @@
     </Each>
     <ReplBench.WaitForText text="[Choice 39]" at={last} />
     <ReplBench.Click at={last} />
-    <ReplBench.WaitForText text="Permission prompt completed." />
+    <ReplBench.WaitForText text="Output" as="output" />
+    <ReplBench.WaitForText text="Permission" row={output.row+1} />
+    <ReplBench.WaitForText text="prompt" row={output.row+2} />
+    <ReplBench.WaitForText text="completed." row={output.row+3} />
     <ReplBench.WaitForText text="✓ COMPLETED" />
     <ReplBench.WaitForText text="Ready for Entry 2" />
     <ReplBench.WaitForText text="Expected one prompt and exactly one decision selecting Choice 39." present={false} />

@@ -320,19 +320,17 @@ no change observation. Issued native work joins before mutation ordering or
 session shutdown releases it. Unknown replacement acknowledgement stays unknown;
 a later read establishes current contents only.
 
-TODO and QUEUE share one tab row with the selected list beneath it. Selecting
-another tab changes only the view; background task or message activity never
-selects a tab. Selecting TODO shows its retained state; activating its active
-header collapses or expands the checklist. `+` creates a task. Task Space checks or
-reopens; Enter edits. Down from the last task creates another. Enter saves the
-editor, Escape cancels, arrows edit its caret and Tab leaves the region. Tasks
-show ☐ when incomplete and ☑ when complete. Only the task with keyboard focus
+Selecting TODO shows the retained checklist in the Sidekick reading area.
+Background task or message activity preserves the selected tab. `+` creates a
+task. Task Space checks or reopens and Enter edits. Down from the last task
+creates another. Enter saves the editor, Escape cancels, arrows edit its caret
+and Tab leaves the region. Tasks show ☐ when incomplete and ☑ when complete. Only the task with keyboard focus
 on its label or an action shows ↑, ↓ and x beside its first displayed row for
 move up, move down and remove. These controls share the list background.
 Left/Right reaches them within the focused task row. Alt+Up/Down navigates locally
-without reordering. The TODO header is its fixed Tab and Backtab entry between
-the conversation and Message. Background changes preserve collapse, focus,
-composer text and reading positions.
+without reordering. The TODO tab is its fixed entry between the conversation
+and Message. Background changes preserve focus, composer text and reading
+positions.
 
 The list uses its natural displayed height up to eight, six and three task rows
 at 160x36, 120x30 and 72x20. Wrapped labels consume rows. Empty and short lists

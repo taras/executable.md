@@ -88,9 +88,9 @@
   <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-held-history.md" columns={120} rows={30}>
     <Repl.Focus.Draft />
     <Each in={[0,1,2,3,4,5,6,7,8,9,10,11]} let="index">
-      <Let as="source" value={index===11 ? Array.from({length:70},(_,row)=>"Background row "+row).join("\n") : '<Let as="history'+index+'" value={'+index+'} />'} />
+      <Let as="source" value={index===11 ? Array.from({length:70},(_,row)=>"Bg row "+row).join("\n") : '<Let as="history'+index+'" value={'+index+'} />'} />
       <ReplBench.Type text={source} />
-      <ReplBench.WaitForText text={index===11 ? "Background row 69" : "value={"+index+"}"} />
+      <ReplBench.WaitForText text={index===11 ? "Bg row 69" : "value={"+index+"}"} />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text={"Ready for Entry "+(index+2)} />
     </Each>
@@ -107,11 +107,11 @@
     <ReplBench.Type text="held-value" />
     <ReplBench.WaitForText text="= held-value" />
     <ReplBench.Key key="ArrowLeft" />
-    <ReplBench.WaitForText text="Background row 0" as="background" />
+    <ReplBench.WaitForText text="Bg row 0" as="background" />
     <ReplBench.Scroll delta={1} at={background} />
     <ReplBench.Key key="Tab" />
     <ReplBench.WaitForText text="> [submit]" />
-    <ReplBench.WaitForText text="Background row 0" at={background} />
+    <ReplBench.WaitForText text="Bg row 0" at={background} />
     <ReplBench.WaitForText text="= held-value" />
     <ReplBench.Key key="Shift+Tab" />
     <ReplBench.WaitForText text="[history]" as="history" />
