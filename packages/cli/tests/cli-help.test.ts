@@ -435,7 +435,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     // the option is on one help and not the other — and it is a second line
     // rather than a second description of `--default-agent`.
     expect(repl.stdout).toContain("--sidekick-agent");
-    expect(repl.stdout).toContain("agent name for the Sidekick's own conversations");
+    expect(repl.stdout).toContain("agent name or explicit path to a Markdown TestAgent");
     expect(repl.stdout).toContain("--default-agent");
     expect(run.stdout).not.toContain("--sidekick-agent");
 
@@ -446,6 +446,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
       ["repl", "--sidekick-agent", "claude"],
       ["repl", "--sidekick-agent=claude"],
       ["repl", "--default-agent", "codex", "--sidekick-agent", "claude"],
+      ["repl", "--sidekick-agent=./fixture.md"],
     ]) {
       const ran = yield* runCli(accepted).join();
       expect([accepted, ran.code]).toEqual([accepted, 1]);

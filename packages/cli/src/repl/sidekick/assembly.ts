@@ -33,6 +33,7 @@ import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 
 import type { SidekickAssembly } from "./owner.ts";
+import type { ScriptedSidekick } from "./scripted.ts";
 
 /**
  * How a Sidekick conversation answers a native permission request.
@@ -56,32 +57,67 @@ export function sidekickAssembly(
   dependencies: AcpxProviderDependencies,
   ownershipAdministration?: import("@executablemd/runtime").AgentSessionOwnershipAdministration,
   repl: readonly ReplPluginExtension[] = [],
+  scripted?: ScriptedSidekick,
 ): SidekickAssembly {
-  const options = { defaultAgent: agent, permissionMode: PERMISSION_MODE };
-  const factory = createAcpxProvider({
-    ...dependencies,
-    // Strict routing, so a request is answered here rather than composed
-    // around by whatever an entry installed. The mode alone would not say
-    // that, which is why the saved configuration carries all three.
-    permissions: "strict",
-    // Both lists stated. `[]` is this host configuring none, which is a
-    // different fact from leaving the agent's own set in place.
-    mcpServers: [],
-    newSessionOptions: { allowedTools: [] },
-  });
-  const installation: ExecutionInstallation = {
-    *install(): Operation<void> {
-      yield* installAgentComponents({
-        defaultAgent: agent,
-        permissionMode: PERMISSION_MODE,
-        rootProvider: { factory, options },
-      });
-    },
-  };
+  const ordinary = { install: () => installSidekickProvider(agent, dependencies) };
   return {
     agent,
     repl,
-    installations: [installation],
+    installations: [ordinary],
+    ...(scripted === undefined
+      ? {}
+      : {
+          scripted: {
+            agent: scripted.agent,
+            hasScenario: scripted.hasScenario,
+            installation(conversation: string): ExecutionInstallation {
+              return {
+                *install() {
+                  const worker = yield* scripted.worker(conversation);
+                  yield* installSidekickProvider(scripted.agent, {
+                    sessionStore: scripted.store,
+                    ...(dependencies.agentCwd === undefined
+                      ? {}
+                      : { agentCwd: dependencies.agentCwd }),
+                    agentRegistry: {
+                      resolve(name) {
+                        if (name !== scripted.agent) {
+                          throw new Error(`Unknown scripted Sidekick agent "${name}".`);
+                        }
+                        return worker;
+                      },
+                      list: () => [scripted.agent],
+                    },
+                    // ACPX's default environment allowlist omits DENO_DIR.
+                    agentProcessEnv: function* () {
+                      return scripted.denoDir === undefined
+                        ? undefined
+                        : { DENO_DIR: scripted.denoDir };
+                    },
+                  });
+                },
+              };
+            },
+          },
+        }),
     ...(ownershipAdministration === undefined ? {} : { ownershipAdministration }),
   };
+}
+
+function* installSidekickProvider(
+  agent: string,
+  dependencies: AcpxProviderDependencies,
+): Operation<void> {
+  const options = { defaultAgent: agent, permissionMode: PERMISSION_MODE };
+  const factory = createAcpxProvider({
+    ...dependencies,
+    permissions: "strict",
+    mcpServers: [],
+    newSessionOptions: { allowedTools: [] },
+  });
+  yield* installAgentComponents({
+    defaultAgent: agent,
+    permissionMode: PERMISSION_MODE,
+    rootProvider: { factory, options },
+  });
 }
