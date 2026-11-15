@@ -951,6 +951,14 @@ describe("Tier PV — generation that ended without a reply", () => {
     ].join("\n"),
   ];
 
+  const NOTICE = "Sidekick reply failed";
+
+  function* dismissFailureNotice(page: ReplPage): Operation<void> {
+    yield* page.until("the provider failure notification", (one) => one.shows(NOTICE));
+    yield* page.key("Escape");
+    yield* page.until("the dismissed failure notification", (one) => !one.shows(NOTICE));
+  }
+
   it("PV3: a provider that fails after saying something leaves an unfinished attempt", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -967,6 +975,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 
     // The saved failed turn is the account now: said as unfinished, with the
     // literal Output it had managed and the reason it stopped.
+    yield* dismissFailureNotice(page);
     yield* page.until("the unfinished attempt", (one) =>
       one.shows(`${MOUNTED_AGENT} (unfinished)`),
     );
@@ -1127,6 +1136,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 
     // Both items stand: the reply that was answered and the attempt that was
     // not. Drawing them is what a duplicated row would have crashed.
+    yield* dismissFailureNotice(page);
     yield* page.until("the failed successor", (one) => one.shows("(unfinished)"));
     expect(repl.outcome()).toBe(undefined);
     expect(page.screen().shows("First reply.")).toBe(true);
@@ -1156,6 +1166,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     first.fake.script({ deltas: CANDIDATE, stopReason: "refusal" });
 
     yield* sendMessage(firstPage, "try it");
+    yield* dismissFailureNotice(firstPage);
     yield* firstPage.until("the unfinished attempt", (one) =>
       one.shows(`${MOUNTED_AGENT} (unfinished)`),
     );
@@ -1182,6 +1193,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     // process remembered: this command never saw that generation.
     expect(againPage.screen().shows("As far as I")).toBe(true);
     expect(againPage.screen().shows("(preview)")).toBe(false);
+    expect(againPage.screen().shows(NOTICE)).toBe(false);
     // Reading it cost nothing: no turn, no session, not one byte.
     expect(againPage.repl.fake.prompts).toHaveLength(asked);
     expect(againPage.repl.fake.ensured).toHaveLength(opened);
