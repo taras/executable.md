@@ -117,14 +117,21 @@
         <Terminal.WaitForText text="1 ●" />
         <Terminal.Focus target="sidekick-composer" />
         <Each in={[1, 2, 3, 4, 5, 6, 7]} let="position">
-          <Terminal.Type text={"Waiting message " + position} />
-          <Terminal.Key key="Enter" />
+          <Let as="message" value={"Waiting message " + position} />
+          <Terminal.Region name="sidekick-composer">
+            <Terminal.Type text={message} />
+            <Terminal.WaitForText text={message} />
+            <Terminal.Key key="Enter" />
+            <Terminal.WaitForText text={message} present={false} />
+          </Terminal.Region>
         </Each>
         <Terminal.WaitForText text="↓ more" />
         <Terminal.WaitForText text="Waiting message 1" as="first" />
         <Terminal.WaitForText text="Waiting message 7" present={false} />
         <Terminal.Screenshot name="long-queue-top" />
-        <Terminal.Scroll delta={7} at={first} />
+        <Terminal.Scroll delta={1} at={first} />
+        <Terminal.WaitForText text="Waiting message 4" as="next" />
+        <Terminal.Scroll delta={1} at={next} />
         <Terminal.WaitForText text="↑ more" />
         <Terminal.WaitForText text="Waiting message 7" />
         <Terminal.Screenshot name="long-queue-bottom" />
