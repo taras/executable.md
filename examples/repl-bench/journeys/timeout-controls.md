@@ -55,3 +55,27 @@
     </ReplBench.Region>
   </ReplBench>
 </Test>
+
+
+<Test name="a Sidekick selected by path joins its worker on prompt mismatch" timeout="60s">
+  <XMD.Repl sidekick-agent="./examples/repl-bench/fixtures/repl-scripted-sidekick.md">
+    <XMD.Repl.SidekickPrompt text="Unexpected path prompt." />
+  </XMD.Repl>
+</Test>
+
+
+<Test name="a Sidekick selected by path joins its worker during an active prompt" timeout="60s">
+  <XMD.Repl sidekick-agent="./examples/repl-bench/fixtures/repl-sidekick-ordered-reads.md">
+    <XMD.Repl.SidekickPrompt text="What should I know?" />
+    <Repl.Focus.Message />
+    <All>
+      <Spawn>
+        <XMD.Repl.SidekickPrompt text="Ask the human." />
+      </Spawn>
+      <Spawn>
+        <Terminal.WaitForText text="[answer sidekick]" />
+        <Terminal.WaitForText text="fail-with-a-pending-path-question" timeout="3s" />
+      </Spawn>
+    </All>
+  </XMD.Repl>
+</Test>

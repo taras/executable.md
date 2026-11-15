@@ -14,6 +14,8 @@ const expectedFailures = [
 const scriptedFailures = [
   'Scripted Sidekick prompt "Unexpected prompt.": prompt did not match the active stage.',
   'Timed out waiting for "fail-with-a-pending-acp-question" in viewport',
+  'Scripted Sidekick prompt "Unexpected path prompt.": prompt did not match the active stage.',
+  'Timed out waiting for "fail-with-a-pending-path-question" in viewport',
 ];
 
 function* assertReaped(log: string, reason: string, workers: Map<number, Set<number>>) {

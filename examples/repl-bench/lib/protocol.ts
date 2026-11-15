@@ -51,6 +51,7 @@ export const launch = z.object({
   cwd: z.string(),
   home: z.string(),
   scenario: z.string().optional(),
+  attachment: z.string().optional(),
   entry: z.string().optional(),
   worktree: z.string().optional(),
   command: z.array(z.string()).min(1),
