@@ -1,10 +1,11 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep } from "effection";
+import { scoped, sleep } from "effection";
 import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell } from "./support/repl-page.ts";
-import { intoComposer, paneLines } from "./support/screen-journeys.ts";
+import { composerHolds, intoComposer, paneLines } from "./support/screen-journeys.ts";
+import { generateTypingHistory } from "./support/typing-history.ts";
 
 const SIZE = { columns: 160, rows: 36 };
 
@@ -126,6 +127,35 @@ describe("wheel bursts in one input chunk", () => {
     expect(page.screen().shows("message-kept")).toBe(true);
     page.repl.terminal.feed("!");
     yield* page.until("retained Message caret", (one) => one.shows("message-kept!"));
+  });
+
+  it("a tick that clears a staged refusal moves the next one within the freed capacity", function* () {
+    const reason =
+      "Permission to start was declined because the chosen fixture rejected this request. ";
+    const request = "Please refuse this request";
+    const footer = "! Permission to start was declined";
+    const cell = { column: 140, row: 13 };
+
+    function* endpoints(move: typeof burst) {
+      return yield* scoped(function* () {
+        const page = yield* useReplPage({ size: SIZE });
+        yield* generateTypingHistory(page, 2, 80);
+        yield* intoComposer(page);
+        // The staged refusal frees more rows than one tick moves when it clears.
+        page.repl.fake.script({ reply: "", failure: reason.repeat(8) });
+        yield* page.type(request);
+        yield* page.until("the request in Message", (one) => composerHolds(one, request));
+        yield* page.key("Enter");
+        yield* page.until("the staged refusal", (one) => one.shows(footer));
+        const start = paneLines(page.screen());
+
+        yield* move(page, "up", cell, 2);
+        expect(page.screen().shows(footer)).toBe(false);
+        return { start, end: paneLines(page.screen()) };
+      });
+    }
+
+    expect(yield* endpoints(burst)).toEqual(yield* endpoints(ticked));
   });
 
   it("Transcript reaches the sequential endpoint and leaves the chat alone", function* () {

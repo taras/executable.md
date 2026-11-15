@@ -2366,7 +2366,7 @@ function* drive(
       if (attended !== undefined && !attended.ok) {
         return refusedView(candidate, attended.error.message, at);
       }
-      return yield* build(
+      const view = yield* build(
         candidate,
         attended?.value ?? reading,
         current,
@@ -2377,6 +2377,9 @@ function* drive(
         dispatch.queue,
         follow,
       );
+      // The footer this screen draws, so a geometry question is asked of the
+      // frame that is actually painted.
+      return liveScreen === undefined ? view : { ...view, detachable: true };
     }
 
     function prepareInput(view: ReplView, renderer: ReplRenderer) {
@@ -2535,11 +2538,17 @@ function* drive(
      * loop's to do — it owns the scope — so this reports it rather than performing
      * it.
      */
-    // The geometry the last wheel tick left behind, for the next tick of the
-    // same batch. Valid only while nothing else has touched the state or the
-    // size: every other wake, every other action and every draw drops it.
+    // The geometry the next wheel tick would measure: what the last tick left
+    // behind, or the frame that settled after it. Valid only while nothing else
+    // has touched the state, the focus or the size: every other wake, every
+    // other action and every draw drops it.
     let wheelGeometry:
-      | { state: ReplState; size: ReplTerminalSize; admission: ReplAdmission }
+      | {
+          state: ReplState;
+          size: ReplTerminalSize;
+          focused: string | undefined;
+          admission: ReplAdmission;
+        }
       | undefined;
 
     function* act(event: ReplInputEvent): Operation<boolean> {
@@ -2599,12 +2608,13 @@ function* drive(
         wheeled !== undefined &&
         carried !== undefined &&
         carried.state === state &&
+        carried.focused === focused &&
         carried.size.columns === size.columns &&
         carried.size.rows === size.rows
       ) {
-        // The previous tick of this batch measured this exact state at this
-        // size and moved only its own window: the frame between them is the
-        // same frame with that window's offset changed.
+        // This exact state was measured at this size: by the previous tick of
+        // this batch, which moved only its own window, or by the frame that
+        // settled before it.
         geometry = carried.admission;
       } else if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
@@ -3107,8 +3117,12 @@ function* drive(
         // Read after `perform`, so anything it changed is a miss.
         const window = geometry.windows.get(wheeled.window);
         if (state === before) {
-          wheelGeometry = { state, size, admission: geometry };
-        } else if (state === transition.state && window !== undefined) {
+          wheelGeometry = { state, size, focused, admission: geometry };
+        } else if (
+          state === transition.state &&
+          window !== undefined &&
+          movedOnlyAWindow(before, state)
+        ) {
           const from = wheelDestination(window, wheeled.direction);
           const count = Math.min(window.capacity, Math.max(0, window.total - from));
           const windows = new Map(geometry.windows);
@@ -3122,10 +3136,37 @@ function* drive(
               more: from + count < window.total,
             }),
           );
-          wheelGeometry = { state, size, admission: Object.freeze({ ...geometry, windows }) };
+          wheelGeometry = {
+            state,
+            size,
+            focused,
+            admission: Object.freeze({ ...geometry, windows }),
+          };
         }
       }
       return performed.exited === true;
+    }
+
+    /**
+     * Keep a committed frame's geometry for the first wheel tick after it.
+     *
+     * That frame was composed from the state, reading, focus and size the next
+     * tick would measure, so its admission is the one that measurement would
+     * produce — while nothing has changed since. Only a frame that settled is
+     * kept: one whose focus moved under it, one carrying focus hints the input
+     * view does not have, and a broken reading's refusal all differ from what
+     * the tick would measure.
+     */
+    function keepCommitted(committed: ReplPainted): void {
+      const view = committed.view;
+      wheelGeometry =
+        broken === undefined &&
+        view.focusHints === undefined &&
+        view.state === state &&
+        view.focused === focused &&
+        focused === keyOfFocus(tree)
+          ? { state, size: view.size, focused, admission: committed.admission }
+          : undefined;
     }
 
     let focused: string | undefined;
@@ -3290,6 +3331,12 @@ function* drive(
         focusPrefix = false;
         rendered = undefined;
         presenting = undefined;
+        wheelGeometry = undefined;
+      }
+      if (taken.some((wake) => wake.kind !== "screen" || wake.event.kind !== "wheel")) {
+        // Whatever woke beside the wheel has already changed what a tick would
+        // measure, even when its wake is queued after the tick.
+        wheelGeometry = undefined;
       }
 
       // What stands now, to return to if what is attempted does not resolve.
@@ -3632,6 +3679,7 @@ function* drive(
       presentedAt = showing();
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
+      let committed = painted;
       // Focus is read against the view that was committed, which a resize may
       // have rebuilt from the one resolved above.
       const view = painted.view;
@@ -3656,7 +3704,9 @@ function* drive(
         settledFocus = keyOfFocus(tree);
         state = focusSettled(again.view, settledFocus, again.admission);
         focused = settledFocus;
+        committed = again;
       }
+      keepCommitted(committed);
       if (observer !== undefined && rendered !== undefined && liveScreen?.connected) {
         observePass("complete");
       }
@@ -3720,6 +3770,27 @@ function* reproject(
 function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
   const node = tree.focused();
   return node === undefined ? undefined : tree.keyOf(node);
+}
+
+/**
+ * Whether a wheel reduction moved a window and changed nothing else a frame
+ * measures.
+ *
+ * The next tick reuses this tick's geometry only then. A scroll also clears the
+ * refusal showing, and a refusal staged in the footer takes rows from the
+ * reading bodies, so a tick that cleared one changed the capacity the next
+ * tick moves within. A pending reveal places its window wherever the revealed
+ * row is, rather than where the reduction put it.
+ */
+function movedOnlyAWindow(before: ReplState, after: ReplState): boolean {
+  if (after.restore?.kind === "reveal") {
+    return false;
+  }
+  const earlier = new Map(Object.entries(before));
+  const later = new Map(Object.entries(after));
+  return [...earlier.keys(), ...later.keys()].every(
+    (key) => key === "viewports" || key === "revealing" || earlier.get(key) === later.get(key),
+  );
 }
 
 /**
