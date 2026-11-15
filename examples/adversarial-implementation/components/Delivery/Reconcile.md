@@ -54,4 +54,4 @@ completion turn can supply the review.
 <If condition={checkout.head !== props.revision || !checkout.clean}><Fail message="Source changed since the review. Preserve its result; the current source needs its own evidence." /></If>
 <If condition={!derived.includes("receipt.json")}><Dir path={attempt}><File path="receipt.json"><Json value={receipt} /></File></Dir></If>
 </If>
-<Return value={receipt} />
+<Return value={{...receipt,model:read.state.attempts[read.state.candidate.position].model}} />
