@@ -384,10 +384,10 @@ describe("shared Sidekick dispatch", () => {
     const visibleWaiting = () =>
       page.screen().rows.flatMap((row) => row.match(/waiting-\d+/)?.[0] ?? []);
     const beforeSwitch = visibleWaiting();
-    yield* page.press("TODO 0");
-    yield* page.until("TODO opens without moving the queue", (one) => one.shows("> TODO 0"));
+    yield* page.press("TODO");
+    yield* page.until("TODO opens without moving the queue", (one) => one.shows("> TODO"));
     expect(visibleWaiting()).toEqual(beforeSwitch);
-    yield* page.press("SIDEKICK", { onRow: "TODO 0" });
+    yield* page.press("SIDEKICK", { onRow: "TODO" });
     yield* page.until("Message returns with the same queue", (one) =>
       one.shows("> › message the sidekick"),
     );

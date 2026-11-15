@@ -32,3 +32,41 @@
 ```
 </Let>
 {done}
+
+<WhenPrompt template="{?before}Review the committed TODO changes{?after}" />
+
+<Let as="acknowledged" select="code">
+```xmd
+<Output>TODO change acknowledged.</Output>
+```
+</Let>
+{acknowledged}
+
+<WhenPrompt template={"{?before}The person says:\n\nFinish the remaining TODOs."} />
+
+<Let as="complete" select="code">
+````xmd
+<Sidekick.Todo as="items">
+```diff
+@@ -1,4 +1,4 @@
+ - [x] Reproduce checkout
+-- [ ] Fix checkout
+-- [ ] Verify checkout
+-- [ ] Review checkout
++- [x] Fix checkout
++- [x] Verify checkout
++- [x] Review checkout
+```
+</Sidekick.Todo>
+````
+</Let>
+{complete}
+
+<WhenPrompt template="{?receipt}Review checkout{?rest}" />
+
+<Let as="completeResult" select="code">
+```xmd
+<Output>All TODOs complete.</Output>
+```
+</Let>
+{completeResult}

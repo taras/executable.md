@@ -180,7 +180,7 @@ for (const size of [
       } else {
         yield* intoComposer(page);
       }
-      yield* page.until("TODO tab", (one) => one.shows("TODO 0"));
+      yield* page.until("TODO tab", (one) => one.shows("TODO"));
       yield* page.press("TODO", { onRow: "SIDEKICK" });
       capture(page, "empty");
       page.repl.fake.script({ reply: "<Output>Reviewed task.</Output>" });
@@ -234,7 +234,7 @@ for (const size of [
       } else {
         yield* intoComposer(page);
       }
-      yield* page.until("TODO tab", (one) => one.shows("TODO 0"));
+      yield* page.until("TODO tab", (one) => one.shows("TODO"));
       yield* page.press("TODO", { onRow: "SIDEKICK" });
       const read = yield* settledReading(page.repl);
       const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";

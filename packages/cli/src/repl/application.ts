@@ -5906,6 +5906,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   }
   if (!narrow || (workspace !== undefined && showSidekick)) {
     const todo = workspace?.todo;
+    const openItems = todo?.document?.openItems ?? 0;
     const tabs = [
       {
         key: "tab:sidekick",
@@ -5919,7 +5920,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
             {
               key: "todo:header",
               pane: "todo",
-              label: `TODO ${todo.document?.openItems ?? 0}`,
+              label: openItems > 0 ? `TODO ${openItems}` : "TODO",
               active: showingTodo(view),
             },
           ]),
