@@ -1,9 +1,9 @@
 import { readTextFile, stat } from "@effectionx/fs";
-import { ensure, main, sleep, spawn, until } from "effection";
+import { ensure, run, sleep, spawn, until } from "effection";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import process from "node:process";
-import { denoCommand, root } from "./lib/run.ts";
+import { denoCommand, root } from "../lib/run.ts";
 
 const decoder = new TextDecoder();
 const expectedFailures = [
@@ -33,7 +33,7 @@ function* assertReaped(log: string, reason: string, workers: Map<number, Set<num
   }
 }
 
-main(function* () {
+function* verifyTeardown() {
   let child: Deno.ChildProcess | undefined;
   let settled = false;
   yield* ensure(function* () {
@@ -47,12 +47,17 @@ main(function* () {
     "examples/repl-bench/journeys/timeout-controls.md",
   ]);
   assert.ok(command);
-  child = new Deno.Command(command, { args, cwd: root, stdout: "piped", stderr: "piped" }).spawn();
+  child = new Deno.Command(command, {
+    args,
+    cwd: root,
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
   const workers = new Map<number, Set<number>>();
   const workerCommand = `${join(root, "packages/cli/src/deno.ts")} test-agent --connect `;
   const poll = yield* spawn(function* () {
     const ps = new Deno.Command("ps", { args: ["-ww", "-axo", "pid=,ppid=,command="] });
-    while (true) {
+    while (!settled) {
       const snapshot = yield* until(ps.output());
       assert.equal(snapshot.code, 0, decoder.decode(snapshot.stderr));
       for (const line of decoder.decode(snapshot.stdout).split("\n")) {
@@ -70,7 +75,7 @@ main(function* () {
   });
   const result = yield* until(child.output());
   settled = true;
-  yield* poll.halt();
+  yield* poll;
   const log = decoder.decode(result.stderr) + "\n" + decoder.decode(result.stdout);
   try {
     assert.equal(result.code, 1, "The intentional failures must exit with status 1");
@@ -86,7 +91,7 @@ main(function* () {
     process.stderr.write(log);
     throw error;
   }
-  process.stdout.write(
-    "Expected bench failures retained their evidence and reaped scripted workers.\n",
-  );
-});
+}
+
+Deno.test("failed journeys keep evidence and reap the REPL and scripted Sidekick", () =>
+  run(verifyTeardown));

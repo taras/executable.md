@@ -45,11 +45,17 @@ deno run --allow-all --cached-only --frozen --node-modules-dir=none \
 ```
 
 Run one document by passing its `*.test.md` path. Both forms use the plugin
-declared in `examples/repl-bench/xmd.json`. Run from the worktree root so the scripted
-scenarios resolve from that working directory. The [isolation journey](journeys/isolation.test.md) verifies that one failure
-leaves the other terminal usable. CI runs the intentional
-[`timeout-controls.md`](journeys/timeout-controls.md) failures through
-`check-teardown.ts`, which verifies that the REPL and scripted Sidekick exit.
+declared in `examples/repl-bench/xmd.json`. Run from the worktree root so the
+scripted scenarios resolve there. The [isolation journey](journeys/isolation.test.md)
+verifies that one failure leaves the other terminal usable.
+
+Run the [TypeScript tests](tests) to check composer recognition and verify
+that the REPL and scripted Sidekick exit after the intentional failures in
+[`timeout-controls.md`](journeys/timeout-controls.md).
+
+```text
+deno test --allow-all --cached-only --frozen --node-modules-dir=none examples/repl-bench/tests
+```
 
 Use a composer region for a field-value
 check. A viewport match can also find the same text in the Draft or Transcript.
