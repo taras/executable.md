@@ -1628,9 +1628,9 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; then compact History and guidance |
+| `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; a readiness row; then compact History |
 | `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
-| `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. The drawer and guidance remain available |
+| `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. Drawer guidance and the readiness row remain available |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
@@ -1639,6 +1639,11 @@ Sidekick's in the same list, neither of them under a heading of its own. Each
 row says whose work it is and which conversation it was in, which is how the two
 owners are told apart here — they keep their own authority and their own
 recorded order, and one displayed list does not merge their histories.
+A recorded successful turn has no status suffix in the Transcript. Queued,
+streaming, unrecorded, failed, and interrupted turns keep their status. Output
+previews start at the first nonblank line. Entry output and Sidekick replies
+omit leading blank lines on screen while preserving indentation, internal
+spacing, and recorded output.
 
 The **All sessions** selector at its head is the filter for that list. It is a
 control: activating it shows the conversations this reading holds — the same
@@ -1669,6 +1674,18 @@ Follow starts checked and keeps its live setting across rounds, navigation and
 resizing. Send stays available beside Stop during an active exchange. A held
 queue shows its reason and offers **Resume queue** beside the other fixed
 actions. When the actions cannot fit one row, each control stays whole.
+
+A new Sidekick reply failure in the active conversation opens a notification
+without moving focus. Uncertain automatic feedback uses its existing inline
+recovery controls. With Sidekick visible, it sits one cell inside the right
+edge below the Sidekick header and spans 52 columns in a three-column frame. In the
+narrow Sidekick outlet it leaves one column on each side. The notification
+includes a short diagnostic and offers Retry while the saved request is still
+eligible. Escape or X dismisses it. A modal takes precedence while open. The
+notification has no timeout. The conversation keeps the failed reply and its
+diagnostic after dismissal, and the Sidekick header shows the failed status
+until the next turn. Dismissal and retry presentation belong to the current
+process, and reopening a saved failure shows its record without a notification.
 
 While messages wait, a list above the composer shows the notice
 `Waiting messages are kept only in this REPL.` and the messages in admission
@@ -1789,30 +1806,16 @@ for, a navigation that selects nothing, a pause this process cannot perform —
 appears beside the control that was refused, shortened with an ellipsis when the
 row is too narrow for all of it. It does not replace the screen.
 
-The last row says how to operate what is in front of you: where typing goes,
-what Enter does on the control that has focus, that Tab and Shift+Tab move
-between regions, that arrows edit fields or navigate locally and Alt+Up/Down
-reaches local actions, that a pointer does what Enter does, and how to close a drawer
-when one is open. It is read off what is mounted rather than fixed, so it never
-names an action this screen does not have — and when focus is on a control
-rather than a field it says how to get back to the draft, because that is the one
-moment a person's keystrokes reach nothing.
+History is the last row. The contextual readiness row above it reports the
+current execution state and any action needed to continue. A refusal of an
+action takes that row while it applies. A presented drawer uses the row for its
+own guidance, including how to leave it and how to reach or scroll its fields.
 
 ## What the screen says the execution is doing
 
-One row says it, and it says the state first. That row is the contextual guidance
-at the top of the surface being read — not a new row, and not one of the
-footer's. The footer holds one compact History row with its contextual controls and one
-row of guidance; the Draft stays with the selected work.
-
-The state comes first because the row is as wide as the region it is drawn in and
-that region decides where it stops. A sentence cut after "Entry 1 running" still told somebody
-the thing they could not have worked out; one cut after the key guidance told them
-what the keys do and left them pressing Enter at an entry that cannot accept it.
-What follows the state is what the state means for the keys, then what the focused
-node does, then the way out, then movement. At the narrowest supported frame the
-row is composed to fit rather than written long and cut, because a row the
-renderer cuts loses its last fact with nothing to say that it is missing.
+The readiness row leads with the execution state, then gives any action needed
+to proceed. It fits the available width and keeps the state readable at every
+supported size.
 
 **Readiness is read from the file and from this process together.** The durable
 side cannot answer it alone: a root close is recorded the moment a document
@@ -1888,8 +1891,8 @@ than as the first line of it. The rule between two columns and the rule that
 closes a header or opens the footer are different readings and are drawn
 differently. A header's own edge is a row of the screen, taken out of the band
 the title sits in and measured there, so a column with a title holds one row
-fewer of its reading than a column without one — and the footer keeps its compact History and guidance
-rows at every supported size, because that edge is the header's and not the footer's. None of this is needed to operate the screen. Where
+fewer of its reading than a column without one — and the footer keeps readiness and compact History
+at every supported size, because that edge is the header's and not the footer's. None of this is needed to operate the screen. Where
 focus is, what the execution is doing and which of the two inputs you are typing
 into are each said in text as well, so a terminal that ignores colour loses
 nothing you need. The two pane tabs are the one exception: which of them is

@@ -44,6 +44,8 @@ import {
   stackProps,
   CONTROL_PROPS,
   drawerLayerProps,
+  sidekickNoticeProps,
+  sidekickNoticeWidth,
   drawerRect,
   sidekickDrawerRect,
   footerProps,
@@ -109,7 +111,7 @@ import { ORDINARY, REPL_PALETTE, styleOf, terminalColour } from "./presentation-
 import type { EntryRestoreProgress } from "./paged-history.ts";
 import { placeScreen } from "./screen-regions.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
-import { jsonRuns, sourceRuns } from "./presentation-text.ts";
+import { jsonRuns, sourceRuns, trimLeadingBlankLines } from "./presentation-text.ts";
 import { HEAD_LABELS, NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
 import type { ReplHistoryNavigation } from "./navigation.ts";
 import { blankBand, EMPTY_BAND } from "./history-rail.ts";
@@ -1064,8 +1066,15 @@ export const AT_TOP: ReplViewports = Object.freeze({
   readings: Object.freeze({}),
 });
 
+interface ReplSidekickNotice {
+  readonly conversation: string;
+  readonly turn: number;
+  readonly decision?: "dismissed" | "retried";
+}
+
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
+  readonly sidekickNotice?: ReplSidekickNotice;
   readonly todoOpen?: boolean;
   readonly todoOffset?: number;
   readonly todoSelected?: string;
@@ -3198,6 +3207,14 @@ export function reduceRepl(
         },
       };
     }
+    case "dismiss-sidekick-notice": {
+      const notice = state.sidekickNotice;
+      return settled(
+        notice?.conversation === action.conversation && notice.turn === action.turn
+          ? { ...state, sidekickNotice: { ...notice, decision: "dismissed" } }
+          : state,
+      );
+    }
     case "retry-message": {
       return {
         state: Object.freeze({ ...state, refusal: undefined }),
@@ -4284,6 +4301,9 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
   const staging = chatStagingOf(view);
   const facts: (string | number | boolean | null | undefined)[] = [
     view.restorationNotice,
+    view.state.sidekickNotice?.conversation,
+    view.state.sidekickNotice?.turn,
+    view.state.sidekickNotice?.decision,
     reading !== undefined,
     reading?.reading,
     reading?.agent,
@@ -5471,14 +5491,14 @@ function requiredLength(parts: readonly GuidancePart[]): number {
  * The staged composition keeps every footer control on one compact History row,
  * which leaves a reason a handful of cells and an ellipsis — and a refusal
  * truncated before its meaning is a keystroke that appeared to do nothing. The
- * band below it is the full width of the frame and already pays a sentence out
+ * band above it is the full width of the frame and already pays a sentence out
  * over as many rows as its words need, so that is where the reason goes.
  *
  * The standing hint waits while it does. A hint describes what a person could
  * do; a refusal answers what they just did, and only one of those is news.
  */
 function refusalInBand(view: ReplView): boolean {
-  return view.state.refusal !== undefined && staged(view) !== undefined;
+  return shownRefusal(view) !== undefined && staged(view) !== undefined;
 }
 
 /**
@@ -5489,9 +5509,17 @@ function refusalInBand(view: ReplView): boolean {
  * for one sentence and drawn with another.
  */
 export function footerSentence(view: ReplView): string {
-  return refusalInBand(view)
-    ? `! ${(view.state.refusal ?? "").split("\n").join(" ")}`
-    : guidanceSentence(view);
+  if (refusalInBand(view)) {
+    return `! ${(shownRefusal(view) ?? "").split("\n").join(" ")}`;
+  }
+  if (staged(view) !== undefined && !modalOpen(view)) {
+    const readiness = readinessOf(view);
+    const narrow = profileFor(view.size) === "narrow";
+    const state = statePhrase(readiness, narrow);
+    const advice = stateAdvice(readiness, narrow, !narrow);
+    return advice === undefined ? state : `${state}${GUIDANCE_SEPARATOR}${advice}`;
+  }
+  return guidanceSentence(view);
 }
 
 export function guidanceSentence(view: ReplView): string {
@@ -5849,6 +5877,78 @@ function restoreRows(view: ReplView, restore: ReplRestoreView): readonly Describ
     );
   }
   return items;
+}
+
+function sidekickNoticeFailure(view: ReplView): ReplSidekickChatRow | undefined {
+  const notice = view.state.sidekickNotice;
+  if (
+    notice === undefined ||
+    staged(view) === undefined ||
+    !showingSidekick(view) ||
+    !currentChat(view) ||
+    view.live.sidekick?.reading !== notice.conversation
+  ) {
+    return undefined;
+  }
+  return view.live.sidekick.chat.findLast(
+    (item) =>
+      item.conversation === notice.conversation &&
+      item.turn === notice.turn &&
+      item.failure !== undefined,
+  );
+}
+
+export function visibleSidekickNotice(view: ReplView): ReplSidekickChatRow | undefined {
+  const notice = view.state.sidekickNotice;
+  return notice !== undefined && notice.decision === undefined && !modalOpen(view)
+    ? sidekickNoticeFailure(view)
+    : undefined;
+}
+
+function shownRefusal(view: ReplView): string | undefined {
+  const refusal = view.state.refusal;
+  return refusal !== undefined && refusal !== sidekickNoticeFailure(view)?.failure
+    ? refusal
+    : undefined;
+}
+
+function sidekickNoticeRows(view: ReplView, reason: readonly string[] = []): readonly Described[] {
+  const notice = visibleSidekickNotice(view);
+  if (notice === undefined || notice.turn === null) {
+    return [];
+  }
+  return [
+    line("notice:title", "× Sidekick reply failed", styleOf("failed-outcome")),
+    row(
+      "notice:dismiss",
+      "[X]",
+      {
+        select: "dismiss-sidekick-notice",
+        conversation: notice.conversation,
+        turn: notice.turn,
+      },
+      styleOf("action"),
+      { here: view.focused },
+    ),
+    ...reason.map((text, index) => line(`notice:reason:${index}`, text, styleOf("output"))),
+    line("notice:help", "Click X or press Esc", styleOf("metadata")),
+    ...(notice.retry === undefined
+      ? []
+      : [
+          row(
+            "notice:retry",
+            "[retry]",
+            {
+              select: "retry-message",
+              conversation: notice.retry.conversation,
+              message: notice.retry.message,
+              noticeTurn: notice.turn,
+            },
+            styleOf("action"),
+            { here: view.focused },
+          ),
+        ]),
+  ];
 }
 
 function described(view: ReplView, context: ReplPresentationContext): DescribedScreen {
@@ -6257,6 +6357,10 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // two nodes with one key would be two controls claiming one name, and leaving
   // it out here would put it outside the active focus root where nothing could
   // reach it.
+  if (view.live.sidekick?.busy !== true && sidekickNoticeFailure(view) !== undefined) {
+    items.push(line("notice:state", "× reply failed", styleOf("failed-outcome")));
+  }
+  items.push(...sidekickNoticeRows(view, context.noticeReason));
   const history = row(
     "footer:history",
     "[history]",
@@ -6384,14 +6488,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
 
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
   // refusal nobody can read is a keystroke that appeared to do nothing.
-  if (state.refusal !== undefined && !refusalInBand(view) && offering("footer:refused")) {
+  const refusal = shownRefusal(view);
+  if (refusal !== undefined && !refusalInBand(view) && offering("footer:refused")) {
     // One line: the footer is seven rows and the controls live in them, so a
     // refusal that wrapped would push the draft off the screen it is about.
     //
     // Cut to whatever the measured row had left, with an ellipsis, so a reader
     // can tell a shortened reason from a complete one. The controls come first:
     // a row too narrow for both keeps the way out and loses the sentence.
-    const said = `! ${state.refusal.split("\n").join(" ")}`;
+    const said = `! ${refusal.split("\n").join(" ")}`;
     const room =
       context.admission.shortened?.key === "footer:refused"
         ? context.admission.shortened.width
@@ -9794,6 +9899,7 @@ export interface ReplPresentationContext {
    * interior has room for. None before the frame has measured one.
    */
   readonly notices?: ReplPreparedNotices | undefined;
+  readonly noticeReason?: readonly string[];
   readonly details?: readonly ReplFittedLine[] | undefined;
   /**
    * How wide the History row's map is, once its controls have been measured.
@@ -10089,6 +10195,7 @@ function slotOf(key: string): ReplSlot | undefined {
     return "todo";
   }
   if (
+    key.startsWith("notice:") ||
     key === "transcript:title" ||
     key === "transcript:selector" ||
     key === "work:crumbs" ||
@@ -11668,6 +11775,7 @@ interface ReplChatStaging {
   readonly model: ReplModel;
   readonly live: ReplLive;
   readonly work: readonly ReplAssociatedWork[];
+  readonly notice?: ReplSidekickNotice;
 }
 
 function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
@@ -11675,7 +11783,12 @@ function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
   if (workspace === undefined) {
     return undefined;
   }
-  return { model: view.model, live: view.live, work: workspace.work };
+  return {
+    model: view.model,
+    live: view.live,
+    work: workspace.work,
+    notice: view.state.sidekickNotice,
+  };
 }
 
 /**
@@ -11742,7 +11855,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
       );
     }
     // The record's own final line break ends its last line rather than adding one.
-    const recorded = inertCommandText(entry.terminal?.output ?? "");
+    const recorded = trimLeadingBlankLines(inertCommandText(entry.terminal?.output ?? ""));
     const output = recorded.endsWith("\n") ? recorded.slice(0, -1) : recorded;
     if (output !== "") {
       found.push(
@@ -11802,12 +11915,13 @@ function workspaceChatComposed(
       // run and no turn is acknowledged, so this is not a reply yet — and a
       // row that differed from one only by its colour would tell a reader
       // nothing they could read. `(unfinished)` below is the other ending.
+      const output = trimLeadingBlankLines(item.text);
       items.push(
         text(
           key,
           item.incomplete === true
-            ? `${reading.agent} (unfinished): ${item.text}`
-            : `${reading.agent} (preview): ${item.text}`,
+            ? `${reading.agent} (unfinished): ${output}`
+            : `${reading.agent} (preview): ${output}`,
           item.incomplete === true ? styleOf("failed-outcome") : styleOf("waiting"),
           SIDEKICK_MARK,
         ),
@@ -11822,6 +11936,12 @@ function workspaceChatComposed(
         ),
       );
     } else if (item.kind === "incomplete" || item.failure !== undefined) {
+      const notice =
+        staging.notice?.conversation === item.conversation && staging.notice.turn === item.turn
+          ? staging.notice
+          : undefined;
+      const noticeLabel = notice === undefined ? "" : ` · ${notice.decision ?? "see notification"}`;
+
       // Said the way the preview above it is said, and the way the ordinary
       // pane says it: who answered, how far it got, then the reason. The mark
       // in front already says this row is the Sidekick's, and the name is what
@@ -11833,7 +11953,7 @@ function workspaceChatComposed(
           key,
           `${reading.agent} (${item.kind === "incomplete" ? "unfinished" : "failed"}): ${
             item.failure ?? "this turn did not complete"
-          }`,
+          }${noticeLabel}`,
           styleOf("failed-outcome"),
           SIDEKICK_MARK,
         ),
@@ -11844,7 +11964,12 @@ function workspaceChatComposed(
       // the conversation it is still continuing — and a staged pane that said
       // the turn failed and then offered nothing would be the same reading
       // with its one action taken away.
-      if (item.kind === "incomplete" && item.retry !== undefined && reading.current) {
+      if (
+        item.kind === "incomplete" &&
+        item.retry !== undefined &&
+        reading.current &&
+        (notice === undefined || notice.decision !== undefined)
+      ) {
         items.push(
           Object.freeze({
             kind: "control" as const,
@@ -11860,7 +11985,7 @@ function workspaceChatComposed(
         );
       }
     } else if (item.hasOutput) {
-      items.push(text(key, item.text, styleOf("output"), SIDEKICK_MARK));
+      items.push(text(key, trimLeadingBlankLines(item.text), styleOf("output"), SIDEKICK_MARK));
     }
     if (item.usageLine !== undefined) {
       items.push({
@@ -12095,13 +12220,12 @@ function inputResultRows(
 function compactTurn(turn: ReplSessionTurn, width: number | undefined): readonly ReplSessionRow[] {
   const rows: ReplSessionRow[] = [];
   const style = turnStyle(turn);
+  const status: readonly ReplLabelPart[] =
+    turn.state === "retained" && turn.status === "completed" && turn.failure === undefined
+      ? []
+      : [{ text: " · " }, { text: stateOf(turn), keep: true }];
   const label = fitControl(
-    [
-      { text: AGENT_MARK.text },
-      { text: headline(turn.prompt), elide: true },
-      { text: " · " },
-      { text: stateOf(turn), keep: true },
-    ],
+    [{ text: AGENT_MARK.text }, { text: headline(turn.prompt), elide: true }, ...status],
     width,
   );
   rows.push(
@@ -12121,7 +12245,10 @@ function compactTurn(turn: ReplSessionTurn, width: number | undefined): readonly
       sessionLine(
         `sessions:turn:${turn.key}:text`,
         fitLine(
-          [{ text: `${CONTROL_ROOM}${MARKER_ROOM}` }, { text: headline(turn.text), elide: true }],
+          [
+            { text: `${CONTROL_ROOM}${MARKER_ROOM}` },
+            { text: headline(trimLeadingBlankLines(turn.text)), elide: true },
+          ],
           width,
         ),
         styleOf("output"),
@@ -12208,13 +12335,10 @@ function compactSidekickTurn(
     : turn.failed
       ? styleOf("failed-outcome")
       : styleOf("source");
+  const status: readonly ReplLabelPart[] =
+    turn.state === "completed" ? [] : [{ text: " · " }, { text: turn.state, keep: true }];
   const label = fitControl(
-    [
-      { text: mark.text },
-      { text: headline(turn.title), elide: true },
-      { text: " · " },
-      { text: turn.state, keep: true },
-    ],
+    [{ text: mark.text }, { text: headline(turn.title), elide: true }, ...status],
     width,
   );
   rows.push(
@@ -12237,7 +12361,7 @@ function compactSidekickTurn(
     const said = fitLine(
       [
         { text: `${CONTROL_ROOM}${SIDEKICK_MARK.text}` },
-        { text: headline(turn.text), elide: true },
+        { text: headline(trimLeadingBlankLines(turn.text)), elide: true },
       ],
       width,
     );
@@ -13098,7 +13222,7 @@ const WORKSPACE_HEADERS: readonly {
     id: "conversation",
     gap: TAB_GAP,
     left: Object.freeze(["tab:sidekick", "todo:header", "tab:bindings"]),
-    right: Object.freeze(["sidekick:configure"]),
+    right: Object.freeze(["notice:state", "sidekick:configure"]),
   }),
   Object.freeze({
     id: "tray",
@@ -13916,6 +14040,41 @@ function workspacePresentation(input: {
     );
   }
 
+  const [noticeTitle] = byKey("notice:title");
+  if (noticeTitle !== undefined) {
+    const detail = startingWith("notice:reason:");
+    const retry = parts(["notice:retry"], "inspection");
+    const width = sidekickNoticeWidth(size) - 4;
+    const headRows = headerRows("conversation", "inspection", header).length;
+    const top = 1 + (outlet ? 1 : 0) + headRows;
+    columns.push(
+      box({
+        id: "box:sidekick:notice",
+        region: "inspection",
+        props: sidekickNoticeProps(size, top, detail.length + 4),
+        children: [
+          box({
+            id: "box:sidekick:notice:header",
+            region: "inspection",
+            props: bandRowProps(REPL_PALETTE.restoreFailureSurface),
+            children: [
+              part(noticeTitle, "inspection"),
+              spacer("box:sidekick:notice:space", "inspection"),
+              ...parts(["notice:dismiss"], "inspection"),
+            ],
+          }),
+          ...detail.map((one) => rowBox(one, "inspection", width)),
+          box({
+            id: "box:sidekick:notice:actions",
+            region: "inspection",
+            props: bandRowProps(REPL_PALETTE.restoreFailureSurface),
+            children: [...retry, ...parts(["notice:help"], "inspection")],
+          }),
+        ],
+      }),
+    );
+  }
+
   // Whichever drawer is presented, through the one calculation both use.
   const rect = presentedRect(view, context);
   const [title] = of("drawer-title");
@@ -13982,6 +14141,21 @@ function workspacePresentation(input: {
             props: stackProps(1 + (context.guidance?.length ?? 1)),
             children: [
               box({
+                id: "box:guidance",
+                region: "footer",
+                props: bandBlockProps(REPL_PALETTE.chromeSurface, WORKSPACE_LIST_GUTTER),
+                children: [
+                  box({
+                    id: GUIDANCE_ROW,
+                    region: "footer",
+                    props: GROWING_STACK_PROPS,
+                    children: of("located").map((one) =>
+                      rowBox(one, "footer", context.widths?.guidance),
+                    ),
+                  }),
+                ],
+              }),
+              box({
                 id: "box:history",
                 region: "footer",
                 props: bandRowProps(REPL_PALETTE.historySurface),
@@ -14043,21 +14217,6 @@ function workspacePresentation(input: {
                         }),
                       ),
                     ],
-                  }),
-                ],
-              }),
-              box({
-                id: "box:guidance",
-                region: "footer",
-                props: bandBlockProps(REPL_PALETTE.chromeSurface, WORKSPACE_LIST_GUTTER),
-                children: [
-                  box({
-                    id: GUIDANCE_ROW,
-                    region: "footer",
-                    props: GROWING_STACK_PROPS,
-                    children: of("located").map((one) =>
-                      rowBox(one, "footer", context.widths?.guidance),
-                    ),
                   }),
                 ],
               }),

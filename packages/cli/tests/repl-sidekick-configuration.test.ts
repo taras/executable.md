@@ -2035,10 +2035,16 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     repl.fake.script({ reply: "<Output>Queued Retry finished.</Output>" });
 
     yield* sendMessage(page, "inspect it");
-    const failed = yield* page.until("the failed attempt and its retry", (one) =>
-      retryOffered(one),
+    const failed = yield* page.until(
+      "the failure notification and its retry",
+      (one) => one.shows("Sidekick reply failed") && retryOffered(one),
     );
-    expect(retryOffered(failed)).toBe(true);
+    expect(failed.occurrences("[retry]")).toBe(1);
+    yield* page.press("[X]");
+    yield* page.until(
+      "the dismissed failure and its retained retry",
+      (one) => !one.shows("Sidekick reply failed") && one.shows("dismissed") && retryOffered(one),
+    );
     yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));

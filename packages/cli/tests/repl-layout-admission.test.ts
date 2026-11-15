@@ -661,8 +661,7 @@ describe("REPL layout: the profiles this product supports", () => {
       const observed = yield* presenter.commit(viewOf(model, size));
       expect(observed.committed.manifest.profile).toBe(profile);
       const bounds = (id: string): ReplBounds | undefined => observed.regionOf(id);
-      // One identity row, the body between, then one compact History row and
-      // one row of guidance, at every size.
+      // The identity and footer keep the body the same height at every size.
       expect(bounds("box:identity")).toEqual({
         x: 0,
         y: 0,
@@ -675,19 +674,19 @@ describe("REPL layout: the profiles this product supports", () => {
         width: size.columns,
         height: size.rows - 3,
       });
-      expect(bounds("box:history")).toEqual({
+      expect(bounds("box:guidance")).toEqual({
         x: 0,
         y: size.rows - 2,
         width: size.columns,
         height: 1,
       });
-      expect(bounds("box:guidance")).toEqual({
+      expect(bounds("box:history")).toEqual({
         x: 0,
         y: size.rows - 1,
         width: size.columns,
         height: 1,
       });
-      expect(presenter.grid.rows()[size.rows - 2]).toContain("HISTORY");
+      expect(presenter.grid.rows()[size.rows - 1]).toContain("HISTORY");
       expect(within(bounds("box:history"), observed.boundsOf("footer:history"))).toBe(true);
       expect(within(bounds("box:draft"), observed.boundsOf("footer:input"))).toBe(true);
     }
@@ -1496,19 +1495,11 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
 });
 
 describe("Owned narrow guidance and pane navigation routes", () => {
-  it("UI10: every narrow focus destination says its state, action and way back whole", function* () {
+  it("UI10: the narrow readiness row stays concise across focus changes", function* () {
     const model = yield* entriesModel(0);
     const presenter = yield* usePresenter(NARROW);
     const state = initialState("owned");
-    for (const [key, expected] of [
-      ["footer:input", "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓"],
-      [
-        "sessions:heading",
-        "Ready for Entry 1 · Enter activates · Tab regions Alt↑↓ · Tab to draft",
-      ],
-      ["footer:exit", "Ready for Entry 1 · Enter exits · Tab regions Alt↑↓ · Tab to draft"],
-      ["footer:history", "Ready for Entry 1 · Enter opens · Tab regions Alt↑↓ · Tab to draft"],
-    ]) {
+    for (const key of ["footer:input", "sessions:heading", "footer:exit", "footer:history"]) {
       yield* presenter.commit(
         viewOf(model, NARROW, {
           state: { ...state, restore: { kind: "reveal", key } },
@@ -1516,12 +1507,10 @@ describe("Owned narrow guidance and pane navigation routes", () => {
         }),
       );
       yield* presenter.commit(viewOf(model, NARROW, { state, focused: focusedKey(presenter) }));
-      const row = presenter.grid
-        .rows()
-        .find((one) => one.includes("Tab regions Alt↑↓"))
-        ?.trim();
-      expect([key, row]).toEqual([key, expected]);
-      expect(row?.length ?? 999).toBeLessThanOrEqual(72);
+      expect(focusedKey(presenter)).toBe(key);
+      const rows = presenter.grid.rows();
+      expect(rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+      expect(rows.at(-1)).toContain("HISTORY");
     }
   });
 
@@ -1610,7 +1599,7 @@ describe("Owned narrow guidance and pane navigation routes", () => {
 });
 
 describe("Owned footer, History and single-field inventory", () => {
-  it("UI1/UI5: the Draft precedes the shared action band and its guidance follows", function* () {
+  it("UI1/UI5: the Draft and readiness precede the last History row", function* () {
     const model = yield* entriesModel(1);
     const presenter = yield* usePresenter(NARROW);
     const observed = yield* presenter.commit(viewOf(model, NARROW));
@@ -1628,12 +1617,14 @@ describe("Owned footer, History and single-field inventory", () => {
     }
     expect(input.y).toBeLessThan(exit.y);
     expect(history.y).toBe(exit.y);
-    expect(guidance.y).toBeGreaterThan(exit.y);
+    expect(guidance.y).toBeLessThan(exit.y);
+    expect(exit.y).toBe(NARROW.rows - 1);
     const rows = presenter.grid.rows();
     for (const word of ["HISTORY", "─", "[history]", "[exit]"]) {
       expect(rows[exit.y]).toContain(word);
     }
-    expect(rows.at(-1)).toContain("Tab regions");
+    expect(rows[guidance.y]?.trim()).toBe("Ready for Entry 2");
+    expect(rows.join(" ")).not.toContain("Tab regions");
     for (const checkpoint of model.checkpoints) {
       expect(rows[0]).not.toContain(checkpoint.label);
     }

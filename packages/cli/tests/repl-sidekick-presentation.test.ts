@@ -1285,12 +1285,25 @@ function transcriptLines(reading: ScreenReading): string[] {
   return reading.rows.map((row) => row.slice(0, heading.column));
 }
 
+function transcriptLabel(row: string): string {
+  return (row.split("│", 1)[0] ?? "").trimEnd();
+}
+
+function matchesTurn(row: string, text: string): boolean {
+  const label = transcriptLabel(row);
+  return label.includes(text) || label.endsWith(text.trimEnd());
+}
+
 function transcriptHas(reading: ScreenReading, text: string): boolean {
-  return transcriptLines(reading).some((row) => row.includes(text));
+  return transcriptLines(reading).some((row) => matchesTurn(row, text));
+}
+
+function settledTranscriptHas(reading: ScreenReading, label: string): boolean {
+  return transcriptLines(reading).some((row) => transcriptLabel(row).endsWith(label));
 }
 
 function* chooseTurn(page: ReplPage, text: string): Operation<void> {
-  const row = transcriptLines(page.screen()).find((one) => one.includes(text));
+  const row = transcriptLines(page.screen()).find((one) => matchesTurn(one, text));
   if (row === undefined) {
     throw new Error(`no Transcript row says ${text}. ${page.describe()}`);
   }
@@ -1365,14 +1378,12 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect(transcriptHas(listed, MOUNTED_AGENT)).toBe(true);
     page.repl.fake.releaseDeltas();
     yield* page.until("the later-started turn completing first", (one) =>
-      transcriptHas(one, "ask side · completed"),
+      settledTranscriptHas(one, "[U] ask side"),
     );
     expect((yield* settledReading(page.repl)).model.turns).toEqual([]);
     page.repl.fake.releaseTurn();
     yield* page.until("the entry turn being recorded", (one) =>
-      transcriptLines(one).some(
-        (row) => row.includes("[A] ask-e") && row.includes("completed, recorded"),
-      ),
+      settledTranscriptHas(one, "[A] ask-entry"),
     );
     const lines = transcriptLines(page.screen());
     expect(lines.filter((line) => line.includes("ask side"))).toHaveLength(1);
@@ -1408,9 +1419,7 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect(page.screen().shows("REPL.Bindings")).toBe(false);
     page.repl.fake.releaseTurn();
     yield* page.until("the empty follow-up saved", (one) =>
-      transcriptLines(one).some(
-        (row) => row.includes("Automatic feed") && row.includes("completed"),
-      ),
+      settledTranscriptHas(one, "Automatic feedback"),
     );
     expect(page.repl.terminal.fed).toBe(fed);
     expect(page.screen().shows("REPL.Bindings")).toBe(false);
@@ -1545,7 +1554,7 @@ describe("Transcript ownership and immutable older chat readings", () => {
     const fed = page.repl.terminal.fed;
     page.repl.fake.releaseTurn();
     yield* page.until("the current reply recorded", (one) =>
-      transcriptHas(one, "one more · completed"),
+      settledTranscriptHas(one, "[U] one more"),
     );
     expect(page.repl.terminal.fed).toBe(fed);
     expect(sidekickShows(page.screen(), "Older answer.")).toBe(true);
@@ -2148,7 +2157,7 @@ function* appendBoundary(stopped: boolean): Operation<void> {
     } else {
       hold.release();
       yield* page.until("the released turn completed", (one) =>
-        transcriptHas(one, "stop me · completed"),
+        settledTranscriptHas(one, "[U] stop me"),
       );
       yield* page.until("the released cycle idle", sidekickIdle);
     }
@@ -2197,13 +2206,12 @@ describe("Sidekick original provider membership and cancelled append", () => {
     page.repl.fake.script({ reply: "<Output>Shared answer.</Output>\n", turnId: "sk-turn-1" });
     yield* pasteDraft(page, promptEntry("entry-ask"));
     yield* page.key("Enter");
-    yield* page.until(
-      "the entry turn recorded",
-      (one) => transcriptHas(one, "entry") && transcriptHas(one, "completed, recorded"),
+    yield* page.until("the entry turn recorded", (one) =>
+      settledTranscriptHas(one, "[A] entry-ask"),
     );
     yield* compose(page, "chat ask");
     yield* sendComposed(page);
-    yield* page.until("the chat turn saved", (one) => transcriptHas(one, "chat ask · completed"));
+    yield* page.until("the chat turn saved", (one) => settledTranscriptHas(one, "[U] chat ask"));
     yield* page.until("the cycle idle", sidekickIdle);
     yield* page.resize(NARROW);
     yield* page.press("Sessions");
@@ -2270,9 +2278,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
       page.repl.fake.script({ reply: "<Output>Chat answer.</Output>\n" });
       yield* pasteDraft(page, promptEntry("later-entry"));
       yield* page.key("Enter");
-      yield* page.until(
-        "the second entry recorded",
-        (one) => transcriptHas(one, "later") && transcriptHas(one, "completed, recorded"),
+      yield* page.until("the second entry recorded", (one) =>
+        settledTranscriptHas(one, "[A] later-entry"),
       );
       yield* compose(page, "chat ask");
       yield* sendComposed(page);
@@ -2316,7 +2323,7 @@ function composerRows(one: ScreenReading, anchor?: string): string[] {
   const prompt = one.locate(COMPOSER);
   const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
   const footer = one.locate("HISTORY");
-  const end = one.size.columns === NARROW.columns ? footer.row - 1 : footer.row;
+  const end = footer.row - (one.size.columns === NARROW.columns ? 2 : 1);
   return one.rows.slice(prompt.row + 1, end).map((row) => row.slice(edge).trimEnd());
 }
 
@@ -2627,9 +2634,7 @@ describe("Sidekick original acknowledged history submission identity", () => {
     });
     const page = yield* useReplPage({ dataRoot, location });
     yield* closeDrawer(page);
-    for (let press = 0; press < 40 && !page.screen().shows("Enter unavailable"); press += 1) {
-      yield* tab(page);
-    }
+    yield* intoDraft(page);
     yield* page.type(HI_THIRD);
     yield* page.until(
       "the frozen Draft holding its source",
@@ -2816,7 +2821,7 @@ describe("Sidekick original independent readings and streaming rows", () => {
       (one) => !composerHolds(one, "hold it"),
     );
     page.repl.fake.releaseDeltas();
-    yield* page.until("the completed status", (one) => transcriptHas(one, "hold it · completed"));
+    yield* page.until("the completed status", (one) => settledTranscriptHas(one, "[U] hold it"));
     expect(chatHas(page.screen(), "Half said.")).toBe(true);
     expect(page.repl.terminal.fed).toBe(fed);
   });
@@ -2836,7 +2841,7 @@ describe("Sidekick original independent readings and streaming rows", () => {
     expect(read.chat.some((one) => one.kind === "response")).toBe(false);
     page.repl.fake.releaseTurn();
     yield* page.until("the completed evaluation", (one) =>
-      transcriptHas(one, "evaluate it · completed"),
+      settledTranscriptHas(one, "[U] evaluate it"),
     );
     expect(page.screen().found("evaluate it", { rightOf: "TRANSCRIPT" })).toBeGreaterThan(0);
     expect(page.repl.terminal.fed).toBe(fed);
@@ -2879,7 +2884,9 @@ describe("Sidekick original interrupted identities and native input routes", () 
     const chat = sidekickChatRows(projected.value, undefined);
     expect(new Set(chat.map((one) => one.key)).size).toBe(chat.length);
     expect(
-      transcriptLines(page.screen()).filter((row) => row.includes("saved ask ·")),
+      transcriptLines(page.screen()).filter((row) =>
+        transcriptLabel(row).endsWith("[U] saved ask"),
+      ),
     ).toHaveLength(1);
     expect(
       transcriptLines(page.screen()).filter((row) => row.includes("failed ask ·")),
@@ -3157,9 +3164,8 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     yield* pasteDraft(page, promptEntry("control-ask"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
-    yield* page.until(
-      "the entry's recorded provider turn",
-      (one) => transcriptHas(one, "contr") && transcriptHas(one, "completed, recorded"),
+    yield* page.until("the entry's recorded provider turn", (one) =>
+      settledTranscriptHas(one, "[A] control-ask"),
     );
     expect(page.repl.terminal.fed).toBe(fed);
     expect(page.screen().shows("Entry agents")).toBe(false);

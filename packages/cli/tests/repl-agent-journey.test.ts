@@ -184,7 +184,7 @@ describe("J1 — the Story, from one entry to one README", () => {
       yield* page.until("the authorship turn streaming", (frame) => frame.shows("· streaming"));
       held.deltas(AUTHORSHIP);
       yield* page.until("the turn's stop reason", (frame) => frame.shows("stopped: end_turn"));
-      yield* page.until("the turn recorded", (frame) => frame.shows("completed, recorded"));
+      yield* page.until("the turn recorded", (frame) => settledAgentTurns(frame).length === 1);
       yield* awaitedFact("the turn was never retained", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length > 0
@@ -264,7 +264,7 @@ describe("J1 — the Story, from one entry to one README", () => {
         "agent_prompt",
         "agent_prompt",
       ]);
-      expect(page.screen().occurrences("completed, recorded")).toBe(2);
+      expect(settledAgentTurns(page.screen())).toHaveLength(2);
       yield* openCatalog(page);
       expect(page.screen().shows("component Plan")).toBe(true);
       expect(page.screen().shows("generated generated")).toBe(true);
@@ -765,7 +765,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       ]) {
         yield* page.until(`${line} shown`, (frame) => frame.shows(line));
       }
-      expect(page.screen().occurrences("completed, recorded")).toBe(2);
+      expect(settledAgentTurns(page.screen())).toHaveLength(2);
       yield* openCatalog(page);
       for (const line of ["component Plan", "generated generated"]) {
         yield* page.until(`${line} listed`, (frame) => frame.shows(line));
@@ -978,7 +978,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       );
       yield* closeDrawer(page);
       expect(page.screen().shows(REPLY.trim())).toBe(false);
-      expect(page.screen().shows("completed, recorded")).toBe(false);
+      expect(settledAgentTurns(page.screen())).toHaveLength(0);
       yield* openHistory(page);
 
       yield* closeDrawer(page);
@@ -997,7 +997,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
           readingRetained(frame) &&
           !drawerOpen(frame) &&
           frame.shows(REPLY.trim()) &&
-          frame.shows("completed, recorded"),
+          settledAgentTurns(frame).length === 1,
       );
 
       expect(live.prompts).toHaveLength(1);
@@ -1830,7 +1830,13 @@ function shownPrompt(line: string, prompt: string): boolean {
 function saying(line: string, prompt: string, state: string): boolean {
   for (let kept = prompt.length; kept >= 1; kept -= 1) {
     const shown = kept === prompt.length ? prompt : `${prompt.slice(0, kept)}…`;
-    if (line.includes(`${shown} · ${state}`)) {
+    if (
+      state === "completed"
+        ? line.trimEnd().endsWith(shown)
+        : state === ""
+          ? line.includes(`${shown} · `) || line.trimEnd().endsWith(shown)
+          : line.includes(`${shown} · ${state}`)
+    ) {
       return true;
     }
   }
@@ -1909,7 +1915,13 @@ function entryMarked(one: ScreenReading, entry: string): boolean {
 }
 
 function sessionTurns(one: ScreenReading): string[] {
-  return one.rows.filter((row) => / · (?:queued|streaming|completed|cancelled|failed)/.test(row));
+  return one.rows
+    .map((row) => row.split("│", 1)[0] ?? "")
+    .filter((row) => /^\s*(?:[*>] )?\[A\] /.test(row));
+}
+
+function settledAgentTurns(one: ScreenReading): string[] {
+  return sessionTurns(one).filter((row) => !row.includes(" · "));
 }
 
 function conversationSelector(one: ScreenReading): string {

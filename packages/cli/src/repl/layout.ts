@@ -843,6 +843,29 @@ export function drawerLayerProps(
   };
 }
 
+export function sidekickNoticeWidth(size: ReplTerminalSize): number {
+  return profileFor(size) === "narrow" ? size.columns - 2 : 52;
+}
+
+export function sidekickNoticeProps(
+  size: ReplTerminalSize,
+  top: number,
+  height: number,
+): ReplBoxProps {
+  const width = sidekickNoticeWidth(size);
+  return {
+    ...drawerLayerProps({ x: size.columns - width - 1, y: top, width, height }),
+    bg: terminalColour(REPL_PALETTE.restoreFailureSurface),
+    border: {
+      color: terminalColour(REPL_PALETTE.restoreFailureEdge),
+      top: 1,
+      bottom: 1,
+      left: 1,
+      right: 1,
+    },
+  };
+}
+
 /**
  * The ops for the measurement pass, under structural ids and nothing else.
  *

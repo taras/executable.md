@@ -117,6 +117,7 @@ import {
   stagedWorkspace,
   workspaceHeaderLines,
   modalOpen,
+  visibleSidekickNotice,
   readsGeometry,
   reduceRepl,
   refusedView,
@@ -203,7 +204,14 @@ import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { ReplClock, useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
-import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
+import {
+  committedOps,
+  flatten,
+  profileFor,
+  routeDrawerRect,
+  sidekickNoticeWidth,
+  skeletonOps,
+} from "./layout.ts";
 import { focusHintOps, focusRouteHint } from "./focus-hints.ts";
 import {
   createFitStore,
@@ -216,6 +224,7 @@ import {
 import type { ReplEditor, ReplFittedLabel, ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
+import { inertCommandText } from "./command-output.ts";
 import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
@@ -1979,6 +1988,26 @@ function* drive(
       },
     });
 
+    function latestSidekickOutcome() {
+      const read = sidekick.reading;
+      if (!read.ok) {
+        return undefined;
+      }
+      const latest = read.value.turns.at(-1);
+      if (latest === undefined || latest.conversation !== read.value.active) {
+        return undefined;
+      }
+      return {
+        conversation: latest.conversation,
+        turn: latest.turn,
+        failed:
+          (latest.status === "failed" || latest.reply?.failure !== undefined) &&
+          (latest.asked !== "automatic" ||
+            sidekick.recoveryStatus(latest.conversation) === undefined),
+      };
+    }
+    let lastSidekickOutcome = latestSidekickOutcome();
+
     const todo = yield* Todo.get();
     if (todo !== undefined) {
       const changes = yield* todo.changes;
@@ -2514,6 +2543,23 @@ function* drive(
       | undefined;
 
     function* act(event: ReplInputEvent): Operation<boolean> {
+      if (
+        event.kind === "key" &&
+        event.key === "Escape" &&
+        state.sidekickNotice !== undefined &&
+        state.sidekickNotice.decision === undefined
+      ) {
+        const view = yield* inputView(state, yield* screen.size());
+        if (visibleSidekickNotice(view) !== undefined) {
+          state = {
+            ...state,
+            sidekickNotice: { ...state.sidekickNotice, decision: "dismissed" },
+          };
+          yield* remount();
+          return false;
+        }
+      }
+
       const dispatched = yield* tree.dispatch(event);
       const action =
         dispatched.ok && dispatched.value.outcome === "action"
@@ -3043,6 +3089,14 @@ function* drive(
         // Either way whatever the readiness last refused is not what is showing.
         refusedByReadiness = false;
       }
+      if (
+        action?.kind === "retry-message" &&
+        performed.remounted === true &&
+        state.sidekickNotice?.conversation === action.conversation &&
+        state.sidekickNotice.turn === action.noticeTurn
+      ) {
+        state = { ...state, sidekickNotice: { ...state.sidekickNotice, decision: "retried" } };
+      }
       if (performed.remounted === true) {
         // Before this call returns, so the next event of the burst is dispatched
         // against the controls that are now offered rather than the ones that
@@ -3406,6 +3460,20 @@ function* drive(
         }
       }
       applySidekickReports();
+      const sidekickOutcome = latestSidekickOutcome();
+      if (
+        sidekickOutcome?.conversation !== lastSidekickOutcome?.conversation ||
+        sidekickOutcome?.turn !== lastSidekickOutcome?.turn ||
+        sidekickOutcome?.failed !== lastSidekickOutcome?.failed
+      ) {
+        lastSidekickOutcome = sidekickOutcome;
+        state = {
+          ...state,
+          sidekickNotice: sidekickOutcome?.failed
+            ? { conversation: sidekickOutcome.conversation, turn: sidekickOutcome.turn }
+            : undefined,
+        };
+      }
       sidekickRoot.applyFills();
       applyReports();
       // And the question, once this batch has been applied: a question that
@@ -5999,6 +6067,23 @@ export function* prepareFrame(
   if (!notices.ok) {
     return notices;
   }
+  const failure = visibleSidekickNotice(view)?.failure;
+  const diagnostic =
+    failure === undefined
+      ? Ok(undefined)
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "notice:reason", text: inertCommandText(failure).replaceAll("\n", " ") }],
+          sidekickNoticeWidth(view.size) - 4,
+        );
+  if (!diagnostic.ok) {
+    return diagnostic;
+  }
+  const reason = diagnostic.value?.slice(0, 3).map((row) => row.text);
+  if (reason !== undefined && (diagnostic.value?.length ?? 0) > reason.length) {
+    reason.push("…");
+  }
   const detailLines = widths.drawer < 1 ? [] : retainedDetailsOf(view);
   const details =
     detailLines.length === 0
@@ -6052,6 +6137,7 @@ export function* prepareFrame(
     draft: draftRows,
     editors,
     notices: notices.value,
+    noticeReason: reason,
     details: details.value,
     todo: todoRows.value,
     queue: queued.value,

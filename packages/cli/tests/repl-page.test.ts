@@ -222,8 +222,7 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
   });
 });
 
-/** The guidance row says this while the Draft takes keystrokes, and not otherwise. */
-const TYPING = "Type here";
+const DRAFT_FOCUS = "> DRAFT";
 
 /** What a question form asks for, so its second field is a real text field. */
 const REVIEW = {
@@ -270,15 +269,13 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
     page.repl.fake.script({ reply: "<Output>AUTHORED</Output>\n" });
     yield* asked(page, "author a component", "AUTHORED");
 
-    // The composer holds the keystrokes now, which the guidance row says by
-    // offering the way back rather than by naming a field.
-    expect(page.screen().shows(TYPING)).toBe(false);
+    expect(page.screen().shows(DRAFT_FOCUS)).toBe(false);
 
     // Message -> History -> Transcript -> Selected work -> Draft.
     for (let press = 0; press < 4; press += 1) {
       yield* tab(page);
     }
-    expect(page.screen().shows(TYPING)).toBe(true);
+    expect(page.screen().shows(DRAFT_FOCUS)).toBe(true);
 
     yield* typed(page, "<Output>the first entry</Output>");
     const drafted = page.screen();

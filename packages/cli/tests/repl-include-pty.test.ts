@@ -142,10 +142,8 @@ function* refused(pty: Pty, history: string, name: string): Operation<void> {
       rail > draft &&
       column !== undefined &&
       column > 0 &&
-      screen.slice(draft + 1, rail).every((row) => row.split("│")[column]?.trim() === "") &&
-      screen
-        .slice(rail + 1)
-        .some((row) => row.includes("Ready for Entry") && row.includes("Type here"))
+      screen.slice(draft + 1, rail - 1).every((row) => row.split("│")[column]?.trim() === "") &&
+      screen[rail - 1]?.includes("Ready for Entry") === true
     ) {
       return;
     }
