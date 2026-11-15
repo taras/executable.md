@@ -2968,20 +2968,26 @@ renders each selected component's symbol metadata followed by the long-form
 documentation its owning package ships, once each, **in symbol order** whatever
 order they were asked for in. `as` captures the same text in either form.
 
-Documentation joins to metadata by component name **and owning package**. Only a
-registration and a protected component come from a package; a repository file, a
+Documentation joins to metadata by component name **and registered origin**:
+the documentation a boundary contributes names the origin its registrations
+declare, and only those components receive it. Only a registration and a
+protected component carry a registered origin; a repository file, a
 bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
 receives none of the built-in `Elicit`'s prose. **A first-party package documents every component it supplies.** The index is
-built from one `components.md` per registration boundary — core's own, its Agent
-registrations, the CLI, testing, web and the repository-composition set — each
+built from one `components.md` per registration boundary — core's own, the
+Agent package's, the CLI, testing, web and the repository-composition set — each
 contributed by that boundary's own bootstrap from the same declarations it
 registers, so a component added to a package demands documentation without
-anyone maintaining a second list. What `xmd syntax NAME` and a document's own
+anyone maintaining a second list. The Agent package's components keep the
+origin `@executablemd/core` they registered under before they moved out of
+Core, because canonical resolution and retained journals identify a component
+by that origin; its `components.md` contributes under the same origin, and the
+index merges it with Core's own. What `xmd syntax NAME` and a document's own
 `<Syntax names={…}>` each read is the one snapshot canonical execution captured
 at collection, which is what makes them one index rather than two.
 
 A boundary that supplies a component with no section refuses the whole index — as does an unknown heading, a duplicate, and a
-component documented twice for one package. A partially documented first-party
+component documented twice for one origin. A partially documented first-party
 package is not a valid build: a reader cannot tell an undocumented component
 from one that has nothing to say, and the product's own reference would be
 silently incomplete.
