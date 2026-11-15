@@ -4715,12 +4715,26 @@ describe("993 mounted nested Output journeys", () => {
       } else {
         repl.fake.releaseDeltas();
       }
-      yield* page.until("the provider attempt settling", sidekickIdle);
-      yield* page.until("the interrupted attempt remaining in its item", (reading) =>
-        reading.shows(
-          stop ? `${MOUNTED_AGENT} (unfinished): ABC` : `${MOUNTED_AGENT} (unfinished):`,
-        ),
-      );
+      const settled = yield* page.until("the provider attempt settling", sidekickIdle);
+      const notice = "Sidekick reply failed";
+      if (stop) {
+        expect(settled.shows(notice)).toBe(false);
+        yield* page.until("the stopped preview remaining in its item", (reading) =>
+          reading.shows(`${MOUNTED_AGENT} (unfinished): ABC`),
+        );
+      } else {
+        yield* page.until("the refusal notification", (reading) => reading.shows(notice));
+        yield* page.key("Escape");
+        yield* page.until(
+          "the dismissed refusal remaining in its item",
+          (reading) =>
+            !reading.shows(notice) &&
+            reading.shows(
+              `[S] ${MOUNTED_AGENT} (unfinished): agent prompt failed with stop reason`,
+            ) &&
+            reading.shows('"refusal" · dismissed'),
+        );
+      }
       const saved = yield* settledReading(repl);
       expect(
         saved.chat.filter((record) => record.kind === "response" || record.kind === "control"),
