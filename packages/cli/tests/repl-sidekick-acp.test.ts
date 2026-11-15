@@ -5039,7 +5039,7 @@ describe("Sidekick reply approval", () => {
     it(`shows long Reveal and decision disclosure at ${size.columns}x${size.rows}`, function* () {
       const long = value.repeat(5) + [...value].reverse().join("");
       const host = yield* useMountedHost();
-      host.fake.script({ reply: `<Output>apiKey=${long}</Output>` });
+      host.fake.script({ reply: `<Output>Use apiKey=${long} for the example.</Output>` });
       const page = yield* useReplPage({ host, size: { columns: 160, rows: 36 } });
       yield* sendMessage(page, "Check approval.");
       yield* page.until("reply approval", (one) => one.shows("[reveal match]"));
@@ -5049,7 +5049,8 @@ describe("Sidekick reply approval", () => {
       const pending = page.screen();
       const positioned = pending.rows.map((row) => row.trim()).join(" ");
       expect(positioned).toContain("CREDENTIAL_FIELD");
-      expect(positioned).toMatch(/line 1, column 16/);
+      expect(positioned).toContain("@executablemd/secretlint-rule-credentials");
+      expect(positioned).toMatch(/line 1, column 20/);
       expect(pending.shows(value)).toBe(false);
       const retained = yield* journalBytes(page, host);
       yield* scrollDrawerTo(page, "[reveal match]");
@@ -5066,8 +5067,11 @@ describe("Sidekick reply approval", () => {
       expect(decisions.shows("and automatic feedback.")).toBe(true);
       expect(decisions.shows("[withhold reply]")).toBe(true);
       expect(decisions.shows("[accept reply]")).toBe(true);
-      yield* page.press("[withhold reply]");
-      yield* page.until("withheld continuation joined", sidekickIdle);
+      const decision = size.columns === 72 ? "[accept reply]" : "[withhold reply]";
+      yield* page.press(decision);
+      yield* page.until("the decision joined", sidekickIdle);
+      const accepted = (yield* rootRecords(page)).includes(`${AGENT_PROMPT_REPLY} turn:1`);
+      expect(accepted).toBe(size.columns === 72);
       expect(host.fake.prompts).toHaveLength(1);
       console.log(
         `Approval drawer ${size.columns}x${size.rows}: first rule and position, complete long match, disclosure and both mounted decisions verified.`,
