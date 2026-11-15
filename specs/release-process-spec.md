@@ -776,6 +776,9 @@ the checkout and with a component search path of its own, so neither the working
 directory nor `--include` can answer for the product's own documentation:
 
 - `xmd syntax TempDir` renders the registry metadata *and* the long-form prose;
+- `xmd syntax Prompt` does the same from the Agent package's own
+  `components.md`, a second asset, with the `@executablemd/core` origin its
+  components keep;
 - `xmd syntax TemdDir` reaches the ordinary unknown-name refusal with empty
   stdout — the half that makes the probe evidence, because a binary missing its
   assets fails both lookups the same way, so a passing first case alone would
