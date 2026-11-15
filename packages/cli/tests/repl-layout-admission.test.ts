@@ -703,12 +703,12 @@ describe("REPL layout: the profiles this product supports", () => {
     });
     expect(wide.regionOf("box:transcript")).toMatchObject({
       x: 36,
-      width: 66,
+      width: 54,
       height: 33,
     });
     expect(wide.regionOf("box:inspection")).toMatchObject({
-      x: 102,
-      width: 58,
+      x: 90,
+      width: 70,
       height: 33,
     });
     expect(wide.regionOf("box:draft")?.height).toBe(4);
@@ -1365,7 +1365,7 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
           if (layer === undefined || pane === undefined || exit === undefined) {
             throw new Error(`${kind} at ${size.columns}x${size.rows} has no layer, pane or footer`);
           }
-          const envelope = size.columns >= 160 ? 102 : size.columns >= 120 ? 88 : 0;
+          const envelope = size.columns >= 160 ? 90 : size.columns >= 120 ? 64 : 0;
           expect([kind, size.columns, layer.x >= envelope]).toEqual([kind, size.columns, true]);
           expect(layer.x + layer.width).toBeLessThanOrEqual(size.columns);
           expect(layer.y + layer.height).toBeLessThanOrEqual(exit.y);
@@ -1883,7 +1883,7 @@ describe("shared TODO measured content", () => {
       const presenter = yield* usePresenter(size);
       const selected = reduceRepl(
         initialState("owned"),
-        { kind: "select-pane", pane: "sidekick" },
+        { kind: "select-pane", pane: "todo" },
         model,
         live,
       ).state;

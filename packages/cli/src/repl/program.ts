@@ -5325,10 +5325,9 @@ export function* prepareFrame(
   //
   // Soft wrapping is display only: the string below is the one the person is
   // editing, and the cuts put no newline into it.
-  // The composer exists where the chat being read is the one being continued:
-  // an older chat is read-only and has none. The reading's own fact, not a
-  // second pane rule.
-  const composing = presentsChat && view.live.sidekick?.current === true;
+  // TODO replaces the chat viewport and leaves the composer mounted.
+  const inspection = profileFor(view.size) === "narrow" ? "content" : "inspection";
+  const composing = third.value.boundsOf(`box:${inspection}:sidekick:message`) !== undefined;
   const editors = new Map<string, ReplEditor>();
   const message =
     chatRoom < 1 || !composing
@@ -5347,7 +5346,11 @@ export function* prepareFrame(
   if (message.value !== undefined) {
     editors.set("sidekick:message", message.value);
   }
-  if (view.state.todoEditor !== undefined && chatRoom > 0) {
+  if (
+    view.state.todoEditor !== undefined &&
+    chatRoom > 0 &&
+    third.value.boundsOf(`box:${inspection}:todo:editor`) !== undefined
+  ) {
     const editor = view.state.todoEditor;
     const fitted = yield* fitEditor(
       renderer,
@@ -5367,7 +5370,8 @@ export function* prepareFrame(
   // label and exactly one value row — the minimum composer. Growing to `h`
   // value rows takes `h - 1` rows from the chat, so `h` at most `C` leaves it
   // one row. Six is the accepted cap, and the fitted rows may be fewer.
-  const capacity = capacityOf(third.value.boundsOf(sidekickViewportOf(measured.manifest)));
+  const messageRoom = presentsChat ? sidekickViewportOf(measured.manifest) : SIDEKICK_BODY;
+  const capacity = capacityOf(third.value.boundsOf(messageRoom));
   const fittedRows = message.value?.display.length ?? 0;
   const height =
     message.value === undefined

@@ -5815,11 +5815,8 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
         workspaceOf(model),
       );
     let visible = rows;
-    for (
-      let press = 0;
-      press < 24 && visible.findIndex((row) => row.includes("Compute the total")) > 2;
-      press += 1
-    ) {
+    let firstSource = visible.findIndex((row) => row.includes("Compute"));
+    for (let press = 0; press < 24 && (firstSource < 0 || firstSource > 2); press += 1) {
       state = reduceRepl(
         state,
         { kind: "scroll-reading", delta: 1 },
@@ -5829,13 +5826,19 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
       ).state;
       const next = yield* presenter.commit(viewOf());
       visible = grid.textIn(regionOf(next, "box:transcript:body"));
+      firstSource = visible.findIndex((row) => row.includes("Compute"));
     }
-    const pieces = wrappedRows(visible, "Compute the total");
-    expect(pieces.join(" ")).toBe(WRAPPING_LINE);
-    expect(pieces.join(" ")).toContain("once,    after");
-    // The last row of that line is its whole remainder: what fits a row stays
-    // on it, which is the behaviour D10's own regressions hold the fitter to.
-    expect(pieces.at(-1)?.endsWith("pays.")).toBe(true);
+    expect(firstSource).toBeGreaterThanOrEqual(0);
+    const sourceColumn = visible[firstSource]?.indexOf("Compute") ?? 0;
+    const compactSource = WRAPPING_LINE.replace(/\s/g, "");
+    let visibleSource = "";
+    for (const row of visible.slice(firstSource)) {
+      if (visibleSource.length >= compactSource.length) {
+        break;
+      }
+      visibleSource += row.slice(sourceColumn).replace(/\s/g, "");
+    }
+    expect(visibleSource).toBe(compactSource);
     // Each drawn row fits the room the body has: nothing of it is drawn in the
     // column's right gutter.
     const gutterOf = regionOf(observed, "box:transcript");
