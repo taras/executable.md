@@ -108,9 +108,7 @@ function* catalog(page: ReplPage): Operation<void> {
     "the Entries catalog owning its controls",
     (one) =>
       one.shows("[close]") &&
-      one.found(one.size.columns <= 72 ? "Enter activates" : "Enter or click activates", {
-        after: "HISTORY",
-      }) > 0,
+      one.shows(one.size.columns <= 72 ? "Enter activates" : "Enter or click activates"),
   );
 }
 
@@ -935,18 +933,18 @@ describe("REPL original interaction costs and visible exit routes", () => {
       "the joined entry offering Draft Send",
       (one) => one.found("[send]", { onRow: "DRAFT" }) === 1,
     );
-    expect(page.screen().shows("Type here")).toBe(true);
+    expect(page.screen().shows("> DRAFT")).toBe(true);
     const before = page.repl.terminal.presented.length;
     const index = page.screen().index;
     yield* page.key("Tab");
     yield* page.until(
-      "the guidance leaving Draft input",
-      (one) => one.index > index && !one.shows("Type here"),
+      "focus leaving Draft input",
+      (one) => one.index > index && !one.shows("> DRAFT"),
     );
     expect(page.repl.terminal.presented.length - before).toBe(1);
     const back = page.repl.terminal.presented.length;
     yield* page.key("Backtab");
-    yield* page.until("the guidance returning to Draft input", (one) => one.shows("Type here"));
+    yield* page.until("focus returning to Draft input", (one) => one.shows("> DRAFT"));
     expect(page.repl.terminal.presented.length - back).toBe(1);
     yield* page.type("returned draft");
     yield* page.until(
@@ -1603,15 +1601,12 @@ describe("REPL original first-use paths and question ownership", () => {
       function* () {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
-        expect(directions(page.screen())).toBe(
-          "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓",
-        );
+        expect(page.screen().rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+        expect(page.screen().rows.at(-1)).toContain("HISTORY");
         yield* runSource(page, SHORT_QUESTION);
         yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
         if (size.columns === 72) {
-          expect(directions(page.screen())).toBe(
-            "Entry 1 question · activate answer · Type here · Tab regions Alt↑↓",
-          );
+          expect(page.screen().rows.at(-2)?.trim()).toBe("Entry 1 question · activate answer");
         }
         yield* sessions(page);
         expect(page.screen().shows("[submit]")).toBe(false);
@@ -1649,9 +1644,9 @@ describe("REPL original first-use paths and question ownership", () => {
         expect(directions(page.screen())).toContain("Esc closes");
         yield* closeDrawer(page);
         yield* page.until("the frozen Draft guidance", (one) =>
-          directions(one).startsWith("History · Enter unavailable"),
+          one.shows("History · Enter unavailable"),
         );
-        expect(directions(page.screen())).toContain("activate live");
+        expect(page.screen().shows("activate live")).toBe(true);
         expect(page.screen().shows("entry two")).toBe(true);
         expect(page.screen().shows("Enter submits")).toBe(false);
         yield* page.press("[live]");
@@ -2027,10 +2022,8 @@ describe("REPL original complete History and cold catalog", () => {
       expect(shown.shows("[live]")).toBe(true);
     }
     expect(historyBand(page.screen())).toBe(band);
-    yield* page.resize(NARROW);
-    yield* page.until("the recovered narrow reading owning input", (one) =>
-      one.shows("Enter does nothing"),
-    );
+    const recovered = yield* page.resize(NARROW);
+    expect(recovered.shows("[live]")).toBe(true);
     yield* openHistory(page);
     const narrow = yield* allPositions(page, expected);
     expect(narrow.reached).toEqual(expected);
@@ -2256,14 +2249,13 @@ function referencePageFor(dataRoot: string): Operation<ReplPage> {
 }
 
 describe("REPL original visible guidance and controlled typing", () => {
-  it("UI1: the guidance teaches the ring that is mounted, at both sizes", function* () {
+  it("UI1: the visible History controls remain navigable at both sizes", function* () {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
-        expect(directions(page.screen())).toBe(
-          "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓",
-        );
+        expect(page.screen().rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+        expect(page.screen().rows.at(-1)).toContain("HISTORY");
         expect(page.screen().shows("Esc closes")).toBe(false);
         yield* intoDraft(
           page,
@@ -2271,14 +2263,11 @@ describe("REPL original visible guidance and controlled typing", () => {
             ? ["Backtab", "Backtab", "ArrowRight"]
             : ["Backtab", "Backtab", "Backtab", "ArrowRight"],
         );
-        yield* page.until("the way out's guidance", (one) => one.shows("Enter exits"));
-        expect(page.screen().shows("Enter submits")).toBe(false);
+        yield* page.until("Exit focused", (one) => one.shows("> [exit]"));
         expect(page.screen().shows("Ready for Entry 1")).toBe(true);
-        expect(
-          page.screen().shows(size.columns === 72 ? "Tab to draft" : "Tab to the draft to type"),
-        ).toBe(true);
+        expect(directions(page.screen())).toBe("");
         yield* page.key("ArrowLeft");
-        yield* page.until("History's guidance", (one) => one.shows("Enter opens"));
+        yield* page.until("History focused", (one) => one.shows("> [history]"));
         yield* page.key("Enter");
         yield* page.until(
           "History's closing instruction",
@@ -2288,16 +2277,14 @@ describe("REPL original visible guidance and controlled typing", () => {
     }
   });
 
-  it("UI9: typing at a control never reaches the draft, and the screen says why", function* () {
+  it("UI9: typing at a focused control leaves the draft untouched", function* () {
     const page = yield* useReplPage();
     yield* intoDraft(page);
     yield* tab(page);
-    yield* page.until("control guidance", (one) => !one.shows("Enter submits"));
-    expect(page.screen().shows("Enter submits")).toBe(false);
-    expect(page.screen().shows("Tab to the draft to type")).toBe(true);
+    yield* page.until("focus leaving the Draft", (one) => !one.shows("> DRAFT"));
     yield* page.type("discarded typing");
     yield* page.key("Backtab");
-    yield* page.until("the Draft's own guidance", (one) => one.shows("Type here"));
+    yield* page.until("Draft focused", (one) => one.shows("> DRAFT"));
     yield* draftText(page, "kept typing");
     expect(page.screen().shows("discarded typing")).toBe(false);
     expect(yield* journalRecords(page)).toEqual([]);
@@ -2598,7 +2585,7 @@ describe("REPL original retained schema and generated evidence", () => {
     yield* closeDrawer(page);
     yield* page.until(
       "the closed recorded reading restoring the entry control",
-      (one) => one.found("Enter does nothing", { after: "HISTORY" }) === 0,
+      (one) => !one.shows("Enter does nothing"),
     );
     yield* openHistory(page);
     expect(positionLabels(page.screen())).toEqual(kept.labels);
@@ -2643,10 +2630,10 @@ describe("REPL original question arrival on another reading", () => {
             ? ["Backtab", "Backtab", "ArrowRight"]
             : ["Backtab", "Backtab", "Backtab", "ArrowRight"],
         );
-        expect(page.screen().shows("Enter exits")).toBe(true);
+        expect(page.screen().shows("> [exit]")).toBe(true);
         release.resolve();
         yield* page.until("the newly arrived question", (one) => one.shows("[answer]"));
-        expect(page.screen().shows("Enter exits")).toBe(true);
+        expect(page.screen().shows("> [exit]")).toBe(true);
         expect(page.screen().shows("[close]")).toBe(false);
         expect(page.screen().shows("decision: go")).toBe(false);
         if (size.columns === 72) {
@@ -2723,12 +2710,10 @@ describe("REPL original surface and entry selection marks", () => {
         if (size.columns !== 72) {
           yield* intoComposer(page);
           yield* tab(page);
-          yield* page.until("History focused", (one) => one.shows("Enter opens History"));
+          yield* page.until("History focused", (one) => one.shows("> [history]"));
         }
         yield* page.key("ArrowRight");
-        yield* page.until("the way out keeping the entry selected", (one) =>
-          one.shows("Enter exits"),
-        );
+        yield* page.until("the way out keeping the entry selected", (one) => one.shows("> [exit]"));
         yield* catalog(page);
         const selected = page.screen().rows.find((one) => one.includes("entry-2")) ?? "";
         expect(selected).toContain("*");

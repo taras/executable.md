@@ -58,6 +58,11 @@ export type ReplAction =
   | { readonly kind: "noop" }
   | { readonly kind: "retry-restore" }
   | { readonly kind: "show-restore-error" }
+  | {
+      readonly kind: "dismiss-sidekick-notice";
+      readonly conversation: string;
+      readonly turn: number;
+    }
   /**
    * Text for one named field, or for the entry draft when it names none.
    *
@@ -236,6 +241,7 @@ export type ReplAction =
       readonly kind: "retry-message";
       readonly conversation: string;
       readonly message: number;
+      readonly noticeTurn?: number;
     }
   /** Give this form field the focus that text and Backspace act on. */
   | { readonly kind: "select-field"; readonly field: string }

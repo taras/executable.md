@@ -439,11 +439,24 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "configure-apply") {
     return { kind: "apply-configure" };
   }
+  if (select === "dismiss-sidekick-notice") {
+    const conversation = named["conversation"];
+    const turn = named["turn"];
+    return typeof conversation === "string" && typeof turn === "number"
+      ? { kind: "dismiss-sidekick-notice", conversation, turn }
+      : undefined;
+  }
   if (select === "retry-message") {
     const conversation = named["conversation"];
     const message = named["message"];
+    const noticeTurn = named["noticeTurn"];
     return typeof conversation === "string" && typeof message === "number"
-      ? { kind: "retry-message", conversation, message }
+      ? {
+          kind: "retry-message",
+          conversation,
+          message,
+          noticeTurn: typeof noticeTurn === "number" ? noticeTurn : undefined,
+        }
       : undefined;
   }
 

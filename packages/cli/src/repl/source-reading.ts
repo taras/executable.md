@@ -47,7 +47,7 @@ import { styleOf } from "./presentation-style.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { tokenRuns } from "./description.ts";
 import type { ReplTokenRun } from "./description.ts";
-import { sourceRuns } from "./presentation-text.ts";
+import { sourceRuns, trimLeadingBlankLines } from "./presentation-text.ts";
 import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandChunk } from "./command-output.ts";
 
@@ -227,7 +227,7 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
       return Object.freeze({
         caption: "Output · live",
         captionStyle: styleOf("waiting", { inspected }),
-        lines: plain(live, "output:live", styleOf("output", { inspected })),
+        lines: plain(trimLeadingBlankLines(live), "output:live", styleOf("output", { inspected })),
       });
     }
     return Object.freeze({
@@ -240,7 +240,11 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
     return Object.freeze({
       caption: "Output",
       captionStyle: styleOf("pane-heading", { inspected }),
-      lines: plain(terminal.output, "output", styleOf("output", { inspected })),
+      lines: plain(
+        trimLeadingBlankLines(terminal.output),
+        "output",
+        styleOf("output", { inspected }),
+      ),
     });
   }
   // Settled with nothing rendered. The outcome is the reading, and it is read

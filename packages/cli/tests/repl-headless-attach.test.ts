@@ -752,7 +752,7 @@ describe("headless live UI", () => {
     yield* click("Entries");
     yield* visible(terminal.terminal, ">   1. [ok]");
     yield* click("1. [ok]");
-    yield* visible(terminal.terminal, "Enter submits · Type here");
+    yield* visible(terminal.terminal, "> DRAFT");
     yield* click("BINDINGS");
     // The entry's own result is its Output; the pane opens on its Input.
     yield* visible(terminal.terminal, "entry-1 Input");
@@ -953,7 +953,7 @@ describe("headless live UI", () => {
       observed.feed(bytes);
       if (index >= baseline) {
         expect(observed.rows().join("\n")).toContain("parent draft remains");
-        expect(observed.rows().join("\n")).toContain("Type here");
+        expect(observed.rows().join("\n")).toContain("> DRAFT");
       }
     }
     parent.terminal.feed(" editable");

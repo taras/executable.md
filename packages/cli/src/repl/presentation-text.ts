@@ -32,6 +32,11 @@ import { tokenRuns } from "./description.ts";
 import type { ReplTokenRun } from "./description.ts";
 import type { ReplPresentationRole } from "./presentation-style.ts";
 
+/** Remove blank lines before output while preserving indentation and later lines. */
+export function trimLeadingBlankLines(text: string): string {
+  return text.replace(/^(?:[^\S\r\n]*\r?\n)+/u, "");
+}
+
 /** One stretch of a line, before the runs are joined. */
 interface Part {
   readonly text: string;
