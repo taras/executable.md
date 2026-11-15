@@ -270,13 +270,26 @@ including nested regions. It defaults to five seconds. Each bench supplies its
 own duration, including when it uses `resume`. The enclosing `<Test>` deadline
 can end a wait earlier.
 
-Set `scenario` on a fresh bench to resolve a Markdown Test Agent behavior file
-from the invocation's contextual cwd. The child starts a private scripted
-Sidekick and the bench waits for its ACP attachment before running the body.
-The scenario starts with the attachment initialization prompt and progresses
-through each user prompt and the resulting entry feedback. ACP actions use
-the enclosing bench's attachment. Each scripted bench starts its own
-scenario and session. A scenario cannot be supplied with `resume`.
+Set `sidekick-agent` to an agent name or an explicit Markdown TestAgent path.
+Paths resolve from the invocation's contextual cwd. For example, this can run in
+a REPL entry or inside a test:
+
+```xmd
+<Terminal columns={72} rows={20}>
+  <XMD.Repl sidekick-agent="./examples/repl-bench/fixtures/repl-sidekick-transcript.md">
+    <XMD.Repl.SidekickPrompt text="turn-00" />
+    <Terminal.WaitForText text="Reply witness 00." />
+  </XMD.Repl>
+</Terminal>
+```
+
+A scripted launch starts in a private home and waits for its ACP attachment
+before running the body. The fixture starts with the attachment initialization
+prompt and progresses through user prompts and entry feedback. The bench joins
+the child and its worker at teardown. Each launch gets its own scenario and
+session. Use a fresh launch for a scripted Sidekick.
+
+Existing tests can still select the behavior file with `scenario`.
 
 The optional `include` and `mount` arrays pass repeated `--include` and
 `--mount` values in order. Each mount value uses the CLI's `SOURCE:TARGET`

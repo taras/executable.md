@@ -22,7 +22,7 @@ import {
   type Yielded,
 } from "effection";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { useTempDirectory } from "../../scripts/lib/temp-directory.ts";
@@ -122,6 +122,7 @@ const bench = size.partial().extend({
   expectExit: z.boolean().default(false),
   waitTimeout: z.string().optional(),
   scenario: z.string().min(1).optional(),
+  "sidekick-agent": z.string().min(1).optional(),
   entryPermissionFixture: z.boolean().default(false),
   entryBenchFixture: z.boolean().default(false),
   include: z.array(z.string().min(1)).default([]),
@@ -239,6 +240,14 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
   ) {
     throw new Error("Use scripted REPL fixtures and launch overrides inside <Test>");
   }
+  const sidekickAgent = wanted["sidekick-agent"];
+  if (wanted.scenario !== undefined && sidekickAgent !== undefined) {
+    throw new Error("Choose either sidekick-agent or scenario for <XMD.Repl>.");
+  }
+  const scripted =
+    sidekickAgent !== undefined &&
+    extname(sidekickAgent) === ".md" &&
+    (sidekickAgent.includes("/") || sidekickAgent.includes(sep));
   const enclosing = yield* TerminalContext.get();
   if (enclosing !== undefined && (wanted.columns !== undefined || wanted.rows !== undefined)) {
     throw new Error("Set viewport dimensions on the enclosing <Terminal>");
@@ -307,29 +316,34 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
   }
   const scenario = wanted.scenario === undefined ? undefined : resolve(directory, wanted.scenario);
   let attachment: string | undefined;
-  if (scenario !== undefined) {
+  if (sidekickAgent !== undefined) {
+    args.push("--sidekick-agent", sidekickAgent);
+  }
+  if (scenario !== undefined || scripted) {
     if (resume !== undefined || home === undefined) {
-      throw new Error("A scripted Sidekick scenario requires a fresh REPL.");
+      throw new Error("A scripted Sidekick requires a fresh REPL.");
     }
     const canonicalHome = yield* realpath(home);
     if (canonicalHome === undefined) {
-      throw new Error("The scripted Sidekick test home is missing.");
+      throw new Error("The scripted Sidekick's private home is missing.");
     }
     attachment = join(canonicalHome, "sidekick.json");
-    args.push(
-      "--plugin",
-      fileURLToPath(new URL("./lib/scripted-sidekick.ts", import.meta.url)),
-      "--sidekick-agent",
-      "scripted",
-      "--sidekick-acp",
-      attachment,
-    );
+    args.push("--sidekick-acp", attachment);
+    if (scenario !== undefined) {
+      args.push(
+        "--plugin",
+        fileURLToPath(new URL("./lib/scripted-sidekick.ts", import.meta.url)),
+        "--sidekick-agent",
+        "scripted",
+      );
+    }
   }
   const implementation =
     build === undefined ? { command: yield* xmdCommand(["repl", ...args]) } : { build };
   const { launch, revision } = yield* prepareRun(directory, terminal.dimensions, args, {
     home: resume?.home ?? home,
     scenario,
+    attachment,
     ...implementation,
   });
   yield* Stdio.around(
@@ -385,7 +399,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
 function* scriptedSidekick() {
   const sidekick = yield* Sidekick.get();
   if (sidekick === undefined) {
-    throw new Error("This action needs an <XMD.Repl> with a scenario.");
+    throw new Error("This action needs an <XMD.Repl> with a scripted Sidekick.");
   }
   return sidekick;
 }
@@ -429,6 +443,7 @@ const replLaunch = {
     expectExit: boolean,
     waitTimeout: string,
     scenario: string,
+    "sidekick-agent": string,
     entryPermissionFixture: boolean,
     entryBenchFixture: boolean,
     include: strings,

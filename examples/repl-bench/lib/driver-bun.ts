@@ -124,7 +124,7 @@ export function useDriver(options: Launch) {
         const timely = yield* race([
           closed,
           (function* () {
-            yield* sleep(options.scenario === undefined ? 2_000 : SCRIPTED_STOP_GRACE);
+            yield* sleep(options.attachment === undefined ? 2_000 : SCRIPTED_STOP_GRACE);
             return null;
           })(),
         ]);
