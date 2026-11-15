@@ -2004,6 +2004,24 @@ export function readsGeometry(action: ReplAction): boolean {
 }
 
 /**
+ * Where one wheel tick moves a measured window: three rows, clamped to the
+ * reading and to the focused control's displayed extent.
+ *
+ * The root carries a wheel batch's geometry forward from this answer, so the
+ * reduction and that carry read one destination.
+ */
+export function wheelDestination(window: ReplWindow, direction: "up" | "down"): number {
+  const requested = scrolled(window, direction === "up" ? -3 : 3);
+  const focus = window.focus;
+  return focus === undefined
+    ? requested
+    : Math.min(
+        Math.max(requested, Math.max(0, focus.to - window.capacity)),
+        Math.min(focus.from, Math.max(0, window.total - window.capacity)),
+      );
+}
+
+/**
  * Answer one action.
  *
  * Total over the union, and pure: nothing here appends, opens, pauses or
@@ -2147,15 +2165,7 @@ export function reduceRepl(
       if (window === undefined || window.capacity < 1) {
         return settled(given);
       }
-      const requested = scrolled(window, action.direction === "up" ? -3 : 3);
-      const focus = window.focus;
-      const next =
-        focus === undefined
-          ? requested
-          : Math.min(
-              Math.max(requested, Math.max(0, focus.to - window.capacity)),
-              Math.min(focus.from, Math.max(0, window.total - window.capacity)),
-            );
+      const next = wheelDestination(window, action.direction);
       if (next === window.from) {
         return settled(given);
       }

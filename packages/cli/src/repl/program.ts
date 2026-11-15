@@ -93,7 +93,9 @@ import {
   readingOf,
   SIDEBAR_BODY,
   SIDEKICK_BODY,
+  SESSIONS_WINDOW,
   SIDEKICK_WINDOW,
+  wheelDestination,
   createChatPreparationStore,
   draftFieldWidth,
   configureNoticesOf,
@@ -2107,8 +2109,26 @@ function* drive(
      * loop's to do — it owns the scope — so this reports it rather than performing
      * it.
      */
+    // The geometry the last wheel tick left behind, for the next tick of the
+    // same batch. Valid only while nothing else has touched the state or the
+    // size: every other wake, every other action and every draw drops it.
+    let wheelGeometry:
+      | { state: ReplState; size: ReplTerminalSize; admission: ReplAdmission }
+      | undefined;
+
     function* act(event: ReplInputEvent): Operation<boolean> {
       const dispatched = yield* tree.dispatch(event);
+      const action =
+        dispatched.ok && dispatched.value.outcome === "action"
+          ? dispatched.value.action
+          : undefined;
+      const wheeled =
+        action?.kind === "viewport-wheel" &&
+        (action.window === SESSIONS_WINDOW || action.window === SIDEKICK_WINDOW)
+          ? action
+          : undefined;
+      const carried = wheelGeometry;
+      wheelGeometry = undefined;
       if (!dispatched.ok || dispatched.value.outcome !== "action") {
         // A traversal has already moved focus in the tree. Taking it now means
         // the frame below is composed with the focus that is actually held —
@@ -2131,10 +2151,22 @@ function* drive(
       // the draft moves no window, and measuring the reading beside it was the
       // single most expensive thing a keystroke did.
       let geometry = NOTHING_ADMITTED;
-      if (readsGeometry(dispatched.value.action)) {
+      const size = yield* screen.size();
+      if (
+        wheeled !== undefined &&
+        carried !== undefined &&
+        carried.state === state &&
+        carried.size.columns === size.columns &&
+        carried.size.rows === size.rows
+      ) {
+        // The previous tick of this batch measured this exact state at this
+        // size and moved only its own window: the frame between them is the
+        // same frame with that window's offset changed.
+        geometry = carried.admission;
+      } else if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
           yield* rendering(),
-          yield* inputView(state, yield* screen.size()),
+          yield* inputView(state, size),
           fits,
           chatFits,
           messageFits,
@@ -2147,6 +2179,7 @@ function* drive(
         }
         geometry = ready.value.admission;
       }
+      const before = state;
       const transition = reduceRepl(
         state,
         dispatched.value.action,
@@ -2619,6 +2652,27 @@ function* drive(
         // were. Waiting for the end-of-batch paint is too late: the key that
         // reaches for the new control has already been taken out of the queue.
         yield* remount();
+      } else if (wheeled !== undefined && geometry !== NOTHING_ADMITTED) {
+        // Read after `perform`, so anything it changed is a miss.
+        const window = geometry.windows.get(wheeled.window);
+        if (state === before) {
+          wheelGeometry = { state, size, admission: geometry };
+        } else if (state === transition.state && window !== undefined) {
+          const from = wheelDestination(window, wheeled.direction);
+          const count = Math.min(window.capacity, Math.max(0, window.total - from));
+          const windows = new Map(geometry.windows);
+          windows.set(
+            wheeled.window,
+            Object.freeze({
+              ...window,
+              from,
+              count,
+              less: from > 0,
+              more: from + count < window.total,
+            }),
+          );
+          wheelGeometry = { state, size, admission: Object.freeze({ ...geometry, windows }) };
+        }
       }
       return performed.exited === true;
     }
@@ -2671,7 +2725,10 @@ function* drive(
         queueFits,
       );
     }
-    const draw = () => (liveScreen === undefined ? paintCurrent() : liveScreen.draw(paintCurrent));
+    const draw = () => {
+      wheelGeometry = undefined;
+      return liveScreen === undefined ? paintCurrent() : liveScreen.draw(paintCurrent);
+    };
     let observedPass = 0;
     let observedEvents: { event: ReplScreenEvent; accepted: boolean }[] = [];
     const observer = options.headless?.observeInputPass;
@@ -2756,6 +2813,10 @@ function* drive(
         // this is the only place that sees the rest of the batch.
         if (departing) {
           break;
+        }
+        if (wake.kind !== "screen" || wake.event.kind !== "wheel") {
+          // Anything else may move what the next measurement reads.
+          wheelGeometry = undefined;
         }
         if (wake.kind === "screen") {
           const accepted = liveScreen === undefined || liveScreen.accepts(wake.event);
