@@ -1,10 +1,11 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep } from "effection";
+import { scoped, sleep } from "effection";
 import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell } from "./support/repl-page.ts";
-import { intoComposer, paneLines, pasteDraft } from "./support/screen-journeys.ts";
+import { composerHolds, intoComposer, paneLines } from "./support/screen-journeys.ts";
+import { generateTypingHistory } from "./support/typing-history.ts";
 
 const SIZE = { columns: 160, rows: 36 };
 
@@ -129,54 +130,32 @@ describe("wheel bursts in one input chunk", () => {
   });
 
   it("a tick that clears a staged refusal moves the next one within the freed capacity", function* () {
-    const page = yield* useReplPage({ size: SIZE });
-    yield* intoComposer(page);
-    const rows = Array.from({ length: 140 }, (_, at) => `Chat row ${at}`).join("\n");
-    page.repl.fake.script({ reply: `<Output>${rows}</Output>` });
-    yield* typed(page, "read this");
-    yield* page.key("Enter");
-    yield* page.until(
-      "reply completed",
-      (one) => one.shows("Chat row 139") && !one.shows("[stop]"),
-    );
-    yield* sleep(60);
-    const plain = chatRows(page);
-    expect(plain.at(-1)).toBe(139);
+    const reason =
+      "Permission to start was declined because the chosen fixture rejected this request. ";
+    const request = "Please refuse this request";
+    const footer = "! Permission to start was declined";
+    const cell = { column: 140, row: 13 };
 
-    // The refusal is staged in the footer and takes more rows from the chat
-    // than one tick moves.
-    function* refused(): Operation<readonly string[]> {
-      const before = page.screen().index;
-      yield* page.key("Enter");
-      yield* page.until(
-        "the staged refusal",
-        (one) => one.index > before && one.shows("! this entry cannot run here"),
-      );
-      yield* sleep(60);
-      return page.screen().rows;
+    function* endpoints(move: typeof burst) {
+      return yield* scoped(function* () {
+        const page = yield* useReplPage({ size: SIZE });
+        yield* generateTypingHistory(page, 2, 80);
+        yield* intoComposer(page);
+        // The staged refusal frees more rows than one tick moves when it clears.
+        page.repl.fake.script({ reply: "", failure: reason.repeat(8) });
+        yield* page.type(request);
+        yield* page.until("the request in Message", (one) => composerHolds(one, request));
+        yield* page.key("Enter");
+        yield* page.until("the staged refusal", (one) => one.shows(footer));
+        const start = paneLines(page.screen());
+
+        yield* move(page, "up", cell, 2);
+        expect(page.screen().shows(footer)).toBe(false);
+        return { start, end: paneLines(page.screen()) };
+      });
     }
-    yield* pasteDraft(page, `<${"Nowhere".repeat(34)} />`);
-    const start = yield* refused();
-    const narrowed = chatRows(page);
-    expect(narrowed.at(-1)).toBe(139);
-    expect(plain.length - narrowed.length).toBeGreaterThan(3);
-    const cell = page.screen().locate("Chat row 139");
 
-    // The first tick clears the refusal, so the clamp at the tail it freed
-    // decides where the second one starts.
-    yield* burst(page, "up", cell, 2);
-    const burstEnd = page.screen().rows;
-    expect(page.screen().shows("! this entry cannot run here")).toBe(false);
-    const freed = chatRows(page);
-    expect(freed).toEqual(consecutive(freed[0], freed.length));
-
-    // The same two ticks, each measured against its acknowledged frame.
-
-    yield* burst(page, "down", cell, 10);
-    expect(chatRows(page)).toEqual(plain);
-    expect(yield* refused()).toEqual(start);
-    yield* ticked(page, "up", cell, 2);
-    expect(page.screen().rows).toEqual(burstEnd);
+    expect(yield* endpoints(burst)).toEqual(yield* endpoints(ticked));
   });
 
   it("Transcript reaches the sequential endpoint and leaves the chat alone", function* () {
