@@ -4,7 +4,7 @@ Use the ReplBench plugin to verify what a person sees in the REPL. Start from
 a tooling checkout prepared with `deno task setup`. The bench uses Bun with
 PTY support to drive the REPL.
 
-[Visual comparison](#compare-repl-builds-with-screenshots) · [UI handoff](#ui-handoff) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
+[Visual comparison](#compare-repl-builds-with-screenshots) · [UI handoff](#ui-handoff) · [Typing latency](#compare-mounted-typing-latency) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
 
 ## Compare REPL builds with screenshots
 
@@ -184,6 +184,27 @@ Each launch saves its viewport and terminal output in the tooling checkout’s
 dirty status, working directory, and dimensions. Failed launches keep their
 available evidence. `Terminal.Screenshot` saves the visible viewport and
 binds its path. Use separate names for the checkpoints you compare.
+
+## Compare mounted typing latency
+
+Prepare a clean baseline and candidate worktree with `deno task setup`. Run
+this command from the tooling checkout and give it a path for the JSON report.
+
+```text
+deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  examples/repl-bench/typing-latency.ts /path/to/baseline /path/to/candidate /tmp/typing.json
+```
+
+Both measurements use the mounted REPL at 200×52. Each starts when the test
+dispatches one character and ends when a completed emulator write shows the
+expected new Message value. The small and 52-round wrapping histories are
+generated with a scripted provider before sampling. The report retains all
+40 edits per workload and calculates median and p95 after the first 10.
+
+The Linux bench job attaches the paired report for pull requests that change
+REPL code, dependencies or tooling. It also runs the deterministic typing and
+render-work regression. Compare both revisions in each workload when
+investigating a timing change. Shared runners report deltas for review.
 
 ## Run the tests
 

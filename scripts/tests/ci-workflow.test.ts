@@ -698,6 +698,20 @@ describe("the dedicated ReplBench job", () => {
       true,
     );
   });
+
+  it("compares the two PR revisions and requires the mounted typing report", function* () {
+    const steps = (yield* workflow())["repl-bench"]?.steps ?? [];
+    const comparison = steps.find((step) =>
+      step.run?.includes("examples/repl-bench/typing-latency.ts"),
+    );
+    expect(comparison?.if).toContain("github.event_name == 'pull_request'");
+    expect(comparison?.env?.BASE_REVISION).toContain("github.event.pull_request.base.sha");
+    expect(comparison?.env?.HEAD_REVISION).toContain("github.event.pull_request.head.sha");
+    expect(comparison?.run).toContain("packages/cli/tests/repl-sidekick-typing.test.ts");
+    const report = steps.find((step) => step.with?.name?.startsWith("repl-typing-latency-"));
+    expect(report?.if).toContain("steps.typing.outputs.affected == 'true'");
+    expect(report?.with?.["if-no-files-found"]).toBe("error");
+  });
 });
 
 describe("the CI workflow aggregate", () => {
