@@ -114,6 +114,21 @@ export class PagedHistory {
     return this.whole.copy().digest("hex");
   }
 
+  get fingerprint(): { records: number; bytes: number; sha256: string } {
+    return { records: this.records, bytes: this.end, sha256: this.digest };
+  }
+
+  *confirmVersion(): Operation<void> {
+    this.requireReadable();
+    try {
+      if (!sameJournal(this.version, yield* journalVersion(this.path))) {
+        throw new JournalChangedError();
+      }
+    } catch (cause) {
+      throw this.fence(new JournalChangedError({ cause }));
+    }
+  }
+
   *prepareRelocation(path: string, digest: string): Operation<JournalVersion> {
     if (digest !== this.digest) {
       throw this.fence(new JournalChangedError());

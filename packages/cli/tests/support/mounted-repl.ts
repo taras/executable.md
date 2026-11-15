@@ -863,6 +863,7 @@ export function* useMountedRepl(
     readonly sidekickAcp?: string;
     readonly size?: ReplTerminalSize;
     readonly location?: string;
+    readonly pagedHistory?: boolean;
     /** A host already installed, for a case that reopens the same root. */
     readonly host?: MountedHost;
     /** A gate over the host's appends, when this call installs the host. */
@@ -904,6 +905,7 @@ export function* useMountedRepl(
   yield* spawn(function* (): Operation<void> {
     const outcome = yield* runReplProgram({
       profile: host.profile,
+      ...(options.pagedHistory === undefined ? {} : { pagedHistory: options.pagedHistory }),
       ...(options.sidekickAcp === undefined ? {} : { sidekickAcp: options.sidekickAcp }),
       ...(options.location === undefined ? {} : { location: options.location }),
     });

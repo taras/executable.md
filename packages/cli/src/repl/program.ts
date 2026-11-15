@@ -324,7 +324,8 @@ export function* prepareReplStartup(
       decoded.value.execution,
     );
     const retained = {
-      entries: yield* bindRetainedPrefix(execution.stream.path),
+      entries:
+        execution.stream.history?.fingerprint ?? (yield* bindRetainedPrefix(execution.stream.path)),
       ...(execution.chat.form === "paired"
         ? { chat: yield* bindRetainedPrefix(execution.chat.location.sidekick) }
         : {}),
@@ -416,6 +417,9 @@ function* unchangedStartup(
     execution.chat.form === "paired"
       ? yield* bindRetainedPrefix(execution.chat.location.sidekick)
       : undefined;
+  if (execution.stream.history !== undefined) {
+    yield* execution.stream.history.confirmVersion();
+  }
   if (
     entries.records !== retained.entries.records ||
     entries.bytes !== retained.entries.bytes ||
@@ -1898,7 +1902,9 @@ function* drive(
           continue;
         }
         if (report.kind === "admitted") {
-          reading = { model: current.model, navigation: current.navigation };
+          if (current.attend === undefined) {
+            reading = { model: current.model, navigation: current.navigation };
+          }
           // The entry exists now, so the draft that became it is finished — and
           // only the revision it was taken from. Somebody who typed while the
           // preflight was running keeps what they typed.
@@ -1920,9 +1926,16 @@ function* drive(
     }
 
     function* inputView(candidate: ReplState, at: ReplTerminalSize) {
+      const attended =
+        current.attend === undefined
+          ? undefined
+          : yield* current.attend(candidate.route.at, candidate.route.scopes[0]);
+      if (attended !== undefined && !attended.ok) {
+        return refusedView(candidate, attended.error.message, at);
+      }
       return yield* build(
         candidate,
-        reading,
+        attended?.value ?? reading,
         current,
         at,
         focused,
@@ -2102,17 +2115,7 @@ function* drive(
       if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
           yield* rendering(),
-          yield* build(
-            state,
-            reading,
-            current,
-            yield* screen.size(),
-            focused,
-            preparingOf(admitting),
-            sidekickReading(state),
-            dispatch.queue,
-            follow,
-          ),
+          yield* inputView(state, yield* screen.size()),
           fits,
           chatFits,
           messageFits,
@@ -2745,7 +2748,14 @@ function* drive(
           }
         }
         if (wake.kind === "session") {
-          reading = { model: current.model, navigation: current.navigation };
+          if (current.attend === undefined) {
+            reading = { model: current.model, navigation: current.navigation };
+          } else {
+            const refreshed = yield* reproject(state, reading, current);
+            if (refreshed.broken === undefined) {
+              reading = refreshed.reading;
+            }
+          }
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {

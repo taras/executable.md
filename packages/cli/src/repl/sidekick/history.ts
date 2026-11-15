@@ -1660,6 +1660,9 @@ export function* upgradeExecution(
     // The held writer pins the acknowledged record count and page ranges.
     // An unpaged stream carries its sealed records to the new writer.
     const history = writer.history;
+    if (history !== undefined) {
+      yield* history.confirmVersion();
+    }
     const events = history === undefined ? yield* writer.readAll() : [];
     const location = yield* establishPair(root, execution);
     // One snapshot, read once: what is fingerprinted, what is parsed for
@@ -1675,10 +1678,14 @@ export function* upgradeExecution(
       history === undefined
         ? undefined
         : yield* history.prepareRelocation(location.entries, origin.sha256);
+    if (history !== undefined) {
+      yield* history.confirmVersion();
+    }
     const entries = new RetainedReplStream(location.entries, events, history);
     const publication = yield* acknowledgePair(location, execution, entries, origin);
-    if (target !== undefined) {
-      history?.relocate(location.entries, target);
+    if (history !== undefined && target !== undefined) {
+      yield* history.confirmVersion();
+      history.relocate(location.entries, target);
     }
     writer.redirect(entries);
     return publication;

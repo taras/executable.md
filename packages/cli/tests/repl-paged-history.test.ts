@@ -1,12 +1,21 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { INLINE_SOURCE_PATH } from "@executablemd/core";
+import { Elicitation, INLINE_SOURCE_PATH } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { appendFile, open, readFile, rename, truncate, unlink, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  truncate,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
-import { until } from "effection";
+import { ensure, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ROOT_IMPORT } from "../src/repl/entries.ts";
 import { ReplHost } from "../src/repl/host.ts";
@@ -16,6 +25,9 @@ import { prepareReplStartup } from "../src/repl/program.ts";
 import { appendCheckedRecord } from "../src/repl/record-file.ts";
 import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { awaited, useMountedHost } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import { pasteDraft } from "./support/screen-journeys.ts";
 
 function admission(content: string): DurableEvent {
   return {
@@ -211,5 +223,83 @@ describe("Paged REPL history", () => {
       state: "ok",
       bindings: [{ name: "data", value: "older" }],
     });
+  });
+  it("refuses to move a running writer after an identical-byte legacy replacement", function* () {
+    yield* useWriter();
+    const root = yield* useTempDirectory("xmd-pages-");
+    const repository = pairedReplRepository(root, true);
+    const path = join(root, "legacy.jsonl");
+    const original = encoded([admission("running")]);
+    yield* until(writeFile(path, original));
+    const execution = yield* repository.open("legacy");
+    const replacement = join(root, "replacement");
+    yield* until(writeFile(replacement, original));
+    yield* until(rename(replacement, path));
+    expect(yield* refuse(() => repository.upgrade(execution))).toContain("changed");
+    expect(yield* refuse(() => execution.stream.append(closed()))).toContain("changed");
+    expect(yield* until(readFile(path, "utf8"))).toBe(original);
+  });
+  it("keeps older Bindings available to input in the batch that observes a live Close", function* () {
+    const host = yield* useMountedHost();
+    yield* until(mkdir(host.root, { recursive: true }));
+    const original = encoded([
+      admission("First"),
+      closed({ earlier: "older value" }),
+      admission("Second"),
+      closed({ earlier: "new head value" }),
+    ]);
+    yield* until(writeFile(join(host.root, "paged.jsonl"), original));
+    const waiting = withResolvers<void>();
+    const answer = withResolvers<void>();
+    const closedLive = withResolvers<void>();
+    yield* ensure(() => answer.resolve());
+    yield* Elicitation.around({
+      *elicit([request], next) {
+        if (request.message !== "Hold for navigation.") {
+          return yield* next(request);
+        }
+        waiting.resolve();
+        yield* answer.operation;
+        return { answer: "continue" };
+      },
+    });
+    yield* ReplHost.around({
+      *appendEntryRecord([path, text, check], next) {
+        yield* next(path, text, check);
+        if (text.includes('"type":"close","coroutineId":"root"')) {
+          closedLive.resolve();
+        }
+      },
+    });
+    const page = yield* useReplPage({
+      host,
+      pagedHistory: true,
+      location: "xmd://repl/paged/entries/entry-1",
+    });
+    yield* pasteDraft(
+      page,
+      '<Elicit schema={{type:"object",properties:{answer:{type:"string",enum:["continue"]}},required:["answer"],additionalProperties:false}} as="answer">Hold for navigation.</Elicit>',
+    );
+    yield* page.key("Enter");
+    yield* waiting.operation;
+    yield* page.until("the running third entry", (screen) => screen.shows("Entry 3 running"));
+    yield* page.press("BINDINGS");
+    yield* page.until("the first entry Input", (screen) => screen.shows("entry-1 Input"));
+    yield* page.press("Output", { rightOf: "BINDINGS" });
+    yield* page.until("the first entry Output", (screen) => screen.shows("older value"));
+
+    const terminal = page.repl.terminal;
+    terminal.holdNextPresent();
+    yield* page.key("Tab");
+    yield* awaited("the presentation held", () => terminal.holdPresent !== undefined);
+    answer.resolve();
+    yield* closedLive.operation;
+    terminal.feed("\x076");
+    terminal.holdPresent?.release();
+    yield* page.until(
+      "the third entry settled with the first entry Output still shown",
+      (screen) => screen.shows("HEAD · SETTLED") && screen.shows("older value"),
+    );
+    expect(page.repl.outcome()).toBe(undefined);
   });
 });

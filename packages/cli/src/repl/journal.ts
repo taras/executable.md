@@ -40,7 +40,7 @@ import type { DurableEvent, DurableStream } from "@executablemd/durable-streams"
 
 import { ReplHost } from "./host.ts";
 import { readRecords, ReplJournalError } from "./journal-records.ts";
-export { readRecords, ReplJournalError } from "./journal-records.ts";
+export { readRecords } from "./journal-records.ts";
 import { RetainedBindings } from "./retained-bindings.ts";
 import { sealEvent } from "./retained-event.ts";
 import { PagedHistory } from "./paged-history.ts";
