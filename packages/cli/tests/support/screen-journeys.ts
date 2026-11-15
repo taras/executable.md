@@ -241,7 +241,7 @@ export function paneLines(reading: ScreenReading): string[] {
     return [];
   }
   const tabs = reading.locate(SIDEKICK).row;
-  const floor = reading.locate(DRAFT).column;
+  const floor = reading.shows(DRAFT) ? reading.locate(DRAFT).column : 0;
   return reading.rows.map((row, index) =>
     index > tabs ? row.slice(Math.min(floor, row.length)) : "",
   );

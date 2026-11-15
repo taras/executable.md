@@ -5,7 +5,7 @@ import type { Operation } from "effection";
 import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage, ScreenCell } from "./support/repl-page.ts";
-import { draftText, intoComposer, intoDraft } from "./support/screen-journeys.ts";
+import { draftText, intoComposer, intoDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
 
 function* key(page: ReplPage, name: PageKey): Operation<void> {
   const before = page.screen().index;
@@ -91,8 +91,8 @@ describe("wheel real consumers", () => {
     yield* page.type('<Session name="permission"><Prompt text="permission-witness" /></Session>');
     yield* page.until("entry source ready", (one) => one.shows("</Session>"));
     yield* page.key("Enter");
-    yield* page.until("pending permission", (one) => one.shows("asks: PERMISSION-BEGIN"));
-    yield* page.press("asks: PERMISSION-BEGIN");
+    yield* page.until("pending permission", (one) => one.shows("asks:"));
+    yield* page.press("asks:");
     yield* page.until("first permission choice", (one) => one.shows("> [Allow]"));
     expect(page.screen().shows("[Reject]")).toBe(true);
     for (let step = 0; step < 5; step += 1) {
@@ -310,7 +310,7 @@ describe("wheel real consumers", () => {
     const value = Array.from({ length: 60 }, (_, at) => `Binding row ${at}`);
     yield* intoDraft(page);
     yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
-    yield* page.until("binding source ready", (one) => one.shows("Binding row 59"));
+    yield* page.until("binding source ready", (one) => one.shows('row 59"]}'));
     yield* page.key("Enter");
     yield* page.until("binding retained", (one) => one.shows("Ready for Entry 2"));
     yield* page.press("Entries");
@@ -320,7 +320,7 @@ describe("wheel real consumers", () => {
     yield* page.press("BINDINGS");
     // The entry's own result is its Output; the pane opens on its Input.
     yield* page.until("binding views", (one) => one.shows("entry-1 Input"));
-    yield* page.press("Output", { rightOf: "BINDINGS" });
+    yield* page.press("Output", SIDEKICK_PANE);
     yield* page.until("binding opener", (one) => one.shows("retained ="));
     yield* page.press("retained =");
     yield* page.until(
@@ -366,7 +366,7 @@ describe("wheel real consumers", () => {
     yield* page.press("BINDINGS");
     // The entry's own result is its Output; the pane opens on its Input.
     yield* page.until("string views", (one) => one.shows("entry-1 Input"));
-    yield* page.press("Output", { rightOf: "BINDINGS" });
+    yield* page.press("Output", SIDEKICK_PANE);
     yield* page.until("string opener", (one) => one.shows("retained ="));
     yield* page.press("retained =");
     yield* page.until(
@@ -449,8 +449,8 @@ describe("wheel real consumers", () => {
       yield* page.until("turn completed", (one) => !one.shows("[stop]"));
       expect(page.screen().shows("draft-kept")).toBe(true);
       expect(page.screen().shows("message-kep!t")).toBe(true);
-      expect(page.screen().found("[↑ earlier]", { rightOf: "BINDINGS" }) > 0).toBe(false);
-      expect(page.screen().found("[↓ later]", { rightOf: "BINDINGS" }) > 0).toBe(false);
+      expect(page.screen().found("[↑ earlier]", SIDEKICK_PANE) > 0).toBe(false);
+      expect(page.screen().found("[↓ later]", SIDEKICK_PANE) > 0).toBe(false);
       expect(page.repl.fake.prompts).toHaveLength(1);
       expect(page.screen().shows("No entry yet")).toBe(true);
       // Message -> History -> Transcript -> Selected work -> Draft.
