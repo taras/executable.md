@@ -1,0 +1,60 @@
+<File path=".bench/comparison-builds.json" as="buildsJson" />
+<Let as="builds" value={JSON.parse(buildsJson)} />
+
+<Each in={[{columns: 160, rows: 36, name: "wide"}, {columns: 72, rows: 20, name: "narrow"}]} let="size">
+  <Terminal columns={size.columns} rows={size.rows}>
+    <Each in={["baseline", "candidate"]} let="label">
+      <XMD.Build checkout={builds[label].checkout} expectedRevision={builds[label].revision}>
+        <XMD.Repl sidekick-agent="./examples/repl-bench/fixtures/repl-sidekick-transcript.md">
+          <Repl.Focus.Message />
+          <Each in={["00", "01"]} let="turn">
+            <Terminal.Type text={"turn-" + turn} />
+            <Terminal.Region name="sidekick-composer">
+              <Terminal.WaitForText text={"turn-" + turn} />
+            </Terminal.Region>
+            <Terminal.Key key="Enter" />
+            <Terminal.WaitForText text={"Reply witness " + turn + "."} />
+            <Terminal.WaitForText text="[stop]" present={false} />
+          </Each>
+          <Repl.Focus.Draft />
+          <Terminal.Type text="unsent-entry" />
+          <Terminal.WaitForText text="unsent-entry" />
+          <Repl.Focus.Message />
+          <Terminal.Type text="unsent-message" />
+          <Terminal.Region name="sidekick-composer">
+            <Terminal.WaitForText text="unsent-message" />
+          </Terminal.Region>
+          <Terminal.Screenshot name={size.name + "-" + label + "-startup"} format="png" as="startup" />
+          <Terminal.Key key="Ctrl+G" />
+          <If condition={label === "candidate"}>
+            <Terminal.WaitForText text="[1]" bold={true} />
+          </If>
+          <Terminal.Screenshot name={size.name + "-" + label + "-hints"} format="png" as="hints" />
+          <If condition={size.name === "wide"}>
+            <Terminal.Key key="4" />
+            <Terminal.WaitForText text="DRAFT" bold={true} />
+          </If>
+          <If condition={size.name === "narrow"}>
+            <Terminal.Key key="2" />
+            <Terminal.WaitForText text="* Sessions" row={1} />
+            <Terminal.WaitForText text="> All sessions" />
+          </If>
+          <Terminal.Screenshot name={size.name + "-" + label + "-jump"} format="png" as="jump" />
+          <Repl.Focus.Message />
+          <Terminal.Key key="Ctrl+G" />
+          <If condition={label === "candidate"}>
+            <Terminal.WaitForText text="[1]" bold={true} />
+          </If>
+          <Terminal.Key key="Escape" />
+          <Terminal.WaitForText text="[1]" present={false} />
+          <Terminal.Region name="sidekick-composer">
+            <Terminal.WaitForText text="unsent-message" />
+          </Terminal.Region>
+          <Terminal.Screenshot name={size.name + "-" + label + "-escape"} format="png" as="escape" />
+          <XMD.Repl.Revision as="revision" />
+          <Output><Json value={{label, revision, size, startup, hints, jump, escape}} /></Output>
+        </XMD.Repl>
+      </XMD.Build>
+    </Each>
+  </Terminal>
+</Each>
