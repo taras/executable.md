@@ -13,6 +13,7 @@ export interface TodoDocument {
   readonly lines: readonly TodoLine[];
   readonly tasks: readonly number[];
   readonly items: readonly TodoItem[];
+  readonly openItems: number;
   readonly newline: string;
 }
 
@@ -38,6 +39,7 @@ export function parseTodo(source: string): TodoDocument {
   const lines = sourceLines(source);
   const items: TodoItem[] = [];
   const tasks: number[] = [];
+  let openItems = 0;
   for (const [at, line] of lines.entries()) {
     if (/^[ \t]*$/.test(line.text)) {
       continue;
@@ -49,13 +51,18 @@ export function parseTodo(source: string): TodoDocument {
       );
     }
     tasks.push(at);
-    items.push(Object.freeze({ text: task[2], completed: task[1] !== " " }));
+    const completed = task[1] !== " ";
+    if (!completed) {
+      openItems++;
+    }
+    items.push(Object.freeze({ text: task[2], completed }));
   }
   return Object.freeze({
     source,
     lines: Object.freeze(lines.map((line) => Object.freeze(line))),
     tasks: Object.freeze(tasks),
     items: Object.freeze(items),
+    openItems,
     newline: lines.find((line) => line.end !== "")?.end ?? "\n",
   });
 }

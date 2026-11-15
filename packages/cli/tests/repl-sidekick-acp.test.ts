@@ -3711,7 +3711,12 @@ describe("Follow: joined mixed-origin queue handoff", () => {
         text: "ACP queued text",
       }),
     );
-    yield* page.until("two delivered waiting messages", (one) => one.shows("QUEUE 2/16"));
+    yield* page.until(
+      "two delivered waiting messages",
+      (one) =>
+        one.shows("Waiting messages are kept only in this REPL.") &&
+        one.rows.filter((row) => /\sX\s*$/.test(row)).length === 2,
+    );
     yield* intoComposer(page);
     yield* typed(page, "newer composer text");
     const before = yield* settledReading(page.repl);

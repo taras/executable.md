@@ -982,7 +982,6 @@ describe("Tier PV — generation that ended without a reply", () => {
     expect(repl.fake.prompts).toHaveLength(1);
 
     // Explicit Resume releases the failure hold without retrying the failed candidate.
-    yield* page.press("QUEUE");
     yield* page.until("failure hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("failure hold released", (one) => !one.shows("[Resume queue]"));
@@ -1266,7 +1265,9 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
       yield* selectPane(page, "bindings");
       yield* selectPane(page, "sidekick");
       const before = page.screen();
-      const queue = before.rows.find((row) => row.includes("QUEUE"));
+      const queue = before.rows.find((row) =>
+        row.includes("Waiting messages are kept only in this REPL."),
+      );
       yield* typed(page, "next question");
       expect(page.screen().shows("kept draftnext")).toBe(false);
       repl.terminal.feed("\x03");
@@ -1278,7 +1279,9 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
       // request the agent accepted are exactly as they were.
       expect(draftShows(cleared, "kept draft")).toBe(true);
       expect(cleared.shows("Entries › Entry 1")).toBe(true);
-      expect(cleared.rows.find((row) => row.includes("QUEUE"))).toBe(queue);
+      expect(
+        cleared.rows.find((row) => row.includes("Waiting messages are kept only in this REPL.")),
+      ).toBe(queue);
       expect(repl.fake.prompts).toHaveLength(1);
       expect(repl.outcome()).toBe(undefined);
       // Still the message box's keystrokes, and still a running command.
@@ -1809,7 +1812,6 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     // And a later message asks a new question, with the same field names and an
     // empty form: the values typed into the stopped one are not an answer to it.
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Asking again.") });
-    yield* page.press("QUEUE");
     yield* page.until("human Stop hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("human Stop hold released", (one) => !one.shows("[Resume queue]"));
@@ -2214,7 +2216,6 @@ describe("Follow: mounted Stop owns continuation", () => {
       (one) => one.occurrences("[stop]") === 0,
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
-    yield* page.press("QUEUE");
     yield* page.until("stopped queue selected", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("queue hold released without work", (one) => !one.shows("[Resume queue]"));

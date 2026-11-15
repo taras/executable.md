@@ -2010,13 +2010,15 @@ function* drive(
         return false;
       }
       const route = shortcutRoute(state.route, region, profile === "narrow");
+      const todoOpen = digit === "7" ? true : digit === "6" ? false : state.todoOpen;
       if (
         starting ||
         route !== state.route ||
+        todoOpen !== state.todoOpen ||
         rendered?.size.columns !== at.columns ||
         rendered.size.rows !== at.rows
       ) {
-        const candidate = { ...state, route, restore: undefined };
+        const candidate = { ...state, route, todoOpen, restore: undefined };
         const view = yield* inputView(candidate, at);
         if (view.refusal !== undefined || modalOpen(view)) {
           return false;
@@ -2056,14 +2058,19 @@ function* drive(
       const routes = new Map<string, readonly ReplDescription<ReplAction>[]>();
       for (const [digit, region] of FOCUS_SHORTCUTS) {
         const route = shortcutRoute(current, region, narrow);
-        if (route === current) {
+        const todoOpen = digit === "7" ? true : digit === "6" ? false : state.todoOpen;
+        const changeTab = (todoOpen === true) !== (state.todoOpen === true);
+        if (route === current && !changeTab) {
           hints.set(digit, undefined);
           continue;
         }
-        const key = JSON.stringify([route.surface, route.view, route.right]);
+        const key = JSON.stringify([route.surface, route.view, route.right, todoOpen]);
         let descriptions = routes.get(key);
         if (descriptions === undefined) {
-          const destination = yield* inputView({ ...state, route, restore: undefined }, view.size);
+          const destination = yield* inputView(
+            { ...state, route, todoOpen, restore: undefined },
+            view.size,
+          );
           descriptions = [];
           if (destination.refusal === undefined && !modalOpen(destination)) {
             const prepared = yield* prepareInput(destination, yield* rendering());
@@ -2075,7 +2082,14 @@ function* drive(
           routes.set(key, descriptions);
         }
         if (hasRegion(descriptions, region)) {
-          hints.set(digit, focusRouteHint(route, narrow));
+          hints.set(
+            digit,
+            route !== current
+              ? focusRouteHint(route, narrow)
+              : todoOpen
+                ? "switches to the TODO tab"
+                : "switches to the Sidekick tab",
+          );
         }
       }
       return hints;

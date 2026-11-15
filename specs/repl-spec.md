@@ -1591,9 +1591,9 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | an identity row; three columns — the Transcript of agent work, the selected work with its own Draft, and Bindings/Sidekick — each with its own surface and the divider that starts it; the drawer layer; then one compact History row and one row of guidance |
-| `120x30` and larger | the same three columns, narrower |
-| `72x20` and larger | one routed surface — the one the route selected — under the Sessions, Entries and Sidekick surface controls, with the same drawer, History and guidance |
+| `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; then compact History and guidance |
+| `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
+| `72x20` and larger | one full-width routed surface with Sessions, Entries and Sidekick controls. The controls sit below the Sidekick view and above the other views. The drawer, History and guidance remain available |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
@@ -1622,23 +1622,26 @@ the **Draft**: one field whose heading row carries its own Send — or Stop, whi
 an entry is running — and whose value takes the rows beneath. The Draft is always
 the next entry's text, and a blank row in it is a row.
 
-**Bindings** and **Sidekick** share the right column as two tabs. Above the
-Sidekick's composer, the trays this build offers sit on the left and the
-Follow checkbox and the Sidekick's own Stop, Send and held Resume controls on
-the right. Send remains available during an active exchange. Resume queue appears only while advancement
-is held and stays outside the scrolling window.
+The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO** with
+the count of open tasks, and **Bindings**. The TODO tab shows the shared
+checklist in the reading area, with the Message composer and its actions below.
+Bindings is available at the two three-column sizes.
 
-**QUEUE** shows the waiting count out of sixteen. Each pending message shows its
-origin, text and `X`, accessible as *Remove message*. Placement expresses FIFO
-order without row numbers or repeated acknowledgements. X withdraws only its
-exact still-pending message; a stale X changes no active work. TODO edits the shared checklist above Message. Follow starts checked and keeps its live setting across
-rounds, navigation and resizing.
+Follow starts checked and keeps its live setting across rounds, navigation and
+resizing. Send stays available beside Stop during an active exchange. A held
+queue shows its reason and offers **Resume queue** beside the other fixed
+actions. When the actions cannot fit one row, each control stays whole.
 
-A fixed status states the hold reason. While messages wait, the tray says once:
-`Waiting messages are kept only in this REPL.` Both are fitted to the measured
-width before the queue window receives its height. When the action groups
-cannot share one row, the header gives Follow, Send/Stop and held Resume their
-own rows so each control stays whole.
+While messages wait, a list above the composer shows the notice
+`Waiting messages are kept only in this REPL.` and the messages in admission
+order. Each message shows its origin, text and `X`, accessible as *Remove
+message*. X withdraws its exact still-pending message. The list and notice
+collapse when the final message leaves. The queue has no tab or count.
+
+At 160, 120 and 72 columns the queue shows up to five, four and three fitted
+rows respectively, as constrained by the available height. Overflow scrolls
+within the list. The notice shows `↓ more` while later rows are below it and
+`↑ more` at the end when earlier rows are above it.
 
 Message is the fixed entry of its keyboard region. Follow, Send, Stop, Resume
 and the vertical group of pending X controls belong to that same region, adding no Tab

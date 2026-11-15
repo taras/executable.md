@@ -32,7 +32,7 @@ for (const size of [
   { columns: 120, rows: 30 },
   { columns: 72, rows: 20 },
 ]) {
-  describe(`TODO/QUEUE tabs at ${size.columns}x${size.rows}`, () => {
+  describe(`Sidekick and TODO tabs at ${size.columns}x${size.rows}`, () => {
     it("switches only on human selection and retains drafts, item controls and held queue work", function* () {
       const page = yield* useReplPage({ size });
       yield* draftText(page, "kept entry");
@@ -45,18 +45,23 @@ for (const size of [
       const file = pairedLocation(page.repl.root, reading.execution).directory + "/todo.md";
       const source = "- [x] done `code`\n- [ ] wrapped " + "label ".repeat(30) + "\n- [ ] last\n";
       yield* writeTextFile(file, source);
+      yield* page.until("open TODO count", (one) => one.shows("TODO 2"));
+      expect(page.screen().shows("☑ done code")).toBe(false);
+      yield* page.press("TODO 2");
       yield* page.until("current tasks", (one) => one.shows("☑ done code"));
       const first = page.screen().locate("done code");
+      const checklistSurface =
+        size.columns < 120 ? REPL_PALETTE.applicationSurface : REPL_PALETTE.conversationSurface;
       expect(page.screen().rows[first.row]).not.toContain("↑");
       expect(page.screen().rows[first.row]).not.toContain("↓");
-      expect(page.screen().locate("▾ TODO").row).toBe(page.screen().locate("QUEUE 0/16").row);
+      expect(page.screen().locate("TODO 2").row).toBe(page.screen().locate("SIDEKICK").row);
+      expect(page.screen().shows("Waiting messages are kept only in this REPL.")).toBe(false);
       expect(page.repl.terminal.screen?.styleAt(first.column, first.row).attrs).toContain(9);
       expect(page.repl.terminal.screen?.styleAt(first.column, first.row).background).toBe(
-        REPL_PALETTE.composerSurface,
+        checklistSurface,
       );
       capture(page, "composer-no-task-icons");
-      yield* page.key("Backtab");
-      yield* page.until("task tabs focused", (one) => one.shows("> ▾ TODO"));
+      yield* page.until("task tab focused", (one) => one.shows("> TODO 2"));
       yield* page.key("ArrowDown");
       yield* page.until("completed task focused", (one) => one.shows("> ☑ done code"));
       const focused = page.screen().locate("done code");
@@ -67,7 +72,7 @@ for (const size of [
         const at = page.screen().locate(icon, { onRow: "done code" });
         expect(at.row).toBe(focused.row);
         const iconStyle = page.repl.terminal.screen?.styleAt(at.column, at.row);
-        expect(iconStyle?.background).toBe(REPL_PALETTE.composerSurface);
+        expect(iconStyle?.background).toBe(checklistSurface);
         expect(iconStyle?.attrs).not.toContain(4);
       }
       capture(page, "completed-task-focused");
@@ -81,12 +86,12 @@ for (const size of [
       expect(actionStyle?.background).toBe(REPL_PALETTE.focusSurface);
       expect(actionStyle?.attrs).toContain(4);
       const labelStyle = page.repl.terminal.screen?.styleAt(label.column, label.row);
-      expect(labelStyle?.background).toBe(REPL_PALETTE.composerSurface);
+      expect(labelStyle?.background).toBe(checklistSurface);
       expect(labelStyle?.attrs).not.toContain(4);
       for (const icon of ["↓", "x"]) {
         const at = page.screen().locate(icon, { onRow: "done code" });
         expect(page.repl.terminal.screen?.styleAt(at.column, at.row).background).toBe(
-          REPL_PALETTE.composerSurface,
+          checklistSurface,
         );
       }
       capture(page, "task-action-focused");
@@ -124,13 +129,20 @@ for (const size of [
         );
         yield* page.type(text);
         yield* page.press("[send]", { rightOf: "message the sidekick" });
-        yield* page.until("waiting count", (one) =>
-          one.shows(text === "waiting-one" ? "QUEUE 1/16" : "QUEUE 2/16"),
+        yield* page.until("the queued message is visible", (one) =>
+          one.rows.some((row) => row.includes(text) && /\sX\s*$/.test(row)),
         );
       }
       yield* page.until(
         "second accepted text cleared",
         (one) => !composerHolds(one, "waiting-two"),
+      );
+      yield* page.key("Ctrl+G");
+      yield* page.until("shortcut overlay", (one) => one.shows("[1]"));
+      yield* page.key("1");
+      yield* page.until(
+        "Message before editing",
+        (one) => !one.shows("[1]") && one.shows("> › message the sidekick"),
       );
       yield* page.type("kept message");
       yield* page.until("newer Message painted", (one) => composerHolds(one, "kept message"));
@@ -145,13 +157,22 @@ for (const size of [
       expect(page.screen().shows("☑ done code")).toBe(true);
       capture(page, "todo-queue-arrival");
 
-      yield* page.press("QUEUE 2/16");
+      yield* page.press("SIDEKICK");
       yield* page.until(
         "queue selected",
         (one) => one.shows("waiting-one") && !one.shows("done code"),
       );
       capture(page, "queue-waiting");
-      yield* page.key("ArrowDown");
+      for (
+        let step = 0;
+        step < 8 &&
+        !page.screen().rows.some((row) => row.includes("waiting-one") && row.includes("> X"));
+        step++
+      ) {
+        const before = page.screen().index;
+        yield* page.key("Alt+ArrowUp");
+        yield* page.until("queue focus step", (one) => one.index > before);
+      }
       yield* page.until("pending action focused", (one) =>
         one.rows.some((row) => row.includes("waiting-one") && row.includes("> X")),
       );
@@ -176,18 +197,19 @@ for (const size of [
       expect(page.repl.fake.prompts).toHaveLength(1);
       capture(page, "queue-after-history");
 
-      yield* page.press("▾ TODO");
+      yield* page.press("TODO 3");
       yield* page.until(
-        "TODO selected with refreshed source",
-        (one) => one.shows("inserted") && !one.shows("waiting-one") && one.shows("> ▾ TODO"),
+        "TODO selected with refreshed source and the same queue",
+        (one) => one.shows("inserted") && one.shows("waiting-one") && one.shows("> TODO 3"),
       );
       capture(page, "todo-after-switch");
-      yield* page.key("ArrowRight");
-      yield* page.until("QUEUE tab focused", (one) => one.shows("> QUEUE 2/16"));
-      yield* page.key("Enter");
+      yield* page.press("SIDEKICK");
       yield* page.until(
-        "keyboard selects queue",
-        (one) => one.shows("waiting-one") && !one.shows("inserted"),
+        "Sidekick restores Message and keeps the queue",
+        (one) =>
+          one.shows("waiting-one") &&
+          !one.shows("inserted") &&
+          one.shows("> › message the sidekick"),
       );
       yield* page.press("[stop]", { rightOf: "message the sidekick" });
       yield* page.until("held queue", (one) => one.shows("[Resume queue]") && !one.shows("[stop]"));
@@ -195,21 +217,21 @@ for (const size of [
       yield* page.press("X", { onRow: "waiting-one" });
       yield* page.until(
         "exact queued withdrawal",
-        (one) => one.shows("QUEUE 1/16") && !one.shows("waiting-one"),
+        (one) => one.shows("waiting-two") && !one.shows("waiting-one"),
       );
       page.repl.fake.script({ reply: "<Output>remaining answer</Output>" });
       yield* page.press("[Resume queue]");
       yield* page.until(
         "remaining work completes",
-        (one) => one.shows("remaining answer") && one.shows("QUEUE 0/16"),
+        (one) =>
+          one.shows("remaining answer") &&
+          !one.shows("Waiting messages are kept only in this REPL."),
       );
       expect(page.repl.fake.prompts).toHaveLength(2);
       expect(page.repl.fake.prompts[1]).toContain("waiting-two");
       expect(page.repl.fake.prompts[1]).not.toContain("waiting-one");
       expect(composerHolds(page.screen(), "kept message")).toBe(true);
-      yield* page.press("QUEUE 0/16");
-      yield* page.until("empty QUEUE tab focus", (one) => one.shows("> QUEUE 0/16"));
-      yield* page.key("Tab");
+      yield* page.press("SIDEKICK");
       yield* page.until("Message fixed entry after queue", (one) =>
         one.shows("> › message the sidekick"),
       );

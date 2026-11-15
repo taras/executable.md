@@ -161,8 +161,8 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
     node.claim((event: ReplInputEvent): ReplAction | undefined => {
       if (event.kind === "text") {
         const input = fields(node.input);
-        if (event.text === " " && input?.["select"] === "todo-collapse") {
-          return { kind: "todo-collapse" };
+        if (event.text === " " && input?.["select"] === "pane" && input["pane"] === "todo") {
+          return { kind: "select-pane", pane: "todo" };
         }
         if (event.text === " " && input?.["select"] === "todo-edit" && input["text"] === "") {
           return activation(node.input);
@@ -230,13 +230,6 @@ function activation(input: ReplViewData): ReplAction | undefined {
     return undefined;
   }
   const select = named["select"];
-  if (select === "select-task-tray") {
-    const tray = named["tray"];
-    return tray === "todo" || tray === "queue" ? { kind: "select-task-tray", tray } : undefined;
-  }
-  if (select === "todo-collapse") {
-    return { kind: "todo-collapse" };
-  }
   if (
     select === "todo-edit" ||
     select === "todo-toggle" ||
@@ -339,7 +332,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   }
   if (select === "pane") {
     const pane = named["pane"];
-    return pane === "bindings" || pane === "sidekick" ? { kind: "select-pane", pane } : undefined;
+    return pane === "bindings" || pane === "sidekick" || pane === "todo"
+      ? { kind: "select-pane", pane }
+      : undefined;
   }
   if (select === "send-message") {
     return { kind: "send-message" };
