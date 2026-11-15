@@ -83,7 +83,8 @@ import type {
 } from "@executablemd/durable-streams";
 
 import { executeInstalledBound } from "../execute.ts";
-import type { ExecutionInstallation } from "../execute.ts";
+import type { BoundExecution, ExecutionInstallation } from "../execute.ts";
+import type { AppendApprovals } from "../secrets/append-approval.ts";
 import type { BoundRootEvaluator } from "../generated-root-owner.ts";
 import type {
   AcceptedRootReply,
@@ -95,14 +96,12 @@ import { isJsonObject, parseJson } from "../json.ts";
 import { retainedSource } from "../root-source.ts";
 import {
   captureReplyTextCheck,
-  grantReplyCopies,
   locateReplySecrets,
   scanSecrets,
   secretPolicy,
 } from "../secrets/policy.ts";
 import type { ReplyTextCheck } from "../secrets/policy.ts";
 import {
-  acceptanceGrant,
   approvedMatches,
   carriedCopies,
   evaluationGrant,
@@ -673,6 +672,8 @@ function handle(
   };
 }
 
+type ConversationBinding = Omit<BoundExecution, "execution">;
+
 /**
  * Run the conversation's own durable root, and serve turns inside it forever.
  *
@@ -719,11 +720,9 @@ function* serve(
   // `executeInstalled` is about to return, so the bound evaluator does not
   // exist yet when the body begins. The bridge is how the two meet: the
   // element waits for it before announcing the conversation ready, and this
-  // function resolves it as soon as the handle exists. It carries the bound
-  // operation and nothing else — no protected table, no route, no reference —
-  // and it is a local value rather than a context, so nothing running in the
-  // conversation can set, read or replace what the element waits on.
-  const bridge = withResolvers<BoundRootEvaluator>();
+  // function resolves it as soon as the handle exists. The evaluator and
+  // journal permissions travel directly through this local value.
+  const bridge = withResolvers<ConversationBinding>();
   const installation: ExecutionInstallation = {
     components: [
       {
@@ -740,15 +739,14 @@ function* serve(
     ],
   };
   try {
-    const execution = yield* executeInstalledBound(
+    const { execution, ...binding } = yield* executeInstalledBound(
       {
         ...retainedSource(CONVERSATION_ROOT_PATH, CONVERSATION_ROOT_SOURCE),
         stream: request.history,
       },
       [...request.installations, installation],
-      undefined,
-      (evaluate) => bridge.resolve(evaluate),
     );
+    bridge.resolve(binding);
     // Before the completion is waited on, and after the handle exists: the
     // element is suspended on this, and nothing it does decides whether this
     // resolves.
@@ -789,7 +787,7 @@ function* held(
   history: ConversationHistory,
   jobs: Queue<Job, never>,
   announce: (outcome: Result<void>) => void,
-  bridge: Resolvers<BoundRootEvaluator>,
+  bridge: Resolvers<ConversationBinding>,
   live: Live,
   claim: IdentityClaimant,
   invocation: ComponentInvocation,
@@ -845,7 +843,8 @@ function* held(
   // The actual method on this execution's own handle, waited for before the
   // conversation is announced: a handle that reported itself ready and then
   // refused to evaluate would be ready for two of the three things it offers.
-  const evaluate = yield* bridge.operation;
+  const binding = yield* bridge.operation;
+  const { evaluate } = binding;
   const checkReplyText = yield* captureReplyTextCheck();
   live.checkReplyText = checkReplyText;
   announce(Ok(undefined));
@@ -896,6 +895,7 @@ function* held(
       live,
       carrying,
       checkReplyText,
+      binding,
     );
     if (live.fatal !== undefined) {
       yield* suspend();
@@ -1137,6 +1137,7 @@ function deliver(
   live: Live,
   carrying: Carrying | undefined,
   checkReplyText: ReplyTextCheck,
+  bound: Pick<BoundExecution, "approvals" | "registerGrant">,
 ): Operation<void> {
   // Scoped, so the turn cannot outlive the call that asked for it however this
   // returns: a turn still running would hold its durable operation open, and
@@ -1145,18 +1146,6 @@ function deliver(
     const copies =
       carrying === undefined ? [] : carriedCopies(job.input, carrying.slices, carrying.carried);
     const prepare = (delegated: string) => (delegated.startsWith(job.input) ? copies : []);
-    // The one turn an accepted answer may be carried by, for exactly as long as
-    // this turn runs: retired when it commits, fails or is cancelled.
-    if (carrying !== undefined) {
-      const retire = yield* grantReplyCopies(
-        feedbackGrant({
-          type: AGENT_PROMPT,
-          name: turnName(order),
-          prepare,
-        }),
-      );
-      yield* ensure(retire);
-    }
     // Registered *before* the turn is spawned, which is what makes it the last
     // thing to unwind: cleanups registered later run first, so the turn — and
     // every cleanup the provider registered inside it — has finished by the
@@ -1165,6 +1154,17 @@ function deliver(
     yield* ensure(() => {
       job.joined.resolve();
     });
+    // The one turn an accepted answer may be carried by, for exactly as long as
+    // this turn runs: retired when it commits, fails or is cancelled.
+    if (carrying !== undefined) {
+      yield* bound.registerGrant(
+        feedbackGrant({
+          type: AGENT_PROMPT,
+          name: turnName(order),
+          prepare,
+        }),
+      );
+    }
     const turn = yield* spawn(() =>
       conversationTurn(
         provider,
@@ -1178,6 +1178,7 @@ function deliver(
         used,
         facts,
         live,
+        bound.approvals,
         job.automaticFeedback || carrying !== undefined
           ? (delegated) => checkReplyText(delegated, prepare(delegated))
           : undefined,
@@ -1244,6 +1245,7 @@ function conversationTurn(
   used: boolean,
   facts: SessionFacts,
   live: Live,
+  approvals: AppendApprovals,
   checkInput: ((text: string) => Operation<void>) | undefined,
 ): Operation<void> {
   return (function* (): Operation<void> {
@@ -1381,7 +1383,7 @@ function conversationTurn(
           const accepted =
             pending === undefined
               ? undefined
-              : yield* reviewWithheld(pending, carried.begun, turnName(order), live);
+              : yield* reviewWithheld(pending, carried.begun, turnName(order), live, approvals);
           job.answer.resolve(
             accepted === undefined ? Err(new AgentReplyWithheldError()) : Ok(accepted),
           );
@@ -1433,6 +1435,7 @@ function* reviewWithheld(
   begun: unknown,
   name: string,
   live: Live,
+  approvals: AppendApprovals,
 ): Operation<string | undefined> {
   const hold: { current?: AgentReplyHold } = {};
   const reviewed = yield* askReplyReview({
@@ -1476,14 +1479,15 @@ function* reviewWithheld(
     return undefined;
   }
   const approved = approvedMatches(pending.text, pending.spans);
-  const retire = yield* grantReplyCopies(
-    acceptanceGrant({ type: AGENT_PROMPT_REPLY, name, text: pending.text, approved }),
-  );
-  try {
+  yield* scoped(function* () {
+    yield* approvals.approveAppend({
+      coroutineId: "root",
+      type: AGENT_PROMPT_REPLY,
+      name,
+      fields: [{ path: ["result", "value", "text"], text: pending.text, matches: approved }],
+    });
     yield* persistPromptReply(name, pending.text, approved);
-  } finally {
-    retire();
-  }
+  });
   live.accepted = { kind: "evaluation", text: pending.text, approved, hold: reviewed.hold };
   return pending.text;
 }

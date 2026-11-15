@@ -48,8 +48,9 @@ import { SecretDetectedError, SecretScannerError } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
 import { createSecretScanner, locateSecrets } from "./scanner.ts";
 import type { SecretScanner, SecretSpan } from "./scanner.ts";
-import { boundariesOf } from "./reply-grant.ts";
-import type { ApprovedMatch, ReplyCopyGrant } from "./reply-grant.ts";
+import { boundariesOf } from "./secret-placement.ts";
+import type { ApprovedMatch } from "./secret-placement.ts";
+import type { AppendGrant } from "./append-approval.ts";
 import type { JsonObject } from "../types.ts";
 
 /**
@@ -94,24 +95,11 @@ class EnabledDetection extends ExecutionDetection {
   readonly enabled = true;
   readonly scanner: SecretScanner;
   readonly inputs: InputValues | undefined;
-  /**
-   * The live allowances for an accepted reply's exact copies.
-   *
-   * The same object the journal gate closes over, so a grant added here is
-   * one this execution's own gate consults — and nothing a document binds
-   * under the policy's name can add to or read from it.
-   */
-  readonly grants: Set<ReplyCopyGrant>;
 
-  constructor(
-    scanner: SecretScanner,
-    inputs: InputValues | undefined,
-    grants: Set<ReplyCopyGrant>,
-  ) {
+  constructor(scanner: SecretScanner, inputs: InputValues | undefined) {
     super();
     this.scanner = scanner;
     this.inputs = inputs;
-    this.grants = grants;
     Object.freeze(this);
   }
 }
@@ -390,6 +378,7 @@ export function* useSecretDetection(
   requested: boolean | undefined,
   stream: DurableStream,
   inputs?: InputValues,
+  grants = new Set<AppendGrant>(),
 ): Operation<SecretDetection> {
   const original = stream;
   if (inputs !== undefined) {
@@ -423,8 +412,7 @@ export function* useSecretDetection(
 
   const create = (yield* CurrentScannerFactory.get()) ?? createSecretScanner;
   const scanner = create();
-  const grants = new Set<ReplyCopyGrant>();
-  yield* CurrentDetection.set(new EnabledDetection(scanner, inputs, grants));
+  yield* CurrentDetection.set(new EnabledDetection(scanner, inputs));
   return {
     journal: guardWithSecretDetection(stream, scanner, grants),
     disclose: projectedDisclosure(discloseThrough(scanner)),
@@ -451,7 +439,7 @@ export interface SecretDetection {
   readonly journal: DurableStream;
   readonly disclose: SecretDisclosure;
   readonly checkReplyText: ReplyTextCheck;
-  allowReplyCopies(grant: ReplyCopyGrant): () => void;
+  allowReplyCopies(grant: AppendGrant): () => void;
 }
 
 export type ReplyTextCheck = (text: string, copies: readonly ApprovedMatch[]) => Operation<void>;
@@ -559,7 +547,7 @@ function discloseThrough(scanner: SecretScanner): SecretDisclosure {
 function guardWithSecretDetection(
   stream: DurableStream,
   scanner: SecretScanner,
-  grants: ReadonlySet<ReplyCopyGrant>,
+  grants: ReadonlySet<AppendGrant>,
 ): DurableStream {
   const guarded = guardDurableStream(stream, function* (event) {
     const serialized = serializeDurableEvent(event);
@@ -592,31 +580,11 @@ function guardWithSecretDetection(
       return false;
     }
     const spans = yield* locateSecrets(scanner, serialized);
-    if (spans === undefined || spans.length !== count) {
+    if (spans === undefined || spans.length !== count || !grants.has(claiming)) {
       return false;
     }
     return claiming.admits(event, serialized, spans);
   }
-}
-
-/**
- * Add one allowance for an accepted reply's exact copies to this execution's
- * own gate, and answer how to retire it.
- *
- * Core-private: only the held conversation that accepted the reply adds one,
- * from inside the execution whose gate it changes. Outside an execution, or
- * where detection is off, nothing is added — off already admits everything,
- * and a missing policy admits nothing.
- */
-export function* grantReplyCopies(grant: ReplyCopyGrant): Operation<() => void> {
-  const detection = yield* currentDetection();
-  if (!(detection instanceof EnabledDetection)) {
-    return () => {};
-  }
-  detection.grants.add(grant);
-  return () => {
-    detection.grants.delete(grant);
-  };
 }
 
 /**

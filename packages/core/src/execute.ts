@@ -230,6 +230,12 @@ import { provideTestHarnessInstallers } from "./test-harness.ts";
 import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import { clearsLiveOutput, useSecretDetection } from "./secrets/policy.ts";
+import { useAppendApprovalOwner } from "./secrets/append-approval.ts";
+import type {
+  AppendApprovalOwner,
+  AppendApprovals,
+  AppendGrant,
+} from "./secrets/append-approval.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment, validateBindingName } from "./live-env.ts";
 
@@ -2970,6 +2976,7 @@ function* executeDocument(
   // established before there is a live reference for it to release.
   const inputs = yield* inputValues();
   const computed = yield* useComputedBindings(inputs);
+  const approvalOwner = yield* useAppendApprovalOwner();
 
   const registry = createModifierRegistry();
   // Held by identity as well as by name: a bound block is authorized against
@@ -3256,7 +3263,12 @@ function* executeDocument(
       // root component import is already behind the gate. What comes back is
       // the stream to journal through; the policy itself stays inside the
       // execution that owns it.
-      const detection = yield* useSecretDetection(secretDetection, stream, inputs);
+      const detection = yield* useSecretDetection(
+        secretDetection,
+        stream,
+        inputs,
+        approvalOwner.grants,
+      );
       const journal = detection.journal;
       // Adopted here, where the policy is established, and held by value: a
       // reader asking this execution later must be answered by the scanner the
@@ -3632,6 +3644,7 @@ function* executeDocument(
       output: channel,
     },
     evaluateGeneratedXmdRoot: roots.evaluate,
+    approvalOwner,
     evaluation: roots.completion,
     computed,
     stop: stopDocument,
@@ -3642,15 +3655,13 @@ function* executeDocument(
  * What canonical execution produces, before a public entrypoint decides how
  * much of it to publish.
  *
- * Three members rather than one object with methods on it. The document handle
- * is what every caller gets, and the bound evaluator travels beside it so that
- * the ordinary `execute()` surface can hand over the handle alone — its runtime
- * object then has no evaluator to find, by its own name or through its
- * prototype, rather than one hidden behind a narrower annotation.
+ * The document handle is what every caller gets. The bound evaluator and
+ * append approvals travel beside it for hosts that ask for them.
  */
 interface CanonicalInvocation {
   readonly execution: DocumentExecution;
   readonly evaluateGeneratedXmdRoot: BoundRootEvaluator;
+  readonly approvalOwner: AppendApprovalOwner;
   /** This execution's own computed root data, for the trusted handle to read. */
   readonly computed: ComputedBindings;
   /**
@@ -4048,6 +4059,7 @@ function* runInvocation(
 
   return {
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
+    approvalOwner: invoked.approvalOwner,
     computed: invoked.computed,
     stop: stopInvocation,
     // Carried through unchanged. The completion this handle publishes has
@@ -4786,21 +4798,40 @@ function initialRootBindings(
  * host holds and passes, so a separately loaded workflow package composes by
  * handing its closure over rather than by agreeing on a name.
  */
-export function executeInstalled(
+export function* executeInstalled(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   initialization?: ExecutionInitialization,
 ): Operation<HostExecution> {
-  return executeInstalledBound(options, installations, initialization);
+  const { execution } = yield* executeInstalledBound(options, installations, initialization);
+  return execution;
 }
 
-/** Hand the canonical evaluator directly to the held conversation. */
+export function* executeInstalledWithApprovals(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+  initialization?: ExecutionInitialization,
+): Operation<{ execution: HostExecution; approvals: AppendApprovals }> {
+  const { execution, approvals } = yield* executeInstalledBound(
+    options,
+    installations,
+    initialization,
+  );
+  return { execution, approvals };
+}
+
+export interface BoundExecution {
+  readonly execution: HostExecution;
+  readonly evaluate: BoundRootEvaluator;
+  readonly approvals: AppendApprovals;
+  registerGrant(grant: AppendGrant): Operation<void>;
+}
+
 export function* executeInstalledBound(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   initialization?: ExecutionInitialization,
-  bindEvaluator?: (evaluate: BoundRootEvaluator) => void,
-): Operation<HostExecution> {
+): Operation<BoundExecution> {
   const invoked = yield* runInvocation(
     options,
     [...installations],
@@ -4814,23 +4845,27 @@ export function* executeInstalledBound(
     },
   });
   const { execution } = invoked;
-  bindEvaluator?.(invoked.evaluateGeneratedXmdRoot);
   const clearDisclosure = invoked.computed.disclose;
   // Assembled here, at the trusted boundary, and nowhere else. The document
   // handle this delegates to is the authoritative one: the consumer's own
   // `ensure` is registered in the consumer's scope exactly as before, so
   // halting a consumer still takes the invocation down with it.
   return {
-    output: execution.output,
-    *[Symbol.iterator]() {
-      return yield* execution;
+    execution: {
+      output: execution.output,
+      *[Symbol.iterator]() {
+        return yield* execution;
+      },
+      evaluateGeneratedXmdRoot: (request) => invoked.evaluateGeneratedXmdRoot(request),
+      bindings: invoked.computed.read,
+      disclose(data) {
+        return clearDisclosure(data, disclosure.operations.disclose);
+      },
+      stop: invoked.stop,
     },
-    evaluateGeneratedXmdRoot: (request) => invoked.evaluateGeneratedXmdRoot(request),
-    bindings: invoked.computed.read,
-    disclose(data) {
-      return clearDisclosure(data, disclosure.operations.disclose);
-    },
-    stop: invoked.stop,
+    evaluate: invoked.evaluateGeneratedXmdRoot,
+    approvals: invoked.approvalOwner.approvals,
+    registerGrant: invoked.approvalOwner.registerGrant,
   };
 }
 

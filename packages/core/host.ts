@@ -67,7 +67,8 @@
  * reader: nothing published, nothing named, and nothing for a same-name context
  * or a second loaded copy to reach.
  */
-export { executeInstalled } from "./src/execute.ts";
+export { executeInstalled, executeInstalledWithApprovals } from "./src/execute.ts";
+export type { AppendApproval, AppendApprovals } from "./src/secrets/append-approval.ts";
 /**
  * `ExecutionInitialization` is the fourth, and it is input rather than
  * infrastructure: the root JSON bindings one execution starts with, supplied
