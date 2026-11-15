@@ -372,6 +372,7 @@ export interface ReplSidekickTurnRow {
   readonly origin?: MessageOrigin;
   /** The mounted identity: this process's response, or the saved turn's own. */
   readonly answer?: number;
+  readonly response?: string;
   readonly controls?: readonly string[];
   readonly key: string;
   /** The chat this turn belongs to, which is what activating it opens. */
@@ -5666,6 +5667,9 @@ export function footerSentence(view: ReplView): string {
   if (refusalInBand(view)) {
     return `! ${(shownRefusal(view) ?? "").split("\n").join(" ")}`;
   }
+  if (profileFor(view.size) === "narrow" && presentedInspection(view) !== undefined) {
+    return "Esc closes · Tab moves · PageUp/PageDown in Content";
+  }
   if (staged(view) !== undefined && !modalOpen(view)) {
     const readiness = readinessOf(view);
     const narrow = profileFor(view.size) === "narrow";
@@ -8043,7 +8047,7 @@ function inspectionRect(size: ReplTerminalSize): ReplBounds {
     return { x, y: 1, width, height: size.rows - 3 };
   }
   const height = Math.floor(size.rows * 0.6);
-  return { x: 1, y: size.rows - height - 2, width: size.columns - 2, height };
+  return { x: 0, y: size.rows - height - 2, width: size.columns, height };
 }
 
 /**
@@ -8323,65 +8327,53 @@ function exchangeOf(reading: ReplSidekickReading | undefined, key: string) {
       );
 }
 
-function inspectionLines(view: ReplView, inspection: ReplInspection) {
-  const sidekick = view.live.sidekick;
-  const turns = inspection.kind === "exchange" ? exchangeOf(sidekick, inspection.key) : [];
-  const pieces =
-    inspection.kind === "feedback"
-      ? inspection.expanded
-        ? [{ text: view.workspace?.feedback?.find((item) => item.key === inspection.key)?.text }]
-        : []
-      : inspection.kind === "person"
-        ? [
-            {
-              text: sidekick?.chat.find(
-                (item) => item.kind === "person" && item.key === inspection.key,
-              )?.text,
-            },
-          ]
-        : inspection.kind === "entry"
-          ? [
-              {
-                text: view.model.entries.find((entry) => entry.key === inspection.key)?.terminal
-                  ?.output,
-              },
-            ]
-          : turns
-              .filter((turn) => inspection.turn === undefined || turn.turn === inspection.turn)
-              .map((turn) => ({ text: turn.text }));
-  const lines = pieces.flatMap(({ text }) =>
-    text === undefined || text === "" ? [] : inertCommandText(text).split("\n"),
+function inspectionEntries(view: ReplView, turns: readonly ReplSidekickTurnRow[]) {
+  const replies = new Set(
+    turns.flatMap((turn) =>
+      turn.response === undefined ? [] : [`chat:${turn.conversation}:${turn.response}`],
+    ),
   );
-  return lines.map((text, offset) => ({
-    key: `drawer:inspection:detail:${offset}`,
-    text,
-    runs: tokenRuns([{ text, token: "field-value" }]),
-  }));
+  const admitted = new Set(
+    view.workspace?.work
+      .filter((work) => work.settled && replies.has(work.message))
+      .map((work) => work.entry),
+  );
+  return view.model.entries.filter((entry) => admitted.has(entry.key));
 }
 
-function inspectionContent(
+interface ReplInspectionRow {
+  readonly key: string;
+  readonly text: string;
+  readonly style: ReplRowStyle;
+  readonly action?: Readonly<Record<string, Json>>;
+  readonly wrap?: boolean;
+}
+
+function inspectionReading(
   view: ReplView,
   inspection: ReplInspection,
-  width: number,
-  details: readonly ReplFittedLine[] | undefined,
-): DrawerContent | undefined {
-  const content: DrawerRow[] = [];
-  const say = (key: string, label: string, style = styleOf("metadata")) => {
-    content.push({ described: drawerLine(`drawer:inspection:${key}`, label, width, style) });
+): { readonly title: string; readonly rows: readonly ReplInspectionRow[] } | undefined {
+  const rows: ReplInspectionRow[] = [];
+  const say = (key: string, text: string, style = styleOf("metadata"), wrap = false) => {
+    rows.push({ key: `drawer:inspection:${key}`, text, style, wrap });
   };
-  const choose = (key: string, label: string, action: { readonly [name: string]: Json }) => {
-    content.push({
-      described: row(
-        `drawer:inspection:${key}`,
-        padControl(fitControl([{ text: label, elide: true }], width), width),
-        action,
-        styleOf("action"),
-        { claim: focusClaim(view), here: view.focused },
-      ),
-    });
+  const choose = (
+    key: string,
+    text: string,
+    action: Readonly<Record<string, Json>>,
+    wrap = false,
+  ) => {
+    rows.push({ key: `drawer:inspection:${key}`, text, style: styleOf("action"), action, wrap });
   };
   const link = (key: string, round: number) => {
     choose(`entry:${key}`, `linked entry Round ${round} ›`, { select: "scope", scopes: [key] });
+  };
+  const block = (key: string, text: string) => {
+    if (text !== "") {
+      for (const [offset, line] of inertCommandText(text).split("\n").entries()) {
+        say(`${key}:${offset}`, line, styleOf("field-value"), true);
+      }
+    }
   };
   const sidekick = view.live.sidekick;
   let title: string;
@@ -8395,12 +8387,30 @@ function inspectionContent(
     if (feedback.controls.length > 0) {
       say("controls", feedback.controls.join(" · "));
     }
-    for (const entry of feedback.entries) {
-      link(entry.key, entry.round);
+    for (const linked of feedback.entries) {
+      link(linked.key, linked.round);
+      const entry = view.model.entries.find((item) => item.key === linked.key);
+      if (entry !== undefined) {
+        const state = workState(entry, view.model, view.live);
+        say(`outcome:${linked.key}`, `Outcome · ${state.word}`, state.style);
+        const output = entry.terminal?.output;
+        if (output !== undefined) {
+          const first = headline(trimLeadingBlankLines(inertCommandText(output)));
+          say(
+            `summary:${linked.key}`,
+            `Output · ${first === "" ? "(empty)" : first}`,
+            styleOf("metadata"),
+            true,
+          );
+        }
+      }
     }
     choose("feedback", inspection.expanded ? "Hide recorded feedback" : "Show recorded feedback", {
       select: "toggle-recorded-feedback",
     });
+    if (inspection.expanded) {
+      block("feedback-text", feedback.text);
+    }
   } else if (inspection.kind === "person") {
     const person = sidekick?.chat.find(
       (item) => item.kind === "person" && item.key === inspection.key,
@@ -8409,6 +8419,7 @@ function inspectionContent(
       return undefined;
     }
     title = person.origin?.kind === "acp" ? "Attached client · Message" : "You · Message";
+    block("person", person.text);
   } else if (inspection.kind === "entry") {
     const entry = view.model.entries.find((item) => item.key === inspection.key);
     if (entry === undefined) {
@@ -8417,83 +8428,125 @@ function inspectionContent(
     title = `Round ${entry.order} · Result`;
     say("status", workState(entry, view.model, view.live).word);
     link(entry.key, entry.order);
+    block("entry", entry.terminal?.output ?? "");
   } else {
     const turns = exchangeOf(sidekick, inspection.key);
     if (turns.length === 0) {
       return undefined;
     }
-    const selected = turns.findIndex((turn) => turn.turn === inspection.turn);
+    const selected = turns.find((turn) => turn.turn === inspection.turn);
+    const visible = selected === undefined ? turns : [selected];
     title =
-      selected < 0
+      selected === undefined
         ? `Sidekick · ${turns.length} saved ${turns.length === 1 ? "turn" : "turns"}`
-        : `Sidekick · saved turn ${selected + 1} of ${turns.length}`;
+        : `Sidekick · saved turn ${turns.indexOf(selected) + 1} of ${turns.length}`;
+    for (const entry of inspectionEntries(view, visible)) {
+      link(entry.key, entry.order);
+    }
+    if (selected?.controls !== undefined && selected.controls.length > 0) {
+      say("controls", selected.controls.join(" · "), styleOf("metadata"), true);
+    }
+    const outputs = visible.filter((turn) => turn.text.length > 0);
+    if (outputs.length > 0) {
+      say("output", "Output", styleOf("field-label"));
+      for (const turn of outputs) {
+        block(`output:${turn.turn}`, turn.text);
+      }
+    }
     say("saved", "SAVED TURNS", styleOf("field-label"));
-    if (selected >= 0) {
+    if (selected !== undefined) {
       choose("exchange", "‹ whole exchange", { select: "inspect-saved-turn", turn: null });
+    }
+    const incoming = new Map<number, ReplRecordedFeedback>();
+    for (const packet of view.workspace?.feedback ?? []) {
+      if (packet.conversation === turns[0]?.conversation && !incoming.has(packet.turn)) {
+        incoming.set(packet.turn, packet);
+      }
     }
     for (const [index, turn] of turns.entries()) {
       if (turn.turn === null) {
         continue;
       }
-      const packet = view.workspace?.feedback?.find(
-        (item) => item.conversation === turn.conversation && item.turn === turn.turn,
-      );
+      const packet = incoming.get(turn.turn);
+      const round = packet?.entries[0]?.round;
+      const controls = packet?.controls.join(", ");
+      const result =
+        round === undefined ? `${controls || "control"} result` : `Round ${round} result`;
       const origin =
-        packet === undefined
-          ? index === 0
-            ? "prompted by your message"
-            : undefined
-          : `prompted by [X] ${packet.entries.length > 0 ? `Round ${packet.entries[0]!.round} result` : packet.controls.join(", ") || "control result"}`;
-      if (selected === index) {
-        if (origin !== undefined) {
-          say("origin", origin);
-        }
-        if (turn.controls !== undefined && turn.controls.length > 0) {
-          say("controls", turn.controls.join(" · "));
-        }
-        for (const entry of packet?.entries ?? []) {
-          link(entry.key, entry.round);
-        }
+        index === 0
+          ? "prompted by your message"
+          : packet === undefined
+            ? undefined
+            : `prompted by [X] ${result}`;
+      const label = [
+        `Turn ${index + 1}`,
+        selected === turn ? "this turn" : undefined,
+        origin,
+        turn.failed ? turn.state : undefined,
+        view.state.showUsage === true ? turn.usageLine : undefined,
+      ]
+        .filter((one) => one !== undefined)
+        .join(" · ");
+      if (selected === turn) {
+        say(`turn:${turn.turn}`, label, styleOf("action", { selected: true }), true);
       } else {
-        const label = [
-          `Turn ${index + 1}`,
-          origin,
-          turn.failed ? turn.state : undefined,
-          view.state.showUsage === true ? turn.usageLine : undefined,
-        ]
-          .filter((one) => one !== undefined)
-          .join(" · ");
-        choose(`turn:${turn.turn}`, label, { select: "inspect-saved-turn", turn: turn.turn });
+        choose(`turn:${turn.turn}`, label, { select: "inspect-saved-turn", turn: turn.turn }, true);
       }
     }
-    if (
-      selected >= 0 &&
-      view.state.showUsage === true &&
-      turns[selected]?.usageLine !== undefined
-    ) {
-      say("usage", turns[selected]!.usageLine!);
-    }
-    if (
-      turns.some((turn) => (selected < 0 || turn.turn === inspection.turn) && turn.text.length > 0)
-    ) {
-      say("output", "Output", styleOf("field-label"));
+  }
+  return { title, rows };
+}
+
+function inspectionContent(
+  view: ReplView,
+  inspection: ReplInspection,
+  width: number,
+  details: readonly ReplFittedLine[] | undefined,
+): DrawerContent | undefined {
+  const reading = inspectionReading(view, inspection);
+  if (reading === undefined) {
+    return undefined;
+  }
+  const fitted = new Map<string, ReplFittedLine[]>();
+  for (const piece of details ?? []) {
+    const held = fitted.get(piece.line);
+    if (held === undefined) {
+      fitted.set(piece.line, [piece]);
+    } else {
+      held.push(piece);
     }
   }
-  const shown =
-    details ?? inspectionLines(view, inspection).map((line) => ({ ...line, indent: 0 }));
-  for (const line of shown) {
-    content.push({
-      described: drawerLine(
-        line.key,
-        " ".repeat(line.indent) + line.text,
-        width,
-        styleOf("field-value"),
-        line.runs,
-      ),
-    });
+  const content: DrawerRow[] = [];
+  for (const item of reading.rows) {
+    const pieces = fitted.get(item.key);
+    const label = [{ text: item.text, elide: true }] satisfies readonly ReplLabelPart[];
+    const action = item.action;
+    if (action !== undefined) {
+      // A wrapped label is one control. The fitted continuations take rows
+      // without adding extra focus stops for the same saved turn.
+      const first = pieces?.[0];
+      const text =
+        first === undefined
+          ? fitControl(label, width)
+          : (" ".repeat(first.indent) + first.text).slice(FOCUS_MARKER);
+      content.push({
+        described: row(item.key, padControl(text, width), action, item.style, {
+          claim: focusClaim(view),
+          here: view.focused,
+        }),
+      });
+    }
+    if (pieces === undefined && action === undefined) {
+      content.push({ described: drawerLine(item.key, fitLine(label, width), width, item.style) });
+    }
+    for (const piece of pieces?.slice(action === undefined ? 0 : 1) ?? []) {
+      content.push({
+        described: drawerLine(piece.key, " ".repeat(piece.indent) + piece.text, width, item.style),
+      });
+    }
   }
   return {
-    title,
+    title: reading.title,
     titleStyle: styleOf("drawer-title"),
     content,
     entering: false,
@@ -9792,7 +9845,11 @@ export function retainedDetailsOf(view: ReplView) {
   const open = view.selection.drawers.at(-1);
   const inspection = presentedInspection(view);
   if (inspection !== undefined) {
-    return inspectionLines(view, inspection);
+    return (inspectionReading(view, inspection)?.rows ?? []).flatMap((item) =>
+      item.wrap === true
+        ? [{ key: item.key, text: (item.action === undefined ? "" : CONTROL_ROOM) + item.text }]
+        : [],
+    );
   }
   if (open?.kind === "binding" || open?.kind === "entry-value") {
     return detailLines("drawer:value", open.binding.value, styleOf("field-value"));

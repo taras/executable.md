@@ -1663,10 +1663,12 @@ lower drawer on the narrow Sidekick surface. **Show recorded feedback** reveals
 the complete input recorded for the receiving turn. A combined input is shown
 as one packet, including any queued message it carried. **Hide recorded
 feedback** collapses it. **Linked entry** selects the admitted entry when the
-current history contains it. An addressed reply opens its exchange with the
-saved turns it answered. Selecting a turn shows its own retained control
-origin, Output, and usage when enabled. Escape and the close control dismiss
-inspection. The selected work and Draft focus shortcuts close a centre
+current history contains it. The feedback details summarize that entry's
+recorded outcome and output before the expander. An addressed reply shows the
+exchange's linked entries and Output above **Saved turns**. A selected turn
+shows the entry it admitted, its own Output, and its retained origin. Its row
+is marked **this turn**. Turn labels wrap at narrower widths and include
+their usage when enabled. Escape and the close control dismiss inspection. The selected work and Draft focus shortcuts close a centre
 inspection and reveal their requested controls. These readings can be opened
 again after reopening the execution.
 

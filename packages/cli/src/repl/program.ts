@@ -4081,6 +4081,7 @@ export function sidekickTurnRows(
       agent: turn.agent,
       turn: turn.turn,
       answer: answers.get(`${turn.conversation}:${turn.turn}`),
+      response: own,
       controls:
         own === undefined
           ? undefined

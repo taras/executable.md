@@ -35,11 +35,21 @@
         <Terminal.WaitForText text="[S] Checkout review complete." as="reply" />
       </Terminal.Region>
       <Terminal.Click at={reply} />
-      <Terminal.WaitForText text="SAVED TURNS" />
+      <Terminal.WaitForText text="linked entry Round 1" as="wholeLink" />
+      <Terminal.WaitForText text="Checkout review complete." row={wholeLink.row + 2} as="shownOutput" />
+      <Terminal.WaitForText text="SAVED TURNS" as="savedHeading" />
+      <AssertEquals actual={Math.sign(savedHeading.row - shownOutput.row)} expected={1} />
+      <Terminal.Screenshot name="exchange-with-output" />
+      <Terminal.Click at={wholeLink} />
+      <Terminal.WaitForText text="SAVED TURNS" present={false} />
+      <Terminal.WaitForText text="Entries › Entry 1" />
+      <Terminal.Click at={reply} />
       <Terminal.WaitForText text="Turn 2" as="savedTurn" />
       <Terminal.Click at={savedTurn} />
       <Terminal.WaitForText text="saved turn 2 of 3" />
-      <Terminal.WaitForText text="REPL.Environment" />
+      <Terminal.WaitForText text="Turn 2 · this turn · prompted by [X]" as="currentTurn" />
+      <Terminal.WaitForText text="REPL.Environment result" row={currentTurn.row + 1} />
+      <Terminal.WaitForText text="linked entry Round 1" />
       <Terminal.Screenshot name="saved-turn-2" />
       <Terminal.WaitForText text="DRAFT" present={false} />
       <Repl.Focus.Draft />
@@ -48,12 +58,31 @@
       <Terminal.Type text="visible-draft-witness" />
       <Terminal.WaitForText text="visible-draft-witness" />
 
+      <Terminal.Resize columns={120} rows={30} />
+      <Terminal.WaitForText text="HISTORY" row={29} />
+      <Terminal.WaitForText text="[S] Checkout review complete." as="mediumReply" />
+      <Terminal.Click at={mediumReply} />
+      <Terminal.WaitForText text="Turn 2 · prompted by [X]" as="mediumTurn" />
+      <Terminal.WaitForText text="REPL.Environment result" row={mediumTurn.row + 1} />
+      <Terminal.Screenshot name="wrapped-turns" />
+      <Terminal.Click at={mediumTurn} />
+      <Terminal.WaitForText text="saved turn 2 of 3" />
+      <Terminal.WaitForText text="Turn 2 · this turn" />
+      <Terminal.WaitForText text="linked entry Round 1" as="savedLink" />
+      <Terminal.Click at={savedLink} />
+      <Terminal.WaitForText text="saved turn 2 of 3" present={false} />
+      <Terminal.WaitForText text="Entries › Entry 1" />
+
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="HISTORY" row={19} />
       <Repl.Focus.Message />
       <Terminal.WaitForText text="↳ [X] Round 1 result sent" as="narrowFeedback" />
       <Terminal.Click at={narrowFeedback} />
       <Terminal.WaitForText text="Show recorded feedback" />
+      <Terminal.WaitForText text="Outcome · ✓ COMPLETED" />
+      <Terminal.WaitForText text="Output · Checkout output witness." />
+      <Terminal.WaitForText text="Esc closes · Tab moves · PageUp/PageDown in Content" row={18} />
+      <Terminal.WaitForText text="Entry entry-1 completed." present={false} />
       <Terminal.Screenshot name="narrow-feedback-drawer" />
       <Terminal.WaitForText text="linked entry Round 1" as="linked" />
       <Terminal.Click at={linked} />
