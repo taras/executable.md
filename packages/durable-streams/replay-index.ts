@@ -21,8 +21,8 @@ export interface YieldEntry {
 }
 
 export class ReplayIndex {
-  private yields = new Map<CoroutineId, Yield[]>();
-  /** Every retained Yield in stream order, each owning its own settled cells. */
+  private yields = new Map<CoroutineId, (Yield | undefined)[]>();
+  /** The admission order is needed only until replay begins. */
   private retained: Yield[] = [];
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
@@ -64,6 +64,11 @@ export class ReplayIndex {
    */
   retainedYields(): Yield[] {
     return [...this.retained];
+  }
+
+  /** Release the admission order after the last guard has inspected it. */
+  finishAdmission(): void {
+    this.retained.length = 0;
   }
 
   /**
@@ -110,9 +115,13 @@ export class ReplayIndex {
     return list?.[cursor];
   }
 
-  /** Advances the cursor for this coroutine by one position. */
+  /** Advances the cursor and releases the result this coroutine has consumed. */
   consumeYield(coroutineId: CoroutineId): void {
     const cursor = this.cursors.get(coroutineId) ?? 0;
+    const entries = this.yields.get(coroutineId);
+    if (entries !== undefined && cursor < entries.length) {
+      entries[cursor] = undefined;
+    }
     this.cursors.set(coroutineId, cursor + 1);
   }
 
@@ -220,8 +229,9 @@ export class ReplayIndex {
       }
       const entries = this.yields.get(coroutineId) ?? [];
       const cursor = this.cursors.get(coroutineId) ?? 0;
-      if (cursor < entries.length) {
-        return { coroutineId, cursor, totalYields: entries.length, entry: entries[cursor] };
+      const entry = entries[cursor];
+      if (entry !== undefined) {
+        return { coroutineId, cursor, totalYields: entries.length, entry };
       }
     }
     return undefined;
