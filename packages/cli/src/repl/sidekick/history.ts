@@ -58,7 +58,7 @@ import type { EntryPlacement } from "../entry-placement.ts";
  * reach the old path after the published prefix was chosen.
  */
 
-import { ensureDir, exists, readTextFile, stat } from "@effectionx/fs";
+import { ensureDir, exists, stat } from "@effectionx/fs";
 import { join } from "node:path";
 import {
   parseDurableEvent,
@@ -883,27 +883,37 @@ export function* readSidekickRecords(path: string): Operation<SidekickRecord[]> 
   if (!target.isFile()) {
     throw new SidekickHistoryError("this execution's chat history is not a file.");
   }
-  const body = yield* readTextFile(path);
-  if (body.length === 0) {
-    return [];
-  }
-  if (!body.endsWith("\n")) {
-    throw new SidekickHistoryError(
-      "this execution's chat history ends in a record that was never finished writing.",
-    );
-  }
   const records: SidekickRecord[] = [];
-  for (const line of body.slice(0, -1).split("\n")) {
-    const parsed = parseSidekickRecord(line);
-    if (parsed === undefined) {
-      // Its text stays out of this. What is in one of these files is a
-      // conversation somebody had.
-      throw new SidekickHistoryError(
-        `this execution's chat history holds a record this version cannot read (record ` +
-          `${records.length + 1}).`,
-      );
-    }
-    records.push(parsed);
+  let malformed = false;
+  yield* forEachLine(
+    path,
+    {
+      refusals: {
+        unterminated: () =>
+          new SidekickHistoryError(
+            "this execution's chat history ends in a record that was never finished writing.",
+          ),
+      },
+    },
+    // deno-lint-ignore require-yield
+    function* (line): Operation<void> {
+      // An unfinished tail takes precedence over a malformed earlier record.
+      if (malformed) {
+        return;
+      }
+      const parsed = parseSidekickRecord(line);
+      if (parsed === undefined) {
+        malformed = true;
+      } else {
+        records.push(parsed);
+      }
+    },
+  );
+  if (malformed) {
+    throw new SidekickHistoryError(
+      `this execution's chat history holds a record this version cannot read (record ` +
+        `${records.length + 1}).`,
+    );
   }
   for (const [index, record] of records.entries()) {
     if (record.kind !== "recovery-decision" && record.kind !== "human-stop") {
@@ -1468,10 +1478,6 @@ const COPY_BATCH = 1 << 22;
  * order and `serializeDurableEvent` preserves whatever order it is handed, so
  * a round trip produces *a* valid encoding of the same history and not the
  * encoding the origin's digest describes.
- *
- * No bound is passed. The file this reads is one `readRecords` has already
- * opened under the supported limit, so a bound here would be a sentence
- * nothing could reach.
  */
 function* copyEntryRecords(from: string, to: string, expected: number): Operation<RetainedOrigin> {
   const hash = createHash("sha256");
@@ -1479,6 +1485,13 @@ function* copyEntryRecords(from: string, to: string, expected: number): Operatio
   let batch: string[] = [];
   let batched = 0;
   let parsed = 0;
+  function* flush(): Operation<void> {
+    if (batched > 0) {
+      yield* ReplHost.operations.appendRecord(to, batch.join(""));
+      batch = [];
+      batched = 0;
+    }
+  }
   const records = yield* forEachLine(
     from,
     {
@@ -1507,18 +1520,19 @@ function* copyEntryRecords(from: string, to: string, expected: number): Operatio
         );
       }
       parsed += 1;
-      batch.push(line, "\n");
-      batched += line.length + 1;
-      if (batched >= COPY_BATCH) {
-        yield* ReplHost.operations.appendRecord(to, batch.join(""));
-        batch = [];
-        batched = 0;
+      const size = line.length + 1;
+      if (batched + size > COPY_BATCH) {
+        yield* flush();
       }
+      if (size > COPY_BATCH) {
+        yield* ReplHost.operations.appendRecord(to, line + "\n");
+        return;
+      }
+      batch.push(line, "\n");
+      batched += size;
     },
   );
-  if (batched > 0) {
-    yield* ReplHost.operations.appendRecord(to, batch.join(""));
-  }
+  yield* flush();
   if (records !== expected) {
     throw new SidekickHistoryError(
       "this execution's entry history no longer holds the records this process retained, so " +
