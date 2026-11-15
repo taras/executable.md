@@ -1,0 +1,940 @@
+{
+  "measurement": "character dispatch through the completed mounted emulator write containing the changed Message value",
+  "viewport": {
+    "columns": 200,
+    "rows": 52
+  },
+  "warmup": 10,
+  "workloads": [
+    {
+      "workload": {
+        "name": "small",
+        "rounds": 2,
+        "linesPerRound": 32
+      },
+      "baseline": {
+        "revision": "230c7352729a568c265e18a4e95f5130fbdbf280",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "os": "darwin",
+          "arch": "aarch64"
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "small",
+          "rounds": 2,
+          "linesPerRound": 32
+        },
+        "warmup": 10,
+        "samples": [
+          {
+            "edit": 1,
+            "milliseconds": 12.646499999999833,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "milliseconds": 11.545333000000028,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "milliseconds": 12.587832999999591,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "milliseconds": 12.328667000000223,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "milliseconds": 11.3134170000003,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "milliseconds": 12.131167000000005,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "milliseconds": 11.564041000000088,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "milliseconds": 12.002958000000035,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "milliseconds": 11.937832999999955,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "milliseconds": 12.04641700000002,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "milliseconds": 11.681541999999808,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "milliseconds": 11.484500000000025,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "milliseconds": 11.793666999999914,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "milliseconds": 12.74350000000004,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "milliseconds": 12.583000000000084,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "milliseconds": 12.118334000000232,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "milliseconds": 12.349833000000217,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "milliseconds": 11.96591699999999,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "milliseconds": 11.080958999999893,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "milliseconds": 11.261582999999973,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "milliseconds": 12.438292000000274,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "milliseconds": 12.240707999999813,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "milliseconds": 12.717834000000039,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "milliseconds": 11.438333000000057,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "milliseconds": 11.726542000000336,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "milliseconds": 11.641541999999845,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "milliseconds": 11.968125000000327,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "milliseconds": 11.763959000000341,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "milliseconds": 11.427458999999999,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "milliseconds": 12.144999999999982,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "milliseconds": 12.224499999999807,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "milliseconds": 12.772958000000017,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "milliseconds": 11.182250000000295,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "milliseconds": 12.181583000000046,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "milliseconds": 12.848000000000411,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "milliseconds": 12.538166999999703,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "milliseconds": 11.774665999999797,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "milliseconds": 12.115707999999813,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "milliseconds": 12.192917000000307,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "milliseconds": 12.170584000000417,
+            "writes": 1
+          }
+        ],
+        "count": 30,
+        "medianMs": 12.117021000000022,
+        "p95Ms": 12.772958000000017
+      },
+      "candidate": {
+        "revision": "f555c9baa72aef27594144e2d3448fefcdee318f",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "os": "darwin",
+          "arch": "aarch64"
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "small",
+          "rounds": 2,
+          "linesPerRound": 32
+        },
+        "warmup": 10,
+        "samples": [
+          {
+            "edit": 1,
+            "milliseconds": 11.743542000000161,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "milliseconds": 11.371124999999665,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "milliseconds": 12.426916999999776,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "milliseconds": 11.386958999999933,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "milliseconds": 11.746374999999716,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "milliseconds": 11.093792000000121,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "milliseconds": 12.147291999999652,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "milliseconds": 11.128125000000182,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "milliseconds": 11.128791999999976,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "milliseconds": 11.462292000000161,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "milliseconds": 11.250042000000121,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "milliseconds": 12.531500000000051,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "milliseconds": 11.173707999999806,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "milliseconds": 11.819624999999633,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "milliseconds": 11.421707999999853,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "milliseconds": 11.706791000000067,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "milliseconds": 11.23812500000031,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "milliseconds": 11.592791999999918,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "milliseconds": 11.405374999999822,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "milliseconds": 11.18100000000004,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "milliseconds": 11.322916999999961,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "milliseconds": 10.728665999999976,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "milliseconds": 11.240167000000383,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "milliseconds": 11.013916000000336,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "milliseconds": 12.371166999999787,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "milliseconds": 11.31579099999999,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "milliseconds": 12.79466599999978,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "milliseconds": 11.477707999999893,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "milliseconds": 11.871875000000273,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "milliseconds": 10.484375,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "milliseconds": 11.444250000000466,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "milliseconds": 12.473665999999866,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "milliseconds": 11.203250000000025,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "milliseconds": 10.42145900000014,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "milliseconds": 10.905083000000104,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "milliseconds": 11.558459000000312,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "milliseconds": 11.004874999999629,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "milliseconds": 11.712999999999738,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "milliseconds": 10.361959000000297,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "milliseconds": 11.644207999999708,
+            "writes": 1
+          }
+        ],
+        "count": 30,
+        "medianMs": 11.364145999999892,
+        "p95Ms": 12.531500000000051
+      },
+      "deltaMs": {
+        "median": -0.752875000000131,
+        "p95": -0.24145799999996598
+      }
+    },
+    {
+      "workload": {
+        "name": "wrapping",
+        "rounds": 52,
+        "linesPerRound": 368
+      },
+      "baseline": {
+        "revision": "230c7352729a568c265e18a4e95f5130fbdbf280",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "os": "darwin",
+          "arch": "aarch64"
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "wrapping",
+          "rounds": 52,
+          "linesPerRound": 368
+        },
+        "warmup": 10,
+        "samples": [
+          {
+            "edit": 1,
+            "milliseconds": 19.446584000004805,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "milliseconds": 19.55724999999802,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "milliseconds": 19.320957999996608,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "milliseconds": 19.794083999993745,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "milliseconds": 20.16287499999453,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "milliseconds": 18.86479199999303,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "milliseconds": 19.11920800000371,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "milliseconds": 19.738083000003826,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "milliseconds": 18.613708000004408,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "milliseconds": 19.856165999997756,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "milliseconds": 20.675708999988274,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "milliseconds": 18.612917000005837,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "milliseconds": 19.58537499999511,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "milliseconds": 19.291916000001947,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "milliseconds": 19.07600000000093,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "milliseconds": 19.30975000000035,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "milliseconds": 19.19458300000406,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "milliseconds": 20.254958999998053,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "milliseconds": 19.77737499999057,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "milliseconds": 20.60654199999408,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "milliseconds": 19.198375000007218,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "milliseconds": 19.343000000008033,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "milliseconds": 18.177582999996957,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "milliseconds": 19.354833000004874,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "milliseconds": 19.770791000002646,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "milliseconds": 18.58583300000464,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "milliseconds": 20.222041999993962,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "milliseconds": 19.909625000000233,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "milliseconds": 20.06050000000687,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "milliseconds": 20.12554199999431,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "milliseconds": 19.444499999997788,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "milliseconds": 20.551582999993116,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "milliseconds": 19.618625000002794,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "milliseconds": 20.716042000000016,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "milliseconds": 19.374749999988126,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "milliseconds": 20.03720800000883,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "milliseconds": 19.525458999996772,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "milliseconds": 18.742417000001296,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "milliseconds": 18.92279199999757,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "milliseconds": 19.32645799999591,
+            "writes": 1
+          }
+        ],
+        "count": 30,
+        "medianMs": 19.48497949999728,
+        "p95Ms": 20.675708999988274
+      },
+      "candidate": {
+        "revision": "f555c9baa72aef27594144e2d3448fefcdee318f",
+        "runtime": {
+          "deno": "2.9.7",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "host": {
+          "os": "darwin",
+          "arch": "aarch64"
+        },
+        "viewport": {
+          "columns": 200,
+          "rows": 52
+        },
+        "workload": {
+          "name": "wrapping",
+          "rounds": 52,
+          "linesPerRound": 368
+        },
+        "warmup": 10,
+        "samples": [
+          {
+            "edit": 1,
+            "milliseconds": 20.555958000011742,
+            "writes": 1
+          },
+          {
+            "edit": 2,
+            "milliseconds": 19.40958400000818,
+            "writes": 1
+          },
+          {
+            "edit": 3,
+            "milliseconds": 20.26395799999591,
+            "writes": 1
+          },
+          {
+            "edit": 4,
+            "milliseconds": 19.41624999999476,
+            "writes": 1
+          },
+          {
+            "edit": 5,
+            "milliseconds": 19.520166000002064,
+            "writes": 1
+          },
+          {
+            "edit": 6,
+            "milliseconds": 19.155833999990136,
+            "writes": 1
+          },
+          {
+            "edit": 7,
+            "milliseconds": 18.05829200000153,
+            "writes": 1
+          },
+          {
+            "edit": 8,
+            "milliseconds": 18.31075000000419,
+            "writes": 1
+          },
+          {
+            "edit": 9,
+            "milliseconds": 19.010292000006302,
+            "writes": 1
+          },
+          {
+            "edit": 10,
+            "milliseconds": 18.9137919999921,
+            "writes": 1
+          },
+          {
+            "edit": 11,
+            "milliseconds": 20.019041000006837,
+            "writes": 1
+          },
+          {
+            "edit": 12,
+            "milliseconds": 19.541583999991417,
+            "writes": 1
+          },
+          {
+            "edit": 13,
+            "milliseconds": 19.246707999991486,
+            "writes": 1
+          },
+          {
+            "edit": 14,
+            "milliseconds": 20.11408400000073,
+            "writes": 1
+          },
+          {
+            "edit": 15,
+            "milliseconds": 19.223582999999053,
+            "writes": 1
+          },
+          {
+            "edit": 16,
+            "milliseconds": 19.98712499999965,
+            "writes": 1
+          },
+          {
+            "edit": 17,
+            "milliseconds": 19.13045900000725,
+            "writes": 1
+          },
+          {
+            "edit": 18,
+            "milliseconds": 19.362624999994296,
+            "writes": 1
+          },
+          {
+            "edit": 19,
+            "milliseconds": 19.123292000003858,
+            "writes": 1
+          },
+          {
+            "edit": 20,
+            "milliseconds": 20.658041999995476,
+            "writes": 1
+          },
+          {
+            "edit": 21,
+            "milliseconds": 19.834625000003143,
+            "writes": 1
+          },
+          {
+            "edit": 22,
+            "milliseconds": 18.774250000002212,
+            "writes": 1
+          },
+          {
+            "edit": 23,
+            "milliseconds": 18.642542000001413,
+            "writes": 1
+          },
+          {
+            "edit": 24,
+            "milliseconds": 19.19062499998836,
+            "writes": 1
+          },
+          {
+            "edit": 25,
+            "milliseconds": 18.452999999994063,
+            "writes": 1
+          },
+          {
+            "edit": 26,
+            "milliseconds": 19.547458000000915,
+            "writes": 1
+          },
+          {
+            "edit": 27,
+            "milliseconds": 19.044791000007535,
+            "writes": 1
+          },
+          {
+            "edit": 28,
+            "milliseconds": 19.28654099999403,
+            "writes": 1
+          },
+          {
+            "edit": 29,
+            "milliseconds": 18.724457999996957,
+            "writes": 1
+          },
+          {
+            "edit": 30,
+            "milliseconds": 19.942249999992782,
+            "writes": 1
+          },
+          {
+            "edit": 31,
+            "milliseconds": 19.874749999988126,
+            "writes": 1
+          },
+          {
+            "edit": 32,
+            "milliseconds": 19.050250000000233,
+            "writes": 1
+          },
+          {
+            "edit": 33,
+            "milliseconds": 19.835582999992766,
+            "writes": 1
+          },
+          {
+            "edit": 34,
+            "milliseconds": 20.12129099998856,
+            "writes": 1
+          },
+          {
+            "edit": 35,
+            "milliseconds": 20.064790999997058,
+            "writes": 1
+          },
+          {
+            "edit": 36,
+            "milliseconds": 20.25083300001279,
+            "writes": 1
+          },
+          {
+            "edit": 37,
+            "milliseconds": 19.040915999998106,
+            "writes": 1
+          },
+          {
+            "edit": 38,
+            "milliseconds": 18.515375000002678,
+            "writes": 1
+          },
+          {
+            "edit": 39,
+            "milliseconds": 18.847584000002826,
+            "writes": 1
+          },
+          {
+            "edit": 40,
+            "milliseconds": 19.315375000005588,
+            "writes": 1
+          }
+        ],
+        "count": 30,
+        "medianMs": 19.30095799999981,
+        "p95Ms": 20.25083300001279
+      },
+      "deltaMs": {
+        "median": -0.18402149999747053,
+        "p95": -0.42487599997548386
+      }
+    }
+  ]
+}
