@@ -1,32 +1,27 @@
-/**
- * Provenance of an accepted reply through generated evaluation and feedback.
- * Each allowance accounts for a finding in a particular durable event using
- * its authored source range or a choice carried from an acknowledged answer.
- */
-
+import type { Json } from "./types.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { ELICITATION_SCHEMA_FIELD, readElicitationAnswer } from "../elicit-journal.ts";
-import { dataStringLiteral } from "../generated-expressions.ts";
-import type { SourceRange } from "../document-targets.ts";
-import { isJsonObject } from "../json.ts";
-import { secretInputFields } from "./input-schema.ts";
-import type { SecretSpan } from "./scanner.ts";
-import type { AppendGrant as ReplyCopyGrant } from "./append-approval.ts";
-import { encodedOffset, exactly, place, within } from "./secret-placement.ts";
-import type { ApprovedMatch, Path } from "./secret-placement.ts";
-export type { ApprovedMatch } from "./secret-placement.ts";
-
-/** A value the evaluation's own question answered with, carried to feedback. */
-export interface FeedbackSlice extends SourceRange {
+import { ELICITATION_SCHEMA_FIELD, readElicitationAnswer } from "./elicit-journal.ts";
+import { dataStringLiteral } from "./generated-expressions.ts";
+import type { SourceRange } from "./document-targets.ts";
+import { isJsonObject } from "./json.ts";
+import { secretInputFields } from "./secrets/input-schema.ts";
+import type { SecretSpan } from "./secrets/scanner.ts";
+import type { AppendGrant } from "./secrets/append-approval.ts";
+import { exactly, place, within } from "./secrets/secret-placement.ts";
+import type { ApprovedMatch, Path } from "./secrets/secret-placement.ts";
+/**
+ * An acknowledged answer and the exact value ranges carried from authored choices.
+ * The journal coordinate identifies the question observed by the host.
+ */
+export interface ApprovedElicitAnswer {
   readonly coroutineId: string;
   readonly index: number;
-}
-
-interface CarriedAnswer {
-  readonly coroutineId: string;
-  readonly index: number;
-  readonly text: string;
-  readonly matches: readonly ApprovedMatch[];
+  readonly value: Json;
+  readonly copies: readonly {
+    readonly field: string;
+    readonly source: SourceRange;
+    readonly match: ApprovedMatch;
+  }[];
 }
 
 export interface ElicitChoiceSelection {
@@ -39,31 +34,33 @@ export interface ElicitChoiceSelection {
 }
 
 /**
- * One evaluation of exactly the accepted source.
+ * Provenance for one evaluation of exactly the approved source.
  *
  * Bound on its admission record: the first `generated_xmd` admission named
- * for this request whose retained source is byte-equal to the accepted reply
+ * for this request whose retained source is byte-equal to the approved source
  * fixes the evaluation's own coroutine. Afterwards the grant speaks only for
  * that coroutine's question records. Their schema may hold an approved match
  * only as an enum choice the `<Elicit>` element at that record's own source
  * position wrote, and their answer only as one of those choices, selected
  * whole. Anything else the evaluation journals is unaccounted for.
  */
-export function evaluationGrant(input: {
+export function approvedGeneratedSource(input: {
   readonly id: string;
   readonly source: string;
   readonly approved: readonly ApprovedMatch[];
-}): ReplyCopyGrant & {
+}): AppendGrant & {
   readonly bind: (id: string) => void;
   readonly schemas: Map<number, SourceRange>;
+  readonly matches: readonly ApprovedMatch[];
   readonly select: (selection: ElicitChoiceSelection) => void;
-  readonly carried: () => readonly CarriedAnswer[];
+  readonly acknowledge: (event: DurableEvent) => void;
+  readonly answers: () => readonly ApprovedElicitAnswer[];
 } {
   let coroutine: string | undefined;
   let admitted = false;
-  const carried: CarriedAnswer[] = [];
+  const answers: ApprovedElicitAnswer[] = [];
   const positions = new Map<string, number>();
-  let pending: CarriedAnswer | undefined;
+  const pending = new Map<string, ApprovedElicitAnswer>();
   const schemas = new Map<number, SourceRange>();
   const selections = new Map<string, Map<string, ElicitChoiceSelection>>();
   const admission = `generated:${input.id}`;
@@ -71,6 +68,7 @@ export function evaluationGrant(input: {
     coroutine !== undefined && (id === coroutine || id.startsWith(`${coroutine}.`));
   return {
     schemas,
+    matches: input.approved,
     select(selection) {
       if (
         owns(selection.coroutineId) &&
@@ -81,14 +79,15 @@ export function evaluationGrant(input: {
         selections.set(selection.coroutineId, fields);
       }
     },
-    published(event) {
+    acknowledge(event) {
       if (!owns(event.coroutineId) || event.type !== "yield") {
         return;
       }
       const index = positions.get(event.coroutineId) ?? 0;
-      if (pending?.coroutineId === event.coroutineId && pending.index === index) {
-        carried.push(pending);
-        pending = undefined;
+      const answer = pending.get(event.coroutineId);
+      if (answer?.index === index) {
+        answers.push(answer);
+        pending.delete(event.coroutineId);
       }
       positions.set(event.coroutineId, index + 1);
       selections.delete(event.coroutineId);
@@ -96,7 +95,7 @@ export function evaluationGrant(input: {
     bind(id) {
       coroutine ??= id;
     },
-    carried: () => Object.freeze([...carried]),
+    answers: () => Object.freeze([...answers]),
     claims(event) {
       if (event.type !== "yield") {
         return false;
@@ -215,8 +214,7 @@ export function evaluationGrant(input: {
     if (placed === undefined) {
       return false;
     }
-    const found: ApprovedMatch[] = [];
-    const text = answer === undefined ? undefined : JSON.stringify(answer, null, 2);
+    const copies: ApprovedElicitAnswer["copies"][number][] = [];
     for (const span of spans) {
       const at = within(placed, span);
       if (at === undefined) {
@@ -229,22 +227,25 @@ export function evaluationGrant(input: {
       ) {
         return false;
       }
-      if (leaf.answerField !== undefined && text !== undefined) {
-        const fieldPlacement = place(`${text}\n`, [[leaf.answerField]], 2)?.[0];
-        const start = encodedOffset(fieldPlacement, at.start);
-        const end = encodedOffset(fieldPlacement, at.end);
-        if (start === undefined || end === undefined) {
-          return false;
-        }
+      if (leaf.answerField !== undefined) {
         const bytes = at.value.slice(at.start, at.end);
-        if (text.slice(start, end) !== bytes) {
+        if (serialized.slice(span.start, span.end) !== bytes) {
           return false;
         }
-        found.push({ ...span, bytes, start, end });
+        copies.push({
+          field: leaf.answerField,
+          source: { start: leaf.origin + at.start, end: leaf.origin + at.end },
+          match: { ...span, bytes, start: at.start, end: at.end },
+        });
       }
     }
-    if (found.length > 0 && text !== undefined) {
-      pending = { coroutineId: event.coroutineId, index, text, matches: found };
+    if (copies.length > 0 && answer !== undefined) {
+      pending.set(event.coroutineId, {
+        coroutineId: event.coroutineId,
+        index,
+        value: answer,
+        copies,
+      });
     }
     return true;
 
@@ -262,83 +263,8 @@ export function evaluationGrant(input: {
   }
 }
 
-/**
- * The next turn's input, where it carries the evaluation's own answer.
- *
- * `slices` are the host's statement of where, in the text it handed the turn,
- * it placed that answer. The turn's final input must still begin with exactly
- * that text, so a composition that changed it inherits nothing, and each
- * finding must lie inside one slice with the bytes the evaluation's answer
- * carried.
- */
-export function feedbackGrant(input: {
-  readonly name: string;
-  readonly type: string;
-  readonly prepare: (delegated: string) => readonly ApprovedMatch[];
-}): ReplyCopyGrant {
-  let used = false;
-  return {
-    claims(event) {
-      return (
-        !used &&
-        event.type === "yield" &&
-        event.coroutineId === "root" &&
-        event.description.type === input.type &&
-        event.description.name === input.name
-      );
-    },
-    admits(event, serialized, spans) {
-      used = true;
-      if (event.type !== "yield") {
-        return false;
-      }
-      const delegated = event.description.input;
-      if (typeof delegated !== "string") {
-        return false;
-      }
-      const copies = input.prepare(delegated);
-      const placed = place(serialized, [["description", "input"]]);
-      return (
-        placed !== undefined &&
-        spans.every((span) => {
-          const at = within(placed, span);
-          if (at === undefined) {
-            return false;
-          }
-          return exactly(copies, span, at.start, at.end);
-        })
-      );
-    },
-  };
-}
-
-export function carriedCopies(
-  text: string,
-  slices: readonly FeedbackSlice[],
-  carried: readonly CarriedAnswer[],
-): ApprovedMatch[] {
-  return slices.flatMap((slice) => {
-    const answer = carried.find(
-      (one) => one.coroutineId === slice.coroutineId && one.index === slice.index,
-    );
-    if (answer === undefined || text.slice(slice.start, slice.end) !== answer.text) {
-      return [];
-    }
-    return answer.matches.map((match) => ({
-      ...match,
-      start: slice.start + match.start,
-      end: slice.start + match.end,
-    }));
-  });
-}
-
 interface Leaf {
   readonly path: Path;
   readonly origin: number;
   readonly answerField?: string;
-}
-
-/** The approved matches of one reply, from the spans its own scan located. */
-export function approvedMatches(text: string, spans: readonly SecretSpan[]): ApprovedMatch[] {
-  return spans.map((span) => Object.freeze({ ...span, bytes: text.slice(span.start, span.end) }));
 }

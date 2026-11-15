@@ -192,7 +192,13 @@ import {
   HostExecutionError,
   isGeneratedRootEvent,
 } from "./generated-root-owner.ts";
-import type { BoundRootEvaluator, GeneratedRootOwner } from "./generated-root-owner.ts";
+import type {
+  ApprovedGeneratedXmdEvaluation,
+  BoundRootEvaluator,
+  GeneratedRootOwner,
+  GeneratedSourceApproval,
+} from "./generated-root-owner.ts";
+import type { ElicitChoiceSelection } from "./approved-generated-source.ts";
 import { SYNTAX_COMPONENT, SYNTAX_PROTECTED } from "./components/Syntax.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
@@ -231,11 +237,8 @@ import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import { clearsLiveOutput, useSecretDetection } from "./secrets/policy.ts";
 import { useAppendApprovalOwner } from "./secrets/append-approval.ts";
-import type {
-  AppendApprovalOwner,
-  AppendApprovals,
-  AppendGrant,
-} from "./secrets/append-approval.ts";
+import type { AppendApprovals } from "./secrets/append-approval.ts";
+import type { SecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment, validateBindingName } from "./live-env.ts";
 
@@ -2567,6 +2570,24 @@ export interface DocumentExecution extends Operation<Result<Json>> {
 }
 
 /**
+ * Exact publication and generated-source approvals for the host that opted in.
+ *
+ * Text observations use the scanner and protected inputs of this execution.
+ * A generated evaluation gets only the approved source and ranges for that
+ * call. Hosts use the journal coordinates on returned answers to identify
+ * their own questions; the receipts carry no authority to append.
+ */
+export interface ExecutionApprovals
+  extends AppendApprovals, Pick<SecretDetection, "scan" | "locateText" | "clearText"> {
+  evaluateGeneratedXmdRoot(
+    request: GeneratedXmdRequest,
+    approval: GeneratedSourceApproval,
+  ): Operation<ApprovedGeneratedXmdEvaluation>;
+  /** Attribute a host-observed selection to the active approved evaluation. */
+  selectElicitation(selection: ElicitChoiceSelection): void;
+}
+
+/**
  * The same execution, as the trusted host that assembled it holds it.
  *
  * Everything a `DocumentExecution` is, plus owned disclosure, bindings and
@@ -2977,6 +2998,13 @@ function* executeDocument(
   const inputs = yield* inputValues();
   const computed = yield* useComputedBindings(inputs);
   const approvalOwner = yield* useAppendApprovalOwner();
+  let activeDetection: SecretDetection | undefined;
+  function detectionOfExecution(): SecretDetection {
+    if (activeDetection === undefined) {
+      throw new HostExecutionError("this execution has no live text policy");
+    }
+    return activeDetection;
+  }
 
   const registry = createModifierRegistry();
   // Held by identity as well as by name: a bound block is authorized against
@@ -3263,6 +3291,9 @@ function* executeDocument(
       // root component import is already behind the gate. What comes back is
       // the stream to journal through; the policy itself stays inside the
       // execution that owns it.
+      yield* ensure(() => {
+        activeDetection = undefined;
+      });
       const detection = yield* useSecretDetection(
         secretDetection,
         stream,
@@ -3275,6 +3306,7 @@ function* executeDocument(
       // journal gate closes over rather than by whatever Context is installed
       // by then.
       computed.adopt(detection.disclose);
+      activeDetection = detection;
 
       // The three values a generated root is evaluated under, handed over here
       // by value and reaching the public handle only as one bound operation.
@@ -3374,7 +3406,7 @@ function* executeDocument(
               reference: derivedSyntax,
               live: profile.live,
             });
-      roots.supply({ journal, evaluator: bound });
+      roots.supply({ journal, evaluator: bound, approvals: approvalOwner });
 
       // The journal is wrapped before it reaches `durableRun`, so the identity
       // check happens inside the read that every phase downstream depends on
@@ -3643,8 +3675,23 @@ function* executeDocument(
       },
       output: channel,
     },
-    evaluateGeneratedXmdRoot: roots.evaluate,
-    approvalOwner,
+    *evaluateGeneratedXmdRoot(request) {
+      return (yield* roots.evaluate(request)).result;
+    },
+    approvals: {
+      ...approvalOwner.approvals,
+      evaluateGeneratedXmdRoot: roots.evaluate,
+      selectElicitation: roots.selectElicitation,
+      *clearText(text, copies) {
+        yield* detectionOfExecution().clearText(text, copies);
+      },
+      *locateText(text) {
+        return yield* detectionOfExecution().locateText(text);
+      },
+      *scan(text) {
+        return yield* detectionOfExecution().scan(text);
+      },
+    },
     evaluation: roots.completion,
     computed,
     stop: stopDocument,
@@ -3660,8 +3707,8 @@ function* executeDocument(
  */
 interface CanonicalInvocation {
   readonly execution: DocumentExecution;
-  readonly evaluateGeneratedXmdRoot: BoundRootEvaluator;
-  readonly approvalOwner: AppendApprovalOwner;
+  readonly evaluateGeneratedXmdRoot: HostExecution["evaluateGeneratedXmdRoot"];
+  readonly approvals: ExecutionApprovals;
   /** This execution's own computed root data, for the trusted handle to read. */
   readonly computed: ComputedBindings;
   /**
@@ -4059,7 +4106,7 @@ function* runInvocation(
 
   return {
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
-    approvalOwner: invoked.approvalOwner,
+    approvals: invoked.approvals,
     computed: invoked.computed,
     stop: stopInvocation,
     // Carried through unchanged. The completion this handle publishes has
@@ -4803,7 +4850,11 @@ export function* executeInstalled(
   installations: readonly ExecutionInstallation[],
   initialization?: ExecutionInitialization,
 ): Operation<HostExecution> {
-  const { execution } = yield* executeInstalledBound(options, installations, initialization);
+  const { execution } = yield* executeInstalledWithApprovals(
+    options,
+    installations,
+    initialization,
+  );
   return execution;
 }
 
@@ -4811,27 +4862,7 @@ export function* executeInstalledWithApprovals(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   initialization?: ExecutionInitialization,
-): Operation<{ execution: HostExecution; approvals: AppendApprovals }> {
-  const { execution, approvals } = yield* executeInstalledBound(
-    options,
-    installations,
-    initialization,
-  );
-  return { execution, approvals };
-}
-
-export interface BoundExecution {
-  readonly execution: HostExecution;
-  readonly evaluate: BoundRootEvaluator;
-  readonly approvals: AppendApprovals;
-  registerGrant(grant: AppendGrant): Operation<void>;
-}
-
-export function* executeInstalledBound(
-  options: ExecuteOptions,
-  installations: readonly ExecutionInstallation[],
-  initialization?: ExecutionInitialization,
-): Operation<BoundExecution> {
+): Operation<{ execution: HostExecution; approvals: ExecutionApprovals }> {
   const invoked = yield* runInvocation(
     options,
     [...installations],
@@ -4863,9 +4894,7 @@ export function* executeInstalledBound(
       },
       stop: invoked.stop,
     },
-    evaluate: invoked.evaluateGeneratedXmdRoot,
-    approvals: invoked.approvalOwner.approvals,
-    registerGrant: invoked.approvalOwner.registerGrant,
+    approvals: invoked.approvals,
   };
 }
 

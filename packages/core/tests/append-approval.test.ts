@@ -2,13 +2,21 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  durablePosition,
+  InMemoryStream,
+} from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { executeInstalledWithApprovals } from "../host.ts";
-import type { AppendApproval, AppendApprovals, ExecutionInstallation } from "../host.ts";
+import type { AppendApproval, ExecutionApprovals, ExecutionInstallation } from "../host.ts";
 import { retainedSource } from "../mod.ts";
 import { useSecretScannerFactory } from "../src/secrets/policy.ts";
 import { createScannerWith } from "../src/secrets/scanner.ts";
+import { Elicitation } from "../src/elicitation-api.ts";
+import { elicitationEffectName, questionFingerprint } from "../src/elicit-journal.ts";
+import { getExpansion } from "../src/expansion.ts";
+import { selecting } from "./support/generated-selection.ts";
 
 const marker = "synthetic-marker";
 const text = `private note\n${marker}`;
@@ -37,8 +45,12 @@ function* useMarkerDetector(): Operation<void> {
   );
 }
 
-function* openNote(stream: InMemoryStream, body: (approvals: AppendApprovals) => Operation<void>) {
-  const bridge = withResolvers<AppendApprovals>();
+function* openNote(
+  stream: InMemoryStream,
+  body: (approvals: ExecutionApprovals) => Operation<void>,
+  extra: readonly ExecutionInstallation[] = [],
+) {
+  const bridge = withResolvers<ExecutionApprovals>();
   const installation: ExecutionInstallation = {
     components: [
       {
@@ -57,7 +69,7 @@ function* openNote(stream: InMemoryStream, body: (approvals: AppendApprovals) =>
   };
   const { execution, approvals } = yield* executeInstalledWithApprovals(
     { ...retainedSource("host-note.md", "<NoteHost />\n"), stream },
-    [installation],
+    [installation, ...extra],
   );
   expect(execution).not.toHaveProperty("approvals");
   bridge.resolve(approvals);
@@ -147,5 +159,85 @@ describe("a trusted host's append approval", () => {
     });
     expect(result.ok).toBe(false);
     expect(notes(stream)).toEqual([{ status: "ok", value: { note: text } }]);
+  });
+});
+
+describe("a trusted host's generated-source approval", () => {
+  it("clears selected Output and returns acknowledged Elicit value and source ranges", function* () {
+    yield* useMarkerDetector();
+    const stream = new InMemoryStream();
+    const choice = `${marker} and ${marker}`;
+    const schema = { type: "object", properties: { choice: { type: "string", enum: [choice] } } };
+    const source =
+      `<Elicit schema={${JSON.stringify(schema)}} as="answer">Choose one</Elicit>\n\n` +
+      `<Output>\n${marker}\n</Output>\n`;
+    const matches = Array.from(source.matchAll(/synthetic-marker/g), ({ index }) => ({
+      ...match,
+      bytes: marker,
+      start: index,
+      end: index + marker.length,
+    }));
+    const request = { id: "note", source, allow: ["write"] } as const;
+    let selectingChoice: ExecutionApprovals | undefined;
+    yield* Elicitation.around({
+      *elicit([request]) {
+        selectingChoice?.selectElicitation({
+          ...(yield* durablePosition()),
+          name: elicitationEffectName((yield* getExpansion()).position),
+          fingerprint: questionFingerprint(request),
+          field: "choice",
+          option: 0,
+        });
+        return { choice };
+      },
+    });
+    const completion = yield* openNote(
+      stream,
+      function* (approvals) {
+        selectingChoice = approvals;
+        const changed = yield* approvals.evaluateGeneratedXmdRoot(
+          { ...request, source: request.source + "\n" },
+          { source, matches },
+        );
+        expect(changed.result.ok).toBe(false);
+        expect(changed.answers).toEqual([]);
+
+        const ran = yield* approvals.evaluateGeneratedXmdRoot(request, { source, matches });
+        if (!ran.result.ok) {
+          throw ran.result.error;
+        }
+        expect(ran.result.value.output).toContain(marker);
+        const events = stream.snapshot();
+        const acknowledged = events.find(
+          (event) => event.type === "yield" && event.description.type === "elicit",
+        );
+        const index = events
+          .filter(
+            (event) => event.type === "yield" && event.coroutineId === acknowledged?.coroutineId,
+          )
+          .indexOf(acknowledged!);
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(ran.answers).toEqual([
+          {
+            coroutineId: acknowledged?.coroutineId,
+            index,
+            value: { choice },
+            copies: matches.slice(0, 2).map(({ start, end, ...copy }, index) => ({
+              field: "choice",
+              source: { start, end },
+              match: {
+                ...copy,
+                start: index * (marker.length + 5),
+                end: index * (marker.length + 5) + marker.length,
+              },
+            })),
+          },
+        ]);
+      },
+      [selecting({ Elicit: ["paired"] })],
+    );
+    if (!completion.ok) {
+      throw completion.error;
+    }
   });
 });

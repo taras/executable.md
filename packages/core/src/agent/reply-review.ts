@@ -10,7 +10,7 @@
  *
  * The question is a contextual operation, not a callback on a request. A
  * trusted host installs middleware for it beside its publisher; the turn calls
- * the chain with a hold Core made for this one invocation; and a decision
+ * the chain with a hold Agent made for this one invocation; and a decision
  * counts only when the middleware hands it to the terminal it was given,
  * together with that same hold, while the turn is still waiting on it. What a
  * handler returns is never read, a hold kept past its turn settles nothing, a
@@ -29,7 +29,14 @@ import { ensure } from "effection";
 import type { Operation } from "effection";
 import type { AgentPromptHandle } from "./publication.ts";
 import type { SecretSpan } from "../secrets/scanner.ts";
-import type { ElicitChoiceSelection, FeedbackSlice } from "../secrets/reply-grant.ts";
+import type { SourceRange } from "../document-targets.ts";
+import type { ElicitChoiceSelection } from "../approved-generated-source.ts";
+
+/** Where feedback places an acknowledged answer from one question. */
+export interface FeedbackSlice extends SourceRange {
+  readonly coroutineId: string;
+  readonly index: number;
+}
 
 /** One finding in a withheld reply, as a local reviewer may show it. */
 export interface AgentReplyFinding {
@@ -55,7 +62,7 @@ export type AgentReplyDecision = "accept" | "withhold";
 /**
  * One withheld reply waiting for a local decision.
  *
- * Made by Core for one invocation of the review and good for that invocation
+ * Made by Agent for one invocation of the review and good for that invocation
  * only. Holding one grants nothing: it is settled through the terminal the
  * reviewer was handed, and only while the turn is still waiting.
  */
@@ -75,7 +82,7 @@ export interface AgentReplyHold {
    * carries the answer that evaluation's own question selected.
    *
    * `text` is exactly what the host hands that turn, and `slices` are where
-   * in it the answer sits. Core keeps this only for the very next turn of the
+   * in it the answer sits. Agent keeps this only for the very next turn of the
    * same conversation, only when the evaluation of exactly the accepted
    * source selected an approved choice, and only while nothing else has run;
    * otherwise it answers false and grants nothing.
@@ -102,7 +109,7 @@ interface ReplyReviewApi {
   review(hold: AgentReplyHold, decision: AgentReplyDecision | undefined): Operation<void>;
 }
 
-/** What Core knows about each hold it issued, and whether it was decided. */
+/** What Agent knows about each hold it issued, and whether it was decided. */
 const REVIEW = "agent.reply-review";
 const ReplyReview: Api<ReplyReviewApi> = createApi<ReplyReviewApi>(REVIEW, {
   // deno-lint-ignore require-yield

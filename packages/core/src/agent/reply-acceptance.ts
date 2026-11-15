@@ -26,7 +26,7 @@ import { createDurableOperation } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { isJsonObject } from "../json.ts";
 import { AGENT_PROMPT, parsePromptRecord } from "./journal.ts";
-import type { ApprovedMatch } from "../secrets/reply-grant.ts";
+import type { ApprovedMatch } from "../secrets/secret-placement.ts";
 
 /** The durable effect an accepted reply is retained under. */
 export const AGENT_PROMPT_REPLY = "agent_prompt_reply";

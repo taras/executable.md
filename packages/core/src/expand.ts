@@ -348,7 +348,7 @@ export interface OutputFrame {
   readonly active: boolean;
   readonly private: boolean;
   readonly marks: WeakMap<Segment, readonly string[]>;
-  readonly replyLiteralOffsets?: WeakMap<Segment, number>;
+  readonly sourceLiteralOffsets?: WeakMap<Segment, number>;
   readonly stringSelection?: Set<string>;
 }
 
@@ -390,7 +390,7 @@ function bodyOutput(segments: Segment[], path: string, inherited?: OutputFrame):
     active: false,
     private: false,
     marks: inherited?.marks ?? new WeakMap(),
-    replyLiteralOffsets: inherited?.replyLiteralOffsets,
+    sourceLiteralOffsets: inherited?.sourceLiteralOffsets,
   };
 }
 
@@ -1256,7 +1256,7 @@ function* expandListSegments(
           type: "text",
           content: final,
         };
-        const literals = outputFrame?.replyLiteralOffsets;
+        const literals = outputFrame?.sourceLiteralOffsets;
         const literal = literals?.get(segment);
         if (
           literal !== undefined &&

@@ -26,7 +26,8 @@ import type { Operation, Result } from "effection";
 import { Execution } from "../execute.ts";
 import { registerComponents } from "../components/registration.ts";
 import { contributeDocumentation } from "../documentation-api.ts";
-import { agentDocumentation } from "../component-documentation.ts";
+import { packageDocumentation, packagedAssetReader } from "../component-documentation.ts";
+import type { DocumentationContribution, DocumentationReader } from "../component-documentation.ts";
 import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
 import { documented } from "../components/documentation.ts";
@@ -208,6 +209,20 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     }),
   },
 ];
+
+export function agentDocumentation(
+  read: DocumentationReader = packagedAssetReader,
+): Operation<DocumentationContribution> {
+  return packageDocumentation(
+    new URL("./components.md", import.meta.url),
+    { owner: CORE_ORIGIN, asset: "packages/core/src/agent/components.md" },
+    [
+      ...AGENT_REGISTRATIONS.map((registration) => registration.name),
+      ...agentIdentityComponents().map((component) => component.name),
+    ],
+    read,
+  );
+}
 
 /**
  * The agent vocabulary, as declarations and nothing else.

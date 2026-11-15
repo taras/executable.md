@@ -47,6 +47,8 @@
  */
 
 import { createDurableOperation, ephemeral, serializeError } from "@executablemd/durable-streams";
+import type { AppendApprovals } from "../secrets/append-approval.ts";
+import type { ApprovedMatch } from "../secrets/secret-placement.ts";
 import type {
   ActivateDurabilityFailure,
   DurableStream,
@@ -55,7 +57,7 @@ import type {
   Result as DurableResult,
   Workflow,
 } from "@executablemd/durable-streams";
-import { createContext, ensure } from "effection";
+import { createContext, ensure, scoped } from "effection";
 import type { Operation, Stream } from "effection";
 import { Agent } from "./agent-api.ts";
 import { InvocationTeardownError } from "../invocation.ts";
@@ -515,6 +517,12 @@ function permissionDecision(outcome: PermissionOutcome): PermissionOutcome | und
  */
 export type RetainPromptInput = (input: string) => void;
 
+interface FeedbackApproval {
+  readonly approvals: AppendApprovals;
+  readonly text: string;
+  readonly copies: readonly ApprovedMatch[];
+}
+
 export function* persistPrompt(
   identity: {
     name: string;
@@ -524,6 +532,7 @@ export function* persistPrompt(
   live: (retain: RetainPromptInput) => Operation<PromptRecord>,
   association: () => AgentPromptAssociation | undefined = () => undefined,
   begun: () => AgentPromptHandle = () => undefined,
+  feedback?: FeedbackApproval,
 ): Workflow<PromptRecord> {
   const sourceOwner = yield* ephemeral(SourceOwner.get());
   // Held here, and handed to nothing but the live runner below: the pending
@@ -544,7 +553,7 @@ export function* persistPrompt(
         }),
       );
     },
-    { coordinator: promptPublication(association, begun) },
+    { coordinator: promptPublication(association, begun, description, feedback) },
   );
   const parsed = parsePromptRecord(stored);
   if (!parsed) {
@@ -579,6 +588,8 @@ class AgentPromptPublicationError extends Error {
 function promptPublication(
   association: () => AgentPromptAssociation | undefined,
   begun: () => AgentPromptHandle,
+  description: { type: string; name: string; input: string },
+  feedback: FeedbackApproval | undefined,
 ): LiveDurableOperationCoordinator {
   return {
     *run<T extends Json>(
@@ -612,9 +623,26 @@ function promptPublication(
         result = { status: "err", error: serializeError(failure) };
       }
 
+      function appendPrompt(): Operation<void> {
+        if (feedback === undefined || !description.input.startsWith(feedback.text)) {
+          return publish(result);
+        }
+        return scoped(function* () {
+          yield* feedback.approvals.approveAppend({
+            coroutineId: "root",
+            type: description.type,
+            name: description.name,
+            fields: [
+              { path: ["description", "input"], text: description.input, matches: feedback.copies },
+            ],
+          });
+          yield* publish(result);
+        });
+      }
+
       const publisher = yield* AgentInternal.operations.promptPublisher;
       if (publisher === undefined) {
-        yield* publish(result);
+        yield* appendPrompt();
         return result;
       }
 
@@ -633,7 +661,7 @@ function promptPublication(
               );
             }
             appended = true;
-            yield* publish(published);
+            yield* appendPrompt();
           },
         });
       } catch (error) {

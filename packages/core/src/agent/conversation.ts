@@ -82,33 +82,17 @@ import type {
   Json as DurableJson,
 } from "@executablemd/durable-streams";
 
-import { executeInstalledBound } from "../execute.ts";
-import type { BoundExecution, ExecutionInstallation } from "../execute.ts";
-import type { AppendApprovals } from "../secrets/append-approval.ts";
-import type { BoundRootEvaluator } from "../generated-root-owner.ts";
-import type {
-  AcceptedRootReply,
-  GeneratedXmdRequest,
-  GeneratedXmdRootResult,
-} from "../generated-xmd.ts";
+import { executeInstalledWithApprovals } from "../execute.ts";
+import type { ExecutionApprovals, ExecutionInstallation, HostExecution } from "../execute.ts";
+import type { ApprovedElicitAnswer } from "../approved-generated-source.ts";
+import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "../generated-xmd.ts";
 import { durabilityFailure } from "../errors.ts";
 import { isJsonObject, parseJson } from "../json.ts";
 import { retainedSource } from "../root-source.ts";
-import {
-  captureReplyTextCheck,
-  locateReplySecrets,
-  scanSecrets,
-  secretPolicy,
-} from "../secrets/policy.ts";
-import type { ReplyTextCheck } from "../secrets/policy.ts";
-import {
-  approvedMatches,
-  carriedCopies,
-  evaluationGrant,
-  feedbackGrant,
-} from "../secrets/reply-grant.ts";
-import type { ApprovedMatch, FeedbackSlice } from "../secrets/reply-grant.ts";
+import { encodedOffset, place } from "../secrets/secret-placement.ts";
+import type { ApprovedMatch } from "../secrets/secret-placement.ts";
 import type { SecretSpan } from "../secrets/scanner.ts";
+import type { FeedbackSlice } from "./reply-review.ts";
 import { AgentConversationProvider } from "./conversation-provider.ts";
 import type {
   AgentOptions,
@@ -333,7 +317,7 @@ interface Live {
    * ending names one outcome.
    */
   fatal?: Error;
-  checkReplyText?: ReplyTextCheck;
+  approvals?: ExecutionApprovals;
   /**
    * What an accepted reply may still carry, for the very next job only.
    *
@@ -355,10 +339,12 @@ type Accepted =
       readonly hold: AgentReplyHold;
     }
   | {
+      readonly kind: "selecting";
+      readonly hold: AgentReplyHold;
+    }
+  | {
       readonly kind: "feedback";
-      readonly select: ReturnType<typeof evaluationGrant>["select"];
-      /** What the evaluation's own question selected, read when the turn starts. */
-      readonly carried: ReturnType<typeof evaluationGrant>["carried"];
+      readonly answers: readonly ApprovedElicitAnswer[];
       readonly hold: AgentReplyHold;
       registered?: { readonly text: string; readonly slices: readonly FeedbackSlice[] };
     };
@@ -520,11 +506,11 @@ function handle(
 
   return {
     *checkSidekickText(text): Operation<Result<void>> {
-      if (!live.open || live.checkReplyText === undefined) {
+      if (!live.open || live.approvals === undefined) {
         return Err(ended());
       }
       try {
-        yield* live.checkReplyText(text, []);
+        yield* live.approvals.clearText(text, []);
         return live.open ? Ok(undefined) : Err(ended());
       } catch (error) {
         return Err(error instanceof Error ? error : new AgentConversationError(String(error)));
@@ -672,7 +658,10 @@ function handle(
   };
 }
 
-type ConversationBinding = Omit<BoundExecution, "execution">;
+interface ConversationBinding {
+  readonly execution: HostExecution;
+  readonly approvals: ExecutionApprovals;
+}
 
 /**
  * Run the conversation's own durable root, and serve turns inside it forever.
@@ -739,7 +728,7 @@ function* serve(
     ],
   };
   try {
-    const { execution, ...binding } = yield* executeInstalledBound(
+    const binding = yield* executeInstalledWithApprovals(
       {
         ...retainedSource(CONVERSATION_ROOT_PATH, CONVERSATION_ROOT_SOURCE),
         stream: request.history,
@@ -750,7 +739,7 @@ function* serve(
     // Before the completion is waited on, and after the handle exists: the
     // element is suspended on this, and nothing it does decides whether this
     // resolves.
-    const settled = yield* execution;
+    const settled = yield* binding.execution;
     if (!settled.ok && durabilityFailure(settled.error) !== undefined) {
       live.fatal ??= settled.error;
     }
@@ -844,9 +833,7 @@ function* held(
   // conversation is announced: a handle that reported itself ready and then
   // refused to evaluate would be ready for two of the three things it offers.
   const binding = yield* bridge.operation;
-  const { evaluate } = binding;
-  const checkReplyText = yield* captureReplyTextCheck();
-  live.checkReplyText = checkReplyText;
+  live.approvals = binding.approvals;
   announce(Ok(undefined));
   while (true) {
     const next = yield* jobs.next();
@@ -869,16 +856,17 @@ function* held(
         job.accepted === offered.hold &&
         job.request.source === offered.text
       ) {
-        yield* evaluatedAccepted(evaluate, live, job, offered);
+        yield* evaluated(binding, live, job, offered);
       } else {
-        yield* evaluated(evaluate, live, job);
+        yield* evaluated(binding, live, job);
       }
       continue;
     }
-    const carried = offered?.kind === "feedback" ? offered.carried() : [];
-    const carrying =
-      offered?.kind === "feedback" && offered.registered?.text === job.input && carried.length > 0
-        ? { carried, slices: offered.registered.slices }
+    const copies =
+      offered?.kind === "feedback" &&
+      offered.registered?.text === job.input &&
+      offered.answers.length > 0
+        ? feedbackCopies(job.input, offered.registered.slices, offered.answers)
         : undefined;
     const observed: Observed = {};
     yield* deliver(
@@ -893,9 +881,8 @@ function* held(
       used,
       sessionFacts(active, established, placement),
       live,
-      carrying,
-      checkReplyText,
-      binding,
+      copies,
+      binding.approvals,
     );
     if (live.fatal !== undefined) {
       yield* suspend();
@@ -1135,17 +1122,13 @@ function deliver(
   used: boolean,
   facts: SessionFacts,
   live: Live,
-  carrying: Carrying | undefined,
-  checkReplyText: ReplyTextCheck,
-  bound: Pick<BoundExecution, "approvals" | "registerGrant">,
+  copies: readonly ApprovedMatch[] | undefined,
+  approvals: ExecutionApprovals,
 ): Operation<void> {
   // Scoped, so the turn cannot outlive the call that asked for it however this
   // returns: a turn still running would hold its durable operation open, and
   // the next turn would be a second one open on the same sequence.
   return scoped(function* () {
-    const copies =
-      carrying === undefined ? [] : carriedCopies(job.input, carrying.slices, carrying.carried);
-    const prepare = (delegated: string) => (delegated.startsWith(job.input) ? copies : []);
     // Registered *before* the turn is spawned, which is what makes it the last
     // thing to unwind: cleanups registered later run first, so the turn — and
     // every cleanup the provider registered inside it — has finished by the
@@ -1154,17 +1137,6 @@ function deliver(
     yield* ensure(() => {
       job.joined.resolve();
     });
-    // The one turn an accepted answer may be carried by, for exactly as long as
-    // this turn runs: retired when it commits, fails or is cancelled.
-    if (carrying !== undefined) {
-      yield* bound.registerGrant(
-        feedbackGrant({
-          type: AGENT_PROMPT,
-          name: turnName(order),
-          prepare,
-        }),
-      );
-    }
     const turn = yield* spawn(() =>
       conversationTurn(
         provider,
@@ -1178,10 +1150,9 @@ function deliver(
         used,
         facts,
         live,
-        bound.approvals,
-        job.automaticFeedback || carrying !== undefined
-          ? (delegated) => checkReplyText(delegated, prepare(delegated))
-          : undefined,
+        approvals,
+        copies ?? [],
+        job.automaticFeedback || copies !== undefined,
       ),
     );
     const outcome = yield* race([
@@ -1245,8 +1216,9 @@ function conversationTurn(
   used: boolean,
   facts: SessionFacts,
   live: Live,
-  approvals: AppendApprovals,
-  checkInput: ((text: string) => Operation<void>) | undefined,
+  approvals: ExecutionApprovals,
+  copies: readonly ApprovedMatch[],
+  checkFeedback: boolean,
 ): Operation<void> {
   return (function* (): Operation<void> {
     try {
@@ -1322,8 +1294,12 @@ function conversationTurn(
         let reviewable:
           | { readonly text: string; readonly spans: readonly SecretSpan[] }
           | undefined;
+        const clearFeedback = checkFeedback
+          ? (text: string): Operation<void> =>
+              approvals.clearText(text, text.startsWith(job.input) ? copies : [])
+          : undefined;
         const record = yield* persistPrompt(
-          { name: turnName(order), input: checkInput === undefined ? job.input : "" },
+          { name: turnName(order), input: checkFeedback ? "" : job.input },
           // The composition this conversation installed runs above the turn's
           // own terminal, so the text it finally delegates is settled inside
           // the live runner. `retain` is the journal's own; nothing the
@@ -1334,17 +1310,18 @@ function conversationTurn(
               agent,
               session,
               retain,
-              checkInput,
+              checkInput: clearFeedback,
             } satisfies DirectPromptTurn);
-            const kept = yield* withholdFlaggedReply(ran, established);
+            const kept = yield* withholdFlaggedReply(ran, established, approvals);
             if (kept.withheld === true) {
-              const spans = yield* locateReplySecrets(ran.text);
+              const spans = yield* approvals.locateText(ran.text);
               reviewable = spans === undefined ? undefined : { text: ran.text, spans };
             }
             return kept;
           },
           () => carried.association,
           () => carried.begun,
+          copies.length === 0 ? undefined : { approvals, text: job.input, copies },
         );
         // A provider may name the conversation only once the turn has started,
         // which is the ordinary first-turn case. Read from the record, because
@@ -1412,10 +1389,37 @@ function conversationTurn(
   })();
 }
 
-/** What one turn may carry of an accepted reply's selected answer. */
-interface Carrying {
-  readonly carried: ReturnType<ReturnType<typeof evaluationGrant>["carried"]>;
-  readonly slices: readonly FeedbackSlice[];
+function feedbackCopies(
+  text: string,
+  slices: readonly FeedbackSlice[],
+  answers: readonly ApprovedElicitAnswer[],
+): ApprovedMatch[] {
+  return slices.flatMap((slice) => {
+    const answer = answers.find(
+      (one) => one.coroutineId === slice.coroutineId && one.index === slice.index,
+    );
+    if (answer === undefined) {
+      return [];
+    }
+    const rendered = JSON.stringify(answer.value, null, 2);
+    if (text.slice(slice.start, slice.end) !== rendered) {
+      return [];
+    }
+    const names = [...new Set(answer.copies.map(({ field }) => field))];
+    const placements = place(
+      `${rendered}\n`,
+      names.map((name) => [name]),
+      2,
+    );
+    return answer.copies.flatMap(({ field, match }) => {
+      const placement = placements?.[names.indexOf(field)];
+      const start = encodedOffset(placement, match.start);
+      const end = encodedOffset(placement, match.end);
+      return start === undefined || end === undefined || rendered.slice(start, end) !== match.bytes
+        ? []
+        : [{ ...match, start: slice.start + start, end: slice.start + end }];
+    });
+  });
 }
 
 /**
@@ -1435,7 +1439,7 @@ function* reviewWithheld(
   begun: unknown,
   name: string,
   live: Live,
-  approvals: AppendApprovals,
+  approvals: ExecutionApprovals,
 ): Operation<string | undefined> {
   const hold: { current?: AgentReplyHold } = {};
   const reviewed = yield* askReplyReview({
@@ -1444,8 +1448,8 @@ function* reviewWithheld(
     begun,
     selectedElicitation(selection) {
       const current = live.accepted;
-      if (current?.kind === "feedback" && current.hold === hold.current) {
-        current.select(selection);
+      if (current?.kind === "selecting" && current.hold === hold.current) {
+        approvals.selectElicitation(selection);
       }
     },
     carry(text, slices) {
@@ -1478,7 +1482,9 @@ function* reviewWithheld(
   if (reviewed.decision !== "accept") {
     return undefined;
   }
-  const approved = approvedMatches(pending.text, pending.spans);
+  const approved = pending.spans.map((span) =>
+    Object.freeze({ ...span, bytes: pending.text.slice(span.start, span.end) }),
+  );
   yield* scoped(function* () {
     yield* approvals.approveAppend({
       coroutineId: "root",
@@ -1490,37 +1496,6 @@ function* reviewWithheld(
   });
   live.accepted = { kind: "evaluation", text: pending.text, approved, hold: reviewed.hold };
   return pending.text;
-}
-
-/**
- * Evaluate exactly the accepted source, with its copies granted for this one
- * evaluation.
- *
- * The grant binds to the evaluation's own admission and coroutine and is
- * retired when the evaluation joins. What its question selected from the
- * accepted choices is left for the very next turn, and only that.
- */
-function* evaluatedAccepted(
-  evaluate: BoundRootEvaluator,
-  live: Live,
-  job: EvaluateJob,
-  offered: Extract<Accepted, { kind: "evaluation" }>,
-): Operation<void> {
-  const grant = evaluationGrant({
-    id: job.request.id,
-    source: offered.text,
-    approved: offered.approved,
-  });
-  // Left for the next job before this one runs, so a host that registers its
-  // feedback the moment its evaluation answers finds it. What it can carry is
-  // read when that next turn starts, after this evaluation has joined.
-  live.accepted = {
-    kind: "feedback",
-    carried: grant.carried,
-    select: grant.select,
-    hold: offered.hold,
-  };
-  yield* evaluated(evaluate, live, job, { grant, approved: offered.approved });
 }
 
 /**
@@ -1559,6 +1534,7 @@ export class AgentReplyWithheldError extends AgentConversationError {
 function* withholdFlaggedReply(
   record: PromptRecord,
   established: string | undefined,
+  approvals: ExecutionApprovals,
 ): Operation<PromptRecord> {
   if (record.status !== "completed" || record.text === "") {
     return record;
@@ -1571,10 +1547,7 @@ function* withholdFlaggedReply(
     return record;
   }
   try {
-    if (!(yield* secretPolicy()).enabled) {
-      return record;
-    }
-    if ((yield* scanSecrets(JSON.stringify(record.text))).length === 0) {
+    if ((yield* approvals.scan(JSON.stringify(record.text))).length === 0) {
       return record;
     }
   } catch {
@@ -1593,19 +1566,31 @@ function* withholdFlaggedReply(
  * to this element, so what this adds is admission and joining and nothing else.
  */
 function evaluated(
-  evaluate: BoundRootEvaluator,
+  binding: ConversationBinding,
   live: Live,
   job: EvaluateJob,
-  accepted?: AcceptedRootReply,
+  accepted?: Extract<Accepted, { kind: "evaluation" }>,
 ): Operation<void> {
   return scoped(function* () {
     yield* ensure(() => {
       job.joined.resolve();
     });
+    if (accepted !== undefined) {
+      live.accepted = { kind: "selecting", hold: accepted.hold };
+    }
     const served = yield* race([
       (function* (): Operation<Served> {
         try {
-          return { kind: "settled", settled: { value: yield* evaluate(job.request, accepted) } };
+          if (accepted === undefined) {
+            const value = yield* binding.execution.evaluateGeneratedXmdRoot(job.request);
+            return { kind: "settled", settled: { value } };
+          }
+          const { result, answers } = yield* binding.approvals.evaluateGeneratedXmdRoot(
+            job.request,
+            { source: accepted.text, matches: accepted.approved },
+          );
+          live.accepted = { kind: "feedback", hold: accepted.hold, answers };
+          return { kind: "settled", settled: { value: result } };
         } catch (error) {
           // Answered *here*, at the throw, rather than after this race has
           // unwound. A failure of the run raised by this execution's own
@@ -1636,6 +1621,8 @@ function evaluated(
     ]);
     if (served.kind === "settled") {
       job.answer.resolve(served.settled);
+    } else {
+      live.accepted = undefined;
     }
   });
 }

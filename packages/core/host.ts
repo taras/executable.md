@@ -320,7 +320,15 @@ export type {
   GeneratedXmdRequest,
   GeneratedXmdRootResult,
 } from "./src/generated-xmd.ts";
-export type { HostExecution } from "./src/execute.ts";
+export type { ExecutionApprovals, HostExecution } from "./src/execute.ts";
+export type {
+  ApprovedGeneratedXmdEvaluation,
+  GeneratedSourceApproval,
+} from "./src/generated-root-owner.ts";
+export type {
+  ApprovedElicitAnswer,
+  ElicitChoiceSelection,
+} from "./src/approved-generated-source.ts";
 export { HostExecutionError } from "./src/generated-root-owner.ts";
 export {
   AgentConversationError,
@@ -432,7 +440,7 @@ export type {
   AgentReplyHold,
   AgentReplyReviewer,
 } from "./src/agent/reply-review.ts";
-export type { FeedbackSlice } from "./src/secrets/reply-grant.ts";
+export type { FeedbackSlice } from "./src/agent/reply-review.ts";
 
 /**
  * `<Answers>` as detached configuration, for the host that installs it.

@@ -139,7 +139,7 @@ import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegment, renderSegments } from "./render.ts";
-import type { ApprovedMatch, evaluationGrant } from "./secrets/reply-grant.ts";
+import type { ApprovedMatch } from "./secrets/secret-placement.ts";
 import type { SecretDetection } from "./secrets/policy.ts";
 import type { SourceRange } from "./document-targets.ts";
 import { scanSegments } from "./scanner.ts";
@@ -738,9 +738,9 @@ export interface GeneratedRootBinding {
   readonly live: () => boolean;
 }
 
-export interface AcceptedRootReply {
-  readonly approved: readonly ApprovedMatch[];
-  readonly grant: ReturnType<typeof evaluationGrant>;
+export interface GeneratedRootProvenance {
+  readonly matches: readonly ApprovedMatch[];
+  readonly schemas: Map<number, SourceRange>;
 }
 
 /**
@@ -2476,7 +2476,7 @@ function expand(
               active: false,
               private: false,
               marks: new WeakMap(),
-              replyLiteralOffsets: literalOffsets,
+              sourceLiteralOffsets: literalOffsets,
             },
       );
       return renderSegments(owner ?? []);
@@ -2743,21 +2743,18 @@ function safeDiagnostic(error: unknown): string {
 function* evaluateRoot(
   request: GeneratedXmdRequest,
   binding: GeneratedRootBinding,
-  accepted?: AcceptedRootReply,
+  provenance?: GeneratedRootProvenance,
 ): Operation<Result<GeneratedXmdRootResult>> {
   // Allocated out here, so a failure partway leaves this frame holding exactly
   // what the root rendered before it. The flag is read from the source core
   // admitted rather than from the caller's copy, and it is the same reading
   // `expand` selects regions with.
   const owner: Segment[] = [];
-  const literalOffsets = accepted === undefined ? undefined : new WeakMap<Segment, number>();
-  if (accepted !== undefined) {
-    yield* ensure(binding.detection.allowReplyCopies(accepted.grant));
-  }
+  const literalOffsets = provenance === undefined ? undefined : new WeakMap<Segment, number>();
   const check = (output: string) =>
-    binding.detection.checkReplyText(
+    binding.detection.clearText(
       output,
-      outputCopies(owner, literalOffsets, accepted?.approved ?? []),
+      outputCopies(owner, literalOffsets, provenance?.matches ?? []),
     );
   let hasOutput = false;
   try {
@@ -2788,7 +2785,7 @@ function* evaluateRoot(
         {
           owner,
           literalOffsets,
-          schemas: accepted?.grant.schemas,
+          schemas: provenance?.schemas,
           declared: (value) => {
             hasOutput = value;
           },
@@ -2872,7 +2869,7 @@ export function bindGeneratedRootEvaluator(
   binding: GeneratedRootBinding,
 ): (
   request: GeneratedXmdRequest,
-  accepted?: AcceptedRootReply,
+  provenance?: GeneratedRootProvenance,
 ) => Operation<Result<GeneratedXmdRootResult>> {
-  return (request, accepted) => evaluateRoot(request, binding, accepted);
+  return (request, provenance) => evaluateRoot(request, binding, provenance);
 }

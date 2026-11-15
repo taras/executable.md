@@ -405,8 +405,9 @@ export function* useSecretDetection(
     return {
       journal: stream,
       disclose: projectedDisclosure(discloseFreely),
-      checkReplyText: replyTextCheck(undefined, inputs),
-      allowReplyCopies: () => () => {},
+      clearText: textClearance(undefined, inputs),
+      scan: () => scanWith(undefined),
+      locateText: (text) => locateTextMatches(undefined, inputs, text),
     };
   }
 
@@ -416,13 +417,9 @@ export function* useSecretDetection(
   return {
     journal: guardWithSecretDetection(stream, scanner, grants),
     disclose: projectedDisclosure(discloseThrough(scanner)),
-    checkReplyText: replyTextCheck(scanner, inputs),
-    allowReplyCopies(grant) {
-      grants.add(grant);
-      return () => {
-        grants.delete(grant);
-      };
-    },
+    clearText: textClearance(scanner, inputs),
+    scan: (text) => scanWith(scanner, text),
+    locateText: (text) => locateTextMatches(scanner, inputs, text),
   };
 }
 
@@ -438,24 +435,17 @@ export function* useSecretDetection(
 export interface SecretDetection {
   readonly journal: DurableStream;
   readonly disclose: SecretDisclosure;
-  readonly checkReplyText: ReplyTextCheck;
-  allowReplyCopies(grant: AppendGrant): () => void;
+  readonly clearText: TextClearance;
+  scan(text: string): Operation<readonly SecretFinding[]>;
+  locateText(text: string): Operation<readonly SecretSpan[] | undefined>;
 }
 
-export type ReplyTextCheck = (text: string, copies: readonly ApprovedMatch[]) => Operation<void>;
+export type TextClearance = (text: string, copies: readonly ApprovedMatch[]) => Operation<void>;
 
-export function* captureReplyTextCheck(): Operation<ReplyTextCheck> {
-  const detection = yield* currentDetection();
-  return replyTextCheck(
-    detection instanceof EnabledDetection ? detection.scanner : undefined,
-    detection.inputs,
-  );
-}
-
-function replyTextCheck(
+function textClearance(
   scanner: SecretScanner | undefined,
   inputs: InputValues | undefined,
-): ReplyTextCheck {
+): TextClearance {
   return function* (text, copies) {
     if (inputs !== undefined) {
       const projected = inputs.display(text);
@@ -557,15 +547,7 @@ function guardWithSecretDetection(
       throw new SecretDetectedError(findings);
     }
   });
-  return preserveJournalProvenance(stream, {
-    readAll: () => guarded.readAll(),
-    *append(event) {
-      yield* guarded.append(event);
-      for (const grant of grants) {
-        grant.published?.(event);
-      }
-    },
-  });
+  return preserveJournalProvenance(stream, guarded);
 
   /**
    * Whether one live grant accounts for every finding in this event.
@@ -587,27 +569,21 @@ function guardWithSecretDetection(
   }
 }
 
-/**
- * Where this execution's scanner finds credentials in one completed reply, in
- * the reply's own coordinates — or nothing when it cannot say exactly.
- *
- * Scanned the way the journal will hold it, as a JSON string, so a span is a
- * span of what the gate refused. A reply that holds a protected input, a
- * scanner this module did not build, a range that falls inside an escape, and
- * a scanner that fails all answer nothing: the reply stays withheld and is
- * never offered for approval.
- */
-export function* locateReplySecrets(text: string): Operation<readonly SecretSpan[] | undefined> {
-  let detection: ExecutionDetection;
-  try {
-    detection = yield* currentDetection();
-  } catch {
+function* scanWith(
+  scanner: SecretScanner | undefined,
+  text = "",
+): Operation<readonly SecretFinding[]> {
+  return scanner === undefined ? [] : yield* scanner.scan(text);
+}
+
+function* locateTextMatches(
+  scanner: SecretScanner | undefined,
+  inputs: InputValues | undefined,
+  text: string,
+): Operation<readonly SecretSpan[] | undefined> {
+  if (scanner === undefined) {
     return undefined;
   }
-  if (!(detection instanceof EnabledDetection)) {
-    return undefined;
-  }
-  const inputs = detection.inputs;
   if (inputs !== undefined) {
     const shown = inputs.display(text);
     if (inputs.contains(text) || !shown.ok || shown.value !== text) {
@@ -616,7 +592,7 @@ export function* locateReplySecrets(text: string): Operation<readonly SecretSpan
   }
   let spans: SecretSpan[] | undefined;
   try {
-    spans = yield* locateSecrets(detection.scanner, JSON.stringify(text));
+    spans = yield* locateSecrets(scanner, JSON.stringify(text));
   } catch {
     return undefined;
   }

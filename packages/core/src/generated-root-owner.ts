@@ -3,8 +3,8 @@
  *
  * A generated root is evaluated *by* an execution rather than beside one. What
  * it needs to run at all — the captured documentation reference, the guarded
- * route canonical `<Syntax />` is entered through, the Agent providers and
- * launch coordinator a document installs, the journal this run writes — all
+ * route canonical `<Syntax />` is entered through, the runtime services
+ * a document installs, the journal this run writes — all
  * belong to one live execution and are reachable nowhere else. So the public
  * method is a mailbox: a caller puts a request on the queue this owner is
  * reading, and the work happens inside the document's own scope, where that
@@ -54,10 +54,27 @@ import { durableRun, preserveJournalProvenance, retainEvents } from "@executable
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 
 import type {
-  AcceptedRootReply,
+  GeneratedRootProvenance,
   GeneratedXmdRequest,
   GeneratedXmdRootResult,
 } from "./generated-xmd.ts";
+
+import { approvedGeneratedSource } from "./approved-generated-source.ts";
+import type { ApprovedElicitAnswer, ElicitChoiceSelection } from "./approved-generated-source.ts";
+import type { AppendApprovalOwner } from "./secrets/append-approval.ts";
+import type { ApprovedMatch } from "./secrets/secret-placement.ts";
+
+/** The exact source and ranges approved for one evaluation by its host. */
+export interface GeneratedSourceApproval {
+  readonly source: string;
+  readonly matches: readonly ApprovedMatch[];
+}
+
+/** The evaluation result and its acknowledged copies from authored choices. */
+export interface ApprovedGeneratedXmdEvaluation {
+  readonly result: Result<GeneratedXmdRootResult>;
+  readonly answers: readonly ApprovedElicitAnswer[];
+}
 
 /** Why this execution could not take the root evaluation it was asked for. */
 export class HostExecutionError extends Error {
@@ -67,7 +84,7 @@ export class HostExecutionError extends Error {
 /** One execution's bound root evaluator, as the owner and the handle hold it. */
 export type BoundRootEvaluator = (
   request: GeneratedXmdRequest,
-  accepted?: AcceptedRootReply,
+  provenance?: GeneratedRootProvenance,
 ) => Operation<Result<GeneratedXmdRootResult>>;
 
 /** What canonical execution hands its owner once both exist. */
@@ -83,6 +100,7 @@ export interface GeneratedRootInputs {
   readonly journal: DurableStream;
   /** The evaluator bound to this execution's captured authority. */
   readonly evaluator: BoundRootEvaluator;
+  readonly approvals: AppendApprovalOwner;
 }
 
 /** The live owner of one execution's explicit root evaluations. */
@@ -93,7 +111,11 @@ export interface GeneratedRootOwner {
    * It closes over the queue and the owner's state, and over nothing a caller
    * could read: no evaluator, no journal, no route and no reference.
    */
-  readonly evaluate: BoundRootEvaluator;
+  evaluate(
+    request: GeneratedXmdRequest,
+    approval?: GeneratedSourceApproval,
+  ): Operation<ApprovedGeneratedXmdEvaluation>;
+  selectElicitation(selection: ElicitChoiceSelection): void;
   /** Hand over the inputs, once, from inside the execution that holds them. */
   supply(inputs: GeneratedRootInputs): void;
   /**
@@ -142,7 +164,7 @@ export interface GeneratedRootOwner {
 /** What one caller asked this execution to evaluate. */
 interface RootJob {
   readonly request: GeneratedXmdRequest;
-  readonly accepted?: AcceptedRootReply;
+  readonly provenance?: EvaluationProvenance;
   readonly answer: Resolvers<Settled>;
   readonly cancelled: Resolvers<void>;
   readonly joined: Resolvers<void>;
@@ -156,7 +178,9 @@ interface RootJob {
  * *run* keeps the identity and classification it already has, so it is carried
  * here unchanged and raised again in the caller's frame rather than described.
  */
-type Settled = { readonly value: Result<GeneratedXmdRootResult> } | { readonly raised: unknown };
+type Settled = { readonly value: ApprovedGeneratedXmdEvaluation } | { readonly raised: unknown };
+
+type EvaluationProvenance = ReturnType<typeof approvedGeneratedSource>;
 
 interface Resolvers<T> {
   readonly operation: Operation<T>;
@@ -211,13 +235,20 @@ function sequenceOrder(event: DurableEvent): number | undefined {
  * backend's own object which coroutine it belongs to would be a read the index
  * is about to make again.
  */
-function evaluationJournal(journal: DurableStream, order: number): DurableStream {
+function evaluationJournal(
+  journal: DurableStream,
+  order: number,
+  provenance: EvaluationProvenance | undefined,
+): DurableStream {
   const view: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
       const events = retainEvents(yield* journal.readAll());
       return events.filter((event) => sequenceOrder(event) === order);
     },
-    append: (event: DurableEvent) => journal.append(event),
+    *append(event: DurableEvent): Operation<void> {
+      yield* journal.append(event);
+      provenance?.acknowledge(event);
+    },
   };
   return preserveJournalProvenance(journal, view);
 }
@@ -286,6 +317,7 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
     }
   };
   let inputs: GeneratedRootInputs | undefined;
+  let activeProvenance: EvaluationProvenance | undefined;
 
   /**
    * Stop admitting evaluations and release everyone waiting on readiness.
@@ -314,15 +346,15 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
 
   function evaluate(
     request: GeneratedXmdRequest,
-    accepted?: AcceptedRootReply,
-  ): Operation<Result<GeneratedXmdRootResult>> {
+    approval?: GeneratedSourceApproval,
+  ): Operation<ApprovedGeneratedXmdEvaluation> {
     return scoped(function* () {
       // Before readiness, so two calls that arrive while the runner is still
       // starting are one admitted call and one refusal rather than two waiters.
       // Waiting for the runner is not queuing behind admitted work.
       const admitted = admit();
       if (!admitted.ok) {
-        return admitted;
+        return { result: admitted, answers: [] };
       }
       const answer = withResolvers<Settled>();
       const cancelled = withResolvers<void>();
@@ -346,14 +378,33 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
           // then there is nothing left to do the joining.
           yield* race([joined.operation, closed.operation]);
         } finally {
+          activeProvenance = undefined;
           state.busy = false;
         }
       });
       const started = yield* ready.operation;
       if (!started.ok) {
-        return started;
+        return { result: started, answers: [] };
       }
-      jobs.add({ request, accepted, answer, cancelled, joined });
+      const queuedRequest = approval === undefined ? request : { ...request };
+      if (approval !== undefined && approval.source !== queuedRequest.source) {
+        return {
+          result: Err(
+            new HostExecutionError("the generated source differs from the approved source"),
+          ),
+          answers: [],
+        };
+      }
+      const provenance =
+        approval === undefined
+          ? undefined
+          : approvedGeneratedSource({
+              id: queuedRequest.id,
+              source: queuedRequest.source,
+              approved: approval.matches.map((match) => ({ ...match })),
+            });
+      activeProvenance = provenance;
+      jobs.add({ request: queuedRequest, provenance, answer, cancelled, joined });
       sent = true;
       // Raced against the execution closing, because a halted worker answers
       // nobody: the work it was doing has joined by the time this resolves, and
@@ -363,7 +414,7 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
         answer.operation,
         (function* (): Operation<Settled> {
           yield* closed.operation;
-          return { value: Err(new HostExecutionError(INTERRUPTED)) };
+          return { value: { result: Err(new HostExecutionError(INTERRUPTED)), answers: [] } };
         })(),
       ]);
       answered = true;
@@ -376,6 +427,9 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
 
   return {
     evaluate,
+    selectElicitation(selection) {
+      activeProvenance?.select({ ...selection });
+    },
     completion: () => fatal,
     supply(supplied: GeneratedRootInputs): void {
       inputs = supplied;
@@ -538,16 +592,20 @@ function sequence(
   inputs: GeneratedRootInputs,
   job: RootJob,
   order: number,
-): Operation<Result<GeneratedXmdRootResult>> {
+): Operation<ApprovedGeneratedXmdEvaluation> {
   return scoped(function* () {
     const settled: { outcome?: Result<GeneratedXmdRootResult> } = {};
     const coroutineId = sequenceName(order);
-    job.accepted?.grant.bind(coroutineId);
+    const { provenance } = job;
+    if (provenance !== undefined) {
+      provenance.bind(coroutineId);
+      yield* inputs.approvals.registerGrant(provenance);
+    }
     yield* durableRun(
       function* (): Operation<void> {
-        settled.outcome = yield* inputs.evaluator(job.request, job.accepted);
+        settled.outcome = yield* inputs.evaluator(job.request, provenance);
       },
-      { stream: evaluationJournal(inputs.journal, order), coroutineId },
+      { stream: evaluationJournal(inputs.journal, order, provenance), coroutineId },
     );
     const outcome = settled.outcome;
     if (outcome === undefined) {
@@ -555,6 +613,6 @@ function sequence(
         `the generated root on sequence "${coroutineId}" recorded no outcome`,
       );
     }
-    return outcome;
+    return { result: outcome, answers: provenance?.answers() ?? [] };
   });
 }

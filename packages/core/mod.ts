@@ -236,11 +236,8 @@ export type { SelectedEntry } from "./src/syntax-markdown.ts";
  * lookup rather than two that agree by hand: the command reaches the index and
  * the selection core's own component reaches.
  */
-export {
-  agentDocumentation,
-  documentationIndexFor,
-  packageDocumentation,
-} from "./src/component-documentation.ts";
+export { documentationIndexFor, packageDocumentation } from "./src/component-documentation.ts";
+export { agentDocumentation } from "./src/agent/components.ts";
 export type {
   DocumentationContribution,
   DocumentationReader,

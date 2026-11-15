@@ -11259,10 +11259,11 @@ contract.
 
 The REPL can ask about a located finding in one completed Sidekick reply
 after the canonical withheld Prompt is acknowledged. Its trusted foreground
-decision reaches Core through the still-live continuation of that turn. Core
-publishes a distinct acceptance immediately after that Prompt in the same
-root sequence, carrying the exact original reply and an audit of approved
-rule, message and ranges. The original Prompt and its receipt stand. The
+decision reaches the Agent conversation through the still-live continuation of
+that turn. The conversation publishes a distinct acceptance immediately after
+that Prompt in the same root sequence, carrying the exact original reply and an
+audit of approved rule, message and ranges. The original Prompt and its receipt
+stand. The
 acceptance uses no new turn ordinal. Replay restores the pair without
 recovering a live approval or contacting a provider.
 
@@ -11274,8 +11275,8 @@ Core clears the actual selected Output, including selected partial Output,
 before the Sidekick response writer or ACP receives it. An unchanged literal
 in selected rendering can carry its approved range. A normalized Elicit enum
 choice can carry its authored range into the acknowledged answer when the
-foreground form selected that choice in the same field. The next feedback
-turn verifies the exact composed input before retaining an intent or reaching
+foreground form selected that choice in the same field. The Agent conversation
+checks the exact composed input before retaining a feedback intent or reaching
 the provider. Appended context preserves approval for exact ranges in the
 unchanged original feedback prefix. The scanner applies ordinary detection to
 findings in appended context, across the join, and in the next reply.

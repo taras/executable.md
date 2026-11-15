@@ -24,7 +24,6 @@ export interface AppendApprovals {
 export interface AppendGrant {
   claims(event: DurableEvent): boolean;
   admits(event: DurableEvent, serialized: string, spans: readonly SecretSpan[]): boolean;
-  published?(event: DurableEvent): void;
 }
 
 export interface AppendApprovalOwner {
