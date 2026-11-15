@@ -390,6 +390,49 @@ describe("REPL UI evidence publication", () => {
     expect(host.bytes.get(urls[0])).toEqual(padded);
   });
 
+  it("requires a well-formed palette for indexed PNG evidence", function* () {
+    const input = yield* useFixture();
+    const host = modeledHost(() => snapshot(input));
+    const rejected = [
+      // missing
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+      // duplicate
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAAA1BMVEX/AAAZ4gk3AAAAA1BMVEX/AAAZ4gk3AAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+      // late
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAACklEQVR4nGNgAAAAAgABSK+kcQAAAANQTFRF/wAAGeIJNwAAAABJRU5ErkJggg==",
+      // empty
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAAAFBMVEVLqIlVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+      // partial entry
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAABFBMVEUAAAAAtKOuegAAAApJREFUeJxjYAAAAAIAAUivpHEAAAAASUVORK5CYII=",
+      // too many entries for the bit depth
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAACVBMVEUAAAAAAAAAAACDY+nAAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+    ];
+    const control =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAAA1BMVEX/AAAZ4gk3AAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+    for (const encoded of [...rejected, control]) {
+      const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+      const digest = sha256(bytes);
+      yield* until(writeFile(input.paths[0], bytes));
+      yield* writeTextFile(
+        input.path,
+        JSON.stringify({
+          ...input.receipt,
+          captures: [{ ...input.receipt.captures[0], sha256: digest }, input.receipt.captures[1]],
+        }),
+      );
+      if (encoded !== control) {
+        expect(String(yield* raised(run(input, host, "dry-run")))).toContain(
+          "Screenshot checkpoint-before must be a PNG matching its approved SHA-256.",
+        );
+        expect(host.calls).toEqual([]);
+      } else {
+        expect((yield* run(input, host)).status).toBe("complete");
+        expect(host.edits[0].images[0].sha256).toBe(digest);
+        expect(host.bytes.get(urls[0])).toEqual(bytes);
+      }
+    }
+  });
+
   it("publishes only staged images and preserves bytes on both sides of the evidence", function* () {
     const input = yield* useFixture();
     const section = yield* preview(input);

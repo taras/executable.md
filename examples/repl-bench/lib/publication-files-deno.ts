@@ -192,6 +192,9 @@ export function png(bytes: Uint8Array): boolean {
   const compressed = new Uint8Array(bytes.length);
   let compressedLength = 0;
   let finalIdatStart = 0;
+  const indexed = view.getUint8(25) === 3;
+  const maxPaletteBytes = 3 * Math.min(256, 2 ** view.getUint8(24));
+  let hasPalette = false;
   for (let at = 8; at + 12 <= bytes.length; ) {
     const length = view.getUint32(at);
     const type = view.getUint32(at + 4);
@@ -199,7 +202,16 @@ export function png(bytes: Uint8Array): boolean {
     if (end > bytes.length || crc32(bytes.subarray(at + 4, end - 4)) !== view.getUint32(end - 4)) {
       return false;
     }
+    if (indexed && type === 0x504c5445) {
+      if (hasPalette || length === 0 || length % 3 !== 0 || length > maxPaletteBytes) {
+        return false;
+      }
+      hasPalette = true;
+    }
     if (type === 0x49444154) {
+      if (indexed && !hasPalette) {
+        return false;
+      }
       finalIdatStart = compressedLength;
       compressed.set(bytes.subarray(at + 8, end - 4), compressedLength);
       compressedLength += length;
