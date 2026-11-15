@@ -26,9 +26,10 @@ import { testForSidekick } from "./sidekick/admission.ts";
  * headless root alive. This module arranges those owners, decides when a frame
  * is owed, and performs the effects a component asks for.
  *
- * ## Nothing is drawn on a clock
+ * ## Live frames follow demand
  *
- * A frame is owed when something that a frame shows has changed: the session
+ * During cold startup the elapsed time also wakes its own painter. Once live,
+ * a frame is owed when something that a frame shows has changed: the session
  * reprojected, the document printed, a question arrived, expansion moved, the
  * terminal resized, or a normalized event
  * produced an action. Each of those wakes the loop; nothing polls, and when
@@ -147,6 +148,7 @@ import type {
   ReplPreparedNotices,
   ReplPresentationContext,
   ReplPresented,
+  ReplRestorePhase,
   ReplSidekickChatRow,
   ReplSidekickQuestion,
   ReplSidekickReading,
@@ -325,21 +327,23 @@ interface ScreenPresentation {
 
 interface ColdReplTerminal extends ScreenPresentation {
   takeOver(): Operation<void>;
+  restorationNotice(): Operation<string | undefined>;
   close(): Operation<void>;
 }
 
 interface RestoreStartup {
   readonly entries: EntryRestoreObserver;
+  store(): Operation<void>;
   sidekick(): Operation<void>;
   placement(checking: boolean): void;
   offer(original: string, launch: string, execution: string): Operation<boolean>;
 }
 
 interface RestoreReading {
+  readonly started: number;
+  readonly phases: readonly ReplRestorePhase[];
   readonly entries?: EntryRestoreProgress;
-  readonly sidekick?: boolean;
-  readonly ready?: boolean;
-  readonly failure?: string;
+  readonly failure?: { readonly diagnostic: string; readonly at: number };
 }
 
 const RESTORE_INTERRUPTED = "Session restoration was interrupted.";
@@ -364,13 +368,23 @@ export function* withColdReplStartup(
     });
     const display = yield* presentation.operation;
     const startupScope = yield* useScope();
-    let view: RestoreReading = {};
+    let view: RestoreReading;
     let wake: (() => void) | undefined;
     let watching: Task<void> | undefined;
     let requestHandoff: (() => void) | undefined;
     function update(next: RestoreReading): void {
       view = next;
       wake?.();
+    }
+    function* startPhase(phase: ReplRestorePhase["phase"]): Operation<void> {
+      const at = yield* ReplClock.operations.now();
+      const phases = [...view.phases];
+      const previous = phases.pop();
+      if (previous !== undefined) {
+        phases.push({ ...previous, finished: at });
+      }
+      phases.push({ phase, started: at });
+      update({ ...view, phases });
     }
     function* takeOver(): Operation<void> {
       const task = watching;
@@ -384,6 +398,14 @@ export function* withColdReplStartup(
     const terminal: ColdReplTerminal = {
       ...display,
       takeOver,
+      *restorationNotice() {
+        const entries = view.entries;
+        if (entries?.stage === "rounds" && entries.restored > 0) {
+          const elapsed = (yield* ReplClock.operations.now()) - view.started;
+          return `Restored ${entries.restored} ${entries.restored === 1 ? "round" : "rounds"} in ${elapsed.toFixed(1)}s.`;
+        }
+        return undefined;
+      },
       *close() {
         yield* takeOver();
         yield* owner.halt();
@@ -410,20 +432,27 @@ export function* withColdReplStartup(
           }
         });
       }
-      update({});
+      const started = yield* ReplClock.operations.now();
+      view = { started, phases: [{ phase: "resolve", started }] };
       yield* watch();
       let placement = false;
       let declined = false;
       const restored = yield* race([
         prepareReplStartup(location, undefined, true, true, {
+          *store() {
+            yield* startPhase("store");
+          },
           *entries(entries) {
-            update({ entries });
+            if (entries.stage === "counting") {
+              yield* startPhase("rounds");
+            }
+            update({ ...view, entries });
             if (entries.stage === "rounds") {
               yield* ReplClock.operations.wait(0);
             }
           },
           *sidekick() {
-            update({ ...view, sidekick: true });
+            yield* startPhase("sidekick");
             yield* ReplClock.operations.wait(0);
           },
           placement(checking) {
@@ -454,7 +483,8 @@ export function* withColdReplStartup(
           yield* refuse(state, restored.error.message, display);
           return restored;
         }
-        update({ ...view, failure: restored.error.message });
+        const at = yield* ReplClock.operations.now();
+        update({ ...view, failure: { diagnostic: restored.error.message, at } });
         const action = yield* choice.operation;
         yield* takeOver();
         if (action === "leave") {
@@ -463,7 +493,7 @@ export function* withColdReplStartup(
         continue;
       }
 
-      update({ ...view, sidekick: false, ready: true });
+      yield* startPhase("repl");
       return yield* race([
         (function* (): Operation<Result<void>> {
           yield* proceed(restored.value, terminal);
@@ -476,40 +506,6 @@ export function* withColdReplStartup(
       ]);
     }
   });
-}
-
-function restoreReading(view: RestoreReading, columns: number): string[] {
-  const stopped = view.failure === undefined ? "" : " · stopped";
-  const lines: string[] = [];
-  const entries = view.entries;
-  if (entries?.stage === "rounds") {
-    const { restored, total } = entries;
-    const finished = stopped === "" && total !== undefined && total === restored;
-    lines.push(
-      `${finished ? "Restored" : "Restoring"} rounds · ${restored} / ${total ?? "unknown"}${stopped}`,
-    );
-    if (total !== undefined && total > 0) {
-      const width = Math.max(0, Math.min(52, columns - 4));
-      const filled = Math.round((restored / total) * width);
-      lines.push("█".repeat(filled) + "░".repeat(width - filled));
-    }
-    if (view.sidekick && stopped === "") {
-      lines.push("Restoring Sidekick history · count not known yet");
-    }
-    if (view.failure !== undefined && total !== undefined && restored < total) {
-      lines.push(`Round ${restored + 1} of ${total} could not be restored`);
-    }
-  } else {
-    lines.push(
-      entries?.stage === "counting"
-        ? `Counting retained rounds${stopped}`
-        : `Opening retained history${stopped}`,
-    );
-  }
-  if (view.ready) {
-    lines.push("Opening REPL");
-  }
-  return lines;
 }
 
 function* restoreScreen(
@@ -553,6 +549,14 @@ function* restoreScreen(
     listen(draw);
     draw();
     yield* spawn(function* () {
+      while (reading().failure === undefined) {
+        yield* ReplClock.operations.wait(0.1);
+        if (reading().failure === undefined) {
+          draw();
+        }
+      }
+    });
+    yield* spawn(function* () {
       yield* handoff;
       changes.add("handoff");
     });
@@ -566,13 +570,14 @@ function* restoreScreen(
     const compose: ReplCompose = function* (size) {
       const view = reading();
       const stopped = view.failure !== undefined;
-      let lines = details ? [] : restoreReading(view, size.columns);
+      const at = view.failure?.at ?? (yield* ReplClock.operations.now());
+      let lines: readonly string[] = [];
       if (view.failure !== undefined && profileFor(size) !== "too-small") {
         const diagnostic = yield* fitPlain(
           renderer,
           size,
-          view.failure.split("\n").map((text, index) => ({ key: String(index), text })),
-          size.columns - 1,
+          view.failure.diagnostic.split("\n").map((text, index) => ({ key: String(index), text })),
+          size.columns - (details ? 1 : 6),
           fits,
         );
         if (!diagnostic.ok) {
@@ -584,12 +589,20 @@ function* restoreScreen(
           offset = Math.min(offset, maximum);
           lines = diagnostic.value.slice(offset, offset + page).map((row) => row.text);
         } else {
-          lines.push(...diagnostic.value.slice(0, 2).map((row) => row.text));
+          lines = diagnostic.value.slice(0, 2).map((row) => row.text);
         }
       }
       return {
         ...refusedView(state, "", size, keyOfFocus(tree)),
-        restore: { lines, stopped, details },
+        restore: {
+          started: view.started,
+          at,
+          phases: view.phases,
+          entries: view.entries,
+          diagnostic: lines,
+          stopped,
+          details,
+        },
       };
     };
 
@@ -680,6 +693,9 @@ export function* prepareReplStartup(
       return decoded;
     }
     const state = yield* stateOf(location);
+    if (restore !== undefined) {
+      yield* restore.store();
+    }
     const directory = root ?? (yield* replRoot());
     const execution = yield* pairedReplRepository(directory, pagedHistory, restore?.entries).open(
       decoded.value.execution,
@@ -3067,6 +3083,7 @@ function* drive(
     // taken from a later snapshot.
     let broken: string | undefined;
     let focusPrefix = false;
+    let restorationNotice: string | undefined;
     const compose: ReplCompose = function* (at): Operation<ReplView> {
       const view =
         broken === undefined
@@ -3090,6 +3107,7 @@ function* drive(
         // The inherited renderer has already drawn startup. The live tree still
         // owns an initial focus claim until its first presentation succeeds.
         ...(coldTerminal === undefined ? {} : { initialPresentation: presentedAt === undefined }),
+        ...(restorationNotice === undefined ? {} : { restorationNotice }),
         ...(liveScreen === undefined ? {} : { detachable: true }),
         ...(focusHints === undefined ? {} : { focusHints }),
       };
@@ -3167,6 +3185,9 @@ function* drive(
     }
     let first: ReplPainted | undefined;
     try {
+      if (coldTerminal !== undefined) {
+        restorationNotice = yield* coldTerminal.restorationNotice();
+      }
       first = yield* draw();
     } catch (error) {
       if (error === interrupted) {
@@ -3260,6 +3281,7 @@ function* drive(
         } else if (wake.event.kind === "resize") {
           renderer?.resize(wake.event.size);
         } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
+          restorationNotice = undefined;
           focusPrefix = false;
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
@@ -3285,6 +3307,7 @@ function* drive(
           if (delivered === undefined) {
             continue;
           }
+          restorationNotice = undefined;
           const prefixed: boolean = focusPrefix;
           focusPrefix = false;
           if (delivered.kind === "key" && delivered.key === "Ctrl+G") {

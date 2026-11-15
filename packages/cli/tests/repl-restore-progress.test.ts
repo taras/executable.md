@@ -199,10 +199,10 @@ function shown(terminal: Terminal, text: string, after = -1): Operation<string[]
 }
 
 function bar(lines: readonly string[], restored: number, total: number): void {
-  const cells = lines.find((line) => /[█░]/u.test(line))?.trim() ?? "";
+  const cells = lines.map((line) => line.trim()).find((line) => /^[━─]+$/u.test(line)) ?? "";
   expect(cells.length).toBeGreaterThan(1);
-  expect(cells).toMatch(/^[█]*[░]*$/u);
-  expect(cells.replaceAll("░", "").length).toBe(Math.round((restored / total) * cells.length));
+  expect(cells).toMatch(/^[━]*[─]*$/u);
+  expect(cells.replaceAll("─", "").length).toBe(Math.round((restored / total) * cells.length));
 }
 
 function* unchanged(fixture: RetainedRestoreFixture, entries = fixture.entries): Operation<void> {
@@ -235,7 +235,16 @@ describe("#1037 cold restore progress", () => {
     );
     const { terminal } = command;
     yield* bounded(command.terminal, "round 42 gate", rounds.reached);
-    bar(yield* shown(terminal, PARTWAY), 42, 155);
+    const reading = yield* shown(terminal, PARTWAY);
+    const progress = reading.join("\n");
+    expect(progress).toContain(`resuming ${held.id}`);
+    expect(progress).toContain(`xmd repl 'xmd://repl/${held.id}/entries/entry-155?view=sidekick'`);
+    expect(progress).toMatch(/elapsed \d+\.\ds/u);
+    expect(progress).toMatch(/✓  Resolve the location +\d+\.\ds/u);
+    expect(progress).toMatch(/✓  Open the session store +\d+\.\ds/u);
+    expect(progress).toMatch(/—  Restore rounds +\d+\.\ds/u);
+    expect(progress).toMatch(/·  Restore the Sidekick conversation/u);
+    bar(reading, 42, 155);
     const before = terminal.drawn;
     terminal.resized(MEDIUM);
     bar(yield* shown(terminal, PARTWAY, before), 42, 155);
@@ -244,6 +253,8 @@ describe("#1037 cold restore progress", () => {
     yield* bounded(terminal, "Sidekick projection gate", sidekick.reached);
     const pending = yield* shown(terminal, "Restoring Sidekick history · count not known yet");
     expect(pending.join("\n")).toContain("Restored rounds · 155 / 155");
+    expect(pending.join("\n")).toContain("Saved messages are being read before the REPL can open.");
+    expect(pending.join("\n")).toMatch(/—  Restore the Sidekick conversation +\d+\.\ds/u);
     expect(pending.join("\n")).not.toContain("message the sidekick");
     bar(pending, 155, 155);
     sidekick.release();
@@ -251,6 +262,7 @@ describe("#1037 cold restore progress", () => {
     yield* shown(terminal, "Entry 155");
     yield* shown(terminal, "Saved round 155 witness.");
     yield* shown(terminal, "Saved Sidekick reply witness.");
+    yield* shown(terminal, "Restored 155 rounds in ");
     terminal.feed("reopened-draft");
     const live = yield* shown(terminal, "reopened-draft");
     const draft = live.map((row) => row.slice(36, 90));
@@ -258,6 +270,7 @@ describe("#1037 cold restore progress", () => {
     expect(heading).toBeGreaterThanOrEqual(0);
     expect(draft.slice(heading + 1).some((row) => row.includes("reopened-draft"))).toBe(true);
     expect(live.some((row) => row.slice(90).includes("reopened-draft"))).toBe(false);
+    expect(live.join("\n")).not.toContain("Restored 155 rounds in ");
     terminal.end();
     yield* bounded(command.terminal, "command teardown", command.task);
     settled(command);
@@ -339,10 +352,13 @@ describe("#1037 cold restore progress", () => {
     const command = yield* openCold(`xmd://repl/${held.id}/entries`, NARROW);
     const { terminal } = command;
     const partial = yield* shown(terminal, "Restoring rounds · 2 / unknown · stopped");
-    expect(partial.join("\n")).not.toMatch(/[█░]|\[exit\]/u);
-    expect(partial.join(" ").replace(/\s+/gu, " ")).toContain(
-      "a record that was never finished writing",
-    );
+    expect(partial.some((row) => /^[━─]+$/u.test(row.trim()))).toBe(false);
+    expect(partial.join("\n")).not.toContain("[exit]");
+    const diagnostic = partial
+      .filter((row) => row.startsWith("│"))
+      .map((row) => row.slice(1, row.lastIndexOf("│")).trim())
+      .join(" ");
+    expect(diagnostic).toContain("a record that was never finished writing");
     terminal.feed("\x1b");
     yield* bounded(command.terminal, "command teardown", command.task);
     settled(command);
@@ -395,7 +411,7 @@ describe("#1037 cold restore progress", () => {
       "Opening REPL",
       "joins terminal takeover when Control-C arrives during the final progress write",
     ],
-    ["XMD REPL", "joins the blocked first live write when Control-C arrives"],
+    ["Entry 1", "joins the blocked first live write when Control-C arrives"],
   ]) {
     it(name, function* () {
       const held = yield* savedRestoreFixture(yield* useMountedHost(), 1);
@@ -424,7 +440,7 @@ describe("#1037 cold restore progress", () => {
       expect(terminal.drawn).toBe(drawn);
       settled(command);
       expect(terminal.fed).toBe(1);
-      expect(terminal.presented.some((bytes) => decoder.decode(bytes).includes("XMD REPL"))).toBe(
+      expect(terminal.presented.some((bytes) => decoder.decode(bytes).includes("Entry 1"))).toBe(
         false,
       );
       expect(command.status()).toBe(1);
