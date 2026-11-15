@@ -72,7 +72,7 @@ const TODO_REGION: ReplFocusRegion = Object.freeze({
   axis: "vertical",
 });
 
-const SHORTCUTS = new Map<string, string>([
+export const FOCUS_SHORTCUTS: ReadonlyMap<string, string> = new Map([
   ["1", MESSAGE_REGION.key],
   ["2", TRANSCRIPT_REGION.key],
   ["3", SELECTED_REGION.key],
@@ -85,7 +85,7 @@ const SHORTCUTS = new Map<string, string>([
 ]);
 
 export function shortcutRegion(digit: string): string | undefined {
-  return SHORTCUTS.get(digit);
+  return FOCUS_SHORTCUTS.get(digit);
 }
 
 export function shortcutRoute(route: ReplRoute, region: string, narrow: boolean): ReplRoute {

@@ -193,6 +193,7 @@ export const REPL_PALETTE = Object.freeze({
   waiting: 0xc99a3f,
   /** Where the next keystroke lands. */
   focus: 0x7fd3e8,
+  focusHint: 0xffd35a,
   /** Behind a selected row, for the whole width the frame measured it at. */
   selectedSurface: 0x122026,
   focusSurface: 0x243747,

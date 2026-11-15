@@ -193,6 +193,7 @@ import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
+import { focusHintOps, focusRouteHint } from "./focus-hints.ts";
 import {
   createFitStore,
   createPlainFitStore,
@@ -213,7 +214,7 @@ import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./r
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
 import { fields, readDescription } from "./description.ts";
-import { shortcutRegion, shortcutRoute } from "./screen-regions.ts";
+import { FOCUS_SHORTCUTS, shortcutRegion, shortcutRoute } from "./screen-regions.ts";
 import type { ReplDescription, ReplInputEvent } from "./description.ts";
 import { FIELD, fieldLabel } from "./components/rows.ts";
 import { caretFor } from "./caret.ts";
@@ -1959,15 +1960,19 @@ function* drive(
       }
     }
 
-    function* focusShortcut(digit: string, starting = false): Operation<void> {
+    function* focusShortcut(digit: string, starting = false): Operation<boolean | undefined> {
       const region = shortcutRegion(digit);
       const at = yield* screen.size();
       const profile = profileFor(at);
-      if (region === undefined || profile === "too-small" || broken !== undefined) {
-        return;
+      if (
+        profile === "too-small" ||
+        broken !== undefined ||
+        modalOpen(yield* inputView(state, at))
+      ) {
+        return undefined;
       }
-      if (modalOpen(yield* inputView(state, at))) {
-        return;
+      if (region === undefined) {
+        return false;
       }
       const route = shortcutRoute(state.route, region, profile === "narrow");
       if (
@@ -1979,7 +1984,7 @@ function* drive(
         const candidate = { ...state, route, restore: undefined };
         const view = yield* inputView(candidate, at);
         if (view.refusal !== undefined || modalOpen(view)) {
-          return;
+          return false;
         }
         const ready = yield* prepareInput(view, yield* rendering());
         if (!ready.ok) {
@@ -1992,7 +1997,7 @@ function* drive(
           size.rows !== at.rows ||
           !hasRegion(descriptions, region)
         ) {
-          return;
+          return false;
         }
         const applied = yield* tree.apply(descriptions);
         if (!applied.ok) {
@@ -2000,7 +2005,45 @@ function* drive(
         }
         state = candidate;
       }
-      yield* act({ kind: "key", key: `Focus${Number(digit)}` });
+      const dispatched = yield* tree.dispatch({ kind: "key", key: `Focus${Number(digit)}` });
+      if (!dispatched.ok || dispatched.value.outcome !== "focus") {
+        return false;
+      }
+      state = { ...state, restore: undefined };
+      focused = keyOfFocus(tree);
+      return true;
+    }
+
+    function* offeredShortcuts(view: ReplView): Operation<ReadonlyMap<string, string | undefined>> {
+      const hints = new Map<string, string | undefined>();
+      const narrow = profileFor(view.size) === "narrow";
+      const current = view.state.route;
+      const routes = new Map<string, readonly ReplDescription<ReplAction>[]>();
+      for (const [digit, region] of FOCUS_SHORTCUTS) {
+        const route = shortcutRoute(current, region, narrow);
+        if (route === current) {
+          hints.set(digit, undefined);
+          continue;
+        }
+        const key = JSON.stringify([route.surface, route.view, route.right]);
+        let descriptions = routes.get(key);
+        if (descriptions === undefined) {
+          const destination = yield* inputView({ ...state, route, restore: undefined }, view.size);
+          descriptions = [];
+          if (destination.refusal === undefined && !modalOpen(destination)) {
+            const prepared = yield* prepareInput(destination, yield* rendering());
+            if (!prepared.ok) {
+              throw prepared.error;
+            }
+            descriptions = prepared.value.presentation.descriptions;
+          }
+          routes.set(key, descriptions);
+        }
+        if (hasRegion(descriptions, region)) {
+          hints.set(digit, focusRouteHint(route, narrow));
+        }
+      }
+      return hints;
     }
 
     /**
@@ -2549,6 +2592,7 @@ function* drive(
     // resolution and commit would otherwise pair this content with navigation
     // taken from a later snapshot.
     let broken: string | undefined;
+    let focusPrefix = false;
     const compose: ReplCompose = function* (at): Operation<ReplView> {
       const view =
         broken === undefined
@@ -2564,7 +2608,14 @@ function* drive(
               follow,
             )
           : refusedView(state, broken, at, focused);
-      return liveScreen === undefined ? view : { ...view, detachable: true };
+      const canShowHints =
+        view.refusal === undefined && profileFor(at) !== "too-small" && !modalOpen(view);
+      const focusHints = focusPrefix && canShowHints ? yield* offeredShortcuts(view) : undefined;
+      return {
+        ...view,
+        ...(liveScreen === undefined ? {} : { detachable: true }),
+        ...(focusHints === undefined ? {} : { focusHints }),
+      };
     };
     function* paintCurrent() {
       return yield* paint(
@@ -2631,7 +2682,6 @@ function* drive(
       observePass("complete");
     }
 
-    let focusPrefix = false;
     let formQuestion = current.overlay.question;
     while (true) {
       const taken = yield* wakes.take();
@@ -2709,9 +2759,10 @@ function* drive(
           if (delivered === undefined) {
             continue;
           }
-          const prefixed = focusPrefix;
-          focusPrefix = delivered.kind === "key" && delivered.key === "Ctrl+G";
-          if (focusPrefix) {
+          const prefixed: boolean = focusPrefix;
+          focusPrefix = false;
+          if (delivered.kind === "key" && delivered.key === "Ctrl+G") {
+            focusPrefix = !prefixed;
             continue;
           }
           if (
@@ -2720,8 +2771,14 @@ function* drive(
             !delivered.pasted &&
             /^[0-9]$/.test(delivered.text)
           ) {
-            yield* focusShortcut(delivered.text);
+            focusPrefix = (yield* focusShortcut(delivered.text)) === false;
             continue;
+          }
+          if (prefixed && delivered.kind === "key" && delivered.key === "Escape") {
+            const size = yield* screen.size();
+            if (profileFor(size) !== "too-small" && !modalOpen(yield* inputView(state, size))) {
+              continue;
+            }
           }
           // Control-C through the tree, where only the focused message box
           // handles it. Anything else leaves, and so does a screen too small to
@@ -4597,6 +4654,19 @@ export function* commitReplFrame(
   if (!prepared.ok) {
     return prepared;
   }
+  const { presentation, admission } = prepared.value;
+  const root = presentation.manifest.root;
+  const offered = [...(view.focusHints ?? [])].filter(([digit, route]) => {
+    const region = shortcutRegion(digit);
+    return (
+      route !== undefined || (region !== undefined && hasRegion(presentation.descriptions, region))
+    );
+  });
+  const hintGeometry =
+    offered.length === 0 ? undefined : yield* renderer.measure(skeletonOps(root), view.size);
+  if (hintGeometry !== undefined && !hintGeometry.ok) {
+    return hintGeometry;
+  }
   // Revalidated here: after the measurement, and before anything is mounted.
   // This is the last moment abandoning the frame is free — one statement later
   // the tree holds controls measured for a terminal that has already changed,
@@ -4615,7 +4685,6 @@ export function* commitReplFrame(
 
   // Only what was admitted is offered, so a row outside a window mounts nothing
   // and a control the row cannot hold whole is not in the tree.
-  const { presentation, admission } = prepared.value;
   const applied = yield* tree.apply(presentation.descriptions);
   if (!applied.ok) {
     return applied;
@@ -4636,13 +4705,16 @@ export function* commitReplFrame(
   for (const cell of tree.frame().cells) {
     cells.set(cell.node, cell.cell);
   }
-  const root = presentation.manifest.root;
   // Read after the reconcile that settled it and handed on, never stored: the
   // tree owns focus, and decoration is the one thing that needs to know where it
   // ended up. A row's own `>` cue is the view's and is therefore a frame behind;
   // this is the frame's own answer.
+  const ops = committedOps(root, nodeByKey, mounted, cells, tree.focused());
+  if (hintGeometry !== undefined) {
+    ops.splice(-1, 0, ...focusHintOps(root, hintGeometry.value, view.size, offered));
+  }
   const drawn = yield* renderer.draw({
-    ops: committedOps(root, nodeByKey, mounted, cells, tree.focused()),
+    ops,
     boxes: drawnBoxesOf(root, nodeByKey, mounted),
     scrolls: presentation.manifest.viewports.flatMap((slot) => {
       const node = slot.owner === undefined ? undefined : nodeByKey.get(slot.owner);
