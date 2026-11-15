@@ -11,6 +11,7 @@ import { ReplEntryHost } from "../src/repl-entry-installation.ts";
 import { ReplClock } from "../src/repl/frame.ts";
 import { PagedHistory } from "../src/repl/paged-history.ts";
 import type { EntryRestoreProgress } from "../src/repl/paged-history.ts";
+import { ReplTerminal } from "../src/repl/terminal.ts";
 import { unsupportedWorkflowHost } from "../src/workflow.ts";
 import { recordingTerminal, useMountedHost } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
@@ -388,6 +389,41 @@ describe("#1037 cold restore progress", () => {
       yield* unchanged(held);
     });
   }
+
+  it("joins terminal takeover when Control-C arrives during the final progress write", function* () {
+    const held = yield* savedRestoreFixture(yield* useMountedHost(), 1);
+    const finalWrite = gate();
+    const decoder = new TextDecoder();
+    yield* ReplTerminal.around(
+      {
+        *write([bytes], next) {
+          if (decoder.decode(bytes).includes("Opening REPL")) {
+            yield* finalWrite.wait();
+          }
+          yield* next(bytes);
+        },
+      },
+      { at: "max" },
+    );
+    const command = yield* openCold(`xmd://repl/${held.id}/entries/entry-1`);
+    const { terminal } = command;
+    yield* bounded(terminal, "the held final progress write", finalWrite.reached);
+    terminal.feed("\u0003");
+    yield* bounded(terminal, "Control-C to settle while the write is held", command.task);
+
+    expect(finalWrite.joined).toBe(true);
+    settled(command);
+    expect(terminal.fed).toBe(1);
+    expect(terminal.presented.some((bytes) => decoder.decode(bytes).includes("XMD REPL"))).toBe(
+      false,
+    );
+    expect(command.status()).toBe(1);
+    expect(command.stdout).toEqual([]);
+    expect(command.stderr).toEqual([
+      { text: "xmd repl: Session restoration was interrupted.", resets: 1, readers: 0 },
+    ]);
+    yield* unchanged(held);
+  });
 
   it("joins a held reader and terminal before leaving during projection", function* () {
     const held = yield* savedRestoreFixture(yield* useMountedHost(), 155);
