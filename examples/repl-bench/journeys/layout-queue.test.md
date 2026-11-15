@@ -33,6 +33,8 @@
 <Test name="#971 Sidekick is the default and the TODO tab counts open items" timeout="45s">
   <Terminal columns={160} rows={36}>
     <XMD.Repl sidekick-agent={fixtureRoot + "/repl-ui-layout.md"}>
+      <Terminal.WaitForText text="TODO" row={1} />
+      <Terminal.WaitForText text="TODO 0" row={1} present={false} />
       <XMD.Repl.SidekickPrompt text="Populate the TODO list." as="turn" />
       <AssertStringIncludes actual={turn.output} expected="Four TODOs saved." />
       <Terminal.WaitForText text="TODO 4" as="todoTab" />
@@ -49,6 +51,16 @@
       <Terminal.WaitForText text="☑ Reproduce checkout" />
       <Terminal.WaitForText text="TODO 3" />
       <Terminal.Screenshot name="todo-three-open" />
+      <Terminal.WaitForText text="SIDEKICK" row={1} as="sidekickTab" />
+      <Terminal.Click at={sidekickTab} />
+      <Terminal.WaitForText text="TODO change acknowledged." />
+      <XMD.Repl.SidekickPrompt text="Finish the remaining TODOs." as="finished" />
+      <AssertStringIncludes actual={finished.output} expected="All TODOs complete." />
+      <Terminal.Click at={todoTab} />
+      <Terminal.WaitForText text="☑ Review checkout" />
+      <Terminal.WaitForText text="TODO" row={1} />
+      <Terminal.WaitForText text="TODO 0" row={1} present={false} />
+      <Terminal.WaitForText text="TODO 3" row={1} present={false} />
     </XMD.Repl>
   </Terminal>
 </Test>

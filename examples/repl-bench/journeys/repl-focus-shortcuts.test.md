@@ -91,7 +91,7 @@
       <Repl.Focus.RightReading />
       <Terminal.WaitForText text="No messages yet." bold={true} />
       <Repl.Focus.Todo />
-      <Terminal.WaitForText text="> TODO 0" />
+      <Terminal.WaitForText text="> TODO" />
       <Repl.Focus.History />
       <Terminal.WaitForText text="> [history]" />
       <Repl.Focus.Message />

@@ -1620,9 +1620,10 @@ the **Draft**: one field whose heading row carries its own Send — or Stop, whi
 an entry is running — and whose value takes the rows beneath. The Draft is always
 the next entry's text, and a blank row in it is a row.
 
-The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO** with
-the count of open tasks, and **Bindings**. The TODO tab shows the shared
-checklist in the reading area, with the Message composer and its actions below.
+The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO**, and
+**Bindings**. With open tasks, the TODO label includes their count, as in
+**TODO 2**. With zero open tasks it reads **TODO**. The TODO tab shows the
+shared checklist in the reading area, with Message and its actions below.
 Bindings is available at the two three-column sizes.
 
 Follow starts checked and keeps its live setting across rounds, navigation and
