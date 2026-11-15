@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep } from "effection";
 import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
-import type { ReplPage, ScreenCell } from "./support/repl-page.ts";
+import type { ReplPage, ScreenCell, ScreenReading } from "./support/repl-page.ts";
 import { draftHolds, intoComposer, intoDraft, paneLines } from "./support/screen-journeys.ts";
 import { generateTypingHistory } from "./support/typing-history.ts";
 
@@ -50,6 +50,13 @@ function chatRows(page: ReplPage): number[] {
     }
   }
   return shown;
+}
+
+// The generated TAIL lines the Sidekick chat shows, right of the Draft pane.
+function tailLines(reading: ScreenReading): string[] {
+  return paneLines(reading).flatMap(
+    (row) => row.slice(row.lastIndexOf("│") + 1).match(/TAIL-(?:LINE|END)-\d+/g) ?? [],
+  );
 }
 
 // A labelled turn row left of the Sidekick pane.
@@ -130,7 +137,9 @@ describe("wheel bursts in one input chunk", () => {
   });
 
   it("a tick that clears a staged refusal moves the next one within the freed capacity", function* () {
-    const request = `<Unknown${"Component".repeat(24)} />`;
+    // Each dotted segment is one probed path segment, so each stays within a file name.
+    const name = ["Unknown", "Missing", "Absent"].map((at) => at + "Component".repeat(27));
+    const request = `<${name.join(".")} />`;
     const footer = "! this entry cannot run here: Cannot resolve component:";
     const cell = { column: 140, row: 13 };
 
@@ -138,25 +147,22 @@ describe("wheel bursts in one input chunk", () => {
       return yield* scoped(function* () {
         const page = yield* useReplPage({ size: SIZE });
         yield* generateTypingHistory(page, 2, 80);
-        // The staged refusal frees more rows than one tick moves when it clears.
+        // The name alone wraps the staged refusal past the searched paths, which
+        // vary by platform, so clearing it frees more rows than one tick moves.
         yield* intoDraft(page);
         yield* page.type(request);
-        yield* page.until("the unknown component in Draft", (one) =>
-          draftHolds(one, "Component />"),
+        const drafted = yield* page.until("the unknown component in Draft", (one) =>
+          draftHolds(one, "/>"),
         );
-        const visible = () =>
-          paneLines(page.screen()).flatMap(
-            (row) => row.slice(row.lastIndexOf("│") + 1).match(/TAIL-(?:LINE|END)-\d+/g) ?? [],
-          );
-        const before = visible();
+        const before = tailLines(drafted);
         yield* page.key("Enter");
-        yield* page.until("the staged refusal", (one) => one.shows(footer));
-        const start = visible();
+        const refused = yield* page.until("the staged refusal", (one) => one.shows(footer));
+        const start = tailLines(refused);
         expect(start.length + 3).toBeLessThan(before.length);
 
         yield* move(page, "up", cell, 2);
         expect(page.screen().shows(footer)).toBe(false);
-        const end = visible();
+        const end = tailLines(page.screen());
         expect(end.length).toBeGreaterThan(start.length);
         expect(end[0]).not.toBe(start[0]);
         return { start, end };
