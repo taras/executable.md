@@ -79,6 +79,7 @@ import {
 } from "./support/mounted-repl.ts";
 import {
   chooseOption,
+  intoSecondField,
   drawnScreen,
   openQuestion,
   sendMessage,
@@ -4899,6 +4900,76 @@ describe("Sidekick reply approval", () => {
     ]);
     const responses = read.chat.flatMap((one) => (one.kind === "response" ? [one] : []));
     expect(responses.find((one) => one.turn === 2)?.output).toContain(`Use ${secret}`);
+  });
+
+  it("carries a selected public choice through a protected Elicit receipt and feedback", function* () {
+    const gate = appendGate();
+    const host = yield* useMountedHost({ gate });
+    const marked = "synthetic-private-note-48";
+    const mixed = {
+      ...choice,
+      properties: { ...choice.properties, note: { type: "string", writeOnly: true } },
+      required: ["choice", "note"],
+    };
+    host.fake.script({
+      reply: `<Elicit schema={${JSON.stringify(mixed)}} as="answer">Pick and annotate.</Elicit>`,
+    });
+    host.fake.script({ reply: "<Output>Feedback received.</Output>" });
+    const page = yield* useReplPage({ host });
+    yield* sendMessage(page, "Ask for the choice and note.");
+    yield* page.until("reply approval", (one) => one.shows("[accept reply]"));
+    yield* page.press("[accept reply]");
+    yield* page.until("the mixed question", (one) => one.shows("[answer sidekick]"));
+    yield* openQuestion(page);
+    const answering = gate.holdNext((_path, record) =>
+      record.includes("executablemd.elicitation-schema"),
+    );
+    yield* ensure(() => answering.release());
+    yield* intoSecondField(page);
+    yield* page.type(marked);
+    yield* chooseOption(page, secret);
+    yield* submitForm(page);
+    yield* answering.started();
+
+    const pending = projectSidekick((yield* settledReading(page.repl)).chat);
+    expect(pending.ok && pending.value.unfinished.some((one) => one.component === "Elicit")).toBe(
+      true,
+    );
+    expect(host.fake.prompts).toHaveLength(1);
+    answering.release();
+    yield* page.until("mixed answer feedback joined", sidekickIdle);
+
+    function verify(read: ReturnType<typeof projectSidekick>) {
+      if (!read.ok) {
+        throw read.error;
+      }
+      expect(read.value.unfinished).toEqual([]);
+      expect(read.value.operations.filter((one) => one.component === "Elicit")).toEqual([
+        expect.objectContaining({ status: "ok" }),
+      ]);
+    }
+
+    verify(projectSidekick((yield* settledReading(page.repl)).chat));
+    yield* verifyColdCut(page, verify);
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(host.fake.prompts[1]).toContain(`"choice": "${secret}"`);
+    expect(host.fake.prompts[1]).toContain('"note": "[redacted]"');
+    expect(JSON.stringify(host.fake.prompts)).not.toContain(marked);
+    const bytes = yield* journalBytes(page, host);
+    expect(bytes).not.toContain(marked);
+    const answer = (yield* canonical(page)).find((event) => event.description.type === "elicit");
+    expect(answer?.result).toMatchObject({
+      status: "ok",
+      value: {
+        "executablemd.input": {
+          kind: "object",
+          members: {
+            choice: { kind: "json", value: secret },
+            note: { kind: "input" },
+          },
+        },
+      },
+    });
   });
 
   for (const choice of ["[withhold reply]", "[close]", "[stop]"]) {

@@ -340,7 +340,7 @@ interface Live {
    *
    * Set when a person accepts a withheld reply, and taken by the next job the
    * element serves whatever that job is: the evaluation of exactly that source
-   * claims it, and that evaluation's own selected answer may leave one for the
+   * uses it, and that evaluation's own selected answer may leave one for the
    * next turn to carry. Any other job retires it. Never journaled and never
    * rebuilt on reopening.
    */

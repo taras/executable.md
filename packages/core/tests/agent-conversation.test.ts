@@ -1500,9 +1500,11 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
    */
   function useRangedScanner(
     matchEnd = (_content: string, start: number) => start + marker.length,
+    onScan?: () => void,
   ): Operation<void> {
     return useSecretScannerFactory(() =>
       createScannerWith((content) => {
+        onScan?.();
         const messages: {
           ruleId: string;
           messageId: string;
@@ -1934,7 +1936,7 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
         yield* Agent.around(
           {
             *prompt([text, options], next) {
-              return yield* next(text === "first" ? text : text + suffix, options);
+              return yield* next(text === feedback ? text + suffix : text, options);
             },
           },
           { at: "max" },
@@ -1942,9 +1944,12 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
         return yield* withQuestions(
           stream,
           stub(traffic, {
-            respond: (content) => (content === "first" ? { deltas: [asking] } : {}),
+            respond: (content) =>
+              content === "first" || content === "later"
+                ? { deltas: [asking] }
+                : { deltas: ["Feedback received."] },
           }),
-          reviewing(() => "accept", seen),
+          reviewing((_hold, count) => (count === 1 ? "accept" : "withhold"), seen),
           () => ({ choice: marker }),
           function* (chat) {
             const first = yield* chat.prompt("first");
@@ -1957,7 +1962,15 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
             );
             expect(ran.ok && ran.value.output).toContain(marker);
             expect(seen[0]!.carry(feedback, [yield* feedbackSlice(stream, feedback)])).toBe(true);
-            return yield* chat.prompt(feedback);
+            const second = yield* chat.prompt(feedback);
+            if (kind === "clean") {
+              expect(second.ok).toBe(true);
+              const later = yield* chat.prompt("later");
+              expect(later.ok).toBe(false);
+              expect(seen).toHaveLength(2);
+              expect(seen[1]).not.toBe(seen[0]);
+            }
+            return second;
           },
           () => seen[0],
         );
@@ -2003,10 +2016,57 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
         );
         expect(rootRecords(events)).not.toContain("agent_prompt turn:2");
       }
-      const expected = kind === "clean" ? ["first", composed] : ["first"];
+      const expected = kind === "clean" ? ["first", composed, "later"] : ["first"];
       expect(begun).toEqual(expected);
       expect(published).toEqual(expected);
       expect(traffic.prompts.map((call) => call.content)).toEqual(expected);
+      if (kind === "clean") {
+        expect(record(events, "turn:3")).toMatchObject({ status: "completed", withheld: true });
+        const replayTraffic = fresh();
+        const replayQuestions: AgentReplyHold[] = [];
+        let scans = 0;
+        let controls = 0;
+        let refusal: unknown;
+        let release: unknown;
+        try {
+          yield* scoped(function* () {
+            yield* useRangedScanner(undefined, () => {
+              scans += 1;
+            });
+            yield* withQuestions(
+              stream,
+              stub(replayTraffic),
+              reviewing(() => "withhold", replayQuestions),
+              () => {
+                controls += 1;
+                return { choice: "none" };
+              },
+              function* (chat) {
+                expect(scans).toBe(0);
+                expect(replayTraffic).toEqual(fresh());
+                expect(controls).toBe(0);
+                expect(replayQuestions).toEqual([]);
+                expect(yield* stream.readAll()).toEqual(events);
+                try {
+                  yield* chat.evaluateGeneratedXmdRoot(
+                    generated(`<Output>${marker}</Output>`, [], "independent-copy"),
+                  );
+                } catch (error) {
+                  refusal = error;
+                }
+              },
+            );
+          });
+        } catch (error) {
+          release = error;
+        }
+        expect(scans).toBeGreaterThan(0);
+        expect(refusal instanceof Error && refusal.name).toBe("SecretDetectedError");
+        expect(release).toBe(refusal);
+        expect(controls).toBe(0);
+        expect(replayTraffic).toEqual(fresh());
+        expect(rootRecords(yield* stream.readAll())).toEqual(rootRecords(events));
+      }
     });
   }
 
@@ -2165,44 +2225,56 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
     expect(seen).toEqual([]);
   });
 
-  it("CW12: an acceptance that cannot be appended answers nothing accepted and leaves the withheld turn", function* () {
-    const backend = new InMemoryStream();
-    const storageFailure = new Error("the storage refused this append");
-    backend.onAppend = (event) => {
-      if (event.type === "yield" && event.description.type === AGENT_PROMPT_REPLY) {
-        throw storageFailure;
+  for (const failedType of ["agent_prompt", AGENT_PROMPT_REPLY]) {
+    it(`CW12: preserves the first storage failure when ${failedType} cannot be appended`, function* () {
+      const backend = new InMemoryStream();
+      const storageFailure = new Error("the storage refused this append");
+      const attempted: string[] = [];
+      backend.onAppend = (event) => {
+        attempted.push(...rootRecords([event]));
+        if (event.type === "yield" && event.description.type === failedType) {
+          throw storageFailure;
+        }
+      };
+      const seen: AgentReplyHold[] = [];
+      const traffic = fresh();
+      let failure: unknown;
+      let caller: Error | undefined;
+      try {
+        yield* scoped(function* () {
+          yield* useRangedScanner();
+          return yield* withConversation(
+            backend,
+            stub(traffic, { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
+            function* (chat) {
+              const settled = yield* chat.prompt("first");
+              caller = settled.ok ? undefined : settled.error;
+            },
+            "chat-1",
+            [reviewing(() => "accept", seen)],
+          );
+        });
+      } catch (error) {
+        failure = error;
       }
-    };
-    const seen: AgentReplyHold[] = [];
-    const traffic = fresh();
-    let failure: unknown;
-    let caller: Error | undefined;
-    try {
-      yield* scoped(function* () {
-        yield* useRangedScanner();
-        return yield* withConversation(
-          backend,
-          stub(traffic, { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
-          function* (chat) {
-            const settled = yield* chat.prompt("first");
-            caller = settled.ok ? undefined : settled.error;
-          },
-          "chat-1",
-          [reviewing(() => "accept", seen)],
-        );
-      });
-    } catch (error) {
-      failure = error;
-    }
-    expect(durabilityFailure(caller)?.cause).toBe(storageFailure);
-    expect(durabilityFailure(failure)?.cause).toBe(storageFailure);
-    expect(seen).toHaveLength(1);
-    const events = yield* backend.readAll();
-    expect(JSON.stringify(events).includes(marker)).toBe(false);
-    expect(rootRecords(events)).toEqual(["agent_prompt turn:1"]);
-    expect(record(events, "turn:1")).toMatchObject({ withheld: true });
-    expect(traffic.prompts).toHaveLength(1);
-  });
+      expect(durabilityFailure(caller)?.cause).toBe(storageFailure);
+      expect(durabilityFailure(failure)?.cause).toBe(storageFailure);
+      const firstFailed = failedType === "agent_prompt";
+      expect(seen).toHaveLength(firstFailed ? 0 : 1);
+      expect(attempted).toEqual(
+        firstFailed
+          ? ["agent_prompt turn:1"]
+          : ["agent_prompt turn:1", `${AGENT_PROMPT_REPLY} turn:1`],
+      );
+      const events = yield* backend.readAll();
+      expect(JSON.stringify(events).includes(marker)).toBe(false);
+      expect(rootRecords(events)).toEqual(firstFailed ? [] : ["agent_prompt turn:1"]);
+      if (!firstFailed) {
+        expect(record(events, "turn:1")).toMatchObject({ withheld: true });
+      }
+      expect(traffic.prompts).toHaveLength(1);
+    });
+  }
 
   for (const partial of [false, true]) {
     it(`CW13: refuses an independently produced match in ${partial ? "partial" : "completed"} selected Output`, function* () {

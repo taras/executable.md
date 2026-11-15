@@ -24,10 +24,11 @@
  */
 
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { ELICITATION_SCHEMA_FIELD } from "../elicit-journal.ts";
+import { ELICITATION_SCHEMA_FIELD, readElicitationAnswer } from "../elicit-journal.ts";
 import { dataStringLiteral } from "../generated-expressions.ts";
 import type { SourceRange } from "../document-targets.ts";
 import { isJsonObject } from "../json.ts";
+import { secretInputFields } from "./input-schema.ts";
 import type { SecretSpan } from "./scanner.ts";
 
 /** One approved match, in the coordinates of the reply it was found in. */
@@ -224,7 +225,6 @@ export function evaluationGrant(input: {
       return false;
     }
     const authored = input.source.slice(schemaRange.start, schemaRange.end);
-    const answer = event.result.status === "ok" ? event.result.value : undefined;
     const properties = isJsonObject(schema.properties) ? schema.properties : undefined;
     if (properties === undefined) {
       return false;
@@ -232,6 +232,12 @@ export function evaluationGrant(input: {
     const leaves: Leaf[] = [];
     const selected = selections.get(event.coroutineId);
     selections.delete(event.coroutineId);
+    const projection = readElicitationAnswer(event, positions.get(event.coroutineId) ?? 0);
+    if (!projection.ok) {
+      return false;
+    }
+    const answer = projection.value;
+    const protectedReceipt = secretInputFields(schema).length > 0;
     for (const [name, property] of Object.entries(properties)) {
       if (!isJsonObject(property) || property.type !== "string" || property.writeOnly === true) {
         continue;
@@ -257,7 +263,10 @@ export function evaluationGrant(input: {
       ) {
         const origin = originOf(name, selected.option, answer[name]);
         if (origin !== undefined) {
-          leaves.push({ path: ["result", "value", name], origin, carried: true });
+          const path = protectedReceipt
+            ? ["result", "value", "executablemd.input", "members", name, "value"]
+            : ["result", "value", name];
+          leaves.push({ path, origin, carried: true });
         }
       }
     }
