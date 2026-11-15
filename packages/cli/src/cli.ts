@@ -118,6 +118,7 @@ import {
 } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { assembleReplProfile } from "./repl-profile.ts";
+import { prepareScriptedSidekick, sidekickFixturePath } from "./repl/sidekick/scripted.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import { useVerboseComponent } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
@@ -368,7 +369,7 @@ const replConfig = object({
   include: executionFields.include,
   ...agentFields,
   sidekickAgent: {
-    description: "agent name for the Sidekick's own conversations",
+    description: "agent name or explicit path to a Markdown TestAgent for the Sidekick",
     ...field(z.string().optional()),
   },
 });
@@ -3210,12 +3211,26 @@ function* dispatch(
         yield* replHost.select();
       }
       yield* useAbsolutePermission(command.config.allowAbsolute);
-      // The Sidekick's own agent selection travels with it, as the name this
-      // line carried and nothing more: the profile settles the fallback, and
-      // whether anybody answers to that name is the first explicit message's
-      // question rather than this command's.
       const moduleLoader = yield* ComponentModuleLoader.get();
       const testAgentWorker = yield* readWorkerCommand();
+      const selectedSidekick = command.config.sidekickAgent;
+      const fixture =
+        selectedSidekick === undefined
+          ? undefined
+          : sidekickFixturePath(selectedSidekick, mountCwd);
+      let scriptedSidekick;
+      if (fixture !== undefined) {
+        try {
+          if (!testAgentWorker.ok) {
+            throw testAgentWorker.error;
+          }
+          scriptedSidekick = yield* prepareScriptedSidekick(fixture, testAgentWorker.value);
+        } catch (error) {
+          console.error(`xmd repl: ${error instanceof Error ? error.message : String(error)}`);
+          yield* exit(1);
+          break;
+        }
+      }
       const bundledPlugin = yield* BundledRunPlugin.expect();
       const profile = yield* assembleReplProfile(replStack, plugins, {
         *testingHarness(includes, access) {
@@ -3248,9 +3263,8 @@ function* dispatch(
         },
         mounts: mounts.value,
         includes: command.config.include,
-        ...(command.config.sidekickAgent === undefined
-          ? {}
-          : { sidekickAgent: command.config.sidekickAgent }),
+        ...(selectedSidekick === undefined ? {} : { sidekickAgent: selectedSidekick }),
+        ...(scriptedSidekick === undefined ? {} : { scriptedSidekick }),
       });
       const ran = yield* runReplProgram({
         profile,

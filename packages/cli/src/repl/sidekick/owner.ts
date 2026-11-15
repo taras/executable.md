@@ -1,5 +1,6 @@
 import type { Json } from "@executablemd/core";
 import { DESIGNATED } from "./controls.ts";
+import { SCRIPTED_AGENT_PREFIX } from "./scripted.ts";
 import type { ReplPluginExtension } from "../../repl-api.ts";
 import { projectInputValue, useSecretInputs } from "@executablemd/core/host";
 import { cwd } from "@executablemd/runtime";
@@ -193,6 +194,11 @@ export interface SidekickAssembly {
    * by this list not carrying one rather than by a rule written somewhere.
    */
   readonly installations: readonly ExecutionInstallation[];
+  readonly scripted?: {
+    readonly agent: string;
+    hasScenario(conversation: string): boolean;
+    installation(conversation: string): ExecutionInstallation;
+  };
 }
 
 /**
@@ -1121,6 +1127,27 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       writer: SidekickWriter,
       records: readonly SidekickRecord[],
     ): Operation<Result<AgentConversation>> {
+      const scripted = assembly.scripted;
+      if (agent.startsWith(SCRIPTED_AGENT_PREFIX) && agent !== scripted?.agent) {
+        return Err(
+          new SidekickOwnerError(
+            "The saved conversation requires its original Markdown TestAgent selection.",
+          ),
+        );
+      }
+      if (
+        scripted?.agent === agent &&
+        !scripted.hasScenario(conversation) &&
+        records.some((record) => record.kind === "event" && record.conversation === conversation)
+      ) {
+        return Err(
+          new SidekickOwnerError(
+            "The scripted Sidekick conversation ended when its REPL closed. Start a new chat.",
+          ),
+        );
+      }
+      const installations =
+        scripted?.agent === agent ? [scripted.installation(conversation)] : assembly.installations;
       const ready = withResolvers<Result<AgentConversation>>();
       const task = mine.run(function* (): Operation<void> {
         const privacy = yield* useSecretInputs();
@@ -1150,12 +1177,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           // installs. It goes inside the conversation's execution because that
           // is where its turns run: installed around `message()` instead, it
           // would be in a scope the saved conversation does not execute in.
-          installations: [
-            privacy,
-            ...assembly.installations,
-            capturing,
-            { install: () => watcher() },
-          ],
+          installations: [privacy, ...installations, capturing, { install: () => watcher() }],
         });
         ready.resolve(opened);
         if (!opened.ok) {

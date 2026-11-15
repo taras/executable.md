@@ -29,6 +29,7 @@ import { contextualAgent, hostAcpDependencies, installAgentProviderStack } from 
 import type { AgentStack } from "./agent-stack.ts";
 import { sidekickAssembly } from "./repl/sidekick/assembly.ts";
 import type { SidekickAssembly } from "./repl/sidekick/owner.ts";
+import type { ScriptedSidekick } from "./repl/sidekick/scripted.ts";
 import { ordinaryGeneratedSelection } from "./evaluation-profile.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
@@ -91,6 +92,7 @@ export interface ReplProfileFacts extends ReplProfileSeams {
    * it, and assembling a profile asks nobody anything.
    */
   readonly sidekickAgent?: string;
+  readonly scriptedSidekick?: ScriptedSidekick;
 }
 
 /**
@@ -265,7 +267,7 @@ export function* assembleReplProfile(
   // have. Resolved rather than retained as "unstated": a profile that carried
   // the absence would leave every reader of it to apply the fallback again,
   // and the one place that applies it is the one place it is right.
-  const agent = facts.sidekickAgent ?? (yield* contextualAgent());
+  const agent = facts.scriptedSidekick?.agent ?? facts.sidekickAgent ?? (yield* contextualAgent());
 
   const entryInstallation = yield* ReplEntryHost.get();
   const host = yield* useScope();
@@ -281,6 +283,7 @@ export function* assembleReplProfile(
     },
     stack.sessions?.ownershipAdministration,
     plugins.repl ?? [],
+    facts.scriptedSidekick,
   );
   const context = planAgentContext(stack, facts.acp);
   const planWriterRoot = facts.planWriterRoot;
