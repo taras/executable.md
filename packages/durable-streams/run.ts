@@ -180,8 +180,7 @@ export function* durableRun<T extends WorkflowValue>(
   // while the workflow is suspended, which narrowing by assignment cannot see.
   const phaseNow = (): RootPhase => phase;
 
-  const events = yield* stream.readAll();
-  const replayIndex = new ReplayIndex(events);
+  const replayIndex = new ReplayIndex(yield* stream.readAll());
 
   // Inherit the caller's scope — middleware (e.g., Divergence, ReplayGuard)
   // is already installed by the caller before yield*-ing into durableRun.
@@ -216,6 +215,8 @@ export function* durableRun<T extends WorkflowValue>(
       terminal: replayIndex.hasClose(coroutineId),
     },
   ]);
+
+  replayIndex.finishAdmission();
 
   // If the root coroutine already has a Close event in the journal,
   // the workflow completed in a previous run. Return the stored result

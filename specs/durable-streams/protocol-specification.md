@@ -310,7 +310,7 @@ cannot produce a result the ability to fail past every guard, carrying its own
 error.
 
 Each retained Yield owns one cell for what it settled to, and **that cell spans
-the whole replay lifecycle**: the check phase is handed the retained Yields
+admission through consumption**: the check phase is handed the retained Yields
 rather than the stream's own events, so a guard that validates a result and the
 replay path that later consumes it observe the same value. The stream's event is
 consulted at most once. Reading once across phases is the property that makes
@@ -363,7 +363,10 @@ terminal result is reused, guards receive the retained history once through
 `admit`. A guard that requires something of the history as a whole — that an
 event it validates is present, and present once — refuses there, because a
 per-event check has nothing to object to in a journal that simply omits the
-event. Its default is a no-op.
+event. Its default is a no-op. After admission, the replay index releases its
+journal-order list. Advancing a coroutine's cursor releases that coroutine's
+reference to the consumed Yield. The cursor and total Yield count still
+determine alignment, and other coroutines can still consume their own records.
 
 A replay distinguishes three views of one history, and conflating any two hands
 the decision to whoever holds the wrong one:
@@ -400,10 +403,7 @@ read every later phase depends on.
 
 ```typescript
 class ReplayIndex {
-  private yields = new Map<
-    CoroutineId,
-    Array<{ description: EffectDescription; result: Result }>
-  >();
+  private yields = new Map<CoroutineId, (Yield | undefined)[]>();
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
 
@@ -435,9 +435,13 @@ class ReplayIndex {
     return list?.[cursor];
   }
 
-  /** Advances the cursor for this coroutine by one position. */
+  /** Advances the cursor and releases the consumed Yield. */
   consumeYield(coroutineId: CoroutineId): void {
     const cursor = this.cursors.get(coroutineId) ?? 0;
+    const entries = this.yields.get(coroutineId);
+    if (entries !== undefined && cursor < entries.length) {
+      entries[cursor] = undefined;
+    }
     this.cursors.set(coroutineId, cursor + 1);
   }
 

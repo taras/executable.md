@@ -43,7 +43,16 @@ runs under grants the Sidekick a tool of its own — its conversations install
 that same selected provider with constraints of their own rather than
 inheriting what an entry runs under: no tools, no MCP servers, every native
 request denied without asking, and no customization of the agent's own system
-prompt. There is no data directory or second provider to select.
+prompt.
+
+An explicit Markdown file path such as `--sidekick-agent ./fixture.md` selects a
+scripted Sidekick. Resolve it in the contextual launch directory and snapshot
+its source before entering the terminal UI. A missing or unreadable file refuses
+startup. Behavior errors surface through the Markdown TestAgent worker when it
+opens or serves the conversation. Each scripted conversation gets its own
+scenario and retains the selected fixture's identity. A saved conversation under
+a named agent keeps that name when the startup selection changes. Scripted
+scenarios live for the invoking process, which joins their workers on teardown.
 
 Cold startup settles an unfinished entry's recorded project before loading any
 plugin or finalizing the profile. An available original directory with a different

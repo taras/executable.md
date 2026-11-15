@@ -198,6 +198,44 @@ jobs:
             repl bench checkout/.bench/*/closed.json
           include-hidden-files: "true"
 
+      - name: Compare mounted REPL typing on the PR revisions
+        if: matrix.host == 'ubuntu-latest' && github.event_name == 'pull_request'
+        id: typing
+        working-directory: repl bench checkout
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_REVISION" "$HEAD_REVISION"
+          changed=$(git diff --no-renames --name-only "$BASE_REVISION" "$HEAD_REVISION" -- \
+            packages/ examples/repl-bench/ deno.json deno.lock package.json \
+            pnpm-lock.yaml bun.lock scripts/setup.ts scripts/deps.ts scripts/lib/ \
+            .github/workflows/ci.yml)
+          if [[ -z "$changed" ]]; then
+            exit 0
+          fi
+          printf '%s\n' 'affected=true' >> "$GITHUB_OUTPUT"
+          scratch=$(mktemp -d "$RUNNER_TEMP/repl-typing-worktrees.XXXXXXXX")
+          trap 'git worktree remove --force "$scratch/candidate" || true; git worktree remove --force "$scratch/baseline" || true; rmdir "$scratch"' EXIT
+          git worktree add --detach "$scratch/baseline" "$BASE_REVISION"
+          git worktree add --detach "$scratch/candidate" "$HEAD_REVISION"
+          (cd "$scratch/baseline" && deno task setup)
+          (cd "$scratch/candidate" && deno task setup)
+          report="$RUNNER_TEMP/repl-typing-latency/${GITHUB_RUN_ATTEMPT}.json"
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            examples/repl-bench/typing-latency.ts "$scratch/baseline" "$scratch/candidate" "$report" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          (cd "$scratch/candidate" && deno task test packages/cli/tests/repl-sidekick-typing.test.ts)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ always() && steps.typing.outputs.affected == 'true' }}
+        with:
+          name: repl-typing-latency-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/repl-typing-latency/
+          if-no-files-found: error
+          retention-days: "7"
+
   # The same command the release publishes with, minus --dry-run. Catches slow
   # types and unresolvable specifiers before they reach a tag.
   jsr:

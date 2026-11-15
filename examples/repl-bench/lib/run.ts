@@ -103,7 +103,7 @@ export function* prepareRun(
   cwd: string,
   size: Size,
   args: string[],
-  options: { home?: string; scenario?: string } & (
+  options: { home?: string; scenario?: string; attachment?: string } & (
     | { build: PreparedBuild; command?: never }
     | { build?: never; command: string[] }
   ),
@@ -135,6 +135,7 @@ export function* prepareRun(
     cwd,
     home: options.home ?? join(directory, "home"),
     scenario: options.scenario,
+    attachment: options.attachment,
     args,
   };
   yield* writeTextFile(

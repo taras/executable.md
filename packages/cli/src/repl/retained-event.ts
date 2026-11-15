@@ -17,8 +17,8 @@
  * before anything retains it, so later edits to it reach nothing retained.
  *
  * Execution never receives these objects as values it may change. Core detaches
- * what it replays into fresh mutable data, and the projector detaches what it
- * models; this graph is only what both of them read from.
+ * what it replays into fresh mutable data. The projector can share retained
+ * bindings as immutable view data.
  */
 
 import type { DurableEvent, EffectDescription, Json, Result } from "@executablemd/durable-streams";

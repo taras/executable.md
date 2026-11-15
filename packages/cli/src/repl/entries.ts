@@ -35,6 +35,7 @@ import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import type { DurableEvent, DurableStream, Yield } from "@executablemd/durable-streams";
 
+import type { RetainedStream } from "./journal.ts";
 import { sealEvent } from "./retained-event.ts";
 
 /** The durable name of the root document import, on the root coroutine. */
@@ -258,13 +259,13 @@ export interface EntrySegmentView {
  * neither is answered with a position.
  */
 export class EntrySegmentStream implements DurableStream {
-  private readonly physical: DurableStream;
+  private readonly physical: Pick<RetainedStream, "append">;
   private readonly snapshot: DurableEvent[];
   private readonly last: boolean;
   private closed: boolean;
   private readonly placement: EntryPlacement | undefined;
 
-  constructor(physical: DurableStream, view: EntrySegmentView = {}) {
+  constructor(physical: Pick<RetainedStream, "append">, view: EntrySegmentView = {}) {
     this.physical = physical;
     this.placement = view.placement;
     this.snapshot = (view.retained ?? []).map((event) => sealEvent(event));
@@ -310,10 +311,13 @@ export class EntrySegmentStream implements DurableStream {
         : event,
     );
 
-    yield* this.physical.append(recorded);
+    let retained = recorded;
+    yield* this.physical.append(recorded, (acknowledged) => {
+      retained = acknowledged;
+    });
 
-    this.snapshot.push(recorded);
-    if (settlesRoot(recorded)) {
+    this.snapshot.push(retained);
+    if (settlesRoot(retained)) {
       this.closed = true;
     }
   }

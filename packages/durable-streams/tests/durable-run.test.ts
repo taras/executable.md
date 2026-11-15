@@ -15,6 +15,7 @@ import {
   TerminalDivergenceError,
   type DurableStream,
   InMemoryStream,
+  ReplayGuard,
   type Json,
   type DurableRootControl,
   type Workflow,
@@ -227,6 +228,44 @@ describe("durableRun", () => {
     expect(finalEvents[2]!.type).toBe("close");
 
     // Only 2 appends: Yield(stepB) + Close
+    expect(stream.appendCount).toBe(2);
+  });
+
+  it("releases the admission snapshot during replay and continues from the saved cursor", function* () {
+    const stream = new InMemoryStream(
+      ["first", "second"].map((name) => ({
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "call", name },
+        result: { status: "ok", value: name },
+      })),
+    );
+    const tracker = createCallTracker();
+    const examined: string[] = [];
+    yield* ReplayGuard.around({
+      *admit([history], next) {
+        examined.push(...history.yields.map((event) => event.description.name));
+        yield* next(history);
+      },
+    });
+
+    const value = yield* durableRun(
+      function* () {
+        const first = yield* durableCall("first", tracker.fn("first", "live-first"));
+        const { replayIndex } = yield* DurableContext.expect();
+        expect(replayIndex.retainedYields()).toEqual([]);
+        expect(replayIndex.getCursor("root")).toBe(1);
+        expect(replayIndex.peekYield("root")?.description.name).toBe("second");
+        const second = yield* durableCall("second", tracker.fn("second", "live-second"));
+        const suffix = yield* durableCall("suffix", tracker.fn("suffix", "suffix"));
+        return [first, second, suffix];
+      },
+      { stream },
+    );
+
+    expect(examined).toEqual(["first", "second"]);
+    expect(value).toEqual(["first", "second", "suffix"]);
+    expect(tracker.calls).toEqual(["suffix"]);
     expect(stream.appendCount).toBe(2);
   });
 
