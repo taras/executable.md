@@ -315,7 +315,7 @@ function screenPlacement(
   if (key === "footer:history") {
     return { region: HISTORY_REGION, entry: 0 };
   }
-  if (key.startsWith("footer:")) {
+  if (key === "identity:usage" || key.startsWith("footer:")) {
     return { region: HISTORY_REGION, entry: 1 };
   }
   return undefined;

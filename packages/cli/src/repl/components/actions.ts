@@ -135,6 +135,7 @@ export type ReplAction =
    * all three would be three decisions behind one key.
    */
   | { readonly kind: "toggle-follow" }
+  | { readonly kind: "toggle-usage" }
   | { readonly kind: "stop-sidekick" }
   | { readonly kind: "remove-sidekick-message"; readonly message: string }
   | { readonly kind: "resume-sidekick-queue" }

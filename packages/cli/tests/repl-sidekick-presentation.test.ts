@@ -3448,7 +3448,38 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
 });
 
 describe("Retained Sidekick token usage", () => {
-  it("keeps the round separate and counts a failed feedback turn across reopen", function* () {
+  const USAGE_OFF = "[ ] Show token usage";
+  const USAGE_ON = "[x] Show token usage";
+
+  it("toggles from the history controls and preserves both draft and message", function* () {
+    const page = yield* useReplPage({ size: NARROW });
+    yield* intoDraft(page);
+    yield* typed(page, "unsent Draft");
+    yield* page.type("\x078");
+    yield* page.until("History focused", (one) => one.shows("> [history]"));
+    yield* page.key("ArrowRight");
+    yield* page.until("Exit focused", (one) => one.shows("> [exit]"));
+    yield* page.key("ArrowRight");
+    yield* page.until("usage checkbox focused", (one) => one.shows(`> ${USAGE_OFF}`));
+    yield* page.type(" ");
+    yield* page.until("Space checks usage", (one) => one.shows(`> ${USAGE_ON}`));
+    yield* page.key("Enter");
+    yield* page.until("Enter unchecks usage in place", (one) => one.shows(`> ${USAGE_OFF}`));
+    yield* intoDraft(page);
+    expect(page.screen().shows("unsent Draft")).toBe(true);
+    yield* page.type("\x071");
+    yield* page.until("Message focused", (one) => one.shows("> › message the sidekick"));
+    yield* typed(page, "unsent Message");
+    yield* page.press(USAGE_OFF);
+    const checked = yield* page.until(
+      "click shows usage without changing focus",
+      (one) => one.shows(USAGE_ON) && one.shows("> › message the sidekick"),
+    );
+    expect(composerHolds(checked, "unsent Message")).toBe(true);
+    expect(page.repl.fake.prompts).toEqual([]);
+  });
+
+  it("keeps retained turn, round and Sidekick usage separate across toggle and reopen", function* () {
     const dataRoot = yield* useTemporary("xmd-repl-token-usage-");
     const options = {
       dataRoot,
@@ -3470,8 +3501,27 @@ describe("Retained Sidekick token usage", () => {
         },
       },
     };
+    const size = { columns: 160, rows: 50 };
+    const providerTotal = "1,400 in subtotal · 206 out";
+    const entryTotal = "Entry agents · 600 in · 90 out";
     const location = yield* scoped(function* () {
       const host = yield* useMountedHost(options);
+      const page = yield* useReplPage({ host, size });
+      for (const step of [
+        { reply: "<Output>Missing report.</Output>" },
+        {
+          reply: "<Output>Reported zero.</Output>",
+          usage: { response: { inputTokens: 0, outputTokens: 0 } },
+        },
+        {
+          reply: "<Output>Missing input count.</Output>",
+          usage: { response: { outputTokens: 6 } },
+        },
+      ]) {
+        host.fake.script(step);
+        yield* sendMessage(page, "Report your usage.");
+        yield* page.until("the usage example settling", sidekickIdle);
+      }
       host.fake.script({
         reply:
           "<Output>Running the token example.</Output>\n" +
@@ -3492,27 +3542,46 @@ describe("Retained Sidekick token usage", () => {
         failure: "Controlled feedback failure",
         usage: { response: { inputTokens: 200, outputTokens: 20 } },
       });
-      const page = yield* useReplPage({ host });
       yield* sendMessage(page, "Run the token example.");
+      const hidden = yield* page.until(
+        "the failed feedback settling while usage stays hidden",
+        (one) => one.shows("Controlled feedback failure") && sidekickIdle(one),
+      );
+      for (const label of ["Usage unavailable", "Sidekick total", "Entry agents ·", "1,200 in"]) {
+        expect(hidden.shows(label)).toBe(false);
+      }
+      expect(hidden.shows(USAGE_OFF)).toBe(true);
+      yield* page.press(USAGE_OFF);
       const settled = yield* page.until(
         "separate Sidekick and round usage",
-        (one) =>
-          one.shows("1,400 in · 200 out") &&
-          one.shows("600 in · 90 out") &&
-          one.shows("Controlled feedback failure"),
+        (one) => one.shows(providerTotal) && one.shows(entryTotal),
       );
+      expect(settled.shows(USAGE_ON)).toBe(true);
       expect(settled.shows("1,200 in · 180 out")).toBe(true);
-      expect(host.fake.prompts).toHaveLength(3);
+      expect(settled.shows("200 in · 20 out")).toBe(true);
+      expect(settled.shows("0 in · 0 out")).toBe(true);
+      expect(settled.shows("in unknown · 6 out")).toBe(true);
+      expect(settled.shows("last request")).toBe(true);
+      expect(settled.shows("Usage unavailable")).toBe(true);
+      expect(host.fake.prompts).toHaveLength(6);
       expect((yield* settledReading(page.repl)).model.turns).toHaveLength(1);
       return yield* leaveLocation(page);
     });
     const cold = yield* useMountedHost(options);
-    const page = yield* useReplPage({ host: cold, location });
+    const page = yield* useReplPage({ host: cold, location, size });
+    expect(page.screen().shows(USAGE_OFF)).toBe(true);
+    expect(page.screen().shows(providerTotal)).toBe(false);
+    expect(page.screen().shows(entryTotal)).toBe(false);
+    const read = yield* settledReading(page.repl);
+    const before = yield* pairBytes(cold.root, read.execution);
+    yield* page.press(USAGE_OFF);
     yield* page.until(
       "retained Sidekick and round usage",
-      (one) => one.shows("1,400 in · 200 out") && one.shows("600 in · 90 out"),
+      (one) => one.shows(providerTotal) && one.shows(entryTotal),
     );
     expect(cold.fake.prompts).toHaveLength(0);
+    expect(cold.fake.ensured).toHaveLength(0);
     expect((yield* settledReading(page.repl)).model.turns).toHaveLength(1);
+    expect(yield* pairBytes(cold.root, read.execution)).toEqual(before);
   });
 });

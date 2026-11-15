@@ -1074,6 +1074,7 @@ interface ReplSidekickNotice {
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
+  readonly showUsage?: boolean;
   readonly sidekickNotice?: ReplSidekickNotice;
   readonly todoOpen?: boolean;
   readonly todoOffset?: number;
@@ -2344,6 +2345,8 @@ export function reduceRepl(
     case "resume-sidekick-queue":
     case "toggle-follow":
       return { state, intent: action };
+    case "toggle-usage":
+      return settled({ ...state, showUsage: !state.showUsage });
     case "stop-sidekick": {
       // Unguarded, like `exit`. Stopping something that is not running is
       // nothing, and a control that refused on a screen where the work had
@@ -3975,7 +3978,8 @@ type ReplChatComposed =
 function sidekickComposedRows(
   reading: ReplSidekickReading | undefined,
   /** The staged composition's associated work, where this reading is drawn there. */
-  staging?: ReplChatStaging,
+  staging: ReplChatStaging | undefined,
+  showUsage: boolean,
 ): readonly ReplChatComposed[] {
   if (
     staging !== undefined &&
@@ -4011,7 +4015,7 @@ function sidekickComposedRows(
   // The chat this location selected, which is the current one unless it named
   // another. Every chat's rows are composed, so reading an older one is a
   // filter over them rather than a second reading assembled somewhere else.
-  if (reading.usageTotal !== undefined) {
+  if (showUsage && reading.usageTotal !== undefined) {
     items.push(text("sidekick:usage-total", reading.usageTotal, styleOf("metadata")));
   }
   const shownChat = reading.chat.filter((item) => item.conversation === reading.reading);
@@ -4035,6 +4039,9 @@ function sidekickComposedRows(
   }
   for (const item of shownChat) {
     const metadata = () => {
+      if (!showUsage) {
+        return;
+      }
       if (item.usageLine !== undefined) {
         items.push(text(`sidekick:${item.key}:usage`, `  ${item.usageLine}`, styleOf("metadata")));
       }
@@ -4203,9 +4210,8 @@ function chatLinesOf(
  */
 export function sidekickChatLines(
   reading: ReplSidekickReading | undefined,
-  staging?: ReplChatStaging,
 ): readonly { readonly key: string; readonly text: string }[] {
-  return sidekickComposedRows(reading, staging).flatMap((one) =>
+  return sidekickComposedRows(reading, undefined, true).flatMap((one) =>
     one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
   );
 }
@@ -4310,8 +4316,9 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     reading?.busy,
     reading?.current,
     reading?.refusal,
-    reading?.usageTotal,
-    reading?.inspectUsage,
+    view.state.showUsage === true,
+    view.state.showUsage === true ? reading?.usageTotal : undefined,
+    view.state.showUsage === true ? reading?.inspectUsage : undefined,
     reading?.setup?.phase,
     reading?.setup?.failure,
     staging !== undefined,
@@ -4329,8 +4336,8 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
       one.hasOutput,
       one.failure,
       one.incomplete,
-      one.usageLine,
-      JSON.stringify(one.usageDetails),
+      view.state.showUsage === true ? one.usageLine : undefined,
+      view.state.showUsage === true ? JSON.stringify(one.usageDetails) : undefined,
       one.automatic,
       one.request,
       one.retry?.conversation,
@@ -4345,7 +4352,7 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     facts.push(
       one.message,
       one.entry,
-      one.usageLine,
+      view.state.showUsage === true ? one.usageLine : undefined,
       entry?.key,
       entry?.order,
       entry?.terminal?.status,
@@ -4393,7 +4400,11 @@ export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPre
       ) {
         return Ok(held.sequence);
       }
-      const chat = sidekickComposedRows(view.live.sidekick, chatStagingOf(view));
+      const chat = sidekickComposedRows(
+        view.live.sidekick,
+        chatStagingOf(view),
+        view.state.showUsage === true,
+      );
       const notice = view.restorationNotice;
       const composed: readonly ReplChatComposed[] =
         notice === undefined
@@ -6139,11 +6150,12 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     workspace !== undefined &&
     showSidekick &&
     !showingTodo(view) &&
+    state.showUsage === true &&
     live.sidekick?.usageTotal !== undefined
   ) {
     items.push(
       ...usageSessionRows(
-        "sidekick:heading:usage",
+        "sidekick:tray:usage",
         live.sidekick.usageTotal,
         context.widths?.body,
       ).map((one) => line(one.key, one.label, one.style)),
@@ -6514,6 +6526,18 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           ? said
           : `${said.slice(0, Math.max(1, room - 1))}…`,
         styleOf("failed-outcome"),
+      ),
+    );
+  }
+
+  if (workspace !== undefined) {
+    items.push(
+      row(
+        "identity:usage",
+        `[${state.showUsage === true ? "x" : " "}] Show token usage`,
+        { select: "toggle-usage" },
+        styleOf("action"),
+        { here: view.focused },
       ),
     );
   }
@@ -7043,6 +7067,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
         view.size.columns,
         view.size.rows,
         compact,
+        view.state.showUsage === true,
         view.state.route.session,
         view.state.route.surface,
         view.state.filtering,
@@ -7091,7 +7116,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
       facts.push(
         sidekick !== undefined,
         sidekick?.refusal,
-        sidekick?.usageTotal,
+        view.state.showUsage === true ? sidekick?.usageTotal : undefined,
         sidekick?.availability.sessions.length,
       );
       facts.push(...(sidekick?.availability.sessions ?? []));
@@ -7106,7 +7131,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
           turn.state,
           turn.running,
           turn.failed,
-          turn.usageLine,
+          view.state.showUsage === true ? turn.usageLine : undefined,
           turn.sessionKey,
           turn.text,
           turn.failure,
@@ -7384,7 +7409,7 @@ function sessionRows(
     );
     return items;
   }
-  if (sidekick.usageTotal !== undefined) {
+  if (state.showUsage === true && sidekick.usageTotal !== undefined) {
     items.push(...usageSessionRows("sessions:sidekick:usage-total", sidekick.usageTotal, width));
   }
   const chat = sidekick.turns.filter((turn) => filter === undefined || turn.sessionKey === filter);
@@ -7440,6 +7465,7 @@ function sessionRows(
           turn,
           width,
           origins.get(turn.conversation)?.get(turn.turn ?? -1) ?? PERSON_MARK,
+          state.showUsage === true,
         ),
       );
     }
@@ -7478,7 +7504,7 @@ function sessionRows(
         {},
       ),
     );
-    if (turn.usageLine !== undefined) {
+    if (state.showUsage === true && turn.usageLine !== undefined) {
       items.push(...usageSessionRows(`sessions:${turn.key}:usage`, turn.usageLine, width));
     }
     // Whose work this was: this section's own owner, then the chat's agent and
@@ -10101,6 +10127,9 @@ type ReplSlot =
 /** The tray window's two controls, which surround it rather than move in it. */
 
 function slotOf(key: string): ReplSlot | undefined {
+  if (key === "identity:usage") {
+    return "workspace";
+  }
   if (key.startsWith("queue:")) {
     return "queue";
   }
@@ -10187,7 +10216,7 @@ function slotOf(key: string): ReplSlot | undefined {
   ) {
     return "bindings";
   }
-  if (key.startsWith("sidekick:heading:usage:")) {
+  if (key.startsWith("sidekick:tray:usage:")) {
     return "workspace";
   }
   if (key.startsWith("binding:") || key.startsWith("sidekick:")) {
@@ -11782,6 +11811,7 @@ interface ReplChatStaging {
   readonly live: ReplLive;
   readonly work: readonly ReplAssociatedWork[];
   readonly notice?: ReplSidekickNotice;
+  readonly showUsage: boolean;
 }
 
 function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
@@ -11794,6 +11824,7 @@ function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
     live: view.live,
     work: workspace.work,
     notice: view.state.sidekickNotice,
+    showUsage: view.state.showUsage === true,
   };
 }
 
@@ -11850,7 +11881,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
         mark: WORK_MARK,
       }),
     );
-    if (one.usageLine !== undefined) {
+    if (staging.showUsage && one.usageLine !== undefined) {
       found.push(
         Object.freeze({
           kind: "text" as const,
@@ -11993,7 +12024,7 @@ function workspaceChatComposed(
     } else if (item.hasOutput) {
       items.push(text(key, trimLeadingBlankLines(item.text), styleOf("output"), SIDEKICK_MARK));
     }
-    if (item.usageLine !== undefined) {
+    if (staging.showUsage && item.usageLine !== undefined) {
       items.push({
         kind: "text",
         key: `${key}:usage`,
@@ -12002,7 +12033,7 @@ function workspaceChatComposed(
       });
     }
     items.push(...workComposed(staging, key));
-    if (reading.inspectUsage) {
+    if (staging.showUsage && reading.inspectUsage) {
       for (const [index, detail] of (item.usageDetails ?? []).entries()) {
         items.push({
           kind: "text",
@@ -12334,6 +12365,7 @@ function compactSidekickTurn(
   turn: ReplSidekickTurnRow,
   width: number | undefined,
   mark: ReplOriginMark,
+  showUsage: boolean,
 ): readonly ReplSessionRow[] {
   const rows: ReplSessionRow[] = [];
   const style = turn.running
@@ -12360,7 +12392,7 @@ function compactSidekickTurn(
       { runs: markedRuns(mark, label, style.role) },
     ),
   );
-  if (turn.usageLine !== undefined) {
+  if (showUsage && turn.usageLine !== undefined) {
     rows.push(...usageSessionRows(`sessions:${turn.key}:usage`, turn.usageLine, width));
   }
   if (turn.text.length > 0) {
@@ -13036,11 +13068,17 @@ export function historyMapWidth(
  *
  * Read from the route, so it names nothing this reading does not hold.
  */
-function identityRuns(view: ReplView): readonly ReplTokenRun[] {
+function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
+  const title = " XMD REPL";
+  const label = profileFor(view.size) === "narrow" ? " session " : "  session ";
+  const id = fitLine(
+    [{ text: view.state.route.execution, elide: true }],
+    width - title.length - label.length,
+  );
   return tokenRuns([
-    { text: " XMD REPL", token: "output" },
-    { text: "  session ", token: "field-label" },
-    { text: view.state.route.execution, token: "source" },
+    { text: title, token: "output" },
+    { text: label, token: "field-label" },
+    { text: id, token: "source" },
   ]);
 }
 
@@ -13461,13 +13499,18 @@ function workspacePresentation(input: {
   const startingWith = (prefix: string): readonly ReplCandidate[] =>
     candidates.filter((candidate) => candidate.key.startsWith(prefix));
   /** One part of a row, exactly as wide as what it says. */
-  const part = (candidate: ReplCandidate, region: ReplRegion, surface?: number): ReplBox =>
+  const part = (
+    candidate: ReplCandidate,
+    region: ReplRegion | undefined,
+    surface?: number,
+  ): ReplBox =>
     box({
-      id: `box:${region}:${candidate.key}`,
+      id: region === undefined ? `box:${candidate.key}` : `box:${region}:${candidate.key}`,
       key: candidate.key,
       region,
       // Fixed panel labels contain only single-cell glyphs; fit can leave fractional widths.
       props:
+        candidate.key === "identity:usage" ||
         candidate.key === "todo:header" ||
         candidate.key === "todo:add" ||
         /^todo:task:.*:action:(up|down|remove)$/.test(candidate.key)
@@ -13791,8 +13834,12 @@ function workspacePresentation(input: {
     const queueViewport = `box:${QUEUE_WINDOW}:viewport`;
     // The rows this body draws besides its chat and that chat's two controls.
     const recovery = startingWith("sidekick:recovery:");
+    const usage = startingWith("sidekick:tray:usage:");
     const extras =
-      byKey("sidekick:back").length + recovery.length + byKey("sidekick:answer").length;
+      byKey("sidekick:back").length +
+      recovery.length +
+      byKey("sidekick:answer").length +
+      usage.length;
     const allocation = trayAllocation(view, context, extras);
     if ((held?.queued.length ?? 0) > 0 && (allocation !== undefined || queueRows.length > 0)) {
       viewports.push(
@@ -13834,7 +13881,6 @@ function workspacePresentation(input: {
         : "fit");
     return [
       ...headerRows("conversation", region, header),
-      ...startingWith("sidekick:heading:usage:").map((one) => rowBox(one, region, room, header)),
       box({
         id: showing ? `${body}:gutter` : "box:inspection:reading:gutter",
         region,
@@ -13903,6 +13949,7 @@ function workspacePresentation(input: {
         ],
       }),
       ...recovery.map((one) => rowBox(one, region, room)),
+      ...usage.map((one) => rowBox(one, region, room, REPL_PALETTE.composerSurface)),
       ...(tray.length === 0 && composer.length === 0
         ? []
         : [
@@ -14115,6 +14162,8 @@ function workspacePresentation(input: {
   );
   const map = compactHistoryRuns(view);
   const inspected = view.state.route.at !== undefined;
+  const usageToggle = byKey("identity:usage");
+  const identity = identityRuns(view, size.columns - (usageToggle[0]?.text.length ?? 0));
   regions.push({ region: "footer", id: "box:footer" });
   return {
     descriptions,
@@ -14132,10 +14181,12 @@ function workspacePresentation(input: {
               box({
                 id: "box:identity:text",
                 props: fittedPartProps(),
-                text: runText(identityRuns(view)),
-                runs: identityRuns(view),
+                text: runText(identity),
+                runs: identity,
                 style: styleOf("metadata"),
               }),
+              box({ id: "box:identity:space", props: SPACER_PROPS }),
+              ...usageToggle.map((one) => part(one, undefined)),
             ],
           }),
           box({ id: "box:body", props: bodyProps(false), children: columns }),

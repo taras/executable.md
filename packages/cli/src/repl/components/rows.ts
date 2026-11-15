@@ -161,6 +161,9 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
     node.claim((event: ReplInputEvent): ReplAction | undefined => {
       if (event.kind === "text") {
         const input = fields(node.input);
+        if (event.text === " " && input?.["select"] === "toggle-usage") {
+          return { kind: "toggle-usage" };
+        }
         if (event.text === " " && input?.["select"] === "pane" && input["pane"] === "todo") {
           return { kind: "select-pane", pane: "todo" };
         }
@@ -348,6 +351,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   }
   if (select === "resume-sidekick-queue") {
     return { kind: "resume-sidekick-queue" };
+  }
+  if (select === "toggle-usage") {
+    return { kind: "toggle-usage" };
   }
   if (select === "toggle-follow") {
     return { kind: "toggle-follow" };

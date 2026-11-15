@@ -9,6 +9,8 @@
     <ReplBench.WaitForText text="1 ✓" />
     <ReplBench.WaitForText text="Probe completed." />
     <ReplBench.WaitForText text="[stop]" present={false} />
+    <ReplBench.WaitForText text="[ ] Show token usage" row={0} as="usage" />
+    <ReplBench.Click at={usage} />
     <ReplBench.WaitForText text="│  Output" as="output" />
     <ReplBench.WaitForText text="Entry agents · No retained entry-agent turns" as="associated" />
     <ReplBench.WaitForText text={"PROBE\\x1b[2JTAIL\\x0dEND"} row={output.row+1} as="entryText" />

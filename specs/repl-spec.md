@@ -996,8 +996,14 @@ record rather than a second row beside it. Entry rows and Sidekick rows are
 never merged, whatever they have in common: they have different owners, so an
 equal provider conversation or an equal turn number leaves two rows.
 
-Saved Sidekick turns show reported token usage beside their recording and
-outcome in Sessions, Transcript and chat. A failed or cancelled Prompt, a
+Show token usage starts unchecked in the identity row. Click it or focus it
+from the History controls and press Space or Enter. The setting follows the
+current REPL through navigation and resizing. Every new invocation starts
+unchecked, including when it opens a saved location. The checkbox changes the
+presentation without starting provider work or writing history.
+
+When checked, saved Sidekick turns show reported token usage beside their
+recording and outcome in Sessions, Transcript and chat. A failed or cancelled Prompt, a
 failed evaluated reply and a saved Prompt without an evaluated reply each
 retain their own usage. An unavailable report, an unrecorded turn and a
 reported zero remain distinguishable. Reading a saved chat exposes its token
@@ -1013,7 +1019,8 @@ Cached and reasoning counters stay in the source detail. A reported total is
 shown in place of the input and output breakdown when both are missing.
 
 The Sidekick total uses every saved Sidekick turn in the retained owner history,
-once per conversation and turn, across all selections. It sums each counter
+once per conversation and turn, across all selections. In the chat pane it
+appears above the composer controls, which keep their own rows. It sums each counter
 independently, identifies partial and unknown coverage and counts unavailable
 and uncountable turns separately. The associated entry outcome shows an Entry
 agents summary of that entry's retained Prompts when its terminal is present in
