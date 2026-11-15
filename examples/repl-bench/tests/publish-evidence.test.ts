@@ -54,6 +54,7 @@ const urls = images.map(
   (_, index) =>
     `https://github.com/user-attachments/assets/${index + 1}0000000-0000-0000-0000-000000000000`,
 );
+const oversizedProse = "x".repeat(65_500);
 const beforeProse = "# Prepared change\r\n\r\n  Leading text  \n\n";
 const afterProse = "\r\n\r\n  More prose\n\n\n";
 
@@ -353,6 +354,42 @@ describe("REPL UI evidence publication", () => {
     expect(host.events).toEqual(["help", "help"]);
   });
 
+  it("rejects a generated description over the body limit in preview and numbered publish", function* () {
+    const input = yield* useFixture();
+    const host = modeledHost(() => snapshot(input, oversizedProse));
+    yield* writeTextFile(join(input.directory, "preview.md"), oversizedProse);
+    const diagnostic = "The proposed draft description exceeds the GitHub body limit.";
+    expect(String(yield* raised(run(input, host, "dry-run")))).toContain(diagnostic);
+    expect(host.events).toEqual(["help"]);
+    host.events.length = 0;
+    expect(String(yield* raised(run(input, host)))).toContain(diagnostic);
+    expect(host.events).toEqual(["help", "read"]);
+  });
+
+  it("publishes a PNG with final IDAT padding without changing its approved bytes", function* () {
+    const input = yield* useFixture();
+    const padded = Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGP4z8AAAAMBAQAAAAAAOUhUywAAAABJRU5ErkJggg==",
+      ),
+      (character) => character.charCodeAt(0),
+    );
+    const digest = sha256(padded);
+    yield* until(writeFile(input.paths[0], padded));
+    yield* writeTextFile(
+      input.path,
+      JSON.stringify({
+        ...input.receipt,
+        captures: [{ ...input.receipt.captures[0], sha256: digest }, input.receipt.captures[1]],
+      }),
+    );
+    const host = modeledHost(() => snapshot(input));
+    const result = yield* run(input, host);
+    expect(result.status).toBe("complete");
+    expect(host.edits[0].images[0].sha256).toBe(digest);
+    expect(host.bytes.get(urls[0])).toEqual(padded);
+  });
+
   it("publishes only staged images and preserves bytes on both sides of the evidence", function* () {
     const input = yield* useFixture();
     const section = yield* preview(input);
@@ -645,6 +682,34 @@ describe("REPL UI evidence publication", () => {
 
       host.events.length = 0;
       host.help = true;
+      yield* writeTextFile(
+        input.path,
+        JSON.stringify({
+          ...input.receipt,
+          target: {
+            kind: "create",
+            title: "Prepared title",
+            body: oversizedProse,
+            draftRecord: "draft.json",
+          },
+        }),
+      );
+      expect(String(yield* raised(run(input, host, "publish", setup)))).toContain(
+        "The proposed draft description exceeds the GitHub body limit.",
+      );
+      expect(host.events).toEqual(["help"]);
+      expect(git.counters.commands).toEqual([]);
+      expect(creations(store)).toBe(0);
+      expect(remoteBranch(remote, "feature")).toBeUndefined();
+
+      host.events.length = 0;
+      yield* writeTextFile(
+        input.path,
+        JSON.stringify({
+          ...input.receipt,
+          target: { kind: "create", title: "Prepared title", body, draftRecord: "draft.json" },
+        }),
+      );
       const result = yield* run(input, host, "publish", setup);
       expect(creations(store)).toBe(1);
       expect(store.pullRequests[0]).toMatchObject({ title: "Prepared title", body, draft: true });
