@@ -15,8 +15,7 @@
         <Terminal.WaitForText text="startup-message42-suffix" />
       </Terminal.Region>
 
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Repl.Focus.Draft />
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.Type text="entry-draft" />
       <Terminal.WaitForText text="entry-draft" />
@@ -28,8 +27,7 @@
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.WaitForText text="> BINDINGS" present={false} />
 
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="1" />
+      <Repl.Focus.Message />
       <Terminal.WaitForText text="message the sidekick" bold={true} />
       <Terminal.Type text="-more" />
       <Terminal.Region name="sidekick-composer">
@@ -48,37 +46,31 @@
       <Terminal.Region name="sidekick-composer">
         <Terminal.WaitForText text="narrow-message" />
       </Terminal.Region>
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Repl.Focus.Draft />
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.Type text="narrow-draft" />
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="5" />
+      <Repl.Focus.Tabs />
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.Type text="-kept" />
       <Terminal.WaitForText text="narrow-draft-kept" />
 
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="8" />
+      <Repl.Focus.History />
       <Terminal.WaitForText text="> [history]" bold={true} />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="[close]" />
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="1" />
+      <Repl.Focus.Message />
       <Terminal.WaitForText text="[close]" />
       <Terminal.WaitForText text="message the sidekick" present={false} />
       <Terminal.Key key="Escape" />
       <Terminal.WaitForText text="[close]" present={false} />
 
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="1" />
+      <Repl.Focus.Message />
       <Terminal.WaitForText text="message the sidekick" bold={true} />
       <Terminal.Type text="-kept" />
       <Terminal.Region name="sidekick-composer">
         <Terminal.WaitForText text="narrow-message-kept" />
       </Terminal.Region>
-      <Terminal.Key key="Ctrl+G" />
-      <Terminal.Key key="4" />
+      <Repl.Focus.Draft />
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.WaitForText text="narrow-draft-kept" />
     </ReplBench>
