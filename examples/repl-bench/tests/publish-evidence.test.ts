@@ -50,10 +50,13 @@ const images = [
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC",
 ].map((image) => Uint8Array.from(atob(image), (character) => character.charCodeAt(0)));
-const urls = images.map(
-  (_, index) =>
-    `https://github.com/user-attachments/assets/${index + 1}0000000-0000-0000-0000-000000000000`,
-);
+function attachmentUrls(names: string[]) {
+  return names.map(
+    (_, index) =>
+      `https://github.com/user-attachments/assets/${index + 1}0000000-0000-0000-0000-000000000000`,
+  );
+}
+const urls = attachmentUrls(imageNames);
 const oversizedProse = "x".repeat(65_500);
 const beforeProse = "# Prepared change\r\n\r\n  Leading text  \n\n";
 const afterProse = "\r\n\r\n  More prose\n\n\n";
@@ -141,6 +144,73 @@ function* useFixture(baseSha = base, headSha = head) {
 
 type Fixture = Yielded<ReturnType<typeof useFixture>>;
 
+const referenceImage = Uint8Array.from(
+  atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGP4z8AAAAMBAQAAAAAAOUhUywAAAABJRU5ErkJggg==",
+  ),
+  (character) => character.charCodeAt(0),
+);
+const mixedNames = [
+  "repl-ui-restore-reference.png",
+  "repl-ui-restore-before.png",
+  "repl-ui-restore-after.png",
+  ...imageNames,
+];
+const mixedImages = [referenceImage, ...images, ...images];
+
+function* useMixedFixture() {
+  const input = yield* useFixture();
+  const restore = {
+    id: "restore",
+    fixture: "Scripted restore",
+    viewport: { columns: 160, rows: 36 },
+    action: "Reveal round 42",
+  };
+  const captures = input.receipt.captures.map((capture) => ({
+    ...capture,
+    ...restore,
+    checkpoint: restore.id,
+    path: `restore-${capture.role}.png`,
+  }));
+  for (const [index, capture] of captures.entries()) {
+    yield* until(writeFile(join(input.directory, capture.path), images[index]));
+  }
+  const reference = {
+    kind: "design",
+    source: "Restore mockup",
+    version: "v8",
+    state: "round 42 settled",
+    viewport: restore.viewport,
+    path: "reference.png",
+    sha256: sha256(referenceImage),
+    approval: "design-approval.txt",
+    comparison: {
+      actor: { role: "reviewer", id: "synthetic-reviewer" },
+      record: "visual-comparison.txt",
+      checkpoint: restore.id,
+      state: "round 42 settled",
+      viewport: restore.viewport,
+      referenceSha256: sha256(referenceImage),
+      candidate: input.pins.head,
+      afterSha256: captures[1].sha256,
+      disposition: "match",
+    },
+  };
+  yield* until(writeFile(join(input.directory, reference.path), referenceImage));
+  const withoutDesign = {
+    ...input.receipt.checkpoints[0],
+    reference: { kind: "none", reason: "No mockup for <Transcript> | navigation" },
+  };
+  const receipt = {
+    ...input.receipt,
+    version: 2,
+    checkpoints: [{ ...restore, reference }, withoutDesign],
+    captures: [...captures, ...input.receipt.captures],
+  };
+  yield* writeTextFile(input.path, JSON.stringify(receipt));
+  return { ...input, mixed: receipt, restore, reference, withoutDesign };
+}
+
 function snapshot(fixture: Fixture, body = "", number = 7) {
   const { pins } = fixture;
   return {
@@ -158,7 +228,8 @@ function unavailable(): never {
   throw new Error("Only streamed attachment reads are expected");
 }
 
-function modeledHost(initial: () => ReturnType<typeof snapshot>) {
+function modeledHost(initial: () => ReturnType<typeof snapshot>, names = imageNames) {
+  const destinations = attachmentUrls(names);
   let existing: ReturnType<typeof snapshot> | undefined;
   const events: string[] = [];
   const calls: string[][] = [];
@@ -171,6 +242,8 @@ function modeledHost(initial: () => ReturnType<typeof snapshot>) {
     edits,
     bytes,
     redirects,
+    destinations,
+    skip: new Set<string>(),
     help: true,
     stopAfter: Infinity,
     staleAfterEdit: false,
@@ -227,13 +300,13 @@ function modeledHost(initial: () => ReturnType<typeof snapshot>) {
               expect(cmd[at]).toBe("--attach");
               const path = cmd[at + 1];
               const file = basename(path);
-              const index = imageNames.indexOf(file);
+              const index = names.indexOf(file);
               expect(index).toBeGreaterThanOrEqual(0);
               const uploaded = yield* until(readFile(path));
               staged.push({ path, sha256: sha256(uploaded) });
-              if (staged.length <= host.stopAfter) {
-                bytes.set(urls[index], uploaded);
-                modified = modified.replace(`](./${file})`, `](${urls[index]})`);
+              if (staged.length <= host.stopAfter && !host.skip.has(file)) {
+                bytes.set(destinations[index], uploaded);
+                modified = modified.replace(`](./${file})`, `](${destinations[index]})`);
               } else {
                 code = 1;
               }
@@ -287,6 +360,12 @@ function modeledHost(initial: () => ReturnType<typeof snapshot>) {
 
 const output = z.object({
   status: z.string().optional(),
+  visualSignOff: z.enum(["pending", "ready"]),
+  sources: z.object({
+    references: z
+      .array(z.object({ checkpoint: z.string(), path: z.string(), sha256: z.string() }))
+      .optional(),
+  }),
   markdown: z.string().optional(),
   images: z.array(z.string()).optional(),
   identity: z.string(),
@@ -345,6 +424,28 @@ describe("REPL UI evidence publication", () => {
     const one = yield* run(input, host, "dry-run");
     const two = yield* run(input, host, "dry-run");
     expect(two).toEqual(one);
+    expect(one.visualSignOff).toBe("pending");
+    const legacyIdentity = sha256(
+      JSON.stringify({
+        version: 1,
+        ...input.pins,
+        acceptance: input.receipt.acceptance.map(({ name, kind, status, revision }) => ({
+          name,
+          kind,
+          status,
+          revision,
+        })),
+        checkpoints: input.receipt.checkpoints,
+        slots: input.receipt.captures.map(({ checkpoint, role, revision, sha256 }) => ({
+          id: `${checkpoint}-${role}`,
+          revision,
+          sha256,
+        })),
+        timingDigest: sha256(JSON.stringify(input.timing)),
+      }),
+    );
+    expect(one.identity).toBe(legacyIdentity);
+    expect(one.markdown).toContain(`<!-- xmd-repl-ui-evidence:v1 ${legacyIdentity} -->`);
     expect(one.markdown?.endsWith(afterProse)).toBe(true);
     expect(one.markdown).toContain("| Checkpoint | Fixture | Viewport | Action | Before | After |");
     expect(one.markdown).toContain("synthetic &#124; composer");
@@ -609,6 +710,7 @@ describe("REPL UI evidence publication", () => {
       ]);
       expect(complete.status).toBe("complete");
       expect(complete.identity).toBe(partial.identity);
+      expect(complete.visualSignOff).toBe("pending");
       expect(retry.edits.at(-1)?.images.map(({ path }) => basename(path))).toEqual([imageNames[1]]);
       expect(retry.edits.at(-1)?.text).toContain(urls[0]);
       const settledBody = retry.draft.body;
@@ -661,6 +763,191 @@ describe("REPL UI evidence publication", () => {
       yield* raised(run(input, alias));
       expect(alias.events).toEqual(["help", "read"]);
     }
+  });
+
+  it("previews and publishes mixed references in checkpoint order", function* () {
+    const input = yield* useMixedFixture();
+    const host = modeledHost(() => snapshot(input), mixedNames);
+    const plan = yield* run(input, host, "dry-run");
+    expect(yield* run(input, host, "dry-run")).toEqual(plan);
+    expect(host.events).toEqual(["help", "help"]);
+    expect(plan.visualSignOff).toBe("pending");
+    expect(plan.sources.references).toEqual([
+      {
+        checkpoint: "restore",
+        path: join(input.directory, input.reference.path),
+        sha256: input.reference.sha256,
+      },
+    ]);
+    const section = z.string().parse(plan.markdown);
+    expect(section).toContain(`<!-- xmd-repl-ui-evidence:v2 ${plan.identity} -->`);
+    expect(section).toContain("| Action | Reference | Before | After | Comparison |");
+    const restore = section.split("\n").find((line) => line.startsWith("| restore "));
+    const undesigned = section.split("\n").find((line) => line.startsWith("| checkpoint "));
+    expect(restore).toContain("160 × 36");
+    expect(restore?.match(/!\[[^\]]+\]/g)).toEqual([
+      "![Reference restore]",
+      "![Before restore]",
+      "![After restore]",
+    ]);
+    expect(undesigned).toContain("No mockup for &#60;Transcript&#62; &#124; navigation");
+    expect(undesigned?.match(/!\[[^\]]+\]/g)).toEqual([
+      "![Before checkpoint]",
+      "![After checkpoint]",
+    ]);
+    yield* writeTextFile(input.path, JSON.stringify(input.receipt));
+    const legacy = yield* preview(input);
+    const timing = "### Mounted typing latency";
+    expect(section.slice(section.indexOf(timing))).toBe(legacy.slice(legacy.indexOf(timing)));
+    yield* writeTextFile(input.path, JSON.stringify(input.mixed));
+    host.draft.body = beforeProse + section + afterProse;
+    host.events.length = 0;
+    const complete = yield* run(input, host);
+    expect(complete.status).toBe("complete");
+    expect(complete.visualSignOff).toBe("ready");
+    expect(host.edits[0].images.map(({ path }) => basename(path))).toEqual(mixedNames);
+    expect(host.edits[0].images.map(({ sha256 }) => sha256)).toEqual(mixedImages.map(sha256));
+    expect(host.events).toEqual([
+      "help",
+      "read",
+      "edit",
+      "read",
+      ...host.destinations.map((url) => `image:${url}`),
+    ]);
+    expect(host.draft.body).toBe(
+      beforeProse +
+        mixedNames.reduce(
+          (body, name, index) => body.replace(`./${name}`, host.destinations[index]),
+          section,
+        ) +
+        afterProse,
+    );
+  });
+
+  it("refuses invalid design evidence before the process boundary", function* () {
+    const input = yield* useMixedFixture();
+    const host = modeledHost(() => snapshot(input), mixedNames);
+    const { mixed, restore, reference, withoutDesign } = input;
+    const { comparison } = reference;
+    const wrong = "0".repeat(64);
+    for (const invalid of [
+      undefined,
+      { kind: "none", reason: " " },
+      { ...reference, approval: undefined },
+      { ...reference, sha256: wrong },
+      { ...reference, viewport: { ...restore.viewport, columns: 120 } },
+      { ...reference, comparison: undefined },
+      { ...reference, comparison: { ...comparison, checkpoint: withoutDesign.id } },
+      { ...reference, comparison: { ...comparison, state: "other" } },
+      { ...reference, comparison: { ...comparison, viewport: withoutDesign.viewport } },
+      { ...reference, comparison: { ...comparison, referenceSha256: wrong } },
+      { ...reference, comparison: { ...comparison, candidate: base } },
+      { ...reference, comparison: { ...comparison, afterSha256: wrong } },
+      { ...reference, comparison: { ...comparison, differences: [{ note: "Open difference" }] } },
+      {
+        ...reference,
+        comparison: {
+          ...comparison,
+          disposition: "accepted-deviation",
+          differences: [{ note: "Shorter label" }],
+        },
+      },
+    ]) {
+      yield* writeTextFile(
+        input.path,
+        JSON.stringify({
+          ...mixed,
+          checkpoints: [{ ...restore, reference: invalid }, withoutDesign],
+        }),
+      );
+      yield* raised(run(input, host));
+    }
+    yield* writeTextFile(input.path, JSON.stringify(mixed));
+    yield* until(writeFile(join(input.directory, reference.path), images[0]));
+    expect(String(yield* raised(run(input, host)))).toContain(
+      "Screenshot restore-reference must be a PNG matching its approved SHA-256.",
+    );
+    expect(host.calls).toEqual([]);
+  });
+
+  it("binds comparison decisions to the identity and leaves open differences pending", function* () {
+    const input = yield* useMixedFixture();
+    const original = yield* run(
+      input,
+      modeledHost(() => snapshot(input), mixedNames),
+      "dry-run",
+    );
+    const { mixed, restore, reference, withoutDesign } = input;
+    const note = "Shorter label | <detail>";
+    const differences = [{ note, approval: "deviation-approval.txt" }];
+    const identities = [original.identity];
+    for (const comparison of [
+      { ...reference.comparison, disposition: "accepted-deviation", differences },
+      { ...reference.comparison, disposition: "unresolved", differences: [{ note }] },
+    ]) {
+      yield* writeTextFile(
+        input.path,
+        JSON.stringify({
+          ...mixed,
+          checkpoints: [{ ...restore, reference: { ...reference, comparison } }, withoutDesign],
+        }),
+      );
+      const host = modeledHost(() => snapshot(input), mixedNames);
+      const result = yield* run(input, host);
+      expect(result.status).toBe("complete");
+      expect(result.visualSignOff).toBe(
+        comparison.disposition === "unresolved" ? "pending" : "ready",
+      );
+      expect(host.draft.body).toContain(
+        `${comparison.disposition} · Shorter label &#124; &#60;detail&#62;`,
+      );
+      expect(host.draft.body).not.toContain("deviation-approval.txt");
+      identities.push(result.identity);
+    }
+    expect(new Set(identities).size).toBe(3);
+  });
+
+  it("reconciles legacy sections explicitly and retries just the pending reference", function* () {
+    const input = yield* useMixedFixture();
+    yield* writeTextFile(input.path, JSON.stringify(input.receipt));
+    const legacy = yield* preview(input);
+    yield* writeTextFile(input.path, JSON.stringify(input.mixed));
+    const host = modeledHost(() => snapshot(input, beforeProse + legacy + afterProse), mixedNames);
+    const conflict = yield* run(input, host);
+    expect(conflict.status).toBe("unverifiable");
+    expect(conflict.visualSignOff).toBe("pending");
+    expect(host.edits).toEqual([]);
+    expect(host.draft.body).toBe(beforeProse + legacy + afterProse);
+
+    host.draft.body = beforeProse + afterProse;
+    host.skip.add(mixedNames[0]);
+    const partial = yield* run(input, host);
+    expect(partial.status).toBe("partial");
+    expect(partial.visualSignOff).toBe("pending");
+    expect(partial.exitCode).toBe(1);
+    expect(partial.slots?.map(({ state }) => state)).toEqual([
+      "pending",
+      "verified",
+      "verified",
+      "verified",
+      "verified",
+    ]);
+    host.skip.clear();
+    const complete = yield* run(input, host);
+    expect(complete.status).toBe("complete");
+    expect(complete.visualSignOff).toBe("ready");
+    expect(complete.identity).toBe(partial.identity);
+    expect(host.edits[1].images.map(({ path }) => basename(path))).toEqual([mixedNames[0]]);
+    expect(complete.slots?.slice(1)).toEqual(partial.slots?.slice(1));
+    expect(yield* run(input, host)).toEqual({ ...complete, exitCode: null });
+    expect(host.edits.length).toBe(2);
+
+    host.bytes.set(host.destinations[0], images[0]);
+    const corrupt = yield* run(input, host);
+    expect(corrupt.status).toBe("unverifiable");
+    expect(corrupt.visualSignOff).toBe("pending");
+    expect(corrupt.slots?.[0].state).toBe("unverifiable");
+    expect(host.edits.length).toBe(2);
   });
 
   if (cliRuntime() === "deno") {
