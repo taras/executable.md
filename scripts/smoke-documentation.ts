@@ -162,7 +162,7 @@ main(function* (args) {
   }
 
   console.log(
-    "documentation smoke: one component documented, an unknown one refused, two rendered " +
+    "documentation smoke: core's and the Agent package's components documented, an unknown one refused, two rendered " +
       "from a directory that is not the checkout",
   );
 });

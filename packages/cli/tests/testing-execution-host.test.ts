@@ -591,11 +591,13 @@ const INSPECTION_PROBE = doc(
 function inspectionHost(observe = false): string {
   const core = new URL("../../core/mod.ts", import.meta.url).href;
   const api = new URL("../../core/api.ts", import.meta.url).href;
+  const agent = new URL("../../agent/api.ts", import.meta.url).href;
   const testing = new URL("../../testing/mod.ts", import.meta.url).href;
   const runtime = new URL("../../runtime/mod.ts", import.meta.url).href;
   const install = cliRuntime() === "deno" ? "useDataUriCompiler" : "useTempFileCompiler";
   return doc(
-    `import { Agent, registerComponents, ${install} } from ${JSON.stringify(core)};`,
+    `import { registerComponents, ${install} } from ${JSON.stringify(core)};`,
+    `import { Agent } from ${JSON.stringify(agent)};`,
     `import { writeTextFile } from ${JSON.stringify(runtime)};`,
     'import { fileURLToPath } from "node:url";',
     'const trace = fileURLToPath(new URL("./inspection-events.json", import.meta.url));',
