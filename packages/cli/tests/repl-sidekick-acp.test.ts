@@ -1,4 +1,4 @@
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { DurablePersistenceError, InMemoryStream } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import {
@@ -107,9 +107,11 @@ import type { ReplLive } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { resolvePointer } from "../src/repl/renderer.ts";
 import { usePresenter } from "./fixtures/repl/presentation.ts";
+import { ReplHost } from "../src/repl/host.ts";
 import {
   pairedLocation,
   PAIRED_DIRECTORY,
+  parseEntryRecords,
   parseSidekickRecord,
 } from "../src/repl/sidekick/history.ts";
 import { AGENT_PROMPT, AGENT_PROMPT_REPLY } from "@executablemd/core/host";
@@ -2059,40 +2061,92 @@ describe("minimal live Sidekick ACP attachment", () => {
   });
 
   it("A6: unestablished feedback refuses another prompt without guessing or resend", function* () {
-    const one = yield* world();
-    const a = attachResult.parse(
-      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
-    );
-    one.held.fake.script({ reply: "<REPL.Bindings/>" });
-    one.held.fake.script({
-      reply: "partial feedback reply",
-      failure: "controlled provider failure",
-    });
-    const ended = exchangeSchema.parse(
-      yield* requestAttachment(one.path, {
-        method: "prompt",
-        attachment: a.attachment,
-        text: "inspect",
-      }),
-    );
-    expect(ended.ending).toMatchObject({ joined: true, outcome: "failed" });
-    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
-    const status = z
-      .object({ feedbackUnestablished: z.number() })
-      .passthrough()
-      .parse(yield* requestAttachment(one.path, { method: "status" }));
-    expect(status.feedbackUnestablished).toBeGreaterThan(0);
-    const before = yield* records(one.held.execution);
-    const count = one.held.fake.prompts.length;
-    yield* refused(
-      requestAttachment(one.path, {
-        method: "prompt",
-        attachment: a.attachment,
-        text: "do not resend",
-      }),
-    );
-    expect(one.held.fake.prompts).toHaveLength(count);
-    expect(yield* records(one.held.execution)).toEqual(before);
+    const storageFailure = new Error("Controlled feedback acknowledgement loss.");
+    let verifiedExchange = false;
+    try {
+      yield* scoped(function* () {
+        const one = yield* world();
+        const a = attachResult.parse(
+          yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+        );
+        let prompts = 0;
+        let failedPrompt: string | undefined;
+        yield* ReplHost.around({
+          *appendRecord([file, text], next) {
+            const row = parseSidekickRecord(text.trim());
+            if (row?.kind === "event") {
+              for (const event of parseEntryRecords(row.event)) {
+                if (event.type === "yield" && event.description.type === AGENT_PROMPT) {
+                  prompts++;
+                  if (prompts === 2) {
+                    failedPrompt = event.description.name;
+                    throw storageFailure;
+                  }
+                }
+              }
+            }
+            yield* next(file, text);
+          },
+        });
+        one.held.fake.script({ reply: "<REPL.Bindings/>" });
+        one.held.fake.script({ reply: "<Output>Backend accepted feedback.</Output>" });
+        const ended = exchangeSchema.parse(
+          yield* requestAttachment(one.path, {
+            method: "prompt",
+            attachment: a.attachment,
+            text: "inspect",
+          }),
+        );
+        expect(ended.ending).toMatchObject({
+          joined: true,
+          outcome: "failed",
+          error: "Failed to persist durable yield event",
+        });
+        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+        const status = z
+          .object({ feedbackUnestablished: z.number() })
+          .passthrough()
+          .parse(yield* requestAttachment(one.path, { method: "status" }));
+        expect(status.feedbackUnestablished).toBe(1);
+        const before = yield* records(one.held.execution);
+        expect(failedPrompt).toBeDefined();
+        expect(
+          before.some(
+            (row) =>
+              row.kind === "event" &&
+              parseEntryRecords(row.event).some(
+                (event) =>
+                  event.type === "yield" &&
+                  event.description.type === AGENT_PROMPT &&
+                  event.description.name === failedPrompt,
+              ),
+          ),
+        ).toBe(false);
+        let refusal: unknown;
+        try {
+          yield* requestAttachment(one.path, {
+            method: "prompt",
+            attachment: a.attachment,
+            text: "do not resend",
+          });
+        } catch (error) {
+          refusal = error;
+        }
+        expect(errorOf(refusal).message).toBe(
+          "This conversation holds feedback whose acceptance cannot be established.",
+        );
+        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+        expect(yield* records(one.held.execution)).toEqual(before);
+        verifiedExchange = true;
+      });
+    } catch (error) {
+      if (!verifiedExchange || !(error instanceof DurablePersistenceError)) {
+        throw error;
+      }
+      expect(error.cause).toBe(storageFailure);
+      return;
+    }
+    throw new Error("Expected the conversation release to report the failed append.");
   });
 
   it("A6: the 64-update observer bound detaches a slow connection while its root producer continues", function* () {
