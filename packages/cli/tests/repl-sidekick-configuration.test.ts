@@ -863,11 +863,19 @@ function retryOffered(reading: ScreenReading): boolean {
  * the owner or the route.
  */
 function* readOwnChat(page: ReplPage, title: string): Operation<void> {
-  // The sidebar's own row for this chat: it carries the turn's state after the
-  // title, which the pane's copy of the same words does not.
-  const own = `${title} \u00b7`;
-  yield* page.until(`a Sessions row showing ${title}`, (one) => one.shows(own));
-  yield* page.press(title, { onRow: own });
+  const rowOf = (frame: ScreenReading) =>
+    frame.rows
+      .map((row) => row.slice(0, row.indexOf("│") + 1).trim())
+      .find((row) => row.split("│", 1)[0]?.trim() === `[U] ${title}`);
+  const settled = yield* page.until(
+    `a settled Transcript row showing ${title}`,
+    (one) => rowOf(one) !== undefined,
+  );
+  const row = rowOf(settled);
+  if (row === undefined) {
+    throw new Error(`the Transcript lost the turn for ${title}`);
+  }
+  yield* page.press(title, { onRow: row });
   yield* page.until("the chat selector standing", (one) => one.shows("[Back to current chat]"));
   // The current chat keeps its usual controls even when it is the chat
   // somebody explicitly selected: it *is* the active association.

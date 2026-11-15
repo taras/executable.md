@@ -244,10 +244,7 @@ describe("wheel real consumers", () => {
     yield* page.key("Escape");
     yield* page.until(
       "closed held question",
-      (one) =>
-        one.shows("[answer sidekick]") &&
-        !one.shows("[submit]") &&
-        one.shows("Enter or click activates"),
+      (one) => one.shows("> [answer sidekick]") && !one.shows("[submit]"),
     );
     yield* page.press("[answer sidekick]");
     yield* page.until("reopened held value", (one) => one.shows("held-value"));

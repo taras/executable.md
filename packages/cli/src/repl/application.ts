@@ -5890,12 +5890,18 @@ function sidekickNoticeFailure(view: ReplView): ReplSidekickChatRow | undefined 
   ) {
     return undefined;
   }
-  return view.live.sidekick.chat.findLast(
-    (item) =>
+  const { chat } = view.live.sidekick;
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    const item = chat[index];
+    if (
       item.conversation === notice.conversation &&
       item.turn === notice.turn &&
-      item.failure !== undefined,
-  );
+      item.failure !== undefined
+    ) {
+      return item;
+    }
+  }
+  return undefined;
 }
 
 export function visibleSidekickNotice(view: ReplView): ReplSidekickChatRow | undefined {
@@ -14067,7 +14073,7 @@ function workspacePresentation(input: {
           box({
             id: "box:sidekick:notice:actions",
             region: "inspection",
-            props: bandRowProps(REPL_PALETTE.restoreFailureSurface),
+            props: partsRowProps(1, TAB_GAP),
             children: [...retry, ...parts(["notice:help"], "inspection")],
           }),
         ],
