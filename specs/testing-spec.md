@@ -117,6 +117,16 @@ never carries a captured value, a prop, command or prompt text, an assertion's
 operands or anything a document rendered, and the rendered report on stdout is
 unchanged by it.
 
+The default `--reporter=pretty` prints the rendered report on stdout and
+progress on stderr. `--reporter=failures` suppresses the rendered report,
+directory headings, test starts, and successful outcomes. It keeps failure
+and cancellation diagnostics and journal notices on stderr. After the run,
+it prints one line on stderr with the number of passing and failing tests
+recorded by the root documents and elapsed time. Nested execution results
+provide diagnostics without adding to those counts. Both reporters use the
+same exit statuses and retain the same journals. Output that commands write
+directly to the terminal keeps its normal routing.
+
 Each root document and each nested `run` child keeps its journal in memory.
 When that execution fails, times out or is cancelled, the command saves the
 recorded events as JSONL after the execution's assertions and teardown have
@@ -240,8 +250,8 @@ registrations, and testing sessions belong to one document and are torn down
 before the next one starts. A document that declares no tests fails on its own
 rather than inheriting an earlier document's results.
 
-Each document's report is preceded by a heading naming its relative path, and a
-failure is reported against that path. A failing document does not stop the
+The pretty reporter precedes each document's report with a heading naming its
+relative path. Both reporters identify a failed document by that path. A failing document does not stop the
 run; the remaining documents still execute, and a closing line names how many
 of them failed. The run exits `0` only when every discovered document passes,
 and `1` when any document fails or when no document matches.
