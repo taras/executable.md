@@ -17,6 +17,9 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { LiveBindingCollisionError } from "../src/live-env.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/ephemeral-service.test.ts");
 
 const SAMPLE = `---
 meta:
@@ -548,11 +551,13 @@ const shared = "must-not-execute";
     ).toHaveLength(1);
   });
 
-  it("allows a later ephemeral eval to update an existing live binding", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "doc.md": `<Provider><Sample /></Provider>\n`,
-      "components/Provider.md": `---
+  journalCase(
+    "allows a later ephemeral eval to update an existing live binding",
+    "doc.md",
+    function* (stream) {
+      yield* useStubFs({
+        "doc.md": `<Provider><Sample /></Provider>\n`,
+        "components/Provider.md": `---
 meta:
   componentName: Provider
 ---
@@ -574,21 +579,22 @@ yield* Sample.around({
 
 <Content />
 `,
-      "components/Sample.md": SAMPLE,
-    });
+        "components/Sample.md": SAMPLE,
+      });
 
-    const output = String(
-      yield* scoped(function* () {
-        return yield* collect(
-          yield* execute({
-            path: "doc.md",
-            stream,
-            includes: ["components", "."],
-          }),
-        );
-      }),
-    );
+      const output = String(
+        yield* scoped(function* () {
+          return yield* collect(
+            yield* execute({
+              path: "doc.md",
+              stream,
+              includes: ["components", "."],
+            }),
+          );
+        }),
+      );
 
-    expect(output).toContain("second");
-  });
+      expect(output).toContain("second");
+    },
+  );
 });
