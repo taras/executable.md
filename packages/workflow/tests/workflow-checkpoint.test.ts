@@ -22,13 +22,16 @@ import { DatabaseSync } from "node:sqlite";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import type { DurableEvent, Yield } from "@executablemd/durable-streams";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { runWorkflowDocument } from "../../git/tests/support/composition.ts";
 import { runPath, useStorageRoot, withBegunRun } from "./support/storage.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";
 import { SUSPENSION_REQUEST } from "../src/suspension/suspend.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const OWNER = "packages/workflow/tests/workflow-checkpoint.test.ts";
+const journalCase = journalCases(OWNER);
 
 /** The durable record core's `<Elicit>` writes and the workflow's must not. */
 const ELICIT = "elicit";
@@ -226,14 +229,17 @@ describe("Tier CK — the durable checkpoint", () => {
     });
   });
 
-  it("CK7: ordinary execution is unchanged — core's <Elicit> still records", function* () {
-    const stream = new InMemoryStream();
-    const output = yield* collect(yield* execute({ ...inlineSource(ANSWERED), stream }));
+  journalCase(
+    "CK7: ordinary execution is unchanged — core's <Elicit> still records",
+    "<eval>",
+    function* (stream) {
+      const output = yield* collect(yield* execute({ ...inlineSource(ANSWERED), stream }));
 
-    expect(String(output)).toContain("decision: true");
+      expect(String(output)).toContain("decision: true");
 
-    const events: DurableEvent[] = yield* stream.readAll();
-    const recorded = events.filter(isYield).filter((event) => event.description.type === ELICIT);
-    expect(recorded).toHaveLength(1);
-  });
+      const events: DurableEvent[] = yield* stream.readAll();
+      const recorded = events.filter(isYield).filter((event) => event.description.type === ELICIT);
+      expect(recorded).toHaveLength(1);
+    },
+  );
 });
