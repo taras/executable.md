@@ -230,27 +230,30 @@ describe("Tier FAIL — stopping a document deliberately", () => {
     },
   );
 
-  it("FAIL3: does nothing beneath an unselected <If>, and the root returns", function* () {
-    const dir = yield* useDir();
-    const result = yield* run(
-      dir,
-      [
-        VALUE_ROOT,
-        `<If condition={false}><Fail message=${JSON.stringify(SENTINEL)} /></If>`,
-        "",
-        '<Ran mark="after" />',
-        "",
-        '<Return value={"approved"} />',
-        "",
-      ].join("\n"),
-    );
+  journalCase(
+    "FAIL3: does nothing beneath an unselected <If>, and the root returns",
+    function* (stream, dir) {
+      const result = yield* run(
+        dir,
+        [
+          VALUE_ROOT,
+          `<If condition={false}><Fail message=${JSON.stringify(SENTINEL)} /></If>`,
+          "",
+          '<Ran mark="after" />',
+          "",
+          '<Return value={"approved"} />',
+          "",
+        ].join("\n"),
+        { stream },
+      );
 
-    expect(result.outcome).toEqual({ ok: true, value: "approved" });
-    expect(result.ran).toEqual(["after"]);
-    expect(everythingSaid(result)).not.toContain(SENTINEL);
-    // An unselected branch imports nothing, so the component was never reached.
-    expect(importedNames(result.events)).not.toContain("Fail");
-  });
+      expect(result.outcome).toEqual({ ok: true, value: "approved" });
+      expect(result.ran).toEqual(["after"]);
+      expect(everythingSaid(result)).not.toContain(SENTINEL);
+      // An unselected branch imports nothing, so the component was never reached.
+      expect(importedNames(result.events)).not.toContain("Fail");
+    },
+  );
 
   journalCase(
     "FAIL4: names loop exhaustion after the loop reached its own max",
@@ -377,9 +380,8 @@ describe("Tier FAIL — invocations that never raise the authored message", () =
   ];
 
   for (const [title, source, expected] of refusals) {
-    it(title, function* () {
-      const dir = yield* useDir();
-      const result = yield* run(dir, source);
+    journalCase(title, function* (stream, dir) {
+      const result = yield* run(dir, source, { stream });
 
       expect(failureOf(result).message).toContain(expected);
       // The refusal happened first: nothing anywhere carries the message a
@@ -446,9 +448,9 @@ describe("Tier FAIL — position, durability and precedence", () => {
     expect(second.events.length).toBe(first.events.length);
   });
 
-  it("FAIL10: a repository Fail.md is chosen ahead of core's", function* () {
-    const dir = yield* useDir();
+  journalCase("FAIL10: a repository Fail.md is chosen ahead of core's", function* (stream, dir) {
     const result = yield* run(dir, `<Fail message=${JSON.stringify(SENTINEL)} />\n`, {
+      stream,
       files: {
         "Fail.md": [
           "---",
