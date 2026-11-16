@@ -533,97 +533,113 @@ describe("Tier FX — the final import answer is verified", () => {
     }
   });
 
-  it("FX3c: an in-place change to a fixed definition cannot run, now or later", function* () {
+  const immutableDefinition =
+    "FX3c: an in-place change to a fixed definition cannot run, now or later";
+  it(immutableDefinition, function* () {
     const fixture = yield* useFixture();
-    const definition = fixedFilesystemDefinition("File");
-    if (definition === undefined) {
-      throw new Error("core supplies no File definition");
-    }
-    const original = definition.fn;
-    const originalPathType = pathType(definition.props);
-    expect(originalPathType).toBe("string");
+    const testCase = { owner: OWNER, name: immutableDefinition };
+    yield* captureTestJournal(testCase, join(fixture.workspace, "doc.md"), function* (stream) {
+      const definition = fixedFilesystemDefinition("File");
+      if (definition === undefined) {
+        throw new Error("core supplies no File definition");
+      }
+      const original = definition.fn;
+      const originalPathType = pathType(definition.props);
+      expect(originalPathType).toBe("string");
 
-    let attempts = 0;
-    const accepted: boolean[] = [];
-    let replacementCalls = 0;
+      let attempts = 0;
+      const accepted: boolean[] = [];
+      let replacementCalls = 0;
 
-    // The dangerous shape is not a replacement object — it is a change to the
-    // object canonical execution handed out, which every execution in the
-    // process shares. Two members are attempted, because both decide what runs:
-    // the implementation, and the schema that says which authored values reach
-    // it.
-    const output = yield* run(
-      fixture,
-      [
-        "<PrintErrors>",
-        "",
-        '<File path="one.md">one</File>',
-        "",
-        '<File path="two.md">two</File>',
-        "",
-        '<File path="two.md" as="two" />',
-        "",
-        "LATER {two}",
-        "",
-        "</PrintErrors>",
-      ].join("\n"),
-      function* () {
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            const answer = yield* next(name, position);
-            if (name !== "File" || attempts > 0) {
+      // The dangerous shape is not a replacement object — it is a change to the
+      // object canonical execution handed out, which every execution in the
+      // process shares. Two members are attempted, because both decide what runs:
+      // the implementation, and the schema that says which authored values reach
+      // it.
+      const output = yield* run(
+        fixture,
+        [
+          "<PrintErrors>",
+          "",
+          '<File path="one.md">one</File>',
+          "",
+          '<File path="two.md">two</File>',
+          "",
+          '<File path="two.md" as="two" />',
+          "",
+          "LATER {two}",
+          "",
+          "</PrintErrors>",
+        ].join("\n"),
+        function* () {
+          yield* Component.around({
+            *importComponent([name, position], next) {
+              const answer = yield* next(name, position);
+              if (name !== "File" || attempts > 0) {
+                return answer;
+              }
+              attempts += 1;
+              accepted.push(
+                Reflect.set(answer, "fn", function* (): Operation<string> {
+                  replacementCalls += 1;
+                  return "POISONED-FILE-BODY";
+                }),
+              );
+              const path = pathSchema(answer.props);
+              if (path !== undefined) {
+                accepted.push(Reflect.set(path, "type", "number"));
+              }
               return answer;
-            }
-            attempts += 1;
-            accepted.push(
-              Reflect.set(answer, "fn", function* (): Operation<string> {
-                replacementCalls += 1;
-                return "POISONED-FILE-BODY";
-              }),
-            );
-            const path = pathSchema(answer.props);
-            if (path !== undefined) {
-              accepted.push(Reflect.set(path, "type", "number"));
-            }
-            return answer;
-          },
-        });
-      },
-    );
+            },
+          });
+        },
+        stream,
+      );
 
-    // Both attempts were made and both were rejected where they were made,
-    // rather than the handler quietly doing nothing.
-    expect(attempts).toBe(1);
-    expect(accepted).toEqual([false, false]);
+      // Both attempts were made and both were rejected where they were made,
+      // rather than the handler quietly doing nothing.
+      expect(attempts).toBe(1);
+      expect(accepted).toEqual([false, false]);
 
-    // No replacement body and no replacement I/O, on this import or any later
-    // one: the writes are the document's own text and the read returns it.
-    expect(replacementCalls).toBe(0);
-    expect(output).not.toContain("POISONED");
-    expect(output).toContain("LATER two");
-    expect(yield* readTextFile(join(fixture.workspace, "one.md"))).toBe("one");
-    expect(yield* readTextFile(join(fixture.workspace, "two.md"))).toBe("two");
+      // No replacement body and no replacement I/O, on this import or any later
+      // one: the writes are the document's own text and the read returns it.
+      expect(replacementCalls).toBe(0);
+      expect(output).not.toContain("POISONED");
+      expect(output).toContain("LATER two");
+      expect(yield* readTextFile(join(fixture.workspace, "one.md"))).toBe("one");
+      expect(yield* readTextFile(join(fixture.workspace, "two.md"))).toBe("two");
 
-    // The owning definition and its whole schema are what they were.
-    expect(fixedFilesystemDefinition("File")?.fn).toBe(original);
-    expect(pathType(fixedFilesystemDefinition("File")?.props)).toBe("string");
+      // The owning definition and its whole schema are what they were.
+      expect(fixedFilesystemDefinition("File")?.fn).toBe(original);
+      expect(pathType(fixedFilesystemDefinition("File")?.props)).toBe("string");
 
-    // And the contract a *fresh* execution validates against is unchanged. This
-    // is the half a single execution cannot establish: the first-issued
-    // baseline refuses a change inside the execution that made it, and what
-    // keeps the next execution from taking its first copy of a changed object
-    // is that there is nothing to change.
-    const later = yield* useFixture();
-    const second = yield* run(
-      later,
-      [
-        '<File path="valid.md">still a string path</File>',
-        '<File path="valid.md" as="seen" />',
-        "{seen}",
-      ].join("\n"),
-    );
-    expect(second).toContain("still a string path");
-    expect(yield* readTextFile(join(later.workspace, "valid.md"))).toBe("still a string path");
+      // And the contract a *fresh* execution validates against is unchanged. This
+      // is the half a single execution cannot establish: the first-issued
+      // baseline refuses a change inside the execution that made it, and what
+      // keeps the next execution from taking its first copy of a changed object
+      // is that there is nothing to change.
+      const later = yield* useFixture();
+      yield* captureTestJournal(
+        testCase,
+        join(later.workspace, "doc.md"),
+        function* (secondStream) {
+          const second = yield* run(
+            later,
+            [
+              '<File path="valid.md">still a string path</File>',
+              '<File path="valid.md" as="seen" />',
+              "{seen}",
+            ].join("\n"),
+            undefined,
+            secondStream,
+          );
+          expect(second).toContain("still a string path");
+          expect(yield* readTextFile(join(later.workspace, "valid.md"))).toBe(
+            "still a string path",
+          );
+        },
+      );
+    });
   });
 
   fixtureCase("FX3c2: another name's issued definition is refused", function* (fixture, stream) {

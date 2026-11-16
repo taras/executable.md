@@ -625,25 +625,31 @@ describe("Tier CR — what a document gets", () => {
     },
   );
 
-  it("CR23: a broken local component fails instead of falling back to core's", function* () {
+  const brokenLocal = "CR23: a broken local component fails instead of falling back to core's";
+  it(brokenLocal, function* () {
     const dir = yield* useFixture();
-    // Core's <TempDir> renders its content, so a fall-through would succeed
-    // visibly. That is what makes the failure below meaningful.
-    yield* writeTextFile(join(dir, "doc.md"), "<TempDir>VISIBLE</TempDir>\n");
-    yield* writeTextFile(join(dir, "TempDir.md"), "unbroken\n");
-    expect(String(yield* run(dir))).toContain("unbroken");
+    const testCase = { owner: OWNER, name: brokenLocal };
+    yield* captureTestJournal(testCase, join(dir, "doc.md"), function* (stream) {
+      // Core's <TempDir> renders its content, so a fall-through would succeed
+      // visibly. That is what makes the failure below meaningful.
+      yield* writeTextFile(join(dir, "doc.md"), "<TempDir>VISIBLE</TempDir>\n");
+      yield* writeTextFile(join(dir, "TempDir.md"), "unbroken\n");
+      expect(String(yield* run(dir, undefined, stream))).toContain("unbroken");
 
-    // Present, and unusable: the schema is not a schema.
-    yield* writeTextFile(
-      join(dir, "TempDir.md"),
-      ["---", "props:", "  type: object", "  properties: 7", "---", "", "unbroken"].join("\n"),
-    );
+      // Present, and unusable: the schema is not a schema.
+      yield* writeTextFile(
+        join(dir, "TempDir.md"),
+        ["---", "props:", "  type: object", "  properties: 7", "---", "", "unbroken"].join("\n"),
+      );
 
-    const output = yield* reportOf(() => run(dir));
-    expect(output).toContain("properties");
-    // Neither the broken component's body nor core's component ran.
-    expect(output).not.toContain("unbroken");
-    expect(output).not.toContain("VISIBLE");
+      yield* captureTestJournal(testCase, join(dir, "doc.md"), function* (secondStream) {
+        const output = yield* reportOf(() => run(dir, undefined, secondStream));
+        expect(output).toContain("properties");
+        // Neither the broken component's body nor core's component ran.
+        expect(output).not.toContain("unbroken");
+        expect(output).not.toContain("VISIBLE");
+      });
+    });
   });
 
   fixtureCase(

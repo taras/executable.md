@@ -1648,11 +1648,17 @@ describe("993 value invocation privacy", () => {
     expect(result.error).toBeUndefined();
     expect(result.output).toBe("");
   });
-  it("W5: a value root refuses nested declarations before its first effect", function* () {
-    const result = yield* run({
-      "doc.md": `---\nreturns: { type: string }\n---\n${BODY_EFFECT}\n<If condition={false}><Output /></If><Return value="answer" />`,
-    });
-    expect(said(result)).toContain("exclusive");
-    expect(result.commands).toEqual([]);
-  });
+  rootCase(
+    "W5: a value root refuses nested declarations before its first effect",
+    function* (stream) {
+      const result = yield* run(
+        {
+          "doc.md": `---\nreturns: { type: string }\n---\n${BODY_EFFECT}\n<If condition={false}><Output /></If><Return value="answer" />`,
+        },
+        stream,
+      );
+      expect(said(result)).toContain("exclusive");
+      expect(result.commands).toEqual([]);
+    },
+  );
 });
