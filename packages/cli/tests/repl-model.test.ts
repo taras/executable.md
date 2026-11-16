@@ -19,6 +19,7 @@ import {
  * binding in a scope that never published it.
  */
 
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -1480,90 +1481,105 @@ describe("REPL model: which call of a repeated source owns its work", () => {
   });
 });
 
+const SOURCE_OWNER = "packages/cli/tests/repl-model.test.ts";
+const sourceCase = journalCases(SOURCE_OWNER);
+
 describe("REPL source ownership by import coordinate (#976)", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("SO1: sequential nested calls keep their own answers at every prefix and after serialization", function* () {
-    const run = yield* ownerRun();
-    expect(run.output.trim()).toBe("first/second");
-    for (let end = 1; end <= run.events.length; end++) {
-      const events = run.events.slice(0, end);
-      const model = projected(events);
-      expect(projected(copied(events))).toEqual(model);
-      const wrappers = only(model)?.scopes ?? [];
-      for (const [index, wrapper] of wrappers.entries()) {
-        const leaf = wrapper.scopes[0];
-        expect(leaf?.name ?? "OwnerLeaf").toBe("OwnerLeaf");
-        for (const question of leaf?.elicitations ?? []) {
-          expect(question).toMatchObject({ answer: index === 0 ? "first" : "second" });
+  sourceCase(
+    "SO1: sequential nested calls keep their own answers at every prefix and after serialization",
+    "<eval>",
+    function* (stream) {
+      const run = yield* ownerRun(undefined, stream);
+      expect(run.output.trim()).toBe("first/second");
+      for (let end = 1; end <= run.events.length; end++) {
+        const events = run.events.slice(0, end);
+        const model = projected(events);
+        expect(projected(copied(events))).toEqual(model);
+        const wrappers = only(model)?.scopes ?? [];
+        for (const [index, wrapper] of wrappers.entries()) {
+          const leaf = wrapper.scopes[0];
+          expect(leaf?.name ?? "OwnerLeaf").toBe("OwnerLeaf");
+          for (const question of leaf?.elicitations ?? []) {
+            expect(question).toMatchObject({ answer: index === 0 ? "first" : "second" });
+          }
         }
       }
-    }
-    const leafImports = run.events.filter(
-      (event) => event.type === "yield" && event.description.name === "OwnerLeaf",
-    );
-    expect(
-      leafImports.map((event) =>
-        event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
-      ),
-    ).toEqual([
-      { coroutineId: "root", index: 1 },
-      { coroutineId: "root", index: 5 },
-    ]);
-    const entry = only(projected(run.events));
-    expect(entry?.scopes.map((wrapper) => wrapper.scopes.map((leaf) => leaf.name))).toEqual([
-      ["OwnerLeaf"],
-      ["OwnerLeaf"],
-    ]);
-    expect(entry?.bindings).toEqual([
-      { name: "first", value: "first" },
-      { name: "second", value: "second" },
-    ]);
-  });
+      const leafImports = run.events.filter(
+        (event) => event.type === "yield" && event.description.name === "OwnerLeaf",
+      );
+      expect(
+        leafImports.map((event) =>
+          event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
+        ),
+      ).toEqual([
+        { coroutineId: "root", index: 1 },
+        { coroutineId: "root", index: 5 },
+      ]);
+      const entry = only(projected(run.events));
+      expect(entry?.scopes.map((wrapper) => wrapper.scopes.map((leaf) => leaf.name))).toEqual([
+        ["OwnerLeaf"],
+        ["OwnerLeaf"],
+      ]);
+      expect(entry?.bindings).toEqual([
+        { name: "first", value: "first" },
+        { name: "second", value: "second" },
+      ]);
+    },
+  );
 
-  it("SO2: repeated loop sites and caller Content keep their lexical source owner", function* () {
-    const source =
-      '<Loop max={2}><OwnerWrapper input="same" as="item" /></Loop>\n<OwnerContent><OwnerWrapper input="caller" as="answer" /></OwnerContent>';
-    const run = yield* ownerRun(source);
-    const entry = only(projected(run.events));
-    expect(entry?.scopes.map((scope) => scope.name)).toEqual([
-      "OwnerWrapper",
-      "OwnerWrapper",
-      "OwnerContent",
-      "OwnerWrapper",
-    ]);
-    expect(entry?.scopes[2].scopes).toEqual([]);
-    expect(
-      entry?.scopes
-        .filter((scope) => scope.name === "OwnerWrapper")
-        .map((scope) => scope.scopes[0]?.elicitations[0]),
-    ).toMatchObject([{ answer: "same" }, { answer: "same" }, { answer: "caller" }]);
-    const wrappers = run.events.filter(
-      (event) => event.type === "yield" && event.description.name === "OwnerWrapper",
-    );
-    expect(wrappers).toHaveLength(3);
-    const yields = run.events.filter((event) => event.type === "yield");
-    const wrapperCoordinates = yields.flatMap((event, index) =>
-      event.description.name === "OwnerWrapper" ? [{ coroutineId: event.coroutineId, index }] : [],
-    );
-    const leafOwners = yields
-      .filter((event) => event.description.name === "OwnerLeaf")
-      .map((event) => event.description[OWNER_FIELD]);
-    expect(leafOwners).toEqual(wrapperCoordinates);
-    expect(
-      wrappers[0].type === "yield" && wrappers[0].description["executablemd.source-position"],
-    ).toEqual(
-      wrappers[1].type === "yield" && wrappers[1].description["executablemd.source-position"],
-    );
+  sourceCase(
+    "SO2: repeated loop sites and caller Content keep their lexical source owner",
+    "<eval>",
+    function* (stream) {
+      const source =
+        '<Loop max={2}><OwnerWrapper input="same" as="item" /></Loop>\n<OwnerContent><OwnerWrapper input="caller" as="answer" /></OwnerContent>';
+      const run = yield* ownerRun(source, stream);
+      const entry = only(projected(run.events));
+      expect(entry?.scopes.map((scope) => scope.name)).toEqual([
+        "OwnerWrapper",
+        "OwnerWrapper",
+        "OwnerContent",
+        "OwnerWrapper",
+      ]);
+      expect(entry?.scopes[2].scopes).toEqual([]);
+      expect(
+        entry?.scopes
+          .filter((scope) => scope.name === "OwnerWrapper")
+          .map((scope) => scope.scopes[0]?.elicitations[0]),
+      ).toMatchObject([{ answer: "same" }, { answer: "same" }, { answer: "caller" }]);
+      const wrappers = run.events.filter(
+        (event) => event.type === "yield" && event.description.name === "OwnerWrapper",
+      );
+      expect(wrappers).toHaveLength(3);
+      const yields = run.events.filter((event) => event.type === "yield");
+      const wrapperCoordinates = yields.flatMap((event, index) =>
+        event.description.name === "OwnerWrapper"
+          ? [{ coroutineId: event.coroutineId, index }]
+          : [],
+      );
+      const leafOwners = yields
+        .filter((event) => event.description.name === "OwnerLeaf")
+        .map((event) => event.description[OWNER_FIELD]);
+      expect(leafOwners).toEqual(wrapperCoordinates);
+      expect(
+        wrappers[0].type === "yield" && wrappers[0].description["executablemd.source-position"],
+      ).toEqual(
+        wrappers[1].type === "yield" && wrappers[1].description["executablemd.source-position"],
+      );
 
-    for (const event of wrappers) {
-      if (event.type === "yield") {
-        expect(event.description[OWNER_FIELD]).toEqual({ coroutineId: "root", index: 0 });
+      for (const event of wrappers) {
+        if (event.type === "yield") {
+          expect(event.description[OWNER_FIELD]).toEqual({ coroutineId: "root", index: 0 });
+        }
       }
-    }
-  });
+    },
+  );
 
-  it("SO7: ordinary middleware copies preserve evaluated blocks' source ownership", function* () {
+  const copiedSource =
+    "SO7: ordinary middleware copies preserve evaluated blocks' source ownership";
+  it(copiedSource, function* () {
     const source = [
       '<OwnerEval input="first" as="first" />',
       '<OwnerEval input="second" as="second" />',
@@ -1575,46 +1591,50 @@ describe("REPL source ownership by import coordinate (#976)", () => {
       "{first}/{second}",
     ].join("\n");
     for (const copy of [false, true]) {
-      yield* scoped(function* () {
-        let forwarded = 0;
-        if (copy) {
-          yield* Component.around({
-            *applyModifiers([modifiers, block], next) {
-              forwarded += 1;
-              return yield* next(modifiers, { ...block });
-            },
-          });
-        }
-        const run = yield* ownerRun(source);
-        expect(run.output.trim()).toBe("first/second");
-        expect(forwarded).toBe(copy ? 3 : 0);
-        const evaluations = run.events.filter(
-          (event) => event.type === "yield" && event.description.type === "eval",
-        );
-        expect(
-          evaluations.map((event) =>
-            event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
-          ),
-        ).toEqual([
-          { coroutineId: "root", index: 1 },
-          { coroutineId: "root", index: 3 },
-          { coroutineId: "root", index: 0 },
-        ]);
-        for (let end = 1; end <= run.events.length; end++) {
-          const prefix = run.events.slice(0, end);
-          expect(projected(copied(prefix))).toEqual(projected(prefix));
-        }
-        const entry = only(projected(copied(run.events)));
-        if (entry === undefined) {
-          throw new Error("the journal admits one entry");
-        }
-        expect(entry.scopes.map((scope) => scope.bindings)).toEqual([
-          [{ name: "value", value: "first" }],
-          [{ name: "value", value: "second" }],
-          [],
-        ]);
-        expect(binding(entry, "callerValue")).toBe("caller");
-      });
+      yield* captureTestJournal(
+        { owner: SOURCE_OWNER, name: copiedSource },
+        "<eval>",
+        function* (stream) {
+          let forwarded = 0;
+          if (copy) {
+            yield* Component.around({
+              *applyModifiers([modifiers, block], next) {
+                forwarded += 1;
+                return yield* next(modifiers, { ...block });
+              },
+            });
+          }
+          const run = yield* ownerRun(source, stream);
+          expect(run.output.trim()).toBe("first/second");
+          expect(forwarded).toBe(copy ? 3 : 0);
+          const evaluations = run.events.filter(
+            (event) => event.type === "yield" && event.description.type === "eval",
+          );
+          expect(
+            evaluations.map((event) =>
+              event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
+            ),
+          ).toEqual([
+            { coroutineId: "root", index: 1 },
+            { coroutineId: "root", index: 3 },
+            { coroutineId: "root", index: 0 },
+          ]);
+          for (let end = 1; end <= run.events.length; end++) {
+            const prefix = run.events.slice(0, end);
+            expect(projected(copied(prefix))).toEqual(projected(prefix));
+          }
+          const entry = only(projected(copied(run.events)));
+          if (entry === undefined) {
+            throw new Error("the journal admits one entry");
+          }
+          expect(entry.scopes.map((scope) => scope.bindings)).toEqual([
+            [{ name: "value", value: "first" }],
+            [{ name: "value", value: "second" }],
+            [],
+          ]);
+          expect(binding(entry, "callerValue")).toBe("caller");
+        },
+      );
     }
   });
 
