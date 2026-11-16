@@ -8,6 +8,7 @@
  * what a document gets.
  */
 
+import { fileJournalCases } from "../../test-support/journal-cases.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
@@ -373,9 +374,10 @@ interface RunOptions {
 function* runDoc(
   doc: string,
   options: RunOptions = {},
+  fixture?: { directory: string; stream: InMemoryStream },
 ): Operation<{ output: string; result: Result<Json>; trace: Trace; events: DurableEvent[] }> {
   const trace: Trace = options.trace ?? { prompts: [], agentLookups: [], timeouts: [] };
-  const dir = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
+  const dir = fixture?.directory ?? path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -427,7 +429,7 @@ function* runDoc(
 
     // `<Session>` names durable work after its own invocation, so the host
     // declares it to the execution rather than registering it.
-    const stream = new InMemoryStream();
+    const stream = fixture?.stream ?? new InMemoryStream();
     const execution = yield* executeInstalled(
       {
         path: docPath,
@@ -451,20 +453,38 @@ function* runDoc(
   });
 }
 
+const guardedCase = fileJournalCases(
+  "packages/agent/tests/agent-function-components.test.ts",
+  "xmd-af-test-",
+  "doc.md",
+);
+
+function promptCase(
+  name: string,
+  body: (run: (doc: string, options?: RunOptions) => ReturnType<typeof runDoc>) => Operation<void>,
+): void {
+  guardedCase(name, (stream, directory) =>
+    body((doc, options) => runDoc(doc, options, { directory, stream })),
+  );
+}
+
 describe("Tier AF — the engine owns props", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("AF1: an expression prop resolves, where the claimed handler rejected it", function* () {
-    const { output, result } = yield* runDoc(
-      ["```js eval", 'const who = "hello";', "```", "", "<Prompt text={who} />", ""].join("\n"),
-    );
+  promptCase(
+    "AF1: an expression prop resolves, where the claimed handler rejected it",
+    function* (run) {
+      const { output, result } = yield* run(
+        ["```js eval", 'const who = "hello";', "```", "", "<Prompt text={who} />", ""].join("\n"),
+      );
 
-    expect(result.ok).toBe(true);
-    expect(output).toContain("[hello]");
-  });
+      expect(result.ok).toBe(true);
+      expect(output).toContain("[hello]");
+    },
+  );
 
-  it("AF2: a boolean expression prop resolves", function* () {
-    const { result } = yield* runDoc(
+  promptCase("AF2: a boolean expression prop resolves", function* (run) {
+    const { result } = yield* run(
       [
         "```js eval",
         "const strict = false;",
@@ -478,36 +498,42 @@ describe("Tier AF — the engine owns props", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("AF3: an expression resolving to the wrong type is a schema printed error, and nothing runs", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc(
-      ["```js eval", "const who = 42;", "```", "", "<Prompt text={who} />", ""].join("\n"),
-      { trace },
-    );
+  promptCase(
+    "AF3: an expression resolving to the wrong type is a schema printed error, and nothing runs",
+    function* (run) {
+      const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+      const { result } = yield* run(
+        ["```js eval", "const who = 42;", "```", "", "<Prompt text={who} />", ""].join("\n"),
+        { trace },
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.error.message).toContain(
-      "Prop validation failed for <Prompt />",
-    );
-    // Validation is the engine's, and it runs before the component does.
-    expect(trace.prompts).toEqual([]);
-    expect(trace.agentLookups).toEqual([]);
-  });
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.error.message).toContain(
+        "Prop validation failed for <Prompt />",
+      );
+      // Validation is the engine's, and it runs before the component does.
+      expect(trace.prompts).toEqual([]);
+      expect(trace.agentLookups).toEqual([]);
+    },
+  );
 
-  it("AF4: an unknown prop is rejected before the component performs anything", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output, result } = yield* runDoc(
-      '<AgentProvider name="stub" nope="x">body</AgentProvider>\n',
-      { trace },
-    );
+  promptCase(
+    "AF4: an unknown prop is rejected before the component performs anything",
+    function* (run) {
+      const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+      const { output, result } = yield* run(
+        '<AgentProvider name="stub" nope="x">body</AgentProvider>\n',
+        { trace },
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.error.message).toContain(
-      "Prop validation failed for <AgentProvider />",
-    );
-    expect(output).not.toContain("body");
-    expect(trace.prompts).toEqual([]);
-  });
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.error.message).toContain(
+        "Prop validation failed for <AgentProvider />",
+      );
+      expect(output).not.toContain("body");
+      expect(trace.prompts).toEqual([]);
+    },
+  );
 });
 
 describe("Tier AF — the engine owns `as`", () => {
@@ -569,17 +595,17 @@ describe("Tier AF — the engine owns `as`", () => {
     expect(JSON.stringify(events)).not.toContain("permission_decision_result");
   });
 
-  it("AF5: the returned string is captured once and not also emitted", function* () {
-    const { output, result } = yield* runDoc('<Prompt text="hi" as="answer" />\n\nGot: {answer}\n');
+  promptCase("AF5: the returned string is captured once and not also emitted", function* (run) {
+    const { output, result } = yield* run('<Prompt text="hi" as="answer" />\n\nGot: {answer}\n');
 
     expect(result.ok).toBe(true);
     expect(output).toContain("Got: [hi]");
     expect(output.indexOf("[hi]")).toBe(output.lastIndexOf("[hi]"));
   });
 
-  it("AF6: an invalid `as` prevents every component effect", function* () {
+  promptCase("AF6: an invalid `as` prevents every component effect", function* (run) {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc('<Prompt text="hi" as="not an identifier" />\n', { trace });
+    const { result } = yield* run('<Prompt text="hi" as="not an identifier" />\n', { trace });
 
     expect(result.ok).toBe(false);
     expect(result.ok ? "" : result.error.message).toContain('Prop "as" on <Prompt />');
@@ -589,48 +615,54 @@ describe("Tier AF — the engine owns `as`", () => {
 });
 
 describe("Tier AF — a prompt does nothing before its content renders", () => {
-  it("AF7: a failing wrapper performs no lookup, no prompt and no journal entry", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc("<Prompt>\n<Missing />\n</Prompt>\n", { trace });
+  promptCase(
+    "AF7: a failing wrapper performs no lookup, no prompt and no journal entry",
+    function* (run) {
+      const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+      const { result } = yield* run("<Prompt>\n<Missing />\n</Prompt>\n", { trace });
 
-    expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.error.message).toContain("Failed to import component Missing");
-    expect(trace.prompts).toEqual([]);
-    expect(trace.agentLookups).toEqual([]);
-  });
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.error.message).toContain("Failed to import component Missing");
+      expect(trace.prompts).toEqual([]);
+      expect(trace.agentLookups).toEqual([]);
+    },
+  );
 
-  it("AF8: an empty wrapper still overrides the text prop", function* () {
+  promptCase("AF8: an empty wrapper still overrides the text prop", function* (run) {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    yield* runDoc('<Prompt text="fallback"></Prompt>\n', { trace });
+    yield* run('<Prompt text="fallback"></Prompt>\n', { trace });
 
     expect(trace.prompts).toEqual([""]);
   });
 });
 
 describe("Tier AF — failures that end the document", () => {
-  it("AF9: an unavailable agent stops the document, nested in another wrapper", function* () {
-    const { output, result } = yield* runDoc(
-      [
-        "BEFORE",
-        "",
-        '<Agent name="stub-agent">',
-        '  <Prompt text="hi" />',
-        "</Agent>",
-        "",
-        "AFTER",
-        "",
-      ].join("\n"),
-      { fail: false },
-    );
+  promptCase(
+    "AF9: an unavailable agent stops the document, nested in another wrapper",
+    function* (run) {
+      const { output, result } = yield* run(
+        [
+          "BEFORE",
+          "",
+          '<Agent name="stub-agent">',
+          '  <Prompt text="hi" />',
+          "</Agent>",
+          "",
+          "AFTER",
+          "",
+        ].join("\n"),
+        { fail: false },
+      );
 
-    // The nested case succeeds; the point is that the wrapper does not swallow.
-    expect(result.ok).toBe(true);
-    expect(output).toContain("BEFORE");
-    expect(output).toContain("AFTER");
-  });
+      // The nested case succeeds; the point is that the wrapper does not swallow.
+      expect(result.ok).toBe(true);
+      expect(output).toContain("BEFORE");
+      expect(output).toContain("AFTER");
+    },
+  );
 
-  it("AF10: a throwOnError prompt inside <Agent> still ends the document", function* () {
-    const { output, result } = yield* runDoc(
+  promptCase("AF10: a throwOnError prompt inside <Agent> still ends the document", function* (run) {
+    const { output, result } = yield* run(
       [
         "BEFORE",
         "",
@@ -651,8 +683,8 @@ describe("Tier AF — failures that end the document", () => {
     expect(output).not.toContain("AFTER");
   });
 
-  it("AF11: the same holds two wrappers deep", function* () {
-    const { output, result } = yield* runDoc(
+  promptCase("AF11: the same holds two wrappers deep", function* (run) {
+    const { output, result } = yield* run(
       [
         "BEFORE",
         "",
@@ -673,62 +705,68 @@ describe("Tier AF — failures that end the document", () => {
     expect(output).not.toContain("AFTER");
   });
 
-  it("AF12: it survives a repository component projecting the prompt as content", function* () {
-    const { output, result } = yield* runDoc(
-      [
-        "BEFORE",
-        "",
-        "<Wrapper>",
-        '  <Prompt text="hi" throwOnError={true} />',
-        "</Wrapper>",
-        "",
-        "AFTER",
-        "",
-      ].join("\n"),
-      {
-        fail: true,
-        files: { "Wrapper.md": "<Content />\n" },
-      },
-    );
+  promptCase(
+    "AF12: it survives a repository component projecting the prompt as content",
+    function* (run) {
+      const { output, result } = yield* run(
+        [
+          "BEFORE",
+          "",
+          "<Wrapper>",
+          '  <Prompt text="hi" throwOnError={true} />',
+          "</Wrapper>",
+          "",
+          "AFTER",
+          "",
+        ].join("\n"),
+        {
+          fail: true,
+          files: { "Wrapper.md": "<Content />\n" },
+        },
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toBeInstanceOf(AgentPromptError);
-    expect(output).not.toContain("AFTER");
-  });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toBeInstanceOf(AgentPromptError);
+      expect(output).not.toContain("AFTER");
+    },
+  );
 });
 
 describe("Tier AF — registered defaults a document can replace", () => {
   const names = ["AgentProvider", "Agent", "Prompt", "ApproveAll", "AskPermission"];
 
-  it("AF24: a Session hands the exact value it was issued to every nested Prompt", function* () {
-    // The value is the capability. A `<Session>` resolves one and pins it around
-    // its body, and what the first nested Prompt is given has to be that exact
-    // object — a provider decides whether a session may be acted on by
-    // identity, and a rebuilt look-alike was issued by nobody.
-    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc(
-      [
-        '<Session name="review">',
-        '  <Prompt text="first" />',
-        '  <Prompt text="second" />',
-        "</Session>",
-        "",
-      ].join("\n"),
-      { trace },
-    );
+  promptCase(
+    "AF24: a Session hands the exact value it was issued to every nested Prompt",
+    function* (run) {
+      // The value is the capability. A `<Session>` resolves one and pins it around
+      // its body, and what the first nested Prompt is given has to be that exact
+      // object — a provider decides whether a session may be acted on by
+      // identity, and a rebuilt look-alike was issued by nobody.
+      const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+      const { result } = yield* run(
+        [
+          '<Session name="review">',
+          '  <Prompt text="first" />',
+          '  <Prompt text="second" />',
+          "</Session>",
+          "",
+        ].join("\n"),
+        { trace },
+      );
 
-    expect(result.ok).toBe(true);
-    // Resolved once, however many prompts are inside it.
-    expect(trace.sessions).toHaveLength(1);
-    const resolved = trace.sessions?.[0];
-    expect(trace.promptSessions).toEqual([resolved, resolved]);
-    expect(trace.promptSessions?.[0]).toBe(resolved);
-    expect(trace.promptSessions?.[1]).toBe(resolved);
-  });
+      expect(result.ok).toBe(true);
+      // Resolved once, however many prompts are inside it.
+      expect(trace.sessions).toHaveLength(1);
+      const resolved = trace.sessions?.[0];
+      expect(trace.promptSessions).toEqual([resolved, resolved]);
+      expect(trace.promptSessions?.[0]).toBe(resolved);
+      expect(trace.promptSessions?.[1]).toBe(resolved);
+    },
+  );
 
-  it("AF25: a self-closing Session resolves one and renders nothing", function* () {
+  promptCase("AF25: a self-closing Session resolves one and renders nothing", function* (run) {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output, result } = yield* runDoc(
+    const { output, result } = yield* run(
       ["BEFORE", "", '<Session name="review" />', "", "AFTER", ""].join("\n"),
       { trace },
     );
@@ -786,16 +824,16 @@ describe("Tier AF — registered defaults a document can replace", () => {
 });
 
 describe("Tier AF — the scoped prompt-failure policy", () => {
-  it("AF16: without a policy a failing prompt is collected, not fatal", function* () {
-    const { output, result } = yield* runDoc('<Prompt text="hi" />\n\nAFTER\n', { fail: true });
+  promptCase("AF16: without a policy a failing prompt is collected, not fatal", function* (run) {
+    const { output, result } = yield* run('<Prompt text="hi" />\n\nAFTER\n', { fail: true });
 
     expect(result.ok).toBe(false); // aggregated at completion, as always
     expect(output).toContain("AFTER"); // but the document ran on
   });
 
-  it("AF17: a policy that says yes ends the document at the prompt", function* () {
+  promptCase("AF17: a policy that says yes ends the document at the prompt", function* (run) {
     let asked = 0;
-    const { output } = yield* runDoc('<Prompt text="hi" />\n\nAFTER\n', {
+    const { output } = yield* run('<Prompt text="hi" />\n\nAFTER\n', {
       fail: true,
       // deno-lint-ignore require-yield
       policy: function* () {
@@ -808,9 +846,9 @@ describe("Tier AF — the scoped prompt-failure policy", () => {
     expect(output).not.toContain("AFTER");
   });
 
-  it("AF18: an explicit throwOnError wins without consulting the policy", function* () {
+  promptCase("AF18: an explicit throwOnError wins without consulting the policy", function* (run) {
     let asked = 0;
-    const { output } = yield* runDoc('<Prompt text="hi" throwOnError={true} />\n\nAFTER\n', {
+    const { output } = yield* run('<Prompt text="hi" throwOnError={true} />\n\nAFTER\n', {
       fail: true,
       // deno-lint-ignore require-yield
       policy: function* () {
@@ -823,8 +861,8 @@ describe("Tier AF — the scoped prompt-failure policy", () => {
     expect(output).not.toContain("AFTER");
   });
 
-  it("AF19: a policy that says no leaves the prompt collected", function* () {
-    const { output } = yield* runDoc('<Prompt text="hi" />\n\nAFTER\n', {
+  promptCase("AF19: a policy that says no leaves the prompt collected", function* (run) {
+    const { output } = yield* run('<Prompt text="hi" />\n\nAFTER\n', {
       fail: true,
       // deno-lint-ignore require-yield
       policy: function* () {
@@ -835,9 +873,9 @@ describe("Tier AF — the scoped prompt-failure policy", () => {
     expect(output).toContain("AFTER");
   });
 
-  it("AF20: a repository Prompt never consults the policy", function* () {
+  promptCase("AF20: a repository Prompt never consults the policy", function* (run) {
     let asked = 0;
-    const { output } = yield* runDoc("<Prompt />\n\nAFTER\n", {
+    const { output } = yield* run("<Prompt />\n\nAFTER\n", {
       fail: true,
       files: { "Prompt.md": "LOCAL\n" },
       // deno-lint-ignore require-yield
@@ -854,30 +892,33 @@ describe("Tier AF — the scoped prompt-failure policy", () => {
 });
 
 describe("Tier AF — prompt timeouts", () => {
-  it("AF21: a prompt nobody bounded carries no timeout", function* () {
-    const { trace } = yield* runDoc('<Prompt text="one" />\n');
+  promptCase("AF21: a prompt nobody bounded carries no timeout", function* (run) {
+    const { trace } = yield* run('<Prompt text="one" />\n');
     expect(trace.timeouts).toEqual([undefined]);
   });
 
-  it("AF22a: a prompt inherits the subtree default an <AgentProvider timeout> installs", function* () {
-    const { trace } = yield* runDoc('<Prompt text="one" />\n', { promptTimeout: 500 });
-    expect(trace.timeouts).toEqual([500]);
-  });
+  promptCase(
+    "AF22a: a prompt inherits the subtree default an <AgentProvider timeout> installs",
+    function* (run) {
+      const { trace } = yield* run('<Prompt text="one" />\n', { promptTimeout: 500 });
+      expect(trace.timeouts).toEqual([500]);
+    },
+  );
 
-  it("AF22b: a prompt's own timeout outranks the inherited one", function* () {
-    const { trace } = yield* runDoc('<Prompt text="one" timeout="250ms" />\n', {
+  promptCase("AF22b: a prompt's own timeout outranks the inherited one", function* (run) {
+    const { trace } = yield* run('<Prompt text="one" timeout="250ms" />\n', {
       promptTimeout: 500,
     });
     expect(trace.timeouts).toEqual([250]);
   });
 
-  it("AF22: a prompt's own timeout is the duration it declares", function* () {
-    const { trace } = yield* runDoc('<Prompt text="one" timeout="250ms" />\n');
+  promptCase("AF22: a prompt's own timeout is the duration it declares", function* (run) {
+    const { trace } = yield* run('<Prompt text="one" timeout="250ms" />\n');
     expect(trace.timeouts).toEqual([250]);
   });
 
-  it("AF23: a malformed prompt timeout refuses instead of prompting", function* () {
-    const { result, trace } = yield* runDoc('<Prompt text="one" timeout="soon" />\n');
+  promptCase("AF23: a malformed prompt timeout refuses instead of prompting", function* (run) {
+    const { result, trace } = yield* run('<Prompt text="one" timeout="soon" />\n');
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error.message).toContain("must be a duration");
     expect(trace.timeouts).toEqual([]);
