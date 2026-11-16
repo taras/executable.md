@@ -41,7 +41,9 @@
  * the only one a locally rebuilt definition cannot stand in for.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { describe } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -49,7 +51,7 @@ import { useSelection } from "./support/generated-selection.ts";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { API, Files, useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -256,7 +258,12 @@ function answering(definition: unknown): ExecutionInstallation {
   };
 }
 
+const OWNER = "packages/core/tests/syntax-loaded-copy.test.ts";
+const journalCase = journalCases(OWNER);
+const ROOT_PATH = "documents/root.md";
+
 function runRoot(
+  stream: InMemoryStream,
   installations: readonly ExecutionInstallation[],
   source = "<Syntax />\n",
 ): Operation<unknown> {
@@ -264,8 +271,8 @@ function runRoot(
     return yield* collect(
       yield* executeInstalled(
         {
-          ...retainedSource("documents/root.md", source),
-          stream: new InMemoryStream(),
+          ...retainedSource(ROOT_PATH, source),
+          stream,
           includes: [],
         },
         [...installations],
@@ -284,7 +291,8 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
 }
 
 describe("Tier SYN — a separately loaded protected implementation", () => {
-  it("SYN26: an implementation another copy built answers for nothing here", function* () {
+  const protectedSyntax = "SYN26: an implementation another copy built answers for nothing here";
+  journalCase(protectedSyntax, ROOT_PATH, function* (stream) {
     const copy = yield* useSeparateCopy();
 
     // An installation the other copy performed: it minted the domain, built the
@@ -318,205 +326,226 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     // for its own implementation.
     expect(installed.componentRouting.body(foreign.fn)).toBeDefined();
 
-    const refused = yield* refusal(runRoot([answering(foreign)]));
+    const refused = yield* refusal(runRoot(stream, [answering(foreign)]));
     expect(refused).toContain("canonical core owns");
 
     // The positive control, in the same shape: a handler that delegates and
     // answers with what came back runs the canonical component.
-    const output = yield* runRoot([
-      {
-        *install() {
-          yield* Component.around(
-            {
-              *importComponent([name, position], next) {
-                return yield* next(name, position);
-              },
-            },
-            { at: "max" },
-          );
-        },
-      },
-    ]);
-    expect(String(output)).toContain("### `<Syntax>`");
-    expect(String(output)).not.toContain("a foreign catalog");
-
-    const forged = function* (): Operation<string> {
-      return "foreign projection";
-    };
-    const projected: unknown[] = [];
-    const observed: string[] = [];
-    const profile: ExecutionInstallation = {
-      *install(): Operation<void> {
-        yield* useSelection({ Syntax: ["self-closing"] });
-      },
-      componentAnswers: [
-        {
-          origin: "test://delegate",
-          *install(registrar) {
-            yield* registrar.around(function* (request, next) {
-              const answer = yield* next();
-              if (request.name === "Syntax" && answer.kind === "function") {
-                observed.push(request.name);
-                projected.push(installed.componentRouting.project(answer.fn, forged));
-              }
-              // Delegated unchanged, so canonical core's own publication of the
-              // protected answer travels with it. A separately loaded copy may
-              // answer an import it was handed; what it cannot do is route a
-              // body of its own into the one the fragment reaches.
-              return answer;
-            });
-          },
-        },
-      ],
-    };
-    const generated = yield* runRoot(
-      [profile],
-      `<Evaluate text={'<Syntax />'} as="answer" />\n<Json value={answer} />`,
-    );
-    expect(String(generated)).toContain("### `<Syntax>`");
-    expect(String(generated)).not.toContain("foreign projection");
-    expect(observed).toEqual(["Syntax", "Syntax"]);
-    expect(projected).toEqual([undefined, undefined]);
-    expect(installed.componentRouting.body(forged)).toBeUndefined();
-  });
-});
-
-describe("Tier FE14 — a separately loaded provider publishes its own answer", () => {
-  it("FE14/U4-7: loaded provider code publishes through the handed request, and the fragment runs it", function* () {
-    const loaded = yield* useLoadedProvider();
-    const stream = new InMemoryStream();
-
-    // The selection states the name and the spelling; what offering it grants
-    // comes from the loaded module's own declaration.
-    const profile: ExecutionInstallation = {
-      *install(): Operation<void> {
-        yield* useSelection({ Loaded: ["self-closing"] });
-      },
-      componentAnswers: [loaded.installation("test://loaded")],
-    };
-
-    const output = yield* scoped(function* () {
-      return yield* collect(
-        yield* executeInstalled(
-          {
-            ...retainedSource("documents/root.md", `<Evaluate text={'<Loaded />\\n'} />\n`),
-            stream,
-            includes: [],
-          },
-          [profile],
-        ),
-      );
-    });
-
-    // The loaded module's own body ran, once, and what it rendered is the
-    // fragment's output: the publication travelled with the object the chain
-    // returned, and canonical capture sealed that exact definition.
-    expect(String(output)).toContain("LOADED ANSWER RAN");
-    expect(loaded.invocations()).toEqual(["loaded answer ran"]);
-
-    // And the admission retains the identity that module declared for the
-    // spelling the fragment wrote — not a host-stated one, and not core's.
-    const admission = (yield* stream.readAll()).find(
-      (event) => event.type === "yield" && event.description.type === "generated_xmd",
-    );
-    const retained =
-      admission?.type === "yield" && admission.result.status === "ok"
-        ? admission.result.value
-        : undefined;
-    expect(JSON.stringify(retained)).toContain(loaded.identity());
-    expect(loaded.identity()).toBe("https://executable.md/components/loaded/read");
-  });
-});
-
-describe("Tier FX — a fixed definition from a separately loaded copy", () => {
-  it("FX3g: another copy's File dispatcher answers for nothing, and reaches no I/O", function* () {
-    const copy = yield* useSeparateCopy();
-
-    // The other shape in the protected tier. `<File>` is answered with an
-    // ordinary definition rather than a body this execution built, so the
-    // dangerous foreign answer is a *complete* definition whose dispatcher the
-    // other copy built — one that would not recognize this execution's
-    // invocations, and must never be reached to find that out.
-    //
-    // Built the way SYN26 builds its foreign implementation: the declaration is
-    // this test's, because the component module does not bundle, and what is
-    // genuinely the second copy's is what decides — the dispatcher it produced
-    // from its own issuance machinery.
-    const foreign: FunctionComponentDefinition = {
-      kind: "function",
-      name: "File",
-      props: parseJsonObject(fileProps),
-      forms: ["self-closing", "paired"],
-      fn: copy.formDispatcher(fileForm) as FunctionComponentDefinition["fn"],
-    };
-
-    const local = fixedFilesystemDefinition("File");
-    if (local === undefined) {
-      throw new Error("core supplies no File definition");
-    }
-    // The premise, stated rather than assumed: the same name and accepted
-    // forms, and a different object with a different implementation.
-    expect(foreign.name).toBe(local.name);
-    expect(foreign.forms).toEqual(local.forms);
-    expect(typeof foreign.fn).toBe("function");
-    expect(foreign.fn).not.toBe(local.fn);
-
-    const workspace = yield* until(mkdtemp(join(tmpdir(), "sl-fixed-ws-")));
-    yield* ensure(() => rm(workspace, { recursive: true, force: true }));
-    const reached: string[] = [];
-
-    const refused = yield* refusal(
-      runRoot(
-        [
-          {
-            *install() {
-              yield* API.Env.around(
-                {
-                  // deno-lint-ignore require-yield
-                  *cwd() {
-                    return workspace;
-                  },
-                },
-                { at: "min" },
-              );
-              yield* useHostFiles();
-              yield* Files.around({
-                *writeTextFile([input], next) {
-                  reached.push(`write:${input.path}`);
-                  return yield* next(input);
-                },
-                *readTextFile([input], next) {
-                  reached.push(`read:${input.path}`);
-                  return yield* next(input);
-                },
-              });
-            },
-          },
+    yield* captureTestJournal(
+      { owner: OWNER, name: protectedSyntax },
+      ROOT_PATH,
+      function* (secondStream) {
+        const output = yield* runRoot(secondStream, [
           {
             *install() {
               yield* Component.around(
                 {
                   *importComponent([name, position], next) {
-                    if (name !== "File") {
-                      return yield* next(name, position);
-                    }
-                    // Delegating first is the strongest form: this handler saw
-                    // canonical execution's own answer and replaced it.
-                    yield* next(name, position);
-                    return foreign;
+                    return yield* next(name, position);
                   },
                 },
                 { at: "max" },
               );
             },
           },
-        ],
-        '<File path="written.md">one</File>\n',
-      ),
-    );
+        ]);
+        expect(String(output)).toContain("### `<Syntax>`");
+        expect(String(output)).not.toContain("a foreign catalog");
 
-    expect(refused).toContain("canonical core owns");
-    // Before its body and before any filesystem call.
-    expect(reached).toEqual([]);
+        const forged = function* (): Operation<string> {
+          return "foreign projection";
+        };
+        const projected: unknown[] = [];
+        const observed: string[] = [];
+        const profile: ExecutionInstallation = {
+          *install(): Operation<void> {
+            yield* useSelection({ Syntax: ["self-closing"] });
+          },
+          componentAnswers: [
+            {
+              origin: "test://delegate",
+              *install(registrar) {
+                yield* registrar.around(function* (request, next) {
+                  const answer = yield* next();
+                  if (request.name === "Syntax" && answer.kind === "function") {
+                    observed.push(request.name);
+                    projected.push(installed.componentRouting.project(answer.fn, forged));
+                  }
+                  // Delegated unchanged, so canonical core's own publication of the
+                  // protected answer travels with it. A separately loaded copy may
+                  // answer an import it was handed; what it cannot do is route a
+                  // body of its own into the one the fragment reaches.
+                  return answer;
+                });
+              },
+            },
+          ],
+        };
+        yield* captureTestJournal(
+          { owner: OWNER, name: protectedSyntax },
+          ROOT_PATH,
+          function* (thirdStream) {
+            const generated = yield* runRoot(
+              thirdStream,
+              [profile],
+              `<Evaluate text={'<Syntax />'} as="answer" />\n<Json value={answer} />`,
+            );
+            expect(String(generated)).toContain("### `<Syntax>`");
+            expect(String(generated)).not.toContain("foreign projection");
+            expect(observed).toEqual(["Syntax", "Syntax"]);
+            expect(projected).toEqual([undefined, undefined]);
+            expect(installed.componentRouting.body(forged)).toBeUndefined();
+          },
+        );
+      },
+    );
   });
+});
+
+describe("Tier FE14 — a separately loaded provider publishes its own answer", () => {
+  journalCase(
+    "FE14/U4-7: loaded provider code publishes through the handed request, and the fragment runs it",
+    ROOT_PATH,
+    function* (stream) {
+      const loaded = yield* useLoadedProvider();
+
+      // The selection states the name and the spelling; what offering it grants
+      // comes from the loaded module's own declaration.
+      const profile: ExecutionInstallation = {
+        *install(): Operation<void> {
+          yield* useSelection({ Loaded: ["self-closing"] });
+        },
+        componentAnswers: [loaded.installation("test://loaded")],
+      };
+
+      const output = yield* scoped(function* () {
+        return yield* collect(
+          yield* executeInstalled(
+            {
+              ...retainedSource(ROOT_PATH, `<Evaluate text={'<Loaded />\\n'} />\n`),
+              stream,
+              includes: [],
+            },
+            [profile],
+          ),
+        );
+      });
+
+      // The loaded module's own body ran, once, and what it rendered is the
+      // fragment's output: the publication travelled with the object the chain
+      // returned, and canonical capture sealed that exact definition.
+      expect(String(output)).toContain("LOADED ANSWER RAN");
+      expect(loaded.invocations()).toEqual(["loaded answer ran"]);
+
+      // And the admission retains the identity that module declared for the
+      // spelling the fragment wrote — not a host-stated one, and not core's.
+      const admission = (yield* stream.readAll()).find(
+        (event) => event.type === "yield" && event.description.type === "generated_xmd",
+      );
+      const retained =
+        admission?.type === "yield" && admission.result.status === "ok"
+          ? admission.result.value
+          : undefined;
+      expect(JSON.stringify(retained)).toContain(loaded.identity());
+      expect(loaded.identity()).toBe("https://executable.md/components/loaded/read");
+    },
+  );
+});
+
+describe("Tier FX — a fixed definition from a separately loaded copy", () => {
+  journalCase(
+    "FX3g: another copy's File dispatcher answers for nothing, and reaches no I/O",
+    ROOT_PATH,
+    function* (stream) {
+      const copy = yield* useSeparateCopy();
+
+      // The other shape in the protected tier. `<File>` is answered with an
+      // ordinary definition rather than a body this execution built, so the
+      // dangerous foreign answer is a *complete* definition whose dispatcher the
+      // other copy built — one that would not recognize this execution's
+      // invocations, and must never be reached to find that out.
+      //
+      // Built the way SYN26 builds its foreign implementation: the declaration is
+      // this test's, because the component module does not bundle, and what is
+      // genuinely the second copy's is what decides — the dispatcher it produced
+      // from its own issuance machinery.
+      const foreign: FunctionComponentDefinition = {
+        kind: "function",
+        name: "File",
+        props: parseJsonObject(fileProps),
+        forms: ["self-closing", "paired"],
+        fn: copy.formDispatcher(fileForm) as FunctionComponentDefinition["fn"],
+      };
+
+      const local = fixedFilesystemDefinition("File");
+      if (local === undefined) {
+        throw new Error("core supplies no File definition");
+      }
+      // The premise, stated rather than assumed: the same name and accepted
+      // forms, and a different object with a different implementation.
+      expect(foreign.name).toBe(local.name);
+      expect(foreign.forms).toEqual(local.forms);
+      expect(typeof foreign.fn).toBe("function");
+      expect(foreign.fn).not.toBe(local.fn);
+
+      const workspace = yield* until(mkdtemp(join(tmpdir(), "sl-fixed-ws-")));
+      yield* ensure(() => rm(workspace, { recursive: true, force: true }));
+      const reached: string[] = [];
+
+      const refused = yield* refusal(
+        runRoot(
+          stream,
+          [
+            {
+              *install() {
+                yield* API.Env.around(
+                  {
+                    // deno-lint-ignore require-yield
+                    *cwd() {
+                      return workspace;
+                    },
+                  },
+                  { at: "min" },
+                );
+                yield* useHostFiles();
+                yield* Files.around({
+                  *writeTextFile([input], next) {
+                    reached.push(`write:${input.path}`);
+                    return yield* next(input);
+                  },
+                  *readTextFile([input], next) {
+                    reached.push(`read:${input.path}`);
+                    return yield* next(input);
+                  },
+                });
+              },
+            },
+            {
+              *install() {
+                yield* Component.around(
+                  {
+                    *importComponent([name, position], next) {
+                      if (name !== "File") {
+                        return yield* next(name, position);
+                      }
+                      // Delegating first is the strongest form: this handler saw
+                      // canonical execution's own answer and replaced it.
+                      yield* next(name, position);
+                      return foreign;
+                    },
+                  },
+                  { at: "max" },
+                );
+              },
+            },
+          ],
+          '<File path="written.md">one</File>\n',
+        ),
+      );
+
+      expect(refused).toContain("canonical core owns");
+      // Before its body and before any filesystem call.
+      expect(reached).toEqual([]);
+    },
+  );
 });
