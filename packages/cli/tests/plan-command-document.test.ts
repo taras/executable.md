@@ -1,3 +1,4 @@
+import { journalCases } from "../../test-support/journal-cases.ts";
 /**
  * The packaged plan command document, executed as itself.
  *
@@ -175,7 +176,10 @@ interface RunOptions {
   symbols?: SyntaxSymbols;
 }
 
-function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
+function* runDocument(
+  options: RunOptions = {},
+  stream = new InMemoryStream(),
+): Operation<CommandRun> {
   const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
 
   let value: Json | undefined;
@@ -235,7 +239,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
       const execution = yield* executeInstalled(
         {
           ...retainedSource(PLAN_COMMAND_IDENTITY, source),
-          stream: new InMemoryStream(),
+          stream,
           includes: [],
           secretDetection: true,
           props: {
@@ -340,36 +344,42 @@ function unattributed(chunks: readonly string[]): string[] {
   return kept;
 }
 
+const journalCase = journalCases("packages/cli/tests/plan-command-document.test.ts");
+
 describe("the packaged plan command document", () => {
-  it("C2: returns the approved candidate's exact bytes and never reaches exhaustion", function* () {
-    const run = yield* useWorkingDirectory(function* () {
-      return yield* runDocument();
-    });
+  journalCase(
+    "C2: returns the approved candidate's exact bytes and never reaches exhaustion",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* useWorkingDirectory(function* () {
+        return yield* runDocument(undefined, stream);
+      });
 
-    // The root this document ran under is the internal one the host declares:
-    // no path selects it, and a position naming it says the source is the
-    // CLI's own.
-    expect(PLAN_COMMAND_IDENTITY).toBe("<plan-command>");
+      // The root this document ran under is the internal one the host declares:
+      // no path selects it, and a position naming it says the source is the
+      // CLI's own.
+      expect(PLAN_COMMAND_IDENTITY).toBe("<plan-command>");
 
-    // Approving the first valid candidate is one turn and one question. A
-    // repair or revision turn here would mean the loops ran when they had
-    // nothing to fix.
-    expect(run.prompts).toHaveLength(1);
-    expect(run.reviews).toHaveLength(1);
+      // Approving the first valid candidate is one turn and one question. A
+      // repair or revision turn here would mean the loops ran when they had
+      // nothing to fix.
+      expect(run.prompts).toHaveLength(1);
+      expect(run.reviews).toHaveLength(1);
 
-    // Both gates inside the Component saw the Agent's complete close value,
-    // unaltered: the draft check while the conversation was still standing, and
-    // the admission after the whole Plan writer frame had gone. They are the same
-    // question asked twice, of the same exact bytes.
-    expect(run.validated).toEqual([CANDIDATE, CANDIDATE]);
+      // Both gates inside the Component saw the Agent's complete close value,
+      // unaltered: the draft check while the conversation was still standing, and
+      // the admission after the whole Plan writer frame had gone. They are the same
+      // question asked twice, of the same exact bytes.
+      expect(run.validated).toEqual([CANDIDATE, CANDIDATE]);
 
-    // The document settled with a value rather than an authored failure. Before
-    // the control-flow correction this was the ten-draft exhaustion message: a
-    // `<Return>` selects a value but does not end the body, so the unconditional
-    // `<Fail>` after the Session ran and won over every approval.
-    expect(run.failure).toBe(undefined);
-    expect(run.value).toBe(CANDIDATE);
-  });
+      // The document settled with a value rather than an authored failure. Before
+      // the control-flow correction this was the ten-draft exhaustion message: a
+      // `<Return>` selects a value but does not end the body, so the unconditional
+      // `<Fail>` after the Session ran and won over every approval.
+      expect(run.failure).toBe(undefined);
+      expect(run.value).toBe(CANDIDATE);
+    },
+  );
 
   /**
    * The review this document asks has to be servable as a browser form, which
@@ -384,38 +394,46 @@ describe("the packaged plan command document", () => {
    * `xmd plan` completed its turn and then ended at the review with
    * `<WebForm> schema could not be compiled for the browser`.
    */
-  it("C9: every conditional branch of the review schema declares its own type", function* () {
-    const run = yield* useWorkingDirectory(function* () {
-      return yield* runDocument();
-    });
+  journalCase(
+    "C9: every conditional branch of the review schema declares its own type",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* useWorkingDirectory(function* () {
+        return yield* runDocument(undefined, stream);
+      });
 
-    const schema = Object(run.reviews[0]?.schema);
-    expect(Reflect.get(Object(Reflect.get(schema, "if")), "type")).toBe("object");
-    expect(Reflect.get(Object(Reflect.get(schema, "then")), "type")).toBe("object");
-  });
+      const schema = Object(run.reviews[0]?.schema);
+      expect(Reflect.get(Object(Reflect.get(schema, "if")), "type")).toBe("object");
+      expect(Reflect.get(Object(Reflect.get(schema, "then")), "type")).toBe("object");
+    },
+  );
 
-  it("PO1: every phase precedes the work it announces, and arrives while it runs", function* () {
-    const run = yield* useWorkingDirectory(function* () {
-      return yield* runDocument();
-    });
+  journalCase(
+    "PO1: every phase precedes the work it announces, and arrives while it runs",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* useWorkingDirectory(function* () {
+        return yield* runDocument(undefined, stream);
+      });
 
-    // Each phase stands before the operation it describes. `catalog` is the
-    // marker the harness records where `<PlanInputs>` builds the vocabulary, so
-    // Preparing being ahead of it is the whole claim: before this was moved
-    // behind `<PlanInputs>`, no authored phase could precede that work at all.
-    expect(timeline(run.events)).toEqual([
-      "phase: Preparing the Plan",
-      "catalog",
-      "phase: Drafting the Plan",
-      "phase: Checking the draft",
-      "phase: Waiting for your review",
-      "phase: Finalizing the Plan",
-    ]);
+      // Each phase stands before the operation it describes. `catalog` is the
+      // marker the harness records where `<PlanInputs>` builds the vocabulary, so
+      // Preparing being ahead of it is the whole claim: before this was moved
+      // behind `<PlanInputs>`, no authored phase could precede that work at all.
+      expect(timeline(run.events)).toEqual([
+        "phase: Preparing the Plan",
+        "catalog",
+        "phase: Drafting the Plan",
+        "phase: Checking the draft",
+        "phase: Waiting for your review",
+        "phase: Finalizing the Plan",
+      ]);
 
-    // And the adapter contributed nothing of its own: every non-blank line in
-    // the transcript belongs to a phase this document authored.
-    expect(unattributed(run.progress)).toEqual([]);
-  });
+      // And the adapter contributed nothing of its own: every non-blank line in
+      // the transcript belongs to a phase this document authored.
+      expect(unattributed(run.progress)).toEqual([]);
+    },
+  );
 
   it("PO1: an early phase reaches the operator while the turn is still blocked", function* () {
     // The negative control for buffering. A turn that never settles holds the
@@ -712,24 +730,28 @@ describe("the packaged plan command document", () => {
     expect(loudText).not.toContain(REQUEST);
   });
 
-  it("PO15: the packaged adapter builds the catalog once, and says nothing itself", function* () {
-    const run = yield* useWorkingDirectory(function* () {
-      return yield* runDocument();
-    });
+  journalCase(
+    "PO15: the packaged adapter builds the catalog once, and says nothing itself",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* useWorkingDirectory(function* () {
+        return yield* runDocument(undefined, stream);
+      });
 
-    expect(run.events.filter((event) => event === "catalog")).toHaveLength(1);
-    // The adapter's own body is projection and return. Its former explanatory
-    // prose would arrive here the moment the transcript is drained.
-    const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
-    const body = source.slice(source.lastIndexOf("---\n") + 4);
-    expect(
-      body
-        .trim()
-        .split("\n")
-        .filter((line) => !line.startsWith("<")),
-    ).toEqual([]);
-    expect(unattributed(run.progress)).toEqual([]);
-  });
+      expect(run.events.filter((event) => event === "catalog")).toHaveLength(1);
+      // The adapter's own body is projection and return. Its former explanatory
+      // prose would arrive here the moment the transcript is drained.
+      const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
+      const body = source.slice(source.lastIndexOf("---\n") + 4);
+      expect(
+        body
+          .trim()
+          .split("\n")
+          .filter((line) => !line.startsWith("<")),
+      ).toEqual([]);
+      expect(unattributed(run.progress)).toEqual([]);
+    },
+  );
 });
 
 /**
@@ -1014,62 +1036,83 @@ describe("Tier PI — read-only information requests", () => {
     expect(run.reviews).toHaveLength(2);
   });
 
-  it("PI1: named documentation comes back, then an ordinary Plan", function* () {
-    const run = yield* runDocument({
-      // Two of the three names this case's vocabulary has, asked for together.
-      // The third is the control: a selection that returned it would be a
-      // catalog injection wearing a selection's clothes.
-      turns: [{ reply: '<Syntax names={["File", "Elicit"]} />\n' }, { reply: CANDIDATE }],
-      symbols: SELECTABLE,
-    });
+  journalCase(
+    "PI1: named documentation comes back, then an ordinary Plan",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* runDocument(
+        {
+          // Two of the three names this case's vocabulary has, asked for together.
+          // The third is the control: a selection that returned it would be a
+          // catalog injection wearing a selection's clothes.
+          turns: [{ reply: '<Syntax names={["File", "Elicit"]} />\n' }, { reply: CANDIDATE }],
+          symbols: SELECTABLE,
+        },
+        stream,
+      );
 
-    expect(run.failure).toBe(undefined);
-    const asked = run.prompts[0] ?? "";
-    const followUp = run.prompts[1] ?? "";
-    // Both selected entries' documentation came back — including the paired
-    // form `<File>` also has, which reading about does not confer.
-    expect(followUp).toContain("File");
-    expect(followUp).toContain("Elicit");
-    expect(followUp).toContain("paired");
-    // And it is a *selection*: the unnamed third entry is not in it, though the
-    // drafting prompt that carried the whole vocabulary did name it.
-    expect(asked).toContain("Loop");
-    expect(followUp).not.toContain("Loop");
-    // The turn after the findings produced a draft that reached review.
-    expect(run.reviews).toHaveLength(1);
-  });
+      expect(run.failure).toBe(undefined);
+      const asked = run.prompts[0] ?? "";
+      const followUp = run.prompts[1] ?? "";
+      // Both selected entries' documentation came back — including the paired
+      // form `<File>` also has, which reading about does not confer.
+      expect(followUp).toContain("File");
+      expect(followUp).toContain("Elicit");
+      expect(followUp).toContain("paired");
+      // And it is a *selection*: the unnamed third entry is not in it, though the
+      // drafting prompt that carried the whole vocabulary did name it.
+      expect(asked).toContain("Loop");
+      expect(followUp).not.toContain("Loop");
+      // The turn after the findings produced a draft that reached review.
+      expect(run.reviews).toHaveLength(1);
+    },
+  );
 
-  it("PI10: an unknown documented name is one retry, not a stopped invocation", function* () {
-    const run = yield* runDocument({
-      turns: [{ reply: '<Syntax names={["NoSuchComponent"]} />\n' }, { reply: CANDIDATE }],
-    });
+  journalCase(
+    "PI10: an unknown documented name is one retry, not a stopped invocation",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* runDocument(
+        {
+          turns: [{ reply: '<Syntax names={["NoSuchComponent"]} />\n' }, { reply: CANDIDATE }],
+        },
+        stream,
+      );
 
-    // Recoverable: the workflow asked again rather than ending, and the reason
-    // quotes only the name the candidate itself wrote.
-    expect(run.failure).toBe(undefined);
-    const followUp = run.prompts[1] ?? "";
-    expect(followUp).toContain("That request was refused");
-    expect(followUp).toContain("NoSuchComponent");
-    expect(run.reviews).toHaveLength(1);
-  });
+      // Recoverable: the workflow asked again rather than ending, and the reason
+      // quotes only the name the candidate itself wrote.
+      expect(run.failure).toBe(undefined);
+      const followUp = run.prompts[1] ?? "";
+      expect(followUp).toContain("That request was refused");
+      expect(followUp).toContain("NoSuchComponent");
+      expect(run.reviews).toHaveLength(1);
+    },
+  );
 
-  it("PI2: an empty match renders as an empty array", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
-    const run = yield* runDocument({
-      turns: [
-        { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
-        { reply: CANDIDATE },
-      ],
-      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
-      files,
-    });
+  journalCase(
+    "PI2: an empty match renders as an empty array",
+    PLAN_COMMAND_IDENTITY,
+    function* (stream) {
+      const files = recordedFiles({ "notes.md": "the retained note\n" });
+      const run = yield* runDocument(
+        {
+          turns: [
+            { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
+            { reply: CANDIDATE },
+          ],
+          generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
+          files,
+        },
+        stream,
+      );
 
-    expect(run.failure).toBe(undefined);
-    // The search ran and found nothing, and nothing is a result rather than a
-    // failure: the next turn is handed `[]`.
-    expect(files.performed).toEqual(["glob absent.md"]);
-    expect(run.prompts[1] ?? "").toContain("[]");
-  });
+      expect(run.failure).toBe(undefined);
+      // The search ran and found nothing, and nothing is a result rather than a
+      // failure: the next turn is handed `[]`.
+      expect(files.performed).toEqual(["glob absent.md"]);
+      expect(run.prompts[1] ?? "").toContain("[]");
+    },
+  );
 
   it("PI4: a prohibited operation anywhere in the request refuses before any read", function* () {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
@@ -1314,13 +1357,16 @@ describe("Tier PI — read-only information requests", () => {
     expect(run.reviews).toHaveLength(1);
   });
 
-  it("PI3: a titled draft is never evaluated", function* () {
+  journalCase("PI3: a titled draft is never evaluated", PLAN_COMMAND_IDENTITY, function* (stream) {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
-    const run = yield* runDocument({
-      turns: [{ reply: CANDIDATE }],
-      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
-      files,
-    });
+    const run = yield* runDocument(
+      {
+        turns: [{ reply: CANDIDATE }],
+        generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
+        files,
+      },
+      stream,
+    );
 
     expect(run.failure).toBe(undefined);
     // One turn, no evaluation, no information phase at all.

@@ -1,3 +1,5 @@
+import { journalCases } from "../../test-support/journal-cases.ts";
+import { UPGRADE_COMMAND_IDENTITY } from "../src/upgrade.ts";
 /**
  * Tier UG — the packaged upgrade command document, executed as itself.
  *
@@ -262,7 +264,7 @@ function* refuseHostCapabilities(): Operation<void> {
   });
 }
 
-function* upgrade(scenario: Scenario): Operation<Run> {
+function* upgrade(scenario: Scenario, stream = new InMemoryStream()): Operation<Run> {
   const run: Run = {
     releaseReads: [],
     downloads: [],
@@ -308,7 +310,7 @@ function* upgrade(scenario: Scenario): Operation<Run> {
         allowPrerelease: scenario.allowPrerelease === true,
       },
       assembly,
-      stream: new InMemoryStream(),
+      stream,
       // deno-lint-ignore require-yield
       *consume(chunk) {
         chunks.push(chunk);
@@ -348,103 +350,121 @@ function transcript(run: Run): string[] {
     .filter((line) => line.length > 0);
 }
 
+const journalCase = journalCases("packages/cli/tests/upgrade-command-document.test.ts");
+
 describe("Tier UG — the packaged upgrade command document", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("UG1: an authorized install renders its milestones in source order", function* () {
-    const run = yield* upgrade({});
+  journalCase(
+    "UG1: an authorized install renders its milestones in source order",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* upgrade({}, stream);
 
-    // The draft above it and the prerelease above that are both skipped, and
-    // the choice was made from the facts rather than by the host.
-    expect(run.releaseReads).toEqual([null]);
-    expect(run.downloads).toEqual(["admitted-2"]);
-    // Each phase received only what the previous one handed back.
-    expect(run.verifies).toEqual(["candidate-of-admitted-2"]);
-    expect(run.replacements).toEqual(["candidate-of-admitted-2"]);
-    expect(run.compiles).toBeGreaterThan(0);
-    expect(run.failure).toBe(undefined);
+      // The draft above it and the prerelease above that are both skipped, and
+      // the choice was made from the facts rather than by the host.
+      expect(run.releaseReads).toEqual([null]);
+      expect(run.downloads).toEqual(["admitted-2"]);
+      // Each phase received only what the previous one handed back.
+      expect(run.verifies).toEqual(["candidate-of-admitted-2"]);
+      expect(run.replacements).toEqual(["candidate-of-admitted-2"]);
+      expect(run.compiles).toBeGreaterThan(0);
+      expect(run.failure).toBe(undefined);
 
-    // The approved transcript, in order: an opening, the selection, then one
-    // milestone per completed phase. This is the whole terminal experience —
-    // there is no separate summary.
-    expect(transcript(run)).toEqual([
-      "# Upgrade XMD",
-      "Installs the latest published stable version of XMD. Verifies the release before",
-      "replacing the standalone binary that ran this command.",
-      "## Select a release",
-      "Checks that the installed XMD binary can be replaced atomically and takes its",
-      "installation lock without waiting. Reads release information from",
-      "`taras/executable.md`. Ignores drafts and releases with invalid tags.",
-      "## Install selected release",
-      "The selected release passed the comparison and consent checks.",
-      "Selected release: v0.11.0 (newer than installed version 0.10.2)",
-      "Downloads the checksum file and target binary from the selected GitHub release.",
-      "Stages the binary beside the installed one without making it executable.",
-      `Downloaded binary: xmd-${TARGET}`,
-      "Verifies the binary against its published SHA-256 checksum. Makes it executable",
-      "only after the checksum passes, then checks that it reports the selected",
-      "version.",
-      "Verified: SHA-256 checksum and version 0.11.0",
-      "Atomically replaces the installed binary with the verified binary. Until",
-      "replacement succeeds, the installed binary remains unchanged.",
-      "Installed xmd 0.11.0 (replaced 0.10.2).",
-      `Binary: ${EXECUTABLE}`,
-      "Release notes: https://github.com/taras/executable.md/releases/tag/v0.11.0",
-    ]);
-  });
+      // The approved transcript, in order: an opening, the selection, then one
+      // milestone per completed phase. This is the whole terminal experience —
+      // there is no separate summary.
+      expect(transcript(run)).toEqual([
+        "# Upgrade XMD",
+        "Installs the latest published stable version of XMD. Verifies the release before",
+        "replacing the standalone binary that ran this command.",
+        "## Select a release",
+        "Checks that the installed XMD binary can be replaced atomically and takes its",
+        "installation lock without waiting. Reads release information from",
+        "`taras/executable.md`. Ignores drafts and releases with invalid tags.",
+        "## Install selected release",
+        "The selected release passed the comparison and consent checks.",
+        "Selected release: v0.11.0 (newer than installed version 0.10.2)",
+        "Downloads the checksum file and target binary from the selected GitHub release.",
+        "Stages the binary beside the installed one without making it executable.",
+        `Downloaded binary: xmd-${TARGET}`,
+        "Verifies the binary against its published SHA-256 checksum. Makes it executable",
+        "only after the checksum passes, then checks that it reports the selected",
+        "version.",
+        "Verified: SHA-256 checksum and version 0.11.0",
+        "Atomically replaces the installed binary with the verified binary. Until",
+        "replacement succeeds, the installed binary remains unchanged.",
+        "Installed xmd 0.11.0 (replaced 0.10.2).",
+        `Binary: ${EXECUTABLE}`,
+        "Release notes: https://github.com/taras/executable.md/releases/tag/v0.11.0",
+      ]);
+    },
+  );
 
-  it("UG2: an exact tag names itself in the opening", function* () {
-    const run = yield* upgrade({ tag: "v0.11.0" });
+  journalCase(
+    "UG2: an exact tag names itself in the opening",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* upgrade({ tag: "v0.11.0" }, stream);
 
-    expect(transcript(run).slice(0, 3)).toEqual([
-      "# Upgrade XMD",
-      "Installs XMD release v0.11.0. Verifies the release before replacing",
-      "the standalone binary that ran this command.",
-    ]);
-  });
+      expect(transcript(run).slice(0, 3)).toEqual([
+        "# Upgrade XMD",
+        "Installs XMD release v0.11.0. Verifies the release before replacing",
+        "the standalone binary that ran this command.",
+      ]);
+    },
+  );
 
-  it("UG3: --status reports the comparison and reaches no install phase", function* () {
-    const run = yield* upgrade({ status: true });
+  journalCase(
+    "UG3: --status reports the comparison and reaches no install phase",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* upgrade({ status: true }, stream);
 
-    expect({
-      downloads: run.downloads,
-      verifies: run.verifies,
-      replacements: run.replacements,
-    }).toEqual({ downloads: [], verifies: [], replacements: [] });
-    expect(transcript(run)).toEqual([
-      "# Upgrade XMD",
-      "Compares the installed XMD version with the selected release without downloading",
-      "a binary or changing the installation.",
-      "## Select a release",
-      "Reads release information from `taras/executable.md`. Ignores drafts and",
-      "releases with invalid tags.",
-      "## Release status",
-      "The installed and selected versions were compared using semantic version",
-      "precedence.",
-      "Installed version: 0.10.2",
-      "Selected release: v0.11.0 (newer)",
-      "Release notes: https://github.com/taras/executable.md/releases/tag/v0.11.0",
-      "No files were changed.",
-    ]);
-    // Status says nothing about locking, because status takes no lock.
-    expect(run.output).not.toContain("installation lock");
-  });
+      expect({
+        downloads: run.downloads,
+        verifies: run.verifies,
+        replacements: run.replacements,
+      }).toEqual({ downloads: [], verifies: [], replacements: [] });
+      expect(transcript(run)).toEqual([
+        "# Upgrade XMD",
+        "Compares the installed XMD version with the selected release without downloading",
+        "a binary or changing the installation.",
+        "## Select a release",
+        "Reads release information from `taras/executable.md`. Ignores drafts and",
+        "releases with invalid tags.",
+        "## Release status",
+        "The installed and selected versions were compared using semantic version",
+        "precedence.",
+        "Installed version: 0.10.2",
+        "Selected release: v0.11.0 (newer)",
+        "Release notes: https://github.com/taras/executable.md/releases/tag/v0.11.0",
+        "No files were changed.",
+      ]);
+      // Status says nothing about locking, because status takes no lock.
+      expect(run.output).not.toContain("installation lock");
+    },
+  );
 
-  it("UG4: an already-installed selection downloads nothing and says so", function* () {
-    const run = yield* upgrade({ tag: "v0.10.2" });
+  journalCase(
+    "UG4: an already-installed selection downloads nothing and says so",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* upgrade({ tag: "v0.10.2" }, stream);
 
-    expect(run.downloads).toEqual([]);
-    expect(run.failure).toBe(undefined);
-    expect(transcript(run).slice(-7)).toEqual([
-      "## Installing existing version",
-      "The selected release was compared with the installed version. They are the same,",
-      "so no download or replacement was needed.",
-      "xmd 0.10.2 is already installed.",
-      `Binary: ${EXECUTABLE}`,
-      "Release notes: https://github.com/taras/executable.md/releases/tag/v0.10.2",
-      "No download or replacement was needed.",
-    ]);
-  });
+      expect(run.downloads).toEqual([]);
+      expect(run.failure).toBe(undefined);
+      expect(transcript(run).slice(-7)).toEqual([
+        "## Installing existing version",
+        "The selected release was compared with the installed version. They are the same,",
+        "so no download or replacement was needed.",
+        "xmd 0.10.2 is already installed.",
+        `Binary: ${EXECUTABLE}`,
+        "Release notes: https://github.com/taras/executable.md/releases/tag/v0.10.2",
+        "No download or replacement was needed.",
+      ]);
+    },
+  );
 
   it("UG5: an untaken branch contributes no prose at all", function* () {
     // The defect this catches is reference documentation leaking: every branch
@@ -698,15 +718,19 @@ describe("Tier UG — the packaged upgrade command document", () => {
     }
   });
 
-  it("UG16: a compiled binary the release does not target refuses too", function* () {
-    const run = yield* upgrade({ target: null });
+  journalCase(
+    "UG16: a compiled binary the release does not target refuses too",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* upgrade({ target: null }, stream);
 
-    expect(run.releaseReads).toEqual([]);
-    expect(run.compiles).toBe(0);
-    expect(run.failure).toContain(
-      "No xmd release is published for darwin/arm64. Build xmd from a checkout for this platform,",
-    );
-  });
+      expect(run.releaseReads).toEqual([]);
+      expect(run.compiles).toBe(0);
+      expect(run.failure).toContain(
+        "No xmd release is published for darwin/arm64. Build xmd from a checkout for this platform,",
+      );
+    },
+  );
 
   it("UG17: every release-read failure code reaches its own answer", function* () {
     const expected: [string, string][] = [
@@ -879,14 +903,18 @@ describe("Tier UG — the packaged upgrade command document", () => {
     }
   });
 
-  it("UG21: a running binary that reports no release version is refused", function* () {
-    const run = yield* upgrade({ currentVersion: "0.10.2-dirty+local" });
+  journalCase(
+    "UG21: a running binary that reports no release version is refused",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      const run = yield* upgrade({ currentVersion: "0.10.2-dirty+local" }, stream);
 
-    expect(run.releaseReads).toEqual([]);
-    expect(run.failure).toContain(
-      "The installed binary reports version 0.10.2-dirty+local, which is not a valid release version.",
-    );
-  });
+      expect(run.releaseReads).toEqual([]);
+      expect(run.failure).toContain(
+        "The installed binary reports version 0.10.2-dirty+local, which is not a valid release version.",
+      );
+    },
+  );
 
   it("UG22: a published release whose own tag is malformed is never selected", function* () {
     const implicit = yield* upgrade({ releases: [{ tag: "release-2" }, { tag: "v0.11.0" }] });
