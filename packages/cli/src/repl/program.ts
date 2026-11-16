@@ -5968,10 +5968,12 @@ export function* prepareFrame(
       : yield* prepareReading(
           renderer,
           view.size,
-          readingLines(readingOf(view)),
+          readingLines(readingOf(view, store?.formatted)),
           widths.surfaceBody,
           store,
         );
+  // What this frame formatted is all the reading goes on holding.
+  store?.formatted.settle();
   if (!reading.ok) {
     return reading;
   }

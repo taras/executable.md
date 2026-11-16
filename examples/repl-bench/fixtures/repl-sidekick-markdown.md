@@ -25,6 +25,7 @@ Show the Markdown fixture.
 
 - sidekick first item
 - sidekick second item
+- [ ] sidekick task item
 
 ```text
   sidekick fence indent
@@ -45,6 +46,7 @@ Entry prose keeps going long enough to wrap inside the wide centre pane, so its 
 
 1. entry first step
 2. entry second step
+3. [x] entry task step
 
 ```text
   entry fence indent

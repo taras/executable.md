@@ -50,6 +50,7 @@ import type { ReplTokenRun } from "./description.ts";
 import { sourceRuns, trimLeadingBlankLines } from "./presentation-text.ts";
 import { inertCommandText } from "./command-output.ts";
 import { markdownLines } from "./markdown.ts";
+import type { ReplMarkdownStore } from "./markdown.ts";
 import type { ReplCommandChunk } from "./command-output.ts";
 
 /** What this terminal draws for each phase, glyph and word together. */
@@ -181,6 +182,8 @@ export interface ReplReadingRequest {
   readonly live: string;
   /** Whether this reading is a retained position rather than the live head. */
   readonly inspected: boolean;
+  /** Where the owner of this reading holds its formatted Output, if anywhere. */
+  readonly formatted?: ReplMarkdownStore;
 }
 
 /**
@@ -220,7 +223,7 @@ export function entryReading(request: ReplReadingRequest): ReplReading {
  * an absence of information — it is the outcome, which is said instead.
  */
 function outputSection(request: ReplReadingRequest): ReplReadingSection {
-  const { entry, live, inspected } = request;
+  const { entry, live, inspected, formatted } = request;
   const terminal = entry.terminal;
   if (terminal === undefined) {
     // Still going. Its own emitted text, if any has arrived.
@@ -232,6 +235,7 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
           trimLeadingBlankLines(live),
           "output:live",
           styleOf("output", { inspected }),
+          formatted,
         ),
       });
     }
@@ -249,6 +253,7 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
         trimLeadingBlankLines(terminal.output),
         "output",
         styleOf("output", { inspected }),
+        formatted,
       ),
     });
   }
@@ -289,9 +294,14 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
  * observed in. The live text and the retained result take the same path, so a
  * settled reading draws what its last live frame drew.
  */
-function written(text: string, prefix: string, style: ReplRowStyle): readonly ReplReadingLine[] {
+function written(
+  text: string,
+  prefix: string,
+  style: ReplRowStyle,
+  formatted: ReplMarkdownStore | undefined,
+): readonly ReplReadingLine[] {
   return Object.freeze(
-    markdownLines(text, style.role).map((one, index) =>
+    (formatted?.lines(text, style.role) ?? markdownLines(text, style.role)).map((one, index) =>
       Object.freeze({
         key: `${prefix}:${index}`,
         text: one.text,

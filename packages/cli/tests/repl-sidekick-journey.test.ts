@@ -5235,6 +5235,7 @@ describe("1342 — written Markdown in the chat and in entry Output", () => {
     "",
     "1. entry first",
     "2. entry second",
+    "3. [ ] entrytask item",
     "",
     "```text",
     "  entryfence indent",
@@ -5255,6 +5256,7 @@ describe("1342 — written Markdown in the chat and in entry Output", () => {
     "",
     "- chat first",
     "- chat second",
+    "- [x] chattask item",
     "",
     "```text",
     "  chatfence indent",
@@ -5411,8 +5413,18 @@ describe("1342 — written Markdown in the chat and in entry Output", () => {
     const label = formatted(page, reading, `${word}label`);
     expect(inkAt(page, label).attrs).toContain(4);
     expect(plainAfter(page, reading, label).attrs).not.toContain(4);
-    expect(reading.rows[label.row]).not.toContain(`${word}-target`);
-    expect(reading.rows[label.row]).not.toContain("](");
+    // Within the label's own pane: the staged chat's entry work rows beside it
+    // show that entry's Output raw, as they always have.
+    const pane = fromColumn(page, label.row, label.column).split("│")[0];
+    expect(pane).not.toContain(`${word}-target`);
+    expect(pane).not.toContain("](");
+
+    // A task's marker, checkbox and text are one row.
+    expect(
+      reading.rows.some((row) =>
+        row.includes(word === "chat" ? "• [x] chattask item" : "3. [ ] entrytask item"),
+      ),
+    ).toBe(true);
 
     // The fence: its payload literal and in code, its indentation in place,
     // its blank line a row and the Markdown inside it unformatted.

@@ -8,6 +8,7 @@
   },
   "imports": {
     "marked": "npm:marked@^17.0.4",
+    "@lezer/markdown": "npm:@lezer/markdown@1.8.1",
     "@effectionx/stream-helpers": "npm:@effectionx/stream-helpers@0.8.3",
     "@standard-schema/spec": "npm:@standard-schema/spec@^1.0.0",
     "zod": "npm:zod@^4.3.6",

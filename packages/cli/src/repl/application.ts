@@ -122,8 +122,8 @@ import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandOutput } from "./command-output.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns, fitPlain, slicedRuns } from "./fitting.ts";
-import { markdownLines } from "./markdown.ts";
-import type { ReplMarkdownLine } from "./markdown.ts";
+import { createMarkdownStore, markdownLines } from "./markdown.ts";
+import type { ReplMarkdownLine, ReplMarkdownStore } from "./markdown.ts";
 import type { ReplPlainFitStore } from "./fitting.ts";
 import type { ReplRenderer } from "./renderer.ts";
 import type { Operation } from "effection";
@@ -4101,6 +4101,8 @@ function sidekickComposedRows(
   /** The staged composition's associated work, where this reading is drawn there. */
   staging: ReplChatStaging | undefined,
   showUsage: boolean,
+  /** Where the caller holds the bodies it has already formatted, if anywhere. */
+  formatted?: ReplMarkdownStore,
 ): readonly ReplChatComposed[] {
   if (
     staging !== undefined &&
@@ -4108,7 +4110,7 @@ function sidekickComposedRows(
     reading.refusal === undefined &&
     (reading.setup === undefined || reading.setup.phase === "activated")
   ) {
-    return workspaceChatComposed(reading, staging);
+    return workspaceChatComposed(reading, staging, formatted);
   }
   const items: ReplChatComposed[] = [];
   /** One row of readable text, which a width still has to cut into rows. */
@@ -4177,6 +4179,7 @@ function sidekickComposedRows(
     if (item.kind === "person") {
       items.push(
         chatBody(
+          formatted,
           `sidekick:${item.key}`,
           `  ${item.origin?.kind === "todo" ? "TODO change" : item.origin?.kind === "acp" ? "ACP (" + item.origin.attachment + ")" : "you"}: `,
           item.text,
@@ -4196,6 +4199,7 @@ function sidekickComposedRows(
       // rather than as an answer or a failure anybody recorded.
       items.push(
         chatBody(
+          formatted,
           `sidekick:${item.key}`,
           item.incomplete === true
             ? `  ${reading.agent} (unfinished): `
@@ -4242,7 +4246,9 @@ function sidekickComposedRows(
         // What that turn had actually said, as the literal Output its saved
         // source projects. Said after the reason, because the reason is why
         // there is no more of it.
-        items.push(chatBody(`sidekick:${item.key}:said`, "  ", item.text, styleOf("source")));
+        items.push(
+          chatBody(formatted, `sidekick:${item.key}:said`, "  ", item.text, styleOf("source")),
+        );
       }
       if (asked !== undefined && reading.current) {
         items.push(
@@ -4270,7 +4276,9 @@ function sidekickComposedRows(
       if (item.hasOutput) {
         // And what it had already rendered, after the reason, because the
         // reason is why there is no more of it.
-        items.push(chatBody(`sidekick:${item.key}:said`, "  ", item.text, styleOf("output")));
+        items.push(
+          chatBody(formatted, `sidekick:${item.key}:said`, "  ", item.text, styleOf("output")),
+        );
       }
       metadata();
       continue;
@@ -4286,7 +4294,13 @@ function sidekickComposedRows(
       continue;
     }
     items.push(
-      chatBody(`sidekick:${item.key}`, `  ${reading.agent}: `, item.text, styleOf("output")),
+      chatBody(
+        formatted,
+        `sidekick:${item.key}`,
+        `  ${reading.agent}: `,
+        item.text,
+        styleOf("output"),
+      ),
     );
     metadata();
   }
@@ -4343,6 +4357,7 @@ interface ReplChatLine {
  * the gutter before every line, both in the row's own role.
  */
 function chatBody(
+  formatted: ReplMarkdownStore | undefined,
   key: string,
   lead: string,
   body: string,
@@ -4353,11 +4368,13 @@ function chatBody(
     readonly action?: { readonly [name: string]: Json };
   } = {},
 ): ReplChatComposed {
-  const lines = markdownLines(body, style.role).map((one, at) => {
-    const before = at === 0 ? `${gutter}${lead}` : gutter;
-    const runs = tokenRuns([{ text: before, token: style.role }, ...one.runs]);
-    return Object.freeze({ text: `${before}${one.text}`, runs });
-  });
+  const lines = (formatted?.lines(body, style.role) ?? markdownLines(body, style.role)).map(
+    (one, at) => {
+      const before = at === 0 ? `${gutter}${lead}` : gutter;
+      const runs = tokenRuns([{ text: before, token: style.role }, ...one.runs]);
+      return Object.freeze({ text: `${before}${one.text}`, runs });
+    },
+  );
   return Object.freeze({
     kind: "text" as const,
     key,
@@ -4568,7 +4585,14 @@ export interface ReplChatPreparationStore {
   materialize: typeof materializeChatRow;
 }
 
-export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPreparationStore {
+export function createChatPreparationStore(
+  cuts: ReplPlainFitStore,
+  /**
+   * The bodies the last composition formatted. A streamed delta changes one
+   * reply, and only that one is formatted again.
+   */
+  formatted: ReplMarkdownStore = createMarkdownStore(),
+): ReplChatPreparationStore {
   let held:
     | {
         readonly facts: ReturnType<typeof chatFacts>;
@@ -4597,7 +4621,9 @@ export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPre
         view.live.sidekick,
         chatStagingOf(view),
         view.state.showUsage === true,
+        formatted,
       );
+      formatted.settle();
       const notice = view.restorationNotice;
       const composed: readonly ReplChatComposed[] =
         notice === undefined
@@ -7118,8 +7144,10 @@ function readingRows(prepared: ReplPreparedReading): readonly Described[] {
  * belongs to the entry producing it — the last one this prefix admitted, since
  * entries are serial — so a reader looking at an earlier entry is given that
  * entry's retained reading rather than text from the run that is still going.
+ *
+ * `formatted` is where the caller holds the Output it has already formatted.
  */
-export function readingOf(view: ReplView): ReplReading {
+export function readingOf(view: ReplView, formatted?: ReplMarkdownStore): ReplReading {
   const key = view.selection.entry?.key;
   const entry =
     key === undefined
@@ -7134,6 +7162,7 @@ export function readingOf(view: ReplView): ReplReading {
     live: livesHere(view.model, view.selection) ? view.live.output : "",
     commandOutput: view.live.commandOutput?.find((one) => one.entry === entry.key)?.chunks ?? [],
     inspected: view.state.route.at !== undefined,
+    formatted,
   });
 }
 
@@ -12481,6 +12510,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
 function workspaceChatComposed(
   reading: ReplSidekickReading,
   staging: ReplChatStaging,
+  formatted: ReplMarkdownStore | undefined,
 ): readonly ReplChatComposed[] {
   const items: ReplChatComposed[] = [];
   const text = (
@@ -12526,6 +12556,7 @@ function workspaceChatComposed(
     if (item.kind === "person") {
       items.push(
         chatBody(
+          formatted,
           key,
           "",
           item.text,
@@ -12543,6 +12574,7 @@ function workspaceChatComposed(
       // nothing they could read. `(unfinished)` below is the other ending.
       items.push(
         chatBody(
+          formatted,
           key,
           item.incomplete === true
             ? `${reading.agent} (unfinished): `
@@ -12615,6 +12647,7 @@ function workspaceChatComposed(
       const saved = savedTurns.get(`${item.conversation}:${item.turn}`);
       items.push(
         chatBody(
+          formatted,
           key,
           "",
           trimLeadingBlankLines(item.text),

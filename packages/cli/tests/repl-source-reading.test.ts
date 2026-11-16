@@ -1753,6 +1753,43 @@ describe("1342 written Markdown as display lines", () => {
     expect(JSON.stringify(lines)).not.toContain("example.test");
   });
 
+  it("keeps a task's marker, checkbox and first text on one line", function* () {
+    // Tight, loose and ordered items, each written once as itself.
+    expect(markdownRoles("- [ ] todo\n- [x] done")).toEqual([
+      ["punctuation:• [ ] ", "output:todo"],
+      ["punctuation:• [x] ", "output:done"],
+    ]);
+    expect(markdownRoles("- [ ] todo\n\n- [x] done")).toEqual([
+      ["punctuation:• [ ] ", "output:todo"],
+      [],
+      ["punctuation:• [x] ", "output:done"],
+    ]);
+    expect(markdownRoles("1. [ ] **first** step\n2. [x] second\n   more")).toEqual([
+      ["punctuation:1. [ ] ", "markdown-strong:first", "output: step"],
+      ["punctuation:2. [x] ", "output:second"],
+      ["punctuation:   ", "output:more"],
+    ]);
+  });
+
+  it("draws a reference as a link only where the body defines its label", function* () {
+    const lines = markdownLines(
+      "[known][r], [R][], [r] and [missing][x]\n\n[r]: https://example.test/defined",
+      "output",
+    );
+    expect(lines.map((line) => line.text)).toEqual([
+      "known, R, r and [missing][x]",
+      "",
+      "[r]: https://example.test/defined",
+    ]);
+    expect(
+      lines[0].runs.filter((run) => run.token === "markdown-link").map((run) => run.text),
+    ).toEqual(["known", "R", "r"]);
+    // A bare address the GFM grammar recognizes is a link too, drawn as written.
+    expect(markdownRoles("see https://bare.test/x now")).toEqual([
+      ["output:see ", "markdown-link:https://bare.test/x", "output: now"],
+    ]);
+  });
+
   it("makes controls inert before the lexer reads them", function* () {
     const source = "a\rb \x1b]8;;https://x.test\x07link\x1b]8;;\x07 **c\x9b**";
     const lines = markdownShown(source);

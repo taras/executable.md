@@ -2099,9 +2099,12 @@ A heading is drawn as its text in the source-heading style. Strong text is bold,
 emphasis is italic and a link is underlined, each in the colour of the text
 around it; inline and fenced code take the code colour. An ordered item keeps the
 number it was written with, a bullet is drawn as `•`, and an item's further
-lines and nested items are set in under its marker. A link shows its label and
-nothing of its target: the target is not drawn, cannot be activated, and reaches
-the terminal as no hyperlink or other control sequence.
+lines and nested items are set in under its marker. A task item's marker, its
+`[ ]` or `[x]` and the start of its text share one row, tight, loose or
+ordered. A link shows its label and nothing of its target: the target is not
+drawn, cannot be activated, and reaches the terminal as no hyperlink or other
+control sequence. A reference is a link only where the body defines its label,
+and a bare web or mail address is a link drawn as written.
 
 A fence is drawn line for line. Its delimiter rows stay, as punctuation, and its
 payload keeps every indentation, blank line and line break, with any Markdown
@@ -2129,6 +2132,11 @@ A cold reopen draws the retained body. Source, command stdout and stderr,
 recorded feedback, title and headline
 previews, an entry's work rows in the chat, the Draft and the composer keep their
 own presentation.
+
+A body is read again only when its text changes. The selected reading and the
+chat each hold the bodies their latest frame drew, so a Draft or composer edit
+reads none, and a streamed delta reads the one reply it changed. A body that
+changes, closes or leaves the view is let go at the next frame.
 
 ## Everything on this screen was measured
 

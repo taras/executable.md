@@ -15,6 +15,7 @@
       <ReplBench.WaitForText text="Entry fixture heading" bold={true} />
       <ReplBench.WaitForText text="entry strong plain" bold={true} />
       <ReplBench.WaitForText text="entry fixture label plain" />
+      <ReplBench.WaitForText text="3. [x] entry task step" />
       <ReplBench.WaitForText text="  entry fence indent" />
       <ReplBench.WaitForText text="Entry fixture end." />
 
@@ -24,6 +25,7 @@
       <ReplBench.WaitForText text="sidekick strong plain" bold={true} />
       <ReplBench.WaitForText text="sidekick fixture label plain" />
       <ReplBench.WaitForText text="• sidekick first item" />
+      <ReplBench.WaitForText text="• [ ] sidekick task item" />
       <ReplBench.WaitForText text="Sidekick fixture end." />
 
       <ReplBench.Resize columns={72} rows={20} />
