@@ -14,7 +14,9 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { registerComponents, useTempFileCompiler } from "@executablemd/core";
-import { runDoc } from "./helpers.ts";
+import { documentCases, runDoc } from "./helpers.ts";
+
+const documentCase = documentCases("packages/testing/tests/testing-boundary.test.ts");
 import type { DocRun } from "./helpers.ts";
 
 /** Every journalled boundary entry, by the name it recorded. */
@@ -125,23 +127,26 @@ describe("Tier TB — a boundary that never finished", () => {
 describe("Tier TB — a repository component replaces <Testing>", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("TB4: a local Testing component is selected, and the package's never runs", function* () {
-    const run = yield* runDoc({
-      "README.md": [
-        "<Testing>",
-        '<Test name="would-run"><Assert expr={false} /></Test>',
-        "</Testing>",
-        "",
-      ].join("\n"),
-      "components/Testing.md": "LOCAL TESTING BOUNDARY\n",
-    });
+  documentCase(
+    "TB4: a local Testing component is selected, and the package's never runs",
+    function* (runFresh) {
+      const run = yield* runFresh({
+        "README.md": [
+          "<Testing>",
+          '<Test name="would-run"><Assert expr={false} /></Test>',
+          "</Testing>",
+          "",
+        ].join("\n"),
+        "components/Testing.md": "LOCAL TESTING BOUNDARY\n",
+      });
 
-    // The repository component answered…
-    expect(run.output).toContain("LOCAL TESTING BOUNDARY");
-    // …so the package implementation never activated testing: the `<Test>`
-    // inside stayed inert, recorded no result, and reported no boundary.
-    expect(run.results).toEqual([]);
-    expect(run.boundaries).toEqual([]);
-    expect(run.output).not.toContain("would-run");
-  });
+      // The repository component answered…
+      expect(run.output).toContain("LOCAL TESTING BOUNDARY");
+      // …so the package implementation never activated testing: the `<Test>`
+      // inside stayed inert, recorded no result, and reported no boundary.
+      expect(run.results).toEqual([]);
+      expect(run.boundaries).toEqual([]);
+      expect(run.output).not.toContain("would-run");
+    },
+  );
 });
