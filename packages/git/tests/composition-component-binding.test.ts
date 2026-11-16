@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * One registry, one authored body, and the invocation an owning execution
  * authenticates for it.
@@ -36,7 +37,7 @@ import { collect, Component, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration, Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, IdentityComponent } from "@executablemd/core/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { COMPOSITION_REGISTRATIONS } from "../src/composition/installation.ts";
 import { pushDeclaration } from "../src/composition/components/GitPush.ts";
 import { issueDeclaration } from "../src/composition/components/Issue.ts";
@@ -141,12 +142,13 @@ interface Ran {
 /** One document, through canonical execution, under this row's declarations. */
 function run(
   root: string,
+  path: string,
+  stream: InMemoryStream,
   source: string,
   installations: readonly ExecutionInstallation[],
   before?: () => Operation<void>,
 ): Operation<Ran> {
   return scoped(function* (): Operation<Ran> {
-    const path = join(root, `entry-${crypto.randomUUID()}.md`);
     yield* writeTextFile(path, source);
     // The whole vocabulary, as the Plugin registers it for every command. What
     // a row declares below is attached inside the execution, over the ordinary
@@ -162,9 +164,7 @@ function run(
     try {
       output = String(
         yield* collect(
-          yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [root] }, [
-            ...installations,
-          ]),
+          yield* executeInstalled({ path, stream, includes: [root] }, [...installations]),
         ),
       );
     } catch (error) {
@@ -215,6 +215,21 @@ function paired(name: string): {
     registration: COMPOSITION_REGISTRATIONS.find((entry) => entry.name === name),
     declaration: ownedDeclarations().find((entry) => entry.name === name),
   };
+}
+
+function bindingCase(
+  name: string,
+  check: (root: string, path: string, stream: InMemoryStream) => Operation<void>,
+): void {
+  it(name, function* () {
+    const root = yield* useRoot();
+    const path = join(root, `entry-${crypto.randomUUID()}.md`);
+    yield* captureTestJournal(
+      { owner: "packages/git/tests/composition-component-binding.test.ts", name },
+      path,
+      (stream) => check(root, path, stream),
+    );
+  });
 }
 
 describe("one registry for every repository operation, and the policy an execution owns", () => {
@@ -273,136 +288,152 @@ describe("one registry for every repository operation, and the policy an executi
     expect(declarations.map((entry) => entry.name)).toEqual(["Issue"]);
   });
 
-  it("A1: canonical dispatch decides the form, whatever a contextual answer says", function* (): Operation<void> {
-    const root = yield* useRoot();
-    const seen = watched();
+  bindingCase(
+    "A1: canonical dispatch decides the form, whatever a contextual answer says",
+    function* (root, path, stream): Operation<void> {
+      const seen = watched();
 
-    // A handler that reports the opposite shape to anything that asks. The form
-    // this element was written as is the scan's, so the read body runs and the
-    // upsert body does not.
-    const lying = function* (): Operation<void> {
-      yield* Component.around({
-        // deno-lint-ignore require-yield
-        *hasContent(): Operation<boolean> {
-          return true;
-        },
-      });
-    };
-
-    const ran = yield* run(
-      root,
-      [
-        `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
-        `<Issue url=${JSON.stringify(`${TRACKER}/issues/7`)} as="found" />`,
-        `</IssueTracker>`,
-        "",
-      ].join("\n"),
-      [declaring({ issue: fakeIssuePolicy(seen) })],
-      lying,
-    );
-
-    expect(ran.refusal).toBe(undefined);
-    expect(seen.performed).toEqual([`read ${TRACKER}/issues/7`]);
-  });
-
-  it("A2: a nested read finishes before the upsert around it is performed", function* (): Operation<void> {
-    const root = yield* useRoot();
-    const seen = watched();
-
-    const ran = yield* run(
-      root,
-      [
-        `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
-        `<Issue title="Outer" as="filed">`,
-        `what the inner read found: <Issue url=${JSON.stringify(`${TRACKER}/issues/3`)} as="inner" />{inner.url}`,
-        `</Issue>`,
-        `</IssueTracker>`,
-        "",
-      ].join("\n"),
-      [declaring({ issue: fakeIssuePolicy(seen) })],
-    );
-
-    expect(ran.refusal).toBe(undefined);
-    // The child's own operation first: an upsert renders its description before
-    // it is offered, so a child that retains work of its own finishes first.
-    expect(seen.performed).toEqual([`read ${TRACKER}/issues/3`, `upsert ${TRACKER}`]);
-    // Two invocations, two facades, two sites — the outer one built first.
-    expect(seen.sites).toHaveLength(2);
-    expect(new Set(seen.sites).size).toBe(2);
-  });
-
-  it("A2: two concurrent invocations keep their own sites", function* (): Operation<void> {
-    const root = yield* useRoot();
-    const seen = watched();
-
-    const ran = yield* run(
-      root,
-      [
-        `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
-        `<All>`,
-        `<Spawn><Issue title="One" as="one">first</Issue></Spawn>`,
-        `<Spawn><Issue title="Two" as="two">second</Issue></Spawn>`,
-        `</All>`,
-        `</IssueTracker>`,
-        "",
-      ].join("\n"),
-      [declaring({ issue: fakeIssuePolicy(seen) })],
-    );
-
-    expect(ran.refusal).toBe(undefined);
-    expect(seen.sites).toHaveLength(2);
-    expect(new Set(seen.sites).size).toBe(2);
-  });
-
-  it("A5: cancelling an invocation stops the operation it was performing", function* (): Operation<void> {
-    const root = yield* useRoot();
-    const seen = watched();
-    const reached = withResolvers<void>();
-
-    // The upsert suspends where a slow service would, and this row halts the
-    // whole execution while it is standing there.
-    const suspending = (site: string): IssueOperationsApi => {
-      seen.sites.push(site);
-      return {
-        read: function* (invocation): Operation<IssueDetails> {
-          return details(invocation.url);
-        },
-        upsert: function* (invocation): Operation<IssueReference> {
-          seen.performed.push(`upsert ${invocation.target}`);
-          reached.resolve();
-          yield* suspend();
-          throw new Error("a suspended upsert resumed");
-        },
+      // A handler that reports the opposite shape to anything that asks. The form
+      // this element was written as is the scan's, so the read body runs and the
+      // upsert body does not.
+      const lying = function* (): Operation<void> {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *hasContent(): Operation<boolean> {
+            return true;
+          },
+        });
       };
-    };
 
-    yield* scoped(function* (): Operation<void> {
-      const task = yield* spawn(() =>
-        run(
-          root,
-          [
-            `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
-            `<Issue title="Filed" as="filed">described</Issue>`,
-            `</IssueTracker>`,
-            "",
-          ].join("\n"),
-          [declaring({ issue: suspending })],
-        ),
+      const ran = yield* run(
+        root,
+        path,
+        stream,
+        [
+          `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
+          `<Issue url=${JSON.stringify(`${TRACKER}/issues/7`)} as="found" />`,
+          `</IssueTracker>`,
+          "",
+        ].join("\n"),
+        [declaring({ issue: fakeIssuePolicy(seen) })],
+        lying,
       );
-      yield* race([
-        reached.operation,
-        (function* (): Operation<never> {
-          yield* sleep(30_000);
-          throw new Error("the upsert never reached its policy");
-        })(),
-      ]);
-      // Joined here: the halt returns once the suspended upsert has been torn
-      // down, so what follows cannot be read before cancellation finished.
-      yield* task.halt();
-    });
 
-    // The upsert was entered once, never resumed and never performed again.
-    expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
-    expect(seen.sites).toHaveLength(1);
-  });
+      expect(ran.refusal).toBe(undefined);
+      expect(seen.performed).toEqual([`read ${TRACKER}/issues/7`]);
+    },
+  );
+
+  bindingCase(
+    "A2: a nested read finishes before the upsert around it is performed",
+    function* (root, path, stream): Operation<void> {
+      const seen = watched();
+
+      const ran = yield* run(
+        root,
+        path,
+        stream,
+        [
+          `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
+          `<Issue title="Outer" as="filed">`,
+          `what the inner read found: <Issue url=${JSON.stringify(`${TRACKER}/issues/3`)} as="inner" />{inner.url}`,
+          `</Issue>`,
+          `</IssueTracker>`,
+          "",
+        ].join("\n"),
+        [declaring({ issue: fakeIssuePolicy(seen) })],
+      );
+
+      expect(ran.refusal).toBe(undefined);
+      // The child's own operation first: an upsert renders its description before
+      // it is offered, so a child that retains work of its own finishes first.
+      expect(seen.performed).toEqual([`read ${TRACKER}/issues/3`, `upsert ${TRACKER}`]);
+      // Two invocations, two facades, two sites — the outer one built first.
+      expect(seen.sites).toHaveLength(2);
+      expect(new Set(seen.sites).size).toBe(2);
+    },
+  );
+
+  bindingCase(
+    "A2: two concurrent invocations keep their own sites",
+    function* (root, path, stream): Operation<void> {
+      const seen = watched();
+
+      const ran = yield* run(
+        root,
+        path,
+        stream,
+        [
+          `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
+          `<All>`,
+          `<Spawn><Issue title="One" as="one">first</Issue></Spawn>`,
+          `<Spawn><Issue title="Two" as="two">second</Issue></Spawn>`,
+          `</All>`,
+          `</IssueTracker>`,
+          "",
+        ].join("\n"),
+        [declaring({ issue: fakeIssuePolicy(seen) })],
+      );
+
+      expect(ran.refusal).toBe(undefined);
+      expect(seen.sites).toHaveLength(2);
+      expect(new Set(seen.sites).size).toBe(2);
+    },
+  );
+
+  bindingCase(
+    "A5: cancelling an invocation stops the operation it was performing",
+    function* (root, path, stream): Operation<void> {
+      const seen = watched();
+      const reached = withResolvers<void>();
+
+      // The upsert suspends where a slow service would, and this row halts the
+      // whole execution while it is standing there.
+      const suspending = (site: string): IssueOperationsApi => {
+        seen.sites.push(site);
+        return {
+          read: function* (invocation): Operation<IssueDetails> {
+            return details(invocation.url);
+          },
+          upsert: function* (invocation): Operation<IssueReference> {
+            seen.performed.push(`upsert ${invocation.target}`);
+            reached.resolve();
+            yield* suspend();
+            throw new Error("a suspended upsert resumed");
+          },
+        };
+      };
+
+      yield* scoped(function* (): Operation<void> {
+        const task = yield* spawn(() =>
+          run(
+            root,
+            path,
+            stream,
+            [
+              `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
+              `<Issue title="Filed" as="filed">described</Issue>`,
+              `</IssueTracker>`,
+              "",
+            ].join("\n"),
+            [declaring({ issue: suspending })],
+          ),
+        );
+        yield* race([
+          reached.operation,
+          (function* (): Operation<never> {
+            yield* sleep(30_000);
+            throw new Error("the upsert never reached its policy");
+          })(),
+        ]);
+        // Joined here: the halt returns once the suspended upsert has been torn
+        // down, so what follows cannot be read before cancellation finished.
+        yield* task.halt();
+      });
+
+      // The upsert was entered once, never resumed and never performed again.
+      expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
+      expect(seen.sites).toHaveLength(1);
+    },
+  );
 });
