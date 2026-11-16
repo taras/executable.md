@@ -23,11 +23,12 @@
  * one written line is one logical line, and wrapping stays with the measured
  * fitting every reading already uses.
  *
- * The grammar does work proportional to the body. A reading that prepares the
- * same body every frame holds its lines in a {@link ReplMarkdownStore} instead.
+ * A reading that prepares the same body every frame holds its formatted lines
+ * in a {@link ReplMarkdownStore}.
  */
 
 import { Autolink, parser, Table, TaskList } from "@lezer/markdown";
+import type { InlineContext } from "@lezer/markdown";
 import { inertCommandText } from "./command-output.ts";
 import { tokenRuns } from "./description.ts";
 import type { ReplTokenRun } from "./description.ts";
@@ -83,7 +84,7 @@ export function markdownLines(
   role: ReplPresentationRole,
 ): readonly ReplMarkdownLine[] {
   const text = inertCommandText(source);
-  const top = MARKDOWN.parse(text).topNode;
+  const top = parseMarkdown(text).topNode;
   const reading: Reading = { text, role, defined: definedLabels(text, top) };
   return Object.freeze(
     blockLines(reading, blocksOf(reading, childrenOf(top)), [], true, 0, text.length).map(
@@ -96,6 +97,54 @@ export function markdownLines(
 }
 
 const MARKDOWN = parser.configure([Table, TaskList, Autolink]);
+
+const MAX_EMPHASIS_RUN = 256;
+const MAX_INLINE_EMPHASIS_MARKS = 1024;
+
+/**
+ * Lezer expands matched marker runs into nested nodes before writing the tree.
+ * Keep an oversized run literal. In an inline section dense enough to build
+ * the same depth from shorter runs, leave its emphasis delimiters as written.
+ */
+function parseMarkdown(text: string) {
+  let checked: InlineContext | undefined;
+  let excessive = false;
+  return MARKDOWN.configure({
+    parseInline: [
+      {
+        name: "BoundEmphasis",
+        before: "Emphasis",
+        parse(context, next, from) {
+          if (next !== "*".charCodeAt(0) && next !== "_".charCodeAt(0)) {
+            return -1;
+          }
+          let to = from + 1;
+          while (context.char(to) === next) {
+            to += 1;
+          }
+          if (to - from > MAX_EMPHASIS_RUN) {
+            return to;
+          }
+          if (checked !== context) {
+            checked = context;
+            let marks = 0;
+            excessive = false;
+            for (const [run] of context.text.matchAll(/\*+|_+/g)) {
+              if (run.length <= MAX_EMPHASIS_RUN) {
+                marks += run.length;
+                if (marks > MAX_INLINE_EMPHASIS_MARKS) {
+                  excessive = true;
+                  break;
+                }
+              }
+            }
+          }
+          return excessive ? to : -1;
+        },
+      },
+    ],
+  }).parse(text);
+}
 
 type SyntaxNode = ReturnType<typeof MARKDOWN.parse>["topNode"];
 

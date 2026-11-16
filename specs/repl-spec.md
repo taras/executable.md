@@ -2106,6 +2106,11 @@ drawn, cannot be activated, and reaches the terminal as no hyperlink or other
 control sequence. A reference is a link only where the body defines its label,
 and a bare web or mail address is a link drawn as written.
 
+An emphasis run of more than 256 consecutive `*` or `_` characters stays
+literal. An inline section with more than 1,024 of those characters in shorter
+runs draws its emphasis markers as written. Other inline constructs in the
+section keep their formatting.
+
 A fence is drawn line for line. Its delimiter rows stay, as punctuation, and its
 payload keeps every indentation, blank line and line break, with any Markdown
 inside it left unformatted. A fence that has not closed holds everything after

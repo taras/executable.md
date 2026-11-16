@@ -1790,6 +1790,46 @@ describe("1342 written Markdown as display lines", () => {
     ]);
   });
 
+  it("prepares a long emphasis run as written beside ordinary formatting", function* () {
+    const marks = "*".repeat(16_000);
+    const literal = `${marks}x${marks}`;
+    const output = `**before** ${literal} and _after_`;
+    const reading = entryReading({
+      entry: entryOf(output, { terminal: settled("ok", output), settled: true }),
+      lifecycle: NO_LIFECYCLE,
+      live: "",
+      inspected: false,
+    });
+
+    expect(reading.output.lines.map((line) => line.text)).toEqual([`before ${literal} and after`]);
+    expect(reading.output.lines[0].runs.map((run) => run.token)).toEqual([
+      "markdown-strong",
+      "output",
+      "markdown-em",
+    ]);
+  });
+
+  it("prepares a dense inline section without losing nearby Markdown", function* () {
+    const literal = `${"*a ".repeat(8_500)}x${" a*".repeat(8_500)}`;
+    const output = `**before**\n\n${literal}\n\n[after](https://example.test/retained)`;
+    const reading = entryReading({
+      entry: entryOf(output, { terminal: settled("ok", output), settled: true }),
+      lifecycle: NO_LIFECYCLE,
+      live: "",
+      inspected: false,
+    });
+
+    expect(reading.output.lines.map((line) => line.text)).toEqual([
+      "before",
+      "",
+      literal,
+      "",
+      "after",
+    ]);
+    expect(reading.output.lines[0].runs[0].token).toBe("markdown-strong");
+    expect(reading.output.lines[4].runs[0].token).toBe("markdown-link");
+  });
+
   it("makes controls inert before the lexer reads them", function* () {
     const source = "a\rb \x1b]8;;https://x.test\x07link\x1b]8;;\x07 **c\x9b**";
     const lines = markdownShown(source);
