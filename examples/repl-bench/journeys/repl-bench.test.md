@@ -26,8 +26,11 @@
 <Test name="a resized Sidekick view reopens at its last terminal size">
   <ReplBench columns={120} rows={30} expectExit={true} as="closed">
     <Cwd as="directory" />
+    <Repl.Focus.Draft />
+    <Terminal.WaitForText text="> DRAFT" />
     <Terminal.WaitForText text="SIDEKICK" row={1} as="sidekickTab" />
     <Terminal.Click at={sidekickTab} />
+    <Terminal.WaitForText text="> › message the sidekick" />
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="Entries    * Sidekick" />
     <ReplBench.WaitForText text="message the sidekick" />

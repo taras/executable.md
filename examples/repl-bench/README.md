@@ -451,8 +451,10 @@ check. A viewport match can also find the same text in the Draft or Transcript.
 Use `<Terminal.Screenshot name="narrow-sidekick" as="image" />` inside an active
 bench to save the visible viewport and bind the image path.
 
-The required macOS and Linux bench jobs run from a checkout whose path
-contains spaces. Their failure artifacts include saved screenshots.
+CI runs the bench tools on pull requests and drives a real terminal on pushes
+to `main`. The hosted [testing specification](../../specs/testing-spec.md#ci-topology)
+describes the runner matrix. The checkout path contains spaces, and terminal
+failure artifacts include saved screenshots.
 
 Run [repl-shared-terminal.test.md](journeys/repl-shared-terminal.test.md) to check these launch transitions in one
 test. Start at `120x30`, submit the marker entry, and resize to `72x20` with
