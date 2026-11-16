@@ -21,7 +21,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, suspend, type Operation } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { API, Service, useHostFiles } from "@executablemd/runtime";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
@@ -35,9 +35,11 @@ import { installPlugins } from "../src/plugin-host.ts";
 import type { CommandPlugins } from "../src/plugin-host.ts";
 import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { DEFAULT_REPOSITORY_ROOT } from "../src/run-repositories.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/cli/tests/run-composition.test.ts");
+const OWNER = "packages/cli/tests/run-composition.test.ts";
+const journalCase = journalCases(OWNER);
 
 /** Every element an author can write that needs a repository provider. */
 const OPERATIONS: readonly { readonly name: string; readonly source: string }[] = [
@@ -98,7 +100,11 @@ const COMPOSITION_NAMES = [
  * Run one element with the declarations registered and no provider installed —
  * which is exactly what Node and Bun assemble.
  */
-function ordinaryWithoutProvider(source: string, cwd: string): Operation<unknown> {
+function ordinaryWithoutProvider(
+  source: string,
+  cwd: string,
+  stream: InMemoryStream,
+): Operation<unknown> {
   return scoped(function* () {
     yield* API.Env.around(
       {
@@ -111,9 +117,7 @@ function ordinaryWithoutProvider(source: string, cwd: string): Operation<unknown
     );
     yield* useHostFiles();
     yield* registerComponents(COMPOSITION_REGISTRATIONS);
-    return yield* collect(
-      yield* execute({ ...inlineSource(source), stream: new InMemoryStream() }),
-    );
+    return yield* collect(yield* execute({ ...inlineSource(source), stream }));
   });
 }
 
@@ -234,28 +238,43 @@ describe("ORC2 — one language, described everywhere and operated somewhere", (
     }
   });
 
-  it("reports an absent provider for every repository operation, and mutates nothing", function* () {
+  const absentProvider =
+    "reports an absent provider for every repository operation, and mutates nothing";
+  it(absentProvider, function* () {
     for (const operation of OPERATIONS) {
-      // The working directory is this repository's own checkout, so a provider
-      // that *did* discover an ambient repository would find one — and the
-      // refusal below would then be about something else.
-      const failure = yield* raisedValue(ordinaryWithoutProvider(operation.source, "."));
-      // The element's name travels with the assertion, so a failure says which
-      // element reported something else.
-      const reported = `${operation.name}: ${String(failure)}`;
-      expect(reported).toMatch(
-        /provider is not installed|no Repository composition provider|no Git composition provider|no issue provider|no Issue provider|no pull-request provider/,
+      yield* captureTestJournal(
+        { owner: OWNER, name: absentProvider },
+        "<eval>",
+        function* (stream) {
+          // The working directory is this repository's own checkout, so a provider
+          // that *did* discover an ambient repository would find one — and the
+          // refusal below would then be about something else.
+          const failure = yield* raisedValue(
+            ordinaryWithoutProvider(operation.source, ".", stream),
+          );
+          // The element's name travels with the assertion, so a failure says which
+          // element reported something else.
+          const reported = `${operation.name}: ${String(failure)}`;
+          expect(reported).toMatch(
+            /provider is not installed|no Repository composition provider|no Git composition provider|no issue provider|no Issue provider|no pull-request provider/,
+          );
+        },
       );
     }
   });
 
-  it("leaves <Dir> working, because it needs no provider at all", function* () {
-    const rendered = yield* ordinaryWithoutProvider(
-      ['<Dir path=".">', "", "inside", "", "</Dir>"].join("\n"),
-      ".",
-    );
-    expect(String(rendered)).toContain("inside");
-  });
+  journalCase(
+    "leaves <Dir> working, because it needs no provider at all",
+    "<eval>",
+    function* (stream) {
+      const rendered = yield* ordinaryWithoutProvider(
+        ['<Dir path=".">', "", "inside", "", "</Dir>"].join("\n"),
+        ".",
+        stream,
+      );
+      expect(String(rendered)).toContain("inside");
+    },
+  );
 });
 
 describe("ORC2 — Dir is operational where the repository provider is not", () => {
@@ -267,50 +286,64 @@ describe("ORC2 — Dir is operational where the repository provider is not", () 
   // This runs in the portable suite deliberately: the operation is the same one
   // the tier suites drive under Deno, and the claim being made here is that
   // nothing about it is Deno's.
-  it("creates the directory and runs its content with no repository provider", function* () {
-    const workspace = yield* useTempDirectory("xmd-orc2-dir-");
+  journalCase(
+    "creates the directory and runs its content with no repository provider",
+    "<eval>",
+    function* (stream) {
+      const workspace = yield* useTempDirectory("xmd-orc2-dir-");
 
-    const rendered = String(
-      yield* ordinaryWithoutProvider(
-        '<Dir path="made/deep">\n\n<File path="inside.md">landed</File>\n\nINSIDE\n\n</Dir>\n',
-        workspace,
-      ),
-    );
+      const rendered = String(
+        yield* ordinaryWithoutProvider(
+          '<Dir path="made/deep">\n\n<File path="inside.md">landed</File>\n\nINSIDE\n\n</Dir>\n',
+          workspace,
+          stream,
+        ),
+      );
 
-    expect(rendered).toContain("INSIDE");
-    expect(yield* exists(join(workspace, "made", "deep"))).toBe(true);
-    expect(yield* readTextFile(join(workspace, "made", "deep", "inside.md"))).toBe("landed");
-  });
+      expect(rendered).toContain("INSIDE");
+      expect(yield* exists(join(workspace, "made", "deep"))).toBe(true);
+      expect(yield* readTextFile(join(workspace, "made", "deep", "inside.md"))).toBe("landed");
+    },
+  );
 
   // And the refusal half, on the same runtime: a non-directory is refused
   // rather than answered, so `<Dir>` being operational is not `<Dir>` being
   // permissive.
-  it("refuses a non-directory target without a repository provider", function* () {
-    const workspace = yield* useTempDirectory("xmd-orc2-dir-refusal-");
-    yield* writeTextFile(join(workspace, "occupied"), "a file");
+  journalCase(
+    "refuses a non-directory target without a repository provider",
+    "<eval>",
+    function* (stream) {
+      const workspace = yield* useTempDirectory("xmd-orc2-dir-refusal-");
+      yield* writeTextFile(join(workspace, "occupied"), "a file");
 
-    const rendered = String(
-      yield* ordinaryWithoutProvider(
-        '<PrintErrors>\n<Dir path="occupied">\n\nINSIDE\n\n</Dir>\n</PrintErrors>\n',
-        workspace,
-      ),
-    );
+      const rendered = String(
+        yield* ordinaryWithoutProvider(
+          '<PrintErrors>\n<Dir path="occupied">\n\nINSIDE\n\n</Dir>\n</PrintErrors>\n',
+          workspace,
+          stream,
+        ),
+      );
 
-    expect(rendered).toContain("not a directory");
-    expect(rendered).not.toContain("INSIDE");
-    expect(yield* readTextFile(join(workspace, "occupied"))).toBe("a file");
-  });
+      expect(rendered).toContain("not a directory");
+      expect(rendered).not.toContain("INSIDE");
+      expect(yield* readTextFile(join(workspace, "occupied"))).toBe("a file");
+    },
+  );
 });
 
 describe("ORC2 — where the managed root is", () => {
-  it("names ~/.xmd/repositories and nothing a document can influence", function* () {
-    expect(DEFAULT_REPOSITORY_ROOT.endsWith("/.xmd/repositories")).toBe(true);
-    // Describing the vocabulary and refusing an operation both leave it exactly
-    // as they found it — including not existing.
-    const before = yield* exists(DEFAULT_REPOSITORY_ROOT);
-    yield* raisedValue(ordinaryWithoutProvider(`<Git.Push />`, "."));
-    expect(yield* exists(DEFAULT_REPOSITORY_ROOT)).toBe(before);
-  });
+  journalCase(
+    "names ~/.xmd/repositories and nothing a document can influence",
+    "<eval>",
+    function* (stream) {
+      expect(DEFAULT_REPOSITORY_ROOT.endsWith("/.xmd/repositories")).toBe(true);
+      // Describing the vocabulary and refusing an operation both leave it exactly
+      // as they found it — including not existing.
+      const before = yield* exists(DEFAULT_REPOSITORY_ROOT);
+      yield* raisedValue(ordinaryWithoutProvider(`<Git.Push />`, ".", stream));
+      expect(yield* exists(DEFAULT_REPOSITORY_ROOT)).toBe(before);
+    },
+  );
 });
 
 /** Whatever this operation raised, as a value. */
