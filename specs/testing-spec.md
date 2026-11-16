@@ -81,10 +81,34 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+### Choose a reporter
+
+The default `--reporter=pretty` prints the rendered report on stdout and
+progress on stderr. Use `--reporter=failures` for a compact report in CI or a
+Sidekick Round.
+
+```sh
+xmd test ./tests --reporter=failures
+```
+
+The failures reporter omits the rendered report, directory headings, test
+starts, and successful outcomes. It writes failure and cancellation
+diagnostics and journal paths to stderr. A completed invocation ends with one
+summary on stderr.
+
+```text
+[xmd test] 11 passed | 1 failed (324ms) · 1 of 3 documents failed
+```
+
+The counts cover tests recorded by the root documents. Nested executions can
+add diagnostics and journals. Exit status and journal retention follow the same
+rules for either reporter. Output that commands write directly to the terminal
+keeps its normal routing.
+
 ### Progress and failure journals
 
-While `xmd test` runs, it writes a short progress report to stderr, so a pipe or
-CI log shows which test is running and which operation a timeout interrupted:
+The pretty reporter writes live progress to stderr. A pipe or CI log shows
+which test is running and which operation a timeout interrupted.
 
 ```text
 [xmd test] start test "held" at suite.test.md:1:1
@@ -116,16 +140,6 @@ tests, elements, command languages and modifier words, locations and states. It
 never carries a captured value, a prop, command or prompt text, an assertion's
 operands or anything a document rendered, and the rendered report on stdout is
 unchanged by it.
-
-The default `--reporter=pretty` prints the rendered report on stdout and
-progress on stderr. `--reporter=failures` suppresses the rendered report,
-directory headings, test starts, and successful outcomes. It keeps failure
-and cancellation diagnostics and journal notices on stderr. After the run,
-it prints one line on stderr with the number of passing and failing tests
-recorded by the root documents and elapsed time. Nested execution results
-provide diagnostics without adding to those counts. Both reporters use the
-same exit statuses and retain the same journals. Output that commands write
-directly to the terminal keeps its normal routing.
 
 Each root document and each nested `run` child keeps its journal in memory.
 When that execution fails, times out or is cancelled, the command saves the
