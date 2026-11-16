@@ -1,9 +1,15 @@
+import { API } from "@executablemd/runtime";
+import {
+  checkSubprocessJournals,
+  parseSubprocessJournal,
+  readSubprocessSnapshot,
+} from "../../test-support/subprocess-journal.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { cliRuntime } from "@executablemd/test-support/launch";
-import { readTextFile, readdir, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, readdir, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { createContext, ensure, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -342,45 +348,155 @@ describe("ComponentModuleLoader", () => {
   });
 
   if (cliRuntime() === "deno") {
-    it("P1: Deno loads under the preserved read-only envelope and retains authored write denial", function* () {
+    const owner = "packages/core/tests/component-module-loader.test.ts";
+    const readOnlyCase =
+      "P1: Deno loads under the preserved read-only envelope and retains authored write denial";
+    const expected = "ordinary-read-only-component";
+
+    function runFixture(directory: string, mode: "read" | "write", capture = false) {
+      return exec(execPath, {
+        arguments: [
+          "run",
+          "--config",
+          join(ROOT, "deno.json"),
+          "--node-modules-dir=manual",
+          "--allow-read",
+          "--allow-env",
+          "--allow-import",
+          "--deny-write",
+          "--no-prompt",
+          "--cached-only",
+          "--frozen",
+          join(ROOT, "packages/core/tests/fixtures/component-module-readonly.ts"),
+          directory,
+          mode,
+          ...(capture ? ["--capture-journal"] : []),
+        ],
+      }).join();
+    }
+
+    function* useReadOnlyFixture() {
       const directory = yield* useTempDirectory("component-loader-readonly-");
       const direct = join(directory, "ReadOnly.ts");
       yield* writeTextFile(
         direct,
         'export default function*() { const value: string = "ordinary-read-only-component"; return value; }',
       );
-      const before = yield* readTextFile(direct);
-      const fixture = join(ROOT, "packages/core/tests/fixtures/component-module-readonly.ts");
-      for (const mode of ["read", "write"]) {
-        const result = yield* exec(execPath, {
-          arguments: [
-            "run",
-            "--config",
-            join(ROOT, "deno.json"),
-            "--node-modules-dir=manual",
-            "--allow-read",
-            "--allow-env",
-            "--allow-import",
-            "--deny-write",
-            "--no-prompt",
-            "--cached-only",
-            "--frozen",
-            fixture,
-            directory,
-            mode,
-          ],
-        }).join();
+      return { directory, direct, before: yield* readTextFile(direct) };
+    }
+
+    function* checkCapturedRead(
+      directory: string,
+      name: string,
+      check: (
+        output: string,
+        snapshot: ReturnType<typeof readSubprocessSnapshot>,
+      ) => Operation<void>,
+    ) {
+      const result = yield* runFixture(directory, "read", true);
+      let data: unknown;
+      try {
+        data = JSON.parse(result.stdout);
+      } catch {
+        data = undefined;
+      }
+      const snapshot = readSubprocessSnapshot(
+        data && typeof data === "object" && "journals" in data ? data.journals : undefined,
+        0,
+      );
+      yield* checkSubprocessJournals(
+        { owner, name },
+        [{ source: "<eval>", snapshot }],
+        function* () {
+          expect({ mode: "read", code: result.code, stderr: result.stderr }).toEqual({
+            mode: "read",
+            code: 0,
+            stderr: "",
+          });
+          const output =
+            data && typeof data === "object" && "output" in data && typeof data.output === "string"
+              ? data.output.trim()
+              : "";
+          yield* check(output, snapshot);
+        },
+      );
+    }
+
+    it(readOnlyCase, function* () {
+      const { directory, direct, before } = yield* useReadOnlyFixture();
+      yield* checkCapturedRead(directory, readOnlyCase, function* (output) {
+        expect(output).toBe(expected);
+        const mode = "write";
+        const result = yield* runFixture(directory, mode);
         expect({ mode, code: result.code, stderr: result.stderr }).toEqual({
           mode,
           code: 0,
           stderr: "",
         });
-        expect(result.stdout.trim()).toBe(
-          mode === "read" ? "ordinary-read-only-component" : "authored-write-denied",
-        );
+        expect(result.stdout.trim()).toBe("authored-write-denied");
+        expect(yield* readTextFile(direct)).toBe(before);
+        expect((yield* readdir(directory)).sort()).toEqual(["ReadOnly.ts"]);
+      });
+    });
+
+    const witness =
+      "P1: attributes a read-only child journal when the joined parent's assertion fails";
+    it(witness, function* () {
+      const { directory } = yield* useReadOnlyFixture();
+      const raw = yield* runFixture(directory, "read");
+      expect({ code: raw.code, stderr: raw.stderr, stdout: raw.stdout.trim() }).toEqual({
+        code: 0,
+        stderr: "",
+        stdout: expected,
+      });
+      const artifacts = join(yield* useTempDirectory("readonly-journal-"), "test-artifacts");
+      yield* API.Env.around({
+        *env([name], next) {
+          return name === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(name);
+        },
+      });
+      // deno-lint-ignore require-yield
+      yield* checkCapturedRead(directory, witness, function* (output, snapshot) {
+        expect(output).toBe(expected);
+        expect(snapshot).toBeInstanceOf(Array);
+      });
+      expect(yield* exists(artifacts)).toBe(false);
+
+      let assertion: unknown;
+      let caught: unknown;
+      let received: ReturnType<typeof readSubprocessSnapshot> = "snapshot absent";
+      try {
+        // deno-lint-ignore require-yield
+        yield* checkCapturedRead(directory, witness, function* (output, snapshot) {
+          received = snapshot;
+          try {
+            expect(output).toBe("missing result");
+          } catch (error) {
+            assertion = error;
+            throw error;
+          }
+        });
+      } catch (error) {
+        caught = error;
       }
-      expect(yield* readTextFile(direct)).toBe(before);
-      expect((yield* readdir(directory)).sort()).toEqual(["ReadOnly.ts"]);
+      expect(assertion).toBeInstanceOf(Error);
+      expect(caught).toBe(assertion);
+
+      const invocations = yield* readdir(artifacts);
+      expect(invocations).toHaveLength(1);
+      const saved = join(artifacts, invocations[0]!);
+      expect((yield* readdir(saved)).sort()).toEqual(["child-1.case.json", "child-1.jsonl"]);
+      expect(JSON.parse(yield* readTextFile(join(saved, "child-1.case.json")))).toEqual({
+        owner,
+        name: witness,
+        kind: "child",
+        ordinal: 1,
+        source: "<eval>",
+      });
+      const lines = (yield* readTextFile(join(saved, "child-1.jsonl"))).trimEnd().split("\n");
+      const replay = parseSubprocessJournal(lines);
+      expect(replay).toEqual(received);
+      expect(replay.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
     });
   }
 });
