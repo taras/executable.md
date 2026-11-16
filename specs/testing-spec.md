@@ -954,7 +954,7 @@ the first failure of either portion. With a selection it resolves that shard and
 invokes its files serially, in sorted order, each through that runtime's
 one-file command:
 
-- Deno — `deno test --allow-all --frozen <file>`
+- Deno — `deno test --allow-all --frozen --reporter=dot <file>`
 - Node — `tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 <file>`
 - Bun — `bun test --timeout=300000 <file>`
 
@@ -965,8 +965,11 @@ source entrypoint, resolved from the runner's checkout:
 - Node — `tsx --tsconfig tsconfig.node.json packages/cli/src/node.ts`
 - Bun — `bun packages/cli/src/bun.ts`
 
-The CLI receives `test <file>` and runs from the repository root with its inherited
-environment (`PATH`, the Deno cache and install variables, `XDG_CACHE_HOME`,
+The CLI runs from the repository root. A shard names each Markdown suite when
+it starts and passes `test <file> --reporter=failures`. Weight measurement
+passes the same arguments. Local unsharded runs use the default reporter.
+Deno weight measurement also uses the same dot reporter as Deno shards.
+The CLI inherits the environment (`PATH`, the Deno cache and install variables, `XDG_CACHE_HOME`,
 `TMPDIR` and `XMD_TEST_ARTIFACTS`). Individually registered suites use the
 CLI's default includes and file permissions. Deno launches of `Plan`,
 `NativeSessionLaunch` and `SessionConfiguration` select the test-only worker
@@ -1012,8 +1015,9 @@ A malformed runtime, index, or count is refused before any test process starts.
 A numeric failure does not prevent the files assigned after it: the shard
 continues, retains the first failed file and its status, and exits with that
 status once every assigned file has had its chance. A status without a numeric
-code — a signalled child — is failure. Native output is neither captured,
-truncated, nor replaced by a summary.
+code — a signalled child — is failure. The shard streams the output its
+selected reporter emits. Deno's dot reporter keeps failure details and omits
+test console logs.
 
 Cancellation is distinct from failure. Halting a shard halts the process group
 of the file it is running, releases that file's scratch state and starts no
