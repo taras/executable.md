@@ -176,10 +176,11 @@ describe("complete testing activation", () => {
     { label: "a failing body", assertion: "<Assert expr={false} />" },
   ];
   for (const shape of shapes) {
-    it(`refuses ${shape.label} before it expands`, function* () {
+    activationCase(`refuses ${shape.label} before it expands`, "README.md", function* (stream) {
       const attempt = yield* runComposed(
         `<Test name="t"><Sentinel name="body" />${shape.assertion}</Test>\n`,
         incompleteActivation(),
+        stream,
       );
       expect(attempt.sentinels).toEqual([]);
       expect(errorOf(attempt)?.message).toContain(REFUSAL);
@@ -307,58 +308,68 @@ describe("complete testing activation", () => {
   // core keeps it away from every failure handler rather than relying on one to
   // decline it: recognizing the refusal takes core's own private mark, and a
   // package composed against a second loaded copy of core could not see it.
-  it("keeps a refused decision away from every failure handler", function* () {
-    const handled: string[] = [];
-    const attempt = yield* runComposed(
-      '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
-      (function* () {
-        yield* Component.around({
-          *handleFailure([failure], next) {
-            handled.push(failure.name);
-            return yield* next(failure);
-          },
-        });
-        yield* incompleteActivation();
-      })(),
-    );
-    expect(handled).toEqual([]);
-    expect(attempt.sentinels).toEqual([]);
-    expect(attempt.completion.ok).toBe(false);
-    expect(errorOf(attempt)?.message).toContain(REFUSAL);
-    expect(attempt.results).toEqual([]);
-    expect(testResultEvents(attempt.events)).toEqual([]);
-    expect(attempt.output).not.toContain("Assert");
-    expect(attempt.output).not.toContain("❌");
-  });
+  activationCase(
+    "keeps a refused decision away from every failure handler",
+    "README.md",
+    function* (stream) {
+      const handled: string[] = [];
+      const attempt = yield* runComposed(
+        '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+        (function* () {
+          yield* Component.around({
+            *handleFailure([failure], next) {
+              handled.push(failure.name);
+              return yield* next(failure);
+            },
+          });
+          yield* incompleteActivation();
+        })(),
+        stream,
+      );
+      expect(handled).toEqual([]);
+      expect(attempt.sentinels).toEqual([]);
+      expect(attempt.completion.ok).toBe(false);
+      expect(errorOf(attempt)?.message).toContain(REFUSAL);
+      expect(attempt.results).toEqual([]);
+      expect(testResultEvents(attempt.events)).toEqual([]);
+      expect(attempt.output).not.toContain("Assert");
+      expect(attempt.output).not.toContain("❌");
+    },
+  );
 
   // Refusing before delegation is an explicitly supported thing for a handler on
   // this seam to do, and what it throws is its own — an ordinary Error carrying
   // no identity this package or core would recognize by type. The test still
   // never ran, so the refusal is still a configuration failure: what marks it is
   // where it was raised, not what it is.
-  it("refuses when a handler throws its own error from the decision chain", function* () {
-    const attempt = yield* runComposed(
-      '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
-      (function* () {
-        const seam = loadedCopyCoreActivationApi();
-        yield* seam.around({
-          // deno-lint-ignore require-yield
-          *require() {
-            throw new Error("activation policy refused");
-          },
-        });
-        yield* incompleteActivation();
-      })(),
-    );
-    expect(attempt.sentinels).toEqual([]);
-    expect(attempt.completion.ok).toBe(false);
-    // The handler's own message survives: a refusal says what the refuser said.
-    expect(errorOf(attempt)?.message).toContain("activation policy refused");
-    expect(attempt.results).toEqual([]);
-    expect(testResultEvents(attempt.events)).toEqual([]);
-    expect(attempt.output).not.toContain("Assert");
-    expect(attempt.output).not.toContain("❌");
-  });
+  activationCase(
+    "refuses when a handler throws its own error from the decision chain",
+    "README.md",
+    function* (stream) {
+      const attempt = yield* runComposed(
+        '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+        (function* () {
+          const seam = loadedCopyCoreActivationApi();
+          yield* seam.around({
+            // deno-lint-ignore require-yield
+            *require() {
+              throw new Error("activation policy refused");
+            },
+          });
+          yield* incompleteActivation();
+        })(),
+        stream,
+      );
+      expect(attempt.sentinels).toEqual([]);
+      expect(attempt.completion.ok).toBe(false);
+      // The handler's own message survives: a refusal says what the refuser said.
+      expect(errorOf(attempt)?.message).toContain("activation policy refused");
+      expect(attempt.results).toEqual([]);
+      expect(testResultEvents(attempt.events)).toEqual([]);
+      expect(attempt.output).not.toContain("Assert");
+      expect(attempt.output).not.toContain("❌");
+    },
+  );
 
   // The same manipulation against core's activation seam. Core dispatches
   // through a terminal of its own and refuses an invocation whose decision was
@@ -374,24 +385,29 @@ describe("complete testing activation", () => {
     { label: "a complete session", compose: () => useTesting() },
   ];
   for (const composition of blockedCompositions) {
-    it(`refuses a blocked activation decision under ${composition.label}`, function* () {
-      const attempt = yield* runComposed(
-        '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
-        (function* () {
-          const seam = loadedCopyCoreActivationApi();
-          // deno-lint-ignore require-yield
-          yield* seam.around({ *require() {} });
-          yield* composition.compose();
-        })(),
-      );
-      expect(attempt.sentinels).toEqual([]);
-      expect(attempt.completion.ok).toBe(false);
-      // Core's own protocol violation: this package is never reached, so the
-      // message is core's rather than the incomplete-activation refusal.
-      expect(errorOf(attempt)?.message).toContain("without delegating it");
-      expect(attempt.results).toEqual([]);
-      expect(testResultEvents(attempt.events)).toEqual([]);
-    });
+    activationCase(
+      `refuses a blocked activation decision under ${composition.label}`,
+      "README.md",
+      function* (stream) {
+        const attempt = yield* runComposed(
+          '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+          (function* () {
+            const seam = loadedCopyCoreActivationApi();
+            // deno-lint-ignore require-yield
+            yield* seam.around({ *require() {} });
+            yield* composition.compose();
+          })(),
+          stream,
+        );
+        expect(attempt.sentinels).toEqual([]);
+        expect(attempt.completion.ok).toBe(false);
+        // Core's own protocol violation: this package is never reached, so the
+        // message is core's rather than the incomplete-activation refusal.
+        expect(errorOf(attempt)?.message).toContain("without delegating it");
+        expect(attempt.results).toEqual([]);
+        expect(testResultEvents(attempt.events)).toEqual([]);
+      },
+    );
   }
 
   // The behavior surface is public middleware, and answering without delegating
@@ -399,26 +415,31 @@ describe("complete testing activation", () => {
   // live inside that chain. Canonical core takes it before the harness exists
   // and before this chain is dispatched, so a handler that answers for what a
   // test does cannot answer for whether it may run.
-  it("survives a TestBehavior handler that never delegates", function* () {
-    const behavior = loadedCopyBehaviorApi();
-    const attempt = yield* runComposed(
-      '<Test name="t"><Sentinel name="body" /><Assert expr={false} /></Test>\n',
-      (function* () {
-        // Installed before the package's own handler, so it is the outer link
-        // and answers first.
-        // deno-lint-ignore require-yield
-        yield* behavior.around({
-          *test() {
-            return "";
-          },
-        });
-        yield* incompleteActivation();
-      })(),
-    );
-    expect(attempt.sentinels).toEqual([]);
-    expect(errorOf(attempt)?.message).toContain(REFUSAL);
-    expect(testResultEvents(attempt.events)).toEqual([]);
-  });
+  activationCase(
+    "survives a TestBehavior handler that never delegates",
+    "README.md",
+    function* (stream) {
+      const behavior = loadedCopyBehaviorApi();
+      const attempt = yield* runComposed(
+        '<Test name="t"><Sentinel name="body" /><Assert expr={false} /></Test>\n',
+        (function* () {
+          // Installed before the package's own handler, so it is the outer link
+          // and answers first.
+          // deno-lint-ignore require-yield
+          yield* behavior.around({
+            *test() {
+              return "";
+            },
+          });
+          yield* incompleteActivation();
+        })(),
+        stream,
+      );
+      expect(attempt.sentinels).toEqual([]);
+      expect(errorOf(attempt)?.message).toContain(REFUSAL);
+      expect(testResultEvents(attempt.events)).toEqual([]);
+    },
+  );
 
   // The control, in the identical middleware order: a handler that delegates
   // observes the behavior and changes nothing about it.
