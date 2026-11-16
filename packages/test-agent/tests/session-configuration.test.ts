@@ -1,85 +1,54 @@
 import { describe, it } from "@executablemd/test-support/bdd";
-import { executeInstalled } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { cliBase } from "@executablemd/test-support/launch";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { executeInstalled } from "@executablemd/core/host";
+import { content, registerComponents } from "@executablemd/core";
+import type { Json } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
+import { API } from "@executablemd/runtime";
+import { useTesting, withFailureJournal } from "@executablemd/testing";
+import type { TestResult } from "@executablemd/testing";
+import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import * as path from "node:path";
-import { content, registerComponents, inlineSource } from "@executablemd/core";
-import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
-import { installAnswerProvider } from "@executablemd/core/host";
-import type { ExecutionInstallation } from "@executablemd/core/host";
-import { forEach } from "@effectionx/stream-helpers";
-import { useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
-import { testHarnessInstallation, useTesting } from "@executablemd/testing";
-import type {
-  ChildInvocation,
-  ChildSettlement,
-  ExecutionHostProvider,
-  TestResult,
-} from "@executablemd/testing";
+import process from "node:process";
+import { Writable } from "node:stream";
+import { useTestDiagnostics } from "../../cli/src/test-diagnostics.ts";
+import type { DeliverySink } from "../../cli/src/stdout-delivery.ts";
 import { installTestAgentComponents } from "../src/components.ts";
-import { installChildTestAgent, testAgentChildDeclaration } from "../src/child-configuration.ts";
-import { useCommand } from "./command.ts";
-import { cliBase } from "@executablemd/test-support/launch";
-import type { Json } from "@executablemd/core";
 import { NativeSessionObserver } from "../src/controller.ts";
 import type { NativeSessionReport } from "../src/controller.ts";
+import { useCommand } from "./command.ts";
 
-const DOC = path.resolve("packages/test-agent/src/SessionConfiguration.test.md");
+const DOC = path.resolve("packages/test-agent/src/SessionConfiguration.replay.md");
+
+function captureConfiguration(
+  doc: string,
+  body: (stream: InMemoryStream) => Operation<void>,
+  sink: DeliverySink = process.stderr,
+): Operation<void> {
+  return scoped(function* () {
+    const diagnostics = yield* useTestDiagnostics(sink);
+    yield* withFailureJournal(
+      diagnostics.execution("root", doc).journal(() => false),
+      body,
+    );
+  });
+}
 
 /** A native session report stamped with milliseconds since the run began. */
 interface TimedSessionReport extends NativeSessionReport {
   elapsedMs: number;
 }
 
-/**
- * The trusted `run` profile, as this package can state it.
- *
- * The shipped one is the CLI's, and the CLI depends on this package — so what
- * stands in here is the same assembly the CLI performs for a declared child:
- * this package's provider built from the frozen scenario data, the Agent
- * defaults, `<Session>`, and core's matcher provider. The CLI case covers the real one.
- */
-function nestedRunHost(worker: string[]): ExecutionHostProvider {
-  return {
-    *runChild(invocation: ChildInvocation): Operation<ChildSettlement> {
-      const request = invocation.request;
-      const installations: ExecutionInstallation[] = [];
-      for (const configuration of request.configuration ?? []) {
-        switch (configuration.kind) {
-          case "test-agent":
-            yield* installAgentComponents(
-              (yield* installChildTestAgent(configuration, { workerCommand: worker })).components,
-            );
-            installations.push({ components: agentIdentityComponents() });
-            break;
-          case "answers":
-            yield* installAnswerProvider(configuration);
-            break;
-        }
-      }
-      yield* useHostFiles();
-      const execution = yield* executeInstalled(
-        {
-          ...inlineSource(request.source ?? ""),
-          stream: new InMemoryStream(),
-          props: request.props,
-        },
-        installations,
-      );
-      const output = yield* forEach(function* (chunk: string) {
-        yield* invocation.chunk(chunk);
-      }, execution.output);
-      return { outcome: { kind: "settled", result: yield* execution }, output };
-    },
-  };
-}
-
 function* runConfiguration(
   stream: InMemoryStream,
   xmd: string[],
-  doc = DOC,
+  doc: string,
 ): Operation<{
   result: Result<Json>;
   output: string;
@@ -124,7 +93,6 @@ function* runConfiguration(
     yield* installAgentComponents();
     const execution = yield* executeInstalled({ path: doc, stream }, [
       { components: agentIdentityComponents() },
-      testHarnessInstallation(nestedRunHost([...xmd, "test-agent"]), [testAgentChildDeclaration()]),
     ]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
@@ -167,52 +135,136 @@ describe(
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     it("refuses unknown, unsupported and unavailable Session selections before consuming the first stage", function* () {
-      const run = yield* runConfiguration(
-        new InMemoryStream(),
-        cliBase(),
-        path.resolve("packages/test-agent/src/SessionConfiguration.refusals.md"),
-      );
-      expect(run.result.ok ? "ok" : run.result.error.message).toBe("ok");
-      expect(run.results.map((entry) => entry.status)).toEqual(["pass", "pass"]);
-      expect(new Set(run.sessions.map((report) => report.nativeSessionId)).size).toBe(2);
+      const doc = path.resolve("packages/test-agent/src/SessionConfiguration.refusals.md");
+      yield* captureConfiguration(doc, function* (stream) {
+        const run = yield* runConfiguration(stream, cliBase(), doc);
+        configurationSucceeded(run);
+        expect(run.results.map((entry) => entry.status)).toEqual(["pass", "pass"]);
+        expect(new Set(run.sessions.map((report) => report.nativeSessionId)).size).toBe(2);
+      });
     });
 
     it("retains named native identity, isolates Tests, and replays without a worker", function* () {
-      const stream = new InMemoryStream();
-      const live = yield* runConfiguration(stream, cliBase());
-      configurationSucceeded(live);
-      expect(live.results.map((entry) => entry.status)).toEqual([
-        "pass",
-        "pass",
-        "pass",
-        "pass",
-        "pass",
-      ]);
-      const byScenario = new Map<string, Set<string>>();
-      for (const report of live.sessions) {
-        const ids = byScenario.get(report.scenarioId) ?? new Set<string>();
-        ids.add(report.nativeSessionId);
-        byScenario.set(report.scenarioId, ids);
+      yield* captureConfiguration(DOC, function* (stream) {
+        const live = yield* runConfiguration(stream, cliBase(), DOC);
+        configurationSucceeded(live);
+        expect(live.results.map((entry) => entry.status)).toEqual(["pass", "pass"]);
+        const configuredReports = live.sessions.filter(
+          (report) => report.scenarioId === live.sessions[0]?.scenarioId,
+        );
+        const independentReports = live.sessions.filter(
+          (report) => report.scenarioId !== live.sessions[0]?.scenarioId,
+        );
+        expect(configuredReports.length).toBeGreaterThan(1);
+        expect(independentReports.length).toBe(1);
+        expect(new Set(configuredReports.map((report) => report.nativeSessionId)).size).toBe(1);
+        expect(independentReports[0]?.nativeSessionId).not.toBe(
+          configuredReports[0]?.nativeSessionId,
+        );
+        const events = JSON.stringify(yield* stream.readAll());
+        expect(events).toContain('"configuration":{"model":"fixture-review","effort":"deep"}');
+        const appended = stream.appendCount;
+        const replay = yield* runConfiguration(
+          stream,
+          ["/nonexistent/xmd-configuration-must-not-spawn"],
+          DOC,
+        );
+        configurationSucceeded(replay);
+        expect(replay.results.map((entry) => entry.status)).toEqual(
+          live.results.map((entry) => entry.status),
+        );
+        expect(replay.sessions).toEqual([]);
+        expect(replay.output).toBe(live.output);
+        expect(stream.appendCount).toBe(appended);
+      });
+    });
+
+    it("saves a journal after an assertion fails and leaves a passing execution unwritten", function* () {
+      const directory = yield* useTempDirectory("xmd-session-configuration-");
+      const doc = path.join(directory, "journal-witness.md");
+      const marker = "Configuration journal witness";
+      yield* writeTextFile(
+        doc,
+        `<Test name="journal witness">
+
+${marker}
+
+</Test>
+`,
+      );
+      const failureRoot = path.join(directory, "failed");
+      const successRoot = path.join(directory, "passed");
+      const failure = new Error("post-settlement assertion failed");
+
+      function* runWitness(
+        artifacts: string,
+        assert: () => void,
+      ): Operation<{ outcome: Result<void>; stderr: string }> {
+        return yield* scoped(function* () {
+          let stderr = "";
+          const sink = new Writable({
+            write(chunk, _encoding, callback) {
+              stderr += String(chunk);
+              callback();
+            },
+          });
+          yield* API.Env.around({
+            *env([name], next) {
+              return name === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(name);
+            },
+          });
+
+          try {
+            yield* captureConfiguration(
+              doc,
+              function* (stream) {
+                const run = yield* runConfiguration(stream, [], doc);
+                configurationSucceeded(run);
+                expect(run.results.map((entry) => entry.status)).toEqual(["pass"]);
+                expect(stream.appendCount).toBeGreaterThan(0);
+                assert();
+              },
+              sink,
+            );
+          } catch (error) {
+            if (!(error instanceof Error)) {
+              throw error;
+            }
+            return { outcome: Err(error), stderr };
+          }
+          return { outcome: Ok(), stderr };
+        });
       }
-      expect(byScenario.size).toBeGreaterThanOrEqual(4);
-      expect([...byScenario.values()].every((ids) => ids.size === 1)).toBe(true);
-      expect(new Set(live.sessions.map((report) => report.nativeSessionId)).size).toBe(
-        byScenario.size,
-      );
-      expect(live.sessions.length).toBeGreaterThan(byScenario.size);
-      const events = JSON.stringify(yield* stream.readAll());
-      expect(events).toContain('"configuration":{"model":"fixture-review","effort":"deep"}');
-      const appended = stream.appendCount;
-      const replay = yield* runConfiguration(stream, [
-        "/nonexistent/xmd-configuration-must-not-spawn",
-      ]);
-      configurationSucceeded(replay);
-      expect(replay.results.map((entry) => entry.status)).toEqual(
-        live.results.map((entry) => entry.status),
-      );
-      expect(replay.sessions).toEqual([]);
-      expect(replay.output).toBe(live.output);
-      expect(stream.appendCount).toBe(appended);
+
+      const failed = yield* runWitness(failureRoot, () => {
+        throw failure;
+      });
+      expect(failed.outcome.ok ? undefined : failed.outcome.error).toBe(failure);
+      const invocations = yield* readdir(failureRoot);
+      expect(invocations.length).toBe(1);
+      const invocation = path.join(failureRoot, invocations[0]);
+      expect(yield* readdir(invocation)).toEqual(["root-1.jsonl"]);
+      const journal = path.join(invocation, "root-1.jsonl");
+      expect(failed.stderr).toBe(`[xmd test] journal saved: ${journal} (root 1 ${doc})
+`);
+      const jsonl = yield* readTextFile(journal);
+      const events = jsonl
+        .trimEnd()
+        .split("\n")
+        .map((line) => {
+          const event = parseDurableEvent(line);
+          if (!event.ok) {
+            throw event.error;
+          }
+          return event.value;
+        });
+      expect(JSON.stringify(events)).toContain(marker);
+
+      expect(yield* runWitness(successRoot, () => undefined)).toEqual({
+        outcome: Ok(),
+        stderr: "",
+      });
+      expect(yield* exists(successRoot)).toBe(false);
     });
   },
 );
