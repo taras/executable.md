@@ -20,6 +20,9 @@ import { Execution, execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { Json } from "../src/types.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/parse-components.test.ts");
 
 interface Run {
   /** Rendered output, or the failure message when the document aborted. */
@@ -37,7 +40,7 @@ interface Run {
  * A document failure is captured rather than thrown: several cases are about
  * *what* the failure says, and about what did not happen before it.
  */
-function run(source: string): Operation<Run> {
+function run(journal: InMemoryStream | undefined, source: string): Operation<Run> {
   return scoped(function* () {
     const commands: string[] = [];
     yield* API.Process.around({
@@ -49,7 +52,7 @@ function run(source: string): Operation<Run> {
     });
     yield* useStubFs({ "doc.md": source });
 
-    const stream = new InMemoryStream();
+    const stream = journal ?? new InMemoryStream();
     const result = yield* execute({ path: "doc.md", stream });
     const outcome = yield* result;
     const events = stream.snapshot();
@@ -106,58 +109,70 @@ const SCHEMA_INVALID = `<Parse schema={${OBJECT_SCHEMA}} as="v">{ "a": 1 }</Pars
 describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResources: false }, () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("PC1: schema is required", function* () {
-    const { output } = yield* run(`<Parse as="value">1</Parse>`);
+  journalCase("PC1: schema is required", "doc.md", function* (stream) {
+    const { output } = yield* run(stream, `<Parse as="value">1</Parse>`);
     expect(output).toContain("Parse");
     expect(output).toContain("schema");
   });
 
-  it("PC2: a capture name is required", function* () {
-    const { output } = yield* run(`<Parse schema={${OBJECT_SCHEMA}}>{ "a": "x" }</Parse>`);
+  journalCase("PC2: a capture name is required", "doc.md", function* (stream) {
+    const { output } = yield* run(stream, `<Parse schema={${OBJECT_SCHEMA}}>{ "a": "x" }</Parse>`);
     expect(output).toContain("must be invoked");
     expect(output).toContain('as="binding"');
   });
 
-  it("PC3: schema text that is not JSON fails", function* () {
-    const { output } = yield* run(`<Parse schema={"{ not json"} as="v">1</Parse>`);
+  journalCase("PC3: schema text that is not JSON fails", "doc.md", function* (stream) {
+    const { output } = yield* run(stream, `<Parse schema={"{ not json"} as="v">1</Parse>`);
     expect(output).toContain("schema text is not JSON");
   });
 
-  it("PC4: a schema that is not a valid draft-07 schema fails", function* () {
-    const { output } = yield* run(`<Parse schema={{ type: "nonsense" }} as="v">1</Parse>`);
-    expect(output).toContain("not a valid draft-07 JSON Schema");
-  });
+  journalCase(
+    "PC4: a schema that is not a valid draft-07 schema fails",
+    "doc.md",
+    function* (stream) {
+      const { output } = yield* run(
+        stream,
+        `<Parse schema={{ type: "nonsense" }} as="v">1</Parse>`,
+      );
+      expect(output).toContain("not a valid draft-07 JSON Schema");
+    },
+  );
 
-  it("PC5: an asynchronous schema is rejected", function* () {
+  journalCase("PC5: an asynchronous schema is rejected", "doc.md", function* (stream) {
     const { output } = yield* run(
+      stream,
       `<Parse schema={{ $async: true, type: "object" }} as="v">{ }</Parse>`,
     );
     expect(output).toContain("asynchronous schema");
   });
 
-  it("PC6: a schema that is not an object is rejected", function* () {
-    const { output } = yield* run(`<Parse schema={true} as="v">1</Parse>`);
+  journalCase("PC6: a schema that is not an object is rejected", "doc.md", function* (stream) {
+    const { output } = yield* run(stream, `<Parse schema={true} as="v">1</Parse>`);
     expect(output).toContain("must be a JSON Schema object");
   });
 
   // The whole point of compiling first: an unusable schema must not let the
   // document do work whose result it would then refuse to judge.
-  it("PC7: the schema compiles before any child effect runs", function* () {
-    const source = [
-      `<Parse schema={{ type: "nonsense" }} as="v">`,
-      "",
-      "```sh exec",
-      "echo should-not-run",
-      "```",
-      "",
-      "</Parse>",
-    ].join("\n");
-    const { output, commands } = yield* run(source);
-    expect(output).toContain("not a valid draft-07 JSON Schema");
-    expect(commands).toEqual([]);
-  });
+  journalCase(
+    "PC7: the schema compiles before any child effect runs",
+    "doc.md",
+    function* (stream) {
+      const source = [
+        `<Parse schema={{ type: "nonsense" }} as="v">`,
+        "",
+        "```sh exec",
+        "echo should-not-run",
+        "```",
+        "",
+        "</Parse>",
+      ].join("\n");
+      const { output, commands } = yield* run(stream, source);
+      expect(output).toContain("not a valid draft-07 JSON Schema");
+      expect(commands).toEqual([]);
+    },
+  );
 
-  it("PC8: SafeParse compiles before child effects too", function* () {
+  journalCase("PC8: SafeParse compiles before child effects too", "doc.md", function* (stream) {
     const source = [
       `<SafeParse schema={{ $async: true }} as="v">`,
       "",
@@ -167,59 +182,79 @@ describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResour
       "",
       "</SafeParse>",
     ].join("\n");
-    const { output, commands } = yield* run(source);
+    const { output, commands } = yield* run(stream, source);
     expect(output).toContain("asynchronous schema");
     expect(commands).toEqual([]);
   });
 
   // SafeParse absorbs JSON syntax and instance validation, and nothing else.
-  it("PC9: a child failure propagates through SafeParse unchanged", function* () {
-    const { output } = yield* run(
-      `<SafeParse schema={{ type: "object" }} as="result"><Missing /></SafeParse>`,
-    );
-    expect(output).toContain("Missing");
-    expect(output).not.toContain('"ok"');
-  });
+  journalCase(
+    "PC9: a child failure propagates through SafeParse unchanged",
+    "doc.md",
+    function* (stream) {
+      const { output } = yield* run(
+        stream,
+        `<SafeParse schema={{ type: "object" }} as="result"><Missing /></SafeParse>`,
+      );
+      expect(output).toContain("Missing");
+      expect(output).not.toContain('"ok"');
+    },
+  );
 
-  it("PC10: a Parse failure names the component and carries its issues", function* () {
-    const { output } = yield* run(`<Parse schema={${OBJECT_SCHEMA}} as="v">{ "a": 1 }</Parse>\n`);
-    expect(output).toContain("Parse");
-    expect(output).toContain("content failed its schema");
-    expect(output).toContain("must be string");
-  });
+  journalCase(
+    "PC10: a Parse failure names the component and carries its issues",
+    "doc.md",
+    function* (stream) {
+      const { output } = yield* run(
+        stream,
+        `<Parse schema={${OBJECT_SCHEMA}} as="v">{ "a": 1 }</Parse>\n`,
+      );
+      expect(output).toContain("Parse");
+      expect(output).toContain("content failed its schema");
+      expect(output).toContain("must be string");
+    },
+  );
 
-  it("PC10: content the schema rejects fails the document and stops later work", function* () {
-    const { output, failed, commands, events } = yield* run(laterEffect(SCHEMA_INVALID));
-    expect(failed).toBe(true);
-    expect(output).toContain("Parse");
-    expect(output).toContain("content failed its schema");
-    expect(output).toContain("must be string");
-    expect(commands).toEqual([]);
+  journalCase(
+    "PC10: content the schema rejects fails the document and stops later work",
+    "doc.md",
+    function* (stream) {
+      const { output, failed, commands, events } = yield* run(stream, laterEffect(SCHEMA_INVALID));
+      expect(failed).toBe(true);
+      expect(output).toContain("Parse");
+      expect(output).toContain("content failed its schema");
+      expect(output).toContain("must be string");
+      expect(commands).toEqual([]);
 
-    const outcome = retained(events);
-    expect(outcome.status).toBe("err");
-    expect(outcome.output).toContain("PREFIX");
-    expect(outcome.output).not.toContain("LATER_EFFECT");
-    expect(outcome.bound).not.toContain("v");
-  });
+      const outcome = retained(events);
+      expect(outcome.status).toBe("err");
+      expect(outcome.output).toContain("PREFIX");
+      expect(outcome.output).not.toContain("LATER_EFFECT");
+      expect(outcome.bound).not.toContain("v");
+    },
+  );
 
-  it("PC11: malformed JSON is reported as a parse failure", function* () {
-    const { output } = yield* run(`<Parse schema={{ type: "object" }} as="v">nope</Parse>`);
+  journalCase("PC11: malformed JSON is reported as a parse failure", "doc.md", function* (stream) {
+    const { output } = yield* run(stream, `<Parse schema={{ type: "object" }} as="v">nope</Parse>`);
     expect(output).toContain("content is not JSON");
   });
 
-  it("PC11: malformed JSON fails the document and stops later work", function* () {
-    const { output, failed, commands, events } = yield* run(laterEffect(MALFORMED));
-    expect(failed).toBe(true);
-    expect(output).toContain("Parse");
-    expect(output).toContain("content is not JSON");
-    expect(commands).toEqual([]);
+  journalCase(
+    "PC11: malformed JSON fails the document and stops later work",
+    "doc.md",
+    function* (stream) {
+      const { output, failed, commands, events } = yield* run(stream, laterEffect(MALFORMED));
+      expect(failed).toBe(true);
+      expect(output).toContain("Parse");
+      expect(output).toContain("content is not JSON");
+      expect(commands).toEqual([]);
 
-    const outcome = retained(events);
-    expect(outcome.status).toBe("err");
-    expect(outcome.output).toContain("PREFIX");
-    expect(outcome.bound).not.toContain("v");
-  });
+      const outcome = retained(events);
+      expect(outcome.status).toBe("err");
+      expect(outcome.output).toContain("PREFIX");
+      expect(outcome.bound).not.toContain("v");
+    },
+  );
 
   // Completion is the execution's settlement, so it waits for everything the
   // execution owns — including cleanup a host established at initialization.
@@ -305,7 +340,7 @@ describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResour
         "</If>",
         "",
       ].join("\n");
-      const { output, failed, commands, events } = yield* run(source);
+      const { output, failed, commands, events } = yield* run(undefined, source);
       expect(failed).toBe(false);
       expect(output).toContain(`INPUT ${content}|${keyword}|${path}`);
       expect(commands).toHaveLength(1);
@@ -314,49 +349,58 @@ describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResour
     }
   });
 
-  it("PC11c: an authored PrintErrors region recovers from a Parse failure", function* () {
-    const source = [
-      "<PrintErrors>",
-      "",
-      SCHEMA_INVALID,
-      "",
-      "</PrintErrors>",
-      "",
-      '<If condition={typeof v === "undefined"}>UNBOUND</If>',
-      "",
-      "```sh exec",
-      "echo LATER_EFFECT",
-      "```",
-      "",
-    ].join("\n");
-    const { output, failed, commands, events } = yield* run(source);
-    expect(failed).toBe(false);
-    expect(output).toContain("content failed its schema");
-    expect(output).toContain("must be string");
-    expect(output).toContain("UNBOUND");
-    expect(commands).toHaveLength(1);
-    expect(commands[0]).toContain("LATER_EFFECT");
-    expect(retained(events).status).toBe("ok");
-  });
+  journalCase(
+    "PC11c: an authored PrintErrors region recovers from a Parse failure",
+    "doc.md",
+    function* (stream) {
+      const source = [
+        "<PrintErrors>",
+        "",
+        SCHEMA_INVALID,
+        "",
+        "</PrintErrors>",
+        "",
+        '<If condition={typeof v === "undefined"}>UNBOUND</If>',
+        "",
+        "```sh exec",
+        "echo LATER_EFFECT",
+        "```",
+        "",
+      ].join("\n");
+      const { output, failed, commands, events } = yield* run(stream, source);
+      expect(failed).toBe(false);
+      expect(output).toContain("content failed its schema");
+      expect(output).toContain("must be string");
+      expect(output).toContain("UNBOUND");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toContain("LATER_EFFECT");
+      expect(retained(events).status).toBe("ok");
+    },
+  );
 
-  it("PC12: neither component renders output", function* () {
+  journalCase("PC12: neither component renders output", "doc.md", function* (stream) {
     const source = [
       `<Parse schema={{ type: "number" }} as="n">1</Parse>`,
       `<SafeParse schema={{ type: "number" }} as="r">2</SafeParse>`,
       "done",
     ].join("\n\n");
-    const { output, failed } = yield* run(source);
+    const { output, failed } = yield* run(stream, source);
     expect(failed).toBe(false);
     expect(output.trim()).toBe("done");
   });
 
-  it("PC13: an external reference fails with the documented limit", function* () {
-    const { output } = yield* run(
-      `<Parse schema={{ $ref: "https://example.com/s.json" }} as="v">1</Parse>`,
-    );
-    expect(output).toContain("could not resolve a schema reference");
-    expect(output).toContain("#192");
-  });
+  journalCase(
+    "PC13: an external reference fails with the documented limit",
+    "doc.md",
+    function* (stream) {
+      const { output } = yield* run(
+        stream,
+        `<Parse schema={{ $ref: "https://example.com/s.json" }} as="v">1</Parse>`,
+      );
+      expect(output).toContain("could not resolve a schema reference");
+      expect(output).toContain("#192");
+    },
+  );
 
   // Parsing performs no effects and a built-in records no import, so a second
   // run over a completed journal must reproduce the result without appending.

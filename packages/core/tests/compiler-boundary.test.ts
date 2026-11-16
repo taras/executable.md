@@ -6,51 +6,72 @@
  * no compiler, one with eval blocks says so plainly when none is installed,
  * and a compiler the caller installed is the one that runs.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { describe } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
 import { asText, completion } from "./helpers.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/compiler-boundary.test.ts");
 
 /** What the run said: its rendered text, or the failure it reported. */
-function* runDoc(source: string): Operation<string> {
+function* runDoc(stream: InMemoryStream, source: string): Operation<string> {
   yield* useStubFs({ "doc.md": source });
-  const result = yield* completion({ path: "doc.md", stream: new InMemoryStream() });
+  const result = yield* completion({ path: "doc.md", stream });
   return result.ok ? asText(result.value) : result.error.message;
 }
 
 describe("Tier CB — compiler boundary", () => {
-  it("CB1: a document without eval blocks runs with no compiler installed", function* () {
-    const output = yield* runDoc("# Plain\n\nJust prose, no fences.\n");
-    expect(output).toContain("Just prose, no fences.");
-    expect(output).not.toContain("ERROR");
-  });
+  journalCase(
+    "CB1: a document without eval blocks runs with no compiler installed",
+    "doc.md",
+    function* (stream) {
+      const output = yield* runDoc(stream, "# Plain\n\nJust prose, no fences.\n");
+      expect(output).toContain("Just prose, no fences.");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
-  it("CB2: an eval block without compiler middleware reports that explicitly", function* () {
-    const output = yield* runDoc(["# Doc", "", "```js eval", "env.x = 1;", "```", ""].join("\n"));
-    expect(output).toContain("compiler not installed");
-    expect(output).toContain("API.Env.around()");
-  });
+  journalCase(
+    "CB2: an eval block without compiler middleware reports that explicitly",
+    "doc.md",
+    function* (stream) {
+      const output = yield* runDoc(
+        stream,
+        ["# Doc", "", "```js eval", "env.x = 1;", "```", ""].join("\n"),
+      );
+      expect(output).toContain("compiler not installed");
+      expect(output).toContain("API.Env.around()");
+    },
+  );
 
-  it("CB3: execute() uses the caller's compiler rather than shadowing it", function* () {
-    const compiled: string[] = [];
-    yield* API.Env.around(
-      {
-        *compile([source]) {
-          compiled.push(source);
-          return function* () {
-            return undefined;
-          };
+  journalCase(
+    "CB3: execute() uses the caller's compiler rather than shadowing it",
+    "doc.md",
+    function* (stream) {
+      const compiled: string[] = [];
+      yield* API.Env.around(
+        {
+          *compile([source]) {
+            compiled.push(source);
+            return function* () {
+              return undefined;
+            };
+          },
         },
-      },
-      { at: "min" },
-    );
+        { at: "min" },
+      );
 
-    const output = yield* runDoc(["# Doc", "", "```js eval", "env.x = 1;", "```", ""].join("\n"));
-    expect(output).not.toContain("compiler not installed");
-    expect(compiled).toHaveLength(1);
-    expect(compiled[0]).toContain("env.x = 1;");
-  });
+      const output = yield* runDoc(
+        stream,
+        ["# Doc", "", "```js eval", "env.x = 1;", "```", ""].join("\n"),
+      );
+      expect(output).not.toContain("compiler not installed");
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0]).toContain("env.x = 1;");
+    },
+  );
 });

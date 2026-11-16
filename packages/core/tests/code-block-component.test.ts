@@ -34,6 +34,9 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { Json } from "../src/types.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/code-block-component.test.ts");
 
 interface Run {
   /** Everything the document emitted, before any output middleware. */
@@ -52,7 +55,11 @@ function reported(result: Run): string {
 }
 
 /** Run `source` as the document, with `values` reachable through `<Value>`. */
-function run(source: string, values: Record<string, string> = {}): Operation<Run> {
+function run(
+  stream: InMemoryStream | undefined,
+  source: string,
+  values: Record<string, string> = {},
+): Operation<Run> {
   return scoped(function* () {
     const probed: string[] = [];
     let tripped = 0;
@@ -100,7 +107,7 @@ function run(source: string, values: Record<string, string> = {}): Operation<Run
       },
     ]);
 
-    const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
+    const execution = yield* execute({ path: "doc.md", stream: stream ?? new InMemoryStream() });
     const output = yield* forEach(function* () {}, execution.output);
     const outcome = yield* execution;
     return {
@@ -113,13 +120,24 @@ function run(source: string, values: Record<string, string> = {}): Operation<Run
 }
 
 /** The one line a `<CodeBlock>` invocation renders, with nothing around it. */
-function* directly(value: string, attributes = ""): Operation<Run> {
-  return yield* run(`<Value key="v" as="v" /><CodeBlock value={v}${attributes} />`, { v: value });
+function* directly(
+  stream: InMemoryStream | undefined,
+  value: string,
+  attributes = "",
+): Operation<Run> {
+  return yield* run(stream, `<Value key="v" as="v" /><CodeBlock value={v}${attributes} />`, {
+    v: value,
+  });
 }
 
 /** The exact string `as` bound, at the capture boundary. */
-function* captured(value: string, attributes = ""): Operation<string> {
+function* captured(
+  stream: InMemoryStream | undefined,
+  value: string,
+  attributes = "",
+): Operation<string> {
   const result = yield* run(
+    stream,
     `<Value key="v" as="v" /><CodeBlock value={v}${attributes} as="block" /><Probe value={block} />`,
     { v: value },
   );
@@ -130,23 +148,24 @@ function* captured(value: string, attributes = ""): Operation<string> {
 
 describe("Tier CB — the envelope", () => {
   it("CB1: an empty value is three backticks, two line feeds and nothing else", function* () {
-    const result = yield* directly("");
+    const result = yield* directly(undefined, "");
 
     expect(result.failure).toBe("");
     expect(result.output).toBe("```\n\n```");
-    expect(yield* captured("")).toBe("```\n\n```");
+    expect(yield* captured(undefined, "")).toBe("```\n\n```");
   });
 
   it("CB1: ordinary Markdown keeps its own lines, and gains no final line feed", function* () {
     const value = "# Title\n\n- one\n- two";
-    const result = yield* directly(value);
+    const result = yield* directly(undefined, value);
 
     expect(result.output).toBe("```\n# Title\n\n- one\n- two\n```");
-    expect(yield* captured(value)).toBe("```\n# Title\n\n- one\n- two\n```");
+    expect(yield* captured(undefined, value)).toBe("```\n# Title\n\n- one\n- two\n```");
   });
 
-  it("CB1: the block lands where the element was written", function* () {
+  journalCase("CB1: the block lands where the element was written", "doc.md", function* (stream) {
     const result = yield* run(
+      stream,
       '<Value key="v" as="v" />before\n\n<CodeBlock value={v} />\n\nafter\n',
       { v: "shown" },
     );
@@ -174,7 +193,7 @@ describe("Tier CB — the fence the value cannot close", () => {
     ];
 
     for (const [value, length] of cases) {
-      const block = yield* captured(value);
+      const block = yield* captured(undefined, value);
       const fence = "`".repeat(length);
 
       expect(block).toBe(`${fence}\n${value}\n${fence}`);
@@ -187,8 +206,8 @@ describe("Tier CB — the fence the value cannot close", () => {
   it("CB2: a run broken by any other character is two runs, not one", function* () {
     // Counting backticks without resetting would read five here and open a
     // six-backtick fence.
-    expect(yield* captured("```\n``")).toBe("````\n```\n``\n````");
-    expect(yield* captured("``x``x``")).toBe("```\n``x``x``\n```");
+    expect(yield* captured(undefined, "```\n``")).toBe("````\n```\n``\n````");
+    expect(yield* captured(undefined, "``x``x``")).toBe("```\n``x``x``\n```");
   });
 });
 
@@ -203,7 +222,7 @@ describe("Tier CB — the value is not read for anything else", () => {
       "`` two `````` six",
       "trailing spaces   ",
     ].join("\n");
-    const block = yield* captured(value);
+    const block = yield* captured(undefined, value);
 
     // The value's longest run is six backticks, so the fence is seven.
     const fence = "`".repeat(7);
@@ -219,15 +238,19 @@ describe("Tier CB — the value is not read for anything else", () => {
 });
 
 describe("Tier CB — the language token", () => {
-  it("CB4: an omitted language leaves the opening fence bare", function* () {
-    expect((yield* captured("plain")).split("\n")[0]).toBe("```");
-  });
+  journalCase(
+    "CB4: an omitted language leaves the opening fence bare",
+    "doc.md",
+    function* (stream) {
+      expect((yield* captured(stream, "plain")).split("\n")[0]).toBe("```");
+    },
+  );
 
   it("CB4: every accepted token renders on the opening fence, unchanged", function* () {
     const accepted = ["markdown", "md", "json", "shell-session", "c++", "c#", "F", "x1._+#-"];
 
     for (const language of accepted) {
-      const result = yield* directly("body", ` language="${language}"`);
+      const result = yield* directly(undefined, "body", ` language="${language}"`);
 
       expect(result.failure).toBe("");
       expect(result.output).toBe("```" + language + "\nbody\n```");
@@ -261,6 +284,7 @@ describe("Tier CB — the language token", () => {
 
     for (const language of refused) {
       const result = yield* run(
+        undefined,
         '<Value key="v" as="v" /><Value key="lang" as="lang" /><CodeBlock value={v} language={lang} />',
         { v: "body", lang: language },
       );
@@ -274,45 +298,54 @@ describe("Tier CB — the language token", () => {
 });
 
 describe("Tier CB — the invocation is refused before the body", () => {
-  it("CB5: a missing value is the engine's own required-prop refusal", function* () {
-    const result = yield* run("<CodeBlock />");
+  journalCase(
+    "CB5: a missing value is the engine's own required-prop refusal",
+    "doc.md",
+    function* (stream) {
+      const result = yield* run(stream, "<CodeBlock />");
 
-    expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
-    expect(reported(result)).toContain("value");
-    expect(result.output).not.toContain("```");
-  });
+      expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
+      expect(reported(result)).toContain("value");
+      expect(result.output).not.toContain("```");
+    },
+  );
 
   it("CB5: a non-string value is refused rather than coerced", function* () {
     for (const value of ["42", "true", "null", "{ text: 'x' }", "['x']"]) {
-      const result = yield* run(`<CodeBlock value={${value}} />`);
+      const result = yield* run(undefined, `<CodeBlock value={${value}} />`);
 
       expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
       expect(result.output).not.toContain("```");
     }
   });
 
-  it("CB5: an unknown prop is refused, and nothing renders", function* () {
-    const result = yield* directly("body", ' fence="~~~"');
+  journalCase("CB5: an unknown prop is refused, and nothing renders", "doc.md", function* (stream) {
+    const result = yield* directly(stream, "body", ' fence="~~~"');
 
     expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
     expect(reported(result)).toContain("fence");
     expect(result.output).not.toContain("body");
   });
 
-  it("CB5: paired content is refused by form, and the content never expands", function* () {
-    const result = yield* run(
-      '<Value key="v" as="v" /><CodeBlock value={v}><Tripwire /></CodeBlock>',
-      { v: "body" },
-    );
+  journalCase(
+    "CB5: paired content is refused by form, and the content never expands",
+    "doc.md",
+    function* (stream) {
+      const result = yield* run(
+        stream,
+        '<Value key="v" as="v" /><CodeBlock value={v}><Tripwire /></CodeBlock>',
+        { v: "body" },
+      );
 
-    expect(reported(result)).toContain("<CodeBlock value={…} />");
-    expect(result.tripped).toBe(0);
-    expect(result.output).not.toContain("TRIPPED");
-    expect(result.output).not.toContain("```");
-  });
+      expect(reported(result)).toContain("<CodeBlock value={…} />");
+      expect(result.tripped).toBe(0);
+      expect(result.output).not.toContain("TRIPPED");
+      expect(result.output).not.toContain("```");
+    },
+  );
 
-  it("CB5: empty paired content is still the paired form", function* () {
-    const result = yield* run('<Value key="v" as="v" /><CodeBlock value={v}></CodeBlock>', {
+  journalCase("CB5: empty paired content is still the paired form", "doc.md", function* (stream) {
+    const result = yield* run(stream, '<Value key="v" as="v" /><CodeBlock value={v}></CodeBlock>', {
       v: "body",
     });
 
@@ -338,7 +371,7 @@ const HOSTILE = [
 
 describe("Tier CB — inertness and capture", () => {
   it("CB6: candidate-like content is shown, not run, and not escaped", function* () {
-    const result = yield* directly(HOSTILE);
+    const result = yield* directly(undefined, HOSTILE);
 
     expect(result.failure).toBe("");
     expect(result.tripped).toBe(0);
@@ -351,8 +384,9 @@ describe("Tier CB — inertness and capture", () => {
   });
 
   it("CB6: `as` binds that exact string and emits nothing where it was written", function* () {
-    const direct = yield* directly(HOSTILE);
+    const direct = yield* directly(undefined, HOSTILE);
     const result = yield* run(
+      undefined,
       '<Value key="v" as="v" />before<CodeBlock value={v} as="block" />after<Probe value={block} />',
       { v: HOSTILE },
     );
