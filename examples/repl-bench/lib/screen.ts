@@ -15,6 +15,10 @@ export function viewport(backend: TerminalBackend, size: Size) {
     const colour = styled[row]?.[column]?.bg;
     return colour == null ? undefined : (colour.r << 16) | (colour.g << 8) | colour.b;
   }
+  function foreground({ row, column }: Point): number | undefined {
+    const colour = styled[row]?.[column]?.fg;
+    return colour == null ? undefined : (colour.r << 16) | (colour.g << 8) | colour.b;
+  }
   const full: Box = { left: 0, right: size.columns, top: 0, bottom: size.rows };
   const rows = cells.map((row) => row.join(""));
 
@@ -95,6 +99,30 @@ export function viewport(backend: TerminalBackend, size: Size) {
     bold: ({ row, column }: Point) => styled[row]?.[column]?.bold === true,
     composerLabel,
     composerFocused: composerLabel !== undefined && hasFocusMarker(composerLabel),
+    focusHints(): string[] | undefined {
+      for (const { row, column } of matches(" move focus · Esc closes")) {
+        if (row !== 0 && background(row, column + 1) !== REPL_PALETTE.drawerSurface) {
+          continue;
+        }
+        const before = cells[row].slice(0, column).join("");
+        const offered = /(?:^|\s)([1-9](?: [1-9])*)$/.exec(before)?.[1]?.split(" ");
+        if (
+          offered !== undefined &&
+          [...matches(`[${offered[0]}]`)].some(
+            ({ row, column }) => background(row, column) === REPL_PALETTE.focusHint,
+          )
+        ) {
+          return offered;
+        }
+      }
+      return undefined;
+    },
+    get sidekickAnswerFocused(): boolean {
+      return (
+        [...matches(">  = ")].some((point) => foreground(point) === REPL_PALETTE.focus) &&
+        matches("[submit]").next().value !== undefined
+      );
+    },
     box(region?: Region): Box | undefined {
       switch (region) {
         case "sidekick-composer":

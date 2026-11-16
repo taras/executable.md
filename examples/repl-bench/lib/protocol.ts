@@ -22,6 +22,13 @@ export const command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ready") }),
   z.object({ action: z.literal("attachment-ready"), path: z.string() }),
   z.object({ action: z.literal("focus") }),
+  z.object({
+    action: z.literal("focus-shortcut"),
+    digit: z.string().regex(/^[1-9]$/),
+    timeout: z.int().positive().optional(),
+  }),
+  z.object({ action: z.literal("activate-sidekick"), timeout: z.int().positive().optional() }),
+  z.object({ action: z.literal("open-sidekick-answer"), timeout: z.int().positive().optional() }),
   z.object({ action: z.literal("type"), text: z.string() }),
   z.object({ action: z.literal("key"), key: z.string().min(1) }),
   z.object({ action: z.literal("click"), at: point }),

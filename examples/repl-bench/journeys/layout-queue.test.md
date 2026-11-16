@@ -16,8 +16,8 @@
       <Terminal.WaitForText text="SIDEKICK" row={1} />
       <Terminal.WaitForText text="HISTORY" row={29} />
       <Terminal.Screenshot name="layout-medium" />
-      <Terminal.WaitForText text="SIDEKICK" row={1} as="mediumTab" />
-      <Terminal.Click at={mediumTab} />
+      <Repl.Focus.Draft />
+      <Repl.Sidekick.Activate />
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="* Sidekick" row={1} />
       <Terminal.WaitForText text="message the sidekick" as="composer" />
@@ -51,8 +51,7 @@
       <Terminal.WaitForText text="☑ Reproduce checkout" />
       <Terminal.WaitForText text="TODO 3" />
       <Terminal.Screenshot name="todo-three-open" />
-      <Terminal.WaitForText text="SIDEKICK" row={1} as="sidekickTab" />
-      <Terminal.Click at={sidekickTab} />
+      <Repl.Sidekick.Activate />
       <Terminal.WaitForText text="TODO change acknowledged." />
       <XMD.Repl.SidekickPrompt text="Finish the remaining TODOs." as="finished" />
       <AssertStringIncludes actual={finished.output} expected="All TODOs complete." />
