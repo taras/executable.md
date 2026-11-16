@@ -16,6 +16,7 @@ import type { Json } from "@executablemd/core";
 import { Test, TestFailureError, testing } from "../src/test-api.ts";
 import { useTesting } from "../src/use-testing.ts";
 import { documentCases, failureOf, runDoc, withFreshDocument } from "./helpers.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
 const OWNER = "packages/testing/tests/use-testing.test.ts";
@@ -142,7 +143,7 @@ describe("useTesting composition", () => {
     }
   });
 
-  it("enforces one execute() call per session", function* () {
+  journalCase("enforces one execute() call per session", "README.md", function* (stream) {
     // Results are cumulative across a session: without the guard, a
     // zero-test second document would succeed on the strength of the first
     // document's passing test.
@@ -153,7 +154,7 @@ describe("useTesting composition", () => {
         "empty.md": "no tests here\n",
       });
       yield* useTesting();
-      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream });
       const result = yield* execution;
       try {
         yield* execute({ path: "empty.md", stream: new InMemoryStream() });
@@ -179,70 +180,84 @@ describe("useTesting composition", () => {
     expect(error?.message).toContain("one session per execution scope");
   });
 
-  documentCase("removes all session middleware with its scope", function* (runFresh) {
-    yield* scoped(function* () {
-      yield* useStubFs({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
-      yield* useTesting();
-      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
-      const result = yield* execution;
-      expect(result.ok).toBe(true);
-    });
+  const middlewareCase = "removes all session middleware with its scope";
+  documentCase(middlewareCase, function* (runFresh) {
+    yield* captureTestJournal(
+      { owner: OWNER, name: middlewareCase },
+      "README.md",
+      function* (stream) {
+        yield* scoped(function* () {
+          yield* useStubFs({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
+          yield* useTesting();
+          const execution = yield* execute({ path: "README.md", stream });
+          const result = yield* execution;
+          expect(result.ok).toBe(true);
+        });
 
-    // Outside the session scope: activation, collectors, and policy are gone.
-    expect(yield* testing).toBe(false);
-    expect(yield* Test.operations.results()).toEqual([]);
-    const second = yield* runFresh({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
-    expect(second.completion.ok).toBe(true);
-    expect(second.output).not.toContain("Assert");
-    expect(second.results).toEqual([]);
+        // Outside the session scope: activation, collectors, and policy are gone.
+        expect(yield* testing).toBe(false);
+        expect(yield* Test.operations.results()).toEqual([]);
+        const second = yield* runFresh({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
+        expect(second.completion.ok).toBe(true);
+        expect(second.output).not.toContain("Assert");
+        expect(second.results).toEqual([]);
+      },
+    );
   });
 
   // The supported multi-document shape: fixtures and providers live in an
   // enclosing scope, and each document gets a child scope with one session and
   // one execution. Wrapping a loop in a single session would instead make the
   // second document inherit the first document's outcomes.
-  it("runs sibling documents with shared fixtures and separate sessions", function* () {
-    const visited: string[] = [];
-    const outcome = yield* scoped(function* () {
-      yield* useStubFs({
-        "first.md": '<Test name="first"><Visit doc="first" /><Assert expr={false} /></Test>\n',
-        "second.md": '<Test name="second"><Visit doc="second" /><Assert expr={true} /></Test>\n',
-      });
-      yield* registerComponents([
-        {
-          name: "Visit",
-          origin: "use-testing-fixture",
-          props: {
-            type: "object",
-            properties: { doc: { type: "string" } },
-            additionalProperties: false,
-          },
-          // deno-lint-ignore require-yield
-          *fn(props: Record<string, Json>): Operation<Json> {
-            visited.push(String(props.doc));
-            return "";
-          },
-        },
-      ]);
+  const siblings = "runs sibling documents with shared fixtures and separate sessions";
+  it(siblings, function* () {
+    const label = { owner: OWNER, name: siblings };
+    yield* captureTestJournal(label, "first.md", function* (firstStream) {
+      yield* captureTestJournal(label, "second.md", function* (secondStream) {
+        const visited: string[] = [];
+        const outcome = yield* scoped(function* () {
+          yield* useStubFs({
+            "first.md": '<Test name="first"><Visit doc="first" /><Assert expr={false} /></Test>\n',
+            "second.md":
+              '<Test name="second"><Visit doc="second" /><Assert expr={true} /></Test>\n',
+          });
+          yield* registerComponents([
+            {
+              name: "Visit",
+              origin: "use-testing-fixture",
+              props: {
+                type: "object",
+                properties: { doc: { type: "string" } },
+                additionalProperties: false,
+              },
+              // deno-lint-ignore require-yield
+              *fn(props: Record<string, Json>): Operation<Json> {
+                visited.push(String(props.doc));
+                return "";
+              },
+            },
+          ]);
 
-      const first = yield* scoped(function* () {
-        const tests = yield* useTesting();
-        const result = yield* yield* execute({ path: "first.md", stream: new InMemoryStream() });
-        return { result, results: yield* tests.results };
+          const first = yield* scoped(function* () {
+            const tests = yield* useTesting();
+            const result = yield* yield* execute({ path: "first.md", stream: firstStream });
+            return { result, results: yield* tests.results };
+          });
+          const second = yield* scoped(function* () {
+            const tests = yield* useTesting();
+            const result = yield* yield* execute({ path: "second.md", stream: secondStream });
+            return { result, results: yield* tests.results };
+          });
+          return { first, second };
+        });
+
+        expect(visited).toEqual(["first", "second"]);
+        expect(outcome.first.result.ok).toBe(false);
+        expect(outcome.first.results.map((r) => [r.name, r.status])).toEqual([["first", "fail"]]);
+        expect(outcome.second.result.ok).toBe(true);
+        expect(outcome.second.results.map((r) => [r.name, r.status])).toEqual([["second", "pass"]]);
       });
-      const second = yield* scoped(function* () {
-        const tests = yield* useTesting();
-        const result = yield* yield* execute({ path: "second.md", stream: new InMemoryStream() });
-        return { result, results: yield* tests.results };
-      });
-      return { first, second };
     });
-
-    expect(visited).toEqual(["first", "second"]);
-    expect(outcome.first.result.ok).toBe(false);
-    expect(outcome.first.results.map((r) => [r.name, r.status])).toEqual([["first", "fail"]]);
-    expect(outcome.second.result.ok).toBe(true);
-    expect(outcome.second.results.map((r) => [r.name, r.status])).toEqual([["second", "pass"]]);
   });
 
   it("completion returns Err instead of throwing for document failures", function* () {
