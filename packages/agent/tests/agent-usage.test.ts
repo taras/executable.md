@@ -8,7 +8,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
-import { fileJournalCases } from "../../test-support/journal-cases.ts";
+import { journalCases, fileJournalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -262,11 +262,9 @@ function always(plan: TurnPlan): () => TurnPlan {
   return () => ({ ...plan });
 }
 
-const journalCase = fileJournalCases(
-  "packages/agent/tests/agent-usage.test.ts",
-  "xmd-pu-test-",
-  "doc.md",
-);
+const OWNER = "packages/agent/tests/agent-usage.test.ts";
+const journalCase = fileJournalCases(OWNER, "xmd-pu-test-", "doc.md");
+const conversationCase = journalCases(OWNER);
 
 function* runDocument(
   doc: string,
@@ -552,38 +550,41 @@ describe("Tier PU — canonical retention and replay", () => {
     },
   );
 
-  it("PU-P3: a held conversation's turn retains usage through the same runner", function* () {
-    const stream = new InMemoryStream();
-    const trace = newTrace();
-    const factory = stubFactory(trace, always({ usage: () => versioned("held") }));
-    const installation: ExecutionInstallation = {
-      *install(): Operation<void> {
-        yield* installAgentComponents({
-          rootProvider: {
-            factory,
-            options: { defaultAgent: AGENT, permissionMode: "deny-all" },
-          },
+  conversationCase(
+    "PU-P3: a held conversation's turn retains usage through the same runner",
+    "agent/conversation.md",
+    function* (stream) {
+      const trace = newTrace();
+      const factory = stubFactory(trace, always({ usage: () => versioned("held") }));
+      const installation: ExecutionInstallation = {
+        *install(): Operation<void> {
+          yield* installAgentComponents({
+            rootProvider: {
+              factory,
+              options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+            },
+          });
+        },
+      };
+      const answered = yield* scoped(function* () {
+        const opened = yield* useAgentConversation({
+          history: stream,
+          id: "chat-usage",
+          agent: AGENT,
+          installations: [installation],
         });
-      },
-    };
-    const answered = yield* scoped(function* () {
-      const opened = yield* useAgentConversation({
-        history: stream,
-        id: "chat-usage",
-        agent: AGENT,
-        installations: [installation],
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        return yield* opened.value.prompt("hello");
       });
-      if (!opened.ok) {
-        throw opened.error;
-      }
-      return yield* opened.value.prompt("hello");
-    });
-    expect(answered.ok ? "ok" : answered.error.message).toBe("ok");
-    const records = promptValues(yield* stream.readAll());
-    expect(records.length).toBe(1);
-    expect(parsePromptRecord(records[0])?.usage?.provenance.xmd.version).toBe("held");
-    expect(trace.subscriptions).toBe(1);
-  });
+      expect(answered.ok ? "ok" : answered.error.message).toBe("ok");
+      const records = promptValues(yield* stream.readAll());
+      expect(records.length).toBe(1);
+      expect(parsePromptRecord(records[0])?.usage?.provenance.xmd.version).toBe("held");
+      expect(trace.subscriptions).toBe(1);
+    },
+  );
 
   it("PU-P4: an unsafe model name is withheld by the producing execution; the rest is kept", function* () {
     const marker = ["tok", "en-", "USAGE01"].join("");
