@@ -35,6 +35,15 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </TempDir>
 </Test>
 
+<Test name="explicit delivery pins review through overlap, source movement, repair and readiness" timeout="270s">
+<Each in={["repair","remote","local"]} let="mode">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.DeliveryJourney fixture={fixture} root={root} command={runner} mode={mode} />
+</TempDir>
+</Each>
+</Test>
+
 <Test name="CI selection shares the exact-main rule and follows newer attempts">
 <Let as="revision" value={"a".repeat(40)} />
 <Let as="run" value={{id:1,run_number:4,run_attempt:1,status:"completed",conclusion:"success",head_sha:revision,head_branch:"main",event:"push",name:"CI",html_url:"https://example.invalid/run/1",actor:{login:"test"}}} />

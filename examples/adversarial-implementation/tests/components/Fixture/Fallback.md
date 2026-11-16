@@ -41,7 +41,7 @@ git symbolic-ref --short HEAD
 }[scenario]} />
 <If condition={expected === undefined}><Fail message={"Unknown fallback scenario " + scenario} /></If>
 <Delivery.Status delivery={delivery} number={7} as="before" />
-<AssertEquals actual={[before.status,before.nextAction]} expected={["review_pending","review"]} />
+<AssertEquals actual={[before.status,before.nextAction]} expected={["review_pending","reconcile_source"]} />
 
 <If condition={scenario === "reserved"}>
 <Delivery.Selection delivery={delivery} revision={revision} as="selection" />
@@ -268,15 +268,18 @@ rm -r -- {quotedReplacement}
 ```
 <If condition={cut.exitCode !== 0}><Fail message={cut.stderr} /></If>
 <Delivery.Status delivery={delivery} number={7} as="resumable" />
-<AssertEquals actual={[resumable.status,resumable.nextAction]} expected={["review_pending","review"]} />
+<AssertEquals actual={[resumable.status,resumable.nextAction]} expected={["review_pending","reconcile_source"]} />
+<File path="remote.json" as="readyRemote" />
+<Parse schema={{type:"object"}} as="draftRemote">{readyRemote}</Parse>
+<File path="remote.json"><Json value={{...draftRemote,draft:true}} /></File>
 ```bash exec as="resumedEntry"
-{props.runner} {entry} --props-action review
+{props.runner} {entry} --props-action submit --props-revision {revision}
 ```
 <If condition={resumedEntry.exitCode !== 0}><Fail message={resumedEntry.stderr + resumedEntry.stdout} /></If>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterResume" />
 <AssertEquals actual={afterResume.calls.map(call => call.position)} expected={[0,1,1]} />
 <Delivery.Status delivery={delivery} number={7} as="resumed" />
-<AssertEquals actual={resumed.status} expected="ready_for_merge" />
+<If condition={resumed.status !== "ready_pending"}><Fail message={"Unexpected resumed status: " + JSON.stringify(resumed)} /></If>
 <Fixture.Inventory directory={attempt} as="afterCut" />
 <AssertEquals actual={Object.keys(afterCut).filter(path => !path.includes("/replacement/")).map(path => afterCut[path])} expected={Object.keys(beforeCut).filter(path => !path.includes("/replacement/")).map(path => beforeCut[path])} />
 </If>

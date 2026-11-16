@@ -24,7 +24,7 @@ git symbolic-ref --short HEAD
 <File path="requirements.json"><Json value={delivery} /></File>
 <File path="feedback.json"><Json value={{status:"feedback_ready",revision}} /></File>
 </Dir>
-<File path="remote.json"><Json value={{revision,branch,base:"main",draft:false,state:"open",merged:false,mergeRevision:null,stable:true,ciGreen:true,ci:{status:"completed",conclusion:"success"},main:{revision,run:{status:"completed",conclusion:"success"}},mainRepair:false}} /></File>
+<File path="remote.json"><Json value={{revision,branch,base:"main",draft:true,state:"open",merged:false,mergeRevision:null,stable:true,ciGreen:true,ci:{status:"completed",conclusion:"success"},main:{revision,run:{status:"completed",conclusion:"success"}},mainRepair:false}} /></File>
 <Fixture.ReviewOverlap command={runner} directory={delivery.directory} revision={revision} scenario={scenario} />
 </Dir>
 </TempDir>

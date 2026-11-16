@@ -248,11 +248,12 @@ xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-impleme
   --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
 
-`status` starts no model. It reads the saved joined review, its published comment,
-the current PR and GitHub's CI workflow runs. Its `nextAction` is computed from the same facts as
-its `status` and `remaining` fields. When it requests `review`, select
-`--props-action review` on that command to perform the independent review with
-the provider, model, effort and session recorded at launch. The review uses
+Read `status` to see the current heads, submitted revision, required gates,
+and next action. After exact-SHA internal feedback and green required CI,
+run the same command with `--props-action submit --props-revision <full SHA>`.
+Submission pins the clean checkout's commit on the matching open draft PR
+against main. Interim pushes, feedback, CI retries and status reads leave the
+draft waiting for submission. The review uses
 normal coding-agent permissions in a provider scope of its own. It receives the
 original captured acceptance text and may inspect source and run focused checks;
 it receives no implementation, delegation, posting or merge task.
@@ -291,13 +292,13 @@ again. `status`, `closeout` and `reconcile` ask nothing and start no reviewer.
 
 ```text
 feedback pending -> continue original feedback
-feedback ready   -> independent review pending -> joined exact-commit verdict
-                      | Fable unavailable/refused  -> one Astra review (review)
+feedback + green required CI -> explicit submit -> joined exact-commit verdict
+                      | Fable unavailable/refused  -> one Astra review (submit)
                       | no reviewer completed      -> review_held: answer via review
                       | incomplete/uncertain       -> reconcile original call
                       | comment pending            -> publish-review
                       | published changes required -> request approved repair
-                      | published pass + checks    -> finish PR metadata
+                      | published pass + checks    -> ready
                       | all passed + PR ready      -> await authorized merge
                       | confirmed merge            -> delivered
 ```
@@ -341,7 +342,7 @@ and saves a raw reply the execution joined but never wrote. It never shortens te
 a model call or overwrites a contradictory receipt. Missing or uncertain execution
 continues to hold. Status uses this same validation boundary to read receipts.
 
-`review` and `reconcile` publish each validated verdict as a comment on the
+`submit` and `reconcile` publish each validated verdict as a comment on the
 current pull request, including findings that require repair. The comment
 names the exact reviewed commit and the reviewer who supplied the result.
 Delivery uses `<PullRequest.Comments>` to reconcile and verify the comment. With
@@ -400,9 +401,19 @@ Main health reuses the repository's authoritative selection
 rule for a push to main's exact current head. Pending, cancelled, skipped and
 failed runs cannot pass. The maintainer-applied `ci-main-red-fix` exception keeps
 the repository's CI contract: it substitutes composability for the main lookup
-inside CI. A draft with a verified passing review and passing checks reports
-`publication_pending` with `finish_pr_metadata`. A confirmed merge with a
-merge commit reports `delivered`. Refresh status before acting on readiness.
+inside CI. Run `--props-action ready` when status reports `ready_pending`.
+The command verifies the existing PASS comment, refreshes the source and checks,
+marks the exact PR ready, and reads it back. Repeating the command returns the
+same comment on the same revision. Merge requires separate authorization. A
+confirmed merge with a merge commit reports `delivered`.
+
+If the local or remote head moves, status retains the submitted SHA and
+original attempt and reports both observed heads. Restore the submitted
+revision for publication or readiness, or use `reconcile` to recover the
+original attempt. Supply `--props-revision <full SHA>` when selecting among
+older attempts. A joined changes-required verdict with a verified comment
+allows an approved repair to be submitted after fresh exact feedback and
+green required CI. Submit the repair explicitly with its own SHA.
 
 The saved `status.json` is the last observation, not a second execution state.
 Use the command for a current answer. Local records are trusted workflow
@@ -806,8 +817,8 @@ including whether existing APIs suffice. Mechanical validation and review
 bookkeeping stay with their existing workflow or coordinator owners. This guide
 adds no workflow phase or review stage.
 
-Start required Fable reviews when the exact feedback commit and focused evidence
-are ready, without waiting for CI on `main` or the reviewed branch. When Fable
+Start final Fable review when the operator submits the exact draft with
+completed internal feedback and green required PR CI. When Fable
 is unavailable, including exhausted Claude quota, use an independent Codex Astra
 (`gpt-6-astra`) reviewer under the same scope, effort policy and correction
 limits. Reconcile any in-flight call and preserve its findings before fallback.

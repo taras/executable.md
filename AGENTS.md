@@ -79,9 +79,10 @@ Feedback:
   paths are affected, including checking existing APIs before accepting a new
   one. The workflow or coordinator owns mechanical validation and review
   bookkeeping.
-- Start Fable reviews without waiting for CI on `main` or the reviewed branch.
-  Main health and required checks remain merge gates; a review pass waives
-  neither.
+- Start internal feedback reviews without waiting for CI. Start final Fable
+  delivery review only after the operator submits the exact draft with internal
+  feedback complete and required PR CI green. Main health and required checks
+  remain merge gates.
 - When a required Fable review is unavailable (including exhausted quota), use
   Codex Astra (`gpt-6-astra`) with the same independence from the Implementor,
   scope, reasoning-effort policy and correction limits. Reconcile any in-flight

@@ -21,6 +21,12 @@ Status: {status.status}
 
 Revision: {reportRevision}
 
+<If condition={status.local != null}>
+Local head: {status.local.head}
+
+Pull request head: {status.remote.observedRevision ?? status.remote.revision}
+</If>
+
 Next action: {status.nextAction}
 
 <Each in={status.required} let="gate">

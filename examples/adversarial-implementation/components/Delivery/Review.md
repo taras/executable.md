@@ -5,6 +5,7 @@ props:
   properties:
     delivery: {type: object}
     revision: {type: string, pattern: '^[0-9a-f]{40}$'}
+    branch: {type: string, minLength: 1}
   required: [delivery, revision]
   additionalProperties: false
 returns: {type: object}
@@ -26,7 +27,7 @@ mkdir -- {quoted}
 ```
 <If condition={reserved.exitCode !== 0}><Fail message="The review attempt already exists or cannot be reserved. Reconcile its original invocation and public effects before another call." /></If>
 <Dir path={read.directory}><File path="selection.json"><Json value={read.selection} /></File></Dir>
-<Delivery.Dispatch delivery={props.delivery} selection={read.selection} position={0} attempt={read.directory} />
+<Delivery.Dispatch delivery={props.delivery} selection={read.selection} branch={props.branch} position={0} attempt={read.directory} />
 <Delivery.Attempts delivery={props.delivery} revision={props.revision} as="read" />
 </If>
 <If condition={continuing && read.state.next !== "replace" && !(read.state.hold !== null && read.state.hold.valid && read.state.hold.answer === null)}><Fail message="The review attempt already exists or cannot be reserved. Reconcile its original invocation and public effects before another call." /></If>
@@ -37,7 +38,7 @@ mkdir -- {quotedReplacement}
 ```
 <If condition={replacementReserved.exitCode !== 0}><Fail message="The replacement review is already reserved. Reconcile its original invocation before another call." /></If>
 <Dir path={read.directory + "/replacement"}><File path="transition.json"><Json value={read.state.transition} /></File></Dir>
-<Delivery.Dispatch delivery={props.delivery} selection={read.selection} position={1} attempt={read.directory + "/replacement"} />
+<Delivery.Dispatch delivery={props.delivery} selection={read.selection} branch={props.branch} position={1} attempt={read.directory + "/replacement"} />
 <Delivery.Attempts delivery={props.delivery} revision={props.revision} as="read" />
 </If>
 <If condition={read.state.next === "reconcile" && read.state.hold === null}>

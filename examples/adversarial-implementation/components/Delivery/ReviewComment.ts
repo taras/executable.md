@@ -225,7 +225,7 @@ export default function* ReviewComment(value: unknown) {
       ].join("\n"),
     );
     yield* clear(body);
-    if (!(yield* readTarget(target))) {
+    if (publish && !(yield* readTarget(target))) {
       return pending("The current pull request does not match the reviewed revision.");
     }
 

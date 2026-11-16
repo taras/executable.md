@@ -116,13 +116,16 @@ export default function* ReviewOverlap(value: unknown) {
     .map(shellQuote)
     .join(" ");
 
-  const review = (actor: z.infer<typeof actorSchema>, timeout: number, action = "review") =>
-    runShell(`exec ${command} ${args} --props-action ${shellQuote(action)}`, {
-      cwd: repository,
-      env: { [overlapEnv]: evidence, [actorEnv]: actor },
-      inheritEnv: true,
-      timeout,
-    }).join();
+  const review = (actor: z.infer<typeof actorSchema>, timeout: number, action = "submit") =>
+    runShell(
+      `exec ${command} ${args} --props-action ${shellQuote(action)}${action === "submit" ? " --props-revision " + shellQuote(revision) : ""}`,
+      {
+        cwd: repository,
+        env: { [overlapEnv]: evidence, [actorEnv]: actor },
+        inheritEnv: true,
+        timeout,
+      },
+    ).join();
 
   function* held() {
     return (
@@ -181,7 +184,7 @@ export default function* ReviewOverlap(value: unknown) {
     check(
       contender.code === 1 &&
         contender.stderr.includes(
-          "The next action is reconcile_original_review; do not start another review.",
+          "is already reserved. Reconcile its original invocation; do not start another review.",
         ),
       `Unexpected contender result (${contender.code}): ${contender.stderr} ${contender.stdout}`,
     );
@@ -208,7 +211,7 @@ export default function* ReviewOverlap(value: unknown) {
   check(
     status.status ===
       (scenario === "pass"
-        ? "ready_for_merge"
+        ? "ready_pending"
         : scenario === "changes_required"
           ? "repair_required"
           : "publication_pending") &&
@@ -288,7 +291,7 @@ export default function* ReviewOverlap(value: unknown) {
   check(published.code === 0, `Publication retry failed: ${published.stderr} ${published.stdout}`);
   const verified = statusSchema.parse(JSON.parse(published.stdout));
   check(
-    verified.status === (scenario === "changes_required" ? "repair_required" : "ready_for_merge") &&
+    verified.status === (scenario === "changes_required" ? "repair_required" : "ready_pending") &&
       verified.reviewPublication.state === "verified" &&
       verified.reviewPublication.revision === revision &&
       verified.reviewPublication.url ===
@@ -319,7 +322,7 @@ export default function* ReviewOverlap(value: unknown) {
     check((yield* readPrompts(evidence, "winner")).length === 0, "Reconciliation contacted ACP.");
   }
 
-  const later = yield* review("later", 25_000);
+  const later = yield* review("later", 25_000, "review");
   const laterPrompts = yield* readPrompts(evidence, "later");
   check(
     laterPrompts.length === 0,
@@ -328,7 +331,7 @@ export default function* ReviewOverlap(value: unknown) {
   check(
     later.code === 1 &&
       later.stderr.includes(
-        `The next action is ${scenario === "changes_required" ? "request_approved_repair" : "await_authorized_merge"}; do not start another review.`,
+        `The next action is ${scenario === "changes_required" ? "request_approved_repair" : "ready"}; do not start another review.`,
       ),
     `Unexpected later result (${later.code}): ${later.stderr} ${later.stdout}`,
   );
