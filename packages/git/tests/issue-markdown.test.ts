@@ -177,59 +177,81 @@ describe("workflow Issue scenarios", () => {
  */
 describe("scenario sessions", () => {
   const sessions = (name: string) => pathOf(`sessions/${name}`);
+  const owner = "packages/git/tests/issue-markdown.test.ts";
+  const suite = "scenario sessions";
 
-  it("shares one tracker between documents that each get their own session", function* () {
+  const sharedTracker = "shares one tracker between documents that each get their own session";
+  it(sharedTracker, function* () {
     const fixture = yield* useScenarioFixture();
 
-    const first = yield* fixture.observe(sessions("First.test.md"));
-    const second = yield* fixture.observe(sessions("Second.test.md"));
+    const testCase = { owner, suite, name: sharedTracker };
+    const firstPath = sessions("First.test.md");
+    const secondPath = sessions("Second.test.md");
+    yield* captureTestJournal(testCase, firstPath, function* (firstStream) {
+      const first = yield* fixture.observe(firstPath, firstStream);
+      yield* captureTestJournal(testCase, secondPath, function* (secondStream) {
+        const second = yield* fixture.observe(secondPath, secondStream);
 
-    // Non-empty and disjoint: each document reports its own test and only
-    // its own, which is what a session per execution buys. A cumulative
-    // session would show the first document's result in the second's.
-    expect(first.results.map((result) => result.name)).toEqual([
-      "the first document sees the tracker it filed on",
-    ]);
-    expect(second.results.map((result) => result.name)).toEqual([
-      "the second document meets the first document's tracker",
-    ]);
+        // Non-empty and disjoint: each document reports its own test and only
+        // its own, which is what a session per execution buys. A cumulative
+        // session would show the first document's result in the second's.
+        expect(first.results.map((result) => result.name)).toEqual([
+          "the first document sees the tracker it filed on",
+        ]);
+        expect(second.results.map((result) => result.name)).toEqual([
+          "the second document meets the first document's tracker",
+        ]);
 
-    // Both passed, and the second's passing is the shared half: it asserted
-    // on an issue the first document filed, so the fixture outlived the
-    // scope the first session closed.
-    expect(failures(first)).toEqual([]);
-    expect(failures(second)).toEqual([]);
-    expect(first.outcome.ok).toBe(true);
-    expect(second.outcome.ok).toBe(true);
-    expect(fixture.server.issues.map((issue) => issue.title)).toEqual([
-      "Filed by the first document",
-    ]);
+        // Both passed, and the second's passing is the shared half: it asserted
+        // on an issue the first document filed, so the fixture outlived the
+        // scope the first session closed.
+        expect(failures(first)).toEqual([]);
+        expect(failures(second)).toEqual([]);
+        expect(first.outcome.ok).toBe(true);
+        expect(second.outcome.ok).toBe(true);
+        expect(fixture.server.issues.map((issue) => issue.title)).toEqual([
+          "Filed by the first document",
+        ]);
+      });
+    });
   });
 
-  it("fails the document whose assertion fails, and no other", function* () {
+  const independent = "fails the document whose assertion fails, and no other";
+  it(independent, function* () {
     const fixture = yield* useScenarioFixture();
 
-    const failing = yield* fixture.observe(sessions("Failing.test.md"));
-    expect(failing.results.map((result) => result.status)).toEqual(["fail"]);
-    expect(failing.outcome.ok).toBe(false);
+    const testCase = { owner, suite, name: independent };
+    const failingPath = sessions("Failing.test.md");
+    yield* captureTestJournal(testCase, failingPath, function* (stream) {
+      const failing = yield* fixture.observe(failingPath, stream);
+      expect(failing.results.map((result) => result.status)).toEqual(["fail"]);
+      expect(failing.outcome.ok).toBe(false);
+    });
 
     // The next document is unharmed, which is the claim that matters: a
     // failure belongs to the session that recorded it, so a passing document
     // observed after a failing one still settles Ok with its own result.
-    const after = yield* fixture.observe(sessions("Passing.test.md"));
-    expect(after.results.map((result) => result.status)).toEqual(["pass"]);
-    expect(after.outcome.ok).toBe(true);
+    const passingPath = sessions("Passing.test.md");
+    yield* captureTestJournal(testCase, passingPath, function* (stream) {
+      const after = yield* fixture.observe(passingPath, stream);
+      expect(after.results.map((result) => result.status)).toEqual(["pass"]);
+      expect(after.outcome.ok).toBe(true);
+    });
   });
 
-  it("fails a document that discovered no tests at all", function* () {
+  const noTests = "fails a document that discovered no tests at all";
+  it(noTests, function* () {
     const fixture = yield* useScenarioFixture();
     // The hazard this arrangement exists to remove: activation that did not
     // take renders a document full of passing assertion reports and collects
     // nothing. The session's completion policy is what makes that an `Err`
     // rather than a silent success. Tracked separately as
     // taras/executable.md#523 for the testing API itself.
-    const empty = yield* fixture.observe(sessions("Untested.md"));
-    expect(empty.results).toEqual([]);
-    expect(empty.outcome.ok).toBe(false);
+    const path = sessions("Untested.md");
+    yield* captureTestJournal({ owner, suite, name: noTests }, path, function* (stream) {
+      const empty = yield* fixture.observe(path, stream);
+      expect(empty.results).toEqual([]);
+      expect(empty.outcome.ok).toBe(false);
+    });
   });
 });
