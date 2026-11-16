@@ -14,6 +14,8 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import {
   createContext,
@@ -59,6 +61,9 @@ import type { DocumentRequest } from "../src/document-request.ts";
 import { executeObserved } from "../src/execute.ts";
 import type { InvocationObservers } from "../src/execute.ts";
 import type { DurablePreparation, ExecutionInstallation, JournalAdmission } from "../host.ts";
+
+const OWNER = "packages/core/tests/execution-protocol.test.ts";
+const journalCase = journalCases(OWNER);
 
 const DOC = "# Hello\n";
 
@@ -148,21 +153,25 @@ const PROPS_DOC = [
 ].join("\n");
 
 describe("Tier EP — the execution protocol", () => {
-  it("EP1: an ordinary execute() with nothing installed still runs the document", function* () {
-    const output = yield* scoped(function* () {
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
-    });
-    expect(String(output)).toContain("Hello");
-  });
+  journalCase(
+    "EP1: an ordinary execute() with nothing installed still runs the document",
+    "<eval>",
+    function* (stream) {
+      const output = yield* scoped(function* () {
+        return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
+      });
+      expect(String(output)).toContain("Hello");
+    },
+  );
 
-  it("EP2: an option transformation reaches the document", function* () {
+  journalCase("EP2: an option transformation reaches the document", "<eval>", function* (stream) {
     const output = yield* scoped(function* () {
       yield* Execution.around({
         *execute([request], next) {
           yield* next(request.withOptions({ ...request.options, ...inlineSource("# Replaced\n") }));
         },
       });
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
     });
     expect(String(output)).toContain("Replaced");
     expect(String(output)).not.toContain("Hello");
@@ -190,7 +199,7 @@ describe("Tier EP — the execution protocol", () => {
     expect(journal.stream.snapshot()).toEqual([]);
   });
 
-  it("EP4: a substitute return after delegating is ignored", function* () {
+  journalCase("EP4: a substitute return after delegating is ignored", "<eval>", function* (stream) {
     // Typed as returning something, which the canonical surface no longer
     // permits — so this is written the only way it can still happen: through a
     // same-named descriptor whose own types allow it.
@@ -212,7 +221,7 @@ describe("Tier EP — the execution protocol", () => {
           return { output: undefined, [Symbol.iterator]: () => undefined };
         },
       });
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
     });
     expect(String(output)).toContain("Hello");
   });
@@ -239,7 +248,7 @@ describe("Tier EP — the execution protocol", () => {
     expect(journal.stream.snapshot()).toEqual([]);
   });
 
-  it("EP6: delegating twice fails", function* () {
+  journalCase("EP6: delegating twice fails", "<eval>", function* (stream) {
     const failure = yield* scoped(function* () {
       yield* Execution.around({
         *execute([request], next) {
@@ -247,36 +256,39 @@ describe("Tier EP — the execution protocol", () => {
           yield* next(request);
         },
       });
-      return yield* raised(execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      return yield* raised(execute({ ...inlineSource(DOC), stream }));
     });
     expect(failure).toBeInstanceOf(ExecutionProtocolError);
     expect(String(failure)).toContain("more than once");
   });
 
-  it("EP7: reusing a request a previous execution consumed fails", function* () {
-    const captured: ExecutionRequest[] = [];
-    yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          captured.push(request);
-          yield* next(request);
-        },
+  const ep7Name = "EP7: reusing a request a previous execution consumed fails";
+  journalCase(ep7Name, "<eval>", function* (firstStream) {
+    yield* captureTestJournal({ owner: OWNER, name: ep7Name }, "<eval>", function* (secondStream) {
+      const captured: ExecutionRequest[] = [];
+      yield* scoped(function* () {
+        yield* Execution.around({
+          *execute([request], next) {
+            captured.push(request);
+            yield* next(request);
+          },
+        });
+        yield* collect(yield* execute({ ...inlineSource(DOC), stream: firstStream }));
       });
-      yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
-    });
 
-    const stale = captured[0];
-    expect(stale).toBeDefined();
-    const failure = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([,], next) {
-          // Delegating the *previous* execution's request.
-          yield* next(stale!);
-        },
+      const stale = captured[0];
+      expect(stale).toBeDefined();
+      const failure = yield* scoped(function* () {
+        yield* Execution.around({
+          *execute([,], next) {
+            // Delegating the *previous* execution's request.
+            yield* next(stale!);
+          },
+        });
+        return yield* raised(execute({ ...inlineSource(DOC), stream: secondStream }));
       });
-      return yield* raised(execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      expect(failure).toBeInstanceOf(ExecutionProtocolError);
     });
-    expect(failure).toBeInstanceOf(ExecutionProtocolError);
   });
 
   it("EP8: delegating a reconstructed look-alike fails", function* () {
@@ -302,45 +314,55 @@ describe("Tier EP — the execution protocol", () => {
     expect(journal.stream.snapshot()).toEqual([]);
   });
 
-  it("EP9: delegating a request a later withOptions() superseded fails", function* () {
-    const failure = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          request.withOptions({ ...request.options, ...inlineSource("# Other\n") });
-          // The superseded request, not the one just derived.
-          yield* next(request);
-        },
+  journalCase(
+    "EP9: delegating a request a later withOptions() superseded fails",
+    "<eval>",
+    function* (stream) {
+      const failure = yield* scoped(function* () {
+        yield* Execution.around({
+          *execute([request], next) {
+            request.withOptions({ ...request.options, ...inlineSource("# Other\n") });
+            // The superseded request, not the one just derived.
+            yield* next(request);
+          },
+        });
+        return yield* raised(execute({ ...inlineSource(DOC), stream }));
       });
-      return yield* raised(execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
-    });
-    expect(failure).toBeInstanceOf(ExecutionProtocolError);
-    expect(String(failure)).toContain("superseded");
-  });
+      expect(failure).toBeInstanceOf(ExecutionProtocolError);
+      expect(String(failure)).toContain("superseded");
+    },
+  );
 
-  it("EP10: middleware from another loaded copy inspects, transforms and delegates", function* () {
-    const seen: string[] = [];
-    // A descriptor of the same stable name, built here rather than imported —
-    // which is what a separately loaded copy of core is.
-    const foreign: Api<{
-      execute(request: ExecutionRequest): Operation<void>;
-    }> = createApi("Execution", {
-      // deno-lint-ignore require-yield
-      *execute(_request: ExecutionRequest): Operation<void> {},
-    });
-
-    const output = yield* scoped(function* () {
-      yield* foreign.around({
-        *execute([request], next) {
-          seen.push(typeof request.options.stream);
-          yield* next(request.withOptions({ ...request.options, ...inlineSource("# Foreign\n") }));
-        },
+  journalCase(
+    "EP10: middleware from another loaded copy inspects, transforms and delegates",
+    "<eval>",
+    function* (stream) {
+      const seen: string[] = [];
+      // A descriptor of the same stable name, built here rather than imported —
+      // which is what a separately loaded copy of core is.
+      const foreign: Api<{
+        execute(request: ExecutionRequest): Operation<void>;
+      }> = createApi("Execution", {
+        // deno-lint-ignore require-yield
+        *execute(_request: ExecutionRequest): Operation<void> {},
       });
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
-    });
 
-    expect(seen).toEqual(["object"]);
-    expect(String(output)).toContain("Foreign");
-  });
+      const output = yield* scoped(function* () {
+        yield* foreign.around({
+          *execute([request], next) {
+            seen.push(typeof request.options.stream);
+            yield* next(
+              request.withOptions({ ...request.options, ...inlineSource("# Foreign\n") }),
+            );
+          },
+        });
+        return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
+      });
+
+      expect(seen).toEqual(["object"]);
+      expect(String(output)).toContain("Foreign");
+    },
+  );
 
   // EP19: a nested invocation cannot settle its caller. The outer request is
   // still live and unconsumed when the nested chain hands it to the nested
@@ -440,35 +462,39 @@ describe("Tier EP — the execution protocol", () => {
     expect(outputs[1]).toContain("Second");
   });
 
-  it("EP21: the exported default refuses and consumes nothing", function* () {
-    const captured: ExecutionRequest[] = [];
-    const output = yield* scoped(function* () {
-      let reentered = false;
-      yield* Execution.around({
-        *execute([request], next) {
-          // The standalone call below re-enters this same handler, because the
-          // public descriptor shares the stable name. Let it pass straight
-          // through so what is under test is the default it reaches.
-          if (reentered) {
+  journalCase(
+    "EP21: the exported default refuses and consumes nothing",
+    "<eval>",
+    function* (stream) {
+      const captured: ExecutionRequest[] = [];
+      const output = yield* scoped(function* () {
+        let reentered = false;
+        yield* Execution.around({
+          *execute([request], next) {
+            // The standalone call below re-enters this same handler, because the
+            // public descriptor shares the stable name. Let it pass straight
+            // through so what is under test is the default it reaches.
+            if (reentered) {
+              yield* next(request);
+              return;
+            }
+            captured.push(request);
+            reentered = true;
+            const standalone = yield* raised(Execution.operations.execute(request));
+            reentered = false;
+            expect(standalone).toBeInstanceOf(ExecutionProtocolError);
+            expect(String(standalone)).toContain("outside canonical core");
+            // The request survived that, and still settles this invocation.
             yield* next(request);
-            return;
-          }
-          captured.push(request);
-          reentered = true;
-          const standalone = yield* raised(Execution.operations.execute(request));
-          reentered = false;
-          expect(standalone).toBeInstanceOf(ExecutionProtocolError);
-          expect(String(standalone)).toContain("outside canonical core");
-          // The request survived that, and still settles this invocation.
-          yield* next(request);
-        },
+          },
+        });
+        return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
       });
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
-    });
 
-    expect(String(output)).toContain("Hello");
-    expect(captured).toHaveLength(1);
-  });
+      expect(String(output)).toContain("Hello");
+      expect(captured).toHaveLength(1);
+    },
+  );
 
   it("EP22: null, primitives and hostile shapes are refused without a native error", function* () {
     const hostile = new Proxy(
@@ -506,37 +532,40 @@ describe("Tier EP — the execution protocol", () => {
   // EP23: contextual behavior an installation establishes is the invocation's.
   // It has to reach document teardown, stay out of a concurrent invocation, and
   // be gone from the next ordinary execution in the same host scope.
-  it("EP23: invocation-installed context reaches teardown and leaks nowhere", function* () {
-    const Marker = createContext<string | undefined>("tier-ep.marker", undefined);
-    const seen: string[] = [];
+  const ep23Name = "EP23: invocation-installed context reaches teardown and leaks nowhere";
+  journalCase(ep23Name, "<eval>", function* (firstStream) {
+    yield* captureTestJournal({ owner: OWNER, name: ep23Name }, "<eval>", function* (secondStream) {
+      const Marker = createContext<string | undefined>("tier-ep.marker", undefined);
+      const seen: string[] = [];
 
-    yield* scoped(function* () {
-      yield* Execution.around({
-        *document([props], next) {
-          seen.push(`document:${(yield* Marker.get()) ?? "absent"}`);
-          try {
-            return yield* next(props);
-          } finally {
-            seen.push("teardown");
-          }
-        },
+      yield* scoped(function* () {
+        yield* Execution.around({
+          *document([props], next) {
+            seen.push(`document:${(yield* Marker.get()) ?? "absent"}`);
+            try {
+              return yield* next(props);
+            } finally {
+              seen.push("teardown");
+            }
+          },
+        });
+
+        yield* collect(
+          yield* executeInstalled({ ...inlineSource(DOC), stream: firstStream }, [
+            {
+              *install(): Operation<void> {
+                yield* Marker.set("installed");
+              },
+            },
+          ]),
+        );
+
+        // A later ordinary execution in the same host scope must not inherit it.
+        yield* collect(yield* execute({ ...inlineSource(DOC), stream: secondStream }));
       });
 
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
-          {
-            *install(): Operation<void> {
-              yield* Marker.set("installed");
-            },
-          },
-        ]),
-      );
-
-      // A later ordinary execution in the same host scope must not inherit it.
-      yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      expect(seen).toEqual(["document:installed", "teardown", "document:absent", "teardown"]);
     });
-
-    expect(seen).toEqual(["document:installed", "teardown", "document:absent", "teardown"]);
   });
 
   // EP24: settlement owns the invocation scope. A caller that continues on the
@@ -614,13 +643,14 @@ describe("Tier EP — the execution protocol", () => {
     expect([...finalized].sort()).toEqual(["first", "second"]);
   });
 
-  it("EP24c: a completed handle can be re-observed without refinalizing", function* () {
-    const finalized: string[] = [];
+  journalCase(
+    "EP24c: a completed handle can be re-observed without refinalizing",
+    "<eval>",
+    function* (stream) {
+      const finalized: string[] = [];
 
-    const results = yield* scoped(function* () {
-      const execution = yield* executeInstalled(
-        { ...inlineSource(DOC), stream: new InMemoryStream() },
-        [
+      const results = yield* scoped(function* () {
+        const execution = yield* executeInstalled({ ...inlineSource(DOC), stream }, [
           {
             *install(): Operation<void> {
               yield* ensure(() => {
@@ -628,85 +658,89 @@ describe("Tier EP — the execution protocol", () => {
               });
             },
           },
-        ],
-      );
-      const first = yield* execution;
-      const second = yield* execution;
-      // Late subscription still replays the whole output.
-      const late = yield* collect(execution);
-      return [first.ok, second.ok, String(late).includes("Hello")];
-    });
+        ]);
+        const first = yield* execution;
+        const second = yield* execution;
+        // Late subscription still replays the whole output.
+        const late = yield* collect(execution);
+        return [first.ok, second.ok, String(late).includes("Hello")];
+      });
 
-    expect(results).toEqual([true, true, true]);
-    expect(finalized).toEqual(["cleanup"]);
-  });
+      expect(results).toEqual([true, true, true]);
+      expect(finalized).toEqual(["cleanup"]);
+    },
+  );
 
   // EP25: cancelling a consumer of an *already-returned* handle cancels the
   // invocation. The handle is obtained in a caller scope that keeps running, and
   // the task that is halted never started the execution — nothing but the handle
   // connects them.
-  it("EP25: halting a consumer of a returned handle cancels the invocation", function* () {
-    const finalized: string[] = [];
-    const halted: string[] = [];
-    const reached = withResolvers<void>();
-    const settledBy: Array<boolean> = [];
+  journalCase(
+    "EP25: halting a consumer of a returned handle cancels the invocation",
+    "<eval>",
+    function* (stream) {
+      const finalized: string[] = [];
+      const halted: string[] = [];
+      const reached = withResolvers<void>();
+      const settledBy: Array<boolean> = [];
 
-    yield* scoped(function* () {
-      yield* Execution.around({
-        *document([props], next) {
-          try {
-            reached.resolve();
-            yield* suspend();
-            return yield* next(props);
-          } finally {
-            halted.push("document");
-          }
-        },
-      });
-
-      const observing = withResolvers<void>();
-      const execution = yield* executeObserved(
-        { ...inlineSource(DOC), stream: new InMemoryStream() },
-        [
-          {
-            *install(): Operation<void> {
-              yield* ensure(() => {
-                finalized.push("cleanup");
-              });
-            },
+      yield* scoped(function* () {
+        yield* Execution.around({
+          *document([props], next) {
+            try {
+              reached.resolve();
+              yield* suspend();
+              return yield* next(props);
+            } finally {
+              halted.push("document");
+            }
           },
-        ],
-        { observed: () => observing.resolve() },
-      );
-      yield* reached.operation;
+        });
 
-      // The consumer says when it is about to observe the handle, so the halt
-      // lands on a task that is *inside* the observation rather than on one
-      // that never started. A delay would only make that likely.
-      // The acknowledgement comes from inside the observation itself: the
-      // handle notifies once the consumer is cancellable. No elapsed time, and
-      // a halt delivered earlier would leave `halted` empty.
-      const consumer = yield* spawn(function* () {
-        yield* execution;
+        const observing = withResolvers<void>();
+        const execution = yield* executeObserved(
+          { ...inlineSource(DOC), stream },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push("cleanup");
+                });
+              },
+            },
+          ],
+          { observed: () => observing.resolve() },
+        );
+        yield* reached.operation;
+
+        // The consumer says when it is about to observe the handle, so the halt
+        // lands on a task that is *inside* the observation rather than on one
+        // that never started. A delay would only make that likely.
+        // The acknowledgement comes from inside the observation itself: the
+        // handle notifies once the consumer is cancellable. No elapsed time, and
+        // a halt delivered earlier would leave `halted` empty.
+        const consumer = yield* spawn(function* () {
+          yield* execution;
+        });
+        yield* observing.operation;
+        yield* consumer.halt();
+
+        // Asserted before this scope exits: halting the consumer is what closed
+        // the invocation, not the surrounding scope unwinding.
+        expect(halted).toEqual(["document"]);
+        expect(finalized).toEqual(["cleanup"]);
+
+        // Another observer of the same handle settles rather than hanging...
+        settledBy.push((yield* execution).ok);
+        // ...and observing it again starts nothing and refinalizes nothing.
+        settledBy.push((yield* execution).ok);
       });
-      yield* observing.operation;
-      yield* consumer.halt();
 
-      // Asserted before this scope exits: halting the consumer is what closed
-      // the invocation, not the surrounding scope unwinding.
+      expect(settledBy).toEqual([false, false]);
       expect(halted).toEqual(["document"]);
       expect(finalized).toEqual(["cleanup"]);
-
-      // Another observer of the same handle settles rather than hanging...
-      settledBy.push((yield* execution).ok);
-      // ...and observing it again starts nothing and refinalizes nothing.
-      settledBy.push((yield* execution).ok);
-    });
-
-    expect(settledBy).toEqual([false, false]);
-    expect(halted).toEqual(["document"]);
-    expect(finalized).toEqual(["cleanup"]);
-  });
+    },
+  );
 
   it("EP25b: a fatal document result survives cancellation by identity", function* () {
     const durable = new DurablePersistenceError("yield", new Error("planted"));
@@ -1259,134 +1293,138 @@ describe("Tier EP — the execution protocol", () => {
    * success. Nothing is invented to stand in for the answer the document never
    * gave, and asking again adds neither output nor terminal.
    */
-  it("EP30: a host Stop reaches a running document, joins its cleanup and retains one cancelled close", function* () {
-    const stream = new InMemoryStream();
-    const reached = withResolvers<void>();
-    const waiting = withResolvers<void>();
-    const releaseCleanup = withResolvers<void>();
-    const order: string[] = [];
-    /** Body text the document renders before it reaches anything that blocks. */
-    const PREFIX = "PARTIAL-OUTPUT-BEFORE-STOP";
+  journalCase(
+    "EP30: a host Stop reaches a running document, joins its cleanup and retains one cancelled close",
+    "<eval>",
+    function* (stream) {
+      const reached = withResolvers<void>();
+      const waiting = withResolvers<void>();
+      const releaseCleanup = withResolvers<void>();
+      const order: string[] = [];
+      /** Body text the document renders before it reaches anything that blocks. */
+      const PREFIX = "PARTIAL-OUTPUT-BEFORE-STOP";
 
-    yield* scoped(function* () {
-      const execution = yield* executeInstalled(
-        { ...inlineSource(`${PREFIX}\n\n<Waiting />\n`), stream },
-        [
-          {
-            *install(): Operation<void> {
-              // Registered first, so it unwinds last: the Stop below cannot
-              // answer until this has been released and joined.
-              yield* ensure(function* (): Operation<void> {
-                order.push("cleanup:begin");
-                yield* releaseCleanup.operation;
-                order.push("cleanup:end");
-              });
-              yield* registerComponents([
-                {
-                  name: "Waiting",
-                  origin: "execution-protocol",
-                  props: { type: "object", properties: {}, additionalProperties: false },
-                  *fn(): Operation<string> {
-                    reached.resolve();
-                    yield* waiting.operation;
-                    return "unreachable";
+      yield* scoped(function* () {
+        const execution = yield* executeInstalled(
+          { ...inlineSource(`${PREFIX}\n\n<Waiting />\n`), stream },
+          [
+            {
+              *install(): Operation<void> {
+                // Registered first, so it unwinds last: the Stop below cannot
+                // answer until this has been released and joined.
+                yield* ensure(function* (): Operation<void> {
+                  order.push("cleanup:begin");
+                  yield* releaseCleanup.operation;
+                  order.push("cleanup:end");
+                });
+                yield* registerComponents([
+                  {
+                    name: "Waiting",
+                    origin: "execution-protocol",
+                    props: { type: "object", properties: {}, additionalProperties: false },
+                    *fn(): Operation<string> {
+                      reached.resolve();
+                      yield* waiting.operation;
+                      return "unreachable";
+                    },
                   },
-                },
-              ]);
+                ]);
+              },
             },
-          },
-        ],
-      );
+          ],
+        );
 
-      // Drained from the moment the execution exists, so what is read is what
-      // the document emitted rather than whatever was left in a buffer. The
-      // close value of this channel is the whole of it — full for a document
-      // that finished, partial for one that did not.
-      const chunks: string[] = [];
-      const closed = withResolvers<string>();
-      yield* spawn(function* () {
-        const subscription = yield* execution.output;
-        let next = yield* subscription.next();
-        while (!next.done) {
-          chunks.push(next.value);
-          next = yield* subscription.next();
+        // Drained from the moment the execution exists, so what is read is what
+        // the document emitted rather than whatever was left in a buffer. The
+        // close value of this channel is the whole of it — full for a document
+        // that finished, partial for one that did not.
+        const chunks: string[] = [];
+        const closed = withResolvers<string>();
+        yield* spawn(function* () {
+          const subscription = yield* execution.output;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            chunks.push(next.value);
+            next = yield* subscription.next();
+          }
+          closed.resolve(next.value);
+        });
+
+        // The document has printed and is now blocked. Both are waited for, so
+        // the stop below happens at a known point rather than a timed one.
+        yield* reached.operation;
+        for (let round = 0; round < 200 && !chunks.join("").includes(PREFIX); round += 1) {
+          yield* sleep(1);
         }
-        closed.resolve(next.value);
+        const observed = chunks.join("");
+        expect(observed).toContain(PREFIX);
+
+        const stopped = withResolvers<Result<void>>();
+        const asking = withResolvers<void>();
+        yield* spawn(function* () {
+          asking.resolve();
+          order.push("stop:asked");
+          const answer = yield* execution.stop();
+          order.push("stop:answered");
+          stopped.resolve(answer);
+        });
+        yield* asking.operation;
+
+        // Held: the cleanup this execution owns has begun and has not finished,
+        // so the stop has nothing to answer with yet.
+        for (let round = 0; round < 200 && !order.includes("cleanup:begin"); round += 1) {
+          yield* sleep(1);
+        }
+        if (!order.includes("cleanup:begin")) {
+          throw new Error("the owned cleanup never began");
+        }
+        expect(order).not.toContain("stop:answered");
+
+        releaseCleanup.resolve();
+        const answer = yield* stopped.operation;
+        expect(answer.ok).toBe(true);
+        // Joined before answered, which is the whole of the gate.
+        expect(order.indexOf("cleanup:end")).toBeLessThan(order.indexOf("stop:answered"));
+
+        // The document did not succeed, and nothing was fabricated for it.
+        const completion = yield* execution;
+        expect(completion.ok).toBe(false);
+
+        // And the text it had already printed is exactly what its output channel
+        // closed with. This is the assertion a stop that dropped the prefix, or
+        // closed the channel empty, does not survive.
+        const closure = yield* closed.operation;
+        expect(closure).toContain(PREFIX);
+        expect(closure).toBe(observed);
+
+        // One cancelled root Close, carrying a status and nothing else.
+        const closes = stream.snapshot().filter((event) => event.type === "close");
+        const roots = closes.filter(
+          (event) => event.type === "close" && event.coroutineId === "root",
+        );
+        expect(roots.length).toBe(1);
+        const only = roots[0];
+        if (only === undefined || only.type !== "close") {
+          throw new Error("this execution recorded no root close");
+        }
+        expect(only.result.status).toBe("cancelled");
+        expect(Object.keys(only.result)).toEqual(["status"]);
+
+        // Asked again, and read again: neither writes a second ending, and
+        // neither adds a byte to what was printed.
+        const again = yield* execution.stop();
+        expect(again.ok).toBe(true);
+        expect(yield* execution).toEqual(completion);
+        expect(
+          stream
+            .snapshot()
+            .filter((event) => event.type === "close" && event.coroutineId === "root").length,
+        ).toBe(1);
+        expect(chunks.join("")).toBe(observed);
+        expect(yield* closed.operation).toBe(closure);
       });
-
-      // The document has printed and is now blocked. Both are waited for, so
-      // the stop below happens at a known point rather than a timed one.
-      yield* reached.operation;
-      for (let round = 0; round < 200 && !chunks.join("").includes(PREFIX); round += 1) {
-        yield* sleep(1);
-      }
-      const observed = chunks.join("");
-      expect(observed).toContain(PREFIX);
-
-      const stopped = withResolvers<Result<void>>();
-      const asking = withResolvers<void>();
-      yield* spawn(function* () {
-        asking.resolve();
-        order.push("stop:asked");
-        const answer = yield* execution.stop();
-        order.push("stop:answered");
-        stopped.resolve(answer);
-      });
-      yield* asking.operation;
-
-      // Held: the cleanup this execution owns has begun and has not finished,
-      // so the stop has nothing to answer with yet.
-      for (let round = 0; round < 200 && !order.includes("cleanup:begin"); round += 1) {
-        yield* sleep(1);
-      }
-      if (!order.includes("cleanup:begin")) {
-        throw new Error("the owned cleanup never began");
-      }
-      expect(order).not.toContain("stop:answered");
-
-      releaseCleanup.resolve();
-      const answer = yield* stopped.operation;
-      expect(answer.ok).toBe(true);
-      // Joined before answered, which is the whole of the gate.
-      expect(order.indexOf("cleanup:end")).toBeLessThan(order.indexOf("stop:answered"));
-
-      // The document did not succeed, and nothing was fabricated for it.
-      const completion = yield* execution;
-      expect(completion.ok).toBe(false);
-
-      // And the text it had already printed is exactly what its output channel
-      // closed with. This is the assertion a stop that dropped the prefix, or
-      // closed the channel empty, does not survive.
-      const closure = yield* closed.operation;
-      expect(closure).toContain(PREFIX);
-      expect(closure).toBe(observed);
-
-      // One cancelled root Close, carrying a status and nothing else.
-      const closes = stream.snapshot().filter((event) => event.type === "close");
-      const roots = closes.filter(
-        (event) => event.type === "close" && event.coroutineId === "root",
-      );
-      expect(roots.length).toBe(1);
-      const only = roots[0];
-      if (only === undefined || only.type !== "close") {
-        throw new Error("this execution recorded no root close");
-      }
-      expect(only.result.status).toBe("cancelled");
-      expect(Object.keys(only.result)).toEqual(["status"]);
-
-      // Asked again, and read again: neither writes a second ending, and
-      // neither adds a byte to what was printed.
-      const again = yield* execution.stop();
-      expect(again.ok).toBe(true);
-      expect(yield* execution).toEqual(completion);
-      expect(
-        stream.snapshot().filter((event) => event.type === "close" && event.coroutineId === "root")
-          .length,
-      ).toBe(1);
-      expect(chunks.join("")).toBe(observed);
-      expect(yield* closed.operation).toBe(closure);
-    });
-  });
+    },
+  );
 
   /**
    * EP31: the journal refuses the cancelled ending that Stop was writing.
@@ -1564,7 +1602,7 @@ describe("Tier EP — the execution protocol", () => {
     expect(finalized).toEqual(["first", "second"]);
   });
 
-  it("EP11: admissions are copied before install() runs", function* () {
+  journalCase("EP11: admissions are copied before install() runs", "<eval>", function* (stream) {
     const order: string[] = [];
     const late: JournalAdmission[] = [];
     const installation: ExecutionInstallation = {
@@ -1580,38 +1618,38 @@ describe("Tier EP — the execution protocol", () => {
     };
 
     yield* scoped(function* () {
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
-          installation,
-        ]),
-      );
+      yield* collect(yield* executeInstalled({ ...inlineSource(DOC), stream }, [installation]));
     });
 
     expect(order).toEqual(["install"]);
   });
 
-  it("EP12: every captured admission runs, in order, on the retained history", function* () {
-    const order: string[] = [];
-    const seen: number[] = [];
-    const admission = (name: string): JournalAdmission =>
-      // deno-lint-ignore require-yield
-      function* (retained) {
-        order.push(name);
-        seen.push(retained.length);
-      };
+  journalCase(
+    "EP12: every captured admission runs, in order, on the retained history",
+    "<eval>",
+    function* (stream) {
+      const order: string[] = [];
+      const seen: number[] = [];
+      const admission = (name: string): JournalAdmission =>
+        // deno-lint-ignore require-yield
+        function* (retained) {
+          order.push(name);
+          seen.push(retained.length);
+        };
 
-    yield* scoped(function* () {
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
-          { admissions: [admission("first")] },
-          { admissions: [admission("second")] },
-        ]),
-      );
-    });
+      yield* scoped(function* () {
+        yield* collect(
+          yield* executeInstalled({ ...inlineSource(DOC), stream }, [
+            { admissions: [admission("first")] },
+            { admissions: [admission("second")] },
+          ]),
+        );
+      });
 
-    expect(order).toEqual(["first", "second"]);
-    expect(seen).toEqual([0, 0]);
-  });
+      expect(order).toEqual(["first", "second"]);
+      expect(seen).toEqual([0, 0]);
+    },
+  );
 
   it("EP13: one admission refusal stops everything after it", function* () {
     for (const refusing of [0, 1]) {
@@ -1712,34 +1750,38 @@ describe("Tier EP — the execution protocol", () => {
     }
   });
 
-  it("EP15: a completion policy cannot replace an existing failure", function* () {
-    const asked: string[] = [];
-    const result = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          request.addCompletionFailure(() => {
-            asked.push("policy");
-            return new Error("the policy's failure");
-          });
-          yield* next(request);
-        },
+  journalCase(
+    "EP15: a completion policy cannot replace an existing failure",
+    "<eval>",
+    function* (stream) {
+      const asked: string[] = [];
+      const result = yield* scoped(function* () {
+        yield* Execution.around({
+          *execute([request], next) {
+            request.addCompletionFailure(() => {
+              asked.push("policy");
+              return new Error("the policy's failure");
+            });
+            yield* next(request);
+          },
+        });
+        // A value root that declares `returns` and produces no <Return> fails on
+        // its own terms.
+        return yield* yield* execute({
+          ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
+          stream,
+        });
       });
-      // A value root that declares `returns` and produces no <Return> fails on
-      // its own terms.
-      return yield* yield* execute({
-        ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
-        stream: new InMemoryStream(),
-      });
-    });
 
-    expect(result.ok).toBe(false);
-    const message = result.ok ? "" : result.error.message;
-    expect(message).not.toContain("the policy's failure");
-    // Not even consulted: the result was already a failure.
-    expect(asked).toEqual([]);
-  });
+      expect(result.ok).toBe(false);
+      const message = result.ok ? "" : result.error.message;
+      expect(message).not.toContain("the policy's failure");
+      // Not even consulted: the result was already a failure.
+      expect(asked).toEqual([]);
+    },
+  );
 
-  it("EP16: an additive failure still converts a success", function* () {
+  journalCase("EP16: an additive failure still converts a success", "<eval>", function* (stream) {
     const result = yield* scoped(function* () {
       yield* Execution.around({
         *execute([request], next) {
@@ -1747,71 +1789,79 @@ describe("Tier EP — the execution protocol", () => {
           yield* next(request);
         },
       });
-      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
+      return yield* yield* execute({ ...inlineSource(DOC), stream });
     });
 
     expect(result.ok).toBe(false);
     expect(result.ok ? "" : result.error.message).toContain("the policy's failure");
   });
 
-  it("EP17: the first policy to fail wins, and later ones do not replace it", function* () {
-    const asked: string[] = [];
-    const result = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          request.addCompletionFailure(() => {
-            asked.push("first");
-            return new Error("the first policy");
-          });
-          request.addCompletionFailure(() => {
-            asked.push("second");
-            return new Error("the second policy");
-          });
-          yield* next(request);
-        },
-      });
-      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
-    });
-
-    expect(result.ok).toBe(false);
-    const message = result.ok ? "" : result.error.message;
-    expect(message).toContain("the first policy");
-    expect(message).not.toContain("the second policy");
-    // The second is never even consulted once the result is a failure.
-    expect(asked).toEqual(["first"]);
-  });
-
-  it("EP14: the obsolete ambient admission channel does not exist", function* () {
-    const ran: string[] = [];
-    // The exact channel a previous revision used, rebuilt by name and cleared —
-    // before the invocation and again from inside the middleware chain. There
-    // is nothing behind the name now, so neither clearing removes anything.
-    const obsolete = createContext<unknown>("executablemd.core.journal-admission", undefined);
-
-    yield* scoped(function* () {
-      yield* obsolete.set([]);
-      yield* Execution.around({
-        *execute([request], next) {
-          yield* obsolete.set([]);
-          yield* next(request);
-        },
-      });
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
-          {
-            admissions: [
-              // deno-lint-ignore require-yield
-              function* () {
-                ran.push("still-ran");
-              },
-            ],
+  journalCase(
+    "EP17: the first policy to fail wins, and later ones do not replace it",
+    "<eval>",
+    function* (stream) {
+      const asked: string[] = [];
+      const result = yield* scoped(function* () {
+        yield* Execution.around({
+          *execute([request], next) {
+            request.addCompletionFailure(() => {
+              asked.push("first");
+              return new Error("the first policy");
+            });
+            request.addCompletionFailure(() => {
+              asked.push("second");
+              return new Error("the second policy");
+            });
+            yield* next(request);
           },
-        ]),
-      );
-    });
+        });
+        return yield* yield* execute({ ...inlineSource(DOC), stream });
+      });
 
-    expect(ran).toEqual(["still-ran"]);
-  });
+      expect(result.ok).toBe(false);
+      const message = result.ok ? "" : result.error.message;
+      expect(message).toContain("the first policy");
+      expect(message).not.toContain("the second policy");
+      // The second is never even consulted once the result is a failure.
+      expect(asked).toEqual(["first"]);
+    },
+  );
+
+  journalCase(
+    "EP14: the obsolete ambient admission channel does not exist",
+    "<eval>",
+    function* (stream) {
+      const ran: string[] = [];
+      // The exact channel a previous revision used, rebuilt by name and cleared —
+      // before the invocation and again from inside the middleware chain. There
+      // is nothing behind the name now, so neither clearing removes anything.
+      const obsolete = createContext<unknown>("executablemd.core.journal-admission", undefined);
+
+      yield* scoped(function* () {
+        yield* obsolete.set([]);
+        yield* Execution.around({
+          *execute([request], next) {
+            yield* obsolete.set([]);
+            yield* next(request);
+          },
+        });
+        yield* collect(
+          yield* executeInstalled({ ...inlineSource(DOC), stream }, [
+            {
+              admissions: [
+                // deno-lint-ignore require-yield
+                function* () {
+                  ran.push("still-ran");
+                },
+              ],
+            },
+          ]),
+        );
+      });
+
+      expect(ran).toEqual(["still-ran"]);
+    },
+  );
 });
 
 /**
@@ -1906,106 +1956,123 @@ describe("Tier DP — the document protocol", () => {
   }
 
   describe("lineage", () => {
-    it("DP1: a handler that answers without delegating is refused, and nothing is authored", function* () {
-      const journal = new InMemoryStream();
-      const expanded: string[] = [];
-      const failure = yield* scoped(function* () {
-        yield* useMark(expanded);
-        yield* Execution.around({
-          // deno-lint-ignore require-yield
-          *document() {
-            return undefined;
-          },
+    journalCase(
+      "DP1: a handler that answers without delegating is refused, and nothing is authored",
+      "<eval>",
+      function* (journal) {
+        const expanded: string[] = [];
+        const failure = yield* scoped(function* () {
+          yield* useMark(expanded);
+          yield* Execution.around({
+            // deno-lint-ignore require-yield
+            *document() {
+              return undefined;
+            },
+          });
+          return yield* raised(
+            collect(yield* execute({ ...inlineSource("<Mark />\n"), stream: journal })),
+          );
         });
-        return yield* raised(
-          collect(yield* execute({ ...inlineSource("<Mark />\n"), stream: journal })),
-        );
-      });
 
-      expect(failure).toBeInstanceOf(DocumentProtocolError);
-      expect(expanded).toEqual([]);
-      // No import was authorized and nothing expanded. The durable root still
-      // records the refusal, because that is what this run turned out to be.
-      expect(shape(journal)).toEqual(["close:root"]);
-    });
+        expect(failure).toBeInstanceOf(DocumentProtocolError);
+        expect(expanded).toEqual([]);
+        // No import was authorized and nothing expanded. The durable root still
+        // records the refusal, because that is what this run turned out to be.
+        expect(shape(journal)).toEqual(["close:root"]);
+      },
+    );
 
-    it("DP2: a substitute return after delegating is ignored", function* () {
-      const output = yield* scoped(function* () {
-        yield* loose().around({
-          *document([request], next) {
-            yield* next(request);
-            return { status: "ok", output: "SUBSTITUTE", value: "SUBSTITUTE" };
-          },
+    journalCase(
+      "DP2: a substitute return after delegating is ignored",
+      "<eval>",
+      function* (stream) {
+        const output = yield* scoped(function* () {
+          yield* loose().around({
+            *document([request], next) {
+              yield* next(request);
+              return { status: "ok", output: "SUBSTITUTE", value: "SUBSTITUTE" };
+            },
+          });
+          return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
         });
-        return yield* collect(
-          yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }),
-        );
-      });
-      expect(String(output)).toContain("Hello");
-      expect(String(output)).not.toContain("SUBSTITUTE");
-    });
+        expect(String(output)).toContain("Hello");
+        expect(String(output)).not.toContain("SUBSTITUTE");
+      },
+    );
 
-    it("DP3: props replaced through withProps() are the ones the document runs on", function* () {
-      const output = yield* scoped(function* () {
-        yield* useMutate(() => {});
-        yield* Execution.around({
-          *document([request], next) {
-            yield* next(
-              request.withProps({ nested: { value: "replaced-value" }, items: ["replaced-item"] }),
-            );
-          },
+    journalCase(
+      "DP3: props replaced through withProps() are the ones the document runs on",
+      "<eval>",
+      function* (stream) {
+        const output = yield* scoped(function* () {
+          yield* useMutate(() => {});
+          yield* Execution.around({
+            *document([request], next) {
+              yield* next(
+                request.withProps({
+                  nested: { value: "replaced-value" },
+                  items: ["replaced-item"],
+                }),
+              );
+            },
+          });
+          return yield* collect(
+            yield* execute({
+              ...inlineSource(PROPS_DOC),
+              stream,
+              props: { nested: { value: "original" }, items: ["original-item"] },
+            }),
+          );
         });
-        return yield* collect(
-          yield* execute({
-            ...inlineSource(PROPS_DOC),
-            stream: new InMemoryStream(),
-            props: { nested: { value: "original" }, items: ["original-item"] },
-          }),
-        );
-      });
-      expect(String(output)).toContain("replaced-value");
-      expect(String(output)).not.toContain("original");
-    });
+        expect(String(output)).toContain("replaced-value");
+        expect(String(output)).not.toContain("original");
+      },
+    );
 
-    it("DP4: a second delegation adds no second expansion to the first one's work", function* () {
-      const journal = new InMemoryStream();
-      const expanded: string[] = [];
-      const result = yield* scoped(function* () {
-        yield* useMark(expanded);
-        yield* Execution.around({
-          *document([request], next) {
-            yield* next(request);
-            yield* next(request);
-          },
+    journalCase(
+      "DP4: a second delegation adds no second expansion to the first one's work",
+      "<eval>",
+      function* (journal) {
+        const expanded: string[] = [];
+        const result = yield* scoped(function* () {
+          yield* useMark(expanded);
+          yield* Execution.around({
+            *document([request], next) {
+              yield* next(request);
+              yield* next(request);
+            },
+          });
+          return yield* yield* execute({ ...inlineSource("<Mark />\n"), stream: journal });
         });
-        return yield* yield* execute({ ...inlineSource("<Mark />\n"), stream: journal });
-      });
 
-      expect(result.ok).toBe(false);
-      expect(String(result.ok ? "" : result.error)).toContain("more than once");
-      // The first delegation's work stands: one import, one expansion. The
-      // second produced nothing at all.
-      expect(expanded).toEqual(["expanded"]);
-      expect(
-        shape(journal).filter((entry) => entry === "yield:import_component(__root__)"),
-      ).toEqual(["yield:import_component(__root__)"]);
-    });
+        expect(result.ok).toBe(false);
+        expect(String(result.ok ? "" : result.error)).toContain("more than once");
+        // The first delegation's work stands: one import, one expansion. The
+        // second produced nothing at all.
+        expect(expanded).toEqual(["expanded"]);
+        expect(
+          shape(journal).filter((entry) => entry === "yield:import_component(__root__)"),
+        ).toEqual(["yield:import_component(__root__)"]);
+      },
+    );
 
-    it("DP5: a request a later withProps() superseded is refused", function* () {
-      const failure = yield* scoped(function* () {
-        yield* Execution.around({
-          *document([request], next) {
-            request.withProps({ ...request.props });
-            yield* next(request);
-          },
+    journalCase(
+      "DP5: a request a later withProps() superseded is refused",
+      "<eval>",
+      function* (stream) {
+        const failure = yield* scoped(function* () {
+          yield* Execution.around({
+            *document([request], next) {
+              request.withProps({ ...request.props });
+              yield* next(request);
+            },
+          });
+          return yield* raised(collect(yield* execute({ ...inlineSource(DOC), stream })));
         });
-        return yield* raised(
-          collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() })),
-        );
-      });
-      expect(failure).toBeInstanceOf(DocumentProtocolError);
-      expect(String(failure)).toContain("superseded");
-    });
+        expect(failure).toBeInstanceOf(DocumentProtocolError);
+        expect(String(failure)).toContain("superseded");
+      },
+    );
 
     it("DP6: invalid, reconstructed and hostile values are refused without a native error", function* () {
       const hostile = new Proxy(
@@ -2047,57 +2114,66 @@ describe("Tier DP — the document protocol", () => {
       }
     });
 
-    it("DP7: a stale request is refused after the expansion it belonged to is over", function* () {
-      const held = withResolvers<DocumentRequest>();
-      yield* scoped(function* () {
-        yield* Execution.around({
-          *document([request], next) {
-            held.resolve(request);
-            yield* next(request);
-          },
-        });
-        yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
-      });
+    const dp7Name = "DP7: a stale request is refused after the expansion it belonged to is over";
+    journalCase(dp7Name, "<eval>", function* (firstStream) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: dp7Name },
+        "<eval>",
+        function* (secondStream) {
+          const held = withResolvers<DocumentRequest>();
+          yield* scoped(function* () {
+            yield* Execution.around({
+              *document([request], next) {
+                held.resolve(request);
+                yield* next(request);
+              },
+            });
+            yield* collect(yield* execute({ ...inlineSource(DOC), stream: firstStream }));
+          });
 
-      // The same request, offered to a *later* invocation's terminal.
-      const stale = yield* held.operation;
-      const failure = yield* scoped(function* () {
-        yield* Execution.around({
-          *document([,], next) {
-            yield* next(stale);
-          },
-        });
-        return yield* raised(
-          collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() })),
-        );
-      });
-      expect(failure).toBeInstanceOf(DocumentProtocolError);
-      expect(String(failure)).toContain("another expansion");
-    });
-
-    it("DP8: middleware from another loaded copy composes and delegates", function* () {
-      const seen: string[] = [];
-      const foreign: Api<{ document(request: DocumentRequest): Operation<void> }> = createApi(
-        "Execution",
-        {
-          // deno-lint-ignore require-yield
-          *document(_request: DocumentRequest): Operation<void> {},
+          // The same request, offered to a *later* invocation's terminal.
+          const stale = yield* held.operation;
+          const failure = yield* scoped(function* () {
+            yield* Execution.around({
+              *document([,], next) {
+                yield* next(stale);
+              },
+            });
+            return yield* raised(
+              collect(yield* execute({ ...inlineSource(DOC), stream: secondStream })),
+            );
+          });
+          expect(failure).toBeInstanceOf(DocumentProtocolError);
+          expect(String(failure)).toContain("another expansion");
         },
       );
-      const output = yield* scoped(function* () {
-        yield* foreign.around({
-          *document([request], next) {
-            seen.push(typeof request.props);
-            yield* next(request);
-          },
-        });
-        return yield* collect(
-          yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }),
-        );
-      });
-      expect(seen).toEqual(["object"]);
-      expect(String(output)).toContain("Hello");
     });
+
+    journalCase(
+      "DP8: middleware from another loaded copy composes and delegates",
+      "<eval>",
+      function* (stream) {
+        const seen: string[] = [];
+        const foreign: Api<{ document(request: DocumentRequest): Operation<void> }> = createApi(
+          "Execution",
+          {
+            // deno-lint-ignore require-yield
+            *document(_request: DocumentRequest): Operation<void> {},
+          },
+        );
+        const output = yield* scoped(function* () {
+          yield* foreign.around({
+            *document([request], next) {
+              seen.push(typeof request.props);
+              yield* next(request);
+            },
+          });
+          return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
+        });
+        expect(seen).toEqual(["object"]);
+        expect(String(output)).toContain("Hello");
+      },
+    );
 
     it("DP9: two live expansions cannot settle each other, and both still settle themselves", function* () {
       const published: Array<ReturnType<typeof withResolvers<DocumentRequest>>> = [
@@ -2143,86 +2219,92 @@ describe("Tier DP — the document protocol", () => {
       expect(expanded).toEqual(["expanded", "expanded"]);
     });
 
-    it("DP10: the exported default refuses a live request and consumes nothing", function* () {
-      const captured = withResolvers<DocumentRequest>();
-      const proceed = withResolvers<void>();
+    journalCase(
+      "DP10: the exported default refuses a live request and consumes nothing",
+      "<eval>",
+      function* (stream) {
+        const captured = withResolvers<DocumentRequest>();
+        const proceed = withResolvers<void>();
 
-      // The capturing handler lives in an inner scope, so the call below reaches
-      // the exported default rather than re-entering the chain.
-      const running = yield* spawn(function* () {
-        return yield* scoped(function* () {
-          yield* Execution.around({
-            *document([request], next) {
-              captured.resolve(request);
-              yield* proceed.operation;
-              yield* next(request);
-            },
+        // The capturing handler lives in an inner scope, so the call below reaches
+        // the exported default rather than re-entering the chain.
+        const running = yield* spawn(function* () {
+          return yield* scoped(function* () {
+            yield* Execution.around({
+              *document([request], next) {
+                captured.resolve(request);
+                yield* proceed.operation;
+                yield* next(request);
+              },
+            });
+            return String(yield* collect(yield* execute({ ...inlineSource(DOC), stream })));
           });
-          return String(
-            yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() })),
-          );
         });
-      });
 
-      const request = yield* captured.operation;
-      const refusal = yield* raised(Execution.operations.document(request));
-      expect(refusal).toBeInstanceOf(DocumentProtocolError);
-      expect(refusal instanceof Error ? refusal.cause : "unset").toBeUndefined();
+        const request = yield* captured.operation;
+        const refusal = yield* raised(Execution.operations.document(request));
+        expect(refusal).toBeInstanceOf(DocumentProtocolError);
+        expect(refusal instanceof Error ? refusal.cause : "unset").toBeUndefined();
 
-      proceed.resolve();
-      // The request the default refused was never consumed, so its own terminal
-      // still accepts it.
-      expect(yield* running).toContain("Hello");
-    });
+        proceed.resolve();
+        // The request the default refused was never consumed, so its own terminal
+        // still accepts it.
+        expect(yield* running).toContain("Hello");
+      },
+    );
   });
 
   describe("detached props", () => {
-    it("DP11: props accepted by the terminal are detached from the caller's containers", function* () {
-      const nested = { value: "accepted-value" };
-      const items = ["accepted-item"];
-      const edited: string[] = [];
+    journalCase(
+      "DP11: props accepted by the terminal are detached from the caller's containers",
+      "<eval>",
+      function* (stream) {
+        const nested = { value: "accepted-value" };
+        const items = ["accepted-item"];
+        const edited: string[] = [];
 
-      const output = yield* scoped(function* () {
-        yield* useMutate(() => {});
-        // The window that actually exists: the terminal has accepted the props
-        // and canonical execution has begun, but the root import has not
-        // returned and nothing has read them yet. Editing here is the strongest
-        // form of the attack — after acceptance, before use.
-        yield* Component.around({
-          *importComponent([name], next) {
-            Reflect.set(nested, "value", "smuggled-value");
-            Reflect.set(items, 0, "smuggled-item");
-            edited.push(name);
-            return yield* next(name);
-          },
+        const output = yield* scoped(function* () {
+          yield* useMutate(() => {});
+          // The window that actually exists: the terminal has accepted the props
+          // and canonical execution has begun, but the root import has not
+          // returned and nothing has read them yet. Editing here is the strongest
+          // form of the attack — after acceptance, before use.
+          yield* Component.around({
+            *importComponent([name], next) {
+              Reflect.set(nested, "value", "smuggled-value");
+              Reflect.set(items, 0, "smuggled-item");
+              edited.push(name);
+              return yield* next(name);
+            },
+          });
+          yield* Execution.around({
+            *document([request], next) {
+              yield* next(request.withProps({ nested, items }));
+            },
+          });
+          return String(
+            yield* collect(
+              yield* execute({
+                ...inlineSource(PROPS_DOC),
+                stream,
+                props: { nested: { value: "unused" }, items: ["unused"] },
+              }),
+            ),
+          );
         });
-        yield* Execution.around({
-          *document([request], next) {
-            yield* next(request.withProps({ nested, items }));
-          },
-        });
-        return String(
-          yield* collect(
-            yield* execute({
-              ...inlineSource(PROPS_DOC),
-              stream: new InMemoryStream(),
-              props: { nested: { value: "unused" }, items: ["unused"] },
-            }),
-          ),
-        );
-      });
 
-      // The edit landed at the root import — after acceptance, before use.
-      expect(edited[0]).toEqual("__root__");
-      expect(output).toContain("accepted-value");
-      expect(output).not.toContain("smuggled-value");
-      expect(output).toContain("accepted-item");
-      expect(output).not.toContain("smuggled-item");
-      // The handler's own containers really were edited — the snapshot is what
-      // protected the document, not an absence of mutation.
-      expect(nested.value).toEqual("smuggled-value");
-      expect(items[0]).toEqual("smuggled-item");
-    });
+        // The edit landed at the root import — after acceptance, before use.
+        expect(edited[0]).toEqual("__root__");
+        expect(output).toContain("accepted-value");
+        expect(output).not.toContain("smuggled-value");
+        expect(output).toContain("accepted-item");
+        expect(output).not.toContain("smuggled-item");
+        // The handler's own containers really were edited — the snapshot is what
+        // protected the document, not an absence of mutation.
+        expect(nested.value).toEqual("smuggled-value");
+        expect(items[0]).toEqual("smuggled-item");
+      },
+    );
 
     it('DP12: "__proto__" survives detachment as an ordinary member', function* () {
       const props: Record<string, Json> = { nested: { value: "kept" } };
@@ -2512,58 +2594,66 @@ describe("Tier DP — the document protocol", () => {
       }
     });
 
-    it("DP16: cleanup finishes exactly once before a reconciled result is observable", function* () {
-      const order: string[] = [];
-      const result = yield* scoped(function* () {
-        yield* Execution.around({
-          *document([request], next) {
-            yield* ensure(() => {
-              order.push("cleanup");
-            });
-            yield* next(request);
-            order.push("policy-failed");
-            throw new Error("POST-DELEGATION-POLICY");
-          },
-        });
-        const execution = yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
-        const settled = yield* execution;
-        order.push("observed");
-        return settled;
-      });
-
-      expect(result.ok).toBe(false);
-      expect(order).toEqual(["policy-failed", "cleanup", "observed"]);
-    });
-
-    it("DP17: cancelling during document policy keeps structured teardown", function* () {
-      const entered = withResolvers<void>();
-      const finalized: string[] = [];
-
-      const settled = yield* scoped(function* () {
-        yield* Execution.around({
-          *document([,], _next) {
-            yield* ensure(() => {
-              finalized.push("cleanup");
-            });
-            entered.resolve();
-            yield* suspend();
-          },
+    journalCase(
+      "DP16: cleanup finishes exactly once before a reconciled result is observable",
+      "<eval>",
+      function* (stream) {
+        const order: string[] = [];
+        const result = yield* scoped(function* () {
+          yield* Execution.around({
+            *document([request], next) {
+              yield* ensure(() => {
+                order.push("cleanup");
+              });
+              yield* next(request);
+              order.push("policy-failed");
+              throw new Error("POST-DELEGATION-POLICY");
+            },
+          });
+          const execution = yield* execute({ ...inlineSource(DOC), stream });
+          const settled = yield* execution;
+          order.push("observed");
+          return settled;
         });
 
-        const execution = yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
-        const consumer = yield* spawn(function* () {
+        expect(result.ok).toBe(false);
+        expect(order).toEqual(["policy-failed", "cleanup", "observed"]);
+      },
+    );
+
+    journalCase(
+      "DP17: cancelling during document policy keeps structured teardown",
+      "<eval>",
+      function* (stream) {
+        const entered = withResolvers<void>();
+        const finalized: string[] = [];
+
+        const settled = yield* scoped(function* () {
+          yield* Execution.around({
+            *document([,], _next) {
+              yield* ensure(() => {
+                finalized.push("cleanup");
+              });
+              entered.resolve();
+              yield* suspend();
+            },
+          });
+
+          const execution = yield* execute({ ...inlineSource(DOC), stream });
+          const consumer = yield* spawn(function* () {
+            return yield* execution;
+          });
+          yield* entered.operation;
+          yield* consumer.halt();
           return yield* execution;
         });
-        yield* entered.operation;
-        yield* consumer.halt();
-        return yield* execution;
-      });
 
-      // Cancellation, not an ordinary policy failure.
-      expect(settled.ok).toBe(false);
-      expect(String(settled.ok ? "" : settled.error)).toContain("cancelled");
-      expect(finalized).toEqual(["cleanup"]);
-    });
+        // Cancellation, not an ordinary policy failure.
+        expect(settled.ok).toBe(false);
+        expect(String(settled.ok ? "" : settled.error)).toContain("cancelled");
+        expect(finalized).toEqual(["cleanup"]);
+      },
+    );
   });
 
   describe("trusted durable preparation", () => {
@@ -2597,44 +2687,44 @@ describe("Tier DP — the document protocol", () => {
       };
     }
 
-    it("DP18: prepare is read once, by value, before any install() runs", function* () {
-      const order: string[] = [];
-      let reads = 0;
-      const installation: ExecutionInstallation = {
-        *install(): Operation<void> {
-          // Too late: what runs was fixed before this.
-          Object.defineProperty(installation, "prepare", {
-            value: marking(order, "replaced"),
-            configurable: true,
-          });
-          order.push("installed");
-        },
-      };
-      Object.defineProperty(installation, "prepare", {
-        get() {
-          reads += 1;
-          return marking(order, `captured-${reads}`);
-        },
-        configurable: true,
-      });
+    journalCase(
+      "DP18: prepare is read once, by value, before any install() runs",
+      "<eval>",
+      function* (stream) {
+        const order: string[] = [];
+        let reads = 0;
+        const installation: ExecutionInstallation = {
+          *install(): Operation<void> {
+            // Too late: what runs was fixed before this.
+            Object.defineProperty(installation, "prepare", {
+              value: marking(order, "replaced"),
+              configurable: true,
+            });
+            order.push("installed");
+          },
+        };
+        Object.defineProperty(installation, "prepare", {
+          get() {
+            reads += 1;
+            return marking(order, `captured-${reads}`);
+          },
+          configurable: true,
+        });
 
+        yield* scoped(function* () {
+          yield* collect(yield* executeInstalled({ ...inlineSource(DOC), stream }, [installation]));
+        });
+
+        expect(reads).toEqual(1);
+        expect(order).toEqual(["installed", "captured-1"]);
+      },
+    );
+
+    journalCase("DP19: preparations run in installation order", "<eval>", function* (stream) {
+      const order: string[] = [];
       yield* scoped(function* () {
         yield* collect(
-          yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
-            installation,
-          ]),
-        );
-      });
-
-      expect(reads).toEqual(1);
-      expect(order).toEqual(["installed", "captured-1"]);
-    });
-
-    it("DP19: preparations run in installation order", function* () {
-      const order: string[] = [];
-      yield* scoped(function* () {
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
+          yield* executeInstalled({ ...inlineSource(DOC), stream }, [
             { prepare: marking(order, "first") },
             { install: () => marking(order, "installed")() },
             { prepare: marking(order, "second") },
@@ -2731,34 +2821,38 @@ describe("Tier DP — the document protocol", () => {
       expect(shape(resumeJournal)).toEqual(["yield:test_preparation(first)", "close:root"]);
     });
 
-    it("DP21: admission precedes preparation, which precedes policy and the root import", function* () {
-      const order: string[] = [];
-      const expanded: string[] = [];
-      yield* scoped(function* () {
-        yield* useMark(expanded);
-        yield* Execution.around({
-          *document([request], next) {
-            order.push("document-policy");
-            yield* next(request);
-          },
-        });
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Mark />\n"), stream: new InMemoryStream() }, [
-            {
-              admissions: [
-                // deno-lint-ignore require-yield
-                function* () {
-                  order.push("admission");
-                },
-              ],
-              prepare: marking(order, "preparation"),
+    journalCase(
+      "DP21: admission precedes preparation, which precedes policy and the root import",
+      "<eval>",
+      function* (stream) {
+        const order: string[] = [];
+        const expanded: string[] = [];
+        yield* scoped(function* () {
+          yield* useMark(expanded);
+          yield* Execution.around({
+            *document([request], next) {
+              order.push("document-policy");
+              yield* next(request);
             },
-          ]),
-        );
-      });
-      expect(expanded).toEqual(["expanded"]);
-      expect(order).toEqual(["admission", "preparation", "document-policy"]);
-    });
+          });
+          yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Mark />\n"), stream }, [
+              {
+                admissions: [
+                  // deno-lint-ignore require-yield
+                  function* () {
+                    order.push("admission");
+                  },
+                ],
+                prepare: marking(order, "preparation"),
+              },
+            ]),
+          );
+        });
+        expect(expanded).toEqual(["expanded"]);
+        expect(order).toEqual(["admission", "preparation", "document-policy"]);
+      },
+    );
 
     it("DP22: a completed replay prepares nothing; a partial one resumes without re-executing", function* () {
       const entered: string[] = [];
