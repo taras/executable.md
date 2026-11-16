@@ -33,6 +33,7 @@ interface Step {
 interface Strategy {
   failFast: unknown;
   shards: unknown;
+  hosts: unknown;
 }
 
 interface Job {
@@ -92,7 +93,7 @@ function steps(value: unknown, label: string): Step[] {
 function strategy(value: unknown, label: string): Strategy {
   const record = object(value, label);
   const matrix = object(record.matrix, `${label}.matrix`);
-  return { failFast: record["fail-fast"], shards: matrix.shard };
+  return { failFast: record["fail-fast"], shards: matrix.shard, hosts: matrix.host };
 }
 
 function job(value: unknown, label: string): Job {
@@ -691,12 +692,36 @@ describe("the conditional CI jobs", () => {
 });
 
 describe("the dedicated ReplBench job", () => {
-  it("runs the TypeScript tests outside the runtime shards", function* () {
+  it("requires the bench tools on each event and runs both hosts on main", function* () {
     const bench = (yield* workflow())["repl-bench"];
-    const commands = bench?.steps.flatMap((step) => step.run?.split("\n") ?? []) ?? [];
-    expect(commands.some((line) => /^deno test .+ examples\/repl-bench\/tests$/.test(line))).toBe(
-      true,
+    const tools = bench?.steps.find((step) => step.name === "Check REPL bench tools");
+
+    expect(bench?.if).toBeUndefined();
+    expect(bench?.strategy?.hosts).toBe(
+      "${{ fromJSON(github.event_name == 'push' && '[\"macos-latest\",\"ubuntu-latest\"]' || '[\"ubuntu-latest\"]') }}",
     );
+    expect(tools?.if).toBeUndefined();
+    expect(tools?.run).toContain("deno test ");
+    expect(tools?.run?.trim().endsWith("examples/repl-bench/tests")).toBe(true);
+  });
+
+  it("runs the tests that drive a host terminal only on pushes to main", function* () {
+    const bench = (yield* workflow())["repl-bench"];
+    const tools = bench?.steps.find((step) => step.name === "Check REPL bench tools");
+    const terminal = bench?.steps.find((step) =>
+      step.run?.includes("test examples/repl-bench/journeys"),
+    );
+    const nativeTests = [
+      "examples/repl-bench/tests/driver-exit.test.ts",
+      "examples/repl-bench/tests/teardown.test.ts",
+    ];
+
+    expect(terminal?.if).toBe("github.event_name == 'push'");
+    expect(terminal?.run).toContain("deno test ");
+    expect(tools?.run).toContain(`--ignore=${nativeTests.join(",")}`);
+    for (const file of nativeTests) {
+      expect(terminal?.run).toContain(file);
+    }
   });
 });
 

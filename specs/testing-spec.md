@@ -1018,6 +1018,12 @@ out, or unexpectedly skips makes that dependency non-success.
 
 Concurrency inside a shard is not enabled.
 
+The required `repl-bench` job checks the bench tools on Ubuntu for pull
+requests. Pushes to `main` run the tools, the driver exit and teardown tests,
+and the Markdown terminal journeys on macOS and Ubuntu. Those terminal tests
+exercise the host's pseudo-terminal and retain screen and terminal evidence
+on failure. `green` requires the job on both events.
+
 ### Remeasurement and calibration
 
 Remeasure after any change to the corpus, the exclusions, or a runner command.

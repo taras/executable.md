@@ -155,7 +155,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: [macos-latest, ubuntu-latest]
+        host: ${{ fromJSON(github.event_name == 'push' && '["macos-latest","ubuntu-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.host }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -175,19 +175,33 @@ jobs:
           deno-version: v2.9.5
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: github.event_name == 'push'
         with:
           bun-version: 1.4.0
 
-      - name: Prepare the worktree and exercise the REPL bench
+      - name: Prepare the worktree
+        working-directory: repl bench checkout
+        run: deno task setup
+
+      - name: Check REPL bench tools
         working-directory: repl bench checkout
         run: |
-          deno task setup
-          deno test --allow-all --cached-only --frozen --node-modules-dir=none examples/repl-bench/tests
+          deno test --allow-all --cached-only --frozen --node-modules-dir=none \
+            --ignore=examples/repl-bench/tests/driver-exit.test.ts,examples/repl-bench/tests/teardown.test.ts \
+            examples/repl-bench/tests
+
+      - name: Exercise the REPL through a host terminal
+        if: github.event_name == 'push'
+        working-directory: repl bench checkout
+        run: |
+          deno test --allow-all --cached-only --frozen --node-modules-dir=none \
+            examples/repl-bench/tests/driver-exit.test.ts \
+            examples/repl-bench/tests/teardown.test.ts
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
             packages/cli/src/deno.ts test examples/repl-bench/journeys
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: failure() || cancelled()
+        if: github.event_name == 'push' && (failure() || cancelled())
         with:
           name: repl-bench-${{ matrix.host }}-attempt-${{ github.run_attempt }}
           path: |
