@@ -680,12 +680,12 @@ describe("Tier WR — workflow runs", () => {
         }
 
         const withoutWorkflow = yield* ids(ordinary);
-        const firstRun = yield* ids(first);
+        const firstRun = yield* ids(first, BUNDLE);
         yield* captureTestJournal(
           { owner: OWNER, name: expansionIdentity },
           "<eval>",
           function* (second) {
-            const secondRun = yield* ids(second);
+            const secondRun = yield* ids(second, OTHER_BUNDLE);
 
             expect(withoutWorkflow).toHaveLength(1);
             expect(firstRun).toEqual(withoutWorkflow);
