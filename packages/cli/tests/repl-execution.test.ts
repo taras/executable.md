@@ -29,7 +29,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
 import { partitionEntrySegments, ROOT_IMPORT } from "../src/repl/entries.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import type { DeliverySink } from "../src/stdout-delivery.ts";
 
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -255,24 +255,7 @@ function captureEntry(
   body: (holder: ReplExecution) => Operation<void>,
   sink: DeliverySink = process.stderr,
 ): Operation<void> {
-  return captureTestJournal(
-    { owner: OWNER, suite, name },
-    source,
-    (stream) => body({ id: "kf39sla2", stream }),
-    {
-      sink,
-      selectEvents(events) {
-        const partition = partitionEntrySegments(events);
-        if (!partition.ok) {
-          throw partition.error;
-        }
-        if (partition.value.length > 1) {
-          throw new Error("fixture execution holds more than one admitted entry");
-        }
-        return partition.value[0]?.events ?? [];
-      },
-    },
-  );
+  return captureReplEntry({ owner: OWNER, suite, name }, "kf39sla2", source, body, sink);
 }
 
 function referenceCases(suite: string) {
