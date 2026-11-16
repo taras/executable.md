@@ -4,6 +4,7 @@ props:
   type: object
   properties:
     repository: {type: string, pattern: '^/'}
+    trackHead: {type: boolean, default: false}
   required: [repository]
   additionalProperties: false
 returns: {type: object}
@@ -28,4 +29,16 @@ git symbolic-ref --quiet --short HEAD
 </Dir>
 <Let as="branch" value={symbolic.exitCode === 0 ? symbolic.stdout.trim() : null} />
 </If>
-<Return value={{head,branch,clean:lines.every(line => line.startsWith("#"))}} />
+<Let as="source" value={{head,branch,clean:lines.every(line => line.startsWith("#"))}} />
+<If condition={props.trackHead}>
+<Dir path={props.repository}>
+```bash exec as="history"
+set -e -o pipefail
+git reflog exists HEAD
+git reflog show --no-color --no-notes --no-show-signature --format='%H %gD %gs' --date=raw HEAD | git hash-object --stdin
+```
+</Dir>
+<Let as="digest" value={history.stdout.trim()} />
+<Let as="source" value={{...source,headHistory:history.exitCode === 0 && /^[0-9a-f]{40}$/.test(digest) ? digest : null}} />
+</If>
+<Return value={source} />

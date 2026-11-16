@@ -10,7 +10,7 @@ export const props = {
     fixture: { type: "object" },
     command: { type: "string" },
     root: { type: "string" },
-    mode: { enum: ["repair", "remote", "local"] },
+    mode: { enum: ["repair", "remote", "local", "roundtrip"] },
   },
   required: ["fixture", "command", "root", "mode"],
   additionalProperties: false,
@@ -20,7 +20,7 @@ const input = z.object({
   fixture: z.object({ repository: z.string(), directory: z.string() }),
   command: z.string(),
   root: z.string(),
-  mode: z.enum(["repair", "remote", "local"]),
+  mode: z.enum(["repair", "remote", "local", "roundtrip"]),
 });
 
 const statusSchema = z.object({
@@ -183,12 +183,17 @@ exit 1
   }
 
   if (mode !== "repair") {
-    const newer = yield* shell("git commit --allow-empty -qm moved && git rev-parse HEAD");
+    const source = cwd + "/legacy.fixture";
+    const submittedText = yield* readTextFile(source);
+    yield* writeTextFile(source, "Different source during review.\n");
+    const newer = yield* shell(
+      "git add -- legacy.fixture && git commit -qm moved && git rev-parse HEAD",
+    );
     yield* shell(`git reset --hard ${shellQuote(initial)}`);
     const release = directory + "/release";
     yield* writeTextFile(directory + "/hold", "");
-    const joined = yield* scoped(function* () {
-      const first = yield* spawn(() => observe("submit", initial));
+    const result = yield* scoped(function* () {
+      const first = yield* spawn(() => entry("submit", initial));
       yield* ensure(function* () {
         yield* writeTextFile(release, "");
         yield* first;
@@ -203,17 +208,76 @@ exit 1
         })(),
       ]);
       check(!held.timeout, "Initial submission did not reach the reviewer.");
-      yield* refuse("submit", initial);
-      if (mode === "local") {
+      if (mode === "roundtrip") {
         yield* shell(`git reset --hard ${shellQuote(newer)}`);
-        yield* feedback(newer);
+        check(
+          (yield* readTextFile(source)) !== submittedText,
+          "The live reviewer had no different source to read.",
+        );
+        yield* shell(`git reset --hard ${shellQuote(initial)}`);
+        check(
+          (yield* readTextFile(source)) === submittedText,
+          "The original tree was not restored before join.",
+        );
+      } else {
+        yield* refuse("submit", initial);
+        if (mode === "local") {
+          yield* shell(`git reset --hard ${shellQuote(newer)}`);
+          yield* feedback(newer);
+        }
+        yield* json(remotePath, { ...remote, revision: newer });
+        yield* refuse("submit", newer);
+        yield* refuse("ready");
       }
-      yield* json(remotePath, { ...remote, revision: newer });
-      yield* refuse("submit", newer);
-      yield* refuse("ready");
       yield* writeTextFile(release, "");
       return yield* first;
     });
+    if (mode === "roundtrip") {
+      check(
+        result.code !== 0 && result.stderr.includes("Source changed during review"),
+        "The restored checkout supplied a verdict: " + result.stderr + result.stdout,
+      );
+      const retained = yield* observe();
+      check(
+        retained.status === "reconciliation_required" &&
+          retained.pin?.revision === initial &&
+          retained.local?.head === initial &&
+          retained.remote?.revision === initial &&
+          retained.review === null,
+        "The round trip did not hold the attempt against the submitted SHA.",
+      );
+      const attempt = directory + "/review-" + initial;
+      const reply = z.object({ revision: z.literal(initial), verdict: z.literal("pass") });
+      const outcome = z
+        .object({ turn: z.object({ state: z.literal("reply"), reply: z.string() }) })
+        .parse(JSON.parse(yield* readTextFile(attempt + "/outcome.json")));
+      reply.parse(JSON.parse(outcome.turn.reply));
+      z.object({ status: z.literal("completed") }).parse(
+        JSON.parse(yield* readTextFile(attempt + "/execution.json")),
+      );
+      const reconciliation = yield* entry("reconcile");
+      check(
+        reconciliation.code !== 0 && reconciliation.stderr.includes("Source changed during review"),
+        "Reconciliation accepted or lost the source-movement evidence.",
+      );
+      yield* refuse("publish-review");
+      yield* refuse("ready");
+      yield* refuse("submit", initial);
+      for (const path of [
+        attempt + "/receipt.json",
+        directory + "/comment-" + initial + ".json",
+        readyCount,
+      ]) {
+        check(!(yield* exists(path)), "The moved review created " + path);
+      }
+      check(
+        (yield* prompts()).join() === initial,
+        "Recovering the moved attempt repeated the prompt.",
+      );
+      return;
+    }
+    check(result.code === 0, result.stderr + result.stdout);
+    const joined = statusSchema.parse(JSON.parse(result.stdout));
     check(
       joined.pin?.revision === initial && joined.remote?.revision === newer,
       "Observed head displaced the pin.",

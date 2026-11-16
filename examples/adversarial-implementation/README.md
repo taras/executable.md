@@ -408,7 +408,10 @@ same comment on the same revision. Merge requires separate authorization. A
 confirmed merge with a merge commit reports `delivered`.
 
 If the local or remote head moves, status retains the submitted SHA and
-original attempt and reports both observed heads. Restore the submitted
+original attempt and reports both observed heads. New review attempts record
+the local HEAD reflog before and after the reviewer runs. A change in its
+history holds the joined reply for reconciliation, even if the checkout has
+returned to the submitted SHA. Restore the submitted
 revision for publication or readiness, or use `reconcile` to recover the
 original attempt. Supply `--props-revision <full SHA>` when selecting among
 older attempts. A joined changes-required verdict with a verified comment

@@ -44,6 +44,13 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </Each>
 </Test>
 
+<Test name="round-trip checkout movement holds a joined review on its submitted SHA" timeout="90s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.DeliveryJourney fixture={fixture} root={root} command={runner} mode="roundtrip" />
+</TempDir>
+</Test>
+
 <Test name="CI selection shares the exact-main rule and follows newer attempts">
 <Let as="revision" value={"a".repeat(40)} />
 <Let as="run" value={{id:1,run_number:4,run_attempt:1,status:"completed",conclusion:"success",head_sha:revision,head_branch:"main",event:"push",name:"CI",html_url:"https://example.invalid/run/1",actor:{login:"test"}}} />
