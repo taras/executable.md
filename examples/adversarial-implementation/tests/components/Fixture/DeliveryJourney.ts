@@ -10,7 +10,7 @@ export const props = {
     fixture: { type: "object" },
     command: { type: "string" },
     root: { type: "string" },
-    mode: { enum: ["repair", "remote", "local", "roundtrip"] },
+    mode: { enum: ["repair", "remote", "local", "roundtrip", "fallback-roundtrip"] },
   },
   required: ["fixture", "command", "root", "mode"],
   additionalProperties: false,
@@ -20,7 +20,7 @@ const input = z.object({
   fixture: z.object({ repository: z.string(), directory: z.string() }),
   command: z.string(),
   root: z.string(),
-  mode: z.enum(["repair", "remote", "local", "roundtrip"]),
+  mode: z.enum(["repair", "remote", "local", "roundtrip", "fallback-roundtrip"]),
 });
 
 const statusSchema = z.object({
@@ -29,7 +29,7 @@ const statusSchema = z.object({
   nextAction: z.string(),
   pin: z.object({ revision: z.string(), previous: z.string().nullable() }).nullable(),
   local: z.object({ head: z.string() }).optional(),
-  remote: z.object({ revision: z.string() }).optional(),
+  remote: z.object({ revision: z.string(), draft: z.boolean() }).optional(),
   review: z
     .object({ result: z.object({ verdict: z.string() }) })
     .nullable()
@@ -48,6 +48,7 @@ function check(condition: boolean, message: string): asserts condition {
 
 export default function* DeliveryJourney(value: unknown) {
   const { fixture, command, root, mode } = input.parse(value);
+  const fallback = mode === "fallback-roundtrip";
   const cwd = fixture.repository;
   const directory = fixture.directory + "/delivery";
   const example = root + "/examples/adversarial-implementation";
@@ -140,12 +141,17 @@ exit 1
   const readyCount = cwd + "/ready-count.txt";
   yield* writeTextFile(directory + "/journey", "");
   yield* json(directory + "/requirements.json", {
-    work: "delivery-journey",
+    work: fallback ? "fallback-roundtrip" : "delivery-journey",
     repository: cwd,
     directory,
     policy: {
       repository: "taras/executable.md",
-      reviewer: { provider: "claude", model: "fixture", effort: null, session: "independent" },
+      reviewer: {
+        provider: "claude",
+        model: fallback ? "fable" : "fixture",
+        effort: null,
+        session: "independent",
+      },
       acceptance: [{ id: "behavior", source: "accepted.md", requirement: "Keep the behavior." }],
     },
     inputs: [],
@@ -196,7 +202,9 @@ exit 1
       const first = yield* spawn(() => entry("submit", initial));
       yield* ensure(function* () {
         yield* writeTextFile(release, "");
-        yield* first;
+        if (!fallback) {
+          yield* first;
+        }
       });
       const held = yield* race([
         waitForFile(called, 12_000),
@@ -208,7 +216,7 @@ exit 1
         })(),
       ]);
       check(!held.timeout, "Initial submission did not reach the reviewer.");
-      if (mode === "roundtrip") {
+      if (mode === "roundtrip" || fallback) {
         yield* shell(`git reset --hard ${shellQuote(newer)}`);
         check(
           (yield* readTextFile(source)) !== submittedText,
@@ -230,8 +238,52 @@ exit 1
         yield* refuse("ready");
       }
       yield* writeTextFile(release, "");
+      if (fallback) {
+        const recorded = yield* race([
+          waitForFile(directory + "/review-" + initial + "/hold.json", 12_000),
+          (function* () {
+            throw new Error(
+              "The moved primary completed without a hold: " + JSON.stringify(yield* first),
+            );
+          })(),
+        ]);
+        check(!recorded.timeout, "The moved primary did not record its hold.");
+        yield* first.halt();
+        return null;
+      }
       return yield* first;
     });
+    if (fallback) {
+      const retained = yield* observe();
+      check(
+        retained.status === "review_held" &&
+          retained.pin?.revision === initial &&
+          retained.review === null,
+        "The moved primary did not hold against its submitted SHA.",
+      );
+      const attempt = directory + "/review-" + initial;
+      const hold = z
+        .object({ attempts: z.array(z.object({ reason: z.string() })) })
+        .parse(JSON.parse(yield* readTextFile(attempt + "/hold.json")));
+      check(
+        hold.attempts[0]?.reason.includes("stable checkout") === true,
+        "The hold did not identify the missing stable source evidence.",
+      );
+      yield* refuse("submit", initial);
+      yield* refuse("publish-review");
+      yield* refuse("ready");
+      check((yield* prompts()).join() === initial, "The moved attempt prompted a replacement.");
+      for (const path of [
+        attempt + "/replacement",
+        attempt + "/receipt.json",
+        directory + "/comment-" + initial + ".json",
+        readyCount,
+      ]) {
+        check(!(yield* exists(path)), "The moved attempt created " + path);
+      }
+      return;
+    }
+    check(result !== null, "The submission did not return its delivery result.");
     if (mode === "roundtrip") {
       check(
         result.code !== 0 && result.stderr.includes("Source changed during review"),
@@ -347,11 +399,20 @@ exit 1
   const ready = yield* observe("ready");
   const repeated = yield* observe("ready");
   check(
-    ready.status === "ready_for_merge" &&
+    ready.status === "ready_pending" &&
+      ready.nextAction === "mark_ready_manually" &&
+      ready.remote?.draft === true &&
+      ready.revision === repair &&
+      repeated.revision === repair &&
       repeated.reviewPublication?.url === ready.reviewPublication?.url,
-    "Ready did not reuse its comment.",
+    "Ready did not return the same verified draft candidate.",
   );
-  check((yield* readTextFile(readyCount)) === "ready\n", "Readiness did not perform one mutation.");
+  check(!(yield* exists(readyCount)), "Readiness changed the remote draft.");
+  yield* json(remotePath, { ...remote, revision: repair, draft: false });
+  check(
+    (yield* observe()).status === "ready_for_merge",
+    "Status missed the maintainer transition.",
+  );
   check(
     (yield* prompts()).join() === [initial, repair].join(),
     "Unexpected review prompts across repair and readiness.",

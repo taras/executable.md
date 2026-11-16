@@ -402,16 +402,21 @@ rule for a push to main's exact current head. Pending, cancelled, skipped and
 failed runs cannot pass. The maintainer-applied `ci-main-red-fix` exception keeps
 the repository's CI contract: it substitutes composability for the main lookup
 inside CI. Run `--props-action ready` when status reports `ready_pending`.
-The command verifies the existing PASS comment, refreshes the source and checks,
-marks the exact PR ready, and reads it back. Repeating the command returns the
-same comment on the same revision. Merge requires separate authorization. A
-confirmed merge with a merge commit reports `delivered`.
+It verifies the existing PASS comment and refreshes the source and checks.
+The result gives the maintainer the exact reviewed SHA to compare with the
+current GitHub head before marking the draft ready. Repeating the command
+returns the same comment on the same revision. The GitHub readiness mutation
+accepts the PR identity and has no expected-head field. Status observes the
+maintainer's transition and reports `ready_for_merge` while the exact gates
+still pass. Merge requires separate authorization. A confirmed merge with a
+merge commit reports `delivered`.
 
 If the local or remote head moves, status retains the submitted SHA and
 original attempt and reports both observed heads. New review attempts record
 the local HEAD reflog before and after the reviewer runs. A change in its
 history holds the joined reply for reconciliation, even if the checkout has
-returned to the submitted SHA. Restore the submitted
+returned to the submitted SHA. A disrupted primary attempt also holds before
+it can select a replacement reviewer. Restore the submitted
 revision for publication or readiness, or use `reconcile` to recover the
 original attempt. Supply `--props-revision <full SHA>` when selecting among
 older attempts. A joined changes-required verdict with a verified comment

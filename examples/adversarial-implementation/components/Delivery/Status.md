@@ -86,7 +86,7 @@ returns: {type: object}
 <Let as="decision" value={checkFailed ? ["checks_failed","repair_failed_check"] : ["checks_pending","wait_for_checks"]} />
 </If>
 <If condition={decision === null && reviewState === "passed"}>
-<Let as="decision" value={!remote.draft ? ["ready_for_merge","await_authorized_merge"] : pin === null ? ["review_pending","submit"] : ["ready_pending","ready"]} />
+<Let as="decision" value={!remote.draft ? ["ready_for_merge","await_authorized_merge"] : pin === null ? ["review_pending","submit"] : ["ready_pending","mark_ready_manually"]} />
 </If>
 <Let as="status" value={decision?.[0] ?? reviewState} />
 <Let as="nextAction" value={decision?.[1] ?? (gates.eligible ? "submit" : "reconcile_source")} />

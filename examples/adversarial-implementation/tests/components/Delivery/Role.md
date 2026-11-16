@@ -3,7 +3,7 @@ props: {type: object, properties: {delivery: {type: object}, revision: {type: st
 ---
 <Let as="work" value={props.delivery.work} />
 <Let as="primary" value={props.position === 0} />
-<Let as="behavior" value={primary ? ({unavailable:"unavailable",configuration:"refused","turn-failed":"turn-failed",exhausted:"turn-failed",partial:"partial","unjoined-primary":"unjoined",outside:"outside",failed:"unjoined"}[work] ?? "reply") : work === "exhausted" ? "refused" : "reply"} />
+<Let as="behavior" value={primary ? ({unavailable:"unavailable",configuration:"refused","turn-failed":"turn-failed","fallback-roundtrip":"turn-failed",exhausted:"turn-failed",partial:"partial","unjoined-primary":"unjoined",outside:"outside",failed:"unjoined"}[work] ?? "reply") : work === "exhausted" ? "refused" : "reply"} />
 <Let as="selected" value={{state:"selected",choices:props.choices,model:props.choices[0],advertised:[...props.choices],failure:null}} />
 <Let as="repairRequested" value={false} />
 <If condition={work === "delivery-journey"}>
@@ -28,7 +28,7 @@ props: {type: object, properties: {delivery: {type: object}, revision: {type: st
 <Parse schema={{type:"array"}} as="prior">{calledText}</Parse>
 </If>
 <Dir path={props.delivery.directory}><File path="called.json"><Json value={[...prior,call]} /></File></Dir>
-<If condition={work === "delivery-journey"}>
+<If condition={work === "delivery-journey" || work === "fallback-roundtrip"}>
 <Let as="gate" value={"'" + props.delivery.directory.replaceAll("'","'\"'\"'") + "'"} />
 ```bash exec as="joinedGate"
 for attempt in $(seq 1 400); do

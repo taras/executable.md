@@ -12,8 +12,8 @@ props:
 
 Submit the exact draft candidate after internal feedback and green required CI.
 Status reads the pinned review and current heads. Recovery reads the original
-attempt. Ready verifies the passing review, comment and current checks before
-marking the draft ready.
+attempt. Ready verifies the passing review, comment and current checks and
+reports the exact draft revision for the maintainer to mark ready.
 
 <Ticket.Text path={props.record} as="recordText" />
 <Parse schema={{type:"object",properties:{work:{type:"string"},repository:{type:"string",pattern:"^/"},directory:{type:"string",pattern:"^/"},policy:{type:"object"},required:{const:["independent-review","required-ci","main-health"]}},required:["work","repository","directory","policy","required"]}} as="delivery">{recordText}</Parse>

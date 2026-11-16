@@ -34,6 +34,13 @@ type Selection = z.infer<typeof selectionSchema>;
 type Reviewer = z.infer<typeof reviewerSchema>;
 type Attempt = z.infer<typeof attemptSchema>;
 
+const sourceObservation = z.object({
+  head: z.string(),
+  branch: z.string().nullable(),
+  clean: z.literal(true),
+  headHistory: z.string().regex(/^[0-9a-f]{40}$/),
+});
+
 function* read(cwd: string, path: string): Operation<string | null> {
   const result = yield* API.Files.operations.readTextFile({ cwd, path });
   if (result.ok) {
@@ -63,6 +70,36 @@ function firstLine(text: string | null): string {
 
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function* holdMovedPrimary(
+  directory: string,
+  revision: string,
+  primary: Attempt,
+): Operation<Attempt> {
+  const beforePath = "source-before.json";
+  const afterPath = "source-after.json";
+  const beforeText = yield* read(directory, beforePath);
+  const afterText = yield* read(directory, afterPath);
+  if (beforeText === null && afterText === null) {
+    // Attempts created before source tracking have no observations.
+    return primary;
+  }
+  const before = parsed(sourceObservation, beforeText);
+  const after = parsed(sourceObservation, afterText);
+  if (before?.head === revision && same(before, after)) {
+    return primary;
+  }
+  return {
+    ...primary,
+    state: "held",
+    reason: "The source observations do not prove a stable checkout during the primary review.",
+    evidence: [
+      ...primary.evidence,
+      ...(beforeText === null ? [] : [directory + "/" + beforePath]),
+      ...(afterText === null ? [] : [directory + "/" + afterPath]),
+    ],
+  };
 }
 
 type Outcome = z.infer<typeof outcomeSchema>;
@@ -238,13 +275,16 @@ function* observe(
   if (first === undefined) {
     return { ...empty, next: "uncertain", hold: null };
   }
-  const primary = yield* attempt(
+  let primary = yield* attempt(
     directory,
     0,
     first.reviewer,
     assignmentFor(expected, first.reviewer),
     expected.chain === "fable-astra" ? first.choices : null,
   );
+  if (second !== undefined && primary.state === "eligible") {
+    primary = yield* holdMovedPrimary(directory, expected.revision, primary);
+  }
   const attempts: Attempt[] = [primary];
   let candidate: { position: number; directory: string; reviewer: Reviewer } | null = {
     position: 0,

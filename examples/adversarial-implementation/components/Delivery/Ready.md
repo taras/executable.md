@@ -1,5 +1,5 @@
 ---
-description: 'Mark the exact reviewed draft ready. Use <Delivery.Ready delivery={delivery} number={123} as="status" />.'
+description: 'Verify the exact reviewed draft for maintainer readiness. Use <Delivery.Ready delivery={delivery} number={123} as="status" />.'
 props:
   type: object
   properties:
@@ -15,12 +15,6 @@ returns: {type: object}
 <Let as="pin" value={status.pin} />
 <Delivery.Gates delivery={props.delivery} number={props.number} as="fresh" />
 <If condition={!fresh.sourceMatches || fresh.source.head !== pin.revision || fresh.source.branch !== pin.branch || fresh.remote.state !== "open" || !fresh.ciPassed || !fresh.mainPassed}><Fail message={"Readiness evidence changed for " + pin.revision + ". Read status before another request."} /></If>
-<If condition={fresh.remote.draft}>
-<Parse schema={{type:"string",pattern:"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}} as="repository"><Json value={pin.repository} /></Parse>
-```bash exec as="mutation"
-gh pr ready {props.number} --repo {repository}
-```
-</If>
 <Delivery.Status delivery={props.delivery} number={props.number} as="readback" />
-<If condition={readback.status !== "ready_for_merge" || readback.revision !== pin.revision || readback.reviewPublication?.state !== "verified"}><Fail message={"Readiness could not be confirmed for " + pin.revision + ". Observed local " + readback.local?.head + ", remote " + (readback.remote?.observedRevision ?? readback.remote?.revision) + " and status " + readback.status + ". " + readback.nextAction} /></If>
+<If condition={!["ready_pending","ready_for_merge"].includes(readback.status) || readback.revision !== pin.revision || readback.reviewPublication?.state !== "verified"}><Fail message={"Readiness could not be confirmed for " + pin.revision + ". Observed local " + readback.local?.head + ", remote " + (readback.remote?.observedRevision ?? readback.remote?.revision) + " and status " + readback.status + ". " + readback.nextAction} /></If>
 <Return value={readback} />
