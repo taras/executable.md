@@ -70,6 +70,17 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplEntryInstallation } from "../src/repl-entry-installation.ts";
 import type { ReplExecution, RetainedStream } from "../src/repl/journal.ts";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
+import { INLINE_SOURCE_PATH } from "@executablemd/core";
+
+const OWNER = "packages/cli/tests/repl-issues.test.ts";
+function entryCase(
+  name: string,
+  id: string,
+  body: (entry: ReplExecution) => Operation<void>,
+): void {
+  it(name, () => captureReplEntry({ owner: OWNER, name }, id, INLINE_SOURCE_PATH, body));
+}
 
 /** The tracker every row files in, as a document writes it. */
 const TRACKER = "https://github.com/octo/project";
@@ -754,65 +765,73 @@ const QUESTION =
   '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>';
 
 describe("how a REPL entry gets its issues", () => {
-  it("E1: composes public middleware once, under the key the request itself names", function* (): Operation<void> {
-    const fixture = yield* useFixture();
-    const seen = counted();
-    const chain: Chain = { calls: [] };
+  entryCase(
+    "E1: composes public middleware once, under the key the request itself names",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture();
+      const seen = counted();
+      const chain: Chain = { calls: [] };
 
-    const ran = yield* submit(fixture, FILES_ONE, execution("execution-1"), {
-      host: entryHost(fixture, seen),
-      installations: [observingChain(chain, "Transformed")],
-    });
+      const ran = yield* submit(fixture, FILES_ONE, entry, {
+        host: entryHost(fixture, seen),
+        installations: [observingChain(chain, "Transformed")],
+      });
 
-    expect(ran.outcome?.ok).toBe(true);
-    // Once. A second delegation would be a second attempt at one position.
-    expect(chain.calls).toEqual([`upsert ${TRACKER}`]);
-    // What the provider was sent is what the middleware transformed.
-    expect(fixture.server.issues.map((issue) => issue.title)).toEqual(["Transformed"]);
-    // What the journal holds is the request as the document made it: a
-    // middleware that rewrote the issue did not rewrite the durable identity.
-    const record = issueRecords(ran.events)[0];
-    const asked =
-      record?.type === "yield" ? parseIssueRequest(record.description["request"]) : undefined;
-    expect(asked?.operation).toBe("upsert");
-    expect(asked?.operation === "upsert" ? asked.issue.title : "").toBe("Filed");
-    // And the mark the provider carried is the one this record's own identity
-    // and the authored target produce — not anything the middleware supplied.
-    expect(bodies(fixture.server)[0]).toContain(
-      expectedOriginMarker(
-        asked === undefined ? { runId: "", expansionId: "" } : asked.identity,
-        "upsert",
-        TRACKER,
-      ),
-    );
-  });
+      expect(ran.outcome?.ok).toBe(true);
+      // Once. A second delegation would be a second attempt at one position.
+      expect(chain.calls).toEqual([`upsert ${TRACKER}`]);
+      // What the provider was sent is what the middleware transformed.
+      expect(fixture.server.issues.map((issue) => issue.title)).toEqual(["Transformed"]);
+      // What the journal holds is the request as the document made it: a
+      // middleware that rewrote the issue did not rewrite the durable identity.
+      const record = issueRecords(ran.events)[0];
+      const asked =
+        record?.type === "yield" ? parseIssueRequest(record.description["request"]) : undefined;
+      expect(asked?.operation).toBe("upsert");
+      expect(asked?.operation === "upsert" ? asked.issue.title : "").toBe("Filed");
+      // And the mark the provider carried is the one this record's own identity
+      // and the authored target produce — not anything the middleware supplied.
+      expect(bodies(fixture.server)[0]).toContain(
+        expectedOriginMarker(
+          asked === undefined ? { runId: "", expansionId: "" } : asked.identity,
+          "upsert",
+          TRACKER,
+        ),
+      );
+    },
+  );
 
-  it("E1: a nested read finishes at its own position, before the upsert around it", function* (): Operation<void> {
-    const fixture = yield* useFixture([SEEDED]);
-    const seen = counted();
-    const source = [
-      `<IssueTracker url="${TRACKER}">`,
-      `<Issue title="Parent" as="parent">`,
-      `<Issue url="${TRACKER}/issues/1" as="child" />`,
-      "a described issue",
-      "</Issue>",
-      "</IssueTracker>",
-    ].join("\n");
+  entryCase(
+    "E1: a nested read finishes at its own position, before the upsert around it",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture([SEEDED]);
+      const seen = counted();
+      const source = [
+        `<IssueTracker url="${TRACKER}">`,
+        `<Issue title="Parent" as="parent">`,
+        `<Issue url="${TRACKER}/issues/1" as="child" />`,
+        "a described issue",
+        "</Issue>",
+        "</IssueTracker>",
+      ].join("\n");
 
-    const ran = yield* submit(fixture, source, execution("execution-1"), {
-      host: entryHost(fixture, seen),
-    });
+      const ran = yield* submit(fixture, source, entry, {
+        host: entryHost(fixture, seen),
+      });
 
-    expect(ran.outcome?.ok).toBe(true);
-    const asked = issueRecords(ran.events).map((event) =>
-      event.type === "yield"
-        ? parseIssueRequest(event.description["request"])?.operation
-        : undefined,
-    );
-    // One envelope per Issue, and the child's is complete before the parent's
-    // is offered: the content is rendered outside the upsert's boundary.
-    expect(asked).toEqual(["read", "upsert"]);
-  });
+      expect(ran.outcome?.ok).toBe(true);
+      const asked = issueRecords(ran.events).map((event) =>
+        event.type === "yield"
+          ? parseIssueRequest(event.description["request"])?.operation
+          : undefined,
+      );
+      // One envelope per Issue, and the child's is complete before the parent's
+      // is offered: the content is rendered outside the upsert's boundary.
+      expect(asked).toEqual(["read", "upsert"]);
+    },
+  );
 
   it("E2: keeps one site's key across a reopen, and gives every other site its own", function* (): Operation<void> {
     const fixture = yield* useFixture();
@@ -920,62 +939,70 @@ describe("how a REPL entry gets its issues", () => {
     expect(identities(second.events)[0]).not.toBe(identities(plain.events)[0]);
   });
 
-  it("E2: the authored form selects the effect, whatever the chain answers", function* (): Operation<void> {
-    const fixture = yield* useFixture([SEEDED]);
-    const probe: Probe = { paired: [] };
-    const source = [
-      `<IssueTracker url="${TRACKER}">`,
-      "<Reversed>",
-      "<Shape>written with content</Shape>",
-      `<Issue url="${TRACKER}/issues/1" as="read" />`,
-      '<Issue title="Filed" as="filed">a described issue</Issue>',
-      "</Reversed>",
-      "</IssueTracker>",
-    ].join("\n");
+  entryCase(
+    "E2: the authored form selects the effect, whatever the chain answers",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture([SEEDED]);
+      const probe: Probe = { paired: [] };
+      const source = [
+        `<IssueTracker url="${TRACKER}">`,
+        "<Reversed>",
+        "<Shape>written with content</Shape>",
+        `<Issue url="${TRACKER}/issues/1" as="read" />`,
+        '<Issue title="Filed" as="filed">a described issue</Issue>',
+        "</Reversed>",
+        "</IssueTracker>",
+      ].join("\n");
 
-    const ran = yield* submit(fixture, source, execution("execution-1"), {
-      host: entryHost(fixture, counted()),
-      installations: [reversedRegion(probe)],
-    });
+      const ran = yield* submit(fixture, source, entry, {
+        host: entryHost(fixture, counted()),
+        installations: [reversedRegion(probe)],
+      });
 
-    expect(ran.outcome?.ok).toBe(true);
-    // The chain really is answering the opposite: a paired element was told it
-    // was written self-closing.
-    expect(probe.paired).toEqual([false]);
-    const asked = issueRecords(ran.events).map((event) =>
-      event.type === "yield"
-        ? parseIssueRequest(event.description["request"])?.operation
-        : undefined,
-    );
-    expect(asked).toEqual(["read", "upsert"]);
-  });
+      expect(ran.outcome?.ok).toBe(true);
+      // The chain really is answering the opposite: a paired element was told it
+      // was written self-closing.
+      expect(probe.paired).toEqual([false]);
+      const asked = issueRecords(ran.events).map((event) =>
+        event.type === "yield"
+          ? parseIssueRequest(event.description["request"])?.operation
+          : undefined,
+      );
+      expect(asked).toEqual(["read", "upsert"]);
+    },
+  );
 
-  it("E2: an invocation the engine did not issue names nothing", function* (): Operation<void> {
-    const fixture = yield* useFixture();
-    const captured: Captured = { definition: undefined };
-    const ran = yield* submit(fixture, FILES_ONE, execution("execution-1"), {
-      host: entryHost(fixture, counted()),
-      installations: [capturingImport(captured)],
-    });
-    expect(ran.outcome?.ok).toBe(true);
+  entryCase(
+    "E2: an invocation the engine did not issue names nothing",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture();
+      const captured: Captured = { definition: undefined };
+      const ran = yield* submit(fixture, FILES_ONE, entry, {
+        host: entryHost(fixture, counted()),
+        installations: [capturingImport(captured)],
+      });
+      expect(ran.outcome?.ok).toBe(true);
 
-    const fn = Reflect.get(Object(captured.definition), "fn");
-    if (typeof fn !== "function") {
-      throw new Error("the entry's Issue definition carries no implementation to call");
-    }
-    const before = paths(fixture.server).length;
-    let refusal: string | undefined;
-    try {
-      // A definition a handler kept, called with an object of the right shape.
-      // There is no shape a forger cannot copy, which is why what answers here
-      // is the issuance the engine holds rather than anything handed in.
-      yield* fn({ title: "Forged" }, { hasContent: () => true });
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal ?? "").toContain("without the invocation the engine issued");
-    expect(paths(fixture.server).length).toBe(before);
-  });
+      const fn = Reflect.get(Object(captured.definition), "fn");
+      if (typeof fn !== "function") {
+        throw new Error("the entry's Issue definition carries no implementation to call");
+      }
+      const before = paths(fixture.server).length;
+      let refusal: string | undefined;
+      try {
+        // A definition a handler kept, called with an object of the right shape.
+        // There is no shape a forger cannot copy, which is why what answers here
+        // is the issuance the engine holds rather than anything handed in.
+        yield* fn({ title: "Forged" }, { hasContent: () => true });
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      expect(refusal ?? "").toContain("without the invocation the engine issued");
+      expect(paths(fixture.server).length).toBe(before);
+    },
+  );
 
   it("E3: adopts an upsert the tracker accepted and this end never wrote down", function* (): Operation<void> {
     const fixture = yield* useFixture();
@@ -1104,66 +1131,78 @@ describe("how a REPL entry gets its issues", () => {
     expect(issueRecords(again.events).length).toBe(1);
   });
 
-  it("E4: files an issue outside a checkout without acquiring one", function* (): Operation<void> {
-    const fixture = yield* useFixture();
-    const acquired: Acquisitions = { count: 0 };
-    const outside = join(fixture.root, "outside");
-    yield* until(writeFile(join(fixture.root, "keep.md"), "keep\n"));
-    const managed = join(fixture.root, "repositories");
+  entryCase(
+    "E4: files an issue outside a checkout without acquiring one",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture();
+      const acquired: Acquisitions = { count: 0 };
+      const outside = join(fixture.root, "outside");
+      yield* until(writeFile(join(fixture.root, "keep.md"), "keep\n"));
+      const managed = join(fixture.root, "repositories");
 
-    const ran = yield* scoped(function* (): Operation<Ran> {
-      yield* failingRecording(acquired, managed);
-      return yield* submit(fixture, FILES_ONE, execution("execution-1"), {
-        host: entryHost(fixture, counted()),
-        cwd: fixture.root,
+      const ran = yield* scoped(function* (): Operation<Ran> {
+        yield* failingRecording(acquired, managed);
+        return yield* submit(fixture, FILES_ONE, entry, {
+          host: entryHost(fixture, counted()),
+          cwd: fixture.root,
+        });
       });
-    });
 
-    expect(ran.outcome?.ok).toBe(true);
-    expect(urls(ran.events)).toEqual([`${TRACKER}/issues/1`]);
-    // Nothing was acquired: no git session, no isolation directory, no managed
-    // root, and no lease.
-    expect(acquired.count).toBe(0);
-    expect(yield* exists(managed)).toBe(false);
-    expect(yield* exists(outside)).toBe(false);
-  });
+      expect(ran.outcome?.ok).toBe(true);
+      expect(urls(ran.events)).toEqual([`${TRACKER}/issues/1`]);
+      // Nothing was acquired: no git session, no isolation directory, no managed
+      // root, and no lease.
+      expect(acquired.count).toBe(0);
+      expect(yield* exists(managed)).toBe(false);
+      expect(yield* exists(outside)).toBe(false);
+    },
+  );
 
-  it("E4: behaves the same inside a checkout, and still makes no managed root", function* (): Operation<void> {
-    const fixture = yield* useFixture();
-    const acquired: Acquisitions = { count: 0 };
-    const managed = join(fixture.root, "repositories");
+  entryCase(
+    "E4: behaves the same inside a checkout, and still makes no managed root",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture();
+      const acquired: Acquisitions = { count: 0 };
+      const managed = join(fixture.root, "repositories");
 
-    const ran = yield* scoped(function* (): Operation<Ran> {
-      yield* failingRecording(acquired, managed);
-      return yield* submit(fixture, FILES_ONE, execution("execution-1"), {
-        host: entryHost(fixture, counted()),
-        cwd: fixture.checkout,
+      const ran = yield* scoped(function* (): Operation<Ran> {
+        yield* failingRecording(acquired, managed);
+        return yield* submit(fixture, FILES_ONE, entry, {
+          host: entryHost(fixture, counted()),
+          cwd: fixture.checkout,
+        });
       });
-    });
 
-    expect(ran.outcome?.ok).toBe(true);
-    expect(urls(ran.events)).toEqual([`${TRACKER}/issues/1`]);
-    expect(acquired.count).toBe(0);
-    expect(yield* exists(managed)).toBe(false);
-  });
+      expect(ran.outcome?.ok).toBe(true);
+      expect(urls(ran.events)).toEqual([`${TRACKER}/issues/1`]);
+      expect(acquired.count).toBe(0);
+      expect(yield* exists(managed)).toBe(false);
+    },
+  );
 
-  it("E5: sends nothing at all to a target this host did not authorize", function* (): Operation<void> {
-    const fixture = yield* useFixture();
-    const elsewhere =
-      '<IssueTracker url="https://github.com/other/repo"><Issue title="Filed" as="filed">a described issue</Issue></IssueTracker>';
+  entryCase(
+    "E5: sends nothing at all to a target this host did not authorize",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const fixture = yield* useFixture();
+      const elsewhere =
+        '<IssueTracker url="https://github.com/other/repo"><Issue title="Filed" as="filed">a described issue</Issue></IssueTracker>';
 
-    const ran = yield* submit(fixture, elsewhere, execution("execution-1"), {
-      host: entryHost(fixture, counted()),
-    });
+      const ran = yield* submit(fixture, elsewhere, entry, {
+        host: entryHost(fixture, counted()),
+      });
 
-    expect(ran.outcome?.ok).toBe(false);
-    // No request, so no credential either: the ceiling is asked before a
-    // session is opened and before anything is built.
-    expect(paths(fixture.server)).toEqual([]);
-    // The refusal is retained as this position's failed outcome, and nothing
-    // about it is an acknowledged issue.
-    expect(settledIssueRecords(ran.events).length).toBe(0);
-  });
+      expect(ran.outcome?.ok).toBe(false);
+      // No request, so no credential either: the ceiling is asked before a
+      // session is opened and before anything is built.
+      expect(paths(fixture.server)).toEqual([]);
+      // The refusal is retained as this position's failed outcome, and nothing
+      // about it is an acknowledged issue.
+      expect(settledIssueRecords(ran.events).length).toBe(0);
+    },
+  );
 
   it("E5: a settled history installs no issue host and reaches nothing", function* (): Operation<void> {
     const fixture = yield* useFixture();
@@ -1435,57 +1474,61 @@ describe("how a REPL entry gets its issues", () => {
     expect(fixture.server.issues.length).toBe(2);
   });
 
-  it("E6: leaving waits for the request cleanup the entry owns", function* (): Operation<void> {
-    const blocked = withResolvers<void>();
-    const arrived = withResolvers<void>();
-    const holding = { count: 0 };
-    const fixture = yield* useFixture([], {
-      *hold(): Operation<void> {
-        holding.count += 1;
-        arrived.resolve();
-        yield* blocked.operation;
-      },
-    });
-    const cleanup: Cleanup = { entered: withResolvers<void>(), release: withResolvers<void>() };
-    const run = execution("execution-1");
-
-    let finished = false;
-    const leaving = yield* spawn(function* (): Operation<void> {
-      yield* scoped(function* (): Operation<void> {
-        yield* useNodeReplHost(run.id);
-        yield* useHostFiles();
-        yield* useWorkingDirectory(fixture.checkout);
-        const installations = [...(yield* replInstallations()), heldCleanup(cleanup)];
-        opened(
-          yield* submitReplEntry({
-            execution: run,
-            source: FILES_ONE,
-            installations,
-            generated: ordinaryGeneratedSelection(),
-            entryInstallation: entryHost(fixture, counted()),
-          }),
-        );
-        // Left while the request is in flight, which is what makes the cleanup
-        // below a cancellation rather than an ordinary release.
-        yield* arrived.operation;
+  entryCase(
+    "E6: leaving waits for the request cleanup the entry owns",
+    "execution-1",
+    function* (entry): Operation<void> {
+      const blocked = withResolvers<void>();
+      const arrived = withResolvers<void>();
+      const holding = { count: 0 };
+      const fixture = yield* useFixture([], {
+        *hold(): Operation<void> {
+          holding.count += 1;
+          arrived.resolve();
+          yield* blocked.operation;
+        },
       });
-      finished = true;
-    });
+      const cleanup: Cleanup = { entered: withResolvers<void>(), release: withResolvers<void>() };
+      const run = entry;
 
-    // The entry's own finalizer has started, so the cancellation reached it.
-    yield* cleanup.entered.operation;
-    // And leaving is not finished: the scope cannot complete while a cleanup
-    // registered inside it has not returned. Nothing is retained either.
-    expect(finished).toBe(false);
-    expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
+      let finished = false;
+      const leaving = yield* spawn(function* (): Operation<void> {
+        yield* scoped(function* (): Operation<void> {
+          yield* useNodeReplHost(run.id);
+          yield* useHostFiles();
+          yield* useWorkingDirectory(fixture.checkout);
+          const installations = [...(yield* replInstallations()), heldCleanup(cleanup)];
+          opened(
+            yield* submitReplEntry({
+              execution: run,
+              source: FILES_ONE,
+              installations,
+              generated: ordinaryGeneratedSelection(),
+              entryInstallation: entryHost(fixture, counted()),
+            }),
+          );
+          // Left while the request is in flight, which is what makes the cleanup
+          // below a cancellation rather than an ordinary release.
+          yield* arrived.operation;
+        });
+        finished = true;
+      });
 
-    // Released, and only now does leaving join.
-    cleanup.release.resolve();
-    yield* leaving;
-    expect(finished).toBe(true);
-    expect(holding.count).toBeGreaterThan(0);
-    expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
-  });
+      // The entry's own finalizer has started, so the cancellation reached it.
+      yield* cleanup.entered.operation;
+      // And leaving is not finished: the scope cannot complete while a cleanup
+      // registered inside it has not returned. Nothing is retained either.
+      expect(finished).toBe(false);
+      expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
+
+      // Released, and only now does leaving join.
+      cleanup.release.resolve();
+      yield* leaving;
+      expect(finished).toBe(true);
+      expect(holding.count).toBeGreaterThan(0);
+      expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
+    },
+  );
 
   it("E5: the REPL profile captures the host's selected entry factory, and absence", function* (): Operation<void> {
     const flags = {

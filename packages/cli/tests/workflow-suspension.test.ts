@@ -32,6 +32,7 @@ import { protectedInputPlugin, protectedInputChild } from "./support/protected-i
  * assembly. It is the only observation here that a value cannot stand in for.
  */
 
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
@@ -46,7 +47,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { durableCall, InMemoryStream } from "@executablemd/durable-streams";
+import { durableCall } from "@executablemd/durable-streams";
 import {
   useWorkflowInputDelivery,
   useWorkflowLifecycle,
@@ -744,40 +745,44 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     expect(answers(path)[0]?.state).toBe("pending");
   });
 
-  it("WFS3: an ordinary execution outside a workflow run is unaffected", function* () {
-    // No workflow host, no run, no controller: `suspendFor()` has no run to
-    // derive an identity from, so it refuses rather than reaching for one.
-    const stream = new InMemoryStream();
-    yield* registerComponents([
-      {
-        name: "Wait",
-        origin: "tier-wfs",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        *fn() {
-          yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
-          return "";
+  const journalCase = journalCases("packages/cli/tests/workflow-suspension.test.ts");
+  journalCase(
+    "WFS3: an ordinary execution outside a workflow run is unaffected",
+    "<eval>",
+    function* (stream) {
+      // No workflow host, no run, no controller: `suspendFor()` has no run to
+      // derive an identity from, so it refuses rather than reaching for one.
+      yield* registerComponents([
+        {
+          name: "Wait",
+          origin: "tier-wfs",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+            return "";
+          },
         },
-      },
-    ]);
+      ]);
 
-    let thrown: unknown;
-    try {
-      yield* collect(yield* execute({ ...inlineSource("<Wait />\n"), stream }));
-    } catch (error) {
-      thrown = error;
-    }
+      let thrown: unknown;
+      try {
+        yield* collect(yield* execute({ ...inlineSource("<Wait />\n"), stream }));
+      } catch (error) {
+        thrown = error;
+      }
 
-    expect(String(thrown)).toContain("workflow run");
+      expect(String(thrown)).toContain("workflow run");
 
-    // Nothing was published: an ordinary run's journal is untouched by a
-    // suspension it could not have.
-    const events = yield* stream.readAll();
-    expect(
-      events.filter(
-        (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
-      ),
-    ).toHaveLength(0);
-  });
+      // Nothing was published: an ordinary run's journal is untouched by a
+      // suspension it could not have.
+      const events = yield* stream.readAll();
+      expect(
+        events.filter(
+          (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
+        ),
+      ).toHaveLength(0);
+    },
+  );
 });
 
 /**
