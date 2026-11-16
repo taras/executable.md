@@ -1623,4 +1623,29 @@ describe("S8 lines fitted together are cut as each is cut alone", () => {
       }
       expect(rowsOf(prepared.value)).toEqual(oracle.value);
     }));
+
+  it("keeps the batched search within what a small terminal's engine holds", () =>
+    scoped(function* () {
+      // An engine opened at 80x24 holds fewer measured parts than one at
+      // 160x36, so a search step carrying every line of a long reading can
+      // overrun it, be refused, and leave the reading to be cut line by line.
+      const size: ReplTerminalSize = { columns: 80, rows: 24 };
+      const renderer = yield* useCountingRenderer(size);
+      const lines = Array.from({ length: 1000 }, (_, at) =>
+        fixed(`t${at}`, `  File "m.py", line ${at}, in call(*args, **kwargs)`, 0),
+      );
+      renderer.reset();
+      const prepared = yield* prepareReading(renderer, size, lines, 49);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      expect(prepared.value.rows.length).toBeGreaterThanOrEqual(lines.length * 2);
+      // Cut line by line this reading takes about twelve thousand renders.
+      expect(renderer.measures()).toBeLessThan(150);
+      const oracle = yield* alone(renderer, size, lines, 49);
+      if (!oracle.ok) {
+        throw oracle.error;
+      }
+      expect(rowsOf(prepared.value)).toEqual(oracle.value);
+    }));
 });

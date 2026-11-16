@@ -154,8 +154,8 @@ export interface ReplFitGeometry {
  * The geometry one running REPL is holding on to.
  *
  * Typing moves the draft, not the reading beside it, and a reading is the
- * expensive thing to fit: a two-hundred-line entry costs an engine render per
- * line plus a binary search per overflowing row, and a keystroke used to pay
+ * expensive thing to fit: a two-hundred-line entry costs a binary search per
+ * overflowing row, its lines searched together, and a keystroke used to pay
  * that twice. This keeps the last answer and the exact inputs it was computed
  * from, so a frame whose reading has not moved reuses it.
  *
@@ -186,9 +186,8 @@ export interface ReplFitStore {
  * {@link ReplFitStore}. The chat's newest line grows on its own and a new
  * message is appended on its own, so a store that could only answer for a whole
  * list would remeasure every older message for every delta — and a wrapping
- * message costs an engine render per line plus a binary search per row it
- * overflows into. Twenty of them turned one typed key into 1,284 measurement
- * renders.
+ * message costs a binary search per row it overflows into. Twenty of them
+ * turned one typed key into 1,284 measurement renders.
  *
  * A cut is an answer for one exact text at one exact room and size, so that is
  * what it is keyed by. Two lines spelled the same are the same question and
@@ -349,6 +348,18 @@ const WIDTHS_PER_RENDER = 1024;
  */
 const WORDS_PER_RENDER = 8192;
 
+/**
+ * How many space-separated parts one render of a many-line search may carry.
+ *
+ * The engine's own figure scales with the terminal it was opened at: measured
+ * on a fresh engine, about 16,383 parts at 120x40 and above, 7,677 at 80x24,
+ * 4,797 at 60x20 and 4,095 at 40x12. A search step asks a question of every
+ * line still being cut, so on a long reading it fills whatever budget it is
+ * given, and at 80x24 a full one was refused and the reading cut line by line.
+ * This sits below the smallest of those figures.
+ */
+const SEARCH_WORDS_PER_RENDER = 2048;
+
 /** What one text costs that budget, counted the way the engine counts it. */
 function wordsIn(text: string): number {
   let parts = 1;
@@ -392,12 +403,14 @@ function windowOf(text: string, room: number): number {
  * renders as the count needs — and every answer copied out of each batch
  * before the next render, because the engine's geometry is only valid until
  * the next measurement. The answers come back in the order they were asked
- * for, one per text, empty ones included.
+ * for, one per text, empty ones included. `words` is the part budget each
+ * render is held to.
  */
 function* widths(
   renderer: ReplRenderer,
   size: ReplTerminalSize,
   texts: readonly string[],
+  words = WORDS_PER_RENDER,
 ): Operation<Result<readonly number[]>> {
   if (texts.length === 0) {
     return Ok([]);
@@ -406,15 +419,15 @@ function* widths(
   let from = 0;
   while (from < texts.length) {
     let to = from;
-    let words = 0;
+    let carried = 0;
     while (to < texts.length && to - from < WIDTHS_PER_RENDER) {
       const cost = wordsIn(texts[to]);
       // A text that outgrows the budget on its own still goes, alone, so the
       // engine's refusal names that text rather than this loop never advancing.
-      if (to > from && words + cost > WORDS_PER_RENDER) {
+      if (to > from && carried + cost > words) {
         break;
       }
-      words += cost;
+      carried += cost;
       to += 1;
     }
     const batch = yield* batchWidths(renderer, size, texts.slice(from, to));
@@ -957,6 +970,7 @@ function* cutLines(
     renderer,
     size,
     asked.map((index, at) => lines[index].text.slice(0, reaches[at])),
+    SEARCH_WORDS_PER_RENDER,
   );
   if (!reaching.ok) {
     return reaching;
@@ -1008,6 +1022,7 @@ function* cutLines(
         renderer,
         size,
         searching.map((one, at) => one.rest.slice(0, one.stops[middles[at]])),
+        SEARCH_WORDS_PER_RENDER,
       );
       if (!measured.ok) {
         return measured;
