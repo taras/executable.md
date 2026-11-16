@@ -1,3 +1,4 @@
+import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier QRY — `<Query>` (spec §6.22).
  *
@@ -22,7 +23,6 @@ import { join } from "node:path";
 import process from "node:process";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, env, Files, useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
@@ -116,6 +116,12 @@ function useFixture(): Operation<string> {
     yield* provide(yield* until(realpath(dir)));
   });
 }
+
+const documentCase = workspaceJournalCases(
+  "packages/core/tests/query-component.test.ts",
+  "doc.md",
+  useFixture,
+);
 
 describe("Tier QRY — the two ordinary modes", () => {
   const DATA: Record<string, Json> = {
@@ -445,60 +451,63 @@ describe("Tier QRY — two producers, each run once, over the page they supplied
     });
   }
 
-  it("Q4: a file read once and a glob listed once answer several queries", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "input.json"), FIXTURE);
-    yield* writeTextFile(
-      join(dir, "doc.md"),
-      [
-        '<File path="input.json" as="text" />',
-        `<Query value={text} yq='from_json | [.records[] | select(.status == "failed") | {"name": .name}]' as="failed" />`,
-        '<Query value={text} yq="from_json | [.records[] | .name]" as="names" />',
-        '<Glob include={["input.json"]} as="paths" />',
-        `<Query value={paths} yq='[.[] | {"path": .}]' as="listed" />`,
-        "<Json value={failed} />",
-        "<Json value={names} />",
-        "<Json value={listed} />",
-        "",
-      ].join("\n\n"),
-    );
-
-    const calls: Calls = { reads: [], globs: [] };
-    const stream = new InMemoryStream();
-    const output = yield* scoped(function* () {
-      // The document's own working directory, installed explicitly the way an
-      // entrypoint does: `<File>` and `<Glob>` resolve against `Env.cwd`
-      // rather than against this process's.
-      yield* API.Env.around(
-        {
-          // deno-lint-ignore require-yield
-          *cwd() {
-            return dir;
-          },
-        },
-        { at: "min" },
+  documentCase(
+    "Q4: a file read once and a glob listed once answer several queries",
+    function* (stream, dir) {
+      yield* writeTextFile(join(dir, "input.json"), FIXTURE);
+      yield* writeTextFile(
+        join(dir, "doc.md"),
+        [
+          '<File path="input.json" as="text" />',
+          `<Query value={text} yq='from_json | [.records[] | select(.status == "failed") | {"name": .name}]' as="failed" />`,
+          '<Query value={text} yq="from_json | [.records[] | .name]" as="names" />',
+          '<Glob include={["input.json"]} as="paths" />',
+          `<Query value={paths} yq='[.[] | {"path": .}]' as="listed" />`,
+          "<Json value={failed} />",
+          "<Json value={names} />",
+          "<Json value={listed} />",
+          "",
+        ].join("\n\n"),
       );
-      yield* useHostFiles();
-      yield* watched(calls);
-      return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }));
-    });
 
-    const rendered = String(output);
-    expect(rendered).toContain('{\n    "name": "b"\n  }');
-    expect(rendered).toContain('[\n  "a",\n  "b"\n]');
-    expect(rendered).toContain('"path": "input.json"');
-    // Each producer crossed its provider exactly once, however many questions
-    // were asked of what it produced.
-    expect(calls.reads).toEqual(["input.json"]);
-    expect(calls.globs).toHaveLength(1);
-    // The next marker is in the value and stays there: nothing followed it and
-    // nothing claimed the records were complete.
-    expect(rendered).not.toContain("cursor-2");
-    expect(
-      yield* scoped(function* () {
+      const calls: Calls = { reads: [], globs: [] };
+      const output = yield* scoped(function* () {
+        // The document's own working directory, installed explicitly the way an
+        // entrypoint does: `<File>` and `<Glob>` resolve against `Env.cwd`
+        // rather than against this process's.
+        yield* API.Env.around(
+          {
+            // deno-lint-ignore require-yield
+            *cwd() {
+              return dir;
+            },
+          },
+          { at: "min" },
+        );
         yield* useHostFiles();
-        return yield* readTextFile(join(dir, "input.json"));
-      }),
-    ).toBe(FIXTURE);
-  });
+        yield* watched(calls);
+        return yield* collect(
+          yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }),
+        );
+      });
+
+      const rendered = String(output);
+      expect(rendered).toContain('{\n    "name": "b"\n  }');
+      expect(rendered).toContain('[\n  "a",\n  "b"\n]');
+      expect(rendered).toContain('"path": "input.json"');
+      // Each producer crossed its provider exactly once, however many questions
+      // were asked of what it produced.
+      expect(calls.reads).toEqual(["input.json"]);
+      expect(calls.globs).toHaveLength(1);
+      // The next marker is in the value and stays there: nothing followed it and
+      // nothing claimed the records were complete.
+      expect(rendered).not.toContain("cursor-2");
+      expect(
+        yield* scoped(function* () {
+          yield* useHostFiles();
+          return yield* readTextFile(join(dir, "input.json"));
+        }),
+      ).toBe(FIXTURE);
+    },
+  );
 });

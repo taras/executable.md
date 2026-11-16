@@ -1,3 +1,4 @@
+import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier CF — what a function component's failure means (spec §6.8.1).
  *
@@ -15,7 +16,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
-import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { StaleInputError } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -211,6 +212,12 @@ function reachableFrom(error: unknown, seen = new Set<unknown>()): unknown[] {
   return [error, ...nestedCauses(error).flatMap((cause) => reachableFrom(cause, seen))];
 }
 
+const documentCase = workspaceJournalCases(
+  "packages/core/tests/failure-printing.test.ts",
+  "doc.md",
+  useFixture,
+);
+
 describe("Tier CF — failing is the default", () => {
   it("CF1: an unmarked component's failure fails the operation, and nothing follows", function* () {
     const boom = new Error("boom");
@@ -222,52 +229,54 @@ describe("Tier CF — failing is the default", () => {
     expect(result.observed).toEqual([]);
   });
 
-  it("CF1b: a registered default fails by default, with nothing after it", function* () {
-    const boom = new Error("registered boom");
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Widget />\n\nAFTER\n");
+  documentCase(
+    "CF1b: a registered default fails by default, with nothing after it",
+    function* (stream, dir) {
+      const boom = new Error("registered boom");
+      yield* writeTextFile(join(dir, "doc.md"), "<Widget />\n\nAFTER\n");
 
-    const registration: ComponentRegistration = {
-      name: "Widget",
-      origin: "host",
-      props: NO_PROPS,
-      // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
-        throw boom;
-      },
-    };
-
-    const observed: ErrorSegment[] = [];
-    const { result, output } = yield* scoped(function* () {
-      yield* Component.around({
-        *raise([segment], next) {
-          observed.push(segment);
-          return yield* next(segment);
+      const registration: ComponentRegistration = {
+        name: "Widget",
+        origin: "host",
+        props: NO_PROPS,
+        // deno-lint-ignore require-yield
+        *fn(): Operation<Json> {
+          throw boom;
         },
-      });
-      yield* registerComponents([registration]);
-      const execution = yield* execute({
-        path: join(dir, "doc.md"),
-        stream: new InMemoryStream(),
-        includes: [dir],
-      });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        next = yield* subscription.next();
-      }
-      return { result: yield* execution, output: next.value };
-    });
+      };
 
-    // Resolved through the registry by the real selector, not a stubbed import:
-    // registration alone does not make a component's failure into a note.
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toBe(boom);
-    // Nothing became a printed error, and nothing after the failure ran.
-    expect(observed).toEqual([]);
-    expect(output).not.toContain("AFTER");
-    expect(output).not.toContain("registered boom");
-  });
+      const observed: ErrorSegment[] = [];
+      const { result, output } = yield* scoped(function* () {
+        yield* Component.around({
+          *raise([segment], next) {
+            observed.push(segment);
+            return yield* next(segment);
+          },
+        });
+        yield* registerComponents([registration]);
+        const execution = yield* execute({
+          path: join(dir, "doc.md"),
+          stream,
+          includes: [dir],
+        });
+        const subscription = yield* execution.output;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          next = yield* subscription.next();
+        }
+        return { result: yield* execution, output: next.value };
+      });
+
+      // Resolved through the registry by the real selector, not a stubbed import:
+      // registration alone does not make a component's failure into a note.
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toBe(boom);
+      // Nothing became a printed error, and nothing after the failure ran.
+      expect(observed).toEqual([]);
+      expect(output).not.toContain("AFTER");
+      expect(output).not.toContain("registered boom");
+    },
+  );
 
   it("CF2: a teardown-only failure propagates after teardown finishes", function* () {
     const boom = new Error("cleanup");

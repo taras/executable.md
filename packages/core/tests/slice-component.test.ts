@@ -1,3 +1,5 @@
+import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Tier SL1 — `<Slice>` (spec §6.21).
  *
@@ -34,7 +36,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 import { useStubFs } from "@executablemd/runtime/test";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
@@ -162,7 +164,11 @@ function controlled(): Harness {
 }
 
 /** Run `source` as the document, with `values` reachable through `<Value>`. */
+const OWNER = "packages/core/tests/slice-component.test.ts";
+const journalCase = journalCases(OWNER);
+
 function run(
+  stream: InMemoryStream,
   source: string,
   values: Record<string, string> = {},
   harness?: Harness,
@@ -183,7 +189,7 @@ function run(
       ),
     );
 
-    const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
+    const execution = yield* execute({ path: "doc.md", stream });
     const output = yield* forEach(function* () {}, execution.output);
     const outcome = yield* execution;
     return {
@@ -206,13 +212,14 @@ function excerpt(start: number, end: number, total: number, payload: string): st
 }
 
 /** One `<Slice>` over a `<Value>`, with nothing else in the document. */
-function* over(value: string, attributes = ""): Operation<Run> {
-  return yield* run(`<Slice${attributes}><Value key="v" /></Slice>`, { v: value });
+function* over(stream: InMemoryStream, value: string, attributes = ""): Operation<Run> {
+  return yield* run(stream, `<Slice${attributes}><Value key="v" /></Slice>`, { v: value });
 }
 
 /** The exact string `as` bound, at the capture boundary. */
-function* captured(value: string, attributes = ""): Operation<Json> {
+function* captured(stream: InMemoryStream, value: string, attributes = ""): Operation<Json> {
   const result = yield* run(
+    stream,
     `<Slice${attributes} as="window"><Value key="v" /></Slice><Probe value={window} />`,
     { v: value },
   );
@@ -235,235 +242,310 @@ const SEVEN = "A\u{1F600}BCDEF";
 const BOUNDARY = `${"a".repeat(4095)}\u{1F600}z`;
 
 describe("Tier SL1 — S1: windows, defaults, clamping and the exact note", () => {
-  it("S1: the omitted window is [0, 4096) and counts code points, not UTF-16 units", function* () {
-    expect(Array.from(BOUNDARY).length).toBe(4097);
-    expect(BOUNDARY.length).toBe(4098);
+  {
+    const name = "S1: the omitted window is [0, 4096) and counts code points, not UTF-16 units";
+    journalCase(name, "doc.md", function* (stream) {
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        expect(Array.from(BOUNDARY).length).toBe(4097);
+        expect(BOUNDARY.length).toBe(4098);
 
-    const result = yield* over(BOUNDARY);
-    const expected = excerpt(0, 4096, 4097, `${"a".repeat(4095)}\u{1F600}`);
+        const result = yield* over(stream, BOUNDARY);
+        const expected = excerpt(0, 4096, 4097, `${"a".repeat(4095)}\u{1F600}`);
 
-    expect(result.failure).toBe("");
-    expect(result.output).toBe(expected);
-    expect(yield* captured(BOUNDARY)).toBe(expected);
-    // Stated separately: the window holds the emoji whole, so no half of a
-    // surrogate pair reached the document.
-    expect(Array.from(result.output.slice(note(0, 4096, 4097).length + 1)).length).toBe(4096);
-    expect(result.output.endsWith("\u{1F600}")).toBe(true);
-  });
-
-  it("S1: a middle window, an end window, and a start before the beginning", function* () {
-    expect(yield* over(SEVEN, " offset={1} length={3}")).toMatchObject({
-      failure: "",
-      output: excerpt(1, 4, 7, "\u{1F600}BC"),
+        expect(result.failure).toBe("");
+        expect(result.output).toBe(expected);
+        expect(yield* captured(stream2, BOUNDARY)).toBe(expected);
+        // Stated separately: the window holds the emoji whole, so no half of a
+        // surrogate pair reached the document.
+        expect(Array.from(result.output.slice(note(0, 4096, 4097).length + 1)).length).toBe(4096);
+        expect(result.output.endsWith("\u{1F600}")).toBe(true);
+      });
     });
-    expect(yield* captured(SEVEN, " offset={1} length={3}")).toBe(excerpt(1, 4, 7, "\u{1F600}BC"));
+  }
 
-    expect((yield* over(SEVEN, " offset={-3} length={4096}")).output).toBe(excerpt(4, 7, 7, "DEF"));
+  {
+    const name = "S1: a middle window, an end window, and a start before the beginning";
+    journalCase(name, "doc.md", function* (stream) {
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream3) {
+          yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream4) {
+            yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream5) {
+              expect(yield* over(stream, SEVEN, " offset={1} length={3}")).toMatchObject({
+                failure: "",
+                output: excerpt(1, 4, 7, "\u{1F600}BC"),
+              });
+              expect(yield* captured(stream2, SEVEN, " offset={1} length={3}")).toBe(
+                excerpt(1, 4, 7, "\u{1F600}BC"),
+              );
 
-    // Clamped to zero rather than wrapping or refusing, and the whole input is
-    // then covered — so the body comes back with no note at all.
-    expect((yield* over(SEVEN, " offset={-99} length={4096}")).output).toBe(SEVEN);
-    expect((yield* over(SEVEN, " offset={-99} length={2}")).output).toBe(
-      excerpt(0, 2, 7, "A\u{1F600}"),
-    );
-  });
+              expect((yield* over(stream3, SEVEN, " offset={-3} length={4096}")).output).toBe(
+                excerpt(4, 7, 7, "DEF"),
+              );
 
-  it("S1: a start at or beyond the end is an empty window that still says so", function* () {
-    for (const offset of [7, 8, 400]) {
-      const result = yield* over(SEVEN, ` offset={${offset}} length={4}`);
+              // Clamped to zero rather than wrapping or refusing, and the whole input is
+              // then covered — so the body comes back with no note at all.
+              expect((yield* over(stream4, SEVEN, " offset={-99} length={4096}")).output).toBe(
+                SEVEN,
+              );
+              expect((yield* over(stream5, SEVEN, " offset={-99} length={2}")).output).toBe(
+                excerpt(0, 2, 7, "A\u{1F600}"),
+              );
+            });
+          });
+        });
+      });
+    });
+  }
 
-      expect(result.failure).toBe("");
-      expect(result.output).toBe(`${note(7, 7, 7)}\n`);
-    }
-  });
+  {
+    const name = "S1: a start at or beyond the end is an empty window that still says so";
+    it(name, function* () {
+      for (const offset of [7, 8, 400]) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream) {
+          const result = yield* over(stream, SEVEN, ` offset={${offset}} length={4}`);
 
-  it("S1: empty content is the empty string, in both authored spellings", function* () {
-    expect(yield* run("<Slice></Slice>")).toMatchObject({ failure: "", output: "" });
-    expect(yield* run("<Slice />")).toMatchObject({ failure: "", output: "" });
-    expect(yield* captured("", " length={4}")).toBe("");
-  });
+          expect(result.failure).toBe("");
+          expect(result.output).toBe(`${note(7, 7, 7)}\n`);
+        });
+      }
+    });
+  }
 
-  it("S1: a positive integer length has no maximum, so 10000 is not capped at 4096", function* () {
-    const long = "b".repeat(5000);
-    const result = yield* over(long, " length={10000}");
+  {
+    const name = "S1: empty content is the empty string, in both authored spellings";
+    journalCase(name, "doc.md", function* (stream) {
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream3) {
+          expect(yield* run(stream, "<Slice></Slice>")).toMatchObject({ failure: "", output: "" });
+          expect(yield* run(stream2, "<Slice />")).toMatchObject({ failure: "", output: "" });
+          expect(yield* captured(stream3, "", " length={4}")).toBe("");
+        });
+      });
+    });
+  }
 
-    expect(result.failure).toBe("");
-    // The complete original, with no note: a 4096 cap would have reported
-    // `[0, 4096) of 5000` here.
-    expect(result.output).toBe(long);
-    expect(result.output).not.toContain("Text excerpt");
-    expect(yield* captured(long, " length={10000}")).toBe(long);
-  });
+  {
+    const name = "S1: a positive integer length has no maximum, so 10000 is not capped at 4096";
+    journalCase(name, "doc.md", function* (stream) {
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        const long = "b".repeat(5000);
+        const result = yield* over(stream, long, " length={10000}");
 
-  it("S1: authored whitespace counts, and is neither trimmed nor normalized", function* () {
-    const padded = yield* run("<Slice length={4096}>  padded  body  </Slice>");
-    expect(padded.failure).toBe("");
-    expect(padded.output).toBe("  padded  body  ");
+        expect(result.failure).toBe("");
+        // The complete original, with no note: a 4096 cap would have reported
+        // `[0, 4096) of 5000` here.
+        expect(result.output).toBe(long);
+        expect(result.output).not.toContain("Text excerpt");
+        expect(yield* captured(stream2, long, " length={10000}")).toBe(long);
+      });
+    });
+  }
 
-    // The same authored content, partially: the total counts every space, and
-    // the payload keeps the two it begins with.
-    const cut = yield* run("<Slice length={9}>  padded  body  </Slice>");
-    expect(cut.output).toBe(excerpt(0, 9, 16, "  padded "));
-  });
+  {
+    const name = "S1: authored whitespace counts, and is neither trimmed nor normalized";
+    journalCase(name, "doc.md", function* (stream) {
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        const padded = yield* run(stream, "<Slice length={4096}>  padded  body  </Slice>");
+        expect(padded.failure).toBe("");
+        expect(padded.output).toBe("  padded  body  ");
+
+        // The same authored content, partially: the total counts every space, and
+        // the payload keeps the two it begins with.
+        const cut = yield* run(stream2, "<Slice length={9}>  padded  body  </Slice>");
+        expect(cut.output).toBe(excerpt(0, 9, 16, "  padded "));
+      });
+    });
+  }
 });
 
 describe("Tier SL1 — S2: an invalid window runs no body", () => {
-  it("S2: every refused argument is ordinary prop validation, and nothing expands", function* () {
-    const refused = [
-      " offset={1.5}",
-      ' offset="x"',
-      " offset={true}",
-      " length={0}",
-      " length={-1}",
-      " length={2.5}",
-      ' length="x"',
-      " window={1}",
-    ];
+  {
+    const name = "S2: every refused argument is ordinary prop validation, and nothing expands";
+    it(name, function* () {
+      const refused = [
+        " offset={1.5}",
+        ' offset="x"',
+        " offset={true}",
+        " length={0}",
+        " length={-1}",
+        " length={2.5}",
+        ' length="x"',
+        " window={1}",
+      ];
 
-    for (const attributes of refused) {
-      const result = yield* run(`<Slice${attributes}><Tripwire /></Slice>`);
+      for (const attributes of refused) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream) {
+          const result = yield* run(stream, `<Slice${attributes}><Tripwire /></Slice>`);
 
-      expect(reported(result)).toContain("Prop validation failed for <Slice />");
-      // Decided before the body: the content never expanded, so there is no
-      // completed work for a window to have been taken from.
-      expect(result.tripped).toBe(0);
-      expect(result.output).not.toContain("TRIPPED");
-      expect(result.output).not.toContain("Text excerpt");
-    }
-  });
+          expect(reported(result)).toContain("Prop validation failed for <Slice />");
+          // Decided before the body: the content never expanded, so there is no
+          // completed work for a window to have been taken from.
+          expect(result.tripped).toBe(0);
+          expect(result.output).not.toContain("TRIPPED");
+          expect(result.output).not.toContain("Text excerpt");
+        });
+      }
+    });
+  }
 });
 
 describe("Tier SL1 — S3: one completion, and captures that stay complete", () => {
-  it("S3: the window waits for the producer, and cuts nothing it captured", function* () {
-    const harness = controlled();
-    const source =
-      '<Slice length={1} as="window">X<Held as="payload" /><Probe value={payload} />' +
-      '<Json value={payload} /></Slice><Probe value={window} /><Value key="after" />';
+  journalCase(
+    "S3: the window waits for the producer, and cuts nothing it captured",
+    "doc.md",
+    function* (stream) {
+      const harness = controlled();
+      const source =
+        '<Slice length={1} as="window">X<Held as="payload" /><Probe value={payload} />' +
+        '<Json value={payload} /></Slice><Probe value={window} /><Value key="after" />';
 
-    const result = yield* scoped(function* (): Operation<Run> {
-      try {
-        const running = yield* spawn(() => run(source, { after: "AFTER" }, harness));
-        yield* harness.entered;
+      const result = yield* scoped(function* (): Operation<Run> {
+        try {
+          const running = yield* spawn(() => run(stream, source, { after: "AFTER" }, harness));
+          yield* harness.entered;
 
-        // Held: the producer has started and has not returned, so the window
-        // cannot have been taken yet. Nothing after the Slice has run either.
-        expect(harness.producer.starts).toBe(1);
-        expect(harness.producer.completions).toBe(0);
-        expect(harness.producer.cleanups).toBe(0);
+          // Held: the producer has started and has not returned, so the window
+          // cannot have been taken yet. Nothing after the Slice has run either.
+          expect(harness.producer.starts).toBe(1);
+          expect(harness.producer.completions).toBe(0);
+          expect(harness.producer.cleanups).toBe(0);
 
-        harness.release();
-        return yield* running;
-      } finally {
-        // Released unconditionally: a failed expectation above would otherwise
-        // leave the producer parked and the join would read as a hang.
-        harness.release();
-      }
-    });
+          harness.release();
+          return yield* running;
+        } finally {
+          // Released unconditionally: a failed expectation above would otherwise
+          // leave the producer parked and the join would read as a hang.
+          harness.release();
+        }
+      });
 
-    expect(result.failure).toBe("");
-    // Once each, and the sibling after the Slice ran once.
-    expect(harness.producer).toEqual({ starts: 1, completions: 1, cleanups: 1 });
+      expect(result.failure).toBe("");
+      // Once each, and the sibling after the Slice ran once.
+      expect(harness.producer).toEqual({ starts: 1, completions: 1, cleanups: 1 });
 
-    // The child's captured value, probed in its own environment: the complete
-    // structured value, not a window of it.
-    expect(result.probed[0]).toEqual({ held: true, size: 3 });
+      // The child's captured value, probed in its own environment: the complete
+      // structured value, not a window of it.
+      expect(result.probed[0]).toEqual({ held: true, size: 3 });
 
-    // And the Slice's own capture. The total is the proof the child's rendering
-    // was complete: one authored point, plus the whole of the JSON that
-    // captured value serializes to.
-    const serialized = JSON.stringify({ held: true, size: 3 }, null, 2);
-    const total = 1 + Array.from(serialized).length;
-    expect(result.probed[1]).toBe(excerpt(0, 1, total, "X"));
+      // And the Slice's own capture. The total is the proof the child's rendering
+      // was complete: one authored point, plus the whole of the JSON that
+      // captured value serializes to.
+      const serialized = JSON.stringify({ held: true, size: 3 }, null, 2);
+      const total = 1 + Array.from(serialized).length;
+      expect(result.probed[1]).toBe(excerpt(0, 1, total, "X"));
 
-    // Captured, so the invocation site contributed nothing; the sibling after
-    // it is the only thing that rendered.
-    expect(result.output).toBe("AFTER");
-  });
+      // Captured, so the invocation site contributed nothing; the sibling after
+      // it is the only thing that rendered.
+      expect(result.output).toBe("AFTER");
+    },
+  );
 });
 
 describe("Tier SL1 — S4: one window over the combined rendering", () => {
-  it("S4: enclosed renderings share one window, and siblings outside are untouched", function* () {
-    const result = yield* run('HEAD<Slice length={3}>AB<Value key="piece" />EF</Slice>TAIL', {
-      piece: "CD",
-    });
+  journalCase(
+    "S4: enclosed renderings share one window, and siblings outside are untouched",
+    "doc.md",
+    function* (stream) {
+      const result = yield* run(
+        stream,
+        'HEAD<Slice length={3}>AB<Value key="piece" />EF</Slice>TAIL',
+        {
+          piece: "CD",
+        },
+      );
 
-    expect(result.failure).toBe("");
-    // One window over `ABCDEF`, not one per child and not one over the whole
-    // document: HEAD and TAIL are outside the element and are unaffected.
-    expect(result.output).toBe(`HEAD${excerpt(0, 3, 6, "ABC")}TAIL`);
-    // Exactly once in that order, so nothing was rescanned or re-rendered.
-    expect(result.output.split("HEAD").length - 1).toBe(1);
-    expect(result.output.split("TAIL").length - 1).toBe(1);
-    expect(result.output.split("Text excerpt").length - 1).toBe(1);
-  });
+      expect(result.failure).toBe("");
+      // One window over `ABCDEF`, not one per child and not one over the whole
+      // document: HEAD and TAIL are outside the element and are unaffected.
+      expect(result.output).toBe(`HEAD${excerpt(0, 3, 6, "ABC")}TAIL`);
+      // Exactly once in that order, so nothing was rescanned or re-rendered.
+      expect(result.output.split("HEAD").length - 1).toBe(1);
+      expect(result.output.split("TAIL").length - 1).toBe(1);
+      expect(result.output.split("Text excerpt").length - 1).toBe(1);
+    },
+  );
 });
 
 describe("Tier SL1 — S5: nesting is ordinary inside-out text", () => {
-  it("S5: the outer window counts the inner note and may cut it", function* () {
-    const inner = excerpt(1, 4, 7, "\u{1F600}BC");
-    // The inner rendering is seventy code points: a sixty-six point note, its
-    // line feed, and the three points it selected.
-    expect(Array.from(inner).length).toBe(70);
+  journalCase(
+    "S5: the outer window counts the inner note and may cut it",
+    "doc.md",
+    function* (stream) {
+      const inner = excerpt(1, 4, 7, "\u{1F600}BC");
+      // The inner rendering is seventy code points: a sixty-six point note, its
+      // line feed, and the three points it selected.
+      expect(Array.from(inner).length).toBe(70);
 
-    const result = yield* run(
-      `<Slice offset={0} length={4}><Slice offset={1} length={3}><Value key="v" /></Slice></Slice>`,
-      { v: SEVEN },
-    );
+      const result = yield* run(
+        stream,
+        `<Slice offset={0} length={4}><Slice offset={1} length={3}><Value key="v" /></Slice></Slice>`,
+        { v: SEVEN },
+      );
 
-    expect(result.failure).toBe("");
-    // The outer note describes the outer input, and the payload is the first
-    // four points of the inner note — so a note is ordinary text to whatever
-    // encloses it, and each note is outside its own selected payload.
-    expect(result.output).toBe(excerpt(0, 4, 70, "Text"));
-  });
+      expect(result.failure).toBe("");
+      // The outer note describes the outer input, and the payload is the first
+      // four points of the inner note — so a note is ordinary text to whatever
+      // encloses it, and each note is outside its own selected payload.
+      expect(result.output).toBe(excerpt(0, 4, 70, "Text"));
+    },
+  );
 });
 
 describe("Tier SL1 — S6: failed work is not an empty successful excerpt", () => {
-  it("S6: a content failure settles the root and publishes no window", function* () {
-    const result = yield* run(
-      '<Slice length={2} as="window">PREFIX<Fail message="the producer gave up" /></Slice>' +
-        '<Probe value={window} /><Value key="after" />',
-      { after: "AFTER" },
-    );
+  journalCase(
+    "S6: a content failure settles the root and publishes no window",
+    "doc.md",
+    function* (stream) {
+      const result = yield* run(
+        stream,
+        '<Slice length={2} as="window">PREFIX<Fail message="the producer gave up" /></Slice>' +
+          '<Probe value={window} /><Value key="after" />',
+        { after: "AFTER" },
+      );
 
-    // The root failed on the authored sentence.
-    expect(result.failure).toContain("the producer gave up");
-    // No window was published, so nothing read one back.
-    expect(result.probed).toEqual([]);
-    // And no range note anywhere: an empty or truncated excerpt would have
-    // reported a successful window over work that never finished.
-    expect(reported(result)).not.toContain("Text excerpt");
-    // Nothing after the element ran.
-    expect(result.output).not.toContain("AFTER");
-  });
+      // The root failed on the authored sentence.
+      expect(result.failure).toContain("the producer gave up");
+      // No window was published, so nothing read one back.
+      expect(result.probed).toEqual([]);
+      // And no range note anywhere: an empty or truncated excerpt would have
+      // reported a successful window over work that never finished.
+      expect(reported(result)).not.toContain("Text excerpt");
+      // Nothing after the element ran.
+      expect(result.output).not.toContain("AFTER");
+    },
+  );
 });
 
 describe("Tier SL1 — S7: cancellation owns the teardown", () => {
-  it("S7: halting the owner joins the producer's cleanup and publishes nothing", function* () {
-    const harness = controlled();
-    const source =
-      '<Slice length={1} as="window">X<Held as="payload" /></Slice>' +
-      '<Probe value={window} /><Value key="after" />';
+  journalCase(
+    "S7: halting the owner joins the producer's cleanup and publishes nothing",
+    "doc.md",
+    function* (stream) {
+      const harness = controlled();
+      const source =
+        '<Slice length={1} as="window">X<Held as="payload" /></Slice>' +
+        '<Probe value={window} /><Value key="after" />';
 
-    yield* scoped(function* () {
-      try {
-        const running = yield* spawn(() => run(source, { after: "AFTER" }, harness));
-        yield* harness.entered;
-        expect(harness.producer.starts).toBe(1);
+      yield* scoped(function* () {
+        try {
+          const running = yield* spawn(() => run(stream, source, { after: "AFTER" }, harness));
+          yield* harness.entered;
+          expect(harness.producer.starts).toBe(1);
 
-        // Halted while the producer is parked, and joined: `halt()` returns a
-        // Future, so observing it is what proves the teardown finished rather
-        // than merely having been asked for.
-        yield* running.halt();
+          // Halted while the producer is parked, and joined: `halt()` returns a
+          // Future, so observing it is what proves the teardown finished rather
+          // than merely having been asked for.
+          yield* running.halt();
 
-        expect(harness.producer.completions).toBe(0);
-        // Exactly one cleanup, through the producer's own `ensure`.
-        expect(harness.producer.cleanups).toBe(1);
-      } finally {
-        harness.release();
-      }
-    });
-  });
+          expect(harness.producer.completions).toBe(0);
+          // Exactly one cleanup, through the producer's own `ensure`.
+          expect(harness.producer.cleanups).toBe(1);
+        } finally {
+          harness.release();
+        }
+      });
+    },
+  );
 
   it("S7: the component owns no task, resource or recovery of its own", function* () {
     const source = yield* readTextFile(
@@ -482,10 +564,17 @@ describe("Tier SL1 — S7: cancellation owns the teardown", () => {
 });
 
 describe("993 selected Slice input", () => {
-  it("W6: returns the ordinary excerpt without publishing the original selected string", function* () {
-    const result = yield* run("<Slice length={2}>documentation<Output>ABCD</Output>tail</Slice>");
-    expect(result.failure).toBe("");
-    expect(result.output).toBe(excerpt(0, 2, 4, "AB"));
-    expect(result.output).not.toContain("ABCD");
-  });
+  journalCase(
+    "W6: returns the ordinary excerpt without publishing the original selected string",
+    "doc.md",
+    function* (stream) {
+      const result = yield* run(
+        stream,
+        "<Slice length={2}>documentation<Output>ABCD</Output>tail</Slice>",
+      );
+      expect(result.failure).toBe("");
+      expect(result.output).toBe(excerpt(0, 2, 4, "AB"));
+      expect(result.output).not.toContain("ABCD");
+    },
+  );
 });

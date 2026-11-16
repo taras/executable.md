@@ -1,3 +1,5 @@
+import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Tier JSP — where an authored durable operation says it was written.
  *
@@ -95,78 +97,94 @@ function sourceOf(events: DurableEvent[], type: string, name?: string): unknown 
   return found.description[SOURCE_POSITION_FIELD];
 }
 
+const OWNER = "packages/core/tests/journal-source-position.test.ts";
+const journalCase = journalCases(OWNER);
+
 describe("Tier JSP — authored source in the journal", () => {
   // The document holds an eval block, and a root that cannot compile one now
   // settles that failure rather than printing it.
   beforeAll(() => useTempFileCompiler());
 
-  it("JSP1: component imports, commands and eval blocks retain where they were written", function* () {
-    const path = yield* useDocument();
-    const stream = new InMemoryStream();
-    yield* useMark();
-    yield* collect(yield* execute({ path, stream }));
+  {
+    const name = "JSP1: component imports, commands and eval blocks retain where they were written";
+    it(name, function* () {
+      const path = yield* useDocument();
+      yield* captureTestJournal({ owner: OWNER, name }, path, function* (stream) {
+        yield* useMark();
+        yield* collect(yield* execute({ path, stream }));
 
-    const events = yield* stream.readAll();
-    for (const event of events) {
-      if (
-        event.type === "yield" &&
-        ["eval", "import_component"].includes(event.description.type) &&
-        event.description.name !== "__root__"
-      ) {
-        expect(event.description["executablemd.source-owner"]).toEqual({
-          coroutineId: "root",
-          index: 0,
+        const events = yield* stream.readAll();
+        for (const event of events) {
+          if (
+            event.type === "yield" &&
+            ["eval", "import_component"].includes(event.description.type) &&
+            event.description.name !== "__root__"
+          ) {
+            expect(event.description["executablemd.source-owner"]).toEqual({
+              coroutineId: "root",
+              index: 0,
+            });
+          }
+        }
+
+        expect(sourceOf(events, "import_component", "Mark")).toEqual({
+          path,
+          offset: DOCUMENT.indexOf("<Mark />"),
+          line: lineOf("<Mark />"),
+          column: 1,
         });
-      }
-    }
-
-    expect(sourceOf(events, "import_component", "Mark")).toEqual({
-      path,
-      offset: DOCUMENT.indexOf("<Mark />"),
-      line: lineOf("<Mark />"),
-      column: 1,
+        expect(sourceOf(events, "exec")).toEqual({
+          path,
+          offset: DOCUMENT.indexOf("```bash exec"),
+          line: lineOf("```bash exec"),
+          column: 1,
+        });
+        expect(sourceOf(events, "eval")).toEqual({
+          path,
+          offset: DOCUMENT.indexOf("```js eval"),
+          line: lineOf("```js eval"),
+          column: 1,
+        });
+      });
     });
-    expect(sourceOf(events, "exec")).toEqual({
-      path,
-      offset: DOCUMENT.indexOf("```bash exec"),
-      line: lineOf("```bash exec"),
-      column: 1,
+  }
+
+  {
+    const name = "JSP2: the root import and the root Close carry no authored source";
+    it(name, function* () {
+      const path = yield* useDocument();
+      yield* captureTestJournal({ owner: OWNER, name }, path, function* (stream) {
+        yield* useMark();
+        yield* collect(yield* execute({ path, stream }));
+
+        const events = yield* stream.readAll();
+
+        // The root is the run's own entry rather than an element somebody wrote.
+        expect(sourceOf(events, "import_component", "__root__")).toBeUndefined();
+
+        const close = events.find(
+          (event) => event.type === "close" && event.coroutineId === "root",
+        );
+        expect(close).toBeDefined();
+        expect(close && "description" in close).toBe(false);
+      });
     });
-    expect(sourceOf(events, "eval")).toEqual({
-      path,
-      offset: DOCUMENT.indexOf("```js eval"),
-      line: lineOf("```js eval"),
-      column: 1,
-    });
-  });
+  }
 
-  it("JSP2: the root import and the root Close carry no authored source", function* () {
-    const path = yield* useDocument();
-    const stream = new InMemoryStream();
-    yield* useMark();
-    yield* collect(yield* execute({ path, stream }));
+  journalCase(
+    "JSP3: an inline document's position names the inline document",
+    "<eval>",
+    function* (stream) {
+      yield* useMark();
+      const root = inlineSource("<Mark />\n");
+      yield* collect(yield* execute({ ...root, stream }));
 
-    const events = yield* stream.readAll();
-
-    // The root is the run's own entry rather than an element somebody wrote.
-    expect(sourceOf(events, "import_component", "__root__")).toBeUndefined();
-
-    const close = events.find((event) => event.type === "close" && event.coroutineId === "root");
-    expect(close).toBeDefined();
-    expect(close && "description" in close).toBe(false);
-  });
-
-  it("JSP3: an inline document's position names the inline document", function* () {
-    const stream = new InMemoryStream();
-    yield* useMark();
-    const root = inlineSource("<Mark />\n");
-    yield* collect(yield* execute({ ...root, stream }));
-
-    // An inline root has an identity of its own rather than a file path, and
-    // the position carries that identity unchanged rather than inventing one.
-    const source = sourceOf(yield* stream.readAll(), "import_component", "Mark");
-    expect(source).toEqual({ path: root.path, offset: 0, line: 1, column: 1 });
-  });
+      // An inline root has an identity of its own rather than a file path, and
+      // the position carries that identity unchanged rather than inventing one.
+      const source = sourceOf(yield* stream.readAll(), "import_component", "Mark");
+      expect(source).toEqual({ path: root.path, offset: 0, line: 1, column: 1 });
+    },
+  );
 
   it("JSP4: a position is not identity, so a recorded run replays", function* () {
     const path = yield* useDocument();
