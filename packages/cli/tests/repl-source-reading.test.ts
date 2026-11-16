@@ -24,13 +24,14 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
-import type { Operation } from "effection";
+import { Ok, scoped } from "effection";
+import type { Operation, Result } from "effection";
 
 import { entryReading, NO_READING, READING_STATUSES } from "../src/repl/source-reading.ts";
 import type { ReplReadingLine } from "../src/repl/source-reading.ts";
 import {
   createFitStore,
+  createPlainFitStore,
   fitPlain,
   prepareReading,
   readingRuns,
@@ -1022,9 +1023,8 @@ describe("S5 a reading is measured once for the inputs it was measured for", () 
       const lines = linesOf(longSource(222));
       const first = yield* prepareReading(renderer, WIDE, lines, 100, store);
       expect(first.ok).toBe(true);
-      // The reading really is the expensive thing: this is the work a
-      // keystroke used to repeat.
-      expect(renderer.measures()).toBeGreaterThan(100);
+      // The reading was measured: this is the work a keystroke used to repeat.
+      expect(renderer.measures()).toBeGreaterThan(0);
 
       // Three more frames, as three keystrokes into the draft would ask for.
       // The reading is rebuilt from the model every frame, so these are fresh
@@ -1360,5 +1360,267 @@ describe("S7 a reading with more words than one measuring render is still measur
       for (const one of lines) {
         expect([one.key, whole.get(one.key)]).toEqual([one.key, one.text]);
       }
+    }));
+});
+
+/**
+ * Tier S8 — lines fitted together are cut exactly as each is cut alone.
+ *
+ * A reading's lines and a plain list's unheld lines share their measuring
+ * renders: each search step for every line travels in one batch. The oracle is
+ * the same public call given one line at a time, which always searches alone —
+ * so every row, width and refusal below is compared with the real engine's
+ * sequential answer rather than with numbers written down here.
+ */
+describe("S8 lines fitted together are cut as each is cut alone", () => {
+  function fixed(key: string, text: string, depth: number): ReplReadingLine {
+    return Object.freeze({
+      key,
+      text,
+      runs: tokenRuns([{ text, token: "source" }]),
+      rail: "rail-pending" as const,
+      depth,
+      badge: undefined,
+      style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
+    });
+  }
+
+  /** Everything a row says, so two rows can only be equal by being the same row. */
+  function rowsOf(prepared: ReplPreparedReading) {
+    return prepared.rows.map((one) => ({
+      key: one.key,
+      text: one.text,
+      runs: one.runs,
+      line: one.line,
+      continuation: one.continuation,
+      indent: one.indent,
+      depth: one.depth,
+      width: one.width,
+    }));
+  }
+
+  /** Each line prepared on its own, which searches it alone. */
+  function* alone(
+    renderer: ReplRenderer,
+    size: ReplTerminalSize,
+    lines: readonly ReplReadingLine[],
+    room: number,
+  ): Operation<Result<ReturnType<typeof rowsOf>>> {
+    const rows: ReturnType<typeof rowsOf> = [];
+    for (const one of lines) {
+      const prepared = yield* prepareReading(renderer, size, [one], room);
+      if (!prepared.ok) {
+        return prepared;
+      }
+      rows.push(...rowsOf(prepared.value));
+    }
+    return Ok(rows);
+  }
+
+  /** The texts that make a cut hard: every case the measurement contract names. */
+  function corpus(exact: number): readonly string[] {
+    return [
+      "",
+      "short",
+      "x".repeat(exact),
+      "y".repeat(exact + 1),
+      "mixed widths: ascii, 界界界 wide, é combining, and a closing clause that wraps",
+      "\tTabbed\tline  with   runs   of    spaces that    continue past one row",
+      "      indented text whose continuations hang at the column it was written at",
+      "é".repeat(90),
+      "👩‍💻🇺🇦✨".repeat(40),
+      "u".repeat(3000),
+      "界".repeat(150),
+      Array.from({ length: 240 }, (_, at) => `w${at}`).join(" "),
+      '  File "m.py", line 12, in call(*args, **kwargs)',
+      "repeated line that wraps once the room is narrow enough to need it",
+      "repeated line that wraps once the room is narrow enough to need it",
+      "   ",
+      "end",
+    ];
+  }
+
+  it("cuts mixed depths, widths and graphemes as each line alone at several rooms", () =>
+    withRenderer(function* (renderer) {
+      const reserved = yield* reserveFor(renderer, WIDE, 100);
+      if (!reserved.ok) {
+        throw reserved.error;
+      }
+      const overhead = 100 - reserved.value.content;
+      // Rooms from the measured reservation: the content widths named are what
+      // the text gets, the deepest line losing six of them to its indent.
+      for (const content of [80, 33, 12, 8]) {
+        const lines = corpus(content).map((text, at) => fixed(`c${at}`, text, at % 4));
+        const room = overhead + content;
+        const together = yield* prepareReading(renderer, WIDE, lines, room);
+        const oracle = yield* alone(renderer, WIDE, lines, room);
+        if (!together.ok || !oracle.ok) {
+          throw new Error(`content ${content} refused`);
+        }
+        expect(rowsOf(together.value)).toEqual(oracle.value);
+        const whole = recovered(together.value);
+        for (const one of lines) {
+          expect([content, one.key, whole.get(one.key)]).toEqual([content, one.key, one.text]);
+        }
+      }
+    }));
+
+  it("cuts a plain list's unheld lines as each alone, and keeps what the store holds", () =>
+    withRenderer(function* (renderer) {
+      // Down to five cells, which every grapheme here fits: a joined emoji
+      // sequence measures as wide as its parts.
+      for (const room of [80, 33, 12, 5]) {
+        const lines = corpus(room).map((text, at) => ({ key: `p${at}`, text }));
+        const store = createPlainFitStore();
+        // Half of them held already, so the batch is only what the store lacks.
+        const warm = yield* fitPlain(
+          renderer,
+          WIDE,
+          lines.filter((_, at) => at % 2 === 0),
+          room,
+          store,
+        );
+        expect(warm.ok).toBe(true);
+        const together = yield* fitPlain(renderer, WIDE, lines, room, store);
+        const oracle = [];
+        for (const one of lines) {
+          const single = yield* fitPlain(renderer, WIDE, [one], room);
+          if (!single.ok) {
+            throw single.error;
+          }
+          oracle.push(...single.value);
+        }
+        if (!together.ok) {
+          throw together.error;
+        }
+        expect([room, together.value]).toEqual([room, oracle]);
+      }
+    }));
+
+  it("reports the refusal the first refusing line reaches, wherever the batch found one", () =>
+    withRenderer(function* (renderer) {
+      const reserved = yield* reserveFor(renderer, WIDE, 100);
+      if (!reserved.ok) {
+        throw reserved.error;
+      }
+      // Three cells of content; a depth-1 line keeps one, which holds no wide
+      // grapheme. The first line refuses on its third row, the second at once:
+      // a search over both reaches the second line's refusal first.
+      const room = 100 - reserved.value.content + 3;
+      const lines = [fixed("first", "ab界", 1), fixed("second", "🙂x", 1)];
+      const together = yield* prepareReading(renderer, WIDE, lines, room);
+      const first = yield* prepareReading(renderer, WIDE, [lines[0]], room);
+      expect(together.ok).toBe(false);
+      expect(first.ok).toBe(false);
+      if (together.ok || first.ok) {
+        return;
+      }
+      expect(together.error.message).toBe(first.error.message);
+      expect(together.error.message).toContain("界");
+
+      // A plain list keeps what it had already cut before the refusing line,
+      // exactly as cutting the lines in order does.
+      const store = createPlainFitStore();
+      const plain = yield* fitPlain(
+        renderer,
+        WIDE,
+        [
+          { key: "fits", text: "ok" },
+          { key: "first", text: "ab界" },
+          { key: "second", text: "🙂x" },
+        ],
+        1,
+        store,
+      );
+      const firstPlain = yield* fitPlain(renderer, WIDE, [{ key: "first", text: "ab界" }], 1);
+      expect(plain.ok).toBe(false);
+      expect(firstPlain.ok).toBe(false);
+      if (plain.ok || firstPlain.ok) {
+        return;
+      }
+      expect(plain.error.message).toBe(firstPlain.error.message);
+      expect(store.held("ok", 1, WIDE)).not.toBe(undefined);
+      expect(store.held("ab界", 1, WIDE)).toBe(undefined);
+    }));
+
+  it("cuts one line at a time where a room reaches the measuring columns", () =>
+    scoped(function* () {
+      // A text wider than the engine's columns is answered from the layout it
+      // shares: alone a breakable one reports the columns, beside a wider
+      // unbreakable one its own width. So these rooms must not share renders.
+      // The engine is opened at these columns, as the REPL's own is.
+      const size: ReplTerminalSize = { columns: 60, rows: 20 };
+      const renderer = yield* useReplRenderer(size);
+      const texts = [
+        Array.from({ length: 30 }, (_, at) => `word${at}`).join(" "),
+        "z".repeat(150),
+        "a breakable line of ordinary prose that is a good deal wider than sixty cells in all",
+        "short",
+      ];
+      for (const room of [60, 61, 100]) {
+        const lines = texts.map((text, at) => ({ key: `n${at}`, text }));
+        const together = yield* fitPlain(renderer, size, lines, room);
+        const oracle = [];
+        for (const one of lines) {
+          const single = yield* fitPlain(renderer, size, [one], room);
+          expect(single.ok).toBe(true);
+          if (single.ok) {
+            oracle.push(...single.value);
+          }
+        }
+        expect(together.ok).toBe(true);
+        if (together.ok) {
+          expect([room, together.value]).toEqual([room, oracle]);
+        }
+      }
+      const reserved = yield* reserveFor(renderer, size, 100);
+      if (!reserved.ok) {
+        throw reserved.error;
+      }
+      // A reading's final pass measures every finished row in one batch, as it
+      // always has, so at these rooms a row's reported width depends on its
+      // neighbours. The cut is what the search decides, and what this pins.
+      const cutsOf = (rows: ReturnType<typeof rowsOf>) => rows.map(({ width: _, ...cut }) => cut);
+      const overhead = 100 - reserved.value.content;
+      for (const room of [overhead + 60, overhead + 80]) {
+        const lines = texts.map((text, at) => fixed(`r${at}`, text, 0));
+        const together = yield* prepareReading(renderer, size, lines, room);
+        const oracle = yield* alone(renderer, size, lines, room);
+        expect([room, together.ok, oracle.ok]).toEqual([room, true, true]);
+        if (together.ok && oracle.ok) {
+          expect([room, cutsOf(rowsOf(together.value))]).toEqual([room, cutsOf(oracle.value)]);
+        }
+      }
+    }));
+
+  it("fits a cold 1,000-line wrapping entry in a bounded number of renders", () =>
+    withCounting(function* (renderer) {
+      const text = Array.from(
+        { length: 1000 },
+        (_, at) => `  File "m.py", line ${at}, in call(*args, **kwargs)`,
+      ).join("\n");
+      const reading = entryReading({
+        entry: entryOf(text, { terminal: settled("ok", text), settled: true }),
+        lifecycle: NO_LIFECYCLE,
+        live: "",
+        inspected: false,
+      });
+      const lines = [...reading.output.lines, ...reading.source.lines];
+      expect(lines.length).toBeGreaterThanOrEqual(2000);
+      renderer.reset();
+      // The reading pane's room at 160x36, where every one of these lines wraps.
+      const prepared = yield* prepareReading(renderer, WIDE, lines, 49);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      expect(prepared.value.rows.length).toBeGreaterThanOrEqual(lines.length * 2);
+      // Searched alone, each line costs a render per search step: thousands.
+      // Together the count follows the search depth and the batch limits.
+      expect(renderer.measures()).toBeLessThan(150);
+      const oracle = yield* alone(renderer, WIDE, lines, 49);
+      if (!oracle.ok) {
+        throw oracle.error;
+      }
+      expect(rowsOf(prepared.value)).toEqual(oracle.value);
     }));
 });

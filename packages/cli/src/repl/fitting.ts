@@ -645,17 +645,24 @@ function* fitGeometry(
     return reserved;
   }
   const reservation = reserved.value;
-  const cuts: (readonly ReplRowCut[])[] = [];
   // Nesting is drawn inside the content region rather than beside it, so a
   // deeply nested element loses text room rather than pushing the status column
   // off the pane it was measured against.
-  for (const line of lines) {
-    const indent = Math.min(line.depth * 2, Math.max(0, reservation.content - 1));
-    const fitted = yield* fitLine(renderer, size, line, reservation.content - indent);
-    if (!fitted.ok) {
-      return fitted;
+  const rooms = lines.map((line) => ({
+    text: line.text,
+    room: reservation.content - Math.min(line.depth * 2, Math.max(0, reservation.content - 1)),
+  }));
+  let cuts = yield* cutTogether(renderer, size, rooms);
+  if (cuts === undefined) {
+    const inOrder: (readonly ReplRowCut[])[] = [];
+    for (const one of rooms) {
+      const fitted = yield* cutLines(renderer, size, [one]);
+      if (!fitted.ok) {
+        return fitted;
+      }
+      inOrder.push(fitted.value[0]);
     }
-    cuts.push(fitted.value);
+    cuts = inOrder;
   }
   // The finished candidates, measured again as the text they ended up being.
   // The search above narrowed over prefixes; this is the row, and a row that
@@ -788,6 +795,22 @@ export function* fitPlain(
     return Ok([]);
   }
   const fitted: ReplFittedLine[] = [];
+  // Every distinct line the store does not hold, cut together where that asks
+  // the same questions. The loop below still owns the store and the order, so a
+  // line this could not answer is cut there exactly as it would be alone.
+  const missing = [
+    ...new Set(
+      lines.filter((one) => store?.held(one.text, room, size) === undefined).map((one) => one.text),
+    ),
+  ];
+  const together = yield* cutTogether(
+    renderer,
+    size,
+    missing.map((text) => ({ text, room })),
+  );
+  const batched = new Map(
+    together === undefined ? [] : missing.map((text, at) => [text, together[at]] as const),
+  );
   for (const one of lines) {
     const runs = one.runs ?? tokenRuns([{ text: one.text, token: "source" }]);
     const line = Object.freeze({
@@ -802,11 +825,16 @@ export function* fitPlain(
     const retained = store?.held(one.text, room, size);
     let pieces: readonly ReplRowCut[];
     if (retained === undefined) {
-      const cuts = yield* fitLine(renderer, size, line, room);
-      if (!cuts.ok) {
-        return cuts;
+      const answered = batched.get(one.text);
+      if (answered === undefined) {
+        const cuts = yield* cutLines(renderer, size, [{ text: line.text, room }]);
+        if (!cuts.ok) {
+          return cuts;
+        }
+        pieces = cuts.value[0];
+      } else {
+        pieces = answered;
       }
-      pieces = cuts.value;
       store?.keep(one.text, room, size, pieces);
     } else {
       pieces = retained;
@@ -841,53 +869,179 @@ export function* fitPlain(
   return Ok(Object.freeze(fitted));
 }
 
+/** One logical line to cut, and the cells each of its rows may take. */
+interface ReplLineRoom {
+  readonly text: string;
+  readonly room: number;
+}
+
 /**
- * One logical line as the pieces it is cut into.
+ * Many lines cut in one search, or nothing where that is not the same search.
+ *
+ * Each measuring render costs about the same whether it carries one text or a
+ * thousand, and a reading of a thousand wrapping lines asked one text per
+ * render: about fifteen renders per line. Cut together, every line's question
+ * for the same step shares a render, so the count follows the depth of the
+ * deepest search rather than the number of lines.
+ *
+ * Only below the measuring terminal's own width. A text wider than the columns
+ * the engine was given is answered from the layout around it — alone a
+ * breakable one reports the terminal's width, beside a wider unbreakable one it
+ * reports its own — so a room that reaches the columns is cut one line at a
+ * time, as a lone question.
+ *
+ * And only where nothing failed. A failure found here is the one some line
+ * reached first in the search, which need not be the first line that fails,
+ * so it is discarded and the caller cuts its lines one at a time again: in
+ * written order, reaching the first failure and saying what it says.
+ */
+function* cutTogether(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  lines: readonly ReplLineRoom[],
+): Operation<readonly (readonly ReplRowCut[])[] | undefined> {
+  if (lines.length < 2 || lines.some((one) => one.room >= size.columns)) {
+    return undefined;
+  }
+  const cut = yield* cutLines(renderer, size, lines);
+  return cut.ok ? cut.value : undefined;
+}
+
+/** Where one line's search stands: the row it is cutting, and how far that row has narrowed. */
+interface ReplOpenLine {
+  readonly index: number;
+  readonly text: string;
+  readonly room: number;
+  readonly hanging: number;
+  readonly cuts: ReplRowCut[];
+  at: number;
+  rest: string;
+  rowRoom: number;
+  stops: readonly number[];
+  low: number;
+  high: number;
+}
+
+/**
+ * Logical lines as the pieces they are cut into, every line searched at once.
+ *
+ * Each line asks what it would ask alone, in the same order: one window probe,
+ * then for each row a search over that row's grapheme boundaries. What lines
+ * share is the render a step's questions travel in, so one line given alone is
+ * the sequential cut, one render per question.
  *
  * Widths are filled in by the pass that measures every finished piece at once;
  * nothing reads them in between.
  */
-function* fitLine(
+function* cutLines(
   renderer: ReplRenderer,
   size: ReplTerminalSize,
-  line: ReplReadingLine,
-  room: number,
-): Operation<Result<readonly ReplRowCut[]>> {
+  lines: readonly ReplLineRoom[],
+): Operation<Result<readonly (readonly ReplRowCut[])[]>> {
+  const cut: (readonly ReplRowCut[] | undefined)[] = lines.map(() => undefined);
   // A blank line is a row. Measuring it would ask the engine the width of
   // nothing, and dropping it would edit the shape of somebody's document.
-  if (line.text.length === 0) {
-    return Ok([piece(0, 0, false, 0)]);
+  const asked: number[] = [];
+  for (const [index, one] of lines.entries()) {
+    if (one.text.length === 0) {
+      cut[index] = [piece(0, 0, false, 0)];
+    } else {
+      asked.push(index);
+    }
   }
-  // Asked of as much of the line as the region could still hold. One row is a
+  // Asked of as much of each line as the region could still hold. One row is a
   // line the engine measured as fitting, and a line held back from the question
   // is longer than the answer it would have given, so it is cut.
-  const reach = windowOf(line.text, room);
-  const reaching = yield* widths(renderer, size, [line.text.slice(0, reach)]);
+  const reaches = asked.map((index) => windowOf(lines[index].text, lines[index].room));
+  const reaching = yield* widths(
+    renderer,
+    size,
+    asked.map((index, at) => lines[index].text.slice(0, reaches[at])),
+  );
   if (!reaching.ok) {
     return reaching;
   }
-  if (reach === line.text.length && reaching.value[0] <= room) {
-    return Ok([piece(0, line.text.length, false, 0)]);
-  }
-  // Where this line begins, so its continuations begin there too. Bounded well
-  // inside the region: an indent that left no room for text would make a row
-  // that consumes nothing, and this loop would not terminate.
-  const hanging = Math.min(
-    line.text.length - line.text.trimStart().length,
-    Math.max(0, Math.floor(room / 2)),
-  );
-  const cuts: ReplRowCut[] = [];
-  let at = 0;
-  while (at < line.text.length) {
-    const rest = line.text.slice(at);
-    const cut = yield* cutAt(renderer, size, rest, at > 0 ? room - hanging : room);
-    if (!cut.ok) {
-      return cut;
+  let open: ReplOpenLine[] = [];
+  for (const [at, index] of asked.entries()) {
+    const { text, room } = lines[index];
+    if (reaches[at] === text.length && reaching.value[at] <= room) {
+      cut[index] = [piece(0, text.length, false, 0)];
+      continue;
     }
-    cuts.push(piece(at, cut.value, at > 0, at > 0 ? hanging : 0));
-    at += cut.value;
+    open.push({
+      index,
+      text,
+      room,
+      // Where this line begins, so its continuations begin there too. Bounded
+      // well inside the region: an indent that left no room for text would make
+      // a row that consumes nothing, and this search would not terminate.
+      hanging: Math.min(text.length - text.trimStart().length, Math.max(0, Math.floor(room / 2))),
+      cuts: [],
+      at: 0,
+      rest: text,
+      rowRoom: room,
+      stops: [],
+      low: 0,
+      high: 0,
+    });
   }
-  return Ok(Object.freeze(cuts));
+  while (open.length > 0) {
+    for (const one of open) {
+      one.rest = one.text.slice(one.at);
+      one.rowRoom = one.at > 0 ? one.room - one.hanging : one.room;
+      // Over the boundaries of the prefix that could still fit, which is what
+      // keeps every candidate inside one render's budget and keeps this from
+      // segmenting the whole remainder once per row of a very long line.
+      one.stops = graphemeStops(one.rest.slice(0, windowOf(one.rest, one.rowRoom)));
+      one.low = 0;
+      one.high = one.stops.length - 1;
+    }
+    // Narrow every row still searching by halves over grapheme boundaries, all
+    // of their candidates for one step in one batch.
+    for (
+      let searching = open.filter((one) => one.low < one.high);
+      searching.length > 0;
+      searching = open.filter((one) => one.low < one.high)
+    ) {
+      const middles = searching.map((one) => Math.ceil((one.low + one.high) / 2));
+      const measured = yield* widths(
+        renderer,
+        size,
+        searching.map((one, at) => one.rest.slice(0, one.stops[middles[at]])),
+      );
+      if (!measured.ok) {
+        return measured;
+      }
+      for (const [at, one] of searching.entries()) {
+        if (measured.value[at] <= one.rowRoom) {
+          one.low = middles[at];
+        } else {
+          one.high = middles[at] - 1;
+        }
+      }
+    }
+    for (const one of open) {
+      if (one.low === 0) {
+        // Not one grapheme fits. Clipping it would show the reader a row that
+        // is not what their file says, so the frame refuses instead.
+        return Err(
+          new ReplFitRefusal(
+            `${one.rowRoom} columns hold no grapheme of ${JSON.stringify(
+              one.rest.slice(0, one.stops[1] ?? 1),
+            )}`,
+          ),
+        );
+      }
+      const length = rowLength(one.rest, one.stops[one.low]);
+      one.cuts.push(piece(one.at, length, one.at > 0, one.at > 0 ? one.hanging : 0));
+      one.at += length;
+      if (one.at >= one.text.length) {
+        cut[one.index] = Object.freeze(one.cuts);
+      }
+    }
+    open = open.filter((one) => one.at < one.text.length);
+  }
+  return Ok(Object.freeze(cut.map((one) => one ?? [])));
 }
 
 /** One cut, before the pass that measures it. */
@@ -896,14 +1050,14 @@ function piece(from: number, length: number, continuation: boolean, indent: numb
 }
 
 /**
- * How many code units of `rest` fit in `room`, cut where a reader would cut.
+ * How many code units of `rest` one row takes, given the longest prefix the
+ * engine measured as fitting: cut where a reader would cut.
  *
- * The longest prefix the engine measures as fitting, then back to its last
- * whitespace boundary if it has one — whitespace kept in the prefix, because it
- * is part of the line and the next row does not begin with somebody else's
- * space. A word longer than the region has no such boundary and is broken at
- * the longest fitting grapheme instead, which is the only way text wider than
- * its pane can be read at all.
+ * Back to the prefix's last whitespace boundary if it has one — whitespace kept
+ * in the prefix, because it is part of the line and the next row does not begin
+ * with somebody else's space. A word longer than the region has no such
+ * boundary and is broken at the longest fitting grapheme instead, which is the
+ * only way text wider than its pane can be read at all.
  *
  * Backing off is for a prefix, and what is left of a line is not one. Where the
  * measured prefix reaches the end of the whole remainder, that remainder is the
@@ -913,47 +1067,11 @@ function piece(from: number, length: number, continuation: boolean, indent: numb
  * The end of the *remainder* is what decides it, never the end of the bounded
  * window the search was asked over, which can stop short of it.
  */
-function* cutAt(
-  renderer: ReplRenderer,
-  size: ReplTerminalSize,
-  rest: string,
-  room: number,
-): Operation<Result<number>> {
-  // Over the boundaries of the prefix that could still fit, which is what keeps
-  // every candidate inside one render's budget and keeps this from segmenting
-  // the whole remainder once per row of a very long line.
-  const stops = graphemeStops(rest.slice(0, windowOf(rest, room)));
-  // Narrow by halves over grapheme boundaries, asking the engine for one batch
-  // of candidates per round rather than one render per candidate.
-  let low = 0;
-  let high = stops.length - 1;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const measured = yield* widths(renderer, size, [rest.slice(0, stops[middle])]);
-    if (!measured.ok) {
-      return measured;
-    }
-    if (measured.value[0] <= room) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  if (low === 0) {
-    // Not one grapheme fits. Clipping it would show the reader a row that is
-    // not what their file says, so the frame refuses instead.
-    return Err(
-      new ReplFitRefusal(
-        `${room} columns hold no grapheme of ${JSON.stringify(rest.slice(0, stops[1] ?? 1))}`,
-      ),
-    );
-  }
-  const longest = stops[low];
+function rowLength(rest: string, longest: number): number {
   if (longest === rest.length) {
-    return Ok(longest);
+    return longest;
   }
-  const preferred = wordBoundary(rest, longest);
-  return Ok(preferred === undefined ? longest : preferred);
+  return wordBoundary(rest, longest) ?? longest;
 }
 
 /**
