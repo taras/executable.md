@@ -15,7 +15,14 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, type Operation } from "effection";
-import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { API } from "@executablemd/runtime";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { withFailureJournal } from "@executablemd/testing";
+import { useTestDiagnostics } from "../../cli/src/test-diagnostics.ts";
+import { join } from "node:path";
 import { git, useBareRemote } from "./support/git-remotes.ts";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
@@ -39,6 +46,7 @@ import {
   useManagedRoot,
   worktreeSlotOf,
   type HostCheckout,
+  type ManagedSlot,
 } from "./support/run-composition.ts";
 import { CHILD, REMOTE, entriesOf, isManagedRefusal } from "./support/run-composition-tier.ts";
 
@@ -509,19 +517,77 @@ describe("ORC11 — an interrupted creation", () => {
   });
 });
 
-describe("ORC12 — exclusive ownership across processes", () => {
+const ORC12_SUITE = "ORC12 — exclusive ownership across processes";
+const OWNER = "packages/git/tests/run-composition-managed.test.ts";
+
+function parseJournal(value: unknown): DurableEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const events: DurableEvent[] = [];
+  for (const record of value) {
+    if (typeof record !== "string") {
+      return [];
+    }
+    const parsed = parseDurableEvent(record);
+    if (!parsed.ok) {
+      return [];
+    }
+    events.push(parsed.value);
+  }
+  return events;
+}
+
+describe(ORC12_SUITE, () => {
   /** One second process, run to completion, and what it reported. */
-  function* elsewhere(root: string, cwd: string, source: string): Operation<ChildOutcome> {
+  function* elsewhere(
+    root: string,
+    cwd: string,
+    source: string,
+    capture = false,
+  ): Operation<Omit<ChildOutcome, "journal"> & { events: DurableEvent[] }> {
     const outcome = spawnSync(
       process.execPath,
-      ["run", "--allow-all", "--frozen", CHILD, root, cwd, source],
+      [
+        "run",
+        "--allow-all",
+        "--frozen",
+        CHILD,
+        root,
+        cwd,
+        source,
+        ...(capture ? ["--capture-journal"] : []),
+      ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
-    const printed = outcome.stdout.trim().split("\n").at(-1) ?? "";
-    if (printed === "") {
-      throw new Error(`the child printed nothing: ${outcome.stderr}`);
+    const printed = outcome.stdout?.trim().split("\n").at(-1);
+    if (outcome.status !== 0 || !printed) {
+      throw new Error(
+        `the checkout fixture returned no successful result (exit ${outcome.status})`,
+      );
     }
-    return JSON.parse(printed) as ChildOutcome;
+    let result: unknown;
+    try {
+      result = JSON.parse(printed);
+    } catch {
+      throw new Error("the checkout fixture result is invalid JSON");
+    }
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("kind" in result) ||
+      (result.kind !== "selected" && result.kind !== "refused" && result.kind !== "failed")
+    ) {
+      throw new Error("the checkout fixture result has an invalid kind");
+    }
+    return {
+      kind: result.kind,
+      bound: "bound" in result && typeof result.bound === "string" ? result.bound : undefined,
+      reason: "reason" in result && typeof result.reason === "string" ? result.reason : undefined,
+      message:
+        "message" in result && typeof result.message === "string" ? result.message : undefined,
+      events: capture && "journal" in result ? parseJournal(result.journal) : [],
+    };
   }
 
   it("refuses a second process the slot a first is holding, and changes nothing", function* () {
@@ -565,6 +631,7 @@ describe("ORC12 — exclusive ownership across processes", () => {
     expect(refused.kind).toBe("refused");
     expect(refused.reason).toBe("in-use");
     expect(refused.message).toContain("another process is working in");
+    expect(refused.events).toEqual([]);
     // And nothing under the slot moved.
     expect(yield* fingerprintTree(held.slot)).toEqual(bytes);
 
@@ -590,7 +657,15 @@ describe("ORC12 — exclusive ownership across processes", () => {
     expect(yield* exists(`${held.checkout}/held.md`)).toBe(true);
   });
 
-  it("hands a slot on after a normal release, with the checkout intact", function* () {
+  function* checkSerialSidecar(slot: ManagedSlot): Operation<void> {
+    expect(yield* readSidecar(slot)).toMatchObject({ kind: "worktree", name: "serial" });
+  }
+
+  function* normalRelease(
+    name: string,
+    check: (slot: ManagedSlot, records: readonly DurableEvent[]) => Operation<void>,
+    artifacts?: string,
+  ): Operation<void> {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
@@ -601,11 +676,84 @@ describe("ORC12 — exclusive ownership across processes", () => {
     const bound = yield* runOrdinaryDocument(document, { root, cwd: checkout.root });
     expect(String(bound).trim()).toBe(slot.checkout);
 
-    // A real second process then takes it, and finds the same checkout.
-    const later = yield* elsewhere(root, checkout.root, document);
-    expect(later.kind).toBe("selected");
-    expect(later.bound).toBe(slot.checkout);
-    expect(yield* readSidecar(slot)).toMatchObject({ kind: "worktree", name: "serial" });
+    yield* scoped(function* () {
+      if (artifacts !== undefined) {
+        yield* API.Env.around({
+          *env([variable], next) {
+            return variable === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(variable);
+          },
+        });
+      }
+      const diagnostics = yield* useTestDiagnostics(process.stderr, {
+        owner: OWNER,
+        suite: ORC12_SUITE,
+        name,
+      });
+      yield* withFailureJournal(
+        diagnostics.execution("child", "<eval>").journal(() => false),
+        function* (buffer) {
+          // The real second process takes the same checkout. Its result is available after exit.
+          const later = yield* elsewhere(root, checkout.root, document, true);
+          for (const event of later.events) {
+            yield* buffer.append(event);
+          }
+          expect(later.kind).toBe("selected");
+          expect(later.bound).toBe(slot.checkout);
+          yield* check(slot, later.events);
+        },
+      );
+    });
+  }
+
+  const normalCase = "hands a slot on after a normal release, with the checkout intact";
+  it(normalCase, () => normalRelease(normalCase, checkSerialSidecar));
+
+  const witness = "attributes the child journal when the post-exit sidecar assertion fails";
+  it(witness, function* () {
+    const root = yield* useTempDirectory("xmd-orc12-failure-");
+    const success = join(root, "passed", ".xmd", "test-artifacts");
+    yield* normalRelease(witness, checkSerialSidecar, success);
+    expect(yield* exists(success)).toBe(false);
+    const artifacts = join(root, ".xmd", "test-artifacts");
+    let received: readonly DurableEvent[] = [];
+    let assertion: unknown;
+    let caught: unknown;
+    try {
+      yield* normalRelease(
+        witness,
+        function* (slot, records) {
+          received = records;
+          yield* rm(slot.metadata);
+          try {
+            yield* checkSerialSidecar(slot);
+          } catch (error) {
+            assertion = error;
+            throw error;
+          }
+        },
+        artifacts,
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(assertion).toBeInstanceOf(Error);
+    expect(caught).toBe(assertion);
+    const invocations = yield* readdir(artifacts);
+    expect(invocations).toHaveLength(1);
+    const directory = join(artifacts, invocations[0]);
+    expect((yield* readdir(directory)).sort()).toEqual(["child-1.case.json", "child-1.jsonl"]);
+    expect(JSON.parse(yield* readTextFile(join(directory, "child-1.case.json")))).toEqual({
+      owner: OWNER,
+      suite: ORC12_SUITE,
+      name: witness,
+      kind: "child",
+      ordinal: 1,
+      source: "<eval>",
+    });
+    const lines = (yield* readTextFile(join(directory, "child-1.jsonl"))).trimEnd().split("\n");
+    const events = parseJournal(lines);
+    expect(events).toEqual(received);
+    expect(events.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
   });
 });
 
