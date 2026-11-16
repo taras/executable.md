@@ -3172,7 +3172,9 @@ function sourceOf(lines: number): string {
  * first frame is warmup; the number returned is what the *second* frame costs
  * when the only thing that changed is the draft beside the reading.
  */
-function* frameCost(lines: number): Operation<{ warmup: number; typed: number }> {
+function* frameCost(
+  lines: number,
+): Operation<{ warmup: number; warmupTexts: number; typed: number; typedTexts: number }> {
   return yield* scoped(function* () {
     const renderer = yield* useCountingRenderer(WIDE);
     const tree = yield* useReplTree<ReplAction>();
@@ -3207,6 +3209,7 @@ function* frameCost(lines: number): Operation<{ warmup: number; typed: number }>
       throw first.error;
     }
     const warmup = renderer.measures();
+    const warmupTexts = renderer.texts();
     renderer.reset();
     const second = yield* commitReplFrame(
       tree,
@@ -3220,7 +3223,7 @@ function* frameCost(lines: number): Operation<{ warmup: number; typed: number }>
     if (!second.ok) {
       throw second.error;
     }
-    return { warmup, typed: renderer.measures() };
+    return { warmup, warmupTexts, typed: renderer.measures(), typedTexts: renderer.texts() };
   });
 }
 
@@ -3231,9 +3234,11 @@ describe("REPL responsiveness: a complete frame after a keystroke", () => {
       const long = yield* frameCost(222);
 
       // The first frame of each pays for its own reading, and the long one
-      // pays far more — so these two fixtures really do differ in the work
-      // the cache is about.
-      expect(long.warmup).toBeGreaterThan(short.warmup * 4);
+      // asks the engine about far more text — so these two fixtures really do
+      // differ in the work the cache is about. Its lines share renders, so the
+      // difference is in the texts those renders carry.
+      expect(long.warmupTexts).toBeGreaterThan(short.warmupTexts * 4);
+      expect(long.warmup).toBeGreaterThan(0);
 
       // The second frame changed only the draft. What it costs is the fixed
       // measurement a complete frame always performs — three structural
@@ -3245,7 +3250,8 @@ describe("REPL responsiveness: a complete frame after a keystroke", () => {
       // fitter on its own.
       expect(short.typed).toBeGreaterThan(0);
       // And it is a fraction of what the reading cost to fit.
-      expect(long.typed).toBeLessThan(long.warmup / 10);
+      expect(long.typedTexts).toBe(short.typedTexts);
+      expect(long.typedTexts).toBeLessThan(long.warmupTexts / 10);
     }));
 });
 
