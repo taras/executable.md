@@ -419,70 +419,77 @@ describe("Tier FD — File.Delete", () => {
   // invocation is not one the engine made, and guessing "self-closing" there
   // would be guessing *delete* — so it refuses before `cwd()` and therefore
   // before any provider.
-  it("FD3c: a look-alike invocation removes nothing and reaches no provider", function* () {
-    const fixture = yield* useFixture();
-    yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
-    const reached: string[] = [];
+  fixtureCase(
+    "FD3c: a look-alike invocation removes nothing and reaches no provider",
+    function* (fixture, stream) {
+      yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+      const reached: string[] = [];
 
-    // Not an absence — a forgery. The whole public shape is here: a method of
-    // the right name, taking nothing, returning a boolean. Every check written
-    // against the shape passes, which is why the component authenticates the
-    // object instead. `false` is the dangerous answer for a paired element, and
-    // it is the one this reports.
-    const mismatched: ComponentInvocation = {
-      hasContent() {
-        return false;
-      },
-    };
+      // Not an absence — a forgery. The whole public shape is here: a method of
+      // the right name, taking nothing, returning a boolean. Every check written
+      // against the shape passes, which is why the component authenticates the
+      // object instead. `false` is the dangerous answer for a paired element, and
+      // it is the one this reports.
+      const mismatched: ComponentInvocation = {
+        hasContent() {
+          return false;
+        },
+      };
 
-    let failure: string | undefined;
-    try {
-      yield* run(fixture, '<File.Delete path="kept.md" />', function* () {
-        yield* API.Env.around({
-          *cwd(_args, next) {
-            reached.push("cwd");
-            return yield* next();
-          },
-        });
-        yield* Files.around({
-          *deleteFile([input], next) {
-            reached.push(`delete:${input.path}`);
-            return yield* next(input);
-          },
-        });
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            const definition = yield* next(name, position);
-            if (name !== "File.Delete" || definition.kind !== "function") {
-              return definition;
-            }
-            const original = definition.fn;
-            if (typeof original !== "function") {
-              return definition;
-            }
-            return {
-              ...definition,
-              *fn(props: Record<string, Json>) {
-                return yield* original(props, mismatched);
+      let failure: string | undefined;
+      try {
+        yield* run(
+          fixture,
+          '<File.Delete path="kept.md" />',
+          function* () {
+            yield* API.Env.around({
+              *cwd(_args, next) {
+                reached.push("cwd");
+                return yield* next();
               },
-            };
+            });
+            yield* Files.around({
+              *deleteFile([input], next) {
+                reached.push(`delete:${input.path}`);
+                return yield* next(input);
+              },
+            });
+            yield* Component.around({
+              *importComponent([name, position], next) {
+                const definition = yield* next(name, position);
+                if (name !== "File.Delete" || definition.kind !== "function") {
+                  return definition;
+                }
+                const original = definition.fn;
+                if (typeof original !== "function") {
+                  return definition;
+                }
+                return {
+                  ...definition,
+                  *fn(props: Record<string, Json>) {
+                    return yield* original(props, mismatched);
+                  },
+                };
+              },
+            });
           },
-        });
-      });
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-    }
+          stream,
+        );
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
 
-    // It stops one layer earlier than it used to. The wrapper returns a
-    // definition canonical execution did not issue, and this is a name
-    // canonical core owns, so verification refuses the answer before anything
-    // is invoked with the forged invocation at all. The dispatcher's own
-    // refusal is still there underneath — `fixed-filesystem-components.test.ts`
-    // reaches it directly, without an import to intercept.
-    expect(failure).toContain("canonical execution did not produce");
-    expect(reached).toEqual([]);
-    expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
-  });
+      // It stops one layer earlier than it used to. The wrapper returns a
+      // definition canonical execution did not issue, and this is a name
+      // canonical core owns, so verification refuses the answer before anything
+      // is invoked with the forged invocation at all. The dispatcher's own
+      // refusal is still there underneath — `fixed-filesystem-components.test.ts`
+      // reaches it directly, without an import to intercept.
+      expect(failure).toContain("canonical execution did not produce");
+      expect(reached).toEqual([]);
+      expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
+    },
+  );
 
   // FD5: every refusal the component has its own sentence for, and the one rule
   // they share — a printed error names the path the document wrote and nothing
@@ -503,26 +510,41 @@ describe("Tier FD — File.Delete", () => {
       { path: "held", says: 'cannot delete "held": it is a directory, not a file.' },
     ];
 
-    for (const refused of cases) {
-      const removed: string[] = [];
-      const output = yield* run(fixture, `<File.Delete path="${refused.path}" />`, function* () {
-        yield* API.Fs.around({
-          *remove([path, options], next) {
-            removed.push(path);
-            return yield* next(path, options);
+    const verifyRefusals = cases.reduceRight<() => Operation<void>>(
+      (next, refused) => () =>
+        captureTestJournal(
+          { owner: OWNER, name: pathRefusals },
+          join(fixture.workspace, "doc.md"),
+          function* (stream) {
+            const removed: string[] = [];
+            const output = yield* run(
+              fixture,
+              `<File.Delete path="${refused.path}" />`,
+              function* () {
+                yield* API.Fs.around({
+                  *remove([path, options], proceed) {
+                    removed.push(path);
+                    return yield* proceed(path, options);
+                  },
+                });
+              },
+              stream,
+            );
+
+            expect(output).toContain(refused.says);
+            expectNoAbsolutePaths(output, fixture);
+            // Nothing was attempted: each of these is decided before the removal.
+            expect(removed).toEqual([]);
+            yield* next();
           },
-        });
-      });
-
-      expect(output).toContain(refused.says);
-      expectNoAbsolutePaths(output, fixture);
-      // Nothing was attempted: each of these is decided before the removal.
-      expect(removed).toEqual([]);
-    }
-
-    // And none of them touched what they named.
-    expect(yield* readTextFile(join(fixture.outside, "secret.txt"))).toBe("SECRET");
-    expect(yield* readTextFile(join(fixture.workspace, "held", "inner.txt"))).toBe("kept");
+        ),
+      function* () {
+        // And none of them touched what they named.
+        expect(yield* readTextFile(join(fixture.outside, "secret.txt"))).toBe("SECRET");
+        expect(yield* readTextFile(join(fixture.workspace, "held", "inner.txt"))).toBe("kept");
+      },
+    );
+    yield* verifyRefusals();
 
     // The same spy on a deletion that is admitted, so the empty lists above are
     // a removal that did not happen rather than a spy that never fired.
