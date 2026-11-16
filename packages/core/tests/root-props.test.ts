@@ -5,6 +5,7 @@
  * validated and defaulted before any body effect, then available through
  * `{props.name}`, bare binding interpolation, and eval blocks.
  */
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -98,7 +99,8 @@ function* runDoc(
   return yield* runPath(path, props, stream);
 }
 
-const rootCase = journalCases("packages/core/tests/root-props.test.ts");
+const OWNER = "packages/core/tests/root-props.test.ts";
+const rootCase = journalCases(OWNER);
 
 describe("Tier RP — root document properties", () => {
   rootCase(
@@ -245,7 +247,8 @@ describe("Tier RI — document inspection", () => {
     expect(failed).toBe(true);
   });
 
-  it("RI6: inspection and execution agree on which roots are markdown", function* () {
+  const extensions = "RI6: inspection and execution agree on which roots are markdown";
+  it(extensions, function* () {
     // Execution parses any non-TypeScript root as markdown, so inspection
     // must not require a `.md` suffix.
     const names = ["README", "notes.markdown", "doc.md"];
@@ -255,15 +258,17 @@ describe("Tier RI — document inspection", () => {
       const info = yield* inspectDocument({ path: name });
       expect(info.props).toMatchObject({ required: ["name"] });
 
-      const execution = yield* execute({
-        path: name,
-        stream: new InMemoryStream(),
-        props: { name: "Ada" },
+      yield* captureTestJournal({ owner: OWNER, name: extensions }, name, function* (stream) {
+        const execution = yield* execute({
+          path: name,
+          stream,
+          props: { name: "Ada" },
+        });
+        const output = yield* forEach(function* () {}, execution.output);
+        const result = yield* execution;
+        expect(result.ok).toBe(true);
+        expect(output).toContain("Hello, Ada!");
       });
-      const output = yield* forEach(function* () {}, execution.output);
-      const result = yield* execution;
-      expect(result.ok).toBe(true);
-      expect(output).toContain("Hello, Ada!");
     }
   });
 });
@@ -288,11 +293,17 @@ describe("Tier RS — concise props declarations", () => {
     },
   );
 
-  it("RS2: the concise and full spellings behave identically", function* () {
+  const comparison = "RS2: the concise and full spellings behave identically";
+  it(comparison, function* () {
     yield* useStubFs({ "concise.md": GREETING_CONCISE, "full.md": GREETING });
-    const concise = yield* runPath("concise.md", { name: "Ada", loud: true });
-    const full = yield* runPath("full.md", { name: "Ada", loud: true });
-    expect(concise.output).toBe(full.output);
+    const label = { owner: OWNER, name: comparison };
+    yield* captureTestJournal(label, "concise.md", function* (conciseStream) {
+      const concise = yield* runPath("concise.md", { name: "Ada", loud: true }, conciseStream);
+      yield* captureTestJournal(label, "full.md", function* (fullStream) {
+        const full = yield* runPath("full.md", { name: "Ada", loud: true }, fullStream);
+        expect(concise.output).toBe(full.output);
+      });
+    });
   });
 
   rootCase(
@@ -338,24 +349,29 @@ describe("Tier RS — concise props declarations", () => {
     expect(output).toContain("port=8080");
   });
 
-  it("RS6: an imported concise component validates props like the root", function* () {
+  const imported = "RS6: an imported concise component validates props like the root";
+  it(imported, function* () {
     yield* useStubFs({
       "supplied.md": '<Greeting name="Ada" />\n',
       "omitted.md": "<Greeting />\n",
       "Greeting.md": GREETING_CONCISE,
     });
-    const supplied = yield* runPath("supplied.md");
-    expect(supplied.result.ok).toBe(true);
-    expect(supplied.output).toContain("Hello, Ada!");
-
-    // Nothing recovers the component's prop failure, so it is the run's own
-    // outcome and the component renders nothing.
-    const omitted = yield* runPath("omitted.md");
-    expect(omitted.result.ok).toBe(false);
-    const reported = omitted.result.ok ? "" : omitted.result.error.message;
-    expect(reported).toContain("Prop validation failed for <Greeting />");
-    expect(reported).toContain("must have required property 'name'");
-    expect(omitted.output).not.toContain("Hello, ");
+    const label = { owner: OWNER, name: imported };
+    yield* captureTestJournal(label, "supplied.md", function* (stream) {
+      const supplied = yield* runPath("supplied.md", undefined, stream);
+      expect(supplied.result.ok).toBe(true);
+      expect(supplied.output).toContain("Hello, Ada!");
+    });
+    yield* captureTestJournal(label, "omitted.md", function* (stream) {
+      // Nothing recovers the component's prop failure, so it is the run's own
+      // outcome and the component renders nothing.
+      const omitted = yield* runPath("omitted.md", undefined, stream);
+      expect(omitted.result.ok).toBe(false);
+      const reported = omitted.result.ok ? "" : omitted.result.error.message;
+      expect(reported).toContain("Prop validation failed for <Greeting />");
+      expect(reported).toContain("must have required property 'name'");
+      expect(omitted.output).not.toContain("Hello, ");
+    });
   });
 
   it("RS7: inspection returns the normalized schema", function* () {
