@@ -22,6 +22,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { collect } from "../src/collect.ts";
 import { GlobError } from "../src/components/Glob.ts";
 import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
@@ -66,18 +67,22 @@ function* useCwd(directory: string): Operation<void> {
   );
 }
 
-function run(fixture: Fixture, source: string): Operation<Json> {
-  return runWith(fixture, source, new InMemoryStream());
+function fixtureDocument(fixture: Fixture): string {
+  return join(fixture.workspace, "..", "doc.md");
+}
+
+function run(fixture: Fixture, source: string, stream = new InMemoryStream()): Operation<Json> {
+  return runWith(fixture, source, stream);
 }
 
 /**
  * What one run said: its rendered text, or the diagnostic it reported. A
  * refusal nothing recovers is the run's own outcome.
  */
-function said(fixture: Fixture, source: string): Operation<string> {
+function said(fixture: Fixture, source: string, stream?: InMemoryStream): Operation<string> {
   return (function* () {
     try {
-      return String(yield* run(fixture, source));
+      return String(yield* run(fixture, source, stream));
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
@@ -101,7 +106,7 @@ function runWith(
   return scoped(function* () {
     // The document lives beside the workspace, not inside it, so it is never
     // itself a match — a `**/*` in a test means only what the test laid out.
-    const path = join(fixture.workspace, "..", "doc.md");
+    const path = fixtureDocument(fixture);
     if (source !== undefined) {
       yield* writeTextFile(path, source);
     }
@@ -202,7 +207,23 @@ const ADVERSARIAL: Array<{ name: string; error: () => unknown }> = [
   },
 ];
 
-describe("Tier GB — Glob component", () => {
+const SUITE = "Tier GB — Glob component";
+
+function globCase(
+  name: string,
+  body: (fixture: Fixture, stream: InMemoryStream) => Operation<void>,
+): void {
+  it(name, function* () {
+    const fixture = yield* useFixture();
+    yield* captureTestJournal(
+      { owner: "packages/core/tests/glob-component.test.ts", suite: SUITE, name },
+      fixtureDocument(fixture),
+      (stream) => body(fixture, stream),
+    );
+  });
+}
+
+describe(SUITE, () => {
   // GB1: props are validated like any component's — no name-specific check.
   it("GB1: include is required and undeclared props are rejected", function* () {
     const fixture = yield* useFixture();
@@ -216,10 +237,8 @@ describe("Tier GB — Glob component", () => {
 
   // GB2: an empty include list is not "match nothing" — it is a pattern list
   // that forgot to say anything, and the schema is where that is caught.
-  it("GB2: an empty include list is rejected", function* () {
-    const fixture = yield* useFixture();
-
-    const output = yield* said(fixture, '<Glob include={[]} as="found" />');
+  globCase("GB2: an empty include list is rejected", function* (fixture, stream) {
+    const output = yield* said(fixture, '<Glob include={[]} as="found" />', stream);
 
     expect(output).toContain('"/include" must NOT have fewer than 1 items');
   });
@@ -242,20 +261,17 @@ describe("Tier GB — Glob component", () => {
   // GB4: declaring `returns` is what requires `as` (§6.10). Nothing in the
   // component enforces it, which is the point — it is the value-component
   // contract, not a rule of its own.
-  it("GB4: invoking without as fails", function* () {
-    const fixture = yield* useFixture();
-
-    const output = yield* said(fixture, '<Glob include={["*.md"]} />');
+  globCase("GB4: invoking without as fails", function* (fixture, stream) {
+    const output = yield* said(fixture, '<Glob include={["*.md"]} />', stream);
 
     expect(output).toContain("must be invoked with `as`");
   });
 
   // GB5: `exclude` is optional, and omitting it excludes nothing.
-  it("GB5: exclude defaults to empty", function* () {
-    const fixture = yield* useFixture();
+  globCase("GB5: exclude defaults to empty", function* (fixture, stream) {
     yield* plant(fixture, ["a.md", "nested/b.md"]);
 
-    const output = text(yield* run(fixture, FIND_ALL));
+    const output = text(yield* run(fixture, FIND_ALL, stream));
 
     expect(output).toContain(found("a.md", "nested/b.md"));
   });
@@ -314,10 +330,8 @@ describe("Tier GB — Glob component", () => {
 
   // GB8: an empty pattern matches nothing by construction, so it is the same
   // authoring mistake as an absolute one.
-  it("GB8: an empty pattern fails", function* () {
-    const fixture = yield* useFixture();
-
-    const output = text(yield* run(fixture, '<Glob include={["*.md", ""]} as="found" />'));
+  globCase("GB8: an empty pattern fails", function* (fixture, stream) {
+    const output = text(yield* run(fixture, '<Glob include={["*.md", ""]} as="found" />', stream));
 
     expect(output).toContain("empty pattern");
   });
@@ -483,26 +497,27 @@ describe("Tier GB — Glob component", () => {
   // GB15b: a link back into the workspace is refused on the same terms. The
   // rule is about symlinks, not about where they point, so `<Glob>` never has
   // to judge a destination.
-  it("GB15b: a directory symlink inside the workspace is not traversed either", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["real/a.md"]);
-    yield* until(symlink(join(fixture.workspace, "real"), join(fixture.workspace, "alias")));
+  globCase(
+    "GB15b: a directory symlink inside the workspace is not traversed either",
+    function* (fixture, stream) {
+      yield* plant(fixture, ["real/a.md"]);
+      yield* until(symlink(join(fixture.workspace, "real"), join(fixture.workspace, "alias")));
 
-    const output = text(yield* run(fixture, FIND_ALL));
+      const output = text(yield* run(fixture, FIND_ALL, stream));
 
-    expect(output).toContain(found("real/a.md"));
-    expect(output).not.toContain("alias/");
-  });
+      expect(output).toContain(found("real/a.md"));
+      expect(output).not.toContain("alias/");
+    },
+  );
 
   // GB15c: the cycle that rule prevents. A link to its own parent would be an
   // unbounded walk if it were followed; the search finishes.
-  it("GB15c: a symlink cycle does not hang the search", function* () {
-    const fixture = yield* useFixture();
+  globCase("GB15c: a symlink cycle does not hang the search", function* (fixture, stream) {
     yield* plant(fixture, ["a.md"]);
     yield* until(symlink(fixture.workspace, join(fixture.workspace, "loop")));
 
     const output = text(
-      yield* race([run(fixture, FIND_ALL), timeout("GB15c: the search did not finish")]),
+      yield* race([run(fixture, FIND_ALL, stream), timeout("GB15c: the search did not finish")]),
     );
 
     expect(output).toContain(found("a.md"));
@@ -510,12 +525,11 @@ describe("Tier GB — Glob component", () => {
 
   // GB16: a symlink is a link rather than a file, so it is not a result even
   // when its destination is an ordinary file inside the workspace.
-  it("GB16: a symlink to a file is not a result", function* () {
-    const fixture = yield* useFixture();
+  globCase("GB16: a symlink to a file is not a result", function* (fixture, stream) {
     yield* plant(fixture, ["a.md"]);
     yield* until(symlink(join(fixture.workspace, "a.md"), join(fixture.workspace, "link.md")));
 
-    const output = text(yield* run(fixture, FIND_ALL));
+    const output = text(yield* run(fixture, FIND_ALL, stream));
 
     expect(output).toContain(found("a.md"));
     expect(output).not.toContain("link.md");
