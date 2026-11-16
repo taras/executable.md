@@ -28,9 +28,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
-import { withFailureJournal } from "@executablemd/testing";
 import { partitionEntrySegments, ROOT_IMPORT } from "../src/repl/entries.ts";
-import { useTestDiagnostics } from "../src/test-diagnostics.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import type { DeliverySink } from "../src/stdout-delivery.ts";
 
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -237,93 +236,98 @@ function* readAll(holder: ReplExecution): Operation<DurableEvent[]> {
 
 const REFERENCE_PATH = join(REFERENCE_DIRECTORY, "entry.md");
 
+const OWNER = "packages/cli/tests/repl-execution.test.ts";
+const SUBMIT_SUITE = "REPL execution: submitting one entry";
+
 function captureReferenceEntry(
+  name: string,
   body: (holder: ReplExecution) => Operation<void>,
   sink: DeliverySink = process.stderr,
 ): Operation<void> {
-  return scoped(function* () {
-    const diagnostics = yield* useTestDiagnostics(sink);
-    const journal = diagnostics.execution("root", REFERENCE_PATH).journal(() => false);
-    yield* withFailureJournal(
-      {
-        ...journal,
-        *save(events) {
-          const partition = partitionEntrySegments(events);
-          if (!partition.ok) {
-            throw partition.error;
-          }
-          if (partition.value.length > 1) {
-            throw new Error("reference execution holds more than one admitted entry");
-          }
-          const [entry] = partition.value;
-          if (entry !== undefined) {
-            yield* journal.save(entry.events);
-          }
-        },
+  return captureTestJournal(
+    { owner: OWNER, suite: SUBMIT_SUITE, name },
+    REFERENCE_PATH,
+    (stream) => body({ id: "kf39sla2", stream }),
+    {
+      sink,
+      selectEvents(events) {
+        const partition = partitionEntrySegments(events);
+        if (!partition.ok) {
+          throw partition.error;
+        }
+        if (partition.value.length > 1) {
+          throw new Error("reference execution holds more than one admitted entry");
+        }
+        return partition.value[0]?.events ?? [];
       },
-      (stream) => body({ id: "kf39sla2", stream }),
-    );
-  });
+    },
+  );
 }
 
 function admitReferenceEntry(
+  name: string,
   check?: (holder: ReplExecution) => Operation<void>,
   sink?: DeliverySink,
 ): Operation<void> {
-  return captureReferenceEntry(function* (holder) {
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+  return captureReferenceEntry(
+    name,
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    const question = yield* nextQuestion(session);
-    expect(question.message).toContain("Approve Ship the REPL?");
-    // The whole form the schema reads as, member for member: every field the
-    // drawer draws, with its annotations, its required marker and the values it
-    // accepts.
-    expect(question.form).toEqual({
-      title: undefined,
-      description: undefined,
-      condition: undefined,
-      fields: [
-        {
-          name: "decision",
-          title: undefined,
-          description: undefined,
-          choices: ["approve", "decline"],
-          minLength: undefined,
-          required: true,
-        },
-      ],
-    });
-    expect(session.model.entries[0]?.scope.elicitations).toEqual([]);
+      const question = yield* nextQuestion(session);
+      expect(question.message).toContain("Approve Ship the REPL?");
+      // The whole form the schema reads as, member for member: every field the
+      // drawer draws, with its annotations, its required marker and the values it
+      // accepts.
+      expect(question.form).toEqual({
+        title: undefined,
+        description: undefined,
+        condition: undefined,
+        fields: [
+          {
+            name: "decision",
+            title: undefined,
+            description: undefined,
+            choices: ["approve", "decline"],
+            minLength: undefined,
+            required: true,
+          },
+        ],
+      });
+      expect(session.model.entries[0]?.scope.elicitations).toEqual([]);
 
-    expect(question.submit({ decision: "approve" }).kind).toBe("answered");
-    yield* session.join();
+      expect(question.submit({ decision: "approve" }).kind).toBe("answered");
+      yield* session.join();
 
-    const entry = session.model.entries[0]?.scope;
-    if (entry === undefined) {
-      throw new Error("the entry was admitted");
-    }
-    expect(entry.source).toBe(source);
-    expect(entry.bindings.map((binding) => binding.name)).toContain("plan");
-    expect(entry.scopes.map((scope) => scope.key)).toEqual(["Checklist-1", "generated-1"]);
-    expect(entry.elicitations[0].answer).toEqual({ decision: "approve" });
-    expect(session.model.settled).toBe(true);
-    expect(session.model.terminal?.output).toContain("Decision: approve");
-    expect(session.overlay.output).toBe(session.model.terminal?.output);
-    if (check !== undefined) {
-      yield* check(holder);
-    }
-  }, sink);
+      const entry = session.model.entries[0]?.scope;
+      if (entry === undefined) {
+        throw new Error("the entry was admitted");
+      }
+      expect(entry.source).toBe(source);
+      expect(entry.bindings.map((binding) => binding.name)).toContain("plan");
+      expect(entry.scopes.map((scope) => scope.key)).toEqual(["Checklist-1", "generated-1"]);
+      expect(entry.elicitations[0].answer).toEqual({ decision: "approve" });
+      expect(session.model.settled).toBe(true);
+      expect(session.model.terminal?.output).toContain("Decision: approve");
+      expect(session.overlay.output).toBe(session.model.terminal?.output);
+      if (check !== undefined) {
+        yield* check(holder);
+      }
+    },
+    sink,
+  );
 }
 
-describe("REPL execution: submitting one entry", () => {
+describe(SUBMIT_SUITE, () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("X1: admits the exact source, binds, generates, asks, and settles", () =>
-    admitReferenceEntry());
+  const admission = "X1: admits the exact source, binds, generates, asks, and settles";
+  it(admission, () => admitReferenceEntry(admission));
 
-  it("X1: the overlay reports its output as the document prints it", () =>
-    captureReferenceEntry(function* (holder) {
+  const overlay = "X1: the overlay reports its output as the document prints it";
+  it(overlay, () =>
+    captureReferenceEntry(overlay, function* (holder) {
       const source = yield* referenceSource();
       const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
@@ -354,9 +358,11 @@ describe("REPL execution: submitting one entry", () => {
 
       question.submit({ decision: "approve" });
       yield* session.join();
-    }));
+    }),
+  );
 
-  it("saves the joined reference entry only when its case fails after admission", function* () {
+  const witness = "saves the joined reference entry only when its case fails after admission";
+  it(witness, function* () {
     const directory = yield* useTempDirectory("xmd-repl-entry-journal-");
     const failed = join(directory, "failed");
     const passed = join(directory, "passed");
@@ -386,19 +392,23 @@ describe("REPL execution: submitting one entry", () => {
     try {
       yield* atArtifactRoot(
         failed,
-        admitReferenceEntry(function* (holder) {
-          recorded = yield* readAll(holder);
-          try {
-            expect(
-              recorded.some(
-                (event) => event.type === "yield" && event.description.name === ROOT_IMPORT,
-              ),
-            ).toBe(false);
-          } catch (error) {
-            assertionFailure = error;
-            throw error;
-          }
-        }, sink),
+        admitReferenceEntry(
+          witness,
+          function* (holder) {
+            recorded = yield* readAll(holder);
+            try {
+              expect(
+                recorded.some(
+                  (event) => event.type === "yield" && event.description.name === ROOT_IMPORT,
+                ),
+              ).toBe(false);
+            } catch (error) {
+              assertionFailure = error;
+              throw error;
+            }
+          },
+          sink,
+        ),
       );
     } catch (error) {
       caught = error;
@@ -417,14 +427,22 @@ describe("REPL execution: submitting one entry", () => {
     const invocations = yield* readdir(failed);
     expect(invocations).toHaveLength(1);
     const invocation = join(failed, invocations[0]);
-    expect(yield* readdir(invocation)).toEqual(["root-1.jsonl"]);
+    expect((yield* readdir(invocation)).sort()).toEqual(["root-1.case.json", "root-1.jsonl"]);
+    expect(JSON.parse(yield* readTextFile(join(invocation, "root-1.case.json")))).toEqual({
+      owner: OWNER,
+      suite: SUBMIT_SUITE,
+      name: witness,
+      kind: "root",
+      ordinal: 1,
+      source: "packages/cli/tests/fixtures/repl/entry.md",
+    });
     const journal = join(invocation, "root-1.jsonl");
     expect(yield* readRecords(journal)).toEqual(entry.events);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(`journal saved: ${journal} (root 1 `);
     expect(lines[0]).toContain("packages/cli/tests/fixtures/repl/entry.md)");
 
-    yield* atArtifactRoot(passed, admitReferenceEntry(undefined, sink));
+    yield* atArtifactRoot(passed, admitReferenceEntry(witness, undefined, sink));
     expect(yield* exists(passed)).toBe(false);
 
     const beforeAdmission = new Error("pre-admission failure");
@@ -432,10 +450,14 @@ describe("REPL execution: submitting one entry", () => {
     try {
       yield* atArtifactRoot(
         empty,
-        captureReferenceEntry(function* (holder) {
-          expect(yield* readAll(holder)).toEqual([]);
-          throw beforeAdmission;
-        }, sink),
+        captureReferenceEntry(
+          witness,
+          function* (holder) {
+            expect(yield* readAll(holder)).toEqual([]);
+            throw beforeAdmission;
+          },
+          sink,
+        ),
       );
     } catch (error) {
       emptyFailure = error;

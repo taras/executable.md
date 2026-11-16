@@ -44,6 +44,13 @@ const DEFAULT_TEST_ARTIFACTS = join(".xmd", "test-artifacts");
 
 const PREFIX = "[xmd test]";
 
+/** The repository test declaration that owns an automatic journal. */
+export interface JournalCase {
+  readonly owner: string;
+  readonly name: string;
+  readonly suite?: string;
+}
+
 /** This command's diagnostics, shared by its root documents and their children. */
 export interface TestDiagnostics {
   /**
@@ -95,7 +102,11 @@ function* artifactDirectory(working: string): Operation<string> {
  * diagnostics drains what was accepted before it returns — on success, failure
  * and cancellation alike — and nothing is written after that.
  */
-export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostics> {
+export function useTestDiagnostics(
+  sink: DeliverySink,
+  testCase?: JournalCase,
+): Operation<TestDiagnostics> {
+  const attribution = testCase === undefined ? undefined : { ...testCase };
   return resource(function* (provide) {
     const working = yield* cwd();
     const directory = yield* artifactDirectory(working);
@@ -127,10 +138,11 @@ export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostic
     const counts = { root: 0, child: 0 };
     yield* provide({
       execution(kind, source) {
-        counts[kind] += 1;
-        const label = `${kind} ${counts[kind]}`;
-        const file = join(directory, `${kind}-${counts[kind]}.jsonl`);
-        const named = `${label} ${shown(source)}`;
+        const ordinal = ++counts[kind];
+        const stem = join(directory, `${kind}-${ordinal}`);
+        const file = `${stem}.jsonl`;
+        const displayedSource = shown(source);
+        const named = `${kind} ${ordinal} ${displayedSource}`;
         const context = kind === "root" ? "" : `${named}: `;
         return {
           observe: () => observe(owner, shown, (line) => emit(`${context}${line}`)),
@@ -138,6 +150,12 @@ export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostic
             failed,
             *save(events: readonly DurableEvent[]) {
               yield* ensureDir(directory);
+              if (attribution !== undefined) {
+                yield* writeTextFile(
+                  `${stem}.case.json`,
+                  JSON.stringify({ ...attribution, kind, ordinal, source: displayedSource }) + "\n",
+                );
+              }
               yield* writeTextFile(file, events.map(serializeDurableEvent).join(""));
               emit(`journal saved: ${file} (${named})`);
             },
