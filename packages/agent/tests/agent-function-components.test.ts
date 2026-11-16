@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Tier AF — the agent components as function components (spec §5.3, §5.5).
  *
@@ -801,26 +802,44 @@ describe("Tier AF — registered defaults a document can replace", () => {
     expect(info.kind).toBe("unresolved");
   });
 
-  it("AF14: a repository component overrides each of them", function* () {
+  const repositoryOverrides = "AF14: a repository component overrides each of them";
+  it(repositoryOverrides, function* () {
     for (const name of names) {
-      const { output } = yield* runDoc(`<${name}>ignored</${name}>\n`, {
-        files: { [`${name}.md`]: "MINE\n" },
-      });
-      expect(output).toContain("MINE");
+      const directory = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
+      yield* captureTestJournal(
+        {
+          owner: "packages/agent/tests/agent-function-components.test.ts",
+          name: repositoryOverrides,
+        },
+        path.join(directory, "doc.md"),
+        function* (stream) {
+          const { output } = yield* runDoc(
+            `<${name}>ignored</${name}>\n`,
+            {
+              files: { [`${name}.md`]: "MINE\n" },
+            },
+            { directory, stream },
+          );
+          expect(output).toContain("MINE");
+        },
+      );
     }
   });
 
-  it("AF15: a repository Prompt contacts no provider and writes no journal entry", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output } = yield* runDoc("<Prompt />\n", {
-      trace,
-      files: { "Prompt.md": "LOCAL PROMPT\n" },
-    });
+  promptCase(
+    "AF15: a repository Prompt contacts no provider and writes no journal entry",
+    function* (run) {
+      const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+      const { output } = yield* run("<Prompt />\n", {
+        trace,
+        files: { "Prompt.md": "LOCAL PROMPT\n" },
+      });
 
-    expect(output).toContain("LOCAL PROMPT");
-    expect(trace.prompts).toEqual([]);
-    expect(trace.agentLookups).toEqual([]);
-  });
+      expect(output).toContain("LOCAL PROMPT");
+      expect(trace.prompts).toEqual([]);
+      expect(trace.agentLookups).toEqual([]);
+    },
+  );
 });
 
 describe("Tier AF — the scoped prompt-failure policy", () => {

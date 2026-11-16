@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases, fileJournalCases } from "../../test-support/journal-cases.ts";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
@@ -729,63 +730,64 @@ describe("Tier RV — component return values", () => {
       },
     );
 
-    rootCase(
-      "RV12: halting after selection publishes no value and completes teardown",
-      function* (stream) {
-        const reached = withResolvers<void>();
-        const torn: string[] = [];
-        const globals = globalThis as Record<string, unknown>;
-        globals.__rv12reached = () => reached.resolve();
-        globals.__rv12torn = () => torn.push("torn down");
-        yield* ensure(() => {
-          delete globals.__rv12reached;
-          delete globals.__rv12torn;
-        });
+    const haltedReturn = "RV12: halting after selection publishes no value and completes teardown";
+    it(haltedReturn, function* () {
+      const reached = withResolvers<void>();
+      const torn: string[] = [];
+      const globals = globalThis as Record<string, unknown>;
+      globals.__rv12reached = () => reached.resolve();
+      globals.__rv12torn = () => torn.push("torn down");
+      yield* ensure(() => {
+        delete globals.__rv12reached;
+        delete globals.__rv12torn;
+      });
 
-        yield* useComponentModuleLoader();
-        yield* scoped(function* () {
-          const dir = path.join(os.tmpdir(), `returns-halt-${randomUUID()}`);
-          yield* ensureDir(dir);
-          yield* ensure(() => rm(dir, { recursive: true, force: true }));
-          yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
-          yield* until(
-            symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"),
-          );
-          yield* writeTextFile(
-            path.join(dir, "doc.md"),
-            [
-              "---",
-              "returns:",
-              "  type: string",
-              "---",
-              "",
-              '<Return value="selected" />',
-              "",
-              // Suspends after the value was selected, so the halt below lands
-              // between selection and completion.
-              '<Suspends as="never" />',
-              "",
-            ].join("\n"),
-          );
-          yield* writeTextFile(
-            path.join(dir, "Suspends.ts"),
-            [
-              'import { ensure, suspend } from "effection";',
-              "export const returns = { type: 'string' };",
-              "export default function*() {",
-              "  yield* ensure(() => { globalThis.__rv12torn(); });",
-              "  globalThis.__rv12reached();",
-              "  yield* suspend();",
-              '  return "unreachable";',
-              "}",
-              "",
-            ].join("\n"),
-          );
+      yield* useComponentModuleLoader();
+      yield* scoped(function* () {
+        const dir = path.join(os.tmpdir(), `returns-halt-${randomUUID()}`);
+        yield* ensureDir(dir);
+        yield* ensure(() => rm(dir, { recursive: true, force: true }));
+        yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
+        yield* until(
+          symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"),
+        );
+        yield* writeTextFile(
+          path.join(dir, "doc.md"),
+          [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Return value="selected" />',
+            "",
+            // Suspends after the value was selected, so the halt below lands
+            // between selection and completion.
+            '<Suspends as="never" />',
+            "",
+          ].join("\n"),
+        );
+        yield* writeTextFile(
+          path.join(dir, "Suspends.ts"),
+          [
+            'import { ensure, suspend } from "effection";',
+            "export const returns = { type: 'string' };",
+            "export default function*() {",
+            "  yield* ensure(() => { globalThis.__rv12torn(); });",
+            "  globalThis.__rv12reached();",
+            "  yield* suspend();",
+            '  return "unreachable";',
+            "}",
+            "",
+          ].join("\n"),
+        );
 
+        const source = path.join(dir, "doc.md");
+        yield* captureTestJournal({ owner: OWNER, name: haltedReturn }, source, function* (stream) {
           const outcome: string[] = [];
           const task = yield* spawn(function* () {
             const execution = yield* execute({
-              path: path.join(dir, "doc.md"),
+              path: source,
               stream,
               includes: [dir],
             });
@@ -801,8 +803,8 @@ describe("Tier RV — component return values", () => {
           expect(outcome).toEqual([]);
           expect(torn).toEqual(["torn down"]);
         });
-      },
-    );
+      });
+    });
 
     it("RV17a: a partial replay reconstructs selection without repeating an effect", function* () {
       const stream = new InMemoryStream();

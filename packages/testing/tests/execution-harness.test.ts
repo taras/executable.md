@@ -1576,66 +1576,77 @@ describe("child configuration declarations", () => {
     expect(configurationOf(run).map((entry) => entry.kind)).toEqual(["test-agent"]);
   });
 
-  rootCase("finishes the child's teardown before the assertions expand", function* (stream) {
-    const order: string[] = [];
-    const run = yield* scoped(function* () {
-      const files = {
-        "README.md": doc(
-          '<Test name="teardown">',
-          '<Execution host="run" target="child.md" as="child">',
-          "<TestAgent>",
-          '<TestAgent.Scenario src="review.md" />',
-          "</TestAgent>",
-          "",
-          "<Mark />",
-          "<AssertEquals actual={child.result.ok} expected={true} />",
-          "</Execution>",
-          "</Test>",
-        ),
-        "child.md": doc("child body"),
-      };
-      yield* useStubFs(files);
-      yield* registerComponents([
-        { name: "TestAgent", origin: "stub", fn: PackageTestAgent, props: AGENT_PROPS },
-        {
-          name: "TestAgent.Scenario",
-          origin: "stub",
-          fn: PackageScenario,
-          props: SCENARIO_PROPS,
-        },
-        {
-          name: "Mark",
-          origin: "stub",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          // deno-lint-ignore require-yield
-          *fn(): Operation<string> {
-            order.push("the assertions");
-            return "";
-          },
-        },
-      ]);
-      const tests = yield* useTesting();
-      const stub = stubExecutionHost({
-        files,
-        onTeardown: () => order.push("the child's teardown"),
-      });
-      const execution = yield* executeInstalled({ path: "README.md", stream }, [
-        testHarnessInstallation(stub.provider, [stubDeclaration()]),
-      ]);
-      const output = yield* forEach(function* () {}, execution.output);
-      const completion = yield* execution;
-      return {
-        results: yield* tests.results,
-        failure: completion.ok ? "" : completion.error.message,
-        log: stub.log,
-        output,
-      };
-    });
-    expect(single(run).status).toBe("pass");
-    // What a declaration installed in the child is torn down before the
-    // outcome is published, so an assertion never runs beside a live provider.
-    expect(order).toEqual(["the child's teardown", "the assertions"]);
-  });
+  const childTeardown = "finishes the child's teardown before the assertions expand";
+  it(childTeardown, () =>
+    captureTestJournal(
+      { owner: OWNER, name: childTeardown },
+      "README.md",
+      function* (stream, diagnostics) {
+        const order: string[] = [];
+        const run = yield* scoped(function* () {
+          const files = {
+            "README.md": doc(
+              '<Test name="teardown">',
+              '<Execution host="run" target="child.md" as="child">',
+              "<TestAgent>",
+              '<TestAgent.Scenario src="review.md" />',
+              "</TestAgent>",
+              "",
+              "<Mark />",
+              "<AssertEquals actual={child.result.ok} expected={true} />",
+              "</Execution>",
+              "</Test>",
+            ),
+            "child.md": doc("child body"),
+          };
+          yield* useStubFs(files);
+          yield* registerComponents([
+            { name: "TestAgent", origin: "stub", fn: PackageTestAgent, props: AGENT_PROPS },
+            {
+              name: "TestAgent.Scenario",
+              origin: "stub",
+              fn: PackageScenario,
+              props: SCENARIO_PROPS,
+            },
+            {
+              name: "Mark",
+              origin: "stub",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              // deno-lint-ignore require-yield
+              *fn(): Operation<string> {
+                order.push("the assertions");
+                return "";
+              },
+            },
+          ]);
+          const tests = yield* useTesting();
+          const stub = stubExecutionHost({
+            files,
+            childJournal: (source) =>
+              diagnostics
+                .execution("child", source)
+                .journal(({ outcome }) => outcome.kind === "settled" && !outcome.result.ok),
+            onTeardown: () => order.push("the child's teardown"),
+          });
+          const execution = yield* executeInstalled({ path: "README.md", stream }, [
+            testHarnessInstallation(stub.provider, [stubDeclaration()]),
+          ]);
+          const output = yield* forEach(function* () {}, execution.output);
+          const completion = yield* execution;
+          return {
+            results: yield* tests.results,
+            failure: completion.ok ? "" : completion.error.message,
+            log: stub.log,
+            output,
+          };
+        });
+        expect(single(run).status).toBe("pass");
+        // What a declaration installed in the child is torn down before the
+        // outcome is published, so an assertion never runs beside a live provider.
+        expect(order).toEqual(["the child's teardown", "the assertions"]);
+      },
+    ),
+  );
 
   /**
    * A construct in the declaration prefix, holding what would otherwise be a
