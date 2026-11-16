@@ -13,13 +13,13 @@
 
 import { main } from "effection";
 import process from "node:process";
-import { Buffer } from "node:buffer";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { useRunComposition } from "../../src/deno/run-composition/provider.ts";
 import { ManagedCheckoutError } from "../../src/deno/run-composition/errors.ts";
+import { boundedJournalResult } from "../../../test-support/subprocess-journal.ts";
 
 /** What the parent reads back off this process's stdout. */
 export interface ChildOutcome {
@@ -65,15 +65,13 @@ await main(function* () {
         : { kind: "refused", reason: refusal.reason, message: refusal.message };
   }
 
-  let line = `${JSON.stringify(outcome)}\n`;
-  if (capture === "--capture-journal") {
-    const journal = (yield* stream.readAll()).map(serializeDurableEvent);
-    const enriched = `${JSON.stringify({ ...outcome, journal })}\n`;
-    if (Buffer.byteLength(enriched) <= 64 * 1024) {
-      line = enriched;
-    }
-  }
-  process.stdout.write(line);
+  const line =
+    capture === "--capture-journal"
+      ? boundedJournalResult(outcome, {
+          journal: (yield* stream.readAll()).map(serializeDurableEvent),
+        })
+      : JSON.stringify(outcome);
+  process.stdout.write(`${line}\n`);
 });
 
 /** The managed-checkout refusal in this error's chain, if there is one. */

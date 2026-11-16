@@ -19,14 +19,15 @@ import { fileURLToPath } from "node:url";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exists, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
-import { useScope, scoped, ensure, until } from "effection";
+import { useScope, scoped, ensure, lift, until } from "effection";
 import type { Operation } from "effection";
 
 import {
@@ -39,6 +40,12 @@ import { planWriterDependencies } from "../src/plan-writer-profile.ts";
 import type { PlanWriterProviderInputs } from "../src/plan-writer-profile.ts";
 import { runPlan } from "../src/plan.ts";
 import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
+import { ASSEMBLY_PROFILES, ASSEMBLY_SOURCE } from "./support/assembly-profiles.ts";
+import {
+  checkSubprocessJournals,
+  parseSubprocessJournal,
+} from "../../test-support/subprocess-journal.ts";
+import type { SubprocessJournal } from "../../test-support/subprocess-journal.ts";
 
 /** The two agents this build carries a patched snapshot for. */
 const EMBEDDED = ["codex", "claude"] as const;
@@ -250,7 +257,30 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
   });
 });
 
-function* assemblyInputs(agent: "claude" | "codex"): Operation<void> {
+const ASSEMBLY_OWNER = "packages/cli/tests/agent-adapters.test.ts";
+const ASSEMBLY_SUITE = "HC host selection across command assemblies";
+
+function checkEnvironment(environmentPreserved: unknown): void {
+  expect(environmentPreserved).toBe(true);
+}
+
+function assemblyJournals(value: unknown): SubprocessJournal[] {
+  if (!Array.isArray(value) || value.length !== ASSEMBLY_PROFILES.length) {
+    return [];
+  }
+  const journals = value.map((entry) => ({
+    source: ASSEMBLY_SOURCE,
+    events: parseSubprocessJournal(entry),
+  }));
+  return journals.every(({ events }) => events.length > 0) ? journals : [];
+}
+
+function* assemblyInputs(
+  agent: "claude" | "codex",
+  name: string,
+  verify = checkEnvironment,
+  inspect?: (journals: readonly SubprocessJournal[]) => void,
+): Operation<void> {
   const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd assemblies ")))));
   yield* ensure(() => rm(root, { recursive: true, force: true }));
   const host = join(root, agent);
@@ -265,6 +295,7 @@ function* assemblyInputs(agent: "claude" | "codex"): Operation<void> {
         fileURLToPath(new URL("./fixtures/agent-assemblies.ts", import.meta.url)),
         root,
         agent,
+        "--capture-journal",
       ],
       env: { [variable]: host },
     });
@@ -272,32 +303,119 @@ function* assemblyInputs(agent: "claude" | "codex"): Operation<void> {
   if (result.exitCode !== 0) {
     throw new Error(result.stderr);
   }
-  const { results: rows, environmentPreserved } = JSON.parse(result.stdout);
-  expect(environmentPreserved).toBe(true);
-  expect(rows.map((row: { profile: string }) => row.profile)).toEqual([
-    "run",
-    "plan",
-    "repl",
-    "custom",
-    "other",
-  ]);
-  for (const row of rows) {
-    expect(row.inputs).toHaveLength(2);
-    for (const input of row.inputs) {
-      if (["custom", "other"].includes(row.profile)) {
-        expect(input.environment).toBeUndefined();
-      } else {
-        expect(input.environment).toEqual({ [variable]: host });
-        expect(input.command).toContain(root);
-        expect(input.command).not.toContain("npx");
-      }
-    }
+  let output;
+  try {
+    output = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("the assembly fixture result is invalid JSON");
   }
+  const { results: rows, environmentPreserved, journals: rawJournals } = output;
+  const journals = assemblyJournals(rawJournals);
+  inspect?.(journals);
+  yield* checkSubprocessJournals(
+    { owner: ASSEMBLY_OWNER, suite: ASSEMBLY_SUITE, name },
+    journals,
+    lift(() => {
+      verify(environmentPreserved);
+      expect(rows.map((row: { profile: string }) => row.profile)).toEqual(ASSEMBLY_PROFILES);
+      for (const row of rows) {
+        expect(row.inputs).toHaveLength(2);
+        for (const input of row.inputs) {
+          if (["custom", "other"].includes(row.profile)) {
+            expect(input.environment).toBeUndefined();
+          } else {
+            expect(input.environment).toEqual({ [variable]: host });
+            expect(input.command).toContain(root);
+            expect(input.command).not.toContain("npx");
+          }
+        }
+      }
+    }),
+  );
 }
 
-describe("HC host selection across command assemblies", () => {
-  it("HC3/HC4: run, Plan and REPL deliver the host selection to probe and live runtimes", () =>
-    assemblyInputs("claude"));
-  it("H3: run, Plan and REPL deliver the host Codex selection to probe and live runtimes", () =>
-    assemblyInputs("codex"));
+describe(ASSEMBLY_SUITE, () => {
+  const claude =
+    "HC3/HC4: run, Plan and REPL deliver the host selection to probe and live runtimes";
+  const codex =
+    "H3: run, Plan and REPL deliver the host Codex selection to probe and live runtimes";
+  it(claude, () => assemblyInputs("claude", claude));
+  it(codex, () => assemblyInputs("codex", codex));
+
+  const witness = "attributes each assembly profile when the joined parent assertion fails";
+  it(witness, function* () {
+    const root = yield* useTempDirectory("xmd-assembly-journals-");
+    function run(
+      artifacts: string,
+      verify: typeof checkEnvironment,
+      inspect?: Parameters<typeof assemblyInputs>[3],
+    ) {
+      return scoped(function* () {
+        yield* API.Env.around({
+          *env([name], next) {
+            return name === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(name);
+          },
+        });
+        yield* assemblyInputs("claude", witness, verify, inspect);
+      });
+    }
+
+    const passed = join(root, "passed", ".xmd", "test-artifacts");
+    yield* run(passed, checkEnvironment, (journals) => {
+      expect(journals).toHaveLength(ASSEMBLY_PROFILES.length);
+    });
+    expect(yield* exists(passed)).toBe(false);
+
+    const failed = join(root, "failed", ".xmd", "test-artifacts");
+    let assertion: unknown;
+    let caught: unknown;
+    let received: readonly SubprocessJournal[] = [];
+    try {
+      yield* run(
+        failed,
+        (value) => {
+          checkEnvironment(value);
+          try {
+            checkEnvironment(false);
+          } catch (error) {
+            assertion = error;
+            throw error;
+          }
+        },
+        (journals) => {
+          received = journals;
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(assertion).toBeInstanceOf(Error);
+    expect(caught).toBe(assertion);
+    expect(received).toHaveLength(ASSEMBLY_PROFILES.length);
+    const invocations = yield* readdir(failed);
+    expect(invocations).toHaveLength(1);
+    const directory = join(failed, invocations[0]);
+    const expectedFiles = ASSEMBLY_PROFILES.flatMap((_, index) => [
+      `child-${index + 1}.case.json`,
+      `child-${index + 1}.jsonl`,
+    ]);
+    expect((yield* readdir(directory)).sort()).toEqual(expectedFiles.sort());
+    for (const [index, journal] of received.entries()) {
+      const ordinal = index + 1;
+      const stem = join(directory, `child-${ordinal}`);
+      expect(JSON.parse(yield* readTextFile(`${stem}.case.json`))).toEqual({
+        owner: ASSEMBLY_OWNER,
+        suite: ASSEMBLY_SUITE,
+        name: witness,
+        kind: "child",
+        ordinal,
+        source: ASSEMBLY_SOURCE,
+      });
+      const events = parseSubprocessJournal(
+        (yield* readTextFile(`${stem}.jsonl`)).trimEnd().split("\n"),
+      );
+      expect(events).toEqual(journal.events);
+      expect(events.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
+    }
+  });
 });
