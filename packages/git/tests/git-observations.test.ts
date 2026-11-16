@@ -1662,6 +1662,7 @@ describe("GO11 — the authored contract, before a provider is reached", () => {
           expect(`${entry.source}: ${refusalKind(raised_)}`).toBe(
             `${entry.source}: ${entry.reason}`,
           );
+          expect(subcommands(counted.counters)).toEqual([]);
         });
       }
 
