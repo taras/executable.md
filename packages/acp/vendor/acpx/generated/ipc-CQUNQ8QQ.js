@@ -2194,7 +2194,9 @@ async function unlinkCountingBytes(filePath) {
 const IDENTITY_QUERY_TIMEOUT_MS$1 = 2e3;
 const LINUX_PROCESS_QUERY = `
   const fs = require('node:fs/promises');
-  const [targetPid, observerPid] = process.argv.slice(1);
+  // XMD Linux process helper: Deno eval inserts a script slot in process.argv.
+  const [targetPid, observerPid, requiredPids] =
+    globalThis.Deno?.build?.standalone === false ? Deno.args : process.argv.slice(1);
   if (process.ppid !== Number(observerPid)) process.exit(1);
   const timeNamespace = (pid) => fs.readlink('/proc/' + pid + '/ns/time').catch((error) => {
     if (error.code === 'ENOENT') return 'unsupported';
@@ -2212,7 +2214,8 @@ const LINUX_PROCESS_QUERY = `
     if (targetPid !== 'all') {
       return { targetStat: await fs.readFile('/proc/' + targetPid + '/stat', 'utf8').catch(() => null) };
     }
-    const required = new Set(JSON.parse(process.argv[3] || '[]'));
+    // XMD Linux process helper: the optional table payload follows the observer PID.
+    const required = new Set(JSON.parse(requiredPids || '[]'));
     const pids = new Set((await fs.readdir('/proc')).filter(pid => /^[1-9][0-9]*$/.test(pid)));
     for (const pid of required) pids.add(String(pid));
     const processStats = [];
@@ -2341,13 +2344,11 @@ function validProcessLinks(parentPid, groupPid) {
 	return Number.isSafeInteger(parentPid) && parentPid >= 0 && Number.isSafeInteger(groupPid) && groupPid >= 0;
 }
 async function readLinuxQuery(pid, timeoutMs, requiredPids = []) {
-	const args = [
-		"--input-type=commonjs",
-		"-e",
-		LINUX_PROCESS_QUERY,
-		String(pid),
-		String(process.pid)
-	];
+	// XMD Linux process helper: only the source Deno executable supports eval.
+	const args = globalThis.Deno?.build?.standalone === false
+		? ["eval", "--no-config", "--no-lock", "--cached-only", "--no-npm", "--no-remote", "--ext=cjs", LINUX_PROCESS_QUERY]
+		: ["--input-type=commonjs", "-e", LINUX_PROCESS_QUERY];
+	args.push(String(pid), String(process.pid));
 	if (pid === "all") args.push(JSON.stringify(requiredPids));
 	const output = await runTimedExecFile(process.execPath, args, {
 		timeoutMs,

@@ -1,5 +1,5 @@
 import { describe, it } from "@executablemd/test-support/bdd";
-import { executeInstalled } from "@executablemd/core/host";
+import { AGENT_PROMPT, executeInstalled, parsePromptRecord } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation, Result } from "effection";
@@ -16,6 +16,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import { forEach } from "@effectionx/stream-helpers";
 import { useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { testHarnessInstallation, useTesting } from "@executablemd/testing";
 import type {
   ChildInvocation,
@@ -142,6 +143,20 @@ function* runConfiguration(
   });
 }
 
+/** Every completed Prompt the journal retains, in recorded order. */
+function completedPrompts(events: readonly DurableEvent[]) {
+  return events.flatMap((event) => {
+    if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
+      return [];
+    }
+    if (event.result.status !== "ok") {
+      return [];
+    }
+    const record = parsePromptRecord(event.result.value);
+    return record?.status === "completed" ? [record] : [];
+  });
+}
+
 function configurationSucceeded(run: {
   result: Result<Json>;
   output: string;
@@ -218,6 +233,20 @@ describe(
       expect(replay.sessions).toEqual([]);
       expect(replay.output).toBe(live.output);
       expect(stream.appendCount).toBe(appended);
+
+      // The first authored Test's seven turns on one named conversation. A
+      // two-setting change costs one configuration worker, not one per write:
+      // 1 + 2 + 2 + 2 + 2 + 1 + 1 establishments of that identity.
+      const first = live.sessions[0];
+      const conversation = live.sessions.filter((report) => report.scenarioId === first.scenarioId);
+      expect(conversation.every((report) => report.nativeSessionId === first.nativeSessionId)).toBe(
+        true,
+      );
+      const prompts = completedPrompts(yield* stream.readAll()).filter(
+        (record) => record.agentSessionId === first.nativeSessionId,
+      );
+      expect(prompts.map((record) => record.text.length > 0)).toEqual(Array(7).fill(true));
+      expect(conversation.length).toBe(11);
     });
   },
 );

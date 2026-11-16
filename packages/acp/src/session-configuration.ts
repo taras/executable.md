@@ -14,6 +14,10 @@
  * failure restores the previous settings in model-first order and preserves the
  * original failure. Unverifiable restoration marks the session unusable for the
  * rest of the run.
+ *
+ * A model change followed by an effort setting can run on one connection the
+ * provider offers for the attempt. Recovery uses live selectors and restores
+ * the saved preferences after verifying the prior settings.
  */
 
 import { ensure, scoped } from "effection";
@@ -279,6 +283,169 @@ export interface ConfigurationTarget {
   readStatus(): Operation<AcpRuntimeStatus>;
   write(optionId: string, value: string): Operation<void>;
   markUnusable(): void;
+  /**
+   * Run the body on an exact cold connection and join its close and save.
+   * A declined initial connection leaves ordinary configuration in charge.
+   */
+  connect?<T>(
+    modelOptionId: string,
+    phase: "model" | "effort" | "recovery",
+    body: (connection: ConfigurationConnection) => Operation<T>,
+  ): Operation<{ declined: true } | { declined: false; value: T }>;
+  recordCleanupFailure?(error: Error): void;
+}
+
+interface SavedConfigurationPreferences {
+  readonly model: string | undefined;
+  readonly options: Readonly<Record<string, string>>;
+}
+
+/** One configuration attempt's connection, as long as its body runs. */
+export interface ConfigurationConnection {
+  readStatus(): AcpRuntimeStatus;
+  observedStatus(): AcpRuntimeStatus | undefined;
+  savedPreferences(): SavedConfigurationPreferences;
+  restorePreferences(
+    prior: SavedConfigurationPreferences,
+    affected: ReadonlySet<string>,
+  ): Operation<void>;
+  write(optionId: string, value: string, started: () => void, restoring?: boolean): Operation<void>;
+  usable(): boolean;
+}
+
+type Setting = "model" | "effort";
+
+/** Reuse the same validation and verification for ordinary, connected and split writes. */
+function* configureEffort(
+  target: ConfigurationTarget,
+  request: SessionConfiguration,
+  refreshed: AgentOptionSelectors,
+  write: (optionId: string, value: string) => Operation<void>,
+  readBack: () => Operation<AgentOptionSelectors>,
+): Operation<AgentOptionSelectors> {
+  if (request.model !== undefined && refreshed.model?.set.selected !== request.model) {
+    throw configurationFailure(
+      `this agent did not apply the model "${request.model}" to session ` +
+        `"${target.sessionKey}", and reports "${refreshed.model?.set.selected ?? "nothing"}"`,
+      "configuration-mismatch",
+      "model",
+    );
+  }
+  if (request.effort === undefined) {
+    return refreshed;
+  }
+  const model = refreshed.model?.set.selected;
+  if (refreshed.effort === null) {
+    throw configurationFailure(effortUnavailable(model), "selector-unavailable", "effort");
+  }
+  if (!refreshed.effort.set.options.some((entry) => entry.id === request.effort)) {
+    throw new AcpConfigurationError(
+      invalidEffort(model ?? "the current model", request.effort, refreshed.effort.set),
+    );
+  }
+  if (refreshed.effort.set.selected !== request.effort) {
+    yield* write(refreshed.effort.optionId, request.effort);
+  }
+  const verified = yield* readBack();
+  if (verified.effort?.set.selected !== request.effort) {
+    throw configurationFailure(
+      `this agent did not apply the effort level "${request.effort}" to session ` +
+        `"${target.sessionKey}", and reports "${verified.effort?.set.selected ?? "nothing"}"`,
+      "configuration-mismatch",
+      "effort",
+    );
+  }
+  if (request.model !== undefined && verified.model?.set.selected !== request.model) {
+    throw configurationFailure(
+      `this agent stopped reporting the model "${request.model}" for session ` +
+        `"${target.sessionKey}" while its effort level was applied`,
+      "configuration-mismatch",
+      "model",
+    );
+  }
+  return verified;
+}
+
+function observed(connection: ConfigurationConnection): AgentOptionSelectors | undefined {
+  const status = connection.observedStatus();
+  return status === undefined ? undefined : readAgentOptions(status);
+}
+
+function collectSelectors(
+  selectors: AgentOptionSelectors | undefined,
+  affected: Set<string>,
+): void {
+  for (const selector of [selectors?.model, selectors?.effort]) {
+    if (selector) {
+      affected.add(selector.optionId);
+    }
+  }
+}
+
+type Recovery = "restored" | "reopen" | "unverified";
+
+function* restoreConnected(
+  connection: ConfigurationConnection,
+  prior: { readonly model: string; readonly effort: string | undefined },
+  saved: SavedConfigurationPreferences,
+  affected: Set<string>,
+  restoring: Set<Setting>,
+  modelAddress?: string,
+): Operation<Recovery> {
+  if (!connection.usable()) {
+    return "unverified";
+  }
+  let current = observed(connection);
+  collectSelectors(current, affected);
+  if (current?.model?.set.selected !== prior.model) {
+    const optionId = current === undefined ? modelAddress : current.model?.optionId;
+    if (optionId === undefined || restoring.has("model")) {
+      return "unverified";
+    }
+    yield* connection.write(optionId, prior.model, () => restoring.add("model"), true);
+    current = observed(connection);
+    collectSelectors(current, affected);
+    if (current === undefined) {
+      return "reopen";
+    }
+    if (current.model?.set.selected !== prior.model) {
+      return "unverified";
+    }
+  }
+  if (prior.effort !== undefined && current?.effort?.set.selected !== prior.effort) {
+    if (!current?.effort || restoring.has("effort") || !connection.usable()) {
+      return "unverified";
+    }
+    yield* connection.write(
+      current.effort.optionId,
+      prior.effort,
+      () => restoring.add("effort"),
+      true,
+    );
+    current = observed(connection);
+    collectSelectors(current, affected);
+    if (current === undefined) {
+      return "reopen";
+    }
+  }
+  if (
+    current?.model?.set.selected !== prior.model ||
+    (prior.effort !== undefined && current.effort?.set.selected !== prior.effort)
+  ) {
+    return "unverified";
+  }
+  yield* connection.restorePreferences(saved, affected);
+  return "restored";
+}
+
+function unusableAfter(error: unknown, sessionKey: string): AcpConfigurationError {
+  const original = error instanceof Error ? error : new Error(String(error));
+  const refused = new AcpConfigurationError(
+    `${original.message}\n${restorationFailed(sessionKey)}`,
+    { cause: original },
+  );
+  refused.sessionUnusable = true;
+  return refused;
 }
 
 function* read(target: ConfigurationTarget): Operation<AgentOptionSelectors> {
@@ -302,8 +469,202 @@ export function* applySessionConfiguration(
   target: ConfigurationTarget,
   request: SessionConfiguration,
 ): Operation<AgentOptionSelectors> {
+  const initial = yield* read(target);
+  const { model, effort } = request;
+  const connect = target.connect;
+  if (model === undefined || effort === undefined || connect === undefined) {
+    return yield* configureOrdinary(target, request, initial);
+  }
+  const requestedModel = model;
+  const selector = validModel(target, requestedModel, initial);
+  if (selector.set.selected === model) {
+    return yield* configureOrdinary(target, request, initial);
+  }
+
+  const affected = new Set<string>();
+  const restoring = new Set<Setting>();
+  let prior:
+    | {
+        readonly model: string;
+        readonly effort: string | undefined;
+        readonly saved: SavedConfigurationPreferences;
+      }
+    | undefined;
+  let touched = false;
+  let accepted = false;
+  let restored = false;
+  let failure: Error | undefined;
+  const recoveryErrors: Error[] = [];
+
+  function* recover(
+    connection: ConfigurationConnection,
+    modelAddress?: string,
+  ): Operation<Recovery> {
+    if (prior === undefined) {
+      return "unverified";
+    }
+    return yield* restoreConnected(
+      connection,
+      prior,
+      prior.saved,
+      affected,
+      restoring,
+      modelAddress,
+    );
+  }
+
+  function forward(
+    connection: ConfigurationConnection,
+    phase: "model" | "effort",
+  ): Operation<AgentOptionSelectors | undefined> {
+    return scoped(function* () {
+      // Forward effort may use the saved selector when the exact load omits it.
+      const loaded = observed(connection) ?? readAgentOptions(connection.readStatus());
+      collectSelectors(loaded, affected);
+      let modelAddress = loaded.model?.optionId;
+      let finished = false;
+      yield* ensure(function* () {
+        if (touched && !finished) {
+          try {
+            restored = (yield* recover(connection, modelAddress)) === "restored";
+          } catch (error) {
+            recoveryErrors.push(asError(error));
+          }
+        }
+      });
+
+      function write(optionId: string, value: string): Operation<void> {
+        return connection.write(optionId, value, () => {
+          touched = true;
+          affected.add(optionId);
+        });
+      }
+
+      let refreshed = loaded;
+      if (phase === "model") {
+        const current = validModel(target, requestedModel, loaded);
+        prior = {
+          model: current.set.selected,
+          effort: loaded.effort?.set.selected,
+          saved: connection.savedPreferences(),
+        };
+        if (current.set.selected !== requestedModel) {
+          yield* write(current.optionId, requestedModel);
+          const answered = observed(connection);
+          collectSelectors(answered, affected);
+          if (answered === undefined || !connection.usable()) {
+            finished = true;
+            return;
+          }
+          refreshed = answered;
+          modelAddress = refreshed.model?.optionId;
+        }
+      }
+      const result = yield* configureEffort(target, request, refreshed, write, function* () {
+        const status = observed(connection);
+        collectSelectors(status, affected);
+        return status ?? readAgentOptions(connection.readStatus());
+      });
+      finished = true;
+      return result;
+    });
+  }
+
+  try {
+    return yield* scoped(function* () {
+      // Only this finalizer starts exact recovery. It runs after the forward
+      // manager joins and cannot be interrupted into sending a write twice.
+      yield* ensure(function* () {
+        if (!touched || accepted) {
+          return;
+        }
+        if (!restored) {
+          try {
+            const restore = (connection: ConfigurationConnection) => recover(connection);
+            let result = yield* connect(selector.optionId, "recovery", restore);
+            if (!result.declined && result.value === "reopen") {
+              result = yield* connect(selector.optionId, "recovery", restore);
+            }
+            restored = !result.declined && result.value === "restored";
+          } catch (error) {
+            recoveryErrors.push(asError(error));
+          }
+        }
+        if (!restored) {
+          target.markUnusable();
+        }
+        if (restored || failure === undefined) {
+          for (const error of recoveryErrors) {
+            target.recordCleanupFailure?.(error);
+          }
+        }
+      });
+      try {
+        const first = yield* connect(selector.optionId, "model", (connection) =>
+          forward(connection, "model"),
+        );
+        if (first.declined) {
+          return yield* configureOrdinary(target, request, initial);
+        }
+        let verified = first.value;
+        if (verified === undefined) {
+          const split = yield* connect(selector.optionId, "effort", (connection) =>
+            forward(connection, "effort"),
+          );
+          if (split.declined || split.value === undefined) {
+            throw new AcpConfigurationError(
+              "The exact session could not settle its effort setting.",
+            );
+          }
+          verified = split.value;
+        }
+        accepted = true;
+        return verified;
+      } catch (error) {
+        failure = asError(error);
+        throw failure;
+      }
+    });
+  } catch (error) {
+    if (!touched || restored) {
+      throw error;
+    }
+    const original = asError(error);
+    throw unusableAfter(
+      recoveryErrors.length === 0
+        ? original
+        : new AggregateError([original, ...recoveryErrors], original.message, { cause: original }),
+      target.sessionKey,
+    );
+  }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/** The requested model's selector, or the refusal that names what is offered. */
+function validModel(
+  target: ConfigurationTarget,
+  model: string,
+  initial: AgentOptionSelectors,
+): RecognizedSelector {
+  if (initial.model === null) {
+    throw configurationFailure(modelUnavailable(target.agent), "selector-unavailable", "model");
+  }
+  if (!initial.model.set.options.some((entry) => entry.id === model)) {
+    throw new AcpConfigurationError(unknownModel(target.agent, model, initial.model.set));
+  }
+  return initial.model;
+}
+
+/** Configure through single writes, starting from `initial`. */
+function* configureOrdinary(
+  target: ConfigurationTarget,
+  request: SessionConfiguration,
+  initial: AgentOptionSelectors,
+): Operation<AgentOptionSelectors> {
   return yield* scoped(function* (): Operation<AgentOptionSelectors> {
-    const initial = yield* read(target);
     const priorModel = initial.model?.set.selected;
     const priorEffort = initial.effort?.set.selected;
     // A started write is a write that may have landed, so this is set before
@@ -362,72 +723,24 @@ export function* applySessionConfiguration(
 
     try {
       if (request.model !== undefined) {
-        if (initial.model === null) {
-          throw configurationFailure(
-            modelUnavailable(target.agent),
-            "selector-unavailable",
-            "model",
-          );
-        }
-        if (!initial.model.set.options.some((entry) => entry.id === request.model)) {
-          throw new AcpConfigurationError(
-            unknownModel(target.agent, request.model, initial.model.set),
-          );
-        }
-        if (initial.model.set.selected !== request.model) {
+        const selector = validModel(target, request.model, initial);
+        if (selector.set.selected !== request.model) {
           touched = true;
-          yield* target.write(initial.model.optionId, request.model);
+          yield* target.write(selector.optionId, request.model);
         }
       }
 
-      // The refreshed answer, and the only source of effort choices for the
-      // model this conversation is now on.
       const refreshed = request.model === undefined ? initial : yield* read(target);
-      if (request.model !== undefined && refreshed.model?.set.selected !== request.model) {
-        throw configurationFailure(
-          `this agent did not apply the model "${request.model}" to session ` +
-            `"${target.sessionKey}", and reports "${refreshed.model?.set.selected ?? "nothing"}"`,
-          "configuration-mismatch",
-          "model",
-        );
-      }
-
-      if (request.effort === undefined) {
-        settled = true;
-        return refreshed;
-      }
-
-      const model = refreshed.model?.set.selected;
-      if (refreshed.effort === null) {
-        throw configurationFailure(effortUnavailable(model), "selector-unavailable", "effort");
-      }
-      if (!refreshed.effort.set.options.some((entry) => entry.id === request.effort)) {
-        throw new AcpConfigurationError(
-          invalidEffort(model ?? "the current model", request.effort, refreshed.effort.set),
-        );
-      }
-      if (refreshed.effort.set.selected !== request.effort) {
-        touched = true;
-        yield* target.write(refreshed.effort.optionId, request.effort);
-      }
-
-      const verified = yield* read(target);
-      if (verified.effort?.set.selected !== request.effort) {
-        throw configurationFailure(
-          `this agent did not apply the effort level "${request.effort}" to session ` +
-            `"${target.sessionKey}", and reports "${verified.effort?.set.selected ?? "nothing"}"`,
-          "configuration-mismatch",
-          "effort",
-        );
-      }
-      if (request.model !== undefined && verified.model?.set.selected !== request.model) {
-        throw configurationFailure(
-          `this agent stopped reporting the model "${request.model}" for session ` +
-            `"${target.sessionKey}" while its effort level was applied`,
-          "configuration-mismatch",
-          "model",
-        );
-      }
+      const verified = yield* configureEffort(
+        target,
+        request,
+        refreshed,
+        function* (optionId, value) {
+          touched = true;
+          yield* target.write(optionId, value);
+        },
+        () => read(target),
+      );
       settled = true;
       return verified;
     } catch (error) {
@@ -444,13 +757,7 @@ export function* applySessionConfiguration(
         throw error;
       }
       target.markUnusable();
-      const original = error instanceof Error ? error : new Error(String(error));
-      const refused = new AcpConfigurationError(
-        `${original.message}\n${restorationFailed(target.sessionKey)}`,
-        { cause: original },
-      );
-      refused.sessionUnusable = true;
-      throw refused;
+      throw unusableAfter(error, target.sessionKey);
     }
   });
 }
