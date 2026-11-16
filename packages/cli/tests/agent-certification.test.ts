@@ -267,7 +267,7 @@ describe("nested qualification teardown", { sanitizeOps: false, sanitizeResource
           yield* writeTextFile(join(f.dir, "package.json"), JSON.stringify({ type: "module" }));
           const faultSource = `
 import {content} from "@executablemd/core";
-import {AgentProviders} from "@executablemd/agent/api";
+import {AgentProviders} from ${JSON.stringify(import.meta.resolve("@executablemd/agent/api"))};
 import {ensure,sleep} from ${JSON.stringify(import.meta.resolve("effection"))};
 import {writeTextFile} from ${JSON.stringify(import.meta.resolve("@effectionx/fs"))};
 export function* install() {
