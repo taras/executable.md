@@ -149,7 +149,7 @@ export interface ScenarioFixture {
    * staged attempt anyway. What it asks about the scenario's journal it asks
    * through `<IssueJournal>`.
    */
-  observe(path: string): Operation<ScenarioObservation>;
+  observe(path: string, stream?: DurableStream): Operation<ScenarioObservation>;
 }
 
 export function* useScenarioFixture(): Operation<ScenarioFixture> {
@@ -179,8 +179,9 @@ export function* useScenarioFixture(): Operation<ScenarioFixture> {
     journal(): DurableEvent[] {
       return held.snapshot(RUN.runId);
     },
-    observe(path: string): Operation<ScenarioObservation> {
-      return observeDocument(path, held, `observing:${basename(path)}`);
+    observe(path, stream): Operation<ScenarioObservation> {
+      const runId = `observing:${basename(path)}`;
+      return observeDocument(path, stream ?? held.for(runId), runId);
     },
   };
 }
@@ -197,12 +198,12 @@ export function* useScenarioFixture(): Operation<ScenarioFixture> {
  */
 function observeDocument(
   path: string,
-  held: Journals,
+  stream: DurableStream,
   runId: string,
 ): Operation<ScenarioObservation> {
   return scoped(function* () {
     const tests = yield* useTesting();
-    const execution = yield* executeInstalled({ path, stream: held.for(runId) }, [
+    const execution = yield* executeInstalled({ path, stream }, [
       retainedWorkflowInstallation({ ...RUN, runId }),
     ]);
     // Drained to its close value first: output closes with the rendered text —
@@ -957,9 +958,9 @@ function stageAttempt(
  * left. A scenario that does stage attempts acquires the fixture itself, so it
  * can stage them between acquiring it and observing the document.
  */
-export function runScenario(path: string): Operation<ScenarioObservation> {
+export function runScenario(path: string, stream?: DurableStream): Operation<ScenarioObservation> {
   return scoped(function* () {
     const fixture = yield* useScenarioFixture();
-    return yield* fixture.observe(path);
+    return yield* fixture.observe(path, stream);
   });
 }
