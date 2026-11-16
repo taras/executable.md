@@ -1416,13 +1416,13 @@ describe("Transcript ownership and immutable older chat readings", () => {
       ),
     );
     expect(page.repl.terminal.fed).toBe(fed);
-    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    expect(page.screen().shows("<REPL.Bindings")).toBe(false);
     page.repl.fake.releaseTurn();
     yield* page.until("the empty follow-up saved", (one) =>
       settledTranscriptHas(one, "Automatic feedback"),
     );
     expect(page.repl.terminal.fed).toBe(fed);
-    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    expect(page.screen().shows("<REPL.Bindings")).toBe(false);
     expect(
       transcriptLines(page.screen()).filter((row) => row.includes("Automatic feed")),
     ).toHaveLength(1);
@@ -2917,7 +2917,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
       "the saved automatic status",
       (one) => transcriptHas(one, "Automatic") && transcriptHas(one, "Turn"),
     );
-    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    expect(page.screen().shows("<REPL.Bindings")).toBe(false);
     yield* reachTurn(page, "Automatic");
     yield* page.until("the inert automatic anchor", (one) =>
       sidekickShows(one, "Automatic feedback · Turn saved"),
@@ -2927,7 +2927,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     expect(at).toBeGreaterThanOrEqual(0);
     expect(rows[at]).toBe("Automatic feedback · Turn saved; no evaluated reply recorded.");
     expect(sidekickShows(page.screen(), "First answer.")).toBe(true);
-    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    expect(page.screen().shows("<REPL.Bindings")).toBe(false);
     expect(cold.fake.created).toEqual([]);
     expect(cold.fake.prompts).toEqual([]);
   });
@@ -3050,7 +3050,8 @@ function* readSilentAndSpoken(page: ReplPage): Operation<void> {
   const said = shownChat(page.screen()).filter((row) => row !== "" && row !== "Usage unavailable");
   const first = said.findIndex((row) => row.includes("[U] run it"));
   expect(first).toBeGreaterThanOrEqual(0);
-  expect(said[first + 1]).toContain("[U] say it");
+  expect(said[first + 1]).toContain("[X] REPL.Bindings result sent to Sidekick");
+  expect(said[first + 2]).toContain("[U] say it");
   expect(sidekickShows(page.screen(), "answered without saying")).toBe(false);
   expect(sidekickShows(page.screen(), "Nothing to add.")).toBe(false);
   yield* reachTurn(page, "Automatic", "up");
@@ -3152,7 +3153,7 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     expect(sidekickShows(page.screen(), "ANSWER-10")).toBe(false);
     expect(sidekickShows(page.screen(), "Nothing to add.")).toBe(false);
     expect(sidekickShows(page.screen(), "answered without saying")).toBe(false);
-    expect(sidekickShows(page.screen(), "REPL.Bindings")).toBe(false);
+    expect(sidekickShows(page.screen(), "<REPL.Bindings")).toBe(false);
     expect(host.fake.prompts).toHaveLength(asked);
     expect(host.fake.ensured).toHaveLength(opened);
     expect(yield* pairBytes(host.root, execution)).toEqual(before);

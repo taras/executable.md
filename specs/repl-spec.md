@@ -1652,6 +1652,26 @@ previews start at the first nonblank line. Entry output and Sidekick replies
 omit leading blank lines on screen while preserving indentation, internal
 spacing, and recorded output.
 
+An addressed Sidekick exchange keeps the person's message and the explicit
+Output from its saved replies. A control result or entry result that reached a
+completed receiving turn appears as a separate `[X]` row. The association
+comes from the response and request records. A queued person's message keeps
+its own request even when the same prompt delivers earlier feedback.
+
+Activating a feedback row opens its details over the centre pane, or in a
+lower drawer on the narrow Sidekick surface. **Show recorded feedback** reveals
+the complete input recorded for the receiving turn. A combined input is shown
+as one packet, including any queued message it carried. **Hide recorded
+feedback** collapses it. **Linked entry** selects the admitted entry when the
+current history contains it. The feedback details summarize that entry's
+recorded outcome and output before the expander. An addressed reply shows the
+exchange's linked entries and Output above **Saved turns**. A selected turn
+shows the entry it admitted, its own Output, and its retained origin. Its row
+is marked **this turn**. Turn labels wrap at narrower widths and include
+their usage when enabled. Escape and the close control dismiss inspection. The selected work and Draft focus shortcuts close a centre
+inspection and reveal their requested controls. These readings can be opened
+again after reopening the execution.
+
 The **All sessions** selector at its head is the filter for that list. It is a
 control: activating it shows the conversations this reading holds — the same
 choices [Sessions](#sessions-two-owners-and-which-conversation-you-are-reading)

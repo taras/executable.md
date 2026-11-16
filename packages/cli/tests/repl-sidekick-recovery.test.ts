@@ -279,6 +279,61 @@ describe("Tier R2 — a reading claims nothing a canonical turn does not establi
     expect(reading.unestablished).toEqual([{ conversation: CHAT, turn: 1 }]);
   });
 
+  it("R2: feedback inspection keeps the complete input attached to its own request", function* () {
+    const packet = "Result from the control.\n\nQueued message from you: continue.";
+    const first: SidekickRecord = {
+      kind: "message",
+      id: "message-1",
+      origin: { kind: "ui" },
+      conversation: CHAT,
+      turn: 1,
+      revision: 1,
+      text: "start",
+    };
+    const second: SidekickRecord = {
+      ...first,
+      id: "message-2",
+      turn: 2,
+      revision: 2,
+      text: "continue",
+    };
+    const feedback: SidekickRecord = {
+      kind: "feedback",
+      conversation: CHAT,
+      response: "r1",
+      turn: null,
+      text: packet,
+    };
+    const began = [
+      ...opened(),
+      first,
+      turn(1, "", { input: "start" }),
+      reply(1, ""),
+      second,
+      feedback,
+    ];
+
+    const own = project([
+      ...began,
+      turn(2, "", { input: packet }),
+      { ...feedback, turn: 2 },
+      reply(2, "done"),
+    ]);
+    expect(own.feedback).toEqual([
+      { conversation: CHAT, response: "r1", source: 1, turn: 2, text: packet },
+    ]);
+    expect(own.answers).toContainEqual({ conversation: CHAT, turn: 2, message: 2 });
+
+    const other = project([
+      ...began,
+      turn(2, "", { input: packet, status: "cancelled" }),
+      { ...second, id: "message-3", turn: 3, revision: 3 },
+      turn(3, "", { input: packet }),
+    ]);
+    expect(other.feedback).toEqual([]);
+    expect(other.answers).toContainEqual({ conversation: CHAT, turn: 3, message: 3 });
+  });
+
   it("R2d: a canonical completed turn establishes both its reply and its delivery", function* () {
     // The control the two rows above would otherwise suppress: with the turn
     // actually retained, the reply is published and the delivery counted.

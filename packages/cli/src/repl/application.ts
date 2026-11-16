@@ -117,6 +117,7 @@ import type { ReplHistoryNavigation } from "./navigation.ts";
 import { blankBand, EMPTY_BAND } from "./history-rail.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
+import type { SidekickFeedback } from "./sidekick/model.ts";
 import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandOutput } from "./command-output.ts";
 import type { ReplReading } from "./source-reading.ts";
@@ -370,6 +371,9 @@ export interface ReplSidekickTurnRow {
   readonly usageLine?: string;
   readonly origin?: MessageOrigin;
   /** The mounted identity: this process's response, or the saved turn's own. */
+  readonly answer?: number;
+  readonly response?: string;
+  readonly controls?: readonly string[];
   readonly key: string;
   /** The chat this turn belongs to, which is what activating it opens. */
   readonly conversation: string;
@@ -460,6 +464,7 @@ export interface ReplSidekickSubmit {
 }
 
 export interface ReplSidekickReading {
+  readonly feedback?: readonly SidekickFeedback[];
   readonly usageTotal?: string;
   readonly inspectUsage?: boolean;
   /**
@@ -1072,9 +1077,18 @@ interface ReplSidekickNotice {
   readonly decision?: "dismissed" | "retried";
 }
 
+interface ReplInspection {
+  readonly kind: "feedback" | "exchange" | "person" | "entry";
+  readonly key: string;
+  readonly expanded?: boolean;
+  readonly turn?: number;
+  readonly offset?: number;
+}
+
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
   readonly showUsage?: boolean;
+  readonly inspection?: ReplInspection;
   readonly sidekickNotice?: ReplSidekickNotice;
   readonly todoOpen?: boolean;
   readonly todoOffset?: number;
@@ -1447,11 +1461,19 @@ export interface ReplQueuedMessage {
 
 /** The entry one Sidekick message submitted, shown after that message as work. */
 interface ReplAssociatedWork {
+  readonly settled?: boolean;
   readonly usageLine?: string;
   /** The chat row the work follows, by the key the reading gives that row. */
   readonly message: string;
   /** The entry, by its catalog key. Its state and output are read from the model. */
   readonly entry: string;
+}
+
+interface ReplRecordedFeedback extends SidekickFeedback {
+  readonly key: string;
+  readonly label: string;
+  readonly controls: readonly string[];
+  readonly entries: readonly { readonly key: string; readonly round: number }[];
 }
 
 /** Acknowledged work and live-only queue presentation. */
@@ -1470,6 +1492,7 @@ export interface ReplWorkspace {
   /** The live queue hold, without an execution handle. */
   readonly queueHeld?: { readonly kind: "stopped" | "failure"; readonly reason: string };
   readonly work: readonly ReplAssociatedWork[];
+  readonly feedback?: readonly ReplRecordedFeedback[];
   /**
    * How far the tray's own window is scrolled through those messages.
    *
@@ -1505,11 +1528,51 @@ export function workspaceOf(
   },
   follow?: boolean,
 ): ReplWorkspace {
+  const work = associatedWork(model, sidekick);
+  const feedback = recordedFeedback(model, sidekick, work);
   return Object.freeze({
     ...(follow === undefined ? {} : { follow }),
     queued: Object.freeze((queue?.pending ?? []).map((one) => Object.freeze({ ...one }))),
     ...(queue?.held === undefined ? {} : { queueHeld: queue.held }),
-    work: associatedWork(model, sidekick),
+    work,
+    feedback,
+  });
+}
+
+function recordedFeedback(
+  model: ReplModel | undefined,
+  reading: ReplSidekickReading | undefined,
+  work: readonly ReplAssociatedWork[],
+): readonly ReplRecordedFeedback[] {
+  if (model === undefined || reading?.feedback === undefined) {
+    return [];
+  }
+  const entries = new Map(model.entries.map((entry) => [entry.key, entry.order]));
+  const turns = new Map(reading.turns.map((turn) => [turn.key, turn]));
+  return reading.feedback.map((packet) => {
+    const id = `${packet.conversation}:${packet.response}`;
+    const controls = turns.get(`sidekick:${id}`)?.controls ?? [];
+    const linked = work.flatMap((item) => {
+      const round = entries.get(item.entry);
+      return item.message === `chat:${id}` && item.settled && round !== undefined
+        ? [{ key: item.entry, round }]
+        : [];
+    });
+    const label =
+      linked.length > 0
+        ? `${linked.map((entry) => `Round ${entry.round}`).join(", ")} result sent to Sidekick`
+        : controls.length === 1
+          ? `${controls[0]} result sent to Sidekick`
+          : controls.length > 0
+            ? "Control result sent to Sidekick"
+            : "Feedback sent to Sidekick";
+    return Object.freeze({
+      ...packet,
+      key: `${id}:${packet.turn}`,
+      label,
+      controls,
+      entries: Object.freeze(linked),
+    });
   });
 }
 
@@ -1595,6 +1658,7 @@ function associatedWork(
       Object.freeze({
         message,
         entry: admitted.key,
+        settled: submit.settled && submit.admitted,
         usageLine:
           admitted.terminal === undefined
             ? undefined
@@ -2431,6 +2495,7 @@ export function reduceRepl(
         {
           ...state.route,
           surface: "entries",
+          view: state.inspection === undefined ? state.route.view : undefined,
           scopes: Object.freeze([...action.scopes]),
           // A drawer named a thing inside the scope that was open. Selecting a
           // different scope cannot keep it.
@@ -2443,7 +2508,10 @@ export function reduceRepl(
       // looking at. A refused one changes nothing, the catalog included: the
       // row they pressed is still there to press again.
       return chosen.state.refusal === undefined
-        ? { ...chosen, state: Object.freeze({ ...chosen.state, catalog: false }) }
+        ? {
+            ...chosen,
+            state: Object.freeze({ ...chosen.state, catalog: false, inspection: undefined }),
+          }
         : chosen;
     }
     case "open-catalog": {
@@ -2516,6 +2584,40 @@ export function reduceRepl(
         live,
       );
     }
+    case "inspect-sidekick": {
+      const prior = state.inspection;
+      const closing = prior?.kind === action.target && prior.key === action.key;
+      return settled({
+        ...state,
+        inspection: closing ? undefined : { kind: action.target, key: action.key },
+        restore:
+          !closing && action.target === "feedback"
+            ? { kind: "reveal", key: "drawer:inspection:feedback" }
+            : undefined,
+      });
+    }
+    case "inspect-saved-turn": {
+      const inspection = state.inspection;
+      return inspection?.kind === "exchange"
+        ? settled({
+            ...state,
+            inspection: { ...inspection, turn: action.turn ?? undefined, offset: 0 },
+          })
+        : settled(state);
+    }
+    case "toggle-recorded-feedback": {
+      const inspection = state.inspection;
+      return inspection?.kind === "feedback"
+        ? settled({
+            ...state,
+            inspection: {
+              ...inspection,
+              expanded: !inspection.expanded,
+              offset: inspection.expanded ? 0 : inspection.offset,
+            },
+          })
+        : settled(state);
+    }
     case "close-drawer": {
       if (state.route.drawers.length === 0 && state.catalog) {
         return settled({ ...state, catalog: false });
@@ -2539,7 +2641,9 @@ export function reduceRepl(
             refusal: undefined,
           });
         }
-        return refuse(state, "no drawer is open.");
+        return state.inspection === undefined
+          ? refuse(state, "no drawer is open.")
+          : settled({ ...state, inspection: undefined });
       }
       const closing = state.route.drawers[state.route.drawers.length - 1];
       if (closing?.kind === "live-permission") {
@@ -3271,6 +3375,14 @@ export function reduceRepl(
     case "scroll": {
       const open = state.route.drawers[state.route.drawers.length - 1];
       if (open === undefined) {
+        const inspection = state.inspection;
+        const window = admission.windows.get(DRAWER_WINDOW);
+        if (inspection !== undefined && window !== undefined) {
+          return settled({
+            ...state,
+            inspection: { ...inspection, offset: scrolled(window, action.delta) },
+          });
+        }
         return refuse(state, "no drawer is open to scroll.");
       }
       // The window the frame measured for the drawer that is open. One viewport
@@ -3966,6 +4078,7 @@ type ReplChatComposed =
       readonly style: ReplRowStyle;
       /** The origin drawn over the first four cells of its first row, where marked. */
       readonly mark?: ReplOriginMark;
+      readonly action?: { readonly [name: string]: Json };
     }
   | {
       readonly kind: "control";
@@ -4284,9 +4397,18 @@ function chatSequence(
 }
 
 function materializeChatRow(one: ReplChatPreparedRow, focused: string | undefined): Described {
-  return one.kind === "control"
-    ? row(one.key, one.label, one.action, one.style, { here: focused })
-    : chatRow(one.key, one.label, one.item, one.first);
+  if (one.kind === "control") {
+    return row(one.key, one.label, one.action, one.style, { here: focused });
+  }
+  const { action, mark } = one.item;
+  if (one.first && action !== undefined && mark !== undefined) {
+    const label = mark.text + one.label.slice(CONTROL_ROOM.length + MARKER_ROOM.length);
+    return row(one.key, label, action, one.item.style, {
+      here: focused,
+      runs: markedRuns(mark, label, one.item.style.role),
+    });
+  }
+  return chatRow(one.key, one.label, one.item, one.first);
 }
 
 function chatWindow(view: ReplView, context: ReplPresentationContext): readonly Described[] {
@@ -4322,6 +4444,8 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     reading?.setup?.phase,
     reading?.setup?.failure,
     staging !== undefined,
+    staging?.inspection?.kind,
+    staging?.inspection?.key,
   ];
   for (const one of reading?.chat ?? []) {
     if (one.conversation !== reading?.reading) {
@@ -4345,6 +4469,12 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
       one.origin?.kind,
       one.origin?.kind === "acp" ? one.origin.attachment : undefined,
     );
+  }
+  facts.push(undefined);
+  for (const packet of staging?.feedback ?? []) {
+    if (packet.conversation === reading?.reading) {
+      facts.push(packet.key, packet.label);
+    }
   }
   facts.push(undefined);
   for (const one of staging?.work ?? []) {
@@ -4460,11 +4590,20 @@ function chatRow(
   first: boolean,
 ): Described {
   const mark = one.mark;
-  if (!first || mark === undefined || !label.startsWith(MARKER_ROOM)) {
+  const room = CONTROL_ROOM + MARKER_ROOM;
+  if (!first || mark === undefined || !label.startsWith(room)) {
     return line(key, label, one.style);
   }
-  const drawn = `${mark.text}${label.slice(MARKER_ROOM.length)}`;
-  return line(key, drawn, one.style, markedRuns(mark, drawn, one.style.role));
+  const drawn = mark.text + label.slice(room.length);
+  return line(
+    key,
+    CONTROL_ROOM + drawn,
+    one.style,
+    tokenRuns([
+      { text: CONTROL_ROOM, token: one.style.role },
+      ...markedRuns(mark, drawn, one.style.role),
+    ]),
+  );
 }
 
 /**
@@ -4731,7 +4870,12 @@ function navigate(
   if (!resolved.ok) {
     return refuse(state, resolved.error.message);
   }
-  return settled({ ...state, route, refusal: undefined });
+  return settled({
+    ...state,
+    route,
+    inspection: route.sidekick === state.route.sidekick ? state.inspection : undefined,
+    refusal: undefined,
+  });
 }
 
 /** How a value reads in one line of a list. */
@@ -5523,6 +5667,9 @@ export function footerSentence(view: ReplView): string {
   if (refusalInBand(view)) {
     return `! ${(shownRefusal(view) ?? "").split("\n").join(" ")}`;
   }
+  if (profileFor(view.size) === "narrow" && presentedInspection(view) !== undefined) {
+    return "Esc closes · Tab moves · PageUp/PageDown in Content";
+  }
   if (staged(view) !== undefined && !modalOpen(view)) {
     const readiness = readinessOf(view);
     const narrow = profileFor(view.size) === "narrow";
@@ -6074,7 +6221,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // surface headings and the catalog's own rows have no region in it.
   const workspace = staged(view);
 
-  const showEntry = (!narrow || routed === "entries") && !(narrow && showSidekick);
+  const workCovered = inlineInspectionOpen(view);
+  const showEntry = !workCovered && (!narrow || (routed === "entries" && !showSidekick));
 
   // Which surface to be on belongs to neither surface. A narrow frame mounts one
   // outlet, so a control that lives inside the outlet can only take somebody
@@ -6130,8 +6278,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     items.push(
       ...workspaceHeadings(view, context.selector, {
         transcript: !narrow || routed === "sessions",
-        work: !narrow || (routed === "entries" && !showSidekick),
-        entries: !narrow,
+        work: showEntry,
+        entries: !narrow && !workCovered,
       }),
     );
   }
@@ -6561,7 +6709,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   if (workspace !== undefined) {
     // With the selected work, which is the surface it is part of. A narrow
     // frame showing the Transcript or the Sidekick has no region to draw it in.
-    if (!narrow || (routed === "entries" && !showSidekick)) {
+    if (showEntry) {
       items.push(...workspaceDraft(view, context, claiming));
     }
   } else {
@@ -7068,6 +7216,8 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
         view.size.rows,
         compact,
         view.state.showUsage === true,
+        view.state.inspection?.kind,
+        view.state.inspection?.key,
         view.state.route.session,
         view.state.route.surface,
         view.state.filtering,
@@ -7127,6 +7277,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
           turn.conversation,
           turn.agent,
           turn.turn,
+          turn.answer,
           turn.title,
           turn.state,
           turn.running,
@@ -7138,6 +7289,9 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
         );
       }
       if (compact) {
+        for (const item of view.workspace?.feedback ?? []) {
+          facts.push(item.key, item.source, item.label);
+        }
         for (const item of sidekick?.chat ?? []) {
           if (item.kind === "person") {
             facts.push(item.conversation, item.turn, item.origin?.kind);
@@ -7151,7 +7305,14 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
       ) {
         return held.sequence;
       }
-      const rows = sessionRows(view.state, turns, width, sidekick, compact);
+      const rows = sessionRows(
+        view.state,
+        turns,
+        width,
+        sidekick,
+        compact,
+        view.workspace?.feedback ?? [],
+      );
       const sequence = { rows, positions: new Map(rows.map((one, at) => [one.key, at])) };
       held = { facts, sequence };
       return sequence;
@@ -7190,6 +7351,7 @@ function sessionRows(
    * it.
    */
   compact = false,
+  feedback: readonly ReplRecordedFeedback[] = [],
 ): readonly ReplSessionRow[] {
   const items: ReplSessionRow[] = [];
   const filter = state.route.session;
@@ -7445,6 +7607,18 @@ function sessionRows(
         turns.set(item.turn, originMark(item.origin));
       }
     }
+    const received = new Set<string>();
+    const packets = new Map<string, ReplRecordedFeedback[]>();
+    for (const packet of feedback) {
+      received.add(`${packet.conversation}:${packet.turn}`);
+      const key = `${packet.conversation}:${packet.source}`;
+      const listed = packets.get(key);
+      if (listed === undefined) {
+        packets.set(key, [packet]);
+      } else {
+        listed.push(packet);
+      }
+    }
     let label: string | undefined;
     for (const turn of chat) {
       const whose = [turn.agent, turn.conversation, turn.sessionKey]
@@ -7460,14 +7634,40 @@ function sessionRows(
         );
       }
       label = whose;
+      const sent = packets.get(`${turn.conversation}:${turn.turn}`) ?? [];
+      const person = origins.get(turn.conversation)?.get(turn.turn ?? -1);
       items.push(
         ...compactSidekickTurn(
           turn,
           width,
-          origins.get(turn.conversation)?.get(turn.turn ?? -1) ?? PERSON_MARK,
+          person ?? PERSON_MARK,
           state.showUsage === true,
+          (sent.length === 0 &&
+            (turn.text === "" || !received.has(`${turn.conversation}:${turn.turn}`))) ||
+            person !== undefined ||
+            turn.state !== "completed" ||
+            turn.running,
+          state.inspection?.kind === "exchange" && state.inspection.key === turn.key,
         ),
       );
+      for (const packet of sent) {
+        const label = fitControl(
+          [{ text: FEEDBACK_MARK.text }, { text: packet.label, elide: true }],
+          width,
+        );
+        items.push(
+          sessionControl(
+            `sessions:feedback:${packet.key}`,
+            label,
+            inspectionAction("feedback", packet.key),
+            styleOf("action", {
+              selected:
+                state.inspection?.kind === "feedback" && state.inspection.key === packet.key,
+            }),
+            { runs: markedRuns(FEEDBACK_MARK, label, "action") },
+          ),
+        );
+      }
     }
     return items;
   }
@@ -7826,6 +8026,30 @@ function showingSidekick(view: ReplView): boolean {
     : (view.state.route.right ?? "sidekick") === "sidekick";
 }
 
+function presentedInspection(view: ReplView): ReplInspection | undefined {
+  return staged(view) === undefined ||
+    view.selection.drawers.length > 0 ||
+    presentedCatalog(view) ||
+    presentedAsking(view) !== undefined ||
+    presentedConfiguring(view) !== undefined
+    ? undefined
+    : view.state.inspection;
+}
+
+export function inlineInspectionOpen(view: ReplView): boolean {
+  return presentedInspection(view) !== undefined && profileFor(view.size) !== "narrow";
+}
+
+function inspectionRect(size: ReplTerminalSize): ReplBounds {
+  const x = workspaceTranscriptWidth(size);
+  const width = workspaceWorkWidth(size);
+  if (x !== undefined && width !== undefined) {
+    return { x, y: 1, width, height: size.rows - 3 };
+  }
+  const height = Math.floor(size.rows * 0.6);
+  return { x: 0, y: size.rows - height - 2, width: size.columns, height };
+}
+
 /**
  * Whether a modal is holding focus, by either owner.
  *
@@ -7839,7 +8063,8 @@ export function modalOpen(view: ReplView): boolean {
     view.selection.drawers.length > 0 ||
     presentedCatalog(view) ||
     presentedAsking(view) !== undefined ||
-    presentedConfiguring(view) !== undefined
+    presentedConfiguring(view) !== undefined ||
+    (profileFor(view.size) === "narrow" && presentedInspection(view) !== undefined)
   );
 }
 
@@ -7873,7 +8098,9 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
       ? (context.drawer ?? drawerRect(view.size, workspace))
       : presentedAsking(view) !== undefined || presentedConfiguring(view) !== undefined
         ? sidekickDrawerRect(view.size, workspace)
-        : undefined;
+        : presentedInspection(view) === undefined
+          ? undefined
+          : inspectionRect(view.size);
   if (rect === undefined || !workspace) {
     return rect;
   }
@@ -7916,6 +8143,7 @@ function drawerFor(
     return undefined;
   }
   const { title, titleStyle, dismissing, entering, content } = held;
+  const inline = inlineInspectionOpen(view);
   const width = context.widths?.drawer ?? 0;
   // Which owner's drawer this is, for the scroll controls, the editable line
   // the window claims focus for, and `[close]`. One drawer is presented at a
@@ -7991,10 +8219,10 @@ function drawerFor(
       }),
     );
   }
-  if (offered("footer:history")) {
+  if (!inline && offered("footer:history")) {
     rows.push(history);
   }
-  if (drawable && offered("footer:exit")) {
+  if (!inline && drawable && offered("footer:exit")) {
     rows.push(exit);
   }
   rows.push(
@@ -8077,10 +8305,253 @@ function drawerFor(
       component: DRAWER,
       input: { label: width < 1 ? title : title.padEnd(width, " ") },
       children,
-      modal: true,
+      ...(inline ? {} : { modal: true }),
     }),
   };
   return { drawer, rows: visibleRows };
+}
+
+function inspectionAction(target: ReplInspection["kind"], key: string) {
+  return { select: "inspect-sidekick", target, key };
+}
+
+function exchangeOf(reading: ReplSidekickReading | undefined, key: string) {
+  const turn = reading?.turns.find((candidate) => candidate.key === key);
+  return turn?.answer === undefined
+    ? []
+    : (reading?.turns ?? []).filter(
+        (candidate) =>
+          candidate.conversation === turn.conversation &&
+          candidate.answer === turn.answer &&
+          !candidate.running,
+      );
+}
+
+function inspectionEntries(view: ReplView, turns: readonly ReplSidekickTurnRow[]) {
+  const replies = new Set(
+    turns.flatMap((turn) =>
+      turn.response === undefined ? [] : [`chat:${turn.conversation}:${turn.response}`],
+    ),
+  );
+  const admitted = new Set(
+    view.workspace?.work
+      .filter((work) => work.settled && replies.has(work.message))
+      .map((work) => work.entry),
+  );
+  return view.model.entries.filter((entry) => admitted.has(entry.key));
+}
+
+interface ReplInspectionRow {
+  readonly key: string;
+  readonly text: string;
+  readonly style: ReplRowStyle;
+  readonly action?: Readonly<Record<string, Json>>;
+  readonly wrap?: boolean;
+}
+
+function inspectionReading(
+  view: ReplView,
+  inspection: ReplInspection,
+): { readonly title: string; readonly rows: readonly ReplInspectionRow[] } | undefined {
+  const rows: ReplInspectionRow[] = [];
+  const say = (key: string, text: string, style = styleOf("metadata"), wrap = false) => {
+    rows.push({ key: `drawer:inspection:${key}`, text, style, wrap });
+  };
+  const choose = (
+    key: string,
+    text: string,
+    action: Readonly<Record<string, Json>>,
+    wrap = false,
+  ) => {
+    rows.push({ key: `drawer:inspection:${key}`, text, style: styleOf("action"), action, wrap });
+  };
+  const link = (key: string, round: number) => {
+    choose(`entry:${key}`, `linked entry Round ${round} ›`, { select: "scope", scopes: [key] });
+  };
+  const block = (key: string, text: string) => {
+    if (text !== "") {
+      for (const [offset, line] of inertCommandText(text).split("\n").entries()) {
+        say(`${key}:${offset}`, line, styleOf("field-value"), true);
+      }
+    }
+  };
+  const sidekick = view.live.sidekick;
+  let title: string;
+  if (inspection.kind === "feedback") {
+    const feedback = view.workspace?.feedback?.find((item) => item.key === inspection.key);
+    if (feedback === undefined) {
+      return undefined;
+    }
+    title = "XMD · automatic feedback";
+    say("result", feedback.label, styleOf("field-label"));
+    if (feedback.controls.length > 0) {
+      say("controls", feedback.controls.join(" · "));
+    }
+    for (const linked of feedback.entries) {
+      link(linked.key, linked.round);
+      const entry = view.model.entries.find((item) => item.key === linked.key);
+      if (entry !== undefined) {
+        const state = workState(entry, view.model, view.live);
+        say(`outcome:${linked.key}`, `Outcome · ${state.word}`, state.style);
+        const output = entry.terminal?.output;
+        if (output !== undefined) {
+          const first = headline(trimLeadingBlankLines(inertCommandText(output)));
+          say(
+            `summary:${linked.key}`,
+            `Output · ${first === "" ? "(empty)" : first}`,
+            styleOf("metadata"),
+            true,
+          );
+        }
+      }
+    }
+    choose("feedback", inspection.expanded ? "Hide recorded feedback" : "Show recorded feedback", {
+      select: "toggle-recorded-feedback",
+    });
+    if (inspection.expanded) {
+      block("feedback-text", feedback.text);
+    }
+  } else if (inspection.kind === "person") {
+    const person = sidekick?.chat.find(
+      (item) => item.kind === "person" && item.key === inspection.key,
+    );
+    if (person === undefined) {
+      return undefined;
+    }
+    title = person.origin?.kind === "acp" ? "Attached client · Message" : "You · Message";
+    block("person", person.text);
+  } else if (inspection.kind === "entry") {
+    const entry = view.model.entries.find((item) => item.key === inspection.key);
+    if (entry === undefined) {
+      return undefined;
+    }
+    title = `Round ${entry.order} · Result`;
+    say("status", workState(entry, view.model, view.live).word);
+    link(entry.key, entry.order);
+    block("entry", entry.terminal?.output ?? "");
+  } else {
+    const turns = exchangeOf(sidekick, inspection.key);
+    if (turns.length === 0) {
+      return undefined;
+    }
+    const selected = turns.find((turn) => turn.turn === inspection.turn);
+    const visible = selected === undefined ? turns : [selected];
+    title =
+      selected === undefined
+        ? `Sidekick · ${turns.length} saved ${turns.length === 1 ? "turn" : "turns"}`
+        : `Sidekick · saved turn ${turns.indexOf(selected) + 1} of ${turns.length}`;
+    for (const entry of inspectionEntries(view, visible)) {
+      link(entry.key, entry.order);
+    }
+    if (selected?.controls !== undefined && selected.controls.length > 0) {
+      say("controls", selected.controls.join(" · "), styleOf("metadata"), true);
+    }
+    const outputs = visible.filter((turn) => turn.text.length > 0);
+    if (outputs.length > 0) {
+      say("output", "Output", styleOf("field-label"));
+      for (const turn of outputs) {
+        block(`output:${turn.turn}`, turn.text);
+      }
+    }
+    say("saved", "SAVED TURNS", styleOf("field-label"));
+    if (selected !== undefined) {
+      choose("exchange", "‹ whole exchange", { select: "inspect-saved-turn", turn: null });
+    }
+    const incoming = new Map<number, ReplRecordedFeedback>();
+    for (const packet of view.workspace?.feedback ?? []) {
+      if (packet.conversation === turns[0]?.conversation && !incoming.has(packet.turn)) {
+        incoming.set(packet.turn, packet);
+      }
+    }
+    for (const [index, turn] of turns.entries()) {
+      if (turn.turn === null) {
+        continue;
+      }
+      const packet = incoming.get(turn.turn);
+      const round = packet?.entries[0]?.round;
+      const controls = packet?.controls.join(", ");
+      const result =
+        round === undefined ? `${controls || "control"} result` : `Round ${round} result`;
+      const origin =
+        index === 0
+          ? "prompted by your message"
+          : packet === undefined
+            ? undefined
+            : `prompted by [X] ${result}`;
+      const label = [
+        `Turn ${index + 1}`,
+        selected === turn ? "this turn" : undefined,
+        origin,
+        turn.failed ? turn.state : undefined,
+        view.state.showUsage === true ? turn.usageLine : undefined,
+      ]
+        .filter((one) => one !== undefined)
+        .join(" · ");
+      if (selected === turn) {
+        say(`turn:${turn.turn}`, label, styleOf("action", { selected: true }), true);
+      } else {
+        choose(`turn:${turn.turn}`, label, { select: "inspect-saved-turn", turn: turn.turn }, true);
+      }
+    }
+  }
+  return { title, rows };
+}
+
+function inspectionContent(
+  view: ReplView,
+  inspection: ReplInspection,
+  width: number,
+  details: readonly ReplFittedLine[] | undefined,
+): DrawerContent | undefined {
+  const reading = inspectionReading(view, inspection);
+  if (reading === undefined) {
+    return undefined;
+  }
+  const fitted = new Map<string, ReplFittedLine[]>();
+  for (const piece of details ?? []) {
+    const held = fitted.get(piece.line);
+    if (held === undefined) {
+      fitted.set(piece.line, [piece]);
+    } else {
+      held.push(piece);
+    }
+  }
+  const content: DrawerRow[] = [];
+  for (const item of reading.rows) {
+    const pieces = fitted.get(item.key);
+    const label = [{ text: item.text, elide: true }] satisfies readonly ReplLabelPart[];
+    const action = item.action;
+    if (action !== undefined) {
+      // A wrapped label is one control. The fitted continuations take rows
+      // without adding extra focus stops for the same saved turn.
+      const first = pieces?.[0];
+      const text =
+        first === undefined
+          ? fitControl(label, width)
+          : (" ".repeat(first.indent) + first.text).slice(FOCUS_MARKER);
+      content.push({
+        described: row(item.key, padControl(text, width), action, item.style, {
+          claim: focusClaim(view),
+          here: view.focused,
+        }),
+      });
+    }
+    if (pieces === undefined && action === undefined) {
+      content.push({ described: drawerLine(item.key, fitLine(label, width), width, item.style) });
+    }
+    for (const piece of pieces?.slice(action === undefined ? 0 : 1) ?? []) {
+      content.push({
+        described: drawerLine(piece.key, " ".repeat(piece.indent) + piece.text, width, item.style),
+      });
+    }
+  }
+  return {
+    title: reading.title,
+    titleStyle: styleOf("drawer-title"),
+    content,
+    entering: false,
+    dismissing: undefined,
+  };
 }
 
 /** What one drawer reading holds, before any window decides what is shown. */
@@ -8150,7 +8621,13 @@ function drawerContent(
       return configureContent(view, settings, width, notices);
     }
     const asking = presentedAsking(view);
-    return asking === undefined ? undefined : askingContent(view, asking, width, preview);
+    if (asking !== undefined) {
+      return askingContent(view, asking, width, preview);
+    }
+    const inspection = presentedInspection(view);
+    return inspection === undefined
+      ? undefined
+      : inspectionContent(view, inspection, width, details);
   }
   // Every row of this drawer reaches its own right edge. A modal that wrote only
   // its own text would let what it is in front of show through from where that
@@ -9366,6 +9843,14 @@ function detailLines(key: string, value: Json, style: ReplRowStyle) {
 
 export function retainedDetailsOf(view: ReplView) {
   const open = view.selection.drawers.at(-1);
+  const inspection = presentedInspection(view);
+  if (inspection !== undefined) {
+    return (inspectionReading(view, inspection)?.rows ?? []).flatMap((item) =>
+      item.wrap === true
+        ? [{ key: item.key, text: (item.action === undefined ? "" : CONTROL_ROOM) + item.text }]
+        : [],
+    );
+  }
   if (open?.kind === "binding" || open?.kind === "entry-value") {
     return detailLines("drawer:value", open.binding.value, styleOf("field-value"));
   }
@@ -11708,7 +12193,10 @@ function offsetOf(view: ReplView, window: string): number {
   if (window === ENTRIES_WINDOW) {
     return view.state.viewports.entries;
   }
-  return drawerOffsetOf(view.state, view.state.route.drawers[view.state.route.drawers.length - 1]);
+  return (
+    presentedInspection(view)?.offset ??
+    drawerOffsetOf(view.state, view.state.route.drawers[view.state.route.drawers.length - 1])
+  );
 }
 
 /**
@@ -11782,6 +12270,7 @@ const ATTACHMENT_MARK: ReplOriginMark = Object.freeze({
   text: "[C] ",
   role: "origin-attachment",
 });
+const FEEDBACK_MARK: ReplOriginMark = { text: "[X] ", role: "metadata" };
 const WORK_MARK: ReplOriginMark = Object.freeze({ text: "[R] ", role: "origin-repl" });
 
 /** The mark a message's own origin earns: a person here, or an attached client. */
@@ -11810,6 +12299,8 @@ interface ReplChatStaging {
   readonly model: ReplModel;
   readonly live: ReplLive;
   readonly work: readonly ReplAssociatedWork[];
+  readonly feedback: readonly ReplRecordedFeedback[];
+  readonly inspection?: ReplInspection;
   readonly notice?: ReplSidekickNotice;
   readonly showUsage: boolean;
 }
@@ -11823,6 +12314,8 @@ function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
     model: view.model,
     live: view.live,
     work: workspace.work,
+    feedback: workspace.feedback ?? [],
+    inspection: presentedInspection(view),
     notice: view.state.sidekickNotice,
     showUsage: view.state.showUsage === true,
   };
@@ -11876,9 +12369,13 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
       Object.freeze({
         kind: "text" as const,
         key: `sidekick:work:${entry.key}`,
-        text: `${MARKER_ROOM}Entry ${entry.order} · ${state.word}`,
-        style: state.style,
+        text: `${CONTROL_ROOM}${MARKER_ROOM}Entry ${entry.order} · ${state.word}`,
+        style:
+          staging.inspection?.kind === "entry" && staging.inspection.key === entry.key
+            ? { ...state.style, selected: true }
+            : state.style,
         mark: WORK_MARK,
+        action: inspectionAction("entry", entry.key),
       }),
     );
     if (staging.showUsage && one.usageLine !== undefined) {
@@ -11886,7 +12383,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
         Object.freeze({
           kind: "text" as const,
           key: `sidekick:work:${entry.key}:usage`,
-          text: `${MARKER_ROOM}${one.usageLine}`,
+          text: `${CONTROL_ROOM}${MARKER_ROOM}${one.usageLine}`,
           style: styleOf("metadata"),
         }),
       );
@@ -11901,7 +12398,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
           key: `sidekick:work:${entry.key}:output`,
           text: output
             .split("\n")
-            .map((own) => `${MARKER_ROOM}${own}`)
+            .map((own) => `${CONTROL_ROOM}${MARKER_ROOM}${own}`)
             .join("\n"),
           style: styleOf("output"),
         }),
@@ -11928,17 +12425,35 @@ function workspaceChatComposed(
     said: string,
     style: ReplRowStyle,
     mark: ReplOriginMark,
+    action?: { readonly [name: string]: Json },
   ): ReplChatComposed =>
     Object.freeze({
       kind: "text" as const,
       key,
       text: said
         .split("\n")
-        .map((own) => `${MARKER_ROOM}${own}`)
+        .map((own) => `${CONTROL_ROOM}${MARKER_ROOM}${own}`)
         .join("\n"),
       style,
       mark,
+      action,
     });
+  const feedback = new Map<string, ReplRecordedFeedback[]>();
+  for (const packet of staging.feedback) {
+    if (packet.conversation !== reading.reading) {
+      continue;
+    }
+    const key = `chat:${packet.conversation}:${packet.response}`;
+    const listed = feedback.get(key);
+    if (listed === undefined) {
+      feedback.set(key, [packet]);
+    } else {
+      listed.push(packet);
+    }
+  }
+  const savedTurns = new Map(
+    reading.turns.map((turn) => [`${turn.conversation}:${turn.turn}`, turn]),
+  );
   const shownChat = reading.chat.filter((item) => item.conversation === reading.reading);
   if (shownChat.length === 0) {
     items.push(text("sidekick:empty", "No messages yet.", styleOf("metadata"), SIDEKICK_MARK));
@@ -11946,7 +12461,17 @@ function workspaceChatComposed(
   for (const item of shownChat) {
     const key = `sidekick:${item.key}`;
     if (item.kind === "person") {
-      items.push(text(key, item.text, styleOf("source"), originMark(item.origin)));
+      items.push(
+        text(
+          key,
+          item.text,
+          styleOf("source", {
+            selected: staging.inspection?.kind === "person" && staging.inspection.key === item.key,
+          }),
+          originMark(item.origin),
+          inspectionAction("person", item.key),
+        ),
+      );
     } else if (item.kind === "preview") {
       // Said as the attempt it is. Nothing has been evaluated, no control has
       // run and no turn is acknowledged, so this is not a reply yet — and a
@@ -12022,7 +12547,21 @@ function workspaceChatComposed(
         );
       }
     } else if (item.hasOutput) {
-      items.push(text(key, trimLeadingBlankLines(item.text), styleOf("output"), SIDEKICK_MARK));
+      const saved = savedTurns.get(`${item.conversation}:${item.turn}`);
+      items.push(
+        text(
+          key,
+          trimLeadingBlankLines(item.text),
+          styleOf("output", {
+            selected:
+              staging.inspection?.kind === "exchange" && staging.inspection.key === saved?.key,
+          }),
+          SIDEKICK_MARK,
+          item.request !== undefined && saved !== undefined
+            ? inspectionAction("exchange", saved.key)
+            : undefined,
+        ),
+      );
     }
     if (staging.showUsage && item.usageLine !== undefined) {
       items.push({
@@ -12033,6 +12572,19 @@ function workspaceChatComposed(
       });
     }
     items.push(...workComposed(staging, key));
+    for (const packet of feedback.get(item.key) ?? []) {
+      items.push({
+        kind: "control",
+        key: `sidekick:feedback:${packet.key}`,
+        label: `↳ [X] ${packet.label}`,
+        action: inspectionAction("feedback", packet.key),
+        style: styleOf("action", {
+          selected:
+            staging.inspection?.kind === "feedback" && staging.inspection.key === packet.key,
+        }),
+      });
+    }
+
     if (staging.showUsage && reading.inspectUsage) {
       for (const [index, detail] of (item.usageDetails ?? []).entries()) {
         items.push({
@@ -12366,6 +12918,8 @@ function compactSidekickTurn(
   width: number | undefined,
   mark: ReplOriginMark,
   showUsage: boolean,
+  showRequest: boolean,
+  selected: boolean,
 ): readonly ReplSessionRow[] {
   const rows: ReplSessionRow[] = [];
   const style = turn.running
@@ -12379,41 +12933,55 @@ function compactSidekickTurn(
     [{ text: mark.text }, { text: headline(turn.title), elide: true }, ...status],
     width,
   );
-  rows.push(
-    sessionControl(
-      `sessions:${turn.key}`,
-      label,
-      {
-        select: "sidekick-turn",
-        conversation: turn.conversation,
-        ...(turn.turn === null ? {} : { turn: turn.turn }),
-      },
-      style,
-      { runs: markedRuns(mark, label, style.role) },
-    ),
-  );
+  if (showRequest) {
+    rows.push(
+      sessionControl(
+        `sessions:${turn.key}`,
+        label,
+        {
+          select: "sidekick-turn",
+          conversation: turn.conversation,
+          ...(turn.turn === null ? {} : { turn: turn.turn }),
+        },
+        style,
+        { runs: markedRuns(mark, label, style.role) },
+      ),
+    );
+  }
   if (showUsage && turn.usageLine !== undefined) {
     rows.push(...usageSessionRows(`sessions:${turn.key}:usage`, turn.usageLine, width));
   }
   if (turn.text.length > 0) {
-    const said = fitLine(
-      [
-        { text: `${CONTROL_ROOM}${SIDEKICK_MARK.text}` },
-        { text: headline(trimLeadingBlankLines(turn.text)), elide: true },
-      ],
-      width,
-    );
-    rows.push(
-      sessionLine(
-        `sessions:${turn.key}:text`,
-        said,
-        styleOf("output"),
-        tokenRuns([
-          { text: CONTROL_ROOM, token: "output" },
-          ...markedRuns(SIDEKICK_MARK, said.slice(CONTROL_ROOM.length), "output"),
-        ]),
-      ),
-    );
+    const value = headline(trimLeadingBlankLines(turn.text));
+    const parts: readonly ReplLabelPart[] = [
+      { text: SIDEKICK_MARK.text },
+      { text: value, elide: true },
+    ];
+    if (turn.answer !== undefined && !turn.running && !turn.failed) {
+      const label = fitControl(parts, width);
+      rows.push(
+        sessionControl(
+          `sessions:${turn.key}:text`,
+          label,
+          inspectionAction("exchange", turn.key),
+          styleOf("output", { selected }),
+          { runs: markedRuns(SIDEKICK_MARK, label, "output") },
+        ),
+      );
+    } else {
+      const label = fitLine([{ text: CONTROL_ROOM }, ...parts], width);
+      rows.push(
+        sessionLine(
+          `sessions:${turn.key}:text`,
+          label,
+          styleOf("output"),
+          tokenRuns([
+            { text: CONTROL_ROOM, token: "output" },
+            ...markedRuns(SIDEKICK_MARK, label.slice(CONTROL_ROOM.length), "output"),
+          ]),
+        ),
+      );
+    }
   }
   if (turn.failure !== undefined) {
     rows.push(

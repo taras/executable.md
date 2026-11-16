@@ -117,6 +117,7 @@ import {
   stagedWorkspace,
   workspaceHeaderLines,
   modalOpen,
+  inlineInspectionOpen,
   visibleSidekickNotice,
   readsGeometry,
   reduceRepl,
@@ -2430,26 +2431,34 @@ function* drive(
       const region = shortcutRegion(digit);
       const at = yield* screen.size();
       const profile = profileFor(at);
-      if (
-        profile === "too-small" ||
-        broken !== undefined ||
-        modalOpen(yield* inputView(state, at))
-      ) {
+      if (profile === "too-small" || broken !== undefined) {
+        return undefined;
+      }
+      const showing = yield* inputView(state, at);
+      if (modalOpen(showing)) {
         return undefined;
       }
       if (region === undefined) {
         return false;
       }
       const route = shortcutRoute(state.route, region, profile === "narrow");
+      const revealWork = shortcutRevealsWork(showing, digit);
       const todoOpen = digit === "7" ? true : digit === "6" ? false : state.todoOpen;
       if (
         starting ||
+        revealWork ||
         route !== state.route ||
         todoOpen !== state.todoOpen ||
         rendered?.size.columns !== at.columns ||
         rendered.size.rows !== at.rows
       ) {
-        const candidate = { ...state, route, todoOpen, restore: undefined };
+        const candidate = {
+          ...state,
+          route,
+          todoOpen,
+          inspection: revealWork ? undefined : state.inspection,
+          restore: undefined,
+        };
         const view = yield* inputView(candidate, at);
         if (view.refusal !== undefined || modalOpen(view)) {
           return false;
@@ -2491,15 +2500,22 @@ function* drive(
         const route = shortcutRoute(current, region, narrow);
         const todoOpen = digit === "7" ? true : digit === "6" ? false : state.todoOpen;
         const changeTab = (todoOpen === true) !== (state.todoOpen === true);
-        if (route === current && !changeTab) {
+        const revealWork = shortcutRevealsWork(view, digit);
+        if (route === current && !changeTab && !revealWork) {
           hints.set(digit, undefined);
           continue;
         }
-        const key = JSON.stringify([route.surface, route.view, route.right, todoOpen]);
+        const key = JSON.stringify([route.surface, route.view, route.right, todoOpen, revealWork]);
         let descriptions = routes.get(key);
         if (descriptions === undefined) {
           const destination = yield* inputView(
-            { ...state, route, todoOpen, restore: undefined },
+            {
+              ...state,
+              route,
+              todoOpen,
+              inspection: revealWork ? undefined : state.inspection,
+              restore: undefined,
+            },
             view.size,
           );
           descriptions = [];
@@ -2515,11 +2531,13 @@ function* drive(
         if (hasRegion(descriptions, region)) {
           hints.set(
             digit,
-            route !== current
-              ? focusRouteHint(route, narrow)
-              : todoOpen
-                ? "switches to the TODO tab"
-                : "switches to the Sidekick tab",
+            revealWork
+              ? "closes inspection"
+              : route !== current
+                ? focusRouteHint(route, narrow)
+                : todoOpen
+                  ? "switches to the TODO tab"
+                  : "switches to the Sidekick tab",
           );
         }
       }
@@ -2567,6 +2585,17 @@ function* drive(
           yield* remount();
           return false;
         }
+      }
+
+      if (
+        event.kind === "key" &&
+        event.key === "Escape" &&
+        state.inspection !== undefined &&
+        inlineInspectionOpen(yield* inputView(state, yield* screen.size()))
+      ) {
+        state = { ...state, inspection: undefined };
+        yield* remount();
+        return false;
       }
 
       const dispatched = yield* tree.dispatch(event);
@@ -3772,6 +3801,10 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
   return node === undefined ? undefined : tree.keyOf(node);
 }
 
+function shortcutRevealsWork(view: ReplView, digit: string): boolean {
+  return (digit === "3" || digit === "4") && inlineInspectionOpen(view);
+}
+
 /**
  * Whether a wheel reduction moved a window and changed nothing else a frame
  * measures.
@@ -3926,6 +3959,7 @@ function sidekickReadingOf(
       ),
     ),
     turns: sidekickTurnRows(read.value, owner.live),
+    feedback: read.value.feedback,
     usageTotal: usageSummary(read.value.turns, "Sidekick total"),
     inspectUsage: selected !== undefined,
     busy: owner.busy,
@@ -4016,6 +4050,19 @@ export function sidekickTurnRows(
     live !== undefined && live.turn !== null
       ? { conversation: live.conversation, turn: live.turn, response: live.response }
       : undefined;
+  const answers = new Map(
+    known.answers.map((one) => [`${one.conversation}:${one.turn}`, one.message]),
+  );
+  const controls = new Map<string, string[]>();
+  for (const operation of known.operations) {
+    const key = `${operation.conversation}:${operation.response}`;
+    const names = controls.get(key);
+    if (names === undefined) {
+      controls.set(key, [operation.component]);
+    } else if (!names.includes(operation.component)) {
+      names.push(operation.component);
+    }
+  }
   const rows: ReplSidekickTurnRow[] = known.turns.map((turn) => {
     const own =
       turn.reply?.response ??
@@ -4033,6 +4080,12 @@ export function sidekickTurnRows(
       conversation: turn.conversation,
       agent: turn.agent,
       turn: turn.turn,
+      answer: answers.get(`${turn.conversation}:${turn.turn}`),
+      response: own,
+      controls:
+        own === undefined
+          ? undefined
+          : Object.freeze(controls.get(`${turn.conversation}:${own}`) ?? []),
       title: titleOf(turn.asked, turn.title),
       state: savedState(turn),
       usageLine: turnUsage(turn.usage),

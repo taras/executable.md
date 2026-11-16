@@ -327,6 +327,26 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "continue") {
     return { kind: "continue" };
   }
+  if (select === "inspect-sidekick") {
+    const target = named["target"];
+    const key = named["key"];
+    return (target === "feedback" ||
+      target === "exchange" ||
+      target === "person" ||
+      target === "entry") &&
+      typeof key === "string"
+      ? { kind: "inspect-sidekick", target, key }
+      : undefined;
+  }
+  if (select === "inspect-saved-turn") {
+    const turn = named["turn"];
+    return turn === null || (typeof turn === "number" && turn > 0)
+      ? { kind: "inspect-saved-turn", turn }
+      : undefined;
+  }
+  if (select === "toggle-recorded-feedback") {
+    return { kind: "toggle-recorded-feedback" };
+  }
   if (select === "close") {
     return { kind: "close-drawer" };
   }
