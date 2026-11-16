@@ -402,7 +402,7 @@ rule for a push to main's exact current head. Pending, cancelled, skipped and
 failed runs cannot pass. The maintainer-applied `ci-main-red-fix` exception keeps
 the repository's CI contract: it substitutes composability for the main lookup
 inside CI. Run `--props-action ready` when status reports `ready_pending`.
-It verifies the existing PASS comment and refreshes the source and checks.
+It verifies the existing PASS comment, then refreshes the source and checks.
 The result gives the maintainer the exact reviewed SHA to compare with the
 current GitHub head before marking the draft ready. Repeating the command
 returns the same comment on the same revision. The GitHub readiness mutation

@@ -331,7 +331,7 @@ export default function* ReviewOverlap(value: unknown) {
   check(
     later.code === 1 &&
       later.stderr.includes(
-        `The next action is ${scenario === "changes_required" ? "request_approved_repair" : "ready"}; do not start another review.`,
+        `The next action is ${scenario === "changes_required" ? "request_approved_repair" : "mark_ready_manually"}; do not start another review.`,
       ),
     `Unexpected later result (${later.code}): ${later.stderr} ${later.stdout}`,
   );

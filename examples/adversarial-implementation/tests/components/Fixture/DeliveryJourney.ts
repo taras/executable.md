@@ -408,10 +408,26 @@ exit 1
     "Ready did not return the same verified draft candidate.",
   );
   check(!(yield* exists(readyCount)), "Readiness changed the remote draft.");
+  yield* json(directory + "/remote-during-comment.json", { ...remote, revision: initial });
+  yield* refuse("ready");
+  check((yield* observe()).status === "source_changed", "Ready missed movement during readback.");
   yield* json(remotePath, { ...remote, revision: repair, draft: false });
   check(
     (yield* observe()).status === "ready_for_merge",
     "Status missed the maintainer transition.",
+  );
+  yield* json(directory + "/remote-during-comment.json", {
+    ...remote,
+    revision: initial,
+    draft: false,
+  });
+  const moved = yield* observe();
+  check(
+    moved.status === "source_changed" &&
+      moved.remote?.revision === initial &&
+      moved.pin?.revision === repair &&
+      moved.reviewPublication?.url === ready.reviewPublication?.url,
+    "Status reported readiness for the former head or lost its verified comment.",
   );
   check(
     (yield* prompts()).join() === [initial, repair].join(),

@@ -19,4 +19,13 @@ returns: {type: object}
 </Else>
 </If>
 </If>
+<Let as="moved" value={null} />
+<Dir path={props.target.directory}>
+<Glob include={["remote-during-comment.json"]} as="movement" />
+<If condition={!props.publish && publication.state === "verified" && movement.length !== 0}>
+<File path="remote-during-comment.json" as="moved" />
+<File.Delete path="remote-during-comment.json" />
+</If>
+</Dir>
+<If condition={moved !== null}><File path="remote.json">{moved}</File></If>
 <Return value={publication} />

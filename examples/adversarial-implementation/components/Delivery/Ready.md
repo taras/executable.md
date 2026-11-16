@@ -12,9 +12,4 @@ returns: {type: object}
 
 <Delivery.Status delivery={props.delivery} number={props.number} as="status" />
 <If condition={status.pin === null || !["ready_pending","ready_for_merge"].includes(status.status) || status.reviewPublication?.state !== "verified"}><Fail message={"Readiness requires the submitted PASS and verified comment. Next action is " + status.nextAction + "."} /></If>
-<Let as="pin" value={status.pin} />
-<Delivery.Gates delivery={props.delivery} number={props.number} as="fresh" />
-<If condition={!fresh.sourceMatches || fresh.source.head !== pin.revision || fresh.source.branch !== pin.branch || fresh.remote.state !== "open" || !fresh.ciPassed || !fresh.mainPassed}><Fail message={"Readiness evidence changed for " + pin.revision + ". Read status before another request."} /></If>
-<Delivery.Status delivery={props.delivery} number={props.number} as="readback" />
-<If condition={!["ready_pending","ready_for_merge"].includes(readback.status) || readback.revision !== pin.revision || readback.reviewPublication?.state !== "verified"}><Fail message={"Readiness could not be confirmed for " + pin.revision + ". Observed local " + readback.local?.head + ", remote " + (readback.remote?.observedRevision ?? readback.remote?.revision) + " and status " + readback.status + ". " + readback.nextAction} /></If>
-<Return value={readback} />
+<Return value={status} />

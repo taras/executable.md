@@ -61,7 +61,16 @@ returns: {type: object}
 <If condition={review !== null}>
 <Delivery.ReviewPublication target={{directory:props.delivery.directory,repository:props.delivery.policy.repository,number:props.number,branch,revision}} review={review} publish={false} as="reviewPublication" />
 </If>
+<Let as="after" value={null} />
+<If condition={sourceMatches && reviewState === "passed" && reviewPublication?.state === "verified"}>
+<Delivery.Gates delivery={props.delivery} number={props.number} as="gates" />
+<Let as="remote" value={gates.remote} />
+<Let as="after" value={gates.source} />
+<Let as="sourceMatches" value={gates.sourceMatches && gates.feedback?.revision === revision} />
+<Else>
 <Delivery.Source repository={props.delivery.repository} as="after" />
+</Else>
+</If>
 <Let as="sourceMatches" value={sourceMatches && after.clean && after.head === source.head && after.branch === source.branch} />
 <Let as="publicationPending" value={review !== null && reviewPublication?.state !== "verified"} />
 <Let as="required" value={[{gate:"independent-review",state:publicationPending ? "publication_pending" : reviewState},{gate:"required-ci",state:gates.ciPassed ? "passed" : remote.ci?.status === "completed" ? "failed" : "pending"},{gate:"main-health",state:gates.mainPassed ? "passed" : remote.main.run?.status === "completed" ? "failed" : "pending"}]} />
