@@ -86,6 +86,8 @@ function* saved(sidekick = false) {
       yield* sendMessage(page, "start the held entry");
     } else {
       yield* pasteDraft(page, source);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
     }
     yield* waiting.operation;

@@ -2784,6 +2784,8 @@ describe("Tier HI — a reopening reconciles against the acknowledged history", 
         yield* page.press("[live]");
         yield* page.until("the live head coming back", (one) => !one.shows("[live]"));
         yield* draftText(page, ORDINARY);
+        yield* page.key("Tab");
+        yield* page.until("Round Send focused", (one) => one.shows("> Send"));
         yield* page.key("Enter");
         yield* admission.started();
 
@@ -3218,6 +3220,8 @@ describe("975 — placement survives cold Submit reconciliation", () => {
         expect(observed.at(-1)).toBe(where);
         expect(yield* until(readFile(location.entries, "utf8"))).toBe(prefix);
         yield* draftText(page, "manual successor waits");
+        yield* page.key("Tab");
+        yield* page.until("Round Send focused", (one) => one.shows("> Send"));
         yield* page.key("Enter");
         yield* page.until("the refused successor after reconciliation", (one) =>
           one.shows("has not finished"),
@@ -4855,6 +4859,8 @@ describe("1269 — mounted retained recovery corrections", () => {
     yield* scoped(function* () {
       const page = yield* useReplPage({ host });
       yield* draftText(page, entryText);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       host.fake.script({ reply: "<REPL.Bindings />" });

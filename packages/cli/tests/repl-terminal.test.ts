@@ -203,6 +203,8 @@ function* useApplication(model: ReplModel, size: ReplTerminalSize = WIDE): Opera
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }
@@ -3038,6 +3040,8 @@ function historyMarkers(reading: ScreenReading): string[] {
  */
 function* submitPast(page: ReplPage, order: number): Operation<void> {
   yield* pasteDraft(page, `Entry ${order} text.`);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* page.until(`ready for entry ${order + 1}`, (one) =>
     one.shows(`Ready for Entry ${order + 1}`),

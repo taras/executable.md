@@ -1621,9 +1621,9 @@ describe("1075 invocation to REPL entry", () => {
           ),
         );
         yield* awaited("initial REPL frame", () => recording.terminal.drawn > 1);
-        recording.terminal.feed("\x074");
+        recording.terminal.feed("\x074\r");
         recording.terminal.feed(
-          `<Dir path=${JSON.stringify(external)}><File path="input.txt" /></Dir>\r`,
+          `<Dir path=${JSON.stringify(external)}><File path="input.txt" /></Dir>\t\r`,
         );
         yield* awaitedFact("submitted entry settlement", function* () {
           const opened = yield* pairedReplRepository(join(root, "xmd", "repl")).open(

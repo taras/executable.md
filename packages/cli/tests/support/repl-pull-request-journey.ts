@@ -287,7 +287,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(first, REACH_MS);
     yield* first.type(entry());
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     // Waited for first, so a prefix that refused is reported as the sentence on
     // the screen rather than as an absent managed checkout. What Git was asked
@@ -500,7 +500,7 @@ export function replUnsupportedPullRequest(repl: ReplCommand): Operation<void> {
       ].join("\n"),
     );
     yield* sleep(500);
-    yield* pty.type("\r");
+    yield* pty.type("\t\r");
 
     // Both refusals are sentences, wrapped where the Transcript's own width
     // cuts them, so they are read across those rows.

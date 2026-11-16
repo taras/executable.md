@@ -1293,7 +1293,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(sidekickIdle(page.screen())).toBe(false);
     expect(page.screen().found("[stop]", SIDEKICK_PANE)).toBe(1);
     expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(1);
-    expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
 
     // The rest of the text arrives, and the entry the reply submits is held
     // open: generation is over and the response is running its controls.
@@ -1898,7 +1898,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // The draft moves while the submission is being prepared, which is what
       // the start check refuses on: the prepared text is not the text anybody
       // is asking for any more.
-      yield* draftText(page, "!", ["Tab", "Tab", "Tab", "Tab"]);
+      yield* draftText(page, "!");
       allow.resolve();
       yield* page.until("the refused submission going back", (one) =>
         sidekickShows(one, "I did not admit an entry."),
@@ -2148,6 +2148,8 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     // The seed, as a person's own entry: pasted into the draft and run. The
     // draft shows its own source, so the entry's outcome is what says it ran.
     yield* pasteDraft(page, seed(names));
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     yield* page.until("the seed entry publishing its names", (one) =>
@@ -4036,8 +4038,8 @@ describe("Follow: submitted rounds in the running command", () => {
       "the actual interrupted prefix beside its source",
       (one) => one.occurrences("INTERRUPTED-PREFIX") >= 2,
     );
-    yield* page.until("Entry Stop", (one) => one.found("[stop]", { onRow: DRAFT }) === 1);
-    yield* page.press("[stop]", { onRow: DRAFT });
+    yield* page.until("Entry Stop", (one) => one.found("Stop", { onRow: "+ New Round" }) === 1);
+    yield* page.press("Stop", { onRow: "+ New Round" });
     yield* savedReplies(page.repl, 5);
     yield* page.until("the joined Send", sidekickIdle);
     const prompts = page.repl.fake.prompts;
@@ -4136,8 +4138,8 @@ describe("Follow: submitted rounds in the running command", () => {
     yield* savedReplies(page.repl, 3);
     yield* page.until("ordinary read joined", sidekickIdle);
     expect(page.repl.fake.prompts).toHaveLength(3);
-    yield* draftText(page, "<Output>MANUAL-ONLY</Output>", ["Tab", "Tab", "Tab", "Tab"]);
-    yield* page.press("[send]", { onRow: DRAFT });
+    yield* draftText(page, "<Output>MANUAL-ONLY</Output>");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* awaitedFact("manual entry settles", function* () {
       return (yield* settledReading(page.repl)).model.entries[1]?.terminal?.status === "ok";
     });
@@ -4582,6 +4584,8 @@ describe("993 mounted nested Output journeys", () => {
       const page = yield* useReplPage({ projectCwd: workspace, hostFiles: true });
       const source = `<Let as="ready" value={${ready}} />\n<If condition={ready}>\n<File path="complete">done</File>\n<Output>Review complete.</Output>\n<Else>\n<File path="pending">waiting</File>\n<Output>Review pending.</Output>\n</Else>\n</If>`;
       yield* pasteDraft(page, source);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       const expected = ready ? "Review complete." : "Review pending.";

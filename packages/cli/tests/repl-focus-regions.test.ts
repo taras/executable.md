@@ -135,6 +135,20 @@ describe("REPL focus regions: the normal screen", () => {
 });
 
 describe("REPL focus regions: Unicode caret editing", () => {
+  it("reveals both ends of a source line longer than the terminal", function* () {
+    const page = yield* useReplPage({ size: MEDIUM });
+    yield* draftFocus(page);
+    const source = `START ${"界".repeat(100)} END`;
+    yield* page.type(source);
+    yield* page.until("the end of the source", (one) => one.found(" END", DRAFT_VALUE) === 1);
+    expect(page.screen().found("START ", DRAFT_VALUE)).toBe(0);
+    yield* key(page, "Home");
+    expect(page.screen().found("START ", DRAFT_VALUE)).toBe(1);
+    expect(page.screen().found(" END", DRAFT_VALUE)).toBe(0);
+    yield* key(page, "End");
+    expect(page.screen().found(" END", DRAFT_VALUE)).toBe(1);
+  });
+
   it("PV3: Draft and Message edit at independent carets across rows, focus and resize", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);

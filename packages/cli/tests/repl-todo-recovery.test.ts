@@ -139,6 +139,8 @@ describe("TODO logical runtime recovery", () => {
     });
     yield* ensure(() => release.resolve());
     yield* pasteDraft(page, "<Output>entry finished</Output>");
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* cleaning.operation;
     yield* intoComposer(page);

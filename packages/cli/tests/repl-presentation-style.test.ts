@@ -717,9 +717,9 @@ function* exchange(page: ReplPage, order: number, one: Exchange): Operation<void
   if (one.outcome === "cancelled") {
     yield* page.until(
       `Entry ${order} waiting`,
-      (reading) => reading.found("[stop]", { onRow: DRAFT }) === 1,
+      (reading) => reading.found("Stop", { onRow: "+ New Round" }) === 1,
     );
-    yield* page.press("[stop]", { onRow: DRAFT });
+    yield* page.press("Stop", { onRow: "+ New Round" });
   }
   yield* entrySettles(page, order, one.outcome);
   yield* page.until(`the Sidekick saying ${one.said}`, (reading) =>
@@ -745,7 +745,7 @@ function* reachWorkspace(size: ReplTerminalSize): Operation<ReplPage> {
   yield* sendMessage(page, "second request");
   yield* page.until(
     "Entry 2 running",
-    (reading) => reading.found("[stop]", { onRow: DRAFT }) === 1,
+    (reading) => reading.found("Stop", { onRow: "+ New Round" }) === 1,
   );
   yield* page.repl.fake.holdingTurns(1);
   return page;
@@ -764,11 +764,13 @@ function* reachOutcomes(size: ReplTerminalSize): Operation<ReplPage> {
     yield* exchange(page, at + 1, one);
   }
   page.repl.fake.script(HELD_AGENT);
-  yield* pasteDraft(page, `${RUNNING_SOURCE}\n${AGENT_TAIL}`, ["Tab", "Tab", "Tab", "Tab"]);
+  yield* pasteDraft(page, `${RUNNING_SOURCE}\n${AGENT_TAIL}`);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* page.until(
     "Entry 4 running",
-    (reading) => reading.found("[stop]", { onRow: DRAFT }) === 1,
+    (reading) => reading.found("Stop", { onRow: "+ New Round" }) === 1,
   );
   yield* page.repl.fake.holdingTurns(1);
   page.repl.fake.script({ reply: `${ROUNDING_QUESTION}\n` });
@@ -781,7 +783,7 @@ function* reachOutcomes(size: ReplTerminalSize): Operation<ReplPage> {
 function* typedInto(page: ReplPage): Operation<void> {
   yield* intoComposer(page);
   yield* typed(page, CHECKPOINT_MESSAGE);
-  yield* pasteDraft(page, CHECKPOINT_DRAFT, ["Tab", "Tab", "Tab", "Tab"]);
+  yield* pasteDraft(page, CHECKPOINT_DRAFT);
 }
 
 /** Open the Entries catalog through the control the sidebar draws for it. */
@@ -5912,7 +5914,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     yield* closeDrawer(page);
     const entries = page.screen();
     expect(entries.shows("DRAFT")).toBe(true);
-    expect(entries.found("[stop]", { onRow: "DRAFT" })).toBe(1);
+    expect(entries.found("Stop", { onRow: "+ New Round" })).toBe(1);
     for (const control of ["Sessions", "Entries"]) {
       expect({ control, shown: entries.shows(control) }).toEqual({ control, shown: true });
     }
@@ -6156,7 +6158,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     yield* intoComposer(page);
     const reading = page.screen();
     expect(reading.found("[send]", SIDEKICK_PANE)).toBe(1);
-    expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(reading.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 
   it("keeps terminal surfaces on the accepted palette", function* () {

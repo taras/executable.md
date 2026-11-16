@@ -317,7 +317,7 @@ describe("1048 — generated retained output", () => {
     yield* page.resize(WIDE);
     yield* page.type("!");
     yield* page.until("the saved middle Message caret", (one) => one.shows("ab!界"));
-    yield* draftText(page, "draft", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "draft");
     yield* completedKey(page, "ArrowLeft");
     yield* openHistory(page);
     yield* page.key("Escape");

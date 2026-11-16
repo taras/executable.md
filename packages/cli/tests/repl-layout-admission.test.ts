@@ -174,6 +174,8 @@ function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }

@@ -248,6 +248,8 @@ describe("987 — mounted original recovery", () => {
       page,
       '<Elicit as="answer" schema={{type:"object",properties:{answer:{type:"string"}},required:["answer"],additionalProperties:false}}>Independent entry question.</Elicit>',
     );
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the independent question", (one) => one.shows("[answer]"));
     yield* page.press("[answer]");
@@ -310,7 +312,7 @@ describe("Sidekick presentation: visible work owns its controls", () => {
     const reading = page.screen();
     expect(composerHolds(reading, "a Sidekick question")).toBe(true);
     expect(draftHolds(reading, "a Sidekick question")).toBe(false);
-    expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(reading.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 
   it("routes one visible surface at narrow size and recovers when widened", function* () {
@@ -390,7 +392,7 @@ describe("Tier CF — complete messages and following the newest reply", () => {
     expect(at(after, "one-C")).toBeLessThan(at(after, "two-A"));
     expect(at(after, "two-A")).toBeLessThan(at(after, "two-B"));
     expect(page.screen().shows(COMPOSER)).toBe(true);
-    expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     yield* awaitedFact("two saved replies", function* () {
       return (
         (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response").length ===
@@ -582,6 +584,8 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
     const running = gate.holdNext((path) => path === legacy && gate.reaching(legacy) >= 1);
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* running.started();
     yield* page.until(
@@ -597,7 +601,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(yield* publishedPairs(host.root)).toEqual([]);
     yield* compose(page, "!");
     expect(composerHolds(page.screen(), "!")).toBe(true);
-    yield* draftText(page, "next", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "next");
     running.release();
     yield* page.until("the reply arriving", (one) => one.shows("Noted."));
     yield* finishing.started();
@@ -652,7 +656,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* sendComposed(page);
     yield* saving.started();
     yield* compose(page, "!");
-    yield* draftText(page, "X", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "X");
     saving.release();
     yield* page.until("the reply arriving", (one) => one.shows("Understood."));
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
@@ -695,7 +699,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* page.until("the Sidekick working", (one) => one.shows("[S] working"));
     expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
     expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
-    expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     yield* compose(page, "then this");
     page.repl.fake.releaseTurn();
     yield* page.until("the reply arriving", (one) => one.shows("Done."));
@@ -725,6 +729,8 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
   it("M5: control — an ordinary entry's own progress reaches the screen with no further key", function* () {
     const page = yield* useReplPage();
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
     yield* page.until("the entry output without input", (one) => one.shows("step-two"));
@@ -813,6 +819,8 @@ describe("Sidekick texts and reading across every profile", () => {
   it("M7: an older entry stays frozen while the Sidekick works, and Bindings still reads it", function* () {
     const page = yield* useReplPage();
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     yield* chooseEntry(page, "entry-1");
@@ -901,7 +909,7 @@ function* submittedUnderEdit(
   yield* reached.operation;
   let edited: string | undefined;
   if (edit) {
-    yield* draftText(page, "mine now", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "mine now");
     expect(page.screen().found("mine now", DRAFT_VALUE)).toBe(1);
     edited = "<GateThing />mine now";
   }
@@ -1008,6 +1016,8 @@ describe("Sidekick question announcement and modal ownership", () => {
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"component":"Elicit"'),
     );
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     yield* chooseEntry(page, "entry-1");
@@ -1043,6 +1053,8 @@ describe("Sidekick question announcement and modal ownership", () => {
   it("MQ1: control — an ordinary entry's question announces itself the same way", function* () {
     const page = yield* useReplPage();
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
     yield* page.until("the entry announcing without input", (one) => one.shows("[answer]"));
@@ -1366,6 +1378,8 @@ describe("Transcript ownership and immutable older chat readings", () => {
     page.repl.fake.script({ held: true, reply: "ENTRY-DONE" });
     page.repl.fake.script({ deltas: ["<Output>Side ans", "wer.</Output>\n"], holdAfter: 1 });
     yield* pasteDraft(page, '<Session name="planner"><Prompt text="ask-entry" /></Session>\n');
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.repl.fake.holdingTurns(1);
     yield* sendMessage(page, "ask side");
@@ -2026,6 +2040,8 @@ describe("Older chats retain their identity across failure and cold opening", ()
         '<Session name="planner"><Prompt text="unfinished-entry" /></Session>\n',
         ["Tab", "Tab", "Tab", "Tab"],
       );
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* first.fake.holdingTurns(1);
       execution = yield* mountedExecution(page.repl);
@@ -2065,7 +2081,9 @@ describe("Older chats retain their identity across failure and cold opening", ()
       root = first.root;
       const page = yield* useReplPage({ host: first });
       yield* exchange(page, "only ask", "Only answer.");
-      yield* pasteDraft(page, TWO_STEP_ENTRY, ["Tab", "Tab", "Tab", "Tab"]);
+      yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       execution = yield* mountedExecution(page.repl);
@@ -2205,6 +2223,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
     page.repl.fake.script({ reply: "<Output>Shared answer.</Output>\n", turnId: "sk-turn-1" });
     yield* pasteDraft(page, promptEntry("entry-ask"));
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry turn recorded", (one) =>
       settledTranscriptHas(one, "[A] entry-ask"),
@@ -2269,6 +2289,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
       const host = yield* useMountedHost({ dataRoot });
       const page = yield* useReplPage({ host });
       yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       const first = yield* settledReading(page.repl);
@@ -2277,6 +2299,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
       page.repl.fake.script({ reply: "ENTRY-REPLY" });
       page.repl.fake.script({ reply: "<Output>Chat answer.</Output>\n" });
       yield* pasteDraft(page, promptEntry("later-entry"));
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("the second entry recorded", (one) =>
         settledTranscriptHas(one, "[A] later-entry"),
@@ -2486,6 +2510,8 @@ const HI_FAILING = '```js eval\nthrow new Error("the third entry failed");\n```'
 
 function* entryRun(page: ReplPage, source: string, ordinal: number): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* entrySettles(page, ordinal, "ok");
 }
@@ -3163,6 +3189,8 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
     yield* pasteDraft(page, promptEntry("control-ask"));
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
     yield* page.until("the entry's recorded provider turn", (one) =>
@@ -3184,7 +3212,7 @@ describe("Sidekick original populated chat profiles", () => {
     }
     yield* newConversation(page);
     yield* exchange(page, "current ask", "Current answer.");
-    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "my entry");
     yield* compose(page, "my q");
     yield* reachTurn(page, "old-6 ");
     yield* page.until("the populated older reading", (one) => chatHas(one, "OLD-6"));
@@ -3213,7 +3241,7 @@ describe("Sidekick original populated chat profiles", () => {
   it("SS7: three profiles keep both sections, the window, Back and both texts", function* () {
     const page = yield* useReplPage();
     yield* exchange(page, "older ask", "Older answer.");
-    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "my entry");
     yield* compose(page, "my q");
     yield* chooseTurn(page, "older ask ");
     yield* page.until("the current chat explicitly selected", (one) =>

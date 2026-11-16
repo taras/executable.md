@@ -1277,19 +1277,28 @@ export function* fitEditor(
     let geometry = store?.heldCaret(line.text, line.indent, Math.max(1, room - 1), size);
     if (geometry === undefined) {
       const stops = boundaries(line.text);
+      // The engine caps the width of a prefix at the terminal width.
       const measured = yield* widths(
         renderer,
         size,
-        stops.map((at) => line.text.slice(0, at)),
+        stops.map((at, index) =>
+          mode === "horizontal"
+            ? line.text.slice(stops[index - 1] ?? 0, at)
+            : line.text.slice(0, at),
+        ),
       );
       if (!measured.ok) {
         return measured;
       }
+      let column = line.indent;
       geometry = {
-        stops: stops.map((offset, index) => ({
-          offset,
-          column: line.indent + measured.value[index],
-        })),
+        stops: stops.map((offset, index) => {
+          column =
+            mode === "horizontal"
+              ? column + measured.value[index]
+              : line.indent + measured.value[index];
+          return { offset, column };
+        }),
       };
     }
     retained.push({ text: line.text, indent: line.indent, row: geometry });
@@ -1324,9 +1333,11 @@ export function* fitEditor(
     };
   }
   if (mode === "horizontal") {
-    const activeColumn =
-      rows[active]?.stops.find((stop) => stop.offset === caret.offset)?.column ?? 0;
-    const left = Math.max(0, activeColumn - room + 1);
+    const activeStops = rows[active]?.stops ?? [];
+    const caretIndex = activeStops.findIndex((stop) => stop.offset === caret.offset);
+    const activeColumn = activeStops[caretIndex]?.column ?? 0;
+    const caretEnd = activeStops[caretIndex + 1]?.column ?? activeColumn + 1;
+    const left = Math.max(0, Math.max(activeColumn + 1, caretEnd) - room);
     for (const [at, one] of display.entries()) {
       const stops = rows[at].stops;
       const first = stops[0]?.offset ?? 0;

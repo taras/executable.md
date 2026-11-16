@@ -2014,6 +2014,8 @@ describe("U2 — the program performs a permission, end to end", () => {
 
       // One entry, submitted the way a person submits one.
       yield* pasteDraft(page, THREE_SPAWNS);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
 
       yield* page.until("the request being announced", requestShown);
@@ -2069,6 +2071,8 @@ describe("U2 — the program performs a permission, end to end", () => {
     yield* scoped(function* (): Operation<void> {
       const { page } = yield* useAgentPage(stub);
       yield* pasteDraft(page, THREE_SPAWNS);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("the request being announced", requestShown);
 
@@ -2130,6 +2134,8 @@ describe("U4 — the loop wakes for Agent work", () => {
       const { page } = yield* useAgentPage(stub);
       const { terminal } = page.repl;
       yield* pasteDraft(page, THREE_SPAWNS);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
 
       // A stable screen: all three observed, none of them started.
@@ -3787,6 +3793,8 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
 
         // One entry, which is what will ask for the permission.
         yield* pasteDraft(page, THREE_SPAWNS);
+        yield* page.key("Tab");
+        yield* page.until("Round Send focused", (one) => one.shows("> Send"));
         yield* page.key("Enter");
 
         // That a request is waiting is read from the one row that says what the

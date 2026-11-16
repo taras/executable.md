@@ -58,7 +58,7 @@ describe("E3 retained command output", () => {
 
 function* submit(page: ReplPage, source: string, order = 1): Operation<void> {
   yield* pasteDraft(page, source);
-  yield* page.press("[send]", { onRow: " DRAFT" });
+  yield* page.press("Send", { onRow: "✎ draft" });
   yield* page.until(`entry ${order} admitted`, (one) =>
     ["●", "✓", "×"].some((status) => one.shows(`${order} ${status}`)),
   );
@@ -208,10 +208,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
       page,
       '```sh exec\ncontrolled-output\n```\n\n```sh exec as="captured"\ncontrolled-bound\n```\n{captured.stdout}',
     );
-    yield* page.until(
-      "the admitted draft clearing",
-      (one) => one.found("{captured.stdout}", { after: " DRAFT" }) === 0,
-    );
+    yield* page.until("the admitted draft clearing", (one) => !one.shows("✎ draft"));
     yield* page.type("draft stays");
     yield* page.until("the preserved draft", (one) => one.shows("draft stays"));
     yield* intoComposer(page);

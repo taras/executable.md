@@ -1026,6 +1026,8 @@ describe("Tier PV — generation that ended without a reply", () => {
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
     yield* pasteDraft(page, OWN_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* closing.started();
 
@@ -1218,6 +1220,8 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
 
     // An ordinary entry of this person's, admitted and still open.
     yield* pasteDraft(page, SUSPENDS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry being admitted", (one) => one.shows("Entry 1"));
     if (draft !== undefined) {
@@ -1718,6 +1722,8 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
 
     // The entry's question first, so both are pending at once.
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -1770,6 +1776,8 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     // The entry's question, pending throughout: Stop is the Sidekick's and must
     // not reach it.
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -1882,6 +1890,8 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
 
     // The entry's question, pending and unanswered throughout.
     yield* pasteDraft(page, ENTRY_WAITS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -2214,7 +2224,7 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* stopSidekick(page);
     yield* page.until(
       "Sidekick Stop joined with the entry still running",
-      (one) => sidekickIdle(one) && one.found("[stop]", { onRow: DRAFT }) === 1,
+      (one) => sidekickIdle(one) && one.found("Stop", { onRow: "+ New Round" }) === 1,
     );
     expect(page.screen().shows("[x] Follow")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(1);
