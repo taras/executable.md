@@ -7,11 +7,13 @@ import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { CodeBlockResult, Segment } from "../src/types.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/each.test.ts");
 
 interface EachRun {
   segments: Segment[];
@@ -217,31 +219,33 @@ describe("Tier Each — native iteration directive", () => {
 
 describe("Tier Each — eval in the loop body", () => {
   beforeAll(() => useTempFileCompiler());
-  it("E18: a body eval block reads the current item binding", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "test.md": [
-        "```js eval",
-        "const items = [{ name: 'alpha' }, { name: 'beta' }];",
-        "```",
-        '<Each in={items} let="item">',
-        "```js eval",
-        "output('got:' + item.name);",
-        "```",
-        "</Each>",
-      ].join("\n"),
-    });
-    yield* useEchoExec();
+  journalCase(
+    "E18: a body eval block reads the current item binding",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "test.md": [
+          "```js eval",
+          "const items = [{ name: 'alpha' }, { name: 'beta' }];",
+          "```",
+          '<Each in={items} let="item">',
+          "```js eval",
+          "output('got:' + item.name);",
+          "```",
+          "</Each>",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+      const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    expect(output).toContain("got:alpha");
-    expect(output).toContain("got:beta");
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).toContain("got:alpha");
+      expect(output).toContain("got:beta");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
-  it("E19: renders a table row per item end to end", function* () {
-    const stream = new InMemoryStream();
+  journalCase("E19: renders a table row per item end to end", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -261,54 +265,60 @@ describe("Tier Each — eval in the loop body", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  it("E22: each iteration's eval env is fresh — body bindings do not carry over", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "test.md": [
-        "```js eval",
-        "const items = [1, 2];",
-        "```",
-        '<Each in={items} let="n">',
-        "```js eval",
-        "output('iter' + n + ':' + ('carry' in env ? env.carry : 'absent'));",
-        "env.carry = 'from-' + n;",
-        "```",
-        "</Each>",
-        "```js eval",
-        "output('final:' + (typeof carry === 'undefined' ? 'absent' : carry));",
-        "```",
-      ].join("\n"),
-    });
-    yield* useEchoExec();
+  journalCase(
+    "E22: each iteration's eval env is fresh — body bindings do not carry over",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "test.md": [
+          "```js eval",
+          "const items = [1, 2];",
+          "```",
+          '<Each in={items} let="n">',
+          "```js eval",
+          "output('iter' + n + ':' + ('carry' in env ? env.carry : 'absent'));",
+          "env.carry = 'from-' + n;",
+          "```",
+          "</Each>",
+          "```js eval",
+          "output('final:' + (typeof carry === 'undefined' ? 'absent' : carry));",
+          "```",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+      const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    expect(output).toContain("iter1:absent");
-    expect(output).toContain("iter2:absent");
-    expect(output).toContain("final:absent");
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).toContain("iter1:absent");
+      expect(output).toContain("iter2:absent");
+      expect(output).toContain("final:absent");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
-  it("E21: an <Each> projected through <Content /> resolves caller bindings", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "components/Wrap.md": "<Content />",
-      "test.md": [
-        "```js eval",
-        "const items = [{ n: 1 }, { n: 2 }];",
-        "const label = 'L';",
-        "```",
-        "<Wrap>",
-        '<Each in={items} let="item">[{label}:{item.n}]</Each>',
-        "</Wrap>",
-      ].join("\n"),
-    });
-    yield* useEchoExec();
+  journalCase(
+    "E21: an <Each> projected through <Content /> resolves caller bindings",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "components/Wrap.md": "<Content />",
+        "test.md": [
+          "```js eval",
+          "const items = [{ n: 1 }, { n: 2 }];",
+          "const label = 'L';",
+          "```",
+          "<Wrap>",
+          '<Each in={items} let="item">[{label}:{item.n}]</Each>',
+          "</Wrap>",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+      const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    expect(output).toContain("[L:1]");
-    expect(output).toContain("[L:2]");
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).toContain("[L:1]");
+      expect(output).toContain("[L:2]");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 });
