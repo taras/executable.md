@@ -30,7 +30,7 @@ import { API } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { gitPlugin } from "../src/plugin.ts";
 import { IssueApi } from "@executablemd/git/api";
 import { GITHUB, useGitHubIssues } from "../src/deno/issue/github.ts";
@@ -44,6 +44,9 @@ import type {
 } from "../src/deno/composition/github.ts";
 import { GITHUB_ISSUES_ENV } from "../src/deno/issue/configuration.ts";
 import { fakeGitHubAccess, gitHubStore } from "./support/github.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/git/tests/github-activation.test.ts");
 
 /** Where every step this suite watches records itself, in the order it happened. */
 type Step = "configuration" | "source" | "open" | "credential" | "transport";
@@ -153,8 +156,7 @@ function reviewing(steps: Step[]): (endpoint?: string) => GitHubSource {
 }
 
 /** One document, executed with the bundled Plugin installed and nothing else. */
-function* document(source: string): Operation<unknown> {
-  const stream = new InMemoryStream();
+function* document(stream: InMemoryStream, source: string): Operation<unknown> {
   const install = gitPlugin.install;
   if (install === undefined) {
     throw new Error("the Git Plugin installed nothing");
@@ -189,21 +191,25 @@ describe("what installing the bundled GitHub adapter costs", () => {
     });
   });
 
-  it("reads no configuration for a document that writes no GitHub vocabulary", function* () {
-    const rendered = yield* scoped(function* () {
-      yield* refusing();
-      yield* useGitHubIssues({
-        host: () => ({
-          endpoint: "https://api.github.test",
-          *open(): Operation<GitHubAccess> {
-            throw new Error("a credential was obtained");
-          },
-        }),
+  journalCase(
+    "reads no configuration for a document that writes no GitHub vocabulary",
+    "<eval>",
+    function* (stream) {
+      const rendered = yield* scoped(function* () {
+        yield* refusing();
+        yield* useGitHubIssues({
+          host: () => ({
+            endpoint: "https://api.github.test",
+            *open(): Operation<GitHubAccess> {
+              throw new Error("a credential was obtained");
+            },
+          }),
+        });
+        return yield* document(stream, "nothing here reaches a service\n");
       });
-      return yield* document("nothing here reaches a service\n");
-    });
-    expect(String(rendered)).toContain("nothing here reaches a service");
-  });
+      expect(String(rendered)).toContain("nothing here reaches a service");
+    },
+  );
 
   it("reads no configuration for a destination another provider owns", function* () {
     // Target recognition comes first, and it reads nothing outside the

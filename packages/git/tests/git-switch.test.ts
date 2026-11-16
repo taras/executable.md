@@ -17,7 +17,6 @@ import { expect } from "@executablemd/test-support/expect";
 import { content, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
@@ -74,6 +73,9 @@ import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./supp
 
 import { filteredRepositoryIdentity } from "../src/composition/selection.ts";
 import { type RepositorySelection } from "@executablemd/git/api";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/git/tests/git-switch.test.ts");
 /**
  * Two branches whose content differs, plus one file that does not.
  *
@@ -711,7 +713,7 @@ describe("workflow Git.Switch selection", () => {
     });
   });
 
-  it("does not turn a missing provider into a refusal", function* () {
+  journalCase("does not turn a missing provider into a refusal", "<eval>", function* (stream) {
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
@@ -719,7 +721,7 @@ describe("workflow Git.Switch selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Switch branch="release" />`),
-            stream: new InMemoryStream(),
+            stream,
           }),
         );
       }),

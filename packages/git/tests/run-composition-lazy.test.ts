@@ -30,12 +30,15 @@ import { repositoryOperationsOver } from "../src/deno/repository-operations.ts";
 import type { DenoRepositoryOperations } from "../deno.ts";
 import type { HelperAssembly } from "../credential-helper.ts";
 import { collect, execute, inlineSource } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useHostFiles } from "@executablemd/runtime";
 import { useRunComposition } from "../src/deno/run-composition/provider.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { Repository } from "@executablemd/git/api";
 import type { RepositoryHost, GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/git/tests/run-composition-lazy.test.ts");
 
 /** Every acquisition this provider can make, counted where it happens. */
 interface Acquisitions {
@@ -76,7 +79,7 @@ function counting(seen: Acquisitions, directory: string): RepositoryHost {
 }
 
 /** One document, run with the provider installed over a counting host. */
-function* run(source: string, seen: Acquisitions): Operation<string> {
+function* run(stream: InMemoryStream, source: string, seen: Acquisitions): Operation<string> {
   const directory = yield* useTempDirectory("xmd-lazy");
   const root = yield* useTempDirectory("xmd-lazy-root");
   return String(
@@ -95,9 +98,7 @@ function* run(source: string, seen: Acquisitions): Operation<string> {
           return undefined;
         },
       });
-      return yield* collect(
-        yield* execute({ ...inlineSource(source), stream: new InMemoryStream() }),
-      );
+      return yield* collect(yield* execute({ ...inlineSource(source), stream }));
     }),
   );
 }
@@ -113,17 +114,21 @@ describe("what the ordinary repository provider acquires, and when", () => {
     expect(seen).toEqual({ directories: 0, commands: [], identities: 0 });
   });
 
-  it("acquires nothing for a document that writes no repository component", function* () {
-    const seen = counters();
-    const rendered = yield* run("a plain document\n", seen);
-    // The document really ran — an empty render would satisfy every count.
-    expect(rendered).toContain("a plain document");
-    expect(seen).toEqual({ directories: 0, commands: [], identities: 0 });
-  });
+  journalCase(
+    "acquires nothing for a document that writes no repository component",
+    "<eval>",
+    function* (stream) {
+      const seen = counters();
+      const rendered = yield* run(stream, "a plain document\n", seen);
+      // The document really ran — an empty render would satisfy every count.
+      expect(rendered).toContain("a plain document");
+      expect(seen).toEqual({ directories: 0, commands: [], identities: 0 });
+    },
+  );
 
-  it("acquires no repository capability for a bare <Dir>", function* () {
+  journalCase("acquires no repository capability for a bare <Dir>", "<eval>", function* (stream) {
     const seen = counters();
-    const rendered = yield* run('<Dir path="notes">local work only</Dir>\n', seen);
+    const rendered = yield* run(stream, '<Dir path="notes">local work only</Dir>\n', seen);
     expect(rendered).toContain("local work only");
     // `<Dir>` makes a directory. It selects no repository, runs no `git`, opens
     // no session and reads no identity.

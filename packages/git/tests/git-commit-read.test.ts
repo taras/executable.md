@@ -15,7 +15,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Json } from "@executablemd/durable-streams";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { spawnSync } from "node:child_process";
@@ -36,6 +35,9 @@ import { denoCommitVerifier } from "../src/deno/run-composition/verification.ts"
 import type { CommitVerifier } from "../src/deno/run-composition/verification.ts";
 import { capturingProbe } from "./support/observations.ts";
 import { raised, runOrdinaryDocument, useManagedRoot } from "./support/run-composition.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/git/tests/git-commit-read.test.ts");
 
 /** Whether this host can sign and verify the SSH fixture commits at all. */
 const SSH_KEYGEN = spawnSync("ssh-keygen", ["-?"]).error === undefined;
@@ -801,29 +803,33 @@ describe("GCR6 — the selected checkout answers, and nothing changes (A6)", () 
     },
   );
 
-  it("refuses with the absent-provider error on a host that installs no reads", function* () {
-    const failure = yield* raised(
-      scoped(function* () {
-        yield* useCompositionComponents();
-        yield* Repository.around(
-          {
-            // deno-lint-ignore require-yield
-            *ambient(): Operation<RepositorySelection | undefined> {
-              return SUPPLIED_SELECTION;
+  journalCase(
+    "refuses with the absent-provider error on a host that installs no reads",
+    "<eval>",
+    function* (stream) {
+      const failure = yield* raised(
+        scoped(function* () {
+          yield* useCompositionComponents();
+          yield* Repository.around(
+            {
+              // deno-lint-ignore require-yield
+              *ambient(): Operation<RepositorySelection | undefined> {
+                return SUPPLIED_SELECTION;
+              },
             },
-          },
-          { at: "min" },
-        );
-        return yield* collect(
-          yield* execute({
-            ...inlineSource(`<Git.Commit ref="HEAD" as="x" />\n`),
-            stream: new InMemoryStream(),
-          }),
-        );
-      }),
-    );
-    expect(failure instanceof GitObservationProviderError).toBe(true);
-  });
+            { at: "min" },
+          );
+          return yield* collect(
+            yield* execute({
+              ...inlineSource(`<Git.Commit ref="HEAD" as="x" />\n`),
+              stream,
+            }),
+          );
+        }),
+      );
+      expect(failure instanceof GitObservationProviderError).toBe(true);
+    },
+  );
 });
 
 describe("GCR7 — the syntax reference describes both forms (A8)", () => {

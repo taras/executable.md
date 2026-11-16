@@ -12,7 +12,6 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -74,6 +73,9 @@ import { gitPluginAdmissions } from "./support/composition.ts";
 import { dropRootClose } from "./support/replay.ts";
 
 import type { RepositorySelection } from "@executablemd/git/api";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/git/tests/git-commit.test.ts");
 /** One tracked file at the root and one in a subdirectory. */
 const REMOTE = {
   commits: [
@@ -939,7 +941,7 @@ describe("workflow Git.Commit selection", () => {
     });
   });
 
-  it("does not turn a missing provider into a refusal", function* () {
+  journalCase("does not turn a missing provider into a refusal", "<eval>", function* (stream) {
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
@@ -947,7 +949,7 @@ describe("workflow Git.Commit selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Commit message="nowhere" as="sha" />`),
-            stream: new InMemoryStream(),
+            stream,
           }),
         );
       }),

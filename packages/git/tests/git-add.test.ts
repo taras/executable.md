@@ -14,7 +14,6 @@ import { expect } from "@executablemd/test-support/expect";
 import { registerComponents } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import { tmpdir } from "node:os";
@@ -64,6 +63,9 @@ import {
   subcommands,
 } from "./support/composition.ts";
 import { gitPluginAdmissions } from "./support/composition.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/git/tests/git-add.test.ts");
 
 /**
  * A tracked file at the root, one in a subdirectory, and one more of each.
@@ -598,7 +600,7 @@ describe("workflow Git.Add selection", () => {
     });
   });
 
-  it("does not turn a missing provider into a refusal", function* () {
+  journalCase("does not turn a missing provider into a refusal", "<eval>", function* (stream) {
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
@@ -606,7 +608,7 @@ describe("workflow Git.Add selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Add paths="." />`),
-            stream: new InMemoryStream(),
+            stream,
           }),
         );
       }),
