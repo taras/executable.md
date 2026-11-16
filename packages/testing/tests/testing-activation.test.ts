@@ -9,6 +9,7 @@
  * and "no results" is the vacuous failure mode rather than the evidence.
  */
 
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
@@ -119,6 +120,8 @@ function useSentinel(sentinels: string[]): Operation<void> {
  * this harness needs are already in place — the position from which a handler
  * would see everything a real one does.
  */
+const activationCase = journalCases("packages/testing/tests/testing-activation.test.ts");
+
 function runComposed(
   document: string,
   compose: Operation<unknown>,
@@ -419,65 +422,82 @@ describe("complete testing activation", () => {
 
   // The control, in the identical middleware order: a handler that delegates
   // observes the behavior and changes nothing about it.
-  it("leaves an ordinary TestBehavior handler composing under a complete session", function* () {
-    const behavior = loadedCopyBehaviorApi();
-    const observed: string[] = [];
-    const attempt = yield* runComposed(
-      '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
-      (function* () {
-        yield* behavior.around({
-          *test([props], next) {
-            observed.push(String(props.name));
-            return yield* next(props);
-          },
-        });
-        yield* useTesting();
-      })(),
-    );
-    expect(observed).toEqual(["t"]);
-    expect(attempt.sentinels).toEqual(["body"]);
-    expect(attempt.completion.ok).toBe(true);
-    expect(attempt.results.map((result) => [result.name, result.status])).toEqual([["t", "pass"]]);
-    expect(testResultEvents(attempt.events)).toHaveLength(1);
-  });
+  activationCase(
+    "leaves an ordinary TestBehavior handler composing under a complete session",
+    "README.md",
+    function* (stream) {
+      const behavior = loadedCopyBehaviorApi();
+      const observed: string[] = [];
+      const attempt = yield* runComposed(
+        '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+        (function* () {
+          yield* behavior.around({
+            *test([props], next) {
+              observed.push(String(props.name));
+              return yield* next(props);
+            },
+          });
+          yield* useTesting();
+        })(),
+        stream,
+      );
+      expect(observed).toEqual(["t"]);
+      expect(attempt.sentinels).toEqual(["body"]);
+      expect(attempt.completion.ok).toBe(true);
+      expect(attempt.results.map((result) => [result.name, result.status])).toEqual([
+        ["t", "pass"],
+      ]);
+      expect(testResultEvents(attempt.events)).toHaveLength(1);
+    },
+  );
 
   // The other direction: under a real session the same public surface keeps
   // working, and observes results in discovery order.
-  it("leaves loaded-copy policy and recording composition working", function* () {
-    const attempt = yield* runComposed(
-      [
-        '<Test name="first"><Sentinel name="first" /><Assert expr={true} /></Test>',
-        '<Test name="second"><Sentinel name="second" /><Assert expr={true} /></Test>',
-        "",
-      ].join("\n"),
-      useTesting(),
-    );
-    expect(attempt.completion.ok).toBe(true);
-    expect(attempt.sentinels).toEqual(["first", "second"]);
-    expect(attempt.results.map((result) => [result.name, result.status])).toEqual([
-      ["first", "pass"],
-      ["second", "pass"],
-    ]);
-    expect(testResultEvents(attempt.events)).toHaveLength(2);
-  });
+  activationCase(
+    "leaves loaded-copy policy and recording composition working",
+    "README.md",
+    function* (stream) {
+      const attempt = yield* runComposed(
+        [
+          '<Test name="first"><Sentinel name="first" /><Assert expr={true} /></Test>',
+          '<Test name="second"><Sentinel name="second" /><Assert expr={true} /></Test>',
+          "",
+        ].join("\n"),
+        useTesting(),
+        stream,
+      );
+      expect(attempt.completion.ok).toBe(true);
+      expect(attempt.sentinels).toEqual(["first", "second"]);
+      expect(attempt.results.map((result) => [result.name, result.status])).toEqual([
+        ["first", "pass"],
+        ["second", "pass"],
+      ]);
+      expect(testResultEvents(attempt.events)).toHaveLength(2);
+    },
+  );
 
   // Narrowing is what the public boolean is for, and it still works: a policy
   // that answers `false` leaves the test inactive rather than refused.
-  it("lets public policy narrow testing to false under a complete session", function* () {
-    const attempt = yield* runComposed(
-      '<Test name="t"><Sentinel name="body" /><Assert expr={false} /></Test>\n',
-      (function* () {
-        yield* useTesting();
-        const policy = loadedCopyTestApi();
-        yield* policy.around({ testing: () => false });
-      })(),
-    );
-    expect(attempt.sentinels).toEqual([]);
-    expect(attempt.results).toEqual([]);
-    // No tests were discovered, which is the session's own outcome — not the
-    // activation refusal.
-    expect(errorOf(attempt)?.message).toContain("no tests were discovered");
-  });
+  activationCase(
+    "lets public policy narrow testing to false under a complete session",
+    "README.md",
+    function* (stream) {
+      const attempt = yield* runComposed(
+        '<Test name="t"><Sentinel name="body" /><Assert expr={false} /></Test>\n',
+        (function* () {
+          yield* useTesting();
+          const policy = loadedCopyTestApi();
+          yield* policy.around({ testing: () => false });
+        })(),
+        stream,
+      );
+      expect(attempt.sentinels).toEqual([]);
+      expect(attempt.results).toEqual([]);
+      // No tests were discovered, which is the session's own outcome — not the
+      // activation refusal.
+      expect(errorOf(attempt)?.message).toContain("no tests were discovered");
+    },
+  );
 
   // An ended boundary's credential is retired, so a `<Test>` written after it
   // is refused exactly as one written before it.
