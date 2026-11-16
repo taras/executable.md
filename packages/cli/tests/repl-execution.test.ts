@@ -1191,30 +1191,32 @@ describe(SELECTION_SUITE, () => {
     });
   });
 
-  it("X1: a host's defined empty selection refuses the entry before its body", function* () {
-    const holder = execution();
-    const entry = opened(
-      yield* submitReplEntry({
-        ...options(holder),
-        source: DESCRIBING,
-        installations: [selecting({})],
-      }),
-    );
+  const emptySelection = "X1: a host's defined empty selection refuses the entry before its body";
+  it(emptySelection, () =>
+    captureEntry(SELECTION_SUITE, emptySelection, INLINE_SOURCE_PATH, function* (holder) {
+      const entry = opened(
+        yield* submitReplEntry({
+          ...options(holder),
+          source: DESCRIBING,
+          installations: [selecting({})],
+        }),
+      );
 
-    // Defined and empty is a host statement, not an absence: core refuses the
-    // setup rather than this session answering over it with its default.
-    const settled = yield* entry.join();
-    expect(settled.ok).toBe(false);
-    expect(settled.ok ? "" : settled.error.message).toContain("selected no component");
-    // Refused before the entry body: the document rendered nothing and the
-    // fragment was never admitted.
-    expect(entry.model.terminal?.output ?? "").toBe("");
-    expect(
-      (yield* readAll(holder)).filter(
-        (event) => event.type === "yield" && event.description.type === "generated_xmd",
-      ),
-    ).toEqual([]);
-  });
+      // Defined and empty is a host statement, not an absence: core refuses the
+      // setup rather than this session answering over it with its default.
+      const settled = yield* entry.join();
+      expect(settled.ok).toBe(false);
+      expect(settled.ok ? "" : settled.error.message).toContain("selected no component");
+      // Refused before the entry body: the document rendered nothing and the
+      // fragment was never admitted.
+      expect(entry.model.terminal?.output ?? "").toBe("");
+      expect(
+        (yield* readAll(holder)).filter(
+          (event) => event.type === "yield" && event.description.type === "generated_xmd",
+        ),
+      ).toEqual([]);
+    }),
+  );
 });
 
 describe("execution initialization in REPL entries", () => {

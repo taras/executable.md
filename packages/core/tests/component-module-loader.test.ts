@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { API } from "@executablemd/runtime";
 import {
   checkSubprocessJournals,
@@ -17,7 +18,7 @@ import * as moduleApi from "node:module";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, Component, execute, registerComponents, useNormalizedOutput } from "../mod.ts";
 import { ComponentModuleLoader, Execution } from "../api.ts";
 import { useComponentModules } from "../src/typescript-module.ts";
@@ -31,7 +32,11 @@ const SOURCE =
   'export const generated = { "self-closing": { identity: "https://executable.md/tests/module/typed", effect: "read" } };\nexport default function*() { const answer: string = "typed-module"; return answer; }';
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
-function render(directory: string, source = "<Typed />"): Operation<unknown> {
+function render(
+  directory: string,
+  stream: InMemoryStream,
+  source = "<Typed />",
+): Operation<unknown> {
   return scoped(function* () {
     yield* useNormalizedOutput();
     return yield* collect(
@@ -39,14 +44,22 @@ function render(directory: string, source = "<Typed />"): Operation<unknown> {
         source,
         path: "<eval>",
         includes: [directory],
-        stream: new InMemoryStream(),
+        stream,
       }),
     );
   });
 }
 
+const OWNER = "packages/core/tests/component-module-loader.test.ts";
+
+function captureLoad(name: string, body: (stream: InMemoryStream) => Operation<void>) {
+  return captureTestJournal({ owner: OWNER, name }, "<eval>", body);
+}
+
 describe("ComponentModuleLoader", () => {
-  it("L1: requires explicit installation independently of eval, Markdown and registrations", function* () {
+  const requiresLoader =
+    "L1: requires explicit installation independently of eval, Markdown and registrations";
+  it(requiresLoader, function* () {
     const directory = yield* useTempDirectory("component-loader-install-");
     const entered = `loader-absent-${directory}`;
     yield* writeTextFile(
@@ -55,13 +68,13 @@ describe("ComponentModuleLoader", () => {
     );
     yield* ComponentModuleLoader.set(undefined);
     for (const evalCompiler of [false, true]) {
-      yield* scoped(function* () {
+      yield* captureLoad(requiresLoader, function* (stream) {
         if (evalCompiler) {
           yield* useTempFileCompiler();
         }
         let diagnostic = "";
         try {
-          yield* render(directory);
+          yield* render(directory, stream);
         } catch (error) {
           diagnostic = error instanceof Error ? error.message : String(error);
         }
@@ -70,7 +83,9 @@ describe("ComponentModuleLoader", () => {
         expect((yield* readdir(directory)).sort()).toEqual(["Typed.ts"]);
       });
     }
-    expect(yield* render(directory, "Markdown alone")).toContain("Markdown alone");
+    yield* captureLoad(requiresLoader, function* (stream) {
+      expect(yield* render(directory, stream, "Markdown alone")).toContain("Markdown alone");
+    });
     yield* registerComponents([
       {
         name: "Registered",
@@ -81,16 +96,22 @@ describe("ComponentModuleLoader", () => {
         },
       },
     ]);
-    expect(yield* render(directory, "<Registered />")).toContain("registered");
+    yield* captureLoad(requiresLoader, function* (stream) {
+      expect(yield* render(directory, stream, "<Registered />")).toContain("registered");
+    });
     yield* ensure(function* () {
       Reflect.deleteProperty(globalThis, entered);
     });
     yield* useComponentModuleLoader();
-    expect(yield* render(directory)).toContain("typed-module");
-    expect(Reflect.get(globalThis, entered)).toBe(true);
+    yield* captureLoad(requiresLoader, function* (stream) {
+      expect(yield* render(directory, stream)).toContain("typed-module");
+      expect(Reflect.get(globalThis, entered)).toBe(true);
+    });
   });
 
-  it("L2: captures one bound selection for profile and durable loading across later rebinding", function* () {
+  const fixedSelection =
+    "L2: captures one bound selection for profile and durable loading across later rebinding";
+  it(fixedSelection, function* () {
     yield* useComponentModuleLoader();
     const native = yield* ComponentModuleLoader.expect();
     if (native === undefined) {
@@ -121,28 +142,32 @@ describe("ComponentModuleLoader", () => {
     );
     yield* copy.set(A);
     expect(yield* ComponentModuleLoader.get()).toBe(A);
-    yield* scoped(function* () {
-      yield* Component.around({ generated: () => ({ Typed: ["self-closing"] }) });
-      yield* Execution.around({
-        *execute([request], next) {
-          yield* ComponentModuleLoader.set(B);
-          yield* next(request);
-        },
+    yield* captureLoad(fixedSelection, function* (stream) {
+      yield* scoped(function* () {
+        yield* Component.around({ generated: () => ({ Typed: ["self-closing"] }) });
+        yield* Execution.around({
+          *execute([request], next) {
+            yield* ComponentModuleLoader.set(B);
+            yield* next(request);
+          },
+        });
+        expect(
+          yield* render(directory, stream, '<Typed />\n<Evaluate text="<Typed />" />'),
+        ).toContain("typed-module");
       });
-      expect(yield* render(directory, '<Typed />\n<Evaluate text="<Typed />" />')).toContain(
-        "typed-module",
-      );
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      expect(
+        calls.every(
+          (call) => call.provider === "A" && call.source === SOURCE && call.origin === origin,
+        ),
+      ).toBe(true);
+      calls.length = 0;
+      yield* copy.set(B);
+      yield* captureLoad(fixedSelection, function* (secondStream) {
+        expect(yield* render(directory, secondStream)).toContain("typed-module");
+        expect(calls).toEqual([{ provider: "B", source: SOURCE, origin }]);
+      });
     });
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    expect(
-      calls.every(
-        (call) => call.provider === "A" && call.source === SOURCE && call.origin === origin,
-      ),
-    ).toBe(true);
-    calls.length = 0;
-    yield* copy.set(B);
-    expect(yield* render(directory)).toContain("typed-module");
-    expect(calls).toEqual([{ provider: "B", source: SOURCE, origin }]);
   });
 
   it("L3: joins native loading before releasing its owned hook or Blob", function* () {
@@ -348,7 +373,6 @@ describe("ComponentModuleLoader", () => {
   });
 
   if (cliRuntime() === "deno") {
-    const owner = "packages/core/tests/component-module-loader.test.ts";
     const readOnlyCase =
       "P1: Deno loads under the preserved read-only envelope and retains authored write denial";
     const expected = "ordinary-read-only-component";
@@ -405,7 +429,7 @@ describe("ComponentModuleLoader", () => {
         0,
       );
       yield* checkSubprocessJournals(
-        { owner, name },
+        { owner: OWNER, name },
         [{ source: "<eval>", snapshot }],
         function* () {
           expect({ mode: "read", code: result.code, stderr: result.stderr }).toEqual({
@@ -487,7 +511,7 @@ describe("ComponentModuleLoader", () => {
       const saved = join(artifacts, invocations[0]!);
       expect((yield* readdir(saved)).sort()).toEqual(["child-1.case.json", "child-1.jsonl"]);
       expect(JSON.parse(yield* readTextFile(join(saved, "child-1.case.json")))).toEqual({
-        owner,
+        owner: OWNER,
         name: witness,
         kind: "child",
         ordinal: 1,
