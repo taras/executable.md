@@ -35,6 +35,7 @@ import type { ReplSession, ReplSessionOptions } from "../src/repl/session.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./support/fake-acp.ts";
+import { runGit } from "./support/fixture-git.ts";
 import { AGENT_SOURCE, STANDARD_AGENT_SOURCE, world } from "../../acp/tests/released-peer.ts";
 import PhaseSession, {
   props as phaseSessionProps,
@@ -380,6 +381,7 @@ const captured = z.strictObject({
 
 interface ReviewWorld {
   root: string;
+  revision: string;
   store: FakeStore;
   delivery: Record<string, Json>;
   asked: unknown[];
@@ -388,13 +390,17 @@ interface ReviewWorld {
 
 function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorld> {
   const root = join(tmpdir(), `xmd-delivery-review-${randomUUID()}`);
-  yield* ensureDir(join(root, "repository"));
+  const repository = join(root, "repository");
+  yield* ensureDir(repository);
+  yield* runGit(repository, ["init", "--quiet", "--initial-branch=main"]);
+  yield* runGit(repository, ["commit", "--quiet", "--allow-empty", "-m", "Review fixture"]);
+  const revision = yield* runGit(repository, ["rev-parse", "HEAD"]);
   yield* ensureDir(join(root, "delivery"));
   const asked: unknown[] = [];
   const store = makeStore();
   const delivery = {
     work: "production-review",
-    repository: join(root, "repository"),
+    repository,
     directory: join(root, "delivery"),
     policy: {
       repository: "taras/executable.md",
@@ -452,7 +458,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
       }
     });
   }
-  return { root, store, delivery, asked, run };
+  return { root, revision, store, delivery, asked, run };
 }
 
 const roleSource =
@@ -747,6 +753,7 @@ describe(
       fake.script({ failure: "The Astra provider turn failed." });
       const gate = closeGate(fake);
       const harness = yield* reviewWorld(fake, gate.create);
+      const { revision } = harness;
       const task = yield* spawn(() =>
         harness.run(reviewSource, { delivery: harness.delivery, revision }),
       );
@@ -796,6 +803,7 @@ describe(
         fake.script({ failure: "The Astra provider turn failed." });
         const gate = closeGate(fake);
         const harness = yield* reviewWorld(fake, gate.create);
+        const { revision } = harness;
         const task = yield* spawn(() =>
           harness.run(reviewSource, { delivery: harness.delivery, revision }),
         );
@@ -855,6 +863,7 @@ describe(
       fake.configuration(catalog(["fable", "gpt-6-astra"]));
       fake.script({ reply: "", cancelled: true });
       const harness = yield* reviewWorld(fake);
+      const { revision } = harness;
       const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
       expect(ran.ok).toBe(true);
       expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
@@ -938,6 +947,7 @@ describe(
       });
       fake.closeFailure = new Error("the review provider would not close");
       const harness = yield* reviewWorld(fake);
+      const { revision } = harness;
       const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
       expect(ran.ok).toBe(false);
       expect(ran.text).toContain("agent provider teardown failed");
@@ -1111,6 +1121,7 @@ describe(
       fake.script({ failure: "The Fable provider turn failed." });
       fake.script({ failure: "The Astra provider turn failed." });
       const harness = yield* reviewWorld(fake);
+      const { revision } = harness;
       const attempt = join(harness.delivery.directory as string, `review-${revision}`);
       const source = `<Let as="delivery" value={${JSON.stringify(harness.delivery)}} /><Delivery.Review delivery={delivery} revision="${revision}" as="result" /><Json value={result} />`;
       const stream = new InMemoryStream();

@@ -970,9 +970,9 @@ source host relaunches itself as a TestAgent worker, including workers for
 isolated run-profile children.
 
 Each adversarial suite but `Implementation`, whose named groups carry their
-own deadlines, runs under a whole-launch deadline. `Preparation` has 420
-seconds, `Friction` has 180, `DecisionResolution` and `Delivery` have 300, and
-the other adversarial suites have 120. A suite that
+own deadlines, runs under a whole-launch deadline. `Preparation` and `Delivery`
+have 420 seconds. `Friction` has 180, `DecisionResolution` has 300, and the
+other adversarial suites have 120. A suite that
 reaches it is stopped and its cleanup joined, its path and deadline are
 reported, and it fails with status 1. The files after it still run.
 `SessionConfiguration` has a 120-second whole-launch deadline under each
