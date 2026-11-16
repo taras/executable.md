@@ -19,7 +19,7 @@ import {
   useTempFileCompiler,
   validateParsed,
 } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import type { Json } from "@executablemd/core";
 
 import { readQuestionForm, useReplElicitation } from "../src/repl/elicitation.ts";
@@ -1160,141 +1160,148 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
   // this test.
   beforeAll(() => useTempFileCompiler());
 
-  it("F3: focus lands on the record this answer caused, once it appends", function* () {
-    // One real session over one real journal, asking three questions in a row.
-    // The record focus has to reach does not exist when the answer is taken —
-    // it appends when the invocation settles — so this drives the whole
-    // interval rather than a frame that already has everything in it.
-    const holder = execution();
-    const session = granted(
-      yield* submitReplEntry({
-        execution: holder,
-        installations: [],
-        generated: ordinaryGeneratedSelection(),
-        source: THREE_QUESTIONS,
-      }),
-    );
-    // Chained after the session's own observer, so a signal arrives with the
-    // session already reprojected — and so the session does not replace it.
-    const appended = elicitAppends(holder);
+  const retainedFocus = "F3: focus lands on the record this answer caused, once it appends";
+  it(retainedFocus, () =>
+    captureReplEntry(
+      { owner: "packages/cli/tests/repl-forms.test.ts", name: retainedFocus },
+      "elicit-forms",
+      "<eval>",
+      function* (holder) {
+        // One real session over one real journal, asking three questions in a row.
+        // The record focus has to reach does not exist when the answer is taken —
+        // it appends when the invocation settles — so this drives the whole
+        // interval rather than a frame that already has everything in it.
+        const session = granted(
+          yield* submitReplEntry({
+            execution: holder,
+            installations: [],
+            generated: ordinaryGeneratedSelection(),
+            source: THREE_QUESTIONS,
+          }),
+        );
+        // Chained after the session's own observer, so a signal arrives with the
+        // session already reprojected — and so the session does not replace it.
+        const appended = elicitAppends(holder);
 
-    // An answer this test did not cause, carrying the same value the one under
-    // test will carry. What excludes it is that it was already retained, not
-    // that it looks different.
-    const first = yield* waiting(session, "the first question");
-    expect(first.message).toContain("First");
-    expect(first.submit({ decision: "Approve" }).kind).toBe("answered");
-    yield* appended(1);
-    expect(answers(session.model)).toHaveLength(1);
+        // An answer this test did not cause, carrying the same value the one under
+        // test will carry. What excludes it is that it was already retained, not
+        // that it looks different.
+        const first = yield* waiting(session, "the first question");
+        expect(first.message).toContain("First");
+        expect(first.submit({ decision: "Approve" }).kind).toBe("answered");
+        yield* appended(1);
+        expect(answers(session.model)).toHaveLength(1);
 
-    // The question under test, in the mounted drawer.
-    const second = yield* waiting(session, "the question under test", first);
-    expect(second.message).toContain("Second");
-    const held = liveReading(session);
-    const open = withScope(opened(held), ENTRY_SCOPE);
-    const tree = yield* useReplTree<ReplAction>();
-    yield* applied(tree, reading(open, held, session.model));
-    const inside = keyed(tree);
-    expect(inside?.startsWith("drawer:")).toBe(true);
+        // The question under test, in the mounted drawer.
+        const second = yield* waiting(session, "the question under test", first);
+        expect(second.message).toContain("Second");
+        const held = liveReading(session);
+        const open = withScope(opened(held), ENTRY_SCOPE);
+        const tree = yield* useReplTree<ReplAction>();
+        yield* applied(tree, reading(open, held, session.model));
+        const inside = keyed(tree);
+        expect(inside?.startsWith("drawer:")).toBe(true);
 
-    // Answered by activating the option control the drawer mounted: Enter on
-    // it is one keystroke, and what it produces is the ordinary action.
-    yield* tree.dispatch({ kind: "key", key: "Alt+ArrowUp" });
-    yield* tree.dispatch({ kind: "key", key: "Alt+ArrowUp" });
-    expect(keyed(tree)).toBe("drawer:choice:decision:Approve");
-    const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
-    if (!dispatched.ok || dispatched.value.outcome !== "action") {
-      throw new Error("the mounted option control produced no action");
-    }
-    const transition = reduceRepl(
-      open,
-      dispatched.value.action,
-      session.model,
-      held,
-      yield* admissionOf(open, held, session.model),
-    );
-    expect(transition.intent.kind).toBe("answer");
-    if (transition.intent.kind !== "answer") {
-      throw new Error("activating an option offers the whole object");
-    }
-    // The boundary the program performs it at, on the question this process is
-    // actually holding.
-    const outcome = session.overlay.question?.submit(transition.intent.values);
-    if (outcome?.kind !== "answered") {
-      throw new Error("the live question did not take its answer");
-    }
-    // Nothing has appended yet: this is the interval the claim has to survive.
-    expect(answers(session.model)).toHaveLength(1);
-    let state = answered(transition.state, session.model, outcome.answer);
-    expect(state.restore?.kind).toBe("answered");
+        // Answered by activating the option control the drawer mounted: Enter on
+        // it is one keystroke, and what it produces is the ordinary action.
+        yield* tree.dispatch({ kind: "key", key: "Alt+ArrowUp" });
+        yield* tree.dispatch({ kind: "key", key: "Alt+ArrowUp" });
+        expect(keyed(tree)).toBe("drawer:choice:decision:Approve");
+        const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
+        if (!dispatched.ok || dispatched.value.outcome !== "action") {
+          throw new Error("the mounted option control produced no action");
+        }
+        const transition = reduceRepl(
+          open,
+          dispatched.value.action,
+          session.model,
+          held,
+          yield* admissionOf(open, held, session.model),
+        );
+        expect(transition.intent.kind).toBe("answer");
+        if (transition.intent.kind !== "answer") {
+          throw new Error("activating an option offers the whole object");
+        }
+        // The boundary the program performs it at, on the question this process is
+        // actually holding.
+        const outcome = session.overlay.question?.submit(transition.intent.values);
+        if (outcome?.kind !== "answered") {
+          throw new Error("the live question did not take its answer");
+        }
+        // Nothing has appended yet: this is the interval the claim has to survive.
+        expect(answers(session.model)).toHaveLength(1);
+        let state = answered(transition.state, session.model, outcome.answer);
+        expect(state.restore?.kind).toBe("answered");
 
-    // A frame drawn in that interval claims nothing, because the row it would
-    // name is not there — and spends nothing either.
-    let view = reading(state, liveReading(session), session.model, NARROW, inside);
-    expect(focusClaim(view)).toBe(undefined);
-    yield* applied(tree, view);
-    const between = keyed(tree);
-    expect(between?.startsWith("elicit:")).toBe(false);
-    state = focusSettled(view, between);
-    expect(state.restore?.kind).toBe("answered");
+        // A frame drawn in that interval claims nothing, because the row it would
+        // name is not there — and spends nothing either.
+        let view = reading(state, liveReading(session), session.model, NARROW, inside);
+        expect(focusClaim(view)).toBe(undefined);
+        yield* applied(tree, view);
+        const between = keyed(tree);
+        expect(between?.startsWith("elicit:")).toBe(false);
+        state = focusSettled(view, between);
+        expect(state.restore?.kind).toBe("answered");
 
-    // A third answer, with a different value, so the record under test is no
-    // longer the newest one by the time any frame can draw it.
-    const third = yield* waiting(session, "the third question", second);
-    expect(third.message).toContain("Third");
-    expect(third.submit({ decision: "Stop" }).kind).toBe("answered");
-    yield* appended(3);
+        // A third answer, with a different value, so the record under test is no
+        // longer the newest one by the time any frame can draw it.
+        const third = yield* waiting(session, "the third question", second);
+        expect(third.message).toContain("Third");
+        expect(third.submit({ decision: "Stop" }).kind).toBe("answered");
+        yield* appended(3);
 
-    const retained = answers(session.model);
-    expect(retained).toHaveLength(3);
-    const caused = retained[1];
-    const before = retained[0];
-    const newest = retained[2];
-    if (caused === undefined || before === undefined || newest === undefined) {
-      throw new Error("the entry retained three answers");
-    }
-    // The one it did not cause has the same answer; the newest one is somebody
-    // else's. Identity here is both, or neither would be enough.
-    expect(before.answer).toEqual({ decision: "Approve" });
-    expect(caused.answer).toEqual({ decision: "Approve" });
-    expect(newest.answer).toEqual({ decision: "Stop" });
+        const retained = answers(session.model);
+        expect(retained).toHaveLength(3);
+        const caused = retained[1];
+        const before = retained[0];
+        const newest = retained[2];
+        if (caused === undefined || before === undefined || newest === undefined) {
+          throw new Error("the entry retained three answers");
+        }
+        // The one it did not cause has the same answer; the newest one is somebody
+        // else's. Identity here is both, or neither would be enough.
+        expect(before.answer).toEqual({ decision: "Approve" });
+        expect(caused.answer).toEqual({ decision: "Approve" });
+        expect(newest.answer).toEqual({ decision: "Stop" });
 
-    // Wide, where there is an inspection region: focus lands on the record this
-    // answer caused, and on neither of the two it did not.
-    view = reading(state, liveReading(session), session.model, WIDE, between);
-    expect(focusClaim(view)).toBe(`elicit:${caused.marker}`);
-    yield* applied(tree, view);
-    expect(keyed(tree)).toBe(`elicit:${caused.marker}`);
-    expect(keyed(tree)).not.toBe(`elicit:${before.marker}`);
-    expect(keyed(tree)).not.toBe(`elicit:${newest.marker}`);
+        // Wide, where there is an inspection region: focus lands on the record this
+        // answer caused, and on neither of the two it did not.
+        view = reading(state, liveReading(session), session.model, WIDE, between);
+        expect(focusClaim(view)).toBe(`elicit:${caused.marker}`);
+        yield* applied(tree, view);
+        expect(keyed(tree)).toBe(`elicit:${caused.marker}`);
+        expect(keyed(tree)).not.toBe(`elicit:${before.marker}`);
+        expect(keyed(tree)).not.toBe(`elicit:${newest.marker}`);
 
-    // Narrow, where there is not. The record's own row is not a row this screen
-    // offers, so the claim names the entry that owns the record — the visible
-    // control — and focus lands there rather than on a node drawing nothing.
-    const owner = `entry:${session.model.entries[0]?.key}`;
-    view = reading(state, liveReading(session), session.model, NARROW, between);
-    expect(focusClaim(view)).toBe(owner);
-    yield* applied(tree, view);
-    const landed = keyed(tree);
-    expect(landed).toBe(owner);
-    // And no recorded-answer row is mounted at this size at all, so none of the
-    // three could have been what focus found.
-    expect(
-      tree
-        .mounted()
-        .map((node) => tree.keyOf(node))
-        .filter((key) => key !== undefined && key.startsWith("elicit:")),
-    ).toEqual([]);
+        // Narrow, where there is not. The record's own row is not a row this screen
+        // offers, so the claim names the entry that owns the record — the visible
+        // control — and focus lands there rather than on a node drawing nothing.
+        const owner = `entry:${session.model.entries[0]?.key}`;
+        view = reading(state, liveReading(session), session.model, NARROW, between);
+        expect(focusClaim(view)).toBe(owner);
+        yield* applied(tree, view);
+        const landed = keyed(tree);
+        expect(landed).toBe(owner);
+        // And no recorded-answer row is mounted at this size at all, so none of the
+        // three could have been what focus found.
+        expect(
+          tree
+            .mounted()
+            .map((node) => tree.keyOf(node))
+            .filter((key) => key !== undefined && key.startsWith("elicit:")),
+        ).toEqual([]);
 
-    // Spent by the commit that satisfied it, so traversal from here is the
-    // person's: Tab moves, and the next frame leaves it where they moved it.
-    state = focusSettled(view, landed);
-    expect(state.restore).toBe(undefined);
-    const moved = yield* tabbed(tree);
-    expect(moved).not.toBe(landed);
-    yield* applied(tree, reading(state, liveReading(session), session.model, NARROW, moved));
-    expect(keyed(tree)).toBe(moved);
-  });
+        // Spent by the commit that satisfied it, so traversal from here is the
+        // person's: Tab moves, and the next frame leaves it where they moved it.
+        state = focusSettled(view, landed);
+        expect(state.restore).toBe(undefined);
+        const moved = yield* tabbed(tree);
+        expect(moved).not.toBe(landed);
+        yield* applied(tree, reading(state, liveReading(session), session.model, NARROW, moved));
+        expect(keyed(tree)).toBe(moved);
+      },
+    ),
+  );
 
   it("F3: closing without answering moves focus to the invocation still asking", function* () {
     const recorded = yield* retained();
@@ -1429,11 +1436,6 @@ const THREE_QUESTIONS = [
   "",
   "{before.decision} {under.decision} {after.decision}",
 ].join("\n");
-
-/** One execution with an empty journal of its own. */
-function execution(): ReplExecution {
-  return { id: "elicit-forms", stream: new InMemoryStream([]) };
-}
 
 /** The session, or the refusal that means there is nothing to drive. */
 function granted(result: Result<ReplSession>): ReplSession {
