@@ -19,6 +19,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -143,6 +144,8 @@ function importEvents(stream: InMemoryStream) {
     );
 }
 
+const journalCase = journalCases("packages/core/tests/inline-root.test.ts");
+
 describe("Tier IR — inline root documents", () => {
   it("IR1: inspection reports the <eval> identity and reads nothing", function* () {
     yield* useNoFs();
@@ -193,19 +196,22 @@ describe("Tier IR — inline root documents", () => {
     expect(inlineSource("body")).toEqual({ path: INLINE_SOURCE_PATH, source: "body" });
   });
 
-  it("IR4: the journal holds the supplied identity and text", function* () {
-    yield* useNoFs();
-    const stream = new InMemoryStream();
+  journalCase(
+    "IR4: the journal holds the supplied identity and text",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      yield* useNoFs();
 
-    yield* collect(yield* execute({ ...inlineSource("# Hello\n"), stream }));
+      yield* collect(yield* execute({ ...inlineSource("# Hello\n"), stream }));
 
-    const imports = importEvents(stream);
-    expect(imports.length).toBe(1);
-    expect(imports[0]).toMatchObject({
-      description: { name: "__root__" },
-      result: { status: "ok", value: { path: "<eval>", content: "# Hello\n" } },
-    });
-  });
+      const imports = importEvents(stream);
+      expect(imports.length).toBe(1);
+      expect(imports[0]).toMatchObject({
+        description: { name: "__root__" },
+        result: { status: "ok", value: { path: "<eval>", content: "# Hello\n" } },
+      });
+    },
+  );
 
   it("IR5: an inline root replays from the journal", function* () {
     yield* useNoFs();
@@ -270,114 +276,132 @@ describe("Tier IR — inline root documents", () => {
     expect(message).not.toContain("filesystem read");
   });
 
-  it("IR7: source positions report <eval> past the frontmatter", function* () {
-    yield* useNoFs();
-    const stream = new InMemoryStream();
+  journalCase(
+    "IR7: source positions report <eval> past the frontmatter",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      yield* useNoFs();
 
-    // Nothing recovers the stray element, so the positioned diagnostic is the
-    // run's own outcome.
-    const result = yield* completion({
-      ...inlineSource(["---", "title: demo", "---", "", "<Else>orphan</Else>"].join("\n")),
-      stream,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(failureMessage(result)).toContain("(<eval>:5:1)");
-  });
-
-  it("IR8: an inline value root returns its declared value", function* () {
-    yield* useNoFs();
-    const stream = new InMemoryStream();
-
-    const value = yield* collect(
-      yield* execute({
-        ...inlineSource(
-          [
-            "---",
-            "returns:",
-            "  ok: { type: boolean }",
-            "---",
-            "",
-            "<Return value={{ ok: true }} />",
-          ].join("\n"),
-        ),
+      // Nothing recovers the stray element, so the positioned diagnostic is the
+      // run's own outcome.
+      const result = yield* completion({
+        ...inlineSource(["---", "title: demo", "---", "", "<Else>orphan</Else>"].join("\n")),
         stream,
-      }),
-    );
+      });
 
-    expect(value).toEqual({ ok: true });
-  });
+      expect(result.ok).toBe(false);
+      expect(failureMessage(result)).toContain("(<eval>:5:1)");
+    },
+  );
 
-  it("IR9: repository components resolve from the search path, not the root", function* () {
-    const trace: FsTrace = { reads: [], stats: [], writes: [] };
-    // The guard first: `useStubFs` is terminal, so a guard installed after it
-    // would sit below and never see a call.
-    yield* useFsWriteGuard(trace);
-    yield* useStubFs({ "components/Greeting.md": "Hello from a component\n" });
-    const stream = new InMemoryStream();
+  journalCase(
+    "IR8: an inline value root returns its declared value",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      yield* useNoFs();
 
-    const output = asText(
-      yield* collect(yield* execute({ ...inlineSource("<Greeting />\n"), stream })),
-    );
+      const value = yield* collect(
+        yield* execute({
+          ...inlineSource(
+            [
+              "---",
+              "returns:",
+              "  ok: { type: boolean }",
+              "---",
+              "",
+              "<Return value={{ ok: true }} />",
+            ].join("\n"),
+          ),
+          stream,
+        }),
+      );
 
-    expect(output).toContain("Hello from a component");
-    // Every candidate is relative and none is derived from the root's identity.
-    expect(trace.stats.some((path) => path.includes("<eval>"))).toBe(false);
-    expect(trace.stats.every((path) => !path.startsWith("/"))).toBe(true);
-    expect(trace.reads).toEqual(["components/Greeting.md"]);
-  });
+      expect(value).toEqual({ ok: true });
+    },
+  );
 
-  it("IR10: a relative path resolves against the contextual cwd", function* () {
-    yield* useWorkspace({ "notes.md": "notes from the working directory\n" });
-    const stream = new InMemoryStream();
+  journalCase(
+    "IR9: repository components resolve from the search path, not the root",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      const trace: FsTrace = { reads: [], stats: [], writes: [] };
+      // The guard first: `useStubFs` is terminal, so a guard installed after it
+      // would sit below and never see a call.
+      yield* useFsWriteGuard(trace);
+      yield* useStubFs({ "components/Greeting.md": "Hello from a component\n" });
 
-    const output = asText(
-      yield* collect(yield* execute({ ...inlineSource('<File path="notes.md" />\n'), stream })),
-    );
+      const output = asText(
+        yield* collect(yield* execute({ ...inlineSource("<Greeting />\n"), stream })),
+      );
 
-    expect(output).toContain("notes from the working directory");
-  });
+      expect(output).toContain("Hello from a component");
+      // Every candidate is relative and none is derived from the root's identity.
+      expect(trace.stats.some((path) => path.includes("<eval>"))).toBe(false);
+      expect(trace.stats.every((path) => !path.startsWith("/"))).toBe(true);
+      expect(trace.reads).toEqual(["components/Greeting.md"]);
+    },
+  );
 
-  it("IR11: props are validated and defaulted for a supplied root", function* () {
-    yield* useNoFs();
-    const source = [
-      "---",
-      "props:",
-      "  name:",
-      "    type: string",
-      "  loud:",
-      "    type: boolean",
-      "    default: false",
-      "required: [name]",
-      "---",
-      "",
-      "{props.name} {props.loud}",
-    ].join("\n");
+  journalCase(
+    "IR10: a relative path resolves against the contextual cwd",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      yield* useWorkspace({ "notes.md": "notes from the working directory\n" });
 
-    const stream = new InMemoryStream();
-    const output = asText(
-      yield* collect(yield* execute({ ...inlineSource(source), props: { name: "Ada" }, stream })),
-    );
-    expect(output).toContain("Ada false");
+      const output = asText(
+        yield* collect(yield* execute({ ...inlineSource('<File path="notes.md" />\n'), stream })),
+      );
 
-    const missing = new InMemoryStream();
-    const result = yield* execute({ ...inlineSource(source), stream: missing });
-    const completion = yield* result;
-    expect(completion.ok).toBe(false);
-  });
+      expect(output).toContain("notes from the working directory");
+    },
+  );
 
-  it("IR12: running a supplied root writes nothing", function* () {
-    const trace: FsTrace = { reads: [], stats: [], writes: [] };
-    // The guard first: `useStubFs` is terminal, so a guard installed after it
-    // would sit below and never see a call.
-    yield* useFsWriteGuard(trace);
-    yield* useStubFs({ "components/Greeting.md": "Hello from a component\n" });
-    const stream = new InMemoryStream();
+  journalCase(
+    "IR11: props are validated and defaulted for a supplied root",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      yield* useNoFs();
+      const source = [
+        "---",
+        "props:",
+        "  name:",
+        "    type: string",
+        "  loud:",
+        "    type: boolean",
+        "    default: false",
+        "required: [name]",
+        "---",
+        "",
+        "{props.name} {props.loud}",
+      ].join("\n");
 
-    yield* collect(yield* execute({ ...inlineSource("<Greeting />\n"), stream }));
+      const output = asText(
+        yield* collect(yield* execute({ ...inlineSource(source), props: { name: "Ada" }, stream })),
+      );
+      expect(output).toContain("Ada false");
 
-    expect(trace.writes).toEqual([]);
-    // The guard is live rather than inert: it saw the component read below it.
-    expect(trace.reads).toContain("components/Greeting.md");
-  });
+      const missing = new InMemoryStream();
+      const result = yield* execute({ ...inlineSource(source), stream: missing });
+      const completion = yield* result;
+      expect(completion.ok).toBe(false);
+    },
+  );
+
+  journalCase(
+    "IR12: running a supplied root writes nothing",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      const trace: FsTrace = { reads: [], stats: [], writes: [] };
+      // The guard first: `useStubFs` is terminal, so a guard installed after it
+      // would sit below and never see a call.
+      yield* useFsWriteGuard(trace);
+      yield* useStubFs({ "components/Greeting.md": "Hello from a component\n" });
+
+      yield* collect(yield* execute({ ...inlineSource("<Greeting />\n"), stream }));
+
+      expect(trace.writes).toEqual([]);
+      // The guard is live rather than inert: it saw the component read below it.
+      expect(trace.reads).toContain("components/Greeting.md");
+    },
+  );
 });
