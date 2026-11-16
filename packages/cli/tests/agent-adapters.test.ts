@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import { mkdtemp, chmod, realpath } from "node:fs/promises";
 import { cliBase } from "@executablemd/test-support/launch";
 import { fileURLToPath } from "node:url";
@@ -44,6 +45,7 @@ import { ASSEMBLY_PROFILES, ASSEMBLY_SOURCE } from "./support/assembly-profiles.
 import {
   checkSubprocessJournals,
   parseSubprocessJournal,
+  readSubprocessSnapshot,
 } from "../../test-support/subprocess-journal.ts";
 import type { SubprocessJournal } from "../../test-support/subprocess-journal.ts";
 
@@ -265,14 +267,11 @@ function checkEnvironment(environmentPreserved: unknown): void {
 }
 
 function assemblyJournals(value: unknown): SubprocessJournal[] {
-  if (!Array.isArray(value) || value.length !== ASSEMBLY_PROFILES.length) {
-    return [];
-  }
-  const journals = value.map((entry) => ({
+  return ASSEMBLY_PROFILES.map((profile, index) => ({
     source: ASSEMBLY_SOURCE,
-    events: parseSubprocessJournal(entry),
+    profile,
+    snapshot: readSubprocessSnapshot(value, index),
   }));
-  return journals.every(({ events }) => events.length > 0) ? journals : [];
 }
 
 function* assemblyInputs(
@@ -280,6 +279,7 @@ function* assemblyInputs(
   name: string,
   verify = checkEnvironment,
   inspect?: (journals: readonly SubprocessJournal[]) => void,
+  options: { oversizedPlan?: boolean; sink?: Writable } = {},
 ): Operation<void> {
   const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd assemblies ")))));
   yield* ensure(() => rm(root, { recursive: true, force: true }));
@@ -296,6 +296,7 @@ function* assemblyInputs(
         root,
         agent,
         "--capture-journal",
+        ...(options.oversizedPlan ? ["--oversized-plan"] : []),
       ],
       env: { [variable]: host },
     });
@@ -311,11 +312,11 @@ function* assemblyInputs(
   }
   const { results: rows, environmentPreserved, journals: rawJournals } = output;
   const journals = assemblyJournals(rawJournals);
-  inspect?.(journals);
   yield* checkSubprocessJournals(
     { owner: ASSEMBLY_OWNER, suite: ASSEMBLY_SUITE, name },
     journals,
     lift(() => {
+      inspect?.(journals);
       verify(environmentPreserved);
       expect(rows.map((row: { profile: string }) => row.profile)).toEqual(ASSEMBLY_PROFILES);
       for (const row of rows) {
@@ -331,6 +332,7 @@ function* assemblyInputs(
         }
       }
     }),
+    options.sink,
   );
 }
 
@@ -342,80 +344,107 @@ describe(ASSEMBLY_SUITE, () => {
   it(claude, () => assemblyInputs("claude", claude));
   it(codex, () => assemblyInputs("codex", codex));
 
-  const witness = "attributes each assembly profile when the joined parent assertion fails";
-  it(witness, function* () {
-    const root = yield* useTempDirectory("xmd-assembly-journals-");
-    function run(
-      artifacts: string,
-      verify: typeof checkEnvironment,
-      inspect?: Parameters<typeof assemblyInputs>[3],
-    ) {
-      return scoped(function* () {
-        yield* API.Env.around({
-          *env([name], next) {
-            return name === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(name);
-          },
+  for (const oversizedPlan of [false, true]) {
+    const witness = oversizedPlan
+      ? "keeps sibling journals when one joined assembly profile exceeds its budget"
+      : "attributes each assembly profile when the joined parent assertion fails";
+    it(witness, function* () {
+      const messages: string[] = [];
+      const sink = new Writable({
+        write(chunk, _encoding, callback) {
+          messages.push(String(chunk));
+          callback();
+        },
+      });
+      const root = yield* useTempDirectory("xmd-assembly-journals-");
+      function run(
+        artifacts: string,
+        verify: typeof checkEnvironment,
+        inspect?: Parameters<typeof assemblyInputs>[3],
+      ) {
+        return scoped(function* () {
+          yield* API.Env.around({
+            *env([name], next) {
+              return name === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(name);
+            },
+          });
+          yield* assemblyInputs("claude", witness, verify, inspect, { oversizedPlan, sink });
         });
-        yield* assemblyInputs("claude", witness, verify, inspect);
-      });
-    }
+      }
 
-    const passed = join(root, "passed", ".xmd", "test-artifacts");
-    yield* run(passed, checkEnvironment, (journals) => {
-      expect(journals).toHaveLength(ASSEMBLY_PROFILES.length);
+      const passed = join(root, "passed", ".xmd", "test-artifacts");
+      yield* run(passed, checkEnvironment, (journals) => {
+        expect(journals).toHaveLength(ASSEMBLY_PROFILES.length);
+      });
+      expect(yield* exists(passed)).toBe(false);
+      expect(messages).toEqual([]);
+
+      const failed = join(root, "failed", ".xmd", "test-artifacts");
+      let assertion: unknown;
+      let caught: unknown;
+      let received: readonly SubprocessJournal[] = [];
+      try {
+        yield* run(
+          failed,
+          (value) => {
+            checkEnvironment(value);
+            try {
+              checkEnvironment(false);
+            } catch (error) {
+              assertion = error;
+              throw error;
+            }
+          },
+          (journals) => {
+            received = journals;
+          },
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect(assertion).toBeInstanceOf(Error);
+      expect(caught).toBe(assertion);
+      expect(received).toHaveLength(ASSEMBLY_PROFILES.length);
+      const invocations = yield* readdir(failed);
+      expect(invocations).toHaveLength(1);
+      const directory = join(failed, invocations[0]);
+      const saved = received.flatMap(({ profile, snapshot }, index) =>
+        typeof snapshot === "string" ? [] : [{ profile, events: snapshot, ordinal: index + 1 }],
+      );
+      expect(saved.map(({ profile }) => profile)).toEqual(
+        ASSEMBLY_PROFILES.filter((profile) => !oversizedPlan || profile !== "plan"),
+      );
+      const omissions = messages.filter((message) => message.includes("journal not saved"));
+      expect(omissions).toEqual(
+        oversizedPlan
+          ? [
+              "[xmd test] journal not saved for child 2 assembly.md (plan): snapshot exceeds journal budget\n",
+            ]
+          : [],
+      );
+      const expectedFiles = saved.flatMap(({ ordinal }) => [
+        `child-${ordinal}.case.json`,
+        `child-${ordinal}.jsonl`,
+      ]);
+      expect((yield* readdir(directory)).sort()).toEqual(expectedFiles.sort());
+      for (const journal of saved) {
+        const { ordinal, profile } = journal;
+        const stem = join(directory, `child-${ordinal}`);
+        expect(JSON.parse(yield* readTextFile(`${stem}.case.json`))).toEqual({
+          owner: ASSEMBLY_OWNER,
+          suite: ASSEMBLY_SUITE,
+          name: witness,
+          kind: "child",
+          ordinal,
+          source: ASSEMBLY_SOURCE,
+          profile,
+        });
+        const events = parseSubprocessJournal(
+          (yield* readTextFile(`${stem}.jsonl`)).trimEnd().split("\n"),
+        );
+        expect(events).toEqual(journal.events);
+        expect(events.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
+      }
     });
-    expect(yield* exists(passed)).toBe(false);
-
-    const failed = join(root, "failed", ".xmd", "test-artifacts");
-    let assertion: unknown;
-    let caught: unknown;
-    let received: readonly SubprocessJournal[] = [];
-    try {
-      yield* run(
-        failed,
-        (value) => {
-          checkEnvironment(value);
-          try {
-            checkEnvironment(false);
-          } catch (error) {
-            assertion = error;
-            throw error;
-          }
-        },
-        (journals) => {
-          received = journals;
-        },
-      );
-    } catch (error) {
-      caught = error;
-    }
-    expect(assertion).toBeInstanceOf(Error);
-    expect(caught).toBe(assertion);
-    expect(received).toHaveLength(ASSEMBLY_PROFILES.length);
-    const invocations = yield* readdir(failed);
-    expect(invocations).toHaveLength(1);
-    const directory = join(failed, invocations[0]);
-    const expectedFiles = ASSEMBLY_PROFILES.flatMap((_, index) => [
-      `child-${index + 1}.case.json`,
-      `child-${index + 1}.jsonl`,
-    ]);
-    expect((yield* readdir(directory)).sort()).toEqual(expectedFiles.sort());
-    for (const [index, journal] of received.entries()) {
-      const ordinal = index + 1;
-      const stem = join(directory, `child-${ordinal}`);
-      expect(JSON.parse(yield* readTextFile(`${stem}.case.json`))).toEqual({
-        owner: ASSEMBLY_OWNER,
-        suite: ASSEMBLY_SUITE,
-        name: witness,
-        kind: "child",
-        ordinal,
-        source: ASSEMBLY_SOURCE,
-      });
-      const events = parseSubprocessJournal(
-        (yield* readTextFile(`${stem}.jsonl`)).trimEnd().split("\n"),
-      );
-      expect(events).toEqual(journal.events);
-      expect(events.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
-    }
-  });
+  }
 });

@@ -22,6 +22,7 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   checkSubprocessJournals,
   parseSubprocessJournal,
+  readSubprocessSnapshot,
 } from "../../test-support/subprocess-journal.ts";
 import { join } from "node:path";
 import { git, useBareRemote } from "./support/git-remotes.ts";
@@ -546,7 +547,7 @@ describe(ORC12_SUITE, () => {
     cwd: string,
     source: string,
     capture = false,
-  ): Operation<Omit<ChildOutcome, "journal"> & { events: DurableEvent[] }> {
+  ): Operation<ChildOutcome & { snapshot: ReturnType<typeof readSubprocessSnapshot> }> {
     const outcome = spawnSync(
       process.execPath,
       [
@@ -587,7 +588,7 @@ describe(ORC12_SUITE, () => {
       reason: "reason" in result && typeof result.reason === "string" ? result.reason : undefined,
       message:
         "message" in result && typeof result.message === "string" ? result.message : undefined,
-      events: capture && "journal" in result ? parseSubprocessJournal(result.journal) : [],
+      snapshot: readSubprocessSnapshot("journals" in result ? result.journals : undefined, 0),
     };
   }
 
@@ -632,7 +633,7 @@ describe(ORC12_SUITE, () => {
     expect(refused.kind).toBe("refused");
     expect(refused.reason).toBe("in-use");
     expect(refused.message).toContain("another process is working in");
-    expect(refused.events).toEqual([]);
+    expect(refused.snapshot).toBe("snapshot absent");
     // And nothing under the slot moved.
     expect(yield* fingerprintTree(held.slot)).toEqual(bytes);
 
@@ -689,11 +690,11 @@ describe(ORC12_SUITE, () => {
       const later = yield* elsewhere(root, checkout.root, document, true);
       yield* checkSubprocessJournals(
         { owner: OWNER, suite: ORC12_SUITE, name },
-        [{ source: "<eval>", events: later.events }],
+        [{ source: "<eval>", snapshot: later.snapshot }],
         function* () {
           expect(later.kind).toBe("selected");
           expect(later.bound).toBe(slot.checkout);
-          yield* check(slot, later.events);
+          yield* check(slot, typeof later.snapshot === "string" ? [] : later.snapshot);
         },
       );
     });

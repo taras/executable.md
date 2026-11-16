@@ -60,7 +60,7 @@ export interface TestDiagnostics {
    * the file each execution saves is named by its own position in this
    * command, so two executions never share one.
    */
-  execution(kind: "root" | "child", source: string): ExecutionDiagnostics;
+  execution(kind: "root" | "child", source: string, profile?: string): ExecutionDiagnostics;
   /** The first failure to deliver a progress line, or `Ok` when none failed. */
   delivery(): Result<void>;
 }
@@ -137,12 +137,12 @@ export function useTestDiagnostics(
 
     const counts = { root: 0, child: 0 };
     yield* provide({
-      execution(kind, source) {
+      execution(kind, source, profile) {
         const ordinal = ++counts[kind];
         const stem = join(directory, `${kind}-${ordinal}`);
         const file = `${stem}.jsonl`;
         const displayedSource = shown(source);
-        const named = `${kind} ${ordinal} ${displayedSource}`;
+        const named = `${kind} ${ordinal} ${displayedSource}${profile === undefined ? "" : ` (${profile})`}`;
         const context = kind === "root" ? "" : `${named}: `;
         return {
           observe: () => observe(owner, shown, (line) => emit(`${context}${line}`)),
@@ -153,7 +153,13 @@ export function useTestDiagnostics(
               if (attribution !== undefined) {
                 yield* writeTextFile(
                   `${stem}.case.json`,
-                  JSON.stringify({ ...attribution, kind, ordinal, source: displayedSource }) + "\n",
+                  JSON.stringify({
+                    ...attribution,
+                    kind,
+                    ordinal,
+                    source: displayedSource,
+                    profile,
+                  }) + "\n",
                 );
               }
               yield* writeTextFile(file, events.map(serializeDurableEvent).join(""));

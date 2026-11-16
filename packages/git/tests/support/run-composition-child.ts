@@ -29,7 +29,6 @@ export interface ChildOutcome {
   /** The fixed word a managed-checkout refusal is reported under. */
   readonly reason?: string;
   readonly message?: string;
-  readonly journal?: readonly string[];
 }
 
 await main(function* () {
@@ -67,9 +66,7 @@ await main(function* () {
 
   const line =
     capture === "--capture-journal"
-      ? boundedJournalResult(outcome, {
-          journal: (yield* stream.readAll()).map(serializeDurableEvent),
-        })
+      ? boundedJournalResult(outcome, [(yield* stream.readAll()).map(serializeDurableEvent)])
       : JSON.stringify(outcome);
   process.stdout.write(`${line}\n`);
 });

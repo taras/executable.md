@@ -42,7 +42,12 @@ main(function* () {
   const journals: string[][] = [];
   for (const profile of ASSEMBLY_PROFILES) {
     const fake = createFakeAcp();
-    fake.script({ reply: "assembled" });
+    fake.script({
+      reply:
+        capture && process.argv[5] === "--oversized-plan" && profile === "plan"
+          ? "assembled ".repeat(2_000)
+          : "assembled",
+    });
     const stream = new InMemoryStream();
     yield* scoped(function* () {
       const host = yield* useScope();
@@ -98,5 +103,5 @@ main(function* () {
     ...new Set([...Object.keys(environment), ...Object.keys(process.env)]),
   ].every((key) => environment[key] === process.env[key]);
   const result = { results, environmentPreserved };
-  console.log(capture ? boundedJournalResult(result, { journals }) : JSON.stringify(result));
+  console.log(capture ? boundedJournalResult(result, journals) : JSON.stringify(result));
 });
