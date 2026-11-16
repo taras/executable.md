@@ -1,3 +1,4 @@
+import { NestedRunCompiler } from "./testing-host.ts";
 import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
 /**
  * Compiled-binary entrypoint — what `deno task build` compiles.
@@ -143,6 +144,7 @@ if (isReplSubmit(process.argv.slice(2))) {
     // the value and imports no adapter, and an ordinary execution installs it
     // in its own scope.
     yield* BundledRunPlugin.set(denoRunRepositories(HELPER));
+    yield* NestedRunCompiler.set(compileDataUri);
     yield* runXmd(
       args,
       useCompiledService,

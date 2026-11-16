@@ -3,7 +3,7 @@ import type {
   ComponentInvocationHooks,
   ComponentInvocationObservation,
 } from "./component-invocation-hooks.ts";
-import { fatalCause } from "./errors.ts";
+import { durabilityFailure, fatalCause, filesFatalFailure, firstCause } from "./errors.ts";
 /**
  * The component invocation boundary (spec §4.4).
  *
@@ -43,6 +43,20 @@ export class InvocationTeardownError extends Error {
     this.causes = causes;
     this.cause = first;
   }
+}
+
+export function terminalInvocationFailure(error: unknown): Error | undefined {
+  return (
+    durabilityFailure(error) ??
+    filesFatalFailure(error) ??
+    firstCause(error, (cause) =>
+      cause instanceof InvocationTeardownError
+        ? error instanceof Error
+          ? error
+          : cause
+        : undefined,
+    )
+  );
 }
 
 export interface Invocation {

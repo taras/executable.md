@@ -165,7 +165,7 @@ import type { PluginSelection } from "./plugin-selection.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { useTestDiagnostics } from "./test-diagnostics.ts";
 import type { ExecutionDiagnostics, TestDiagnostics } from "./test-diagnostics.ts";
-import { testingExecutionHost } from "./testing-host.ts";
+import { NestedRunCompiler, testingExecutionHost } from "./testing-host.ts";
 import { ComponentModuleLoader } from "@executablemd/core/api";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
@@ -1578,6 +1578,7 @@ function* runDocument(
   const testingHost = testingExecutionHost({
     ...(mode.diagnostics === undefined ? {} : { diagnostics: mode.diagnostics }),
     componentModuleLoader: yield* ComponentModuleLoader.get(),
+    compile: yield* NestedRunCompiler.get(),
     includes: include,
     // The Plugin *values*, so an isolated child installs them again for itself
     // with command `run`. Live middleware and installation-scoped resources
@@ -3218,6 +3219,7 @@ function* dispatch(
       }
       yield* useAbsolutePermission(command.config.allowAbsolute);
       const moduleLoader = yield* ComponentModuleLoader.get();
+      const compile = yield* NestedRunCompiler.get();
       const testAgentWorker = yield* readWorkerCommand();
       const selectedSidekick = command.config.sidekickAgent;
       const fixture =
@@ -3246,6 +3248,7 @@ function* dispatch(
           return testHarnessInstallation(
             testingExecutionHost({
               componentModuleLoader: moduleLoader,
+              compile,
               includes: [...includes],
               fileAccess: access,
               plugins: plugins.plugins,

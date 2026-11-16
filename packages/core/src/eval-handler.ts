@@ -9,14 +9,19 @@ import { parseJson, isJsonObject } from "./json.ts";
  * compiled block runs with `retain()` rejected — see `withoutRetain`.
  */
 
-import { createDurableOperation, ephemeral } from "@executablemd/durable-streams";
-import type { Json } from "@executablemd/durable-streams";
+import { createDurableOperation, ephemeral, serializeError } from "@executablemd/durable-streams";
+import type {
+  Json,
+  LiveDurableOperationCoordinator,
+  Result as DurableResult,
+} from "@executablemd/durable-streams";
 import { unbox } from "@effectionx/scope-eval";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { Component, env, evalScope, persistent } from "./component-api.ts";
+import { terminalInvocationFailure } from "./invocation.ts";
 import { ErrorMode } from "./errors.ts";
 import { commitExports, evaluationEnv } from "./eval-env.ts";
 import { compileBlock } from "./eval-context.ts";
@@ -110,12 +115,43 @@ function rejectRetain(blockId: string): Operation<void> {
  * afterwards, and content projected later in the same invocation must still
  * reach the invocation's own provider.
  */
-function runBlock<T>(blockId: string, block: () => Operation<T>): Operation<T> {
-  return scoped(function* () {
-    yield* rejectRetain(blockId);
-    return yield* block();
-  });
+function* runBlock<T>(blockId: string, block: () => Operation<T>): Operation<T> {
+  let bodyFailure: Error | undefined;
+  try {
+    return yield* scoped(function* () {
+      yield* rejectRetain(blockId);
+      try {
+        return yield* block();
+      } catch (error) {
+        bodyFailure = terminalInvocationFailure(error);
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (bodyFailure !== undefined && error !== bodyFailure) {
+      throw terminalInvocationFailure(new AggregateError([bodyFailure, error])) ?? bodyFailure;
+    }
+    throw error;
+  }
 }
+
+const evalPublication: LiveDurableOperationCoordinator = {
+  *run(execute, publish, activateFailure) {
+    let result: DurableResult;
+    try {
+      result = { status: "ok", value: yield* execute() };
+    } catch (error) {
+      const terminal = terminalInvocationFailure(error);
+      if (terminal !== undefined) {
+        throw activateFailure(terminal);
+      }
+      const failure = error instanceof Error ? error : new Error(String(error));
+      result = { status: "err", error: serializeError(failure) };
+    }
+    yield* publish(result);
+    return result;
+  },
+};
 
 export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
@@ -238,6 +274,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
 
         return { value: exports as unknown as Json } as Json;
       },
+      { coordinator: evalPublication },
     )) as unknown as { value: Json };
 
     const envelope = parseJson(result);

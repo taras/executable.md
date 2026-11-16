@@ -21,8 +21,10 @@ pwd -P
 <Let as="receipt">
 <Dir path={props.repository}>
 <Execution host="run" target={props.root + "/examples/adversarial-implementation/" + props.entry + ".md"} props={props.entry === "run" ? {task:input} : props.entry === "resolve-decision" ? {record:input,decision:props.decision} : {record:input,steps:props.steps ?? 1}}>
+<DiagnosticJournal />
 <CollectOutput as="stdout" />
-<Json value={{exitCode:0,stdout,stderr:""}} />
+<CollectJournal as="journal" />
+<Json value={{exitCode:0,stdout,stderr:"",launchGates:journal.filter(event => event.type === "yield" && ["Entry.Checkout","Entry.Admission","Entry.CheckoutCheck","Entry.InspectionCheck","Entry.CodexAdmission","entry-checkout-verdict","entry-codex-verdict"].includes(event.description.name)).map(event => event.description.name)}} />
 </Execution>
 </Dir>
 </Let>

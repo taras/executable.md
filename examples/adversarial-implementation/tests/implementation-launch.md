@@ -13,7 +13,9 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   {name:"complex bug stable-evidence",ready:false,needed:false,architecture:false,provider:"codex"},
   {name:"necessary API and consumers ready",ready:true,needed:true,architecture:false},
   {name:"necessary API and consumers unready",ready:false,needed:true,architecture:false},
-  {name:"ready structural fix",ready:true,needed:false,architecture:true}
+  {name:"ready structural fix",ready:true,needed:false,architecture:true},
+  {name:"Claude Planner then Codex Implementor",ready:false,needed:false,architecture:false,planner:"claude",implementor:"codex",skipInspection:true},
+  {name:"Claude Implementor then Codex Planner",ready:true,needed:false,architecture:false,planner:"codex",implementor:"claude",skipInspection:true}
 ]} let="scenario">
 <TempDir>
 <Fixture.Repository guides={true} as="fixture" />
@@ -30,7 +32,7 @@ git rev-parse HEAD
 <Dir path={fixture.root}><File path="accepted.md">Evidence A: accepted format behavior and focused consumer checks.</File></Dir>
 <Let as="evidence" value={fixture.root + "/accepted.md"} />
 <Let as="assessment" value={{mechanical:false,architecture:scenario.architecture,acceptance:true,risk:null,reason:"Inspect the accepted consumer behavior.",evidence:[evidence]}} />
-<Let as="task" value={{work:"test",repository:fixture.repository,directory:fixture.directory,revision:base.stdout.trim(),request:scenario.name,inputs:[evidence],sessions:{planner:"original-planner",implementor:"original-implementor",architect:"conditional-architect"},providers:{architect:"codex",planner:scenario.provider ?? "claude",implementor:scenario.provider ?? "claude"},maxResponseCorrections:0,maxCorrections:3,maxApiRepairs:3,assessment,scope:{decisions:{evidence:[evidence],openQuestions:[]},implementation:{ready:scenario.ready,evidence:[evidence]},sharedApi:{needed:scenario.needed,evidence:[evidence]},migration:null}}} />
+<Let as="task" value={{work:"test",repository:fixture.repository,directory:fixture.directory,revision:base.stdout.trim(),request:scenario.name,inputs:[evidence],sessions:{planner:"original-planner",implementor:"original-implementor",architect:"conditional-architect"},providers:{architect:"codex",planner:scenario.planner ?? scenario.provider ?? "claude",implementor:scenario.implementor ?? scenario.provider ?? "claude"},maxResponseCorrections:0,maxCorrections:3,maxApiRepairs:3,assessment,scope:{decisions:{evidence:[evidence],openQuestions:[]},implementation:{ready:scenario.ready,evidence:[evidence]},sharedApi:{needed:scenario.needed,evidence:[evidence]},migration:null}}} />
 <Let as="task" value={{...task,delivery:{repository:"taras/executable.md",reviewer:{provider:"claude",model:"fixture",effort:null,session:"independent-review"},acceptance:[{id:"accepted-behavior",source:task.inputs[0],requirement:"Preserve the original accepted behavior."}]}}} />
 <If condition={scenario.name === "ready existing-interface fix"}>
 <Fixture.Entry entry="run" value={task} command={runner} root={root} as="child" />
@@ -42,6 +44,11 @@ git rev-parse HEAD
 <Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
 <If condition={work.status !== "feedback_ready"}><Fail message={JSON.stringify(work)} /></If>
 <Ticket.Load record={work} as="saved" />
+<If condition={scenario.skipInspection === true}>
+<AssertEquals actual={child.launchGates} expected={[]} />
+<AssertEquals actual={saved.calls[0].provider} expected="claude" />
+<AssertEquals actual={saved.calls.slice(1).some(call => call.provider === "codex")} expected={true} />
+</If>
 <AssertEquals actual={work.remainingRequiredDeliveryWork} expected={["independent-review","required-ci","main-health"]} />
 <AssertEquals actual={work.delivery.status} expected="review_pending" />
 <Let as="implementationCalls" value={saved.calls.filter(call => call.assignment.phase !== "discovery")} />

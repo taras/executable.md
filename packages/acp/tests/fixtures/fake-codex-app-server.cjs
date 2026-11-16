@@ -15,10 +15,19 @@
 const fs = require("node:fs");
 
 const LOG = process.env.FAKE_CODEX_LOG;
+const AUTH_MARKER = process.env.FAKE_CODEX_AUTH_MARKER;
+const LAUNCH = AUTH_MARKER ? require("node:crypto").randomUUID() : undefined;
+
+if (LAUNCH) {
+  log({ event: "launch", home: process.env.HOME, path: process.env.PATH });
+  process.stdin.once("end", () => log({ event: "eof" }));
+  process.once("exit", () => log({ event: "exit" }));
+  process.once("SIGTERM", () => process.exit(0));
+}
 
 function log(entry) {
   if (LOG) {
-    fs.appendFileSync(LOG, JSON.stringify(entry) + "\n");
+    fs.appendFileSync(LOG, JSON.stringify(LAUNCH ? { ...entry, launch: LAUNCH } : entry) + "\n");
   }
 }
 
@@ -135,9 +144,19 @@ function handle(message) {
     case "initialize":
       reply(message.id, { userAgent: { name: "fake-codex", version: "0.0.0" } });
       return;
-    case "account/read":
-      reply(message.id, { account: null });
+    case "account/read": {
+      if (!AUTH_MARKER) {
+        reply(message.id, { account: null });
+        return;
+      }
+      const authenticated = fs.existsSync(require("node:path").join(process.env.HOME, AUTH_MARKER));
+      log({ event: "auth", authenticated });
+      reply(message.id, {
+        account: authenticated ? { type: "apiKey" } : null,
+        requiresOpenaiAuth: true,
+      });
       return;
+    }
     case "skills/list":
       reply(message.id, { data: [] });
       return;
@@ -215,6 +234,18 @@ function handle(message) {
             jsonrpc: "2.0",
             method: "thread/tokenUsage/updated",
             params: { threadId, turnId, tokenUsage },
+          });
+        }
+        if (process.env.FAKE_CODEX_ROLE_REPLY) {
+          send({
+            jsonrpc: "2.0",
+            method: "item/agentMessage/delta",
+            params: {
+              threadId,
+              turnId,
+              itemId: "fixture-reply",
+              delta: process.env.FAKE_CODEX_ROLE_REPLY,
+            },
           });
         }
         send({
