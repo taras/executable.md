@@ -1,4 +1,5 @@
 import { describe, it } from "@executablemd/test-support/bdd";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { createApi } from "@effectionx/context-api";
@@ -418,116 +419,124 @@ describe("Tier DLC — physical Workspace package composition", () => {
  * copy buys a place in the middleware chain and nothing else: no credential, no
  * capability, no answer, and no route to the invocation's own terminal.
  */
+const journalCase = journalCases("packages/workflow/tests/workspace-effect-loaded-copy.test.ts");
+
 describe("Tier DLG — physical Git-host package composition", () => {
-  it("DLG1: one copy's provider serves the other copy's reconciliation", function* () {
-    const copy = yield* physicalGitHostCopy();
-    const stream = new InMemoryStream();
-    const observed: unknown[] = [];
-    const captured: unknown[] = [];
-    const refused: unknown[] = [];
-    const seen = gitHostAttempt();
+  journalCase(
+    "DLG1: one copy's provider serves the other copy's reconciliation",
+    "<eval>",
+    function* (stream) {
+      const copy = yield* physicalGitHostCopy();
+      const observed: unknown[] = [];
+      const captured: unknown[] = [];
+      const refused: unknown[] = [];
+      const seen = gitHostAttempt();
 
-    const provider: GitHostProvider = {
-      *observe(request): Operation<EffectionResult<GitHostObservation>> {
-        observed.push(request);
-        return Ok(AUTHORIZED_OBSERVATION);
-      },
-      // deno-lint-ignore require-yield
-      *perform(): Operation<EffectionResult<GitHostCompletion>> {
-        throw new Error("the copy performed where nothing may be performed");
-      },
-    };
-
-    yield* scoped(function* () {
-      yield* useGitHostEffectComponent(seen, reconcileGitHostEffect);
-      // GH10's consequence, in the loaded-copy direction: middleware built from
-      // the stable name, sitting between the two copies, still authors nothing.
-      yield* GitHostWitness.around({
-        *route([call], next): Operation<unknown> {
-          if (call.intent !== "route") {
-            return yield* next(call);
-          }
-          captured.push(call);
-          for (const attempted of [
-            { intent: "inspect", routing: call } as GitHostCall,
-            { intent: "answer", routing: call, answer: Ok(FORGED_OBSERVATION) } as GitHostCall,
-          ]) {
-            try {
-              refused.push(yield* next(attempted));
-            } catch (error) {
-              refused.push(error);
-            }
-          }
-          return yield* next(call);
+      const provider: GitHostProvider = {
+        *observe(request): Operation<EffectionResult<GitHostObservation>> {
+          observed.push(request);
+          return Ok(AUTHORIZED_OBSERVATION);
         },
+        // deno-lint-ignore require-yield
+        *perform(): Operation<EffectionResult<GitHostCompletion>> {
+          throw new Error("the copy performed where nothing may be performed");
+        },
+      };
+
+      yield* scoped(function* () {
+        yield* useGitHostEffectComponent(seen, reconcileGitHostEffect);
+        // GH10's consequence, in the loaded-copy direction: middleware built from
+        // the stable name, sitting between the two copies, still authors nothing.
+        yield* GitHostWitness.around({
+          *route([call], next): Operation<unknown> {
+            if (call.intent !== "route") {
+              return yield* next(call);
+            }
+            captured.push(call);
+            for (const attempted of [
+              { intent: "inspect", routing: call } as GitHostCall,
+              { intent: "answer", routing: call, answer: Ok(FORGED_OBSERVATION) } as GitHostCall,
+            ]) {
+              try {
+                refused.push(yield* next(attempted));
+              } catch (error) {
+                refused.push(error);
+              }
+            }
+            return yield* next(call);
+          },
+        });
+        // The provider is installed by the physically separate copy; the
+        // reconciliation the document reaches is this copy's canonical one.
+        yield* copy.withGitHostProvider(provider, gitHostDocument(stream));
       });
-      // The provider is installed by the physically separate copy; the
-      // reconciliation the document reaches is this copy's canonical one.
-      yield* copy.withGitHostProvider(provider, gitHostDocument(stream));
-    });
 
-    expect(seen.failures).toEqual([]);
-    expect(observed).toHaveLength(1);
-    expect(seen.records[0]?.decision).toBe("adopted");
-    expect(seen.records[0]?.result).toEqual({ by: "authorized-provider" });
-    expect(gitHostYields(stream)).toHaveLength(1);
-    expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
-      "middleware-forgery",
-    );
+      expect(seen.failures).toEqual([]);
+      expect(observed).toHaveLength(1);
+      expect(seen.records[0]?.decision).toBe("adopted");
+      expect(seen.records[0]?.result).toEqual({ by: "authorized-provider" });
+      expect(gitHostYields(stream)).toHaveLength(1);
+      expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
+        "middleware-forgery",
+      );
 
-    // Reconstructing the name reached the chain and nothing else. The refusals
-    // are the *copy's* class, not this one's — `instanceof` is wrong in exactly
-    // this direction across loaded copies, which is why the closed name is what
-    // identifies a condition everywhere else in this boundary too.
-    expect(captured).toHaveLength(1);
-    expect(refused.length).toBeGreaterThanOrEqual(2);
-    for (const refusal of refused) {
-      expect(refusal).toBeInstanceOf(Error);
-      expect((refusal as Error).name).toBe("GitHostProviderError");
-      expect(refusal).not.toBeInstanceOf(GitHostProviderError);
-    }
-    for (const value of captured) {
-      const call = Object(value);
-      expect(Object.keys(call).sort()).toEqual(["intent", "phase", "request"]);
-      expect(Object.values(call).some((member) => typeof member === "function")).toBe(false);
-      expect(Object.isFrozen(call)).toBe(true);
-    }
+      // Reconstructing the name reached the chain and nothing else. The refusals
+      // are the *copy's* class, not this one's — `instanceof` is wrong in exactly
+      // this direction across loaded copies, which is why the closed name is what
+      // identifies a condition everywhere else in this boundary too.
+      expect(captured).toHaveLength(1);
+      expect(refused.length).toBeGreaterThanOrEqual(2);
+      for (const refusal of refused) {
+        expect(refusal).toBeInstanceOf(Error);
+        expect((refusal as Error).name).toBe("GitHostProviderError");
+        expect(refusal).not.toBeInstanceOf(GitHostProviderError);
+      }
+      for (const value of captured) {
+        const call = Object(value);
+        expect(Object.keys(call).sort()).toEqual(["intent", "phase", "request"]);
+        expect(Object.values(call).some((member) => typeof member === "function")).toBe(false);
+        expect(Object.isFrozen(call)).toBe(true);
+      }
 
-    // And a request captured here completes nothing afterwards: the exported
-    // descriptor's own default is a refusal, whoever holds the request.
-    const routing = captured[0];
-    expect(
-      yield* raised(GitHost.operations.route(routing as GitHostRoutingRequest)),
-    ).toBeInstanceOf(GitHostProviderError);
-  });
+      // And a request captured here completes nothing afterwards: the exported
+      // descriptor's own default is a refusal, whoever holds the request.
+      const routing = captured[0];
+      expect(
+        yield* raised(GitHost.operations.route(routing as GitHostRoutingRequest)),
+      ).toBeInstanceOf(GitHostProviderError);
+    },
+  );
 
-  it("DLG2: the other copy's reconciliation runs under this copy's provider", function* () {
-    const copy = yield* physicalGitHostCopy();
-    const stream = new InMemoryStream();
-    const observed: unknown[] = [];
-    const seen = gitHostAttempt();
+  journalCase(
+    "DLG2: the other copy's reconciliation runs under this copy's provider",
+    "<eval>",
+    function* (stream) {
+      const copy = yield* physicalGitHostCopy();
+      const observed: unknown[] = [];
+      const seen = gitHostAttempt();
 
-    const provider: GitHostProvider = {
-      *observe(request): Operation<EffectionResult<GitHostObservation>> {
-        observed.push(request);
-        return Ok(AUTHORIZED_OBSERVATION);
-      },
-      // deno-lint-ignore require-yield
-      *perform(): Operation<EffectionResult<GitHostCompletion>> {
-        throw new Error("the canonical provider performed where nothing may be performed");
-      },
-    };
+      const provider: GitHostProvider = {
+        *observe(request): Operation<EffectionResult<GitHostObservation>> {
+          observed.push(request);
+          return Ok(AUTHORIZED_OBSERVATION);
+        },
+        // deno-lint-ignore require-yield
+        *perform(): Operation<EffectionResult<GitHostCompletion>> {
+          throw new Error("the canonical provider performed where nothing may be performed");
+        },
+      };
 
-    yield* scoped(function* () {
-      yield* useGitHostEffectComponent(seen, copy.reconcileGitHostEffect);
-      yield* withGitHostProvider(provider, gitHostDocument(stream));
-    });
+      yield* scoped(function* () {
+        yield* useGitHostEffectComponent(seen, copy.reconcileGitHostEffect);
+        yield* withGitHostProvider(provider, gitHostDocument(stream));
+      });
 
-    expect(seen.failures).toEqual([]);
-    expect(observed).toHaveLength(1);
-    expect(seen.records).toHaveLength(1);
-    expect(gitHostYields(stream)).toHaveLength(1);
-  });
+      expect(seen.failures).toEqual([]);
+      expect(observed).toHaveLength(1);
+      expect(seen.records).toHaveLength(1);
+      expect(gitHostYields(stream)).toHaveLength(1);
+    },
+  );
 
   it("DLG3: the other copy consumes an inherited record under its retained identity", function* () {
     // A fork's journal holds records its source wrote, and a Git-host effect is

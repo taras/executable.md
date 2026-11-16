@@ -28,8 +28,9 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
@@ -506,6 +507,7 @@ describe("Tier GOM — a shared definition's metadata cannot be edited", () => {
  * a run that admitted the wrong URL and happened to fail later.
  */
 describe("Tier GOM — a declared component's offer survives capture", () => {
+  const journalCase = journalCases("packages/core/tests/generated-owner-metadata.test.ts");
   const ROOT_PATH = "owner.md";
   /** A document naming the declared component in the spelling it offers. */
   const NAMING_PROBE = `<Evaluate text={'<Probe />\\n'} />\n`;
@@ -630,95 +632,107 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
     effect: "read",
   };
 
-  it("GOM4: a host's factory declaration runs the spelling it offered", function* () {
-    const stream = new InMemoryStream();
-    const published: FunctionComponentDefinition[] = [];
+  journalCase(
+    "GOM4: a host's factory declaration runs the spelling it offered",
+    ROOT_PATH,
+    function* (stream) {
+      const published: FunctionComponentDefinition[] = [];
 
-    const output = yield* run([host(declaredProbe(READ_PROBE), published)], stream);
+      const output = yield* run([host(declaredProbe(READ_PROBE), published)], stream);
 
-    // The built implementation carries its declaration's offer, the admission
-    // names that URL and effect, and the body a factory supplied is what ran.
-    expect(published[0]?.generated).toEqual(READ_PROBE);
-    expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
-    expect(String(output)).toContain("the factory body ran");
-  });
+      // The built implementation carries its declaration's offer, the admission
+      // names that URL and effect, and the body a factory supplied is what ran.
+      expect(published[0]?.generated).toEqual(READ_PROBE);
+      expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
+      expect(String(output)).toContain("the factory body ran");
+    },
+  );
 
-  it("GOM4: capture reads the offer once, and construction uses that reading", function* () {
-    // The check/use gap at the installation boundary, where the host also gets
-    // to run code in between: the accessor answers the accepted URL the first
-    // time and a substituted one afterwards, so a construction that read the
-    // host's object again would build a component offering a URL capture never
-    // validated.
-    const reads: GeneratedForms[] = [];
-    const component: IdentityComponent = {
-      ...declaredProbe(undefined),
-      get generated(): GeneratedForms {
-        reads.push(READ_PROBE);
-        return reads.length === 1 ? READ_PROBE : SUBSTITUTE;
-      },
-    };
-    const stream = new InMemoryStream();
-    const published: FunctionComponentDefinition[] = [];
+  journalCase(
+    "GOM4: capture reads the offer once, and construction uses that reading",
+    ROOT_PATH,
+    function* (stream) {
+      // The check/use gap at the installation boundary, where the host also gets
+      // to run code in between: the accessor answers the accepted URL the first
+      // time and a substituted one afterwards, so a construction that read the
+      // host's object again would build a component offering a URL capture never
+      // validated.
+      const reads: GeneratedForms[] = [];
+      const component: IdentityComponent = {
+        ...declaredProbe(undefined),
+        get generated(): GeneratedForms {
+          reads.push(READ_PROBE);
+          return reads.length === 1 ? READ_PROBE : SUBSTITUTE;
+        },
+      };
+      const published: FunctionComponentDefinition[] = [];
 
-    const output = yield* run([host(component, published)], stream);
+      const output = yield* run([host(component, published)], stream);
 
-    // What the one reading said is what was built and what was admitted — and
-    // one reading is all there was. The plant is live rather than inert: the
-    // very next reading of the host's object offers the substituted URL.
-    expect(published[0]?.generated).toEqual(READ_PROBE);
-    expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
-    expect(reads).toHaveLength(1);
-    expect(component.generated).toEqual(SUBSTITUTE);
-    expect(String(output)).toContain("the factory body ran");
-  });
+      // What the one reading said is what was built and what was admitted — and
+      // one reading is all there was. The plant is live rather than inert: the
+      // very next reading of the host's object offers the substituted URL.
+      expect(published[0]?.generated).toEqual(READ_PROBE);
+      expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
+      expect(reads).toHaveLength(1);
+      expect(component.generated).toEqual(SUBSTITUTE);
+      expect(String(output)).toContain("the factory body ran");
+    },
+  );
 
-  it("GOM4: an offer replaced from inside install() has replaced nothing", function* () {
-    // A host's installation callback runs before the declared components are
-    // built, so this is the window a live reference would be read through.
-    const offers: { generated: GeneratedForms } = { generated: READ_PROBE };
-    const component: IdentityComponent = {
-      ...declaredProbe(undefined),
-      get generated(): GeneratedForms {
-        return offers.generated;
-      },
-    };
-    const stream = new InMemoryStream();
-    const published: FunctionComponentDefinition[] = [];
+  journalCase(
+    "GOM4: an offer replaced from inside install() has replaced nothing",
+    ROOT_PATH,
+    function* (stream) {
+      // A host's installation callback runs before the declared components are
+      // built, so this is the window a live reference would be read through.
+      const offers: { generated: GeneratedForms } = { generated: READ_PROBE };
+      const component: IdentityComponent = {
+        ...declaredProbe(undefined),
+        get generated(): GeneratedForms {
+          return offers.generated;
+        },
+      };
+      const published: FunctionComponentDefinition[] = [];
 
-    const output = yield* run(
-      [
-        // deno-lint-ignore require-yield
-        host(component, published, function* () {
-          offers.generated = SUBSTITUTE;
-        }),
-      ],
-      stream,
-    );
+      const output = yield* run(
+        [
+          // deno-lint-ignore require-yield
+          host(component, published, function* () {
+            offers.generated = SUBSTITUTE;
+          }),
+        ],
+        stream,
+      );
 
-    expect(offers.generated).toEqual(SUBSTITUTE);
-    expect(published[0]?.generated).toEqual(READ_PROBE);
-    expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
-    expect(String(output)).toContain("the factory body ran");
-  });
+      expect(offers.generated).toEqual(SUBSTITUTE);
+      expect(published[0]?.generated).toEqual(READ_PROBE);
+      expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
+      expect(String(output)).toContain("the factory body ran");
+    },
+  );
 
-  it("GOM4: an unusable offer refuses the execution, having run nothing", function* () {
-    const stream = new InMemoryStream();
-    const published: FunctionComponentDefinition[] = [];
-    const unusable = { "self-closing": { identity: "not-a-url", effect: "read" as const } };
+  journalCase(
+    "GOM4: an unusable offer refuses the execution, having run nothing",
+    ROOT_PATH,
+    function* (stream) {
+      const published: FunctionComponentDefinition[] = [];
+      const unusable = { "self-closing": { identity: "not-a-url", effect: "read" as const } };
 
-    let refused = "";
-    try {
-      yield* run([host(declaredProbe(unusable), published)], stream);
-    } catch (error) {
-      refused = error instanceof Error ? error.message : String(error);
-    }
+      let refused = "";
+      try {
+        yield* run([host(declaredProbe(unusable), published)], stream);
+      } catch (error) {
+        refused = error instanceof Error ? error.message : String(error);
+      }
 
-    // Read where it is captured, so a declaration this engine cannot read
-    // refuses before an implementation is built, a provider is asked or
-    // anything is written down.
-    expect(refused).toContain('the identity component "Probe" offers its self-closing form');
-    expect(refused).toContain("not an absolute URL");
-    expect(published).toEqual([]);
-    expect(yield* stream.readAll()).toEqual([]);
-  });
+      // Read where it is captured, so a declaration this engine cannot read
+      // refuses before an implementation is built, a provider is asked or
+      // anything is written down.
+      expect(refused).toContain('the identity component "Probe" offers its self-closing form');
+      expect(refused).toContain("not an absolute URL");
+      expect(published).toEqual([]);
+      expect(yield* stream.readAll()).toEqual([]);
+    },
+  );
 });
