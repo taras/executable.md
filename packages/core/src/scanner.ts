@@ -147,6 +147,8 @@ export interface SourceOrigin {
 interface PositionIndex {
   origin?: SourceOrigin;
   lineStarts: number[];
+  literalOffsets?: WeakMap<Segment, number>;
+  elicitSchemas?: Map<number, SourceRange>;
 }
 
 function computeLineStarts(text: string): number[] {
@@ -236,8 +238,15 @@ export function scanSegments(
   unfinished?: UnfinishedConstruct[],
   /** A suffix rescan retains its authored prefix for line-boundary decisions. */
   start = 0,
+  literalOffsets?: WeakMap<Segment, number>,
+  elicitSchemas?: Map<number, SourceRange>,
 ): Segment[] {
-  const index: PositionIndex = { origin, lineStarts: computeLineStarts(text) };
+  const index: PositionIndex = {
+    origin,
+    lineStarts: computeLineStarts(text),
+    literalOffsets,
+    elicitSchemas,
+  };
   const segments: Segment[] = [];
   let pos = start;
   let textStart = start;
@@ -246,7 +255,7 @@ export function scanSegments(
     const fenceMatch = matchFenceOpen(text, pos);
     if (fenceMatch) {
       if (pos > textStart) {
-        pushText(segments, text, textStart, pos);
+        pushText(segments, text, index, textStart, pos);
       }
 
       const fenceEnd = findFenceClose(
@@ -274,7 +283,7 @@ export function scanSegments(
         } satisfies ExecutableCodeBlock);
       } else {
         // Non-executable code block: preserve as text
-        pushText(segments, text, pos, fenceEnd.fenceEnd);
+        pushText(segments, text, index, pos, fenceEnd.fenceEnd);
       }
 
       pos = fenceEnd.fenceEnd;
@@ -299,7 +308,7 @@ export function scanSegments(
       const component = parseComponentTag(text, pos, index, elements, unfinished);
       if (component) {
         if (pos > textStart) {
-          pushText(segments, text, textStart, pos);
+          pushText(segments, text, index, textStart, pos);
         }
         segments.push(component.segment);
         spans?.push({ start: pos, end: component.end });
@@ -313,7 +322,7 @@ export function scanSegments(
   }
 
   if (textStart < text.length) {
-    pushText(segments, text, textStart);
+    pushText(segments, text, index, textStart);
   }
 
   return segments;
@@ -570,13 +579,17 @@ function parseComponentTag(
     return null;
   }
 
+  const schema =
+    name === "Elicit" && index.elicitSchemas !== undefined
+      ? { seen: false, range: undefined as SourceRange | undefined }
+      : undefined;
   const {
     props,
     expressions,
     authoredExpressions,
     end: attrEnd,
     exhausted,
-  } = parseAttributes(text, pos, name);
+  } = parseAttributes(text, pos, name, schema);
   if (attrEnd === -1) {
     if (exhausted) {
       unfinished?.push({ start, name });
@@ -654,6 +667,9 @@ function parseComponentTag(
     );
     elements.push(...nested);
   }
+  if (schema?.range !== undefined) {
+    index.elicitSchemas?.set(start, schema.range);
+  }
 
   return {
     segment: {
@@ -693,6 +709,7 @@ function parseAttributes(
   pos: number,
   /** Whose attributes these are: a construct may bind one of them by reference. */
   componentName: string,
+  schema?: { seen: boolean; range: SourceRange | undefined },
 ): ParsedAttributes {
   const props: Record<string, Json> = {};
   const expressions: Record<string, string> = {};
@@ -734,6 +751,11 @@ function parseAttributes(
       return { props, expressions, authoredExpressions, end: -1, exhausted: false };
     }
 
+    const capture = schema !== undefined && attrName === "schema" && !schema.seen;
+    if (schema !== undefined && attrName === "schema") {
+      schema.seen = true;
+      schema.range = undefined;
+    }
     pos = skipWhitespace(text, pos);
 
     // Boolean attribute (no value): `verbose`
@@ -785,7 +807,12 @@ function parseAttributes(
       if (exprEnd === -1) {
         return { props, expressions, authoredExpressions, end: -1, exhausted: true };
       }
-      const exprText = text.slice(pos + 1, exprEnd).trim();
+      const raw = text.slice(pos + 1, exprEnd);
+      const exprText = raw.trim();
+      if (capture && schema !== undefined) {
+        const start = pos + 1 + raw.length - raw.trimStart().length;
+        schema.range = { start, end: start + exprText.length };
+      }
       if (bindsByReference(componentName, attrName)) {
         expressions[attrName] = exprText;
       } else if (exprText === "undefined" && !isStructural(componentName)) {
@@ -990,7 +1017,7 @@ function parseChildren(
   while (pos < text.length) {
     if (text.startsWith(closingTag, pos)) {
       if (pos > textStart) {
-        pushText(children, text, textStart, pos);
+        pushText(children, text, index, textStart, pos);
       }
       return { children, end: pos + closingTag.length };
     }
@@ -998,7 +1025,7 @@ function parseChildren(
     const fenceMatch = matchFenceOpen(text, pos);
     if (fenceMatch) {
       if (pos > textStart) {
-        pushText(children, text, textStart, pos);
+        pushText(children, text, index, textStart, pos);
       }
 
       const fenceEnd = findFenceClose(
@@ -1024,7 +1051,7 @@ function parseChildren(
           position: positionAt(index, pos),
         } satisfies ExecutableCodeBlock);
       } else {
-        pushText(children, text, pos, fenceEnd.fenceEnd);
+        pushText(children, text, index, pos, fenceEnd.fenceEnd);
       }
 
       pos = fenceEnd.fenceEnd;
@@ -1046,7 +1073,7 @@ function parseChildren(
       const nested = parseComponentTag(text, pos, index, elements, unfinished);
       if (nested) {
         if (pos > textStart) {
-          pushText(children, text, textStart, pos);
+          pushText(children, text, index, textStart, pos);
         }
         children.push(nested.segment);
         pos = nested.end;
@@ -1110,7 +1137,13 @@ function skipWhitespace(text: string, pos: number): number {
   return pos;
 }
 
-function pushText(segments: Segment[], text: string, start: number, end = text.length): void {
+function pushText(
+  segments: Segment[],
+  text: string,
+  index: PositionIndex,
+  start: number,
+  end = text.length,
+): void {
   const content = text.slice(start, end);
   if (content.length === 0) {
     return;
@@ -1119,6 +1152,10 @@ function pushText(segments: Segment[], text: string, start: number, end = text.l
   // Merge with previous text segment if possible
   const last = segments[segments.length - 1];
   if (last && last.type === "text") {
+    const offset = index.literalOffsets?.get(last);
+    if (offset !== undefined && offset + last.content.length !== start) {
+      index.literalOffsets?.delete(last);
+    }
     last.content += content;
     return;
   }
@@ -1130,5 +1167,6 @@ function pushText(segments: Segment[], text: string, start: number, end = text.l
     value: start === 0 || text[start - 1] === "\n",
     enumerable: true,
   });
+  index.literalOffsets?.set(segment, start);
   segments.push(segment);
 }

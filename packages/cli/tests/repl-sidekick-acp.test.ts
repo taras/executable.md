@@ -1,4 +1,4 @@
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { DurablePersistenceError, InMemoryStream } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import {
@@ -9,7 +9,7 @@ import { runSidekickCommand } from "../src/sidekick-acp/command.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { copyFile, ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec, ProcessApi, Stdio } from "@effectionx/process";
 import { selectJson } from "@executablemd/core/host";
 import { openReplSession } from "../src/repl/session.ts";
@@ -22,6 +22,7 @@ import {
   chmod,
   lstat,
   mkdtemp,
+  readFile,
   readdir,
   realpath,
   rename,
@@ -70,22 +71,52 @@ import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sideki
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
 import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
-import { recordingTerminal, useMountedHost, MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import {
+  appendGate,
+  mountedExecution,
+  recordingTerminal,
+  useMountedHost,
+  MOUNTED_AGENT,
+} from "./support/mounted-repl.ts";
+import {
+  chooseOption,
+  intoSecondField,
   drawnScreen,
+  openQuestion,
   sendMessage,
+  submitForm,
   intoComposer,
   typed,
   composerHolds,
   sidekickIdle,
+  scrollDrawerTo,
 } from "./support/screen-journeys.ts";
 import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
+import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { runReplProgram } from "../src/repl/program.ts";
+import {
+  initialState,
+  NO_AGENT,
+  presentedDrawer,
+  reduceRepl,
+  viewFor,
+} from "../src/repl/application.ts";
+import type { ReplLive } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
+import { resolvePointer } from "../src/repl/renderer.ts";
+import { usePresenter } from "./fixtures/repl/presentation.ts";
 import { ReplHost } from "../src/repl/host.ts";
-import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
-import { AGENT_PROMPT } from "@executablemd/agent/host";
+import {
+  pairedLocation,
+  PAIRED_DIRECTORY,
+  parseEntryRecords,
+  parseSidekickRecord,
+} from "../src/repl/sidekick/history.ts";
+import { AGENT_PROMPT, AGENT_PROMPT_REPLY } from "@executablemd/agent/host";
+import { parseDurableEvent } from "@executablemd/durable-streams";
 import {
   Descriptor,
   Request,
@@ -172,7 +203,7 @@ function* world(options: Parameters<typeof useHarness>[1] = {}, install?: () => 
 }
 type World = ReturnType<typeof world> extends Operation<infer T> ? T : never;
 function sdk(
-  world: World,
+  world: Pick<World, "launch" | "home" | "descriptor">,
 ): Operation<{ connection: acp.ClientConnection; updates: acp.SessionNotification[] }> {
   return resource(function* (provide) {
     let child: ChildProcess | undefined;
@@ -193,7 +224,7 @@ function sdk(
       }
     });
     child = spawnChild(world.launch.command, world.launch.arguments, {
-      cwd: world.held.workspace,
+      cwd: world.descriptor.cwd,
       env: { PATH: process.env.PATH, DENO_DIR: process.env.DENO_DIR, HOME: world.home },
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -2031,54 +2062,92 @@ describe("minimal live Sidekick ACP attachment", () => {
   });
 
   it("A6: unestablished feedback refuses another prompt without guessing or resend", function* () {
-    const one = yield* world();
-    const a = attachResult.parse(
-      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
-    );
-    let prompts = 0;
-    yield* ReplHost.around({
-      *appendRecord([file, text], next) {
-        const row = z
-          .object({ kind: z.string(), event: z.string().optional() })
+    const storageFailure = new Error("Controlled feedback acknowledgement loss.");
+    let verifiedExchange = false;
+    try {
+      yield* scoped(function* () {
+        const one = yield* world();
+        const a = attachResult.parse(
+          yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+        );
+        let prompts = 0;
+        let failedPrompt: string | undefined;
+        yield* ReplHost.around({
+          *appendRecord([file, text], next) {
+            const row = parseSidekickRecord(text.trim());
+            if (row?.kind === "event") {
+              for (const event of parseEntryRecords(row.event)) {
+                if (event.type === "yield" && event.description.type === AGENT_PROMPT) {
+                  prompts++;
+                  if (prompts === 2) {
+                    failedPrompt = event.description.name;
+                    throw storageFailure;
+                  }
+                }
+              }
+            }
+            yield* next(file, text);
+          },
+        });
+        one.held.fake.script({ reply: "<REPL.Bindings/>" });
+        one.held.fake.script({ reply: "<Output>Backend accepted feedback.</Output>" });
+        const ended = exchangeSchema.parse(
+          yield* requestAttachment(one.path, {
+            method: "prompt",
+            attachment: a.attachment,
+            text: "inspect",
+          }),
+        );
+        expect(ended.ending).toMatchObject({
+          joined: true,
+          outcome: "failed",
+          error: "Failed to persist durable yield event",
+        });
+        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+        const status = z
+          .object({ feedbackUnestablished: z.number() })
           .passthrough()
-          .parse(JSON.parse(text));
-        if (row.kind === "event" && row.event !== undefined) {
-          const events = parseEntryRecords(row.event);
-          if (
-            events.some(
-              (event) => event.type === "yield" && event.description.type === AGENT_PROMPT,
-            ) &&
-            ++prompts === 2
-          ) {
-            throw new Error("Controlled feedback acknowledgement loss.");
-          }
+          .parse(yield* requestAttachment(one.path, { method: "status" }));
+        expect(status.feedbackUnestablished).toBe(1);
+        const before = yield* records(one.held.execution);
+        expect(failedPrompt).toBeDefined();
+        expect(
+          before.some(
+            (row) =>
+              row.kind === "event" &&
+              parseEntryRecords(row.event).some(
+                (event) =>
+                  event.type === "yield" &&
+                  event.description.type === AGENT_PROMPT &&
+                  event.description.name === failedPrompt,
+              ),
+          ),
+        ).toBe(false);
+        let refusal: unknown;
+        try {
+          yield* requestAttachment(one.path, {
+            method: "prompt",
+            attachment: a.attachment,
+            text: "do not resend",
+          });
+        } catch (error) {
+          refusal = error;
         }
-        yield* next(file, text);
-      },
-    });
-    one.held.fake.script({ reply: "<REPL.Bindings/>" });
-    one.held.fake.script({ reply: "<Output>Backend accepted feedback.</Output>" });
-    yield* requestAttachment(one.path, {
-      method: "prompt",
-      attachment: a.attachment,
-      text: "inspect",
-    });
-    const status = z
-      .object({ feedbackUnestablished: z.number() })
-      .passthrough()
-      .parse(yield* requestAttachment(one.path, { method: "status" }));
-    expect(status.feedbackUnestablished).toBeGreaterThan(0);
-    const before = yield* records(one.held.execution);
-    const count = one.held.fake.prompts.length;
-    yield* refused(
-      requestAttachment(one.path, {
-        method: "prompt",
-        attachment: a.attachment,
-        text: "do not resend",
-      }),
-    );
-    expect(one.held.fake.prompts).toHaveLength(count);
-    expect(yield* records(one.held.execution)).toEqual(before);
+        expect(errorOf(refusal).message).toBe(
+          "This conversation holds feedback whose acceptance cannot be established.",
+        );
+        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+        expect(yield* records(one.held.execution)).toEqual(before);
+        verifiedExchange = true;
+      });
+    } catch (error) {
+      if (!verifiedExchange || !(error instanceof DurablePersistenceError)) {
+        throw error;
+      }
+      expect(error.cause).toBe(storageFailure);
+      return;
+    }
+    throw new Error("Expected the conversation release to report the failed append.");
   });
 
   it("A6: the 64-update observer bound detaches a slow connection while its root producer continues", function* () {
@@ -4579,5 +4648,788 @@ describe("Passive workflow supervision", () => {
         elapsedMs,
       }),
     );
+  });
+});
+
+/**
+ * A completed reply secret detection withheld, decided by the foreground person.
+ *
+ * The real mounted REPL, a real attachment socket, the real scanner and the
+ * real journals; only the provider is a double. The synthetic credential is
+ * assembled at runtime, and every case reads the bytes actually written.
+ */
+describe("Sidekick reply approval", () => {
+  const value = ["Zx81", "qPm40", "aLw2tYu"].join("");
+  const secret = `apiKey=${value}`;
+  const choice = {
+    type: "object",
+    properties: { choice: { type: "string", enum: [secret, "none"] } },
+    required: ["choice"],
+    additionalProperties: false,
+  };
+  const reply =
+    `<Elicit schema={${JSON.stringify(choice)}} as="answer">Which value?</Elicit>\n\n` +
+    `<Output>Use ${secret}</Output>\n`;
+
+  /** Every byte this execution's two journals hold. */
+  function* journalBytes(
+    page: { repl: Parameters<typeof mountedExecution>[0] },
+    host: {
+      repository: { open(execution: string): Operation<unknown> };
+    },
+  ): Operation<string> {
+    const execution = yield* mountedExecution(page.repl);
+    const pair = (yield* host.repository.open(execution)) as {
+      chat: { form: string; location: { sidekick: string; entries: string } };
+    };
+    if (pair.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const sidekick = yield* until(readFile(pair.chat.location.sidekick, "utf8"));
+    const entries = yield* until(readFile(pair.chat.location.entries, "utf8").catch(() => ""));
+    return sidekick + entries;
+  }
+
+  /** The canonical events of this execution's Sidekick, in history order. */
+  function* canonical(page: { repl: Parameters<typeof mountedExecution>[0] }) {
+    const read = yield* settledReading(page.repl);
+    return read.chat.flatMap((record) => {
+      if (record.kind !== "event") {
+        return [];
+      }
+      const parsed = parseDurableEvent(record.event);
+      return parsed.ok && parsed.value.type === "yield" ? [parsed.value] : [];
+    });
+  }
+
+  /** Those of them a turn, an acceptance or an admission is, by type and name. */
+  function* rootRecords(page: {
+    repl: Parameters<typeof mountedExecution>[0];
+  }): Operation<string[]> {
+    return (yield* canonical(page)).flatMap((event) => {
+      const type = event.description.type;
+      return type === AGENT_PROMPT || type === AGENT_PROMPT_REPLY || type === "generated_xmd"
+        ? [`${type} ${event.description.name}`]
+        : [];
+    });
+  }
+
+  function* verifyColdCut(
+    page: ReplPage,
+    verify: (read: ReturnType<typeof projectSidekick>) => void,
+  ) {
+    const execution = yield* mountedExecution(page.repl);
+    const source = pairedLocation(page.repl.root, execution);
+    yield* scoped(function* () {
+      const cold = yield* useMountedHost();
+      const copy = pairedLocation(cold.root, execution);
+      yield* ensureDir(copy.directory);
+      yield* copyFile(source.sidekick, copy.sidekick);
+      if (yield* exists(source.entries)) {
+        yield* copyFile(source.entries, copy.entries);
+      }
+      const before = yield* readTextFile(copy.sidekick);
+      const reopened = yield* useReplPage({
+        host: cold,
+        location: `xmd://repl/${execution}/entries`,
+      });
+      yield* reopened.until("the reopened history is idle", sidekickIdle);
+      verify(projectSidekick((yield* settledReading(reopened.repl)).chat));
+      expect(cold.fake.prompts).toEqual([]);
+      expect(yield* readTextFile(copy.sidekick)).toBe(before);
+      expect(reopened.screen().shows("[accept reply]")).toBe(false);
+    });
+  }
+
+  it("Pending and exact Accept: private while asked, then the original runs once and reaches ACP and feedback", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const home = yield* publishingHome("xmd-reply-approval-");
+    const path = join(home, "attachment.json");
+    const gate = appendGate();
+    const host = yield* useMountedHost({ gate });
+    host.fake.script({ reply: "<Output>Ready for attachment.</Output>" });
+    const page = yield* useReplPage({ host, sidekickAcp: path });
+    const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+    const { connection, updates } = yield* sdk({
+      descriptor,
+      home,
+      launch: cliCommand(["sidekick", "acp", "--attach", path]),
+    });
+    const session = yield* until(
+      connection.agent.request(acp.methods.agent.session.new, {
+        cwd: descriptor.cwd,
+        mcpServers: [],
+      }),
+    );
+    host.fake.script({ reply, held: true });
+    host.fake.script({ reply: "<Output>Feedback received.</Output>" });
+    const prompting = yield* spawn(() =>
+      until(
+        connection.agent.request(acp.methods.agent.session.prompt, {
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text: "Pick the example value." }],
+        }),
+      ),
+    );
+    yield* host.fake.startedTurns(2);
+    yield* page.press("TODO", { onRow: "SIDEKICK" });
+    yield* page.until("Add task is visible", (one) => one.shows("+"));
+    yield* page.press("+");
+    yield* page.until("the new TODO editor", (one) => one.shows("Task:"));
+    yield* page.type("Verify the composed input");
+    yield* page.key("Enter");
+    yield* page.until("the committed TODO edit", (one) => one.shows("☐ Verify the composed input"));
+    expect(host.fake.prompts[1]).not.toContain("Verify the composed input");
+    yield* page.press("SIDEKICK", { onRow: "TODO" });
+    host.fake.releaseTurn();
+    yield* page.until("the withheld reply's question", (one) => one.shows("[accept reply]"));
+
+    // Pending: the withheld completion is saved and its preview withdrawn, and
+    // nothing of the reply is anywhere but this screen's masked excerpt.
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(page.screen().shows(value)).toBe(false);
+    expect(page.screen().shows("Which value?")).toBe(false);
+    const pending = yield* journalBytes(page, host);
+    expect(pending.includes(value)).toBe(false);
+    expect(pending.includes("Which value?")).toBe(false);
+    expect(pending.includes(AGENT_PROMPT_REPLY)).toBe(false);
+    const asked = yield* rootRecords(page);
+    // The bootstrap's own turn and evaluation, then this turn's withheld
+    // completion — and nothing after it: no acceptance, no admission.
+    expect(asked.at(-1)).toBe(`${AGENT_PROMPT} turn:2`);
+    expect(asked.filter((one) => one.startsWith(AGENT_PROMPT))).toEqual([
+      `${AGENT_PROMPT} turn:1`,
+      `${AGENT_PROMPT} turn:2`,
+    ]);
+    const status = JSON.stringify(yield* requestAttachment(path, { method: "status" }));
+    expect(status.includes(value)).toBe(false);
+    expect(status.includes("Which value?")).toBe(false);
+    expect(updates.length).toBeGreaterThan(0);
+    expect(JSON.stringify(updates).includes(value)).toBe(false);
+    expect(JSON.stringify(updates).includes("Which value?")).toBe(false);
+
+    for (const size of [
+      { columns: 160, rows: 36 },
+      { columns: 120, rows: 30 },
+      { columns: 72, rows: 20 },
+    ]) {
+      if (page.screen().size.columns !== size.columns || page.screen().size.rows !== size.rows) {
+        yield* page.resize(size);
+      }
+      yield* scrollDrawerTo(page, "[reveal match 1]");
+      expect(page.screen().shows(value)).toBe(false);
+      yield* page.press("[reveal match 1]");
+      const toggled = yield* page.until("Reveal applied", (one) => one.shows("[hide match 1]"));
+      if (!toggled.shows(value)) {
+        yield* page.key("PageUp");
+      }
+      yield* page.until("the revealed match", (one) => one.shows(value));
+      expect(yield* journalBytes(page, host)).toBe(pending);
+      yield* scrollDrawerTo(page, "[hide match 1]");
+      yield* page.press("[hide match 1]");
+      yield* page.until("the masked match", (one) => !one.shows(value));
+      console.log(
+        `Approval drawer ${size.columns}x${size.rows}: pending and Reveal verified on the completed terminal frame.`,
+      );
+    }
+    yield* page.resize({ columns: 160, rows: 36 });
+
+    // Accept, held at the acceptance's own append: nothing has run yet.
+    const held = gate.holdNext((_path, record) => record.includes(AGENT_PROMPT_REPLY));
+    const admitting = gate.holdNext((_path, line) => {
+      const record = parseSidekickRecord(line.trim());
+      if (record?.kind !== "event") {
+        return false;
+      }
+      const event = parseDurableEvent(record.event);
+      return (
+        event.ok && event.value.type === "yield" && event.value.description.type === "generated_xmd"
+      );
+    });
+    yield* ensure(() => {
+      held.release();
+      admitting.release();
+    });
+    yield* page.press("[accept reply]");
+    yield* held.started();
+    expect(page.screen().shows(`Use ${secret}`)).toBe(false);
+    expect((yield* journalBytes(page, host)).includes(value)).toBe(false);
+    held.release();
+    yield* admitting.started();
+    expect((yield* rootRecords(page)).at(-1)).toBe(`${AGENT_PROMPT_REPLY} turn:2`);
+    yield* verifyColdCut(page, (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      const turn = read.value.turns.find((one) => one.turn === 2);
+      expect(turn).toMatchObject({ accepted: true, status: "completed" });
+      expect(turn?.reply).toBeUndefined();
+      expect(read.value.chat.at(-1)).toMatchObject({ kind: "saved", turn: 2 });
+      expect(read.value.operations).toEqual([]);
+    });
+    admitting.release();
+
+    // The reply runs: its own question offers the choice it wrote.
+    yield* page.until("the accepted reply's question", (one) => one.shows("[answer sidekick]"));
+    yield* openQuestion(page);
+    const answering = gate.holdNext((_path, record) =>
+      record.includes("executablemd.elicitation-schema"),
+    );
+    const responding = gate.holdNext((_path, record) => record.includes('"kind":"response"'));
+    yield* chooseOption(page, secret);
+    yield* submitForm(page);
+    yield* answering.started();
+    const pendingAnswer = projectSidekick((yield* settledReading(page.repl)).chat);
+    expect(
+      pendingAnswer.ok && pendingAnswer.value.unfinished.some((one) => one.component === "Elicit"),
+    ).toBe(true);
+    expect(host.fake.prompts).toHaveLength(2);
+    answering.release();
+    yield* responding.started();
+    const acknowledgedAnswer = yield* settledReading(page.repl);
+    const projectedAnswer = projectSidekick(acknowledgedAnswer.chat);
+    expect(
+      projectedAnswer.ok &&
+        projectedAnswer.value.unfinished.some((one) => one.component === "Elicit"),
+    ).toBe(false);
+    expect(
+      projectedAnswer.ok &&
+        projectedAnswer.value.operations
+          .filter((one) => one.component === "Elicit")
+          .map((one) => one.status),
+    ).toEqual(["ok"]);
+    expect(acknowledgedAnswer.chat.some((one) => one.kind === "control-outcome")).toBe(false);
+    expect(host.fake.prompts).toHaveLength(2);
+    responding.release();
+    const answer = yield* prompting;
+    expect(answer.stopReason).toBe("end_turn");
+    expect(answer._meta?.["executablemd.sidekick-exchange/v1"]).toMatchObject({ joined: true });
+    const output = updates.flatMap(({ update }) =>
+      update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+        ? [update.content.text]
+        : [],
+    );
+    expect(output.join("")).toBe(`Use ${secret}Feedback received.`);
+    yield* page.until("all Send work joined", sidekickIdle);
+
+    // One provider turn for the reply — the same request and native turn —
+    // and one ordinary feedback turn carrying the selected value.
+    expect(host.fake.prompts).toHaveLength(3);
+    expect(host.fake.prompts[1]).toContain("Pick the example value.");
+    expect(host.fake.prompts[2]).toContain(`"choice": "${secret}"`);
+    const key = host.fake.turns[0]?.handle.sessionKey;
+    expect(host.fake.turns.map((one) => one.handle.sessionKey)).toEqual([key, key, key]);
+    const after = yield* rootRecords(page);
+    const evaluatedAs = (yield* settledReading(page.repl)).chat.flatMap((one) =>
+      one.kind === "response" && one.turn >= 2 ? [one.response] : [],
+    );
+    // Saved before it was admitted, and the same turn: no new ordinal between.
+    expect(after.slice(after.indexOf(`${AGENT_PROMPT} turn:2`))).toEqual([
+      `${AGENT_PROMPT} turn:2`,
+      `${AGENT_PROMPT_REPLY} turn:2`,
+      `generated_xmd generated:${evaluatedAs[0]}`,
+      `${AGENT_PROMPT} turn:3`,
+      `generated_xmd generated:${evaluatedAs[1]}`,
+    ]);
+    const events = yield* canonical(page);
+    const accepted = events.find((one) => one.description.type === AGENT_PROMPT_REPLY);
+    expect(
+      accepted?.result.status === "ok" &&
+        (accepted.result.value as { text?: string } | undefined)?.text,
+    ).toBe(reply);
+    const feedback = events.find(
+      (one) => one.description.type === AGENT_PROMPT && one.description.name === "turn:3",
+    );
+    const composed = host.fake.prompts[2];
+    expect(composed).toContain("Committed TODO changes (in commit order)");
+    expect(composed).toContain('"origin":"human"');
+    expect(composed).toContain("+- [ ] Verify the composed input");
+    expect(feedback?.description.input).toBe(composed);
+    const read = yield* settledReading(page.repl);
+    const acknowledged = read.chat.filter((one) => one.kind === "feedback" && one.turn === 3);
+    expect(acknowledged).toEqual([expect.objectContaining({ text: composed })]);
+    const projection = projectSidekick(read.chat);
+    if (!projection.ok) {
+      throw projection.error;
+    }
+    expect(projection.value.delivered).toEqual([
+      { conversation: projection.value.active, turn: 3 },
+    ]);
+    const responses = read.chat.flatMap((one) => (one.kind === "response" ? [one] : []));
+    expect(responses.find((one) => one.turn === 2)?.output).toBe(`Use ${secret}`);
+  });
+
+  for (const choiceFirst of [false, true]) {
+    it(`carries a selected choice through protected feedback with choice first: ${choiceFirst}`, function* () {
+      const gate = appendGate();
+      const host = yield* useMountedHost({ gate });
+      const marked = "synthetic-private-note-48";
+      const mixed = {
+        ...choice,
+        properties: { ...choice.properties, note: { type: "string", writeOnly: true } },
+        required: ["choice", "note"],
+      };
+      host.fake.script({
+        reply: `<Elicit schema={${JSON.stringify(mixed)}} as="answer">Pick and annotate.</Elicit>`,
+      });
+      host.fake.script({ reply: "<Output>Feedback received.</Output>" });
+      const page = yield* useReplPage({ host });
+      yield* sendMessage(page, "Ask for the choice and note.");
+      yield* page.until("reply approval", (one) => one.shows("[accept reply]"));
+      yield* page.press("[accept reply]");
+      yield* page.until("the mixed question", (one) => one.shows("[answer sidekick]"));
+      yield* openQuestion(page);
+      const answering = gate.holdNext((_path, record) =>
+        record.includes("executablemd.elicitation-schema"),
+      );
+      yield* ensure(() => answering.release());
+      if (choiceFirst) {
+        yield* chooseOption(page, secret);
+      }
+      yield* intoSecondField(page);
+      yield* page.type(marked);
+      if (choiceFirst) {
+        yield* submitForm(page);
+      } else {
+        yield* chooseOption(page, secret);
+      }
+      yield* answering.started();
+
+      const pending = projectSidekick((yield* settledReading(page.repl)).chat);
+      expect(pending.ok && pending.value.unfinished.some((one) => one.component === "Elicit")).toBe(
+        true,
+      );
+      expect(host.fake.prompts).toHaveLength(1);
+      answering.release();
+      yield* page.until("mixed answer feedback joined", sidekickIdle);
+
+      function verify(read: ReturnType<typeof projectSidekick>) {
+        if (!read.ok) {
+          throw read.error;
+        }
+        expect(read.value.unfinished).toEqual([]);
+        expect(read.value.operations.filter((one) => one.component === "Elicit")).toEqual([
+          expect.objectContaining({ status: "ok" }),
+        ]);
+      }
+
+      verify(projectSidekick((yield* settledReading(page.repl)).chat));
+      yield* verifyColdCut(page, verify);
+      expect(host.fake.prompts).toHaveLength(2);
+      expect(host.fake.prompts[1]).toContain(`"choice": "${secret}"`);
+      expect(host.fake.prompts[1]).toContain('"note": "[redacted]"');
+      expect(JSON.stringify(host.fake.prompts)).not.toContain(marked);
+      const bytes = yield* journalBytes(page, host);
+      expect(bytes).not.toContain(marked);
+      const answer = (yield* canonical(page)).find((event) => event.description.type === "elicit");
+      expect(answer?.result).toMatchObject({
+        status: "ok",
+        value: {
+          "executablemd.input": {
+            kind: "object",
+            members: {
+              choice: { kind: "json", value: secret },
+              note: { kind: "input" },
+            },
+          },
+        },
+      });
+    });
+  }
+
+  it("carries both explicitly selected fields into automatic feedback", function* () {
+    const other = `apiKey=${[...value].reverse().join("")}`;
+    const two = {
+      ...choice,
+      properties: { ...choice.properties, other: { type: "string", enum: [other, "skip"] } },
+      required: ["choice", "other"],
+    };
+    const host = yield* useMountedHost();
+    host.fake.script({
+      reply: `<Elicit schema={${JSON.stringify(two)}} as="answer">Pick two.</Elicit>`,
+    });
+    host.fake.script({ reply: "<Output>Feedback received.</Output>" });
+    const page = yield* useReplPage({ host });
+    yield* sendMessage(page, "Ask for two choices.");
+    yield* page.until("reply approval", (one) => one.shows("[accept reply]"));
+    yield* page.press("[accept reply]");
+    yield* page.until("the two-choice question", (one) => one.shows("[answer sidekick]"));
+    yield* openQuestion(page);
+    yield* chooseOption(page, secret);
+    yield* chooseOption(page, other);
+    yield* page.until("both choices joined", sidekickIdle);
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(host.fake.prompts[1]).toContain(`"choice": "${secret}"`);
+    expect(host.fake.prompts[1]).toContain(`"other": "${other}"`);
+  });
+
+  it("acknowledges a refused question and sends ordinary feedback", function* () {
+    const host = yield* useMountedHost();
+    const unsupported = { ...choice, additionalProperties: true };
+    host.fake.script({
+      reply: `<Elicit schema={${JSON.stringify(unsupported)}} as="answer">Pick one.</Elicit>`,
+    });
+    host.fake.script({ reply: "<Output>Feedback received.</Output>" });
+    const page = yield* useReplPage({ host });
+    yield* sendMessage(page, "Ask an unsupported question.");
+    yield* page.until("reply approval", (one) => one.shows("[accept reply]"));
+    yield* page.press("[accept reply]");
+    yield* page.until("refusal feedback joined", sidekickIdle);
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(host.fake.prompts[1]).toContain("Elicit failed:");
+    expect(host.fake.prompts[1]).not.toContain(value);
+    const answer = (yield* canonical(page)).find((event) => event.description.type === "elicit");
+    expect(answer?.result.status).toBe("err");
+    expect(JSON.stringify(answer?.description)).toContain(secret);
+    expect(JSON.stringify(answer?.result)).not.toContain(value);
+  });
+
+  for (const size of [
+    { columns: 160, rows: 36 },
+    { columns: 120, rows: 30 },
+    { columns: 72, rows: 20 },
+  ]) {
+    it(`shows long Reveal and decision disclosure at ${size.columns}x${size.rows}`, function* () {
+      const long = value.repeat(5) + [...value].reverse().join("");
+      const host = yield* useMountedHost();
+      host.fake.script({ reply: `<Output>Use apiKey=${long} for the example.</Output>` });
+      const page = yield* useReplPage({ host, size: { columns: 160, rows: 36 } });
+      yield* sendMessage(page, "Check approval.");
+      yield* page.until("reply approval", (one) => one.shows("[reveal match]"));
+      if (size.columns !== 160) {
+        yield* page.resize(size);
+      }
+      const pending = page.screen();
+      const positioned = pending.rows.map((row) => row.trim()).join(" ");
+      expect(positioned).toContain("CREDENTIAL_FIELD");
+      expect(positioned).toContain("@executablemd/secretlint-rule-credentials");
+      expect(positioned).toMatch(/line 1, column 20/);
+      expect(pending.shows(value)).toBe(false);
+      const retained = yield* journalBytes(page, host);
+      yield* scrollDrawerTo(page, "[reveal match]");
+      yield* page.press("[reveal match]");
+      const revealed = yield* page.until("long match revealed", (one) => one.shows(value));
+      const pieces = revealed.rows.flatMap((row) =>
+        (row.match(/[A-Za-z0-9]{8,}/g) ?? []).filter((word) => long.includes(word)),
+      );
+      expect(pieces.join("")).toBe(long);
+      expect(yield* journalBytes(page, host)).toBe(retained);
+      yield* scrollDrawerTo(page, "[accept reply]");
+      const decisions = page.screen();
+      expect(decisions.shows("Accept saves the original and permits ACP Output")).toBe(true);
+      expect(decisions.shows("and automatic feedback.")).toBe(true);
+      expect(decisions.shows("[withhold reply]")).toBe(true);
+      expect(decisions.shows("[accept reply]")).toBe(true);
+      const decision = size.columns === 72 ? "[accept reply]" : "[withhold reply]";
+      yield* page.press(decision);
+      yield* page.until("the decision joined", sidekickIdle);
+      const accepted = (yield* rootRecords(page)).includes(`${AGENT_PROMPT_REPLY} turn:1`);
+      expect(accepted).toBe(size.columns === 72);
+      expect(host.fake.prompts).toHaveLength(1);
+      console.log(
+        `Approval drawer ${size.columns}x${size.rows}: first rule and position, complete long match, disclosure and both mounted decisions verified.`,
+      );
+    });
+  }
+
+  for (const choice of ["[withhold reply]", "[close]", "[stop]"]) {
+    it(`keeps the automatic follow-up withheld through ${choice} and a cold reopen`, function* () {
+      const host = yield* useMountedHost();
+      host.fake.script({ reply: "<Output>Earlier work finished.</Output>\n<REPL.Bindings />" });
+      host.fake.script({ reply });
+      const execution = yield* scoped(function* () {
+        const page = yield* useReplPage({ host });
+        yield* sendMessage(page, "Read the current bindings.");
+        yield* page.until("the automatic reply approval", (one) => one.shows("Reply withheld"));
+        const before = yield* settledReading(page.repl);
+        expect(before.chat.some((one) => one.kind === "feedback" && one.turn === 2)).toBe(true);
+        expect(
+          before.chat.some((one) => one.kind === "control" && one.component === "Elicit"),
+        ).toBe(false);
+        expect((yield* journalBytes(page, host)).includes(value)).toBe(false);
+        if (choice === "[close]") {
+          yield* verifyColdCut(page, (read) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            expect(read.value.turns.find((one) => one.turn === 2)?.withheld).toBe(true);
+            expect(read.value.delivered).toEqual([{ conversation: read.value.active, turn: 2 }]);
+          });
+        }
+        yield* page.press(choice, choice === "[stop]" ? { onRow: "[close]" } : undefined);
+        yield* page.until(
+          "the withheld continuation joined",
+          (one) => !one.shows("Reply withheld") && sidekickIdle(one),
+        );
+        expect(yield* rootRecords(page)).not.toContain(`${AGENT_PROMPT_REPLY} turn:2`);
+        expect(host.fake.prompts).toHaveLength(2);
+        return before.execution;
+      });
+      yield* scoped(function* () {
+        const reopened = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
+        const read = projectSidekick((yield* settledReading(reopened.repl)).chat);
+        expect(read.ok && read.value.turns.find((one) => one.turn === 2)?.withheld).toBe(true);
+        expect(reopened.screen().shows("[accept reply]")).toBe(false);
+        expect(host.fake.prompts).toHaveLength(2);
+      });
+    });
+  }
+
+  it("rejects a stale mounted target and action, and an attached attempt to accept the next reply", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const home = yield* publishingHome("xmd-reply-stale-");
+    const path = join(home, "attachment.json");
+    const host = yield* useMountedHost();
+    host.fake.script({ reply: "<Output>Ready for attachment.</Output>" });
+    const page = yield* useReplPage({ host, sidekickAcp: path });
+    const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+    const size = { columns: 160, rows: 36 };
+    const presenter = yield* usePresenter(size);
+    function* drawApproval(turn: number) {
+      const { execution, model, chat } = yield* settledReading(page.repl);
+      const record = projectSidekick(chat);
+      if (!record.ok) {
+        throw record.error;
+      }
+      const conversation = record.value.active;
+      if (conversation === undefined) {
+        throw new Error("Expected a live conversation.");
+      }
+      const live: ReplLive = {
+        output: "",
+        question: undefined,
+        expansion: "playing",
+        pausable: false,
+        running: false,
+        agent: NO_AGENT,
+        lifecycle: NO_LIFECYCLE,
+        sidekick: {
+          chat: [],
+          busy: true,
+          agent: MOUNTED_AGENT,
+          turns: [],
+          reading: conversation,
+          current: true,
+          availability: { chats: [conversation], sessions: [], refusal: undefined },
+          refusal: undefined,
+          question: undefined,
+          conversation,
+          requested: undefined,
+          verified: undefined,
+          approval: {
+            key: `fixture-reply:${turn}`,
+            turn,
+            findingCount: 1,
+            accepting: false,
+            revealed: undefined,
+            finding: () => ["rule at line 1", "••••••••"],
+          },
+        },
+      };
+      const state = initialState(execution);
+      const view = viewFor(state, model, live, size);
+      if (!view.ok) {
+        throw view.error;
+      }
+      const frame = yield* presenter.commit(view.value);
+      const bounds = frame.boundsOf("drawer:reply-approval:accept");
+      const pointer =
+        bounds === undefined
+          ? undefined
+          : resolvePointer(frame.committed.rendered, {
+              column: bounds.x,
+              row: bounds.y,
+            });
+      if (pointer === undefined) {
+        throw new Error("Expected the mounted Accept target.");
+      }
+      return { state, model, live, view: view.value, pointer };
+    }
+
+    host.fake.script({ reply });
+    yield* sendMessage(page, "Review the first reply.");
+    yield* page.until("the first approval", (one) => one.shows("[accept reply]"));
+    const first = yield* drawApproval(2);
+    const original = yield* presenter.tree.dispatch(first.pointer);
+    if (!original.ok || original.value.outcome !== "action") {
+      throw new Error("Expected Accept to produce an action in its own frame.");
+    }
+    yield* page.press("[withhold reply]");
+    yield* page.until("the first reply withholding joined", sidekickIdle);
+
+    host.fake.script({ reply });
+    yield* sendMessage(page, "Review the second reply.");
+    yield* page.until("the second approval", (one) => one.shows("[accept reply]"));
+    const before = yield* journalBytes(page, host);
+    const second = yield* drawApproval(3);
+    expect(yield* presenter.tree.dispatch(first.pointer)).toMatchObject({
+      ok: true,
+      value: { outcome: "dropped" },
+    });
+    const reduce = (action: typeof original.value.action) =>
+      reduceRepl(
+        second.state,
+        action,
+        second.model,
+        second.live,
+        undefined,
+        presentedDrawer(second.view),
+      );
+    expect(reduce(original.value.action).intent).toEqual({ kind: "none" });
+    const fresh = yield* presenter.tree.dispatch(second.pointer);
+    if (!fresh.ok || fresh.value.outcome !== "action") {
+      throw new Error("Expected Accept to produce an action in the replacement frame.");
+    }
+    expect(reduce(fresh.value.action).intent).toMatchObject({
+      kind: "decide-sidekick-reply",
+      approval: "fixture-reply:3",
+      decision: "accept",
+    });
+    yield* scoped(function* () {
+      const { wire } = yield* (yield* SidekickTransport.expect()).connect(path);
+      yield* wire.send({ id: 0, request: { method: "hello", descriptor } });
+      yield* wire.receive();
+      yield* wire.send({
+        id: 1,
+        request: { method: "approve-reply", key: "sidekick-approval:2", decision: "accept" },
+      });
+      yield* refused(wire.receive());
+    });
+    expect(page.screen().shows("[accept reply]")).toBe(true);
+    expect(yield* journalBytes(page, host)).toBe(before);
+    expect(host.fake.prompts).toHaveLength(3);
+    yield* page.press("[accept reply]");
+    yield* page.until("the fresh local action accepted the reply", (one) =>
+      one.shows("[answer sidekick]"),
+    );
+    expect(yield* rootRecords(page)).toContain(`${AGENT_PROMPT_REPLY} turn:3`);
+    expect(yield* rootRecords(page)).not.toContain(`${AGENT_PROMPT_REPLY} turn:2`);
+    yield* page.press("[stop]");
+    yield* page.until("the accepted reply's question joined Stop", sidekickIdle);
+  });
+
+  it("acknowledges one interleaved child Elicit without settling its sibling", function* () {
+    const gate = appendGate();
+    const host = yield* useMountedHost({ gate });
+    const schema = {
+      type: "object",
+      properties: { choice: { type: "string", enum: ["confirmed", "declined"] } },
+      required: ["choice"],
+      additionalProperties: false,
+    };
+    host.fake.script({
+      reply:
+        "<All>\n" +
+        ["First child", "Second child"]
+          .map(
+            (message) =>
+              `<Spawn>\n<Elicit schema={${JSON.stringify(schema)}} as="answer">${message}</Elicit>\n</Spawn>`,
+          )
+          .join("\n") +
+        "\n</All>",
+    });
+    const page = yield* useReplPage({ host });
+    yield* sendMessage(page, "Ask both children.");
+    yield* page.until("a child question", (one) => one.shows("[answer sidekick]"));
+    const intents = function* () {
+      return (yield* settledReading(page.repl)).chat.flatMap((one) =>
+        one.kind === "control" && one.elicit !== undefined
+          ? [{ order: one.order, ...one.elicit }]
+          : [],
+      );
+    };
+    yield* awaitedFact("both child intents are acknowledged", function* () {
+      return (yield* intents()).length === 2;
+    });
+    const children = yield* intents();
+    expect(new Set(children.map((one) => one.coroutineId)).size).toBe(2);
+    expect(children.map((one) => one.index)).toEqual([0, 0]);
+    yield* openQuestion(page);
+    const answering = gate.holdNext((_path, record) =>
+      record.includes("executablemd.elicitation-schema"),
+    );
+    yield* ensure(() => answering.release());
+    yield* chooseOption(page, "confirmed");
+    yield* submitForm(page);
+    yield* answering.started();
+    const before = projectSidekick((yield* settledReading(page.repl)).chat);
+    expect(before.ok && before.value.unfinished.map((one) => one.order)).toEqual(
+      children.map((one) => one.order),
+    );
+    answering.release();
+    yield* awaitedFact("only the answered child's canonical event is public", function* () {
+      return (yield* canonical(page)).some((one) => one.description.type === "elicit");
+    });
+    const events = (yield* canonical(page)).filter((one) => one.description.type === "elicit");
+    expect(events).toHaveLength(1);
+    const answered = children.find((one) => one.coroutineId === events[0].coroutineId);
+    if (answered === undefined) {
+      throw new Error("The canonical answer did not belong to either child.");
+    }
+    const sibling = children.find((one) => one !== answered);
+    const verify = (read: ReturnType<typeof projectSidekick>) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      expect(read.value.operations.find((one) => one.order === answered.order)?.status).toBe("ok");
+      expect(read.value.unfinished.map((one) => one.order)).toEqual([sibling?.order]);
+    };
+    const live = yield* settledReading(page.repl);
+    verify(projectSidekick(live.chat));
+    expect(live.chat.some((one) => one.kind === "control-outcome")).toBe(false);
+    yield* verifyColdCut(page, verify);
+    yield* page.press("[stop]");
+    yield* page.until("both child lifetimes joined Stop", sidekickIdle);
+    expect(host.fake.prompts).toHaveLength(1);
+  });
+
+  it("refuses independently entered bytes before either journal retains the answer", function* () {
+    const host = yield* useMountedHost({});
+    const freeText = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    host.fake.script({
+      reply:
+        `<Elicit schema={${JSON.stringify(freeText)}} as="answer">Enter a value.</Elicit>\n\n` +
+        `<Output>Example ${secret}</Output>\n`,
+    });
+    const mounted: { page?: ReplPage } = {};
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        const page = yield* useReplPage({ host });
+        mounted.page = page;
+        yield* sendMessage(page, "Ask me for a separate value.");
+        yield* page.until("the approval", (one) => one.shows("[accept reply]"));
+        yield* page.press("[accept reply]");
+        yield* page.until("the free-text question", (one) => one.shows("[answer sidekick]"));
+        yield* openQuestion(page);
+        yield* page.type(secret);
+        yield* page.until("the field containing the synthetic answer", (one) => one.shows(secret));
+        yield* submitForm(page);
+        yield* page.until("all Send work joined", sidekickIdle);
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure instanceof Error && failure.name).toBe("SecretDetectedError");
+    const page = mounted.page;
+    if (page === undefined) {
+      throw new Error("The fixture did not mount.");
+    }
+
+    const history = yield* settledReading(page.repl);
+    const canonicalAnswer = (yield* canonical(page)).some(
+      (event) => event.description.type === "elicit" && event.result.status === "ok",
+    );
+    expect(canonicalAnswer).toBe(false);
+    const independentlyRetained = history.chat.some(
+      (one) => one.kind === "control-outcome" && JSON.stringify(one.observed).includes(secret),
+    );
+    expect(independentlyRetained).toBe(false);
+    expect(host.fake.prompts).toHaveLength(1);
   });
 });

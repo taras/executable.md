@@ -97,6 +97,7 @@ describe("protected provider observations before validation", () => {
         let failed = false;
         try {
           yield* asking.answering(
+            "protected-provider-test",
             {
               *began() {
                 return 0;
@@ -105,6 +106,7 @@ describe("protected provider observations before validation", () => {
                 outcomes.push({ outcome, observed });
               },
             },
+            undefined,
             () => elicit({ schema, message: "Enter input." }),
           );
         } catch {

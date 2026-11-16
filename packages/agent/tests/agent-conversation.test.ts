@@ -17,7 +17,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { durablePosition, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
   createContext,
@@ -68,7 +68,14 @@ import type { AgentSessionSetup } from "../src/session-setup.ts";
 import { sessionOf } from "../src/session-use.ts";
 import { useAgentPromptPublisher } from "../src/publication.ts";
 import { secretPolicy, useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
+import { createScannerWith } from "../../core/src/secrets/scanner.ts";
 import type { SecretScanner } from "../../core/src/secrets/scanner.ts";
+import { Elicitation } from "../../core/src/elicitation-api.ts";
+import { getExpansion } from "../../core/src/expansion.ts";
+import { elicitationEffectName, questionFingerprint } from "../../core/src/elicit-journal.ts";
+import type { ElicitationRequest } from "../../core/src/elicitation-api.ts";
+import { acceptedReplies, AGENT_PROMPT_REPLY, useAgentReplyReview } from "../host.ts";
+import type { AgentReplyDecision, AgentReplyHold } from "../host.ts";
 import type { SecretFinding } from "../../core/src/secrets/findings.ts";
 import type { AgentLaunchCoordinator } from "../src/launch-coordinator.ts";
 import type { ProviderSessionConfiguration } from "../src/provider-configuration.ts";
@@ -1487,6 +1494,905 @@ describe("Tier CW — a completed reply secret detection withholds", () => {
     expect(JSON.stringify(events).includes("native-late")).toBe(false);
     expect(turnNames(events)).toEqual(["turn:1"]);
   });
+
+  /**
+   * The real scanner over a detector that finds the marker wherever it is,
+   * with its range — the only kind of scanner whose findings can be reviewed.
+   */
+  function useRangedScanner(
+    matchEnd = (_content: string, start: number) => start + marker.length,
+    onScan?: () => void,
+  ): Operation<void> {
+    return useSecretScannerFactory(() =>
+      createScannerWith((content) => {
+        onScan?.();
+        const messages: {
+          ruleId: string;
+          messageId: string;
+          range: readonly [number, number];
+          loc: { start: { line: number; column: number } };
+        }[] = [];
+        for (let at = content.indexOf(marker); at >= 0; at = content.indexOf(marker, at + 1)) {
+          messages.push({
+            ruleId: "test-rule",
+            messageId: "TEST_SECRET",
+            range: [at, matchEnd(content, at)],
+            loc: { start: { line: 1, column: at } },
+          });
+        }
+        return Promise.resolve({ messages });
+      }),
+    );
+  }
+
+  /** A local reviewer that decides each hold as `decide` says, and keeps it. */
+  function reviewing(
+    decide: (hold: AgentReplyHold, count: number) => AgentReplyDecision | "return",
+    seen: AgentReplyHold[],
+    settlers: ((decision: AgentReplyDecision) => Operation<void>)[] = [],
+  ): ExecutionInstallation {
+    return {
+      *install(): Operation<void> {
+        yield* useAgentReplyReview({
+          *review(hold, settle) {
+            seen.push(hold);
+            settlers.push(settle);
+            const decision = decide(hold, seen.length);
+            if (decision !== "return") {
+              yield* settle(decision);
+            }
+          },
+        });
+      },
+    };
+  }
+
+  /** The conversation's own root records, by type and name, in history order. */
+  function rootRecords(events: readonly DurableEvent[]): string[] {
+    return events.flatMap((event) =>
+      event.type === "yield" &&
+      (event.description.type === "agent_prompt" ||
+        event.description.type === AGENT_PROMPT_REPLY ||
+        event.description.type === "generated_xmd")
+        ? [`${event.description.type} ${event.description.name}`]
+        : [],
+    );
+  }
+
+  it("CW5: an accepted reply is saved exactly after its withheld turn, answered once and run", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const seen: AgentReplyHold[] = [];
+    const reply = `Lead ${marker}\n\n<Output>\nshown ${marker}\n</Output>\n`;
+    const answered = yield* scoped(function* () {
+      yield* useRangedScanner();
+      return yield* withConversation(
+        stream,
+        stub(traffic, { respond: (content) => (content === "first" ? { deltas: [reply] } : {}) }),
+        function* (chat) {
+          const first = yield* chat.prompt("first");
+          const ran = first.ok
+            ? yield* chat.evaluateGeneratedXmdRoot(generated(first.value), seen[0])
+            : undefined;
+          return { first, ran, second: yield* chat.prompt("second") };
+        },
+        "chat-1",
+        [reviewing(() => "accept", seen)],
+      );
+    });
+    if (!answered.ok) {
+      throw new Error(`the conversation did not open: ${answered.error.message}`);
+    }
+    const { first, ran, second } = answered.value;
+    // The same turn, answered with exactly what the provider completed it
+    // with — not a retry, not a new turn.
+    expect(first.ok && first.value).toBe(reply);
+    expect(traffic.prompts.map((call) => call.content)).toEqual(["first", "second"]);
+    expect(second.ok && second.value).toBe("[second]");
+    expect(seen).toHaveLength(1);
+    const hold = seen[0]!;
+    expect(hold.findings.map((one) => [one.ruleId, one.messageId, one.line, one.column])).toEqual([
+      ["test-rule", "TEST_SECRET", 1, 6],
+      ["test-rule", "TEST_SECRET", 4, 7],
+    ]);
+    for (const finding of hold.findings) {
+      expect(JSON.stringify(finding).includes(marker)).toBe(false);
+    }
+    // The hold is dead once its turn stopped waiting.
+    expect(hold.reveal(0)).toBeUndefined();
+    expect(ran?.ok && ran.value.output).toContain(`shown ${marker}`);
+
+    const events = yield* stream.readAll();
+    expect(rootRecords(events)).toEqual([
+      "agent_prompt turn:1",
+      `${AGENT_PROMPT_REPLY} turn:1`,
+      "generated_xmd generated:reply-1",
+      "agent_prompt turn:2",
+    ]);
+    expect(record(events, "turn:1")).toMatchObject({
+      status: "completed",
+      text: "",
+      withheld: true,
+    });
+    const joined = acceptedReplies(events);
+    expect(joined.ok && joined.value.get("turn:1")?.text).toBe(reply);
+
+    // Reopened: replayed in order, with no provider, no question and no grant.
+    const again = fresh();
+    const reopened: AgentReplyHold[] = [];
+    const continued = yield* scoped(function* () {
+      yield* useRangedScanner();
+      return yield* withConversation(
+        stream,
+        stub(again),
+        function* (chat) {
+          return yield* chat.prompt("third");
+        },
+        "chat-1",
+        [reviewing(() => "accept", reopened)],
+      );
+    });
+    expect(continued.ok && continued.value.ok && continued.value.value).toBe("[third]");
+    expect(again.prompts.map((call) => call.content)).toEqual(["third"]);
+    expect(reopened).toEqual([]);
+    expect(turnNames(yield* stream.readAll())).toEqual(["turn:1", "turn:2", "turn:3"]);
+  });
+
+  for (const [label, decision] of [
+    ["returns without deciding", "return"],
+    ["withholds", "withhold"],
+  ] as const) {
+    it(`CW6: a reviewer that ${label} leaves the withheld completion standing`, function* () {
+      const stream = new InMemoryStream();
+      const traffic = fresh();
+      const seen: AgentReplyHold[] = [];
+      const answered = yield* scoped(function* () {
+        yield* useRangedScanner();
+        return yield* withConversation(
+          stream,
+          stub(traffic, { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
+          function* (chat) {
+            return yield* chat.prompt("first");
+          },
+          "chat-1",
+          [reviewing(() => decision, seen)],
+        );
+      });
+      expect(seen).toHaveLength(1);
+      const first = answered.ok ? answered.value : undefined;
+      expect(first?.ok).toBe(false);
+      expect(first !== undefined && !first.ok && first.error.name).toBe("AgentReplyWithheldError");
+      const events = yield* stream.readAll();
+      expect(JSON.stringify(events).includes(marker)).toBe(false);
+      expect(rootRecords(events)).toEqual(["agent_prompt turn:1"]);
+      expect(traffic.prompts).toHaveLength(1);
+    });
+  }
+
+  it("CW7: a settlement kept from an earlier question decides nothing about a later one", function* () {
+    const stream = new InMemoryStream();
+    const seen: AgentReplyHold[] = [];
+    const settlers: ((decision: AgentReplyDecision) => Operation<void>)[] = [];
+    let revealed: string | undefined;
+    const answered = yield* scoped(function* () {
+      yield* useRangedScanner();
+      return yield* withConversation(
+        stream,
+        stub(fresh(), { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
+        function* (chat) {
+          return [yield* chat.prompt("first"), yield* chat.prompt("second")];
+        },
+        "chat-1",
+        [
+          {
+            *install(): Operation<void> {
+              yield* useAgentReplyReview({
+                *review(hold, settle) {
+                  seen.push(hold);
+                  settlers.push(settle);
+                  // While waiting, the hold reveals its own match locally.
+                  revealed = hold.reveal(0);
+                  if (seen.length === 1) {
+                    yield* settle("withhold");
+                    return;
+                  }
+                  // The first question's terminal, and its dead hold, settle
+                  // nothing for the second.
+                  yield* settlers[0]!("accept");
+                },
+              });
+            },
+          },
+        ],
+      );
+    });
+    expect(revealed).toBe(marker);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!.reveal(0)).toBeUndefined();
+    const [first, second] = answered.ok ? answered.value : [];
+    expect(first?.ok).toBe(false);
+    expect(second?.ok).toBe(false);
+    const events = yield* stream.readAll();
+    expect(JSON.stringify(events).includes(marker)).toBe(false);
+    expect(rootRecords(events)).toEqual(["agent_prompt turn:1", "agent_prompt turn:2"]);
+  });
+
+  it("CW7: cancelling a pending reply joins its review cleanup before returning", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const pending = withResolvers<AgentReplyHold>();
+    const cleanup = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* scoped(function* () {
+      yield* useRangedScanner();
+      const result = yield* withConversation(
+        stream,
+        stub(traffic, { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
+        function* (chat) {
+          yield* ensure(() => release.resolve());
+          const caller = yield* spawn(() => chat.prompt("first"));
+          const hold = yield* pending.operation;
+          let joined = false;
+          const stopping = yield* spawn(function* () {
+            yield* caller.halt();
+            joined = true;
+          });
+          yield* cleanup.operation;
+          expect(joined).toBe(false);
+          expect(rootRecords(yield* stream.readAll())).toEqual(["agent_prompt turn:1"]);
+          release.resolve();
+          yield* stopping;
+          expect(joined).toBe(true);
+          expect(hold.reveal(0)).toBeUndefined();
+        },
+        "chat-1",
+        [
+          {
+            *install() {
+              yield* useAgentReplyReview({
+                *review(hold) {
+                  yield* ensure(function* () {
+                    cleanup.resolve();
+                    yield* release.operation;
+                  });
+                  pending.resolve(hold);
+                  yield* suspend();
+                },
+              });
+            },
+          },
+        ],
+      );
+      expect(result.ok).toBe(true);
+    });
+    expect(traffic.prompts.map((call) => call.content)).toEqual(["first"]);
+    expect(rootRecords(yield* stream.readAll())).toEqual(["agent_prompt turn:1"]);
+  });
+
+  it("CW8: approval covers exactly the accepted reply, once — a repeat asks again and other bytes refuse", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const seen: AgentReplyHold[] = [];
+    const reply = `<Output>\n${marker}\n</Output>\n`;
+    let refused: unknown;
+    let released: unknown;
+    try {
+      yield* scoped(function* () {
+        yield* useRangedScanner();
+        return yield* withConversation(
+          stream,
+          stub(traffic, { respond: () => ({ deltas: [reply] }) }),
+          function* (chat) {
+            const first = yield* chat.prompt("first");
+            expect(first.ok).toBe(true);
+            // Other work in between retires what the acceptance could carry,
+            // and a later reply repeating the value is a new question.
+            yield* chat.options();
+            const second = yield* chat.prompt("second");
+            expect(second.ok).toBe(false);
+            try {
+              yield* chat.evaluateGeneratedXmdRoot(generated(reply));
+            } catch (error) {
+              refused = error;
+            }
+          },
+          "chat-1",
+          [reviewing((_hold, count) => (count === 1 ? "accept" : "withhold"), seen)],
+        );
+      });
+    } catch (error) {
+      released = error;
+    }
+    // The refusal is the run's own secret-policy failure, reported again when
+    // the conversation is released.
+    expect(released).toBe(refused);
+    expect(seen).toHaveLength(2);
+    expect(refused instanceof Error && refused.name).toBe("SecretDetectedError");
+    const events = yield* stream.readAll();
+    expect(rootRecords(events)).toEqual([
+      "agent_prompt turn:1",
+      `${AGENT_PROMPT_REPLY} turn:1`,
+      "agent_prompt turn:2",
+    ]);
+    expect(traffic.prompts.map((call) => call.content)).toEqual(["first", "second"]);
+  });
+
+  /** A question whose choices the reply wrote, offered the way a host selects it. */
+  const CHOICE = {
+    type: "object",
+    properties: {
+      choice: { type: "string", enum: [marker, "none"] },
+      note: { type: "string" },
+    },
+    required: ["choice"],
+    additionalProperties: false,
+  } as const;
+
+  /** Open a conversation that may evaluate roots asking `<Elicit>`. */
+  function withQuestions<T>(
+    stream: InMemoryStream,
+    installation: ExecutionInstallation,
+    reviewer: ExecutionInstallation,
+    answer: (request: ElicitationRequest) => unknown,
+    body: (conversation: AgentConversation) => Operation<T>,
+    select?: () => AgentReplyHold | undefined,
+  ): Operation<Result<T>> {
+    return scoped(function* () {
+      yield* Elicitation.around(
+        {
+          *elicit([request]) {
+            const hold = select?.();
+            if (hold !== undefined) {
+              hold.selectedElicitation({
+                ...(yield* durablePosition()),
+                name: elicitationEffectName((yield* getExpansion()).position),
+                fingerprint: questionFingerprint(request),
+                field: "choice",
+                option: 0,
+              });
+            }
+            return answer(request);
+          },
+        },
+        { at: "min" },
+      );
+      const opened = yield* useAgentConversation({
+        history: stream,
+        id: "chat-1",
+        agent: AGENT,
+        installations: [
+          installation,
+          reviewer,
+          {
+            componentAnswers: [answerProvider("Probe", probe([]).definition)],
+            *install(): Operation<void> {
+              yield* useSelection({ Probe: ["self-closing"], Elicit: ["paired"] });
+            },
+          },
+        ],
+      });
+      if (!opened.ok) {
+        return opened;
+      }
+      return Ok(yield* body(opened.value));
+    });
+  }
+
+  /** The reply these rows accept: a question whose first choice is the marker. */
+  const asking =
+    `Choose.\n\n<Elicit schema={${JSON.stringify(CHOICE)}} as="answer">Pick one</Elicit>\n\n` +
+    `<Output>\n${marker}\n</Output>\n`;
+
+  it("CW9: acknowledges an ordinary Elicit failure with an approved authored choice", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const seen: AgentReplyHold[] = [];
+    const ran = yield* scoped(function* () {
+      yield* useRangedScanner();
+      return yield* withQuestions(
+        stream,
+        stub(traffic, { respond: () => ({ deltas: [asking] }) }),
+        reviewing(() => "accept", seen),
+        () => {
+          throw new Error("Question refused by the test presenter.");
+        },
+        function* (chat) {
+          const first = yield* chat.prompt("first");
+          if (!first.ok) {
+            throw first.error;
+          }
+          return yield* chat.evaluateGeneratedXmdRoot(
+            { id: "reply-1", source: first.value, allow: ["read", "write"] },
+            seen[0],
+          );
+        },
+      );
+    });
+    expect(ran.ok && ran.value.ok).toBe(false);
+    const events = yield* stream.readAll();
+    const failed = events.find(
+      (event) => event.type === "yield" && event.description.type === "elicit",
+    );
+    if (failed?.type !== "yield") {
+      throw new Error("Expected an acknowledged elicitation refusal.");
+    }
+    expect(failed.result.status).toBe("err");
+    expect(JSON.stringify(failed.description)).toContain(marker);
+    expect(JSON.stringify(failed.result)).not.toContain(marker);
+    expect(traffic.prompts).toHaveLength(1);
+  });
+
+  function* feedbackSlice(stream: InMemoryStream, text: string, start = 0) {
+    const events = yield* stream.readAll();
+    const answer = events.findLast(
+      (event) => event.type === "yield" && event.description.type === "elicit",
+    );
+    if (answer === undefined) {
+      throw new Error("Expected an acknowledged elicitation.");
+    }
+    return {
+      coroutineId: answer.coroutineId,
+      index: events
+        .filter((event) => event.type === "yield" && event.coroutineId === answer.coroutineId)
+        .indexOf(answer),
+      start,
+      end: start + text.length,
+    };
+  }
+
+  for (const kind of ["clean", "repeated", "crossing"] as const) {
+    it(`CW9: an accepted choice with a ${kind} TODO suffix`, function* () {
+      const stream = new InMemoryStream();
+      const traffic = fresh();
+      const seen: AgentReplyHold[] = [];
+      const begun: string[] = [];
+      const published: unknown[] = [];
+      const feedback = JSON.stringify({ choice: marker }, null, 2);
+      const suffix =
+        "\n\nCommitted TODO changes (in commit order):\n" + (kind === "repeated" ? marker : "[]");
+      const composed = feedback + suffix;
+      const scanned = JSON.stringify(composed);
+      const join = JSON.stringify(feedback).length - 1;
+      const findings = new Map<number, number>();
+      const answered = yield* scoped(function* () {
+        yield* useRangedScanner((content, start) => {
+          const end =
+            kind === "crossing" && content === scanned ? scanned.length - 1 : start + marker.length;
+          if (content === scanned) {
+            findings.set(start, end);
+          }
+          return end;
+        });
+        yield* useAgentPromptPublisher({
+          *begin(input) {
+            begun.push(input);
+            return input;
+          },
+          *publish(publication) {
+            yield* publication.append();
+            published.push(publication.begun);
+          },
+        });
+        yield* Agent.around(
+          {
+            *prompt([text, options], next) {
+              return yield* next(text === feedback ? text + suffix : text, options);
+            },
+          },
+          { at: "max" },
+        );
+        return yield* withQuestions(
+          stream,
+          stub(traffic, {
+            respond: (content) =>
+              content === "first" || content === "later"
+                ? { deltas: [asking] }
+                : { deltas: ["Feedback received."] },
+          }),
+          reviewing((_hold, count) => (count === 1 ? "accept" : "withhold"), seen),
+          () => ({ choice: marker }),
+          function* (chat) {
+            const first = yield* chat.prompt("first");
+            if (!first.ok) {
+              throw first.error;
+            }
+            const ran = yield* chat.evaluateGeneratedXmdRoot(
+              { id: "reply-1", source: first.value, allow: ["read", "write"] },
+              seen[0],
+            );
+            expect(ran.ok && ran.value.output).toContain(marker);
+            expect(seen[0]!.carry(feedback, [yield* feedbackSlice(stream, feedback)])).toBe(true);
+            const second = yield* chat.prompt(feedback);
+            if (kind === "clean") {
+              expect(second.ok).toBe(true);
+              const later = yield* chat.prompt("later");
+              expect(later.ok).toBe(false);
+              expect(seen).toHaveLength(2);
+              expect(seen[1]).not.toBe(seen[0]);
+            }
+            return second;
+          },
+          () => seen[0],
+        );
+      });
+      if (!answered.ok) {
+        throw answered.error;
+      }
+      const second = answered.value;
+      const events = yield* stream.readAll();
+      const elicited = events.filter(
+        (event) =>
+          event.type === "yield" &&
+          event.description.type === "elicit" &&
+          event.result.status === "ok",
+      );
+      expect(elicited).toHaveLength(1);
+      expect(JSON.stringify(elicited[0])).toContain(marker);
+      const firstMatch = scanned.indexOf(marker);
+      expect(firstMatch).toBeLessThan(join);
+      if (kind === "clean") {
+        expect([...findings]).toEqual([[firstMatch, firstMatch + marker.length]]);
+        if (!second.ok) {
+          throw second.error;
+        }
+        const prompted = prompts(events).find(
+          (event) => event.type === "yield" && event.description.name === "turn:2",
+        );
+        expect(prompted?.type === "yield" && prompted.description.input).toBe(composed);
+      } else {
+        if (kind === "repeated") {
+          const repeated = scanned.lastIndexOf(marker);
+          expect(repeated).toBeGreaterThanOrEqual(join);
+          expect([...findings]).toEqual([
+            [firstMatch, firstMatch + marker.length],
+            [repeated, repeated + marker.length],
+          ]);
+        } else {
+          expect([...findings]).toEqual([[firstMatch, scanned.length - 1]]);
+          expect(scanned.length - 1).toBeGreaterThan(join);
+        }
+        expect(!second.ok && second.error.message).toBe(
+          "Secret detection withheld automatic feedback.",
+        );
+        expect(rootRecords(events)).not.toContain("agent_prompt turn:2");
+      }
+      const expected = kind === "clean" ? ["first", composed, "later"] : ["first"];
+      expect(begun).toEqual(expected);
+      expect(published).toEqual(expected);
+      expect(traffic.prompts.map((call) => call.content)).toEqual(expected);
+      if (kind === "clean") {
+        expect(record(events, "turn:3")).toMatchObject({ status: "completed", withheld: true });
+        const replayTraffic = fresh();
+        const replayQuestions: AgentReplyHold[] = [];
+        let scans = 0;
+        let controls = 0;
+        let refusal: unknown;
+        let release: unknown;
+        try {
+          yield* scoped(function* () {
+            yield* useRangedScanner(undefined, () => {
+              scans += 1;
+            });
+            yield* withQuestions(
+              stream,
+              stub(replayTraffic),
+              reviewing(() => "withhold", replayQuestions),
+              () => {
+                controls += 1;
+                return { choice: "none" };
+              },
+              function* (chat) {
+                expect(scans).toBe(0);
+                expect(replayTraffic).toEqual(fresh());
+                expect(controls).toBe(0);
+                expect(replayQuestions).toEqual([]);
+                expect(yield* stream.readAll()).toEqual(events);
+                try {
+                  yield* chat.evaluateGeneratedXmdRoot(
+                    generated(`<Output>${marker}</Output>`, [], "independent-copy"),
+                  );
+                } catch (error) {
+                  refusal = error;
+                }
+              },
+            );
+          });
+        } catch (error) {
+          release = error;
+        }
+        expect(scans).toBeGreaterThan(0);
+        expect(refusal instanceof Error && refusal.name).toBe("SecretDetectedError");
+        expect(release).toBe(refusal);
+        expect(controls).toBe(0);
+        expect(replayTraffic).toEqual(fresh());
+        expect(rootRecords(yield* stream.readAll())).toEqual(rootRecords(events));
+      }
+    });
+  }
+
+  for (const [label, answer, slice] of [
+    ["the same bytes typed into a free field", { choice: "none", note: marker }, "stated"],
+    ["a slice the host did not state", { choice: marker }, "elsewhere"],
+  ] as const) {
+    it(`CW9: ${label} inherits nothing from the acceptance`, function* () {
+      const stream = new InMemoryStream();
+      const seen: AgentReplyHold[] = [];
+      let failure: unknown;
+      let answered: Result<Result<string>> | undefined;
+      try {
+        answered = yield* scoped(function* () {
+          yield* useRangedScanner();
+          return yield* withQuestions(
+            stream,
+            stub(fresh(), {
+              respond: (content) => (content === "first" ? { deltas: [asking] } : {}),
+            }),
+            reviewing(() => "accept", seen),
+            () => answer,
+            function* (chat) {
+              const first = yield* chat.prompt("first");
+              if (!first.ok) {
+                throw first.error;
+              }
+              yield* chat.evaluateGeneratedXmdRoot(
+                {
+                  id: "reply-1",
+                  source: first.value,
+                  allow: ["read", "write"],
+                },
+                seen[0],
+              );
+              // The value appears twice; the host states only the second.
+              const result = JSON.stringify({ choice: marker }, null, 2);
+              const feedback = `${marker} and ${result}`;
+              seen[0]!.carry(
+                feedback,
+                slice === "elsewhere"
+                  ? [yield* feedbackSlice(stream, result, marker.length + 5)]
+                  : [],
+              );
+              return yield* chat.prompt(feedback);
+            },
+            slice === "elsewhere" ? () => seen[0] : undefined,
+          );
+        });
+      } catch (error) {
+        failure = error;
+      }
+      if (slice === "stated") {
+        // A free field's value is another origin: the evaluation itself is refused.
+        expect(failure instanceof Error && failure.name).toBe("SecretDetectedError");
+      } else {
+        // An occurrence outside the stated slice: that turn's record is refused.
+        expect(failure).toBeUndefined();
+        expect(answered?.ok && answered.value.ok).toBe(false);
+      }
+      const events = yield* stream.readAll();
+      expect(
+        JSON.stringify(
+          events.filter((one) => one.type === "yield" && one.description.name === "turn:2"),
+        ),
+      ).not.toContain(marker);
+    });
+  }
+
+  it("CW10: an acceptance that does not directly follow its own withheld turn is refused on opening", function* () {
+    const withheld = {
+      sequence: 1,
+      agent: AGENT,
+      sessionKey: "k",
+      status: "completed",
+      text: "",
+      withheld: true,
+    };
+    const completed = {
+      sequence: 1,
+      agent: AGENT,
+      sessionKey: "k",
+      status: "completed",
+      text: "kept",
+    };
+    const accepted = {
+      version: 1,
+      text: "kept",
+      approved: [{ ruleId: "r", messageId: "m", start: 0, end: 4 }],
+    };
+    const prompt = (name: string, value: Json): DurableEvent => ({
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "agent_prompt", name, input: "x" },
+      result: { status: "ok", value },
+    });
+    const reply = (name: string, value: Json): DurableEvent => ({
+      type: "yield",
+      coroutineId: "root",
+      description: { type: AGENT_PROMPT_REPLY, name, input: name },
+      result: { status: "ok", value },
+    });
+    expect(acceptedReplies([prompt("turn:1", withheld), reply("turn:1", accepted)]).ok).toBe(true);
+    for (const history of [
+      [reply("turn:1", accepted)],
+      [prompt("turn:1", withheld), reply("turn:1", accepted), reply("turn:1", accepted)],
+      [prompt("turn:1", withheld), prompt("turn:2", completed), reply("turn:1", accepted)],
+      [prompt("turn:1", completed), reply("turn:1", accepted)],
+      [prompt("turn:1", withheld), reply("turn:2", accepted)],
+      [prompt("turn:1", withheld), reply("turn:1", { ...accepted, extra: true })],
+    ]) {
+      expect(acceptedReplies(history).ok).toBe(false);
+    }
+  });
+
+  it("CW11: no question is asked where the reply was never the conversation's withheld completion", function* () {
+    const seen: AgentReplyHold[] = [];
+    // A scanner that fails, and a failed turn's partial text: refused by the
+    // journal's own guard and never offered.
+    for (const [mode, status] of [
+      ["fail", "completed"],
+      ["flag", "failed"],
+    ] as const) {
+      const stream = new InMemoryStream();
+      yield* scoped(function* () {
+        yield* useScanner(mode);
+        return yield* withConversation(
+          stream,
+          stub(fresh(), { respond: () => ({ status, deltas: [`<Output>${marker}</Output>`] }) }),
+          function* (chat) {
+            return yield* chat.prompt("first");
+          },
+          "chat-1",
+          [reviewing(() => "accept", seen)],
+        );
+      });
+      expect(JSON.stringify(yield* stream.readAll()).includes(marker)).toBe(false);
+    }
+    // A substituted scanner that cannot say where it matched: withheld, never offered.
+    const stream = new InMemoryStream();
+    const answered = yield* scoped(function* () {
+      yield* useScanner("flag");
+      return yield* withConversation(
+        stream,
+        stub(fresh(), { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
+        function* (chat) {
+          return yield* chat.prompt("first");
+        },
+        "chat-1",
+        [reviewing(() => "accept", seen)],
+      );
+    });
+    expect(answered.ok && !answered.value.ok && answered.value.error.name).toBe(
+      "AgentReplyWithheldError",
+    );
+    expect(seen).toEqual([]);
+  });
+
+  for (const failedType of ["agent_prompt", AGENT_PROMPT_REPLY]) {
+    it(`CW12: preserves the first storage failure when ${failedType} cannot be appended`, function* () {
+      const backend = new InMemoryStream();
+      const storageFailure = new Error("the storage refused this append");
+      const attempted: string[] = [];
+      backend.onAppend = (event) => {
+        attempted.push(...rootRecords([event]));
+        if (event.type === "yield" && event.description.type === failedType) {
+          throw storageFailure;
+        }
+      };
+      const seen: AgentReplyHold[] = [];
+      const traffic = fresh();
+      let failure: unknown;
+      let caller: Error | undefined;
+      try {
+        yield* scoped(function* () {
+          yield* useRangedScanner();
+          return yield* withConversation(
+            backend,
+            stub(traffic, { respond: () => ({ deltas: [`<Output>${marker}</Output>`] }) }),
+            function* (chat) {
+              const settled = yield* chat.prompt("first");
+              caller = settled.ok ? undefined : settled.error;
+            },
+            "chat-1",
+            [reviewing(() => "accept", seen)],
+          );
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(durabilityFailure(caller)?.cause).toBe(storageFailure);
+      expect(durabilityFailure(failure)?.cause).toBe(storageFailure);
+      const firstFailed = failedType === "agent_prompt";
+      expect(seen).toHaveLength(firstFailed ? 0 : 1);
+      expect(attempted).toEqual(
+        firstFailed
+          ? ["agent_prompt turn:1"]
+          : ["agent_prompt turn:1", `${AGENT_PROMPT_REPLY} turn:1`],
+      );
+      const events = yield* backend.readAll();
+      expect(JSON.stringify(events).includes(marker)).toBe(false);
+      expect(rootRecords(events)).toEqual(firstFailed ? [] : ["agent_prompt turn:1"]);
+      if (!firstFailed) {
+        expect(record(events, "turn:1")).toMatchObject({ withheld: true });
+      }
+      expect(traffic.prompts).toHaveLength(1);
+    });
+  }
+
+  for (const [description, partial, crossing] of [
+    ["an independently produced match in completed", false, false],
+    ["an independently produced match in partial", true, false],
+    ["a match crossing the approved literal into independent", false, true],
+  ] as const) {
+    it(`CW13: refuses ${description} selected Output`, function* () {
+      const stream = new InMemoryStream();
+      const seen: AgentReplyHold[] = [];
+      const traffic = fresh();
+      const tail = "independent";
+      const source = crossing
+        ? `<Output>${marker}<External /></Output>`
+        : `Context ${marker}.\n\n<Output><External /></Output>\n${partial ? "<Boom />" : ""}`;
+      let scannedCrossing = false;
+      const external = pinnedComponent(
+        "External",
+        definitionOf("External", "read", ["self-closing"], function* (): Operation<Json> {
+          return crossing ? tail : marker;
+        }),
+        "component-answer",
+      );
+      const attempts: string[] = [];
+      let release: unknown;
+      try {
+        yield* scoped(function* () {
+          yield* useRangedScanner((content, start) => {
+            const end = start + marker.length;
+            if (crossing && content.startsWith("<External", end)) {
+              return end + 1;
+            }
+            if (crossing && content.startsWith(tail, end)) {
+              scannedCrossing = true;
+              return end + 1;
+            }
+            return end;
+          });
+          yield* withConversation(
+            stream,
+            stub(traffic, { respond: () => ({ deltas: [source] }) }),
+            function* (chat) {
+              const prompt = yield* chat.prompt("first");
+              if (!prompt.ok) {
+                throw prompt.error;
+              }
+              try {
+                yield* chat.evaluateGeneratedXmdRoot(generated(prompt.value), seen[0]);
+              } catch (error) {
+                attempts.push(error instanceof Error ? error.name : "");
+              }
+            },
+            "chat-1",
+            [reviewing(() => "accept", seen)],
+            AGENT,
+            [external, boom()],
+          );
+        });
+      } catch (error) {
+        release = error;
+      }
+      expect(attempts).toEqual(["SecretDetectedError"]);
+      expect(release instanceof Error && release.name).toBe("SecretDetectedError");
+      expect(traffic.prompts).toHaveLength(1);
+      if (crossing) {
+        expect(scannedCrossing).toBe(true);
+        expect(release instanceof Error && release.message.includes(marker)).toBe(false);
+        const events = yield* stream.readAll();
+        expect(rootRecords(events)).toEqual([
+          "agent_prompt turn:1",
+          `${AGENT_PROMPT_REPLY} turn:1`,
+          "generated_xmd generated:reply-1",
+        ]);
+        expect(record(events, "turn:1")).toMatchObject({ withheld: true, text: "" });
+        const saved = acceptedReplies(events);
+        expect(saved.ok && saved.value.get("turn:1")?.text).toBe(source);
+      }
+    });
+  }
 });
 
 describe("Tier CV — a conversation is an execution the host keeps open", () => {

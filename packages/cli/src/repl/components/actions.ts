@@ -202,6 +202,19 @@ export type ReplAction =
   | { readonly kind: "open-sidekick-question"; readonly question: string }
   /** Hide the Sidekick's question form, leaving the question pending. */
   | { readonly kind: "close-sidekick-question" }
+  /**
+   * Act on the withheld reply this key names: show or hide its matched text
+   * on this screen, or decide it.
+   *
+   * The key is the one question this was drawn for. A reveal changes only what
+   * this screen draws; only `withhold` and `accept` decide anything.
+   */
+  | {
+      readonly kind: "review-sidekick-reply";
+      readonly approval: string;
+      readonly decision: "reveal" | "withhold" | "accept";
+      readonly finding?: number;
+    }
   /** Give one field of the Sidekick's own form the focus text acts on. */
   | {
       readonly kind: "select-sidekick-field";

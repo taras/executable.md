@@ -85,7 +85,7 @@ import { retainablePromptUsage } from "./usage.ts";
 import type { PromptRecord, RetainPromptInput } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
-import { HostObservationFailure } from "./publication.ts";
+import { HeldPromptInputRefusal, HostObservationFailure } from "./publication.ts";
 import type {
   AgentPromptAssociation,
   AgentPromptHandle,
@@ -443,6 +443,7 @@ export interface DirectPromptTurn {
    * actually delegated.
    */
   readonly retain: RetainPromptInput;
+  readonly checkInput?: (text: string) => Operation<void>;
 }
 
 /** What a held turn's own terminal refuses a rerouted call with. */
@@ -673,6 +674,19 @@ function* installHeldPromptTerminal(
             // The text this turn actually delegates, fixed in the journal's
             // own pending description and then announced to the host under
             // exactly that text, both before the provider is reached.
+            if (direct.checkInput !== undefined) {
+              try {
+                yield* direct.checkInput(content);
+              } catch (error) {
+                checked.failure = new HeldPromptInputRefusal(
+                  "Secret detection withheld automatic feedback.",
+                  {
+                    cause: error,
+                  },
+                );
+                throw checked.failure;
+              }
+            }
             direct.retain(content);
             const publisher = yield* AgentInternal.operations.promptPublisher;
             if (publisher?.begin !== undefined) {
@@ -1000,7 +1014,7 @@ export function* runPrompt(
             cause: initiating,
           });
     }
-    if (error instanceof HostObservationFailure) {
+    if (error instanceof HostObservationFailure || error instanceof HeldPromptInputRefusal) {
       // Not this turn's failure to describe. The provider's own cleanup has
       // already run — the scope above owns it — and this travels on to the
       // durability failure a host that cannot be trusted with its turn gets,
@@ -1011,6 +1025,9 @@ export function* runPrompt(
     consumed.failure = serializePromptFailure(error);
   }
 
+  if (held?.failure instanceof HeldPromptInputRefusal) {
+    throw held.failure;
+  }
   const status = consumed.status ?? "failed";
   let failure = consumed.failure;
   if (status !== "completed" && failure === undefined) {

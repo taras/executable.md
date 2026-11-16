@@ -180,7 +180,13 @@ export { props as elicitProps, returns as elicitReturns } from "./src/components
  * the description is journal data, and a schema that merely looked plausible
  * would reach a form as one.
  */
-export { ELICITATION_SCHEMA_FIELD, readElicitationSchema } from "./src/elicit-journal.ts";
+export {
+  ELICITATION_SCHEMA_FIELD,
+  elicitationEffectName,
+  questionFingerprint,
+  readElicitationAnswer,
+  readElicitationSchema,
+} from "./src/elicit-journal.ts";
 export { clearsLiveOutput, retainsOptionalText } from "./src/secrets/policy.ts";
 
 /**
@@ -199,6 +205,39 @@ export {
   hasInvocationTeardown,
 } from "./src/errors.ts";
 export { readSourceOwnerDescription } from "./src/source-owner.ts";
+
+/**
+ * The closed exception secret detection makes for one accepted reply — see
+ * `src/secrets/reply-grant.ts`.
+ *
+ * A host that withheld a completed reply and then had a person accept it
+ * reads where the execution's own scanner found each match, and adds one
+ * allowance per event that may carry the exact accepted bytes: the acceptance
+ * record, one evaluation of exactly that source, and the one turn that carries
+ * its selected answer back. The gate still scans every event; an allowance
+ * only accounts for findings at the positions it names, with the same rule
+ * and bytes. The scanner and the gate that enforce it stay core's own.
+ */
+export {
+  acceptanceGrant,
+  approvedMatches,
+  carriedCopies,
+  evaluationGrant,
+  feedbackGrant,
+} from "./src/secrets/reply-grant.ts";
+export type {
+  ApprovedMatch,
+  ElicitChoiceSelection,
+  FeedbackSlice,
+  ReplyCopyGrant,
+} from "./src/secrets/reply-grant.ts";
+export {
+  captureReplyTextCheck,
+  grantReplyCopies,
+  locateReplySecrets,
+} from "./src/secrets/policy.ts";
+export type { ReplyTextCheck } from "./src/secrets/policy.ts";
+export type { SecretSpan } from "./src/secrets/scanner.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 
@@ -310,7 +349,7 @@ export { GeneratedXmdError } from "./src/generated-xmd.ts";
  * selection its execution already captured, so a caller has nothing to say
  * about those. `GeneratedEffectClass` is here because that request names it.
  */
-export { GeneratedXmdRootError } from "./src/generated-xmd.ts";
+export { GeneratedXmdRootError, readGeneratedRootAdmission } from "./src/generated-xmd.ts";
 export type {
   GeneratedEffectClass,
   GeneratedXmdRequest,
@@ -318,6 +357,20 @@ export type {
 } from "./src/generated-xmd.ts";
 export type { HostExecution } from "./src/execute.ts";
 export { HostExecutionError } from "./src/generated-root-owner.ts";
+
+/**
+ * The same execution, with its bound root evaluator handed to the host that
+ * started it.
+ *
+ * That evaluator also takes an `AcceptedRootReply`: the approved matches of a
+ * reply a person accepted and the allowance for one evaluation of exactly that
+ * source. Only the host holding the execution can pass one, because the
+ * evaluator reaches it through this call and is never on the handle a
+ * document or another caller can see.
+ */
+export { executeInstalledBound } from "./src/execute.ts";
+export type { BoundRootEvaluator } from "./src/generated-root-owner.ts";
+export type { AcceptedRootReply } from "./src/generated-xmd.ts";
 
 /**
  * What an arriving generated root already says — see

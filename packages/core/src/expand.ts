@@ -348,6 +348,7 @@ export interface OutputFrame {
   readonly active: boolean;
   readonly private: boolean;
   readonly marks: WeakMap<Segment, readonly string[]>;
+  readonly replyLiteralOffsets?: WeakMap<Segment, number>;
   readonly stringSelection?: Set<string>;
 }
 
@@ -389,6 +390,7 @@ function bodyOutput(segments: Segment[], path: string, inherited?: OutputFrame):
     active: false,
     private: false,
     marks: inherited?.marks ?? new WeakMap(),
+    replyLiteralOffsets: inherited?.replyLiteralOffsets,
   };
 }
 
@@ -1236,7 +1238,8 @@ function* expandListSegments(
             ? textEvalEnv.values.props
             : parentProps;
         const textInputs = yield* inputValues();
-        const final = splitTextFences(segment, healed)
+        const chunks = splitTextFences(segment, healed);
+        const final = chunks
           .map(({ content, passive }) => {
             if (passive) {
               return content;
@@ -1249,10 +1252,21 @@ function* expandListSegments(
             return bound.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{");
           })
           .join("");
-        result.push({
+        const rendered: Segment = {
           type: "text",
           content: final,
-        });
+        };
+        const literals = outputFrame?.replyLiteralOffsets;
+        const literal = literals?.get(segment);
+        if (
+          literal !== undefined &&
+          healed === segment.content &&
+          final === healed &&
+          chunks.every(({ content, passive }) => passive || !/[{\uE000]/.test(content))
+        ) {
+          literals?.set(rendered, literal);
+        }
+        result.push(rendered);
         break;
       }
 
