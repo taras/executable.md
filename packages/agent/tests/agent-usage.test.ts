@@ -8,6 +8,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { fileJournalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -261,6 +262,12 @@ function always(plan: TurnPlan): () => TurnPlan {
   return () => ({ ...plan });
 }
 
+const journalCase = fileJournalCases(
+  "packages/agent/tests/agent-usage.test.ts",
+  "xmd-pu-test-",
+  "doc.md",
+);
+
 function* runDocument(
   doc: string,
   stream: InMemoryStream,
@@ -270,8 +277,8 @@ function* runDocument(
     direct?: boolean;
     scanner?: () => SecretScanner;
   } = {},
+  dir = path.join(os.tmpdir(), `xmd-pu-test-${randomUUID()}`),
 ): Operation<{ result: Result<Json>; events: DurableEvent[] }> {
-  const dir = path.join(os.tmpdir(), `xmd-pu-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -435,52 +442,60 @@ describe("Tier PU — subscription-local receiver", () => {
     expect(trace.acquisitions).toBe(2);
   });
 
-  it("PU-B3: a direct Agent.prompt() gets an ephemeral receiver and lends nothing to the next Prompt", function* () {
-    const trace = newTrace();
-    const receivers: (PromptUsageReporter | undefined)[] = [];
-    const plans: TurnPlan[] = [
-      {
-        usage: () => versioned("direct"),
-        captured: (report) => receivers.push(report),
-      },
-      { captured: (report) => receivers.push(report) },
-      {
-        usage: () => versioned("canonical"),
-        captured: (report) => receivers.push(report),
-      },
-    ];
-    const { result, events } = yield* runDocument(
-      "<Direct />\n\n<Prompt>silent</Prompt>\n\n<Prompt>measured</Prompt>\n",
-      new InMemoryStream(),
-      stubFactory(trace, () => plans.shift() ?? {}),
-      { direct: true },
-    );
-    expect(result.ok).toBe(true);
-    expect(receivers.length).toBe(3);
-    expect(receivers[0]).not.toBe(undefined);
-    // The direct call's turn reported, and no record exists for it; the
-    // adjacent Prompt that reported nothing retains nothing; the one that did
-    // retains its own.
-    const records = promptValues(events);
-    expect(records.length).toBe(2);
-    expect(Object.hasOwn(records[0], "usage")).toBe(false);
-    expect(parsePromptRecord(records[1])?.usage?.provenance.xmd.version).toBe("canonical");
-  });
+  journalCase(
+    "PU-B3: a direct Agent.prompt() gets an ephemeral receiver and lends nothing to the next Prompt",
+    function* (stream, directory) {
+      const trace = newTrace();
+      const receivers: (PromptUsageReporter | undefined)[] = [];
+      const plans: TurnPlan[] = [
+        {
+          usage: () => versioned("direct"),
+          captured: (report) => receivers.push(report),
+        },
+        { captured: (report) => receivers.push(report) },
+        {
+          usage: () => versioned("canonical"),
+          captured: (report) => receivers.push(report),
+        },
+      ];
+      const { result, events } = yield* runDocument(
+        "<Direct />\n\n<Prompt>silent</Prompt>\n\n<Prompt>measured</Prompt>\n",
+        stream,
+        stubFactory(trace, () => plans.shift() ?? {}),
+        { direct: true },
+        directory,
+      );
+      expect(result.ok).toBe(true);
+      expect(receivers.length).toBe(3);
+      expect(receivers[0]).not.toBe(undefined);
+      // The direct call's turn reported, and no record exists for it; the
+      // adjacent Prompt that reported nothing retains nothing; the one that did
+      // retains its own.
+      const records = promptValues(events);
+      expect(records.length).toBe(2);
+      expect(Object.hasOwn(records[0], "usage")).toBe(false);
+      expect(parsePromptRecord(records[1])?.usage?.provenance.xmd.version).toBe("canonical");
+    },
+  );
 
-  it("PU-B4: a registered provider's delivered coordinator keeps the optional receiver", function* () {
-    const trace = newTrace();
-    const { result, events } = yield* runDocument(
-      '<AgentProvider name="usage-stub">\n\n<Prompt>one</Prompt>\n\n</AgentProvider>\n',
-      new InMemoryStream(),
-      stubFactory(trace, always({ usage: () => versioned("registered") })),
-      { register: true },
-    );
-    expect(result.ok).toBe(true);
-    expect(trace.acquisitions).toBe(1);
-    expect(parsePromptRecord(promptValues(events)[0])?.usage?.provenance.xmd.version).toBe(
-      "registered",
-    );
-  });
+  journalCase(
+    "PU-B4: a registered provider's delivered coordinator keeps the optional receiver",
+    function* (stream, directory) {
+      const trace = newTrace();
+      const { result, events } = yield* runDocument(
+        '<AgentProvider name="usage-stub">\n\n<Prompt>one</Prompt>\n\n</AgentProvider>\n',
+        stream,
+        stubFactory(trace, always({ usage: () => versioned("registered") })),
+        { register: true },
+        directory,
+      );
+      expect(result.ok).toBe(true);
+      expect(trace.acquisitions).toBe(1);
+      expect(parsePromptRecord(promptValues(events)[0])?.usage?.provenance.xmd.version).toBe(
+        "registered",
+      );
+    },
+  );
 });
 
 describe("Tier PU — canonical retention and replay", () => {
@@ -511,26 +526,31 @@ describe("Tier PU — canonical retention and replay", () => {
     expect(restored?.map((record) => record.usage)).toEqual([sampleUsage("one")]);
   });
 
-  it("PU-P2: an acknowledged failed turn keeps what it reported, and no checkpoint", function* () {
-    const failing = sampleUsage("failed");
-    const partial: PromptUsage = {
-      ...failing,
-      coverage: {
-        finalReport: "unavailable",
-        outerPrompt: "unknown",
-        limitations: ["final-report-unavailable"],
-      },
-    };
-    const { events } = yield* runDocument(
-      "<Prompt>fails</Prompt>\n",
-      new InMemoryStream(),
-      stubFactory(newTrace(), always({ status: "failed", usage: () => partial })),
-    );
-    const record = parsePromptRecord(promptValues(events)[0]);
-    expect(record?.status).toBe("failed");
-    expect(record?.usage).toEqual(partial);
-    expect(record?.checkpoint).toBe(undefined);
-  });
+  journalCase(
+    "PU-P2: an acknowledged failed turn keeps what it reported, and no checkpoint",
+    function* (stream, directory) {
+      const failing = sampleUsage("failed");
+      const partial: PromptUsage = {
+        ...failing,
+        coverage: {
+          finalReport: "unavailable",
+          outerPrompt: "unknown",
+          limitations: ["final-report-unavailable"],
+        },
+      };
+      const { events } = yield* runDocument(
+        "<Prompt>fails</Prompt>\n",
+        stream,
+        stubFactory(newTrace(), always({ status: "failed", usage: () => partial })),
+        {},
+        directory,
+      );
+      const record = parsePromptRecord(promptValues(events)[0]);
+      expect(record?.status).toBe("failed");
+      expect(record?.usage).toEqual(partial);
+      expect(record?.checkpoint).toBe(undefined);
+    },
+  );
 
   it("PU-P3: a held conversation's turn retains usage through the same runner", function* () {
     const stream = new InMemoryStream();

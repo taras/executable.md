@@ -8,14 +8,13 @@
  * teardown — never a manual teardown call or a Promise.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
+import { fileJournalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped } from "effection";
 import type { Operation, Result, Stream } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import * as os from "node:os";
 import { execute } from "../../core/src/execute.ts";
 import { Agent } from "../src/agent-api.ts";
 import { sessionOf } from "../src/session-use.ts";
@@ -130,15 +129,24 @@ function stubStream(
   };
 }
 
-function* runDoc(doc: string): Operation<{ output: string; result: Result<Json> }> {
-  const dir = path.join(os.tmpdir(), `xmd-rp-test-${randomUUID()}`);
+const journalCase = fileJournalCases(
+  "packages/agent/tests/root-provider.test.ts",
+  "xmd-rp-test-",
+  "doc.md",
+);
+
+function* runDoc(
+  doc: string,
+  stream: InMemoryStream,
+  dir: string,
+): Operation<{ output: string; result: Result<Json> }> {
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
-    const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+    const execution = yield* execute({ path: docPath, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -152,81 +160,95 @@ function* runDoc(doc: string): Operation<{ output: string; result: Result<Json> 
 const OPTIONS: AgentProviderOptions = { defaultAgent: "a", permissionMode: "deny-all" };
 
 describe("Tier RP — root-provider lifecycle", () => {
-  it("RP1: provider is active during execution; its finalizer runs once, before completion settles", function* () {
-    const { factory, state } = createProvider();
-    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
-    const { output, result } = yield* runDoc('<Prompt text="hi" />\n');
-    expect(result.ok).toBe(true);
-    expect(output).toContain("[hi]");
-    expect(state.activeDuringPrompt).toBe(true);
-    expect(state.finalizeCount).toBe(1);
-    // Completion only settled after cleanup ran.
-    expect(state.cleanupDone).toBe(true);
-  });
+  journalCase(
+    "RP1: provider is active during execution; its finalizer runs once, before completion settles",
+    function* (stream, directory) {
+      const { factory, state } = createProvider();
+      yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+      const { output, result } = yield* runDoc('<Prompt text="hi" />\n', stream, directory);
+      expect(result.ok).toBe(true);
+      expect(output).toContain("[hi]");
+      expect(state.activeDuringPrompt).toBe(true);
+      expect(state.finalizeCount).toBe(1);
+      // Completion only settled after cleanup ran.
+      expect(state.cleanupDone).toBe(true);
+    },
+  );
 
-  it("RP2: a teardown failure still closes rendered output but makes completion an Err", function* () {
-    const boom = new Error("teardown boom");
-    const { factory } = createProvider({ teardownError: boom });
-    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
-    const { output, result } = yield* runDoc('<Prompt text="hi" />\n');
-    expect(output).toContain("[hi]");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBe(boom);
-    }
-  });
+  journalCase(
+    "RP2: a teardown failure still closes rendered output but makes completion an Err",
+    function* (stream, directory) {
+      const boom = new Error("teardown boom");
+      const { factory } = createProvider({ teardownError: boom });
+      yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+      const { output, result } = yield* runDoc('<Prompt text="hi" />\n', stream, directory);
+      expect(output).toContain("[hi]");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBe(boom);
+      }
+    },
+  );
 
   // RP5: first-failure precedence, where it is easiest to get wrong. The
   // document fails on its own terms and cleanup fails too. Both happened; what
   // the caller receives is the failure the document earned, because a completion
   // policy adds and never replaces.
-  it("RP5: a failed document keeps its own failure even when cleanup also fails", function* () {
-    const boom = new Error("teardown boom");
-    const { factory, state } = createProvider({ teardownError: boom, extraFinalizer: true });
-    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+  journalCase(
+    "RP5: a failed document keeps its own failure even when cleanup also fails",
+    function* (stream, directory) {
+      const boom = new Error("teardown boom");
+      const { factory, state } = createProvider({ teardownError: boom, extraFinalizer: true });
+      yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
 
-    // The document fails on its own terms — a failing command inside <Output>,
-    // where an error fails the execution rather than printing — with no prompt
-    // having failed.
-    const { result } = yield* runDoc(
-      ["<Output>", "", "```bash exec", "exit 3", "```", "", "</Output>", ""].join("\n"),
-    );
+      // The document fails on its own terms — a failing command inside <Output>,
+      // where an error fails the execution rather than printing — with no prompt
+      // having failed.
+      const { result } = yield* runDoc(
+        ["<Output>", "", "```bash exec", "exit 3", "```", "", "</Output>", ""].join("\n"),
+        stream,
+        directory,
+      );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).not.toBe(boom);
-      expect(result.error).not.toBeInstanceOf(AggregateError);
-      expect(result.error.message).not.toContain("teardown boom");
-    }
-    // Cleanup still ran — both finalizers.
-    expect(state.extraRan).toBe(true);
-    expect(state.cleanupDone).toBe(true);
-  });
-
-  it("RP3: a prompt failure plus a teardown failure aggregate — primary first, every cleanup runs", function* () {
-    const boom = new Error("teardown boom");
-    const { factory, state } = createProvider({
-      teardownError: boom,
-      extraFinalizer: true,
-      fail: true,
-    });
-    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
-    const { result } = yield* runDoc('<Prompt text="hi" />\n');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(AggregateError);
-      if (result.error instanceof AggregateError) {
-        const errors = result.error.errors;
-        expect(errors[0]).toBeInstanceOf(AgentPromptError);
-        expect(errors[errors.length - 1]).toBe(boom);
-        expect(result.error.message).toContain("agent prompt(s) failed");
-        expect(result.error.message).toContain("teardown failed");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).not.toBe(boom);
+        expect(result.error).not.toBeInstanceOf(AggregateError);
+        expect(result.error.message).not.toContain("teardown boom");
       }
-    }
-    // The non-throwing finalizer still ran despite the throwing one.
-    expect(state.extraRan).toBe(true);
-    expect(state.cleanupDone).toBe(true);
-  });
+      // Cleanup still ran — both finalizers.
+      expect(state.extraRan).toBe(true);
+      expect(state.cleanupDone).toBe(true);
+    },
+  );
+
+  journalCase(
+    "RP3: a prompt failure plus a teardown failure aggregate — primary first, every cleanup runs",
+    function* (stream, directory) {
+      const boom = new Error("teardown boom");
+      const { factory, state } = createProvider({
+        teardownError: boom,
+        extraFinalizer: true,
+        fail: true,
+      });
+      yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+      const { result } = yield* runDoc('<Prompt text="hi" />\n', stream, directory);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(AggregateError);
+        if (result.error instanceof AggregateError) {
+          const errors = result.error.errors;
+          expect(errors[0]).toBeInstanceOf(AgentPromptError);
+          expect(errors[errors.length - 1]).toBe(boom);
+          expect(result.error.message).toContain("agent prompt(s) failed");
+          expect(result.error.message).toContain("teardown failed");
+        }
+      }
+      // The non-throwing finalizer still ran despite the throwing one.
+      expect(state.extraRan).toBe(true);
+      expect(state.cleanupDone).toBe(true);
+    },
+  );
 });
 
 describe("Tier RP — what the delivery adapter carries to a provider", () => {

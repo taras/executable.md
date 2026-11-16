@@ -7,14 +7,13 @@
  * not established here; it is asserted at the CLI boundary.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
+import { fileJournalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import * as os from "node:os";
 import { execute } from "../../core/src/execute.ts";
 import { registerComponents } from "../../core/src/components/registration.ts";
 import { Agent } from "../src/agent-api.ts";
@@ -55,11 +54,18 @@ function recordingFactory(seen: AgentProviderOptions[]): AgentProviderFactory {
   };
 }
 
+const journalCase = fileJournalCases(
+  "packages/agent/tests/agent-stack.test.ts",
+  "xmd-ag-",
+  "doc.md",
+);
+
 function* runDoc(
   doc: string,
   install: () => Operation<void>,
+  stream: InMemoryStream,
+  dir: string,
 ): Operation<{ output: string; result: Result<Json> }> {
-  const dir = path.join(os.tmpdir(), `xmd-ag-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -67,7 +73,7 @@ function* runDoc(
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
     yield* install();
-    const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+    const execution = yield* execute({ path: docPath, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -211,106 +217,139 @@ describe("Tier AG — provider registry and permission policies", () => {
     expect(yield* decide()).toEqual({ outcome: "selected", optionId: "allow-once" });
   });
 
-  it("AG7: <ApproveAll> approves inside its body under an enclosing deny", function* () {
-    const outcomes: string[] = [];
-    const { result } = yield* runDoc(
-      ["<Ask />", "", "<ApproveAll>", "<Ask />", "</ApproveAll>", "", "<Ask />", ""].join("\n"),
-      function* () {
-        yield* installAskComponent(outcomes);
-        yield* installAgentComponents();
-      },
-    );
-    expect(result.ok).toBe(true);
-    expect(outcomes).toEqual(["reject-once", "allow-once", "reject-once"]);
-  });
+  journalCase(
+    "AG7: <ApproveAll> approves inside its body under an enclosing deny",
+    function* (stream, directory) {
+      const outcomes: string[] = [];
+      const { result } = yield* runDoc(
+        ["<Ask />", "", "<ApproveAll>", "<Ask />", "</ApproveAll>", "", "<Ask />", ""].join("\n"),
+        function* () {
+          yield* installAskComponent(outcomes);
+          yield* installAgentComponents();
+        },
+        stream,
+        directory,
+      );
+      expect(result.ok).toBe(true);
+      expect(outcomes).toEqual(["reject-once", "allow-once", "reject-once"]);
+    },
+  );
 
-  it("AG8: <AskPermission> denies inside its body under an enclosing approve-all", function* () {
-    const outcomes: string[] = [];
-    const { result } = yield* runDoc(
-      ["<Ask />", "", "<AskPermission>", "<Ask />", "</AskPermission>", "", "<Ask />", ""].join(
-        "\n",
-      ),
-      function* () {
-        yield* installAskComponent(outcomes);
-        yield* installApproveAll();
-        yield* installAgentComponents();
-      },
-    );
-    expect(result.ok).toBe(true);
-    expect(outcomes).toEqual(["allow-once", "reject-once", "allow-once"]);
-  });
+  journalCase(
+    "AG8: <AskPermission> denies inside its body under an enclosing approve-all",
+    function* (stream, directory) {
+      const outcomes: string[] = [];
+      const { result } = yield* runDoc(
+        ["<Ask />", "", "<AskPermission>", "<Ask />", "</AskPermission>", "", "<Ask />", ""].join(
+          "\n",
+        ),
+        function* () {
+          yield* installAskComponent(outcomes);
+          yield* installApproveAll();
+          yield* installAgentComponents();
+        },
+        stream,
+        directory,
+      );
+      expect(result.ok).toBe(true);
+      expect(outcomes).toEqual(["allow-once", "reject-once", "allow-once"]);
+    },
+  );
 
-  it("AG9: installAgentComponents seeds the default agent and permission mode", function* () {
-    const seen: AgentProviderOptions[] = [];
-    const { result } = yield* runDoc('<AgentProvider name="rec" />\n', function* () {
-      yield* registerAgentProvider("rec", recordingFactory(seen));
-      yield* installAgentComponents({
-        defaultAgent: "seeded-agent",
-        permissionMode: "approve-reads",
-      });
-    });
-    expect(result.ok).toBe(true);
-    expect(seen).toEqual([{ defaultAgent: "seeded-agent", permissionMode: "approve-reads" }]);
-  });
+  journalCase(
+    "AG9: installAgentComponents seeds the default agent and permission mode",
+    function* (stream, directory) {
+      const seen: AgentProviderOptions[] = [];
+      const { result } = yield* runDoc(
+        '<AgentProvider name="rec" />\n',
+        function* () {
+          yield* registerAgentProvider("rec", recordingFactory(seen));
+          yield* installAgentComponents({
+            defaultAgent: "seeded-agent",
+            permissionMode: "approve-reads",
+          });
+        },
+        stream,
+        directory,
+      );
+      expect(result.ok).toBe(true);
+      expect(seen).toEqual([{ defaultAgent: "seeded-agent", permissionMode: "approve-reads" }]);
+    },
+  );
 
-  it("AG10: <AgentProvider defaultAgent> overrides inside its body and restores after", function* () {
-    const seen: AgentProviderOptions[] = [];
-    const { result } = yield* runDoc(
-      [
-        '<AgentProvider name="rec" defaultAgent="scoped-agent">',
-        "inside",
-        "</AgentProvider>",
-        '<AgentProvider name="rec" />',
-        "",
-      ].join("\n"),
-      function* () {
-        yield* registerAgentProvider("rec", recordingFactory(seen));
-        yield* installAgentComponents({
-          defaultAgent: "seeded-agent",
-          permissionMode: "deny-all",
-        });
-      },
-    );
-    expect(result.ok).toBe(true);
-    expect(seen.map((options) => options.defaultAgent)).toEqual(["scoped-agent", "seeded-agent"]);
-    // permissionMode is inherited, never overridden by a prop.
-    expect(seen.every((options) => options.permissionMode === "deny-all")).toBe(true);
-  });
+  journalCase(
+    "AG10: <AgentProvider defaultAgent> overrides inside its body and restores after",
+    function* (stream, directory) {
+      const seen: AgentProviderOptions[] = [];
+      const { result } = yield* runDoc(
+        [
+          '<AgentProvider name="rec" defaultAgent="scoped-agent">',
+          "inside",
+          "</AgentProvider>",
+          '<AgentProvider name="rec" />',
+          "",
+        ].join("\n"),
+        function* () {
+          yield* registerAgentProvider("rec", recordingFactory(seen));
+          yield* installAgentComponents({
+            defaultAgent: "seeded-agent",
+            permissionMode: "deny-all",
+          });
+        },
+        stream,
+        directory,
+      );
+      expect(result.ok).toBe(true);
+      expect(seen.map((options) => options.defaultAgent)).toEqual(["scoped-agent", "seeded-agent"]);
+      // permissionMode is inherited, never overridden by a prop.
+      expect(seen.every((options) => options.permissionMode === "deny-all")).toBe(true);
+    },
+  );
 
-  it("AG11: an unknown <AgentProvider> fails the execution; no body or later content renders", function* () {
-    const seen: AgentProviderOptions[] = [];
-    const { output, result } = yield* runDoc(
-      [
-        '<AgentProvider name="bogus">',
-        "INSIDE_MARKER",
-        "</AgentProvider>",
-        "AFTER_MARKER",
-        "",
-      ].join("\n"),
-      function* () {
-        yield* registerAgentProvider("rec", recordingFactory(seen));
-        yield* installAgentComponents({ defaultAgent: "seeded-agent" });
-      },
-    );
-    expect(result.ok).toBe(false);
-    expect(output).not.toContain("INSIDE_MARKER");
-    expect(output).not.toContain("AFTER_MARKER");
-    expect(seen.length).toBe(0);
-  });
+  journalCase(
+    "AG11: an unknown <AgentProvider> fails the execution; no body or later content renders",
+    function* (stream, directory) {
+      const seen: AgentProviderOptions[] = [];
+      const { output, result } = yield* runDoc(
+        [
+          '<AgentProvider name="bogus">',
+          "INSIDE_MARKER",
+          "</AgentProvider>",
+          "AFTER_MARKER",
+          "",
+        ].join("\n"),
+        function* () {
+          yield* registerAgentProvider("rec", recordingFactory(seen));
+          yield* installAgentComponents({ defaultAgent: "seeded-agent" });
+        },
+        stream,
+        directory,
+      );
+      expect(result.ok).toBe(false);
+      expect(output).not.toContain("INSIDE_MARKER");
+      expect(output).not.toContain("AFTER_MARKER");
+      expect(seen.length).toBe(0);
+    },
+  );
 
-  it("AG12: <AgentProvider> without any default agent fails before its body expands", function* () {
-    const seen: AgentProviderOptions[] = [];
-    const { output, result } = yield* runDoc(
-      ['<AgentProvider name="rec">', "INSIDE_MARKER", "</AgentProvider>", ""].join("\n"),
-      function* () {
-        yield* registerAgentProvider("rec", recordingFactory(seen));
-        yield* installAgentComponents();
-      },
-    );
-    expect(result.ok).toBe(false);
-    const message = result.ok ? "" : result.error.message;
-    expect(message).toContain("no default agent");
-    expect(output).not.toContain("INSIDE_MARKER");
-    expect(seen.length).toBe(0);
-  });
+  journalCase(
+    "AG12: <AgentProvider> without any default agent fails before its body expands",
+    function* (stream, directory) {
+      const seen: AgentProviderOptions[] = [];
+      const { output, result } = yield* runDoc(
+        ['<AgentProvider name="rec">', "INSIDE_MARKER", "</AgentProvider>", ""].join("\n"),
+        function* () {
+          yield* registerAgentProvider("rec", recordingFactory(seen));
+          yield* installAgentComponents();
+        },
+        stream,
+        directory,
+      );
+      expect(result.ok).toBe(false);
+      const message = result.ok ? "" : result.error.message;
+      expect(message).toContain("no default agent");
+      expect(output).not.toContain("INSIDE_MARKER");
+      expect(seen.length).toBe(0);
+    },
+  );
 });
