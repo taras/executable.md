@@ -305,36 +305,48 @@ describe(RUN_SUITE, () => {
     expect((yield* readdir(artifacts)).sort()).toEqual([...directories].sort());
   });
 
-  it("selects one target inside a document without component addressability", function* () {
-    const run = yield* runHarness({
-      "README.md": doc(
-        '<Test name="target">',
-        '<Execution host="run" target="guide.md#Second" as="child">',
-        '<CollectOutput as="output" />',
-        "",
-        "<AssertEquals actual={child.result.ok} expected={true} />",
-        '<AssertStringIncludes actual={output} expected="second body" />',
-        "</Execution>",
-        "</Test>",
-      ),
-      "guide.md": doc("# First", "", "first body", "", "# Second", "", "second body"),
-    });
-    expect(only(run).status).toBe("pass");
-    expect(run.output).not.toContain("first body");
+  const selectedTarget = "selects one target inside a document without component addressability";
+  it(selectedTarget, function* () {
+    yield* captureHarness(
+      selectedTarget,
+      {
+        "README.md": doc(
+          '<Test name="target">',
+          '<Execution host="run" target="guide.md#Second" as="child">',
+          '<CollectOutput as="output" />',
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          '<AssertStringIncludes actual={output} expected="second body" />',
+          "</Execution>",
+          "</Test>",
+        ),
+        "guide.md": doc("# First", "", "first body", "", "# Second", "", "second body"),
+      },
+      (run) => {
+        expect(only(run).status).toBe("pass");
+        expect(run.output).not.toContain("first body");
+      },
+    );
   });
 
-  it("carries a text root's rendered markdown as the settled value", function* () {
-    const run = yield* runHarness({
-      "README.md": doc(
-        '<Test name="text">',
-        '<Execution host="run" target="child.md" as="child">',
-        '<AssertStringIncludes actual={child.result.value} expected="child body" />',
-        "</Execution>",
-        "</Test>",
-      ),
-      "child.md": doc("child body"),
-    });
-    expect(only(run).status).toBe("pass");
+  const textRoot = "carries a text root's rendered markdown as the settled value";
+  it(textRoot, function* () {
+    yield* captureHarness(
+      textRoot,
+      {
+        "README.md": doc(
+          '<Test name="text">',
+          '<Execution host="run" target="child.md" as="child">',
+          '<AssertStringIncludes actual={child.result.value} expected="child body" />',
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child body"),
+      },
+      (run) => {
+        expect(only(run).status).toBe("pass");
+      },
+    );
   });
 
   const inline = "runs inline source under the <eval> identity, with no authored file";
