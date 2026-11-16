@@ -408,6 +408,7 @@ export function controlJournal(
         order,
         component: occurrence.component,
         arguments: occurrence.arguments,
+        ...(occurrence.elicit === undefined ? {} : { elicit: occurrence.elicit }),
         ...(reserved === undefined ? {} : { submit: reserved }),
       });
       return order;

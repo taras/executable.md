@@ -62,7 +62,7 @@ import type {
 } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 
-import type { RetainedPrefix } from "./history.ts";
+import type { ControlRecord, RetainedPrefix } from "./history.ts";
 import type { OutputRead, OutputReadRequest } from "./output.ts";
 import type {
   EntryJournalPage,
@@ -175,6 +175,7 @@ export interface SubmitReceipt {
 export interface ControlOccurrence {
   readonly component: string;
   readonly arguments: Json;
+  readonly elicit?: ControlRecord["elicit"];
 }
 
 /**

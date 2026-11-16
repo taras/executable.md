@@ -153,6 +153,7 @@ import type {
   ReplPresented,
   ReplRestorePhase,
   ReplSidekickChatRow,
+  ReplSidekickApproval,
   ReplSidekickQuestion,
   ReplSidekickReading,
   ReplSidekickSetup,
@@ -216,6 +217,7 @@ import {
 } from "./layout.ts";
 import { focusHintOps, focusRouteHint } from "./focus-hints.ts";
 import {
+  ReplFitRefusal,
   createFitStore,
   createPlainFitStore,
   fitCells,
@@ -1882,6 +1884,9 @@ function* drive(
      */
     const sidekick: SidekickOwner = yield* useSidekickOwner({
       follow: () => follow,
+      // Only a foreground terminal has a person who may decide about a reply
+      // secret detection withheld. A headless root keeps every one withheld.
+      reviewsReplies: options.headless === undefined,
       assembly: options.profile.sidekickAssembly,
       projectCwd: options.profile.projectCwd,
       workspace,
@@ -2266,7 +2271,7 @@ function* drive(
      * a route is being validated at has to be the reading that route names.
      */
     function sidekickReading(held: ReplState): ReplSidekickReading {
-      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick);
+      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick, approvalNow(sidekick));
     }
 
     /**
@@ -3870,6 +3875,42 @@ function setupOf(
   return Object.freeze({ phase: found.phase, failure: found.failure });
 }
 
+/** The withheld reply waiting on this screen's person, as the screen draws it. */
+function approvalNow(owner: SidekickOwner): ReplSidekickApproval | undefined {
+  const asked = owner.approval;
+  if (asked === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    key: asked.key,
+    turn: asked.turn,
+    findingCount: asked.findings.length,
+    accepting: asked.accepting,
+    revealed: asked.revealed,
+    finding(index: number): readonly [string, string] | undefined {
+      if (owner.approval !== asked) {
+        return undefined;
+      }
+      const finding = asked.findings[index];
+      if (finding === undefined) {
+        return undefined;
+      }
+      const { ruleId, messageId, line, column, excerpt } = finding;
+      const revealed = asked.revealed === index;
+      const shown = revealed ? (asked.reveal(index) ?? excerpt.masked) : excerpt.masked;
+      return [
+        approvalText(`${messageId} · line ${line}, column ${column} (${ruleId})`),
+        approvalText(revealed ? shown : excerpt.before + shown + excerpt.after),
+      ];
+    },
+  });
+}
+
+function approvalText(text: string): string {
+  // deno-lint-ignore no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "�");
+}
+
 /**
  * What the Sidekick says, as detached rows the screen can draw.
  *
@@ -3896,6 +3937,8 @@ function sidekickReadingOf(
    * names a chat this history actually holds.
    */
   selected: string | undefined,
+  /** The withheld reply waiting on this screen's person, as the screen names it. */
+  approval?: ReplSidekickApproval,
 ): ReplSidekickReading {
   const read = owner.reading;
   if (!read.ok) {
@@ -3970,6 +4013,8 @@ function sidekickReadingOf(
     agent: read.value.conversations.find((one) => one.id === reading)?.agent ?? owner.agent,
     refusal: undefined,
     question,
+    // Only for the current chat, which is the only one anybody is asked about.
+    ...(approval === undefined || reading !== active ? {} : { approval }),
     // What was asked for, read back out of the history rather than out of
     // anything this process remembered.
     requested: requestedBy(read.value, active),
@@ -4121,7 +4166,9 @@ export function sidekickTurnRows(
             ? "asking"
             : live.phase === "generating"
               ? "generating"
-              : "evaluating the reply",
+              : live.phase === "reviewing"
+                ? "awaiting reply approval"
+                : "evaluating the reply",
         running: true,
         failed: false,
         sessionKey: live.sessionKey,
@@ -4764,6 +4811,19 @@ function* perform(
     case "start-new-chat":
       chat.startNewChat(intent.conversation);
       return {};
+    case "decide-sidekick-reply": {
+      // The question this key names, and only while it is still the one
+      // waiting: a decision drawn for an earlier question decides nothing.
+      const asked = chat.owner.approval;
+      if (asked === undefined || asked.key !== intent.approval) {
+        return { refusal: "that withheld reply is no longer waiting for a decision." };
+      }
+      const done =
+        intent.decision === "reveal"
+          ? intent.finding !== undefined && asked.toggleReveal(intent.finding)
+          : asked.decide(intent.decision);
+      return done ? {} : { refusal: "that withheld reply is no longer waiting for a decision." };
+    }
     case "recovery-reference":
       chat.reference(intent.accept, intent.reference);
       return {};
@@ -4943,7 +5003,7 @@ function* perform(
       // The schema decides, through the same compiled validator the request
       // carries, and the existing canonical operation writes the answer. This
       // reads no form and judges no value.
-      const outcome = asked.submit(intent.values);
+      const outcome = asked.submit(intent.values, intent.choices);
       return outcome.kind === "answered"
         ? { askingAnswered: true }
         : { askingMessages: reported(outcome) };
@@ -5451,6 +5511,13 @@ export function* commitReplFrame(
   for (const cell of tree.frame().cells) {
     cells.set(cell.node, cell.cell);
   }
+  for (const [key, line] of presentation.approvalRows ?? []) {
+    const node = nodeByKey.get(key);
+    const cell = prepared.value.approvalCell?.(line);
+    if (node !== undefined && cell !== undefined) {
+      cells.set(node, cell);
+    }
+  }
   // Read after the reconcile that settled it and handed on, never stored: the
   // tree owns focus, and decoration is the one thing that needs to know where it
   // ended up. A row's own `>` cue is the view's and is therefore a frame behind;
@@ -5514,6 +5581,7 @@ function sidekickViewportOf(manifest: ReplLayoutManifest): string {
 
 /** What one bounded preparation measured, and the frame it decided on. */
 export interface ReplPrepared {
+  readonly approvalCell?: (line: string) => string | undefined;
   readonly context: ReplPresentationContext;
   readonly presentation: ReplPresentation;
   readonly admission: ReplAdmission;
@@ -5977,20 +6045,43 @@ export function* prepareFrame(
   }
   // A drawer row is one displayed row: fitting the presented question or
   // permission text before admission keeps wrapped content reachable.
+  const approval =
+    presentedDrawer(view)?.kind === "reply-approval" ? view.live.sidekick?.approval : undefined;
+  const findingLines: { key: string; text: string }[] = [];
+  for (let index = 0; index < (approval?.findingCount ?? 0); index += 1) {
+    const finding = approval?.finding(index);
+    if (finding !== undefined) {
+      findingLines.push(
+        { key: `drawer:reply-approval:rule:${index}`, text: finding[0] },
+        { key: `drawer:reply-approval:excerpt:${index}`, text: finding[1] },
+      );
+    }
+  }
+  const fittedApproval = yield* fitPlain(renderer, view.size, findingLines, widths.drawer);
+  if (!fittedApproval.ok) {
+    return Err(new ReplFitRefusal("The reply approval text could not be fitted."));
+  }
+  // Only the terminal paint receives the fitted text. The mounted tree and its
+  // layout get the same row identities and lengths with empty cells.
+  const approvalCells = new Map(
+    fittedApproval.value.map((row) => [row.key, row.text.padEnd(widths.drawer, " ")]),
+  );
   const asked = previewedMessage(view);
   const preview =
-    asked === undefined || widths.drawer < 1
-      ? Ok(undefined)
-      : yield* fitPlain(
-          renderer,
-          view.size,
-          asked.split("\n").map((text, offset) => ({
-            key: `message:${offset}`,
-            text,
-            runs: sourceRuns(text),
-          })),
-          widths.drawer,
-        );
+    approval !== undefined
+      ? Ok(fittedApproval.value.map((row) => ({ ...row, text: "", runs: [] })))
+      : asked === undefined || widths.drawer < 1
+        ? Ok(undefined)
+        : yield* fitPlain(
+            renderer,
+            view.size,
+            asked.split("\n").map((text, offset) => ({
+              key: `message:${offset}`,
+              text,
+              runs: sourceRuns(text),
+            })),
+            widths.drawer,
+          );
   if (!preview.ok) {
     return preview;
   }
@@ -6324,7 +6415,12 @@ export function* prepareFrame(
   if (!edited.ok) {
     return edited;
   }
-  return Ok({ context, admission, presentation: presentationFor(view, context) });
+  return Ok({
+    context,
+    admission,
+    presentation: presentationFor(view, context),
+    ...(approval === undefined ? {} : { approvalCell: (line: string) => approvalCells.get(line) }),
+  });
 }
 
 /**

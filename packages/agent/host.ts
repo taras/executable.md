@@ -21,8 +21,8 @@
  *
  * Kept apart from `./api` for the reason core keeps its own `./host`: nothing a
  * document, a component or a middleware package reaches by importing the
- * consumer API can install a provider for a region it did not author or decide
- * where a prompt is journaled.
+ * consumer API can install a provider for a region it did not author, decide
+ * where a prompt is journaled, or answer a withheld reply.
  */
 
 // Agent components — <Agent>/<Session>/<Prompt> over a provider-factory seam.
@@ -105,3 +105,31 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/journal.ts";
 export type { PromptRecord } from "./src/journal.ts";
+
+/**
+ * A withheld reply a local person accepted, and the one rule that joins it to
+ * its turn.
+ *
+ * Readers of a held conversation's history — replay, a Sidekick's chat and
+ * its passive projections — read a withheld turn followed by its acceptance as
+ * that turn's successful reply. They read it through this reconciler rather
+ * than their own, so they agree on which acceptances count.
+ */
+export { acceptedReplies, AGENT_PROMPT_REPLY, parsePromptReply } from "./src/reply-acceptance.ts";
+export type { PromptReplyRecord } from "./src/reply-acceptance.ts";
+
+/**
+ * The trusted foreground question about a withheld reply.
+ *
+ * Installed by a host with a person in front of it, beside its prompt
+ * publisher, as one of a held conversation's installations. A host that
+ * installs none keeps every withheld reply withheld. See
+ * `src/reply-review.ts`.
+ */
+export { useAgentReplyReview } from "./src/reply-review.ts";
+export type {
+  AgentReplyDecision,
+  AgentReplyFinding,
+  AgentReplyHold,
+  AgentReplyReviewer,
+} from "./src/reply-review.ts";

@@ -35,9 +35,12 @@
 
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
+import type { FeedbackSlice } from "@executablemd/core/host";
 
 import { DESIGNATED, DRAFT_FILLED, renderRead, renderReceipt } from "./controls.ts";
-import type { ControlOutcomeRecord, ControlRecord } from "./history.ts";
+import { acknowledgedControlOutcomes, controlSlot } from "./control-outcomes.ts";
+import type { ControlOutcome } from "./control-outcomes.ts";
+import type { ControlOutcomeRecord, ControlRecord, ElicitReference } from "./history.ts";
 import type { OutputRead } from "./output.ts";
 import { describeGuideIndex, readSidekickBootstrap, sidekickGuideIndex } from "./guide.ts";
 import { fingerprint } from "./history.ts";
@@ -157,16 +160,20 @@ export function turnRequest(input: {
   readonly recovered: string | undefined;
   readonly draft: string;
   readonly message: string;
-}): string {
+}): { text: string; recoveredAt: number | undefined } {
   const parts: string[] = [];
   if (input.context !== undefined) {
     parts.push(input.context.bootstrap, input.context.index, input.context.surface);
   }
+  const recoveredAt =
+    input.recovered === undefined
+      ? undefined
+      : parts.reduce((length, part) => length + part.length + 2, 0);
   if (input.recovered !== undefined) {
     parts.push(input.recovered);
   }
   parts.push(describeDraft(input.draft), `The person says:\n\n${input.message}`);
-  return parts.join("\n\n");
+  return { text: parts.join("\n\n"), recoveredAt };
 }
 
 /**
@@ -190,6 +197,7 @@ export function describeDraft(draft: string): string {
 
 /** One designated operation's result, as the next turn is told about it. */
 export interface DesignatedResult {
+  readonly elicit?: ElicitReference;
   /** Its position among this response's controls, in admission order. */
   readonly order: number;
   /** The control that produced it, spelled as the reply wrote it. */
@@ -246,7 +254,27 @@ export function designatedResults(
   }[] = [],
   designated: ReadonlySet<string> = DESIGNATED,
 ): readonly DesignatedResult[] {
-  const intents = new Map<number, ControlRecord>();
+  return resultsFrom(outcomesOf(records), at, refused, designated);
+}
+
+function outcomesOf(records: readonly SidekickRecord[]): ReadonlyMap<string, ControlOutcome> {
+  const outcomes = acknowledgedControlOutcomes(records);
+  if (!outcomes.ok) {
+    throw outcomes.error;
+  }
+  return outcomes.value;
+}
+
+function resultsFrom(
+  outcomes: ReadonlyMap<string, ControlOutcome>,
+  at: { readonly conversation: string; readonly response: string },
+  refused: readonly {
+    readonly order: number;
+    readonly component: string;
+    readonly reason: string;
+  }[],
+  designated: ReadonlySet<string>,
+): readonly DesignatedResult[] {
   const results: DesignatedResult[] = refused
     // Through the same set, so a control that is not designated does not get
     // its refusals delivered either. One set decides what comes back.
@@ -258,24 +286,14 @@ export function designatedResults(
       text: held.reason,
       json: false,
     }));
-  for (const record of records) {
-    if (record.kind === "control") {
-      if (record.conversation === at.conversation && record.response === at.response) {
-        intents.set(record.order, record);
-      }
+  for (const { intent, outcome } of outcomes.values()) {
+    if (intent.conversation !== at.conversation || intent.response !== at.response) {
       continue;
     }
-    if (record.kind !== "control-outcome") {
+    if (!designated.has(intent.component)) {
       continue;
     }
-    if (record.conversation !== at.conversation || record.response !== at.response) {
-      continue;
-    }
-    const intent = intents.get(record.order);
-    if (intent === undefined || !designated.has(intent.component)) {
-      continue;
-    }
-    results.push({ order: record.order, ...answered(intent, record) });
+    results.push({ order: intent.order, ...answered(intent, outcome) });
   }
   // Stable, so a refusal and the pair that followed it keep the order they
   // happened in: the refusal was pushed first and holds the order that pair
@@ -307,21 +325,24 @@ export function recoveredWork(
   records: readonly SidekickRecord[],
   at: { readonly conversation: string; readonly response: string },
   designated: ReadonlySet<string> = DESIGNATED,
+  withheld: ReadonlySet<number> = new Set(),
 ): string | undefined {
   const items: { order: number; component: string; body: string }[] = [];
-  for (const result of designatedResults(records, at, [], designated)) {
+  const outcomes = outcomesOf(records);
+  for (const result of resultsFrom(outcomes, at, [], designated)) {
     items.push({
       order: result.order,
       component: result.component,
-      body:
-        result.kind === "answered"
+      body: withheld.has(result.order)
+        ? "This operation settled. Its retained answer was withheld from recovery feedback."
+        : result.kind === "answered"
           ? result.json
             ? fenced(result.text)
             : result.text
           : `${refusal(result.component)}: ${result.text}`,
     });
   }
-  for (const waiting of unanswered(records, at, designated)) {
+  for (const waiting of unanswered(records, outcomes, at, designated)) {
     items.push(waiting);
   }
   if (items.length === 0) {
@@ -348,31 +369,22 @@ export function recoveredWork(
  */
 function unanswered(
   records: readonly SidekickRecord[],
+  outcomes: ReadonlyMap<string, ControlOutcome>,
   at: { readonly conversation: string; readonly response: string },
   designated: ReadonlySet<string> = DESIGNATED,
 ): { order: number; component: string; body: string }[] {
-  const intents = new Map<number, ControlRecord>();
-  const settled = new Set<number>();
-  for (const record of records) {
-    if (record.kind === "control") {
-      if (record.conversation === at.conversation && record.response === at.response) {
-        intents.set(record.order, record);
-      }
-      continue;
-    }
-    if (record.kind !== "control-outcome") {
-      continue;
-    }
-    if (record.conversation === at.conversation && record.response === at.response) {
-      settled.add(record.order);
-    }
-  }
   const waiting: { order: number; component: string; body: string }[] = [];
-  for (const [order, intent] of intents) {
-    if (settled.has(order) || !designated.has(intent.component)) {
+  for (const intent of records) {
+    if (
+      intent.kind !== "control" ||
+      intent.conversation !== at.conversation ||
+      intent.response !== at.response ||
+      !designated.has(intent.component) ||
+      outcomes.has(controlSlot(intent.conversation, intent.response, intent.order))
+    ) {
       continue;
     }
-    waiting.push({ order, component: intent.component, body: asking(intent) });
+    waiting.push({ order: intent.order, component: intent.component, body: asking(intent) });
   }
   return waiting;
 }
@@ -453,6 +465,7 @@ function answered(
         kind: "answered",
         text: JSON.stringify(record.observed ?? null, null, 2),
         json: true,
+        elicit: intent.elicit,
       };
     }
   }
@@ -516,7 +529,7 @@ function submitted(
 export function sealedFeedback(
   results: readonly DesignatedResult[],
   failure?: string,
-): string | undefined {
+): { text: string; slices: readonly FeedbackSlice[] } | undefined {
   if (results.length === 0 && failure === undefined) {
     // Nothing was asked for and nothing went wrong, so there is nothing to say
     // and no turn to spend saying it. The person has the reply; it is their
@@ -524,35 +537,50 @@ export function sealedFeedback(
     return undefined;
   }
   const parts: string[] = [];
+  const slices: FeedbackSlice[] = [];
+  let length = 0;
+  function append(text: string, result?: DesignatedResult, offset = 0): void {
+    if (result?.elicit !== undefined) {
+      const start = length + offset;
+      const { coroutineId, index } = result.elicit;
+      slices.push({ coroutineId, index, start, end: start + result.text.length });
+    }
+    length += text.length + 2;
+    parts.push(text);
+  }
   if (results.length === 1 && failure === undefined) {
     const only = results[0];
     if (only !== undefined) {
       // One answer to one question, with nothing round it — not even a fence
       // around a JSON value, because the whole message is that value and a
       // reply can parse it as it stands.
-      parts.push(only.kind === "answered" ? only.text : `${refusal(only.component)}: ${only.text}`);
+      if (only.kind === "answered") {
+        append(only.text, only);
+      } else {
+        append(`${refusal(only.component)}: ${only.text}`);
+      }
     }
   } else {
     for (const result of results) {
-      const body =
-        result.kind === "answered"
-          ? result.json
-            ? // Fenced, because this one is sitting among other things now and a
-              // reply has to know where the value ends. Longer than any run inside
-              // it, since a published string may hold a fence of its own.
-              fenced(result.text)
-            : result.text
-          : `${refusal(result.component)}: ${result.text}`;
-      parts.push(`## ${result.component}\n\n${body}`);
+      const heading = `## ${result.component}\n\n`;
+      if (result.kind !== "answered") {
+        append(`${heading}${refusal(result.component)}: ${result.text}`);
+      } else if (result.json) {
+        const fence = jsonFence(result.text);
+        const opening = `${heading}${fence}json\n`;
+        append(`${opening}${result.text}\n${fence}`, result, opening.length);
+      } else {
+        append(heading + result.text, result, heading.length);
+      }
     }
   }
   if (failure !== undefined) {
-    parts.push(
+    append(
       `Your response did not finish: ${failure}\n\nWhat it did before that stands. ` +
         "Continue from there rather than repeating it.",
     );
   }
-  return parts.join("\n\n");
+  return { text: parts.join("\n\n"), slices };
 }
 
 /**
@@ -569,8 +597,12 @@ function refusal(component: string): string {
 
 /** One JSON value in a fence longer than any backtick run inside it. */
 function fenced(value: string): string {
-  const fence = "`".repeat(Math.max(3, longestRun(value, "`") + 1));
+  const fence = jsonFence(value);
   return [`${fence}json`, value, fence].join("\n");
+}
+
+function jsonFence(value: string): string {
+  return "`".repeat(Math.max(3, longestRun(value, "`") + 1));
 }
 
 /** The digest of exactly these bytes, which is what a version is. */

@@ -304,6 +304,7 @@ export interface ControlRecord {
   readonly order: number;
   readonly component: string;
   readonly arguments: unknown;
+  readonly elicit?: ElicitReference;
   /** Submit alone binds the slot it reserved, so a crash can be reconciled. */
   readonly submit?: {
     /**
@@ -323,6 +324,13 @@ export interface ControlRecord {
     /** The exact entry journal this reservation was taken against. */
     readonly retained: RetainedPrefix;
   };
+}
+
+export interface ElicitReference {
+  readonly coroutineId: string;
+  readonly index: number;
+  readonly name: string;
+  readonly fingerprint: string;
 }
 
 /** What one control answered, written once it has answered. */
@@ -719,7 +727,7 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     !exactly(
       value,
       ["kind", "conversation", "response", "order", "component", "arguments"],
-      ["submit"],
+      ["submit", "elicit"],
     )
   ) {
     return undefined;
@@ -730,6 +738,26 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
   const component = str(value.component);
   if (held === undefined || named === undefined || order === undefined || component === undefined) {
     return undefined;
+  }
+  let elicit: ElicitReference | undefined;
+  if (Object.hasOwn(value, "elicit")) {
+    const ref = value.elicit;
+    if (
+      component !== "Elicit" ||
+      Object.hasOwn(value, "submit") ||
+      !plain(ref) ||
+      !exactly(ref, ["coroutineId", "index", "name", "fingerprint"]) ||
+      typeof ref.coroutineId !== "string" ||
+      typeof ref.name !== "string" ||
+      typeof ref.fingerprint !== "string"
+    ) {
+      return undefined;
+    }
+    const index = whole(ref.index);
+    if (index === undefined) {
+      return undefined;
+    }
+    elicit = { coroutineId: ref.coroutineId, index, name: ref.name, fingerprint: ref.fingerprint };
   }
   let submit: ControlRecord["submit"];
   if (Object.hasOwn(value, "submit")) {
@@ -787,6 +815,7 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     order,
     component,
     arguments: value.arguments,
+    ...(elicit === undefined ? {} : { elicit }),
     ...(submit === undefined ? {} : { submit }),
   };
 }

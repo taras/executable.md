@@ -204,3 +204,6 @@ export class HostObservationFailure extends Error {
     super("an installed prompt publisher failed while observing this turn");
   }
 }
+
+/** The composed input was refused before publication and before delegation. */
+export class HeldPromptInputRefusal extends Error {}

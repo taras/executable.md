@@ -38,11 +38,17 @@ import type { MessageOrigin } from "./history.ts";
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
+import {
+  acceptedReplies,
+  AGENT_PROMPT,
+  AGENT_PROMPT_REPLY,
+  parsePromptRecord,
+} from "@executablemd/agent/host";
 import type { SessionConfiguration } from "@executablemd/agent/api";
 import type { PromptRecord } from "@executablemd/agent/host";
 import { projectUsage, type ReplUsage } from "../usage.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
 
 import type {
   ConversationRecord,
@@ -315,6 +321,14 @@ export interface SidekickSavedTurn {
   readonly incomplete: { readonly output: string; readonly failure: string } | undefined;
   /** The turn completed and secret detection withheld its reply, so it has none. */
   readonly withheld?: true;
+  /**
+   * The turn's withheld reply was accepted by the person in front of the REPL,
+   * and its exact text is saved after the withheld completion.
+   *
+   * The same turn, completed successfully: `reply` is its evaluated response
+   * when one was recorded, and absent when the process ended before it ran.
+   */
+  readonly accepted?: true;
 }
 
 /** One control a response ran, and what became of it. */
@@ -871,6 +885,15 @@ export const SAVED_WITHOUT_REPLY = "Turn saved; no evaluated reply recorded.";
 export const REPLY_WITHHELD = "Turn saved; its reply was withheld by secret detection and not run.";
 
 /**
+ * What a turn whose withheld reply was accepted says, before anything ran it.
+ *
+ * The person accepted the reply and its exact text is saved; the process
+ * ended before its evaluated response was recorded, and nothing runs it on
+ * the turn's behalf now.
+ */
+export const REPLY_ACCEPTED = "Turn saved; its reply was accepted and saved, and was not run.";
+
+/**
  * The input a canonical description carries, as text.
  *
  * Core writes a Prompt's input beside its name, and for a conversation turn it
@@ -936,6 +959,12 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
   if (!recovery.ok) {
     return recovery;
   }
+  const controlOutcomes = new Map(
+    [...recovery.value.outcomes.entries()].map(([key, outcome]) => [
+      outcome.at,
+      { key, ...outcome },
+    ]),
+  );
   /** Each request by the record that began it. */
   const began = new Map<number, SidekickRequest>(
     requests.value.map((request) => [request.at, request]),
@@ -1043,6 +1072,11 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
        * prefer over it.
        */
       verified: Map<number, SessionConfiguration>;
+      /**
+       * This conversation's root yields, in history order, for the one rule
+       * that joins an acceptance to its withheld turn.
+       */
+      roots: DurableEvent[];
     }
   >();
   const order: string[] = [];
@@ -1077,6 +1111,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
     usage?: ReplUsage;
     incomplete: { output: string; failure: string } | undefined;
     withheld: boolean;
+    accepted: boolean;
   }[] = [];
   /** Each conversation's evaluated responses, by the turn they belong to. */
   const replies = new Map<string, ResponseRecord>();
@@ -1152,6 +1187,22 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
     if (request !== undefined) {
       readingRequest.set(request.conversation, request);
     }
+    const control = controlOutcomes.get(index);
+    if (control !== undefined) {
+      const { key, intent, outcome } = control;
+      settled.add(key);
+      if (typeof outcome.observed === "string") {
+        observed.add(key);
+      }
+      operations.push({
+        conversation: intent.conversation,
+        response: intent.response,
+        order: intent.order,
+        component: intent.component,
+        status: outcome.outcome.status === "ok" ? "ok" : "failed",
+        failure: outcome.outcome.status === "err" ? outcome.outcome.error.message : undefined,
+      });
+    }
     switch (record.kind) {
       case "owner":
       case "ready":
@@ -1170,6 +1221,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
             completed: new Map<number, string>(),
             at: new Map<number, number>(),
             verified: new Map<number, SessionConfiguration>(),
+            roots: [],
           });
           order.push(record.conversation);
         } else {
@@ -1237,6 +1289,34 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
           );
         }
         const canonical = parsed.value;
+        if (canonical.type === "yield" && canonical.coroutineId === "root") {
+          held.roots.push(canonical);
+        }
+        if (canonical.type === "yield" && canonical.description.type === AGENT_PROMPT_REPLY) {
+          // The same turn's reply, which the person accepted after it was
+          // withheld. Joined by Core's own rule; a history that rule cannot
+          // read says nothing about what that turn answered.
+          const joined = acceptedReplies(
+            canonical.coroutineId === "root" ? held.roots : [canonical],
+          );
+          if (!joined.ok) {
+            return Err(
+              new SidekickProjectionError(
+                `this chat history holds an accepted reply it cannot join to its turn (record ` +
+                  `${position}).`,
+              ),
+            );
+          }
+          const name = canonical.description.name;
+          const amended = saved.findLast(
+            (one) => one.conversation === record.conversation && one.name === name,
+          );
+          if (amended !== undefined && joined.value.has(name)) {
+            amended.withheld = false;
+            amended.accepted = true;
+          }
+          break;
+        }
         if (canonical.type !== "yield" || canonical.description.type !== AGENT_PROMPT) {
           break;
         }
@@ -1282,6 +1362,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
               ? undefined
               : { output: literalOutput(prompt.text), failure: incompleteFailure(prompt) },
           withheld: prompt.withheld === true,
+          accepted: false,
         });
         if (prompt.status === "completed") {
           // The description's input is what this turn was actually sent. Core
@@ -1336,48 +1417,11 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       }
       case "control": {
         const key = slot(record.conversation, record.response, record.order);
-        if (intents.has(key)) {
-          return Err(
-            new SidekickProjectionError(
-              `this chat history records two operations at one position (record ${position}).`,
-            ),
-          );
-        }
         intents.set(key, { record, index });
         break;
       }
-      case "control-outcome": {
-        const key = slot(record.conversation, record.response, record.order);
-        const intent = intents.get(key);
-        if (intent === undefined) {
-          return Err(
-            new SidekickProjectionError(
-              `this chat history records what an operation answered without recording the ` +
-                `operation (record ${position}).`,
-            ),
-          );
-        }
-        if (settled.has(key)) {
-          return Err(
-            new SidekickProjectionError(
-              `this chat history answers one operation twice (record ${position}).`,
-            ),
-          );
-        }
-        settled.add(key);
-        if (typeof record.observed === "string") {
-          observed.add(key);
-        }
-        operations.push({
-          conversation: record.conversation,
-          response: record.response,
-          order: record.order,
-          component: intent.record.component,
-          status: record.outcome.status === "ok" ? "ok" : "failed",
-          failure: record.outcome.status === "err" ? record.outcome.error.message : undefined,
-        });
+      case "control-outcome":
         break;
-      }
       case "feedback":
         if (record.turn === null) {
           // Feedback text retained before its turn: composed for that response
@@ -1500,7 +1544,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       conversation: one.conversation,
       turn: one.turn,
       automatic: request?.kind === "feedback",
-      status: one.withheld ? REPLY_WITHHELD : SAVED_WITHOUT_REPLY,
+      status: one.withheld ? REPLY_WITHHELD : one.accepted ? REPLY_ACCEPTED : SAVED_WITHOUT_REPLY,
     });
   }
   // The file's own order, restored. Sorted by where each item's record sits
@@ -1546,6 +1590,7 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
             }),
       incomplete: one.incomplete === undefined ? undefined : Object.freeze(one.incomplete),
       ...(one.withheld ? { withheld: true as const } : {}),
+      ...(one.accepted ? { accepted: true as const } : {}),
     });
   });
 
