@@ -28,8 +28,7 @@ const props = { type: "object", properties: {}, additionalProperties: false };
 function declaration(body: () => Operation<unknown>, name = "Observed"): IdentityComponent {
   return { name, origin: "test://observation", props, factory: () => body };
 }
-function* run(source: string, installation: ExecutionInstallation) {
-  const stream = new InMemoryStream();
+function* run(source: string, installation: ExecutionInstallation, stream = new InMemoryStream()) {
   const execution = yield* executeInstalled({ ...retainedSource("hooks.md", source), stream }, [
     installation,
   ]);
@@ -434,75 +433,91 @@ describe("Installation-owned component observation", () => {
 });
 
 describe("Invocation observation settlement", () => {
-  it("R4a: successful component cleanup and after cleanup precede caller continuation", function* () {
-    const cleaning = withResolvers<void>();
-    const release = withResolvers<void>();
-    const notified = withResolvers<void>();
-    const afterRelease = withResolvers<void>();
-    let after = false;
-    let continued = false;
-    const execution = yield* spawn(function* () {
-      const result = yield* run('<Observed as="value" />', {
-        components: [
-          declaration(function* () {
-            yield* ensure(function* () {
-              cleaning.resolve();
-              yield* release.operation;
-            });
-            return { actual: true };
-          }),
-        ],
-        componentInvocations: {
-          *after(_observation, result, cancelled) {
-            after = true;
-            expect(result.ok && result.value).toEqual({ actual: true });
-            expect(cancelled).toBe(false);
-            yield* ensure(() => afterRelease.operation);
-            notified.resolve();
+  heldHostCase(
+    "R4a: successful component cleanup and after cleanup precede caller continuation",
+    function* (stream) {
+      const cleaning = withResolvers<void>();
+      const release = withResolvers<void>();
+      const notified = withResolvers<void>();
+      const afterRelease = withResolvers<void>();
+      let after = false;
+      let continued = false;
+      const execution = yield* spawn(function* () {
+        const result = yield* run(
+          '<Observed as="value" />',
+          {
+            components: [
+              declaration(function* () {
+                yield* ensure(function* () {
+                  cleaning.resolve();
+                  yield* release.operation;
+                });
+                return { actual: true };
+              }),
+            ],
+            componentInvocations: {
+              *after(_observation, result, cancelled) {
+                after = true;
+                expect(result.ok && result.value).toEqual({ actual: true });
+                expect(cancelled).toBe(false);
+                yield* ensure(() => afterRelease.operation);
+                notified.resolve();
+              },
+            },
+          },
+          stream,
+        );
+        expect(result.result.ok).toBe(true);
+        continued = true;
+      });
+      yield* cleaning.operation;
+      expect(after).toBe(false);
+      release.resolve();
+      yield* notified.operation;
+      expect(continued).toBe(false);
+      afterRelease.resolve();
+      yield* execution;
+      expect(continued).toBe(true);
+    },
+    "hooks.md",
+  );
+
+  heldHostCase(
+    "R4d: nested notifications unwind and outer after survives inner after failure",
+    function* (stream) {
+      const order: string[] = [];
+      const failure = new Error("inner after");
+      const components = [
+        declaration(function* () {
+          return yield* content();
+        }, "Outer"),
+        declaration(text, "Inner"),
+      ];
+      const result = yield* run(
+        "<Outer><Inner /></Outer>",
+        {
+          components,
+          componentInvocations: {
+            *before(observation) {
+              order.push(`before:${observation.component}`);
+              yield* sleep(0);
+            },
+            *after(observation) {
+              order.push(`after:${observation.component}`);
+              if (observation.component === "Inner") {
+                throw failure;
+              }
+              yield* sleep(0);
+            },
           },
         },
-      });
-      expect(result.result.ok).toBe(true);
-      continued = true;
-    });
-    yield* cleaning.operation;
-    expect(after).toBe(false);
-    release.resolve();
-    yield* notified.operation;
-    expect(continued).toBe(false);
-    afterRelease.resolve();
-    yield* execution;
-    expect(continued).toBe(true);
-  });
-
-  it("R4d: nested notifications unwind and outer after survives inner after failure", function* () {
-    const order: string[] = [];
-    const failure = new Error("inner after");
-    const components = [
-      declaration(function* () {
-        return yield* content();
-      }, "Outer"),
-      declaration(text, "Inner"),
-    ];
-    const result = yield* run("<Outer><Inner /></Outer>", {
-      components,
-      componentInvocations: {
-        *before(observation) {
-          order.push(`before:${observation.component}`);
-          yield* sleep(0);
-        },
-        *after(observation) {
-          order.push(`after:${observation.component}`);
-          if (observation.component === "Inner") {
-            throw failure;
-          }
-          yield* sleep(0);
-        },
-      },
-    });
-    expect(result.result.ok).toBe(false);
-    expect(order).toEqual(["before:Outer", "before:Inner", "after:Inner", "after:Outer"]);
-  });
+        stream,
+      );
+      expect(result.result.ok).toBe(false);
+      expect(order).toEqual(["before:Outer", "before:Inner", "after:Inner", "after:Outer"]);
+    },
+    "hooks.md",
+  );
 });
 
 describe("Observed live protected returns", () => {
