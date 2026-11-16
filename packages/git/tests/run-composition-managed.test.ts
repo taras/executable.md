@@ -30,6 +30,7 @@ import { spawn, withResolvers } from "effection";
 import { registerComponents } from "@executablemd/core";
 import type { ChildOutcome } from "./support/run-composition-child.ts";
 import {
+  ordinaryDocumentCases,
   causedBy,
   commonDirectoryOf,
   countingOrdinaryHost,
@@ -50,86 +51,97 @@ import {
 } from "./support/run-composition.ts";
 import { CHILD, REMOTE, entriesOf, isManagedRefusal } from "./support/run-composition-tier.ts";
 
+const ordinaryCase = ordinaryDocumentCases("packages/git/tests/run-composition-managed.test.ts");
+
 describe("ORC8 — managed checkouts are persistent", () => {
-  it("leaves the checkout, its metadata and its working files after the run", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const common = commonDirectoryOf(checkout);
-    const slot = worktreeSlotOf(root, common, "kept");
+  ordinaryCase(
+    "leaves the checkout, its metadata and its working files after the run",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const common = commonDirectoryOf(checkout);
+      const slot = worktreeSlotOf(root, common, "kept");
 
-    yield* runOrdinaryDocument(
-      [
-        `<Worktree name="kept" branch="kept">`,
-        `<File path="draft.md">unfinished</File>`,
-        "</Worktree>",
-      ].join("\n"),
-      { root, cwd: checkout.root },
-    );
+      yield* runFresh(
+        [
+          `<Worktree name="kept" branch="kept">`,
+          `<File path="draft.md">unfinished</File>`,
+          "</Worktree>",
+        ].join("\n"),
+        { root, cwd: checkout.root },
+      );
 
-    expect(yield* exists(slot.checkout)).toBe(true);
-    expect(yield* exists(`${slot.checkout}/draft.md`)).toBe(true);
-    const sidecar = yield* readSidecar(slot);
-    expect(sidecar).toMatchObject({
-      kind: "worktree",
-      version: 1,
-      name: "kept",
-      requestedBranch: "kept",
-      requestedBase: null,
-      owner: common,
-    });
-  });
+      expect(yield* exists(slot.checkout)).toBe(true);
+      expect(yield* exists(`${slot.checkout}/draft.md`)).toBe(true);
+      const sidecar = yield* readSidecar(slot);
+      expect(sidecar).toMatchObject({
+        kind: "worktree",
+        version: 1,
+        name: "kept",
+        requestedBranch: "kept",
+        requestedBase: null,
+        owner: common,
+      });
+    },
+  );
 
-  it("leaves a managed Repository, its metadata and its files after the run", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const slot = repositorySlotOf(root, remote.locator, "project");
+  ordinaryCase(
+    "leaves a managed Repository, its metadata and its files after the run",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const slot = repositorySlotOf(root, remote.locator, "project");
 
-    yield* runOrdinaryDocument(
-      [
-        `<Repository name="project" url="${remote.locator}">`,
-        `<File path="draft.md">unfinished</File>`,
-        "</Repository>",
-      ].join("\n"),
-      { root, cwd: checkout.root },
-    );
+      yield* runFresh(
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<File path="draft.md">unfinished</File>`,
+          "</Repository>",
+        ].join("\n"),
+        { root, cwd: checkout.root },
+      );
 
-    expect(yield* exists(`${slot.checkout}/draft.md`)).toBe(true);
-    expect(yield* readSidecar(slot)).toMatchObject({
-      kind: "repository",
-      version: 1,
-      name: "project",
-      locator: remote.locator,
-      requestedBase: null,
-    });
-  });
+      expect(yield* exists(`${slot.checkout}/draft.md`)).toBe(true);
+      expect(yield* readSidecar(slot)).toMatchObject({
+        kind: "repository",
+        version: 1,
+        name: "project",
+        locator: remote.locator,
+        requestedBase: null,
+      });
+    },
+  );
 
-  it("issues no Git or delete command for a checkout while tearing down", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const counting = countingOrdinaryHost();
+  ordinaryCase(
+    "issues no Git or delete command for a checkout while tearing down",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const counting = countingOrdinaryHost();
 
-    yield* runOrdinaryDocument(
-      [
-        `<Repository name="project" url="${remote.locator}" as="r" />`,
-        `<Worktree name="kept" branch="kept" as="w" />`,
-      ].join("\n"),
-      { root, cwd: checkout.root, host: counting.host },
-    );
+      yield* runFresh(
+        [
+          `<Repository name="project" url="${remote.locator}" as="r" />`,
+          `<Worktree name="kept" branch="kept" as="w" />`,
+        ].join("\n"),
+        { root, cwd: checkout.root, host: counting.host },
+      );
 
-    // Nothing that could undo a checkout ever ran — not while the document was
-    // expanding, and not on the way out.
-    const issued = subcommands(counting.counters);
-    for (const undoing of ["reset", "clean", "restore", "prune", "gc", "fetch"]) {
-      expect(`${undoing} ${issued.includes(undoing)}`).toBe(`${undoing} false`);
-    }
-    expect(counting.counters.commands.some((args) => args.includes("--force"))).toBe(false);
-    expect(
-      counting.counters.commands.some((args) => args[0] === "worktree" && args[1] === "remove"),
-    ).toBe(false);
-  });
+      // Nothing that could undo a checkout ever ran — not while the document was
+      // expanding, and not on the way out.
+      const issued = subcommands(counting.counters);
+      for (const undoing of ["reset", "clean", "restore", "prune", "gc", "fetch"]) {
+        expect(`${undoing} ${issued.includes(undoing)}`).toBe(`${undoing} false`);
+      }
+      expect(counting.counters.commands.some((args) => args.includes("--force"))).toBe(false);
+      expect(
+        counting.counters.commands.some((args) => args[0] === "worktree" && args[1] === "remove"),
+      ).toBe(false);
+    },
+  );
 
   it("keeps both kinds of checkout after a cancellation", function* () {
     const remote = yield* useBareRemote(REMOTE);
@@ -156,66 +168,72 @@ describe("ORC8 — managed checkouts are persistent", () => {
     expect(yield* exists(`${worktree.checkout}/in-flight.md`)).toBe(true);
   });
 
-  it("keeps a managed Repository after an authored failure inside its body", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const slot = repositorySlotOf(root, remote.locator, "surviving");
+  ordinaryCase(
+    "keeps a managed Repository after an authored failure inside its body",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const slot = repositorySlotOf(root, remote.locator, "surviving");
 
-    yield* raised(
-      runOrdinaryDocument(
-        [
-          `<Repository name="surviving" url="${remote.locator}">`,
-          `<File path="kept.md">written before the failure</File>`,
-          `<Git.Switch branch="in-progress" />`,
-          `<Git.Add paths="kept.md" />`,
-          `<Git.Add paths="absent-on-purpose.md" />`,
-          "</Repository>",
-        ].join("\n"),
-        { root, cwd: checkout.root },
-      ),
-    );
+      yield* raised(
+        runFresh(
+          [
+            `<Repository name="surviving" url="${remote.locator}">`,
+            `<File path="kept.md">written before the failure</File>`,
+            `<Git.Switch branch="in-progress" />`,
+            `<Git.Add paths="kept.md" />`,
+            `<Git.Add paths="absent-on-purpose.md" />`,
+            "</Repository>",
+          ].join("\n"),
+          { root, cwd: checkout.root },
+        ),
+      );
 
-    // The path, the sidecar, the Git state and the working file all survive.
-    expect(yield* exists(slot.checkout)).toBe(true);
-    expect(yield* readSidecar(slot)).toMatchObject({
-      kind: "repository",
-      version: 1,
-      name: "surviving",
-      locator: remote.locator,
-    });
-    expect(yield* readTextFile(`${slot.checkout}/kept.md`)).toBe("written before the failure");
-    // The branch the document switched to and the staging it did are both still
-    // there: nothing rolled back, and nothing was cleaned up on the way out.
-    expect(git(["rev-parse", "--abbrev-ref", "HEAD"], slot.checkout, checkout.home)).toBe(
-      "in-progress",
-    );
-    expect(git(["diff", "--cached", "--name-only"], slot.checkout, checkout.home)).toContain(
-      "kept.md",
-    );
-  });
+      // The path, the sidecar, the Git state and the working file all survive.
+      expect(yield* exists(slot.checkout)).toBe(true);
+      expect(yield* readSidecar(slot)).toMatchObject({
+        kind: "repository",
+        version: 1,
+        name: "surviving",
+        locator: remote.locator,
+      });
+      expect(yield* readTextFile(`${slot.checkout}/kept.md`)).toBe("written before the failure");
+      // The branch the document switched to and the staging it did are both still
+      // there: nothing rolled back, and nothing was cleaned up on the way out.
+      expect(git(["rev-parse", "--abbrev-ref", "HEAD"], slot.checkout, checkout.home)).toBe(
+        "in-progress",
+      );
+      expect(git(["diff", "--cached", "--name-only"], slot.checkout, checkout.home)).toContain(
+        "kept.md",
+      );
+    },
+  );
 
-  it("keeps the checkout after an authored failure inside the Worktree body", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const slot = worktreeSlotOf(root, commonDirectoryOf(checkout), "survivor");
+  ordinaryCase(
+    "keeps the checkout after an authored failure inside the Worktree body",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const slot = worktreeSlotOf(root, commonDirectoryOf(checkout), "survivor");
 
-    yield* raised(
-      runOrdinaryDocument(
-        [
-          `<Worktree name="survivor" branch="survivor">`,
-          `<File path="kept.md">written before the failure</File>`,
-          `<Git.Add paths="absent-on-purpose.md" />`,
-          "</Worktree>",
-        ].join("\n"),
-        { root, cwd: checkout.root },
-      ),
-    );
+      yield* raised(
+        runFresh(
+          [
+            `<Worktree name="survivor" branch="survivor">`,
+            `<File path="kept.md">written before the failure</File>`,
+            `<Git.Add paths="absent-on-purpose.md" />`,
+            "</Worktree>",
+          ].join("\n"),
+          { root, cwd: checkout.root },
+        ),
+      );
 
-    expect(yield* exists(`${slot.checkout}/kept.md`)).toBe(true);
-    expect(yield* readSidecar(slot)).toMatchObject({ kind: "worktree" });
-  });
+      expect(yield* exists(`${slot.checkout}/kept.md`)).toBe(true);
+      expect(yield* readSidecar(slot)).toMatchObject({ kind: "worktree" });
+    },
+  );
 });
 
 describe("ORC9 — compatible reuse", () => {

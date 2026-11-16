@@ -33,6 +33,7 @@ import { UnresolvedGitIdentityError } from "../src/deno/run-composition/errors.t
 import { useBareRemote } from "./support/git-remotes.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 import {
+  ordinaryDocumentCases,
   causedBy,
   commonDirectoryOf,
   countingOrdinaryHost,
@@ -54,27 +55,32 @@ import {
   reviewRoutes,
 } from "./support/run-composition-tier.ts";
 
+const ordinaryCase = ordinaryDocumentCases("packages/git/tests/run-composition-ambient.test.ts");
+
 describe("ORC3 — the ambient primary checkout", () => {
-  it("switches, stages and commits in the repository the command was run in", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "switches, stages and commits in the repository the command was run in",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    yield* runOrdinaryDocument(
-      [
-        `<Git.Switch branch="feature" />`,
-        `<File path="notes.md">ordinary</File>`,
-        `<Git.Add paths="notes.md" />`,
-        `<Git.Commit message="Write notes" as="commit" />`,
-      ].join("\n"),
-      { root, cwd: checkout.root },
-    );
+      yield* runFresh(
+        [
+          `<Git.Switch branch="feature" />`,
+          `<File path="notes.md">ordinary</File>`,
+          `<Git.Add paths="notes.md" />`,
+          `<Git.Commit message="Write notes" as="commit" />`,
+        ].join("\n"),
+        { root, cwd: checkout.root },
+      );
 
-    // The person's own checkout moved, and it is what a later `git` sees.
-    expect(checkout.run("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
-    expect(checkout.run("log", "-1", "--pretty=%s")).toBe("Write notes");
-    expect(checkout.run("show", "--pretty=", "--name-only", "HEAD")).toContain("notes.md");
-  });
+      // The person's own checkout moved, and it is what a later `git` sees.
+      expect(checkout.run("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
+      expect(checkout.run("log", "-1", "--pretty=%s")).toBe("Write notes");
+      expect(checkout.run("show", "--pretty=", "--name-only", "HEAD")).toContain("notes.md");
+    },
+  );
 
   it("refuses every root element that needs a repository outside a Git checkout", function* () {
     const root = yield* useManagedRoot();
@@ -113,32 +119,35 @@ describe("ORC3 — the ambient primary checkout", () => {
 });
 
 describe("ORC4 — the ambient linked worktree", () => {
-  it("follows the common directory for identity and the worktree root for work", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const primary = yield* useHostCheckout(remote.locator);
-    // A linked worktree made by hand, exactly as a person would.
-    const linked = `${primary.root}-linked`;
-    primary.run("worktree", "add", "-b", "sidecar", linked);
+  ordinaryCase(
+    "follows the common directory for identity and the worktree root for work",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const primary = yield* useHostCheckout(remote.locator);
+      // A linked worktree made by hand, exactly as a person would.
+      const linked = `${primary.root}-linked`;
+      primary.run("worktree", "add", "-b", "sidecar", linked);
 
-    const before = primary.run("rev-parse", "HEAD");
+      const before = primary.run("rev-parse", "HEAD");
 
-    yield* scoped(function* () {
-      yield* runOrdinaryDocument(
-        [
-          `<File path="from-worktree.md">here</File>`,
-          `<Git.Add paths="from-worktree.md" />`,
-          `<Git.Commit message="In the worktree" as="commit" />`,
-        ].join("\n"),
-        // The command is run *in the linked worktree*.
-        { root, cwd: linked },
-      );
-    });
+      yield* scoped(function* () {
+        yield* runFresh(
+          [
+            `<File path="from-worktree.md">here</File>`,
+            `<Git.Add paths="from-worktree.md" />`,
+            `<Git.Commit message="In the worktree" as="commit" />`,
+          ].join("\n"),
+          // The command is run *in the linked worktree*.
+          { root, cwd: linked },
+        );
+      });
 
-    // The worktree advanced; the primary checkout did not.
-    expect(primary.run("rev-parse", "HEAD")).toBe(before);
-    expect(primary.run("log", "-1", "--pretty=%s", "sidecar")).toBe("In the worktree");
-  });
+      // The worktree advanced; the primary checkout did not.
+      expect(primary.run("rev-parse", "HEAD")).toBe(before);
+      expect(primary.run("log", "-1", "--pretty=%s", "sidecar")).toBe("In the worktree");
+    },
+  );
 });
 
 describe("ORC5 — origin is not local admission", () => {
@@ -196,25 +205,28 @@ describe("ORC5 — origin is not local admission", () => {
     }
   });
 
-  it("opens a session and transports when there is an origin, so the counters can fail", function* () {
-    // The same counters, on a repository that *does* have an origin. Without
-    // this, every assertion above would pass on a counter that can never be
-    // incremented — which is the one way "nothing was reached" lies.
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const counting = countingOrdinaryHost();
+  ordinaryCase(
+    "opens a session and transports when there is an origin, so the counters can fail",
+    function* (runFresh) {
+      // The same counters, on a repository that *does* have an origin. Without
+      // this, every assertion above would pass on a counter that can never be
+      // incremented — which is the one way "nothing was reached" lies.
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const counting = countingOrdinaryHost();
 
-    yield* runOrdinaryDocument([`<Git.Switch branch="published" />`, `<Git.Push />`].join("\n"), {
-      root,
-      cwd: checkout.root,
-      host: counting.host,
-    });
+      yield* runFresh([`<Git.Switch branch="published" />`, `<Git.Push />`].join("\n"), {
+        root,
+        cwd: checkout.root,
+        host: counting.host,
+      });
 
-    expect(counting.counters.sessions).toEqual([remote.locator]);
-    expect(subcommands(counting.counters)).toContain("ls-remote");
-    expect(subcommands(counting.counters)).toContain("push");
-  });
+      expect(counting.counters.sessions).toEqual([remote.locator]);
+      expect(subcommands(counting.counters)).toContain("ls-remote");
+      expect(subcommands(counting.counters)).toContain("push");
+    },
+  );
 
   it("reaches a Git host when one is configured, so those counters can fail too", function* () {
     const remote = yield* useBareRemote(REMOTE);
@@ -241,53 +253,56 @@ describe("ORC5 — origin is not local admission", () => {
 });
 
 describe("ORC6 — lexical working directories", () => {
-  it("restores the enclosing directory after a Worktree body and a Dir body", function* () {
-    yield* Permissions.around(
-      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
-      { at: "min" },
-    );
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "restores the enclosing directory after a Worktree body and a Dir body",
+    function* (runFresh) {
+      yield* Permissions.around(
+        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+        { at: "min" },
+      );
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    // A relative `<File>` path resolves against the contextual working
-    // directory, so where each one lands is where the document was standing.
-    const common = commonDirectoryOf(checkout);
-    yield* runOrdinaryDocument(
-      [
-        `<File path="outer.md">outer</File>`,
-        `<Worktree name="inner" branch="inner" as="worktree" />`,
-        `<Worktree name="lexical" branch="lexical">`,
-        `<File path="within.md">within</File>`,
-        "</Worktree>",
-        "<Dir path={worktree}>",
-        `<File path="bound.md">bound</File>`,
-        "</Dir>",
-        `<File path="after.md">after</File>`,
-      ].join("\n"),
-      { root, cwd: checkout.root },
-    );
+      // A relative `<File>` path resolves against the contextual working
+      // directory, so where each one lands is where the document was standing.
+      const common = commonDirectoryOf(checkout);
+      yield* runFresh(
+        [
+          `<File path="outer.md">outer</File>`,
+          `<Worktree name="inner" branch="inner" as="worktree" />`,
+          `<Worktree name="lexical" branch="lexical">`,
+          `<File path="within.md">within</File>`,
+          "</Worktree>",
+          "<Dir path={worktree}>",
+          `<File path="bound.md">bound</File>`,
+          "</Dir>",
+          `<File path="after.md">after</File>`,
+        ].join("\n"),
+        { root, cwd: checkout.root },
+      );
 
-    const lexical = worktreeSlotOf(root, common, "lexical");
-    const bound = worktreeSlotOf(root, common, "inner");
-    expect(yield* exists(`${checkout.root}/outer.md`)).toBe(true);
-    // Each body observed its own checkout.
-    expect(yield* exists(`${lexical.checkout}/within.md`)).toBe(true);
-    expect(yield* exists(`${bound.checkout}/bound.md`)).toBe(true);
-    // Restored: the sibling after both is back in the enclosing directory.
-    expect(yield* exists(`${checkout.root}/after.md`)).toBe(true);
-    expect(yield* exists(`${lexical.checkout}/after.md`)).toBe(false);
-    expect(yield* exists(`${bound.checkout}/after.md`)).toBe(false);
-  });
+      const lexical = worktreeSlotOf(root, common, "lexical");
+      const bound = worktreeSlotOf(root, common, "inner");
+      expect(yield* exists(`${checkout.root}/outer.md`)).toBe(true);
+      // Each body observed its own checkout.
+      expect(yield* exists(`${lexical.checkout}/within.md`)).toBe(true);
+      expect(yield* exists(`${bound.checkout}/bound.md`)).toBe(true);
+      // Restored: the sibling after both is back in the enclosing directory.
+      expect(yield* exists(`${checkout.root}/after.md`)).toBe(true);
+      expect(yield* exists(`${lexical.checkout}/after.md`)).toBe(false);
+      expect(yield* exists(`${bound.checkout}/after.md`)).toBe(false);
+    },
+  );
 
-  it("restores the enclosing directory when the body fails", function* () {
+  ordinaryCase("restores the enclosing directory when the body fails", function* (runFresh) {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
 
     // The refusal is printed rather than fatal, so the document goes on — and
     // what it goes on in is the directory the Worktree body was installed over.
-    yield* runOrdinaryDocument(
+    yield* runFresh(
       [
         "<PrintErrors>",
         `<Worktree name="failing" branch="failing">`,
@@ -339,28 +354,31 @@ describe("ORC6 — lexical working directories", () => {
 });
 
 describe("ORC13 — live local Git", () => {
-  it("makes real, non-transactional changes and claims no rollback on failure", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "makes real, non-transactional changes and claims no rollback on failure",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    const failure = yield* raised(
-      runOrdinaryDocument(
-        [
-          `<Git.Switch branch="partway" />`,
-          `<File path="staged.md">staged before the failure</File>`,
-          `<Git.Add paths="staged.md" />`,
-          `<Git.Add paths="never-existed.md" />`,
-        ].join("\n"),
-        { root, cwd: checkout.root },
-      ),
-    );
-    expect(failure).toBeInstanceOf(Error);
+      const failure = yield* raised(
+        runFresh(
+          [
+            `<Git.Switch branch="partway" />`,
+            `<File path="staged.md">staged before the failure</File>`,
+            `<Git.Add paths="staged.md" />`,
+            `<Git.Add paths="never-existed.md" />`,
+          ].join("\n"),
+          { root, cwd: checkout.root },
+        ),
+      );
+      expect(failure).toBeInstanceOf(Error);
 
-    // The switch and the first Add really happened, and nothing took them back.
-    expect(checkout.run("rev-parse", "--abbrev-ref", "HEAD")).toBe("partway");
-    expect(checkout.run("diff", "--cached", "--name-only")).toContain("staged.md");
-  });
+      // The switch and the first Add really happened, and nothing took them back.
+      expect(checkout.run("rev-parse", "--abbrev-ref", "HEAD")).toBe("partway");
+      expect(checkout.run("diff", "--cached", "--name-only")).toContain("staged.md");
+    },
+  );
 
   it("keeps what a cancelled document had already done, and claims no rollback", function* () {
     const remote = yield* useBareRemote(REMOTE);
@@ -385,12 +403,12 @@ describe("ORC13 — live local Git", () => {
     expect(checkout.run("log", "-1", "--pretty=%s")).not.toBe("never reached");
   });
 
-  it("commits as the invoking user, not as the workflow identity", function* () {
+  ordinaryCase("commits as the invoking user, not as the workflow identity", function* (runFresh) {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
 
-    yield* runOrdinaryDocument(
+    yield* runFresh(
       [
         `<File path="mine.md">mine</File>`,
         `<Git.Add paths="mine.md" />`,
@@ -409,85 +427,94 @@ describe("ORC13 — live local Git", () => {
     expect(checkout.run("log", "-1", "--pretty=%an")).not.toBe("Executable.md workflow");
   });
 
-  it("takes author and committer separately when the host resolves them apart", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "takes author and committer separately when the host resolves them apart",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    yield* runOrdinaryDocument(
-      [
-        `<File path="pair.md">pair</File>`,
-        `<Git.Add paths="pair.md" />`,
-        `<Git.Commit message="Two identities" as="commit" />`,
-      ].join("\n"),
-      {
-        root,
-        cwd: checkout.root,
-        identity: statedIdentity(
-          "Ada Lovelace <ada@example.test> 1 +0000",
-          "Grace Hopper <grace@example.test> 1 +0000",
-        ),
-      },
-    );
-
-    expect(checkout.run("log", "-1", "--pretty=%an|%ae|%cn|%ce")).toBe(
-      "Ada Lovelace|ada@example.test|Grace Hopper|grace@example.test",
-    );
-  });
-
-  it("refuses to commit when the host cannot say who the commit is by", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-    const before = checkout.run("rev-parse", "HEAD");
-
-    const failure = yield* raised(
-      runOrdinaryDocument(
+      yield* runFresh(
         [
-          `<File path="orphan.md">orphan</File>`,
-          `<Git.Add paths="orphan.md" />`,
-          `<Git.Commit message="Nobody" as="commit" />`,
+          `<File path="pair.md">pair</File>`,
+          `<Git.Add paths="pair.md" />`,
+          `<Git.Commit message="Two identities" as="commit" />`,
+        ].join("\n"),
+        {
+          root,
+          cwd: checkout.root,
+          identity: statedIdentity(
+            "Ada Lovelace <ada@example.test> 1 +0000",
+            "Grace Hopper <grace@example.test> 1 +0000",
+          ),
+        },
+      );
+
+      expect(checkout.run("log", "-1", "--pretty=%an|%ae|%cn|%ce")).toBe(
+        "Ada Lovelace|ada@example.test|Grace Hopper|grace@example.test",
+      );
+    },
+  );
+
+  ordinaryCase(
+    "refuses to commit when the host cannot say who the commit is by",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+      const before = checkout.run("rev-parse", "HEAD");
+
+      const failure = yield* raised(
+        runFresh(
+          [
+            `<File path="orphan.md">orphan</File>`,
+            `<Git.Add paths="orphan.md" />`,
+            `<Git.Commit message="Nobody" as="commit" />`,
+          ].join("\n"),
+          { root, cwd: checkout.root, identity: statedIdentity(undefined) },
+        ),
+      );
+
+      expect(failure).toBeInstanceOf(UnresolvedGitIdentityError);
+      expect(String(failure)).toContain("git config --global user.name");
+      // Nothing was committed, and no identity was substituted.
+      expect(checkout.run("rev-parse", "HEAD")).toBe(before);
+      // The staging that came before it still happened: this refuses the commit,
+      // not the document that led to it.
+      expect(checkout.run("diff", "--cached", "--name-only")).toContain("orphan.md");
+    },
+  );
+
+  ordinaryCase(
+    "leaves every other component usable when no identity resolves",
+    function* (runFresh) {
+      yield* Permissions.around(
+        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+        { at: "min" },
+      );
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
+
+      // Repository, Worktree, Dir, Switch and Add all work: none of them writes a
+      // commit object, so none of them needs to know who anybody is.
+      const rendered = yield* runFresh(
+        [
+          `<Repository name="project" url="${remote.locator}" as="repository" />`,
+          `<Worktree name="usable" branch="usable" as="worktree" />`,
+          "<Dir path={worktree}>",
+          `<Git.Switch branch="usable-two" />`,
+          `<File path="fine.md">fine</File>`,
+          `<Git.Add paths="fine.md" />`,
+          "</Dir>",
+          "",
+          "ran",
         ].join("\n"),
         { root, cwd: checkout.root, identity: statedIdentity(undefined) },
-      ),
-    );
-
-    expect(failure).toBeInstanceOf(UnresolvedGitIdentityError);
-    expect(String(failure)).toContain("git config --global user.name");
-    // Nothing was committed, and no identity was substituted.
-    expect(checkout.run("rev-parse", "HEAD")).toBe(before);
-    // The staging that came before it still happened: this refuses the commit,
-    // not the document that led to it.
-    expect(checkout.run("diff", "--cached", "--name-only")).toContain("orphan.md");
-  });
-
-  it("leaves every other component usable when no identity resolves", function* () {
-    yield* Permissions.around(
-      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
-      { at: "min" },
-    );
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
-
-    // Repository, Worktree, Dir, Switch and Add all work: none of them writes a
-    // commit object, so none of them needs to know who anybody is.
-    const rendered = yield* runOrdinaryDocument(
-      [
-        `<Repository name="project" url="${remote.locator}" as="repository" />`,
-        `<Worktree name="usable" branch="usable" as="worktree" />`,
-        "<Dir path={worktree}>",
-        `<Git.Switch branch="usable-two" />`,
-        `<File path="fine.md">fine</File>`,
-        `<Git.Add paths="fine.md" />`,
-        "</Dir>",
-        "",
-        "ran",
-      ].join("\n"),
-      { root, cwd: checkout.root, identity: statedIdentity(undefined) },
-    );
-    expect(String(rendered)).toContain("ran");
-  });
+      );
+      expect(String(rendered)).toContain("ran");
+    },
+  );
 
   it("keeps hooks, monitors, signing and repository helpers disabled", function* () {
     const remote = yield* useBareRemote(REMOTE);
@@ -571,86 +598,89 @@ function selectionProbe(seen: (RepositorySelection | undefined)[]): ComponentReg
 
 describe("ORC6 — Dir makes the directory it names", () => {
   // ORC6: the ordering claim and the two path rules, in one document.
-  it("ORC6: creates missing parents, keeps an absolute path, and finishes before content", function* () {
-    yield* Permissions.around(
-      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
-      { at: "min" },
-    );
-    const root = yield* useManagedRoot();
-    const checkout = (yield* useOriginlessCheckout()).root;
-    const elsewhere = yield* useTempDirectory("xmd-orc6-absolute-");
+  ordinaryCase(
+    "ORC6: creates missing parents, keeps an absolute path, and finishes before content",
+    function* (runFresh) {
+      yield* Permissions.around(
+        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+        { at: "min" },
+      );
+      const root = yield* useManagedRoot();
+      const checkout = (yield* useOriginlessCheckout()).root;
+      const elsewhere = yield* useTempDirectory("xmd-orc6-absolute-");
 
-    // The ordering probe. A nested `<File>` proves nothing about ordering,
-    // because a write creates its own parents recursively — it would land
-    // whether or not the ensure had finished. This runs *first* inside the
-    // region and records what it finds: whether the directory is already there,
-    // and what the contextual working directory is at that moment.
-    const observed: { exists: boolean; cwd: string }[] = [];
-    const probe: ComponentRegistration = {
-      name: "Observes",
-      origin: "test://observes",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      *fn(): Operation<string> {
-        const here = yield* cwd();
-        observed.push({ exists: yield* exists(here), cwd: here });
-        return "";
-      },
-    };
+      // The ordering probe. A nested `<File>` proves nothing about ordering,
+      // because a write creates its own parents recursively — it would land
+      // whether or not the ensure had finished. This runs *first* inside the
+      // region and records what it finds: whether the directory is already there,
+      // and what the contextual working directory is at that moment.
+      const observed: { exists: boolean; cwd: string }[] = [];
+      const probe: ComponentRegistration = {
+        name: "Observes",
+        origin: "test://observes",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn(): Operation<string> {
+          const here = yield* cwd();
+          observed.push({ exists: yield* exists(here), cwd: here });
+          return "";
+        },
+      };
 
-    yield* runOrdinaryDocument(
-      [
-        '<Dir path="made/deep">',
-        "",
-        "<Observes />",
-        "",
-        '<File path="inside.md">landed</File>',
-        "",
-        "</Dir>",
-        "",
-        `<Dir path="${join(elsewhere, "written", "here")}">`,
-        "",
-        "<Observes />",
-        "",
-        '<File path="outside.md">also landed</File>',
-        "",
-        "</Dir>",
-        "",
-      ].join("\n"),
-      { root, cwd: checkout, components: [probe] },
-    );
+      yield* runFresh(
+        [
+          '<Dir path="made/deep">',
+          "",
+          "<Observes />",
+          "",
+          '<File path="inside.md">landed</File>',
+          "",
+          "</Dir>",
+          "",
+          `<Dir path="${join(elsewhere, "written", "here")}">`,
+          "",
+          "<Observes />",
+          "",
+          '<File path="outside.md">also landed</File>',
+          "",
+          "</Dir>",
+          "",
+        ].join("\n"),
+        { root, cwd: checkout, components: [probe] },
+      );
 
-    // Before any other content ran, the directory already existed and was the
-    // contextual working directory. That is the ordering claim, observed rather
-    // than inferred.
-    expect(observed).toHaveLength(2);
-    expect(observed[0]).toEqual({ exists: true, cwd: join(checkout, "made", "deep") });
-    expect(observed[1]).toEqual({
-      exists: true,
-      cwd: join(elsewhere, "written", "here"),
-    });
+      // Before any other content ran, the directory already existed and was the
+      // contextual working directory. That is the ordering claim, observed rather
+      // than inferred.
+      expect(observed).toHaveLength(2);
+      expect(observed[0]).toEqual({ exists: true, cwd: join(checkout, "made", "deep") });
+      expect(observed[1]).toEqual({
+        exists: true,
+        cwd: join(elsewhere, "written", "here"),
+      });
 
-    // Every missing parent, and the file that landed after them.
-    expect(yield* readTextFile(join(checkout, "made", "deep", "inside.md"))).toBe("landed");
-    // The absolute target names exactly that place — not a rebase beneath cwd.
-    expect(yield* readTextFile(join(elsewhere, "written", "here", "outside.md"))).toBe(
-      "also landed",
-    );
-    expect(yield* exists(join(checkout, elsewhere.replace(/^\//, "")))).toBe(false);
-  });
+      // Every missing parent, and the file that landed after them.
+      expect(yield* readTextFile(join(checkout, "made", "deep", "inside.md"))).toBe("landed");
+      // The absolute target names exactly that place — not a rebase beneath cwd.
+      expect(yield* readTextFile(join(elsewhere, "written", "here", "outside.md"))).toBe(
+        "also landed",
+      );
+      expect(yield* exists(join(checkout, elsewhere.replace(/^\//, "")))).toBe(false);
+    },
+  );
 
   // ORC6a: an existing directory is adopted. Asserted on the bytes and on the
   // entry list, because a provider that removed and recreated it would pass a
   // test that only checked the directory exists.
-  it("ORC6a: an existing directory keeps its contents", function* () {
+  ordinaryCase("ORC6a: an existing directory keeps its contents", function* (runFresh) {
     const root = yield* useManagedRoot();
     const checkout = (yield* useOriginlessCheckout()).root;
     yield* ensureDir(join(checkout, "kept", "sub"));
     yield* writeTextFile(join(checkout, "kept", "planted.txt"), "the bytes that were here");
 
-    yield* runOrdinaryDocument(
-      '<Dir path="kept">\n\n<File path="added.md">added</File>\n\n</Dir>\n',
-      { root, cwd: checkout },
-    );
+    yield* runFresh('<Dir path="kept">\n\n<File path="added.md">added</File>\n\n</Dir>\n', {
+      root,
+      cwd: checkout,
+    });
 
     expect(yield* readTextFile(join(checkout, "kept", "planted.txt"))).toBe(
       "the bytes that were here",
@@ -791,35 +821,38 @@ describe("ORC6 — Dir makes the directory it names", () => {
   // ORC6d: the operation is about a directory. The Repository selection in
   // scope, and every member of its identity, is the same inside the region and
   // after it.
-  it("ORC6d: Repository selection and identity are unchanged by Dir", function* () {
-    const root = yield* useManagedRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const checkout = (yield* useHostCheckout(remote.locator)).root;
-    const seen: (RepositorySelection | undefined)[] = [];
+  ordinaryCase(
+    "ORC6d: Repository selection and identity are unchanged by Dir",
+    function* (runFresh) {
+      const root = yield* useManagedRoot();
+      const remote = yield* useBareRemote(REMOTE);
+      const checkout = (yield* useHostCheckout(remote.locator)).root;
+      const seen: (RepositorySelection | undefined)[] = [];
 
-    yield* runOrdinaryDocument(
-      [
-        '<Stated as="before" />',
-        '<Dir path="within">',
-        "",
-        '<Stated as="inside" />',
-        "",
-        "</Dir>",
-        "",
-        '<Stated as="after" />',
-        "",
-      ].join("\n"),
-      { root, cwd: checkout, components: [selectionProbe(seen)] },
-    );
+      yield* runFresh(
+        [
+          '<Stated as="before" />',
+          '<Dir path="within">',
+          "",
+          '<Stated as="inside" />',
+          "",
+          "</Dir>",
+          "",
+          '<Stated as="after" />',
+          "",
+        ].join("\n"),
+        { root, cwd: checkout, components: [selectionProbe(seen)] },
+      );
 
-    expect(seen).toHaveLength(3);
-    // The whole selection, member by member: identifier, name, checkout path
-    // and every member of the identity. A Dir that had re-selected anything
-    // would differ in one of them.
-    expect(seen[0]).toBeDefined();
-    expect(seen[1]).toEqual(seen[0]);
-    expect(seen[2]).toEqual(seen[0]);
-  });
+      expect(seen).toHaveLength(3);
+      // The whole selection, member by member: identifier, name, checkout path
+      // and every member of the identity. A Dir that had re-selected anything
+      // would differ in one of them.
+      expect(seen[0]).toBeDefined();
+      expect(seen[1]).toEqual(seen[0]);
+      expect(seen[2]).toEqual(seen[0]);
+    },
+  );
 
   // ORC6e: creation is persistent. A directory made inside a region whose
   // content then fails is still there, and so is one made in a run that was

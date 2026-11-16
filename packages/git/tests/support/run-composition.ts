@@ -8,8 +8,8 @@
  * the user's own `~/.xmd/repositories`, and the Git subprocess where a suite
  * counts invocations.
  *
- * There is no database, no journal and no WorkflowRun anywhere in this file.
- * That is the point of the profile: an ordinary run has none of them.
+ * The ordinary profile installs no run store. The test owns any diagnostic
+ * snapshot around the execution.
  */
 
 import { scoped, spawn, suspend, until, withResolvers, type Operation } from "effection";
@@ -25,6 +25,8 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../../test-support/failure-journal.ts";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { RepositoryContext } from "../../src/composition/context.ts";
 import type { RepositorySelection } from "../../src/composition/selection.ts";
@@ -236,7 +238,11 @@ export interface RunOptions extends Omit<RunCompositionOptions, "root" | "cwd"> 
  * green on a developer's laptop, red on every shard. A case that is *about*
  * identity resolution passes its own `identity` and overrides this.
  */
-export function runOrdinaryDocument(source: string, options: RunOptions): Operation<Json> {
+export function runOrdinaryDocument(
+  source: string,
+  options: RunOptions,
+  stream = new InMemoryStream(),
+): Operation<Json> {
   return scoped(function* () {
     yield* API.Env.around(
       {
@@ -267,11 +273,23 @@ export function runOrdinaryDocument(source: string, options: RunOptions): Operat
     return yield* collect(
       yield* execute({
         ...inlineSource(source),
-        stream: new InMemoryStream(),
+        stream,
         ...(options.props === undefined ? {} : { props: options.props }),
       }),
     );
   });
+}
+
+type RunOrdinary = (source: string, options: RunOptions) => Operation<Json>;
+
+export function ordinaryDocumentCases(owner: string) {
+  return (name: string, body: (run: RunOrdinary) => Operation<void>): void => {
+    it(name, () =>
+      captureTestJournal({ owner, name }, "<eval>", (stream) =>
+        body((source, options) => runOrdinaryDocument(source, options, stream)),
+      ),
+    );
+  };
 }
 
 /** What a suite reads back about one managed slot. */

@@ -33,6 +33,7 @@ import {
   patches,
 } from "./support/github.ts";
 import {
+  ordinaryDocumentCases,
   causedBy,
   countingOrdinaryHost,
   fingerprintTree,
@@ -56,34 +57,39 @@ import {
   isAdmissionFailure,
 } from "./support/run-composition-tier.ts";
 
+const ordinaryCase = ordinaryDocumentCases("packages/git/tests/run-composition-remote.test.ts");
+
 describe("ORC14 — live Push evidence", () => {
-  it("records a performed publication and lets exactly that head be authorized", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "records a performed publication and lets exactly that head be authorized",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    const failure = yield* raised(
-      runOrdinaryDocument(
-        [
-          `<Git.Switch branch="published" />`,
-          `<File path="published.md">published</File>`,
-          `<Git.Add paths="published.md" />`,
-          `<Git.Commit message="Publish" as="commit" />`,
-          `<Git.Push />`,
-          `<PullRequest title="Publish" as="pullRequest" />`,
-        ].join("\n"),
-        { root, cwd: checkout.root },
-      ),
-    );
+      const failure = yield* raised(
+        runFresh(
+          [
+            `<Git.Switch branch="published" />`,
+            `<File path="published.md">published</File>`,
+            `<Git.Add paths="published.md" />`,
+            `<Git.Commit message="Publish" as="commit" />`,
+            `<Git.Push />`,
+            `<PullRequest title="Publish" as="pullRequest" />`,
+          ].join("\n"),
+          { root, cwd: checkout.root },
+        ),
+      );
 
-    // The branch really is at the remote, at the commit this execution made.
-    expect(remoteBranch(remote, "published")).toBe(checkout.run("rev-parse", "HEAD"));
-    // And the pull request got past the evidence gate: what stopped it is the
-    // adapter declining a locator that is not a github.com repository, which is
-    // the step *after* the local authorization this criterion is about.
-    expect(String(failure)).toContain("only for repositories on github.com");
-    expect(String(failure)).not.toContain("holds no successful <Git.Push> result");
-  });
+      // The branch really is at the remote, at the commit this execution made.
+      expect(remoteBranch(remote, "published")).toBe(checkout.run("rev-parse", "HEAD"));
+      // And the pull request got past the evidence gate: what stopped it is the
+      // adapter declining a locator that is not a github.com repository, which is
+      // the step *after* the local authorization this criterion is about.
+      expect(String(failure)).toContain("only for repositories on github.com");
+      expect(String(failure)).not.toContain("holds no successful <Git.Push> result");
+    },
+  );
 
   it("records an already-equal publication the same way it records a performed one", function* () {
     const remote = yield* useBareRemote(REMOTE);
@@ -225,7 +231,7 @@ describe("ORC14 — live Push evidence", () => {
     expect((stale as LivePushEvidenceError).reason).toBe("conflicting-push-evidence");
   });
 
-  it("lets the latest publication of a destination decide", function* () {
+  ordinaryCase("lets the latest publication of a destination decide", function* (runFresh) {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
@@ -233,7 +239,7 @@ describe("ORC14 — live Push evidence", () => {
     // Two publications of one destination, at successive commits, and then a
     // third commit nothing published.
     const failure = yield* raised(
-      runOrdinaryDocument(
+      runFresh(
         [
           `<Git.Switch branch="moving" />`,
           `<File path="one.md">one</File>`,
@@ -258,49 +264,55 @@ describe("ORC14 — live Push evidence", () => {
     expect(remoteBranch(remote, "moving")).toBe(checkout.run("rev-parse", "HEAD~1"));
   });
 
-  it("authorizes at the second publication's commit, not the first's", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "authorizes at the second publication's commit, not the first's",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    const failure = yield* raised(
-      runOrdinaryDocument(
-        [
-          `<Git.Switch branch="latest" />`,
-          `<File path="one.md">one</File>`,
-          `<Git.Add paths="one.md" />`,
-          `<Git.Commit message="One" as="first" />`,
-          `<Git.Push />`,
-          `<File path="two.md">two</File>`,
-          `<Git.Add paths="two.md" />`,
-          `<Git.Commit message="Two" as="second" />`,
-          `<Git.Push />`,
-          `<PullRequest title="Latest" as="pullRequest" />`,
-        ].join("\n"),
-        { root, cwd: checkout.root },
-      ),
-    );
-    // Past the gate: the latest publication names the head the pull request
-    // would open from.
-    expect(String(failure)).toContain("only for repositories on github.com");
-    expect(remoteBranch(remote, "latest")).toBe(checkout.run("rev-parse", "HEAD"));
-  });
+      const failure = yield* raised(
+        runFresh(
+          [
+            `<Git.Switch branch="latest" />`,
+            `<File path="one.md">one</File>`,
+            `<Git.Add paths="one.md" />`,
+            `<Git.Commit message="One" as="first" />`,
+            `<Git.Push />`,
+            `<File path="two.md">two</File>`,
+            `<Git.Add paths="two.md" />`,
+            `<Git.Commit message="Two" as="second" />`,
+            `<Git.Push />`,
+            `<PullRequest title="Latest" as="pullRequest" />`,
+          ].join("\n"),
+          { root, cwd: checkout.root },
+        ),
+      );
+      // Past the gate: the latest publication names the head the pull request
+      // would open from.
+      expect(String(failure)).toContain("only for repositories on github.com");
+      expect(remoteBranch(remote, "latest")).toBe(checkout.run("rev-parse", "HEAD"));
+    },
+  );
 });
 
 describe("ORC15 — evidence cannot cross runs", () => {
-  it("refuses a PullRequest in an execution that published nothing", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const checkout = yield* useHostCheckout(remote.locator);
+  ordinaryCase(
+    "refuses a PullRequest in an execution that published nothing",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const checkout = yield* useHostCheckout(remote.locator);
 
-    const failure = yield* raised(
-      runOrdinaryDocument(`<PullRequest title="Nothing pushed" as="pr" />`, {
-        root,
-        cwd: checkout.root,
-      }),
-    );
-    expect(String(failure)).toContain("holds no successful <Git.Push> result");
-  });
+      const failure = yield* raised(
+        runFresh(`<PullRequest title="Nothing pushed" as="pr" />`, {
+          root,
+          cwd: checkout.root,
+        }),
+      );
+      expect(String(failure)).toContain("holds no successful <Git.Push> result");
+    },
+  );
 
   it("does not let one execution's real publication authorize the next", function* () {
     const remote = yield* useBareRemote(REMOTE);
@@ -554,13 +566,13 @@ describe("ORC16 — live Issues", () => {
     expect(store.requests).toHaveLength(0);
   });
 
-  it("installs no matching provider when nothing is configured", function* () {
+  ordinaryCase("installs no matching provider when nothing is configured", function* (runFresh) {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
 
     const failure = yield* raised(
-      runOrdinaryDocument(`<Issue url="${GITHUB_LOCATOR}/issues/7" as="found" />`, {
+      runFresh(`<Issue url="${GITHUB_LOCATOR}/issues/7" as="found" />`, {
         root,
         cwd: checkout.root,
       }),
@@ -972,7 +984,7 @@ describe("checkout admission is the whole repository identity", () => {
  * at the end is the ordinary provider's own.
  */
 describe("ORC18 — the authored Git vocabulary", () => {
-  it("reaches Repository and Git middleware, and still publishes", function* () {
+  ordinaryCase("reaches Repository and Git middleware, and still publishes", function* (runFresh) {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const here = yield* useHostCheckout(remote.locator);
@@ -980,7 +992,7 @@ describe("ORC18 — the authored Git vocabulary", () => {
     const selections: string[] = [];
     const transitions: string[] = [];
 
-    yield* runOrdinaryDocument(
+    yield* runFresh(
       [
         `<Repository name="project" url="${remote.locator}">`,
         `<Worktree name="release" branch="release">`,
