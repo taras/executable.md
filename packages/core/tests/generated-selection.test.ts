@@ -20,6 +20,7 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { createApi } from "@effectionx/context-api";
 import { ensure, resource, scoped, until, useScope } from "effection";
@@ -45,6 +46,7 @@ import { answerProvider, implementation } from "./support/answer-provider.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import type { ComponentDefinition, FunctionComponentDefinition } from "../src/types.ts";
 
+const journalCase = journalCases("packages/core/tests/generated-selection.test.ts");
 const ROOT_PATH = "selection.md";
 const NOTE = "the retained note\n";
 
@@ -62,20 +64,21 @@ interface Attempt {
  * installation, because that is what a host composes: there is no installation
  * member for it, and core reads the final answer of the chain once.
  */
+type SelectionRunOptions = {
+  offered?: unknown;
+  installations?: readonly ExecutionInstallation[];
+  files?: RecordedFiles;
+  around?: () => Operation<void>;
+  /** What the *host* supplies, before any policy has seen the request. */
+  includes?: readonly string[];
+};
+
 function run(
   source: string,
-  options: {
-    offered?: unknown;
-    installations?: readonly ExecutionInstallation[];
-    files?: RecordedFiles;
-    events?: DurableEvent[];
-    around?: () => Operation<void>;
-    /** What the *host* supplies, before any policy has seen the request. */
-    includes?: readonly string[];
-  } = {},
+  options: SelectionRunOptions = {},
+  stream = new InMemoryStream(),
 ): Operation<Attempt> {
   return scoped(function* () {
-    const stream = new InMemoryStream(options.events ?? []);
     yield* useComponentModuleLoader();
     if (options.files !== undefined) {
       yield* useRecordedFiles(options.files);
@@ -220,17 +223,21 @@ function rootImports(events: readonly DurableEvent[]): DurableEvent[] {
 }
 
 describe("Tier GS — the property and its default", () => {
-  it("U5-1: the default is absent, and a document that writes no `<Evaluate>` runs", function* () {
-    const read = yield* scoped(function* () {
-      return yield* Component.operations.generated;
-    });
-    expect(read).toBe(undefined);
+  journalCase(
+    "U5-1: the default is absent, and a document that writes no `<Evaluate>` runs",
+    ROOT_PATH,
+    function* (stream) {
+      const read = yield* scoped(function* () {
+        return yield* Component.operations.generated;
+      });
+      expect(read).toBe(undefined);
 
-    const attempt = yield* run("The document wrote no fragment.\n");
-    expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("The document wrote no fragment.");
-    expect(admissions(attempt.events)).toHaveLength(0);
-  });
+      const attempt = yield* run("The document wrote no fragment.\n", {}, stream);
+      expect(attempt.failure).toBe(undefined);
+      expect(attempt.output).toContain("The document wrote no fragment.");
+      expect(admissions(attempt.events)).toHaveLength(0);
+    },
+  );
 
   it("U5-1: a same-name Component descriptor answers the same default", function* () {
     // The property is a value member of the stable `Component` Api, so a second
@@ -243,19 +250,27 @@ describe("Tier GS — the property and its default", () => {
     expect(yield* Component.operations.generated).toBe(undefined);
   });
 
-  it("U5-1: an absent selection refuses a paired `<Evaluate>` before its producer runs", function* () {
-    const produced: string[] = [];
+  journalCase(
+    "U5-1: an absent selection refuses a paired `<Evaluate>` before its producer runs",
+    ROOT_PATH,
+    function* (stream) {
+      const produced: string[] = [];
 
-    const attempt = yield* run(producing(`<File path="notes.md" />\n`), {
-      around: () => useProducer(produced),
-    });
+      const attempt = yield* run(
+        producing(`<File path="notes.md" />\n`),
+        {
+          around: () => useProducer(produced),
+        },
+        stream,
+      );
 
-    expect(attempt.failure).toContain("no generated components here");
-    // The producer renders the program, so a refusal that happened after it
-    // would have run an Agent turn for a fragment nothing could admit.
-    expect(produced).toEqual([]);
-    expect(admissions(attempt.events)).toHaveLength(0);
-  });
+      expect(attempt.failure).toContain("no generated components here");
+      // The producer renders the program, so a refusal that happened after it
+      // would have run an Agent turn for a fragment nothing could admit.
+      expect(produced).toEqual([]);
+      expect(admissions(attempt.events)).toHaveLength(0);
+    },
+  );
 });
 
 describe("Tier GS — a selection core cannot capture refuses setup", () => {
@@ -313,49 +328,65 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
     });
   }
 
-  it("U5-1: a valid selection is the control every refusal above is measured against", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    const policy: string[] = [];
-    const produced: string[] = [];
+  journalCase(
+    "U5-1: a valid selection is the control every refusal above is measured against",
+    ROOT_PATH,
+    function* (stream) {
+      const files = recordedFiles({ "notes.md": NOTE });
+      const policy: string[] = [];
+      const produced: string[] = [];
 
-    const attempt = yield* run(producing(`<File path="notes.md" />\n`), {
-      offered: { File: ["self-closing"] },
-      files,
-      *around(): Operation<void> {
-        yield* useProducer(produced);
-        yield* Execution.around({
-          *execute([request], next) {
-            policy.push("execute");
-            yield* next(request);
+      const attempt = yield* run(
+        producing(`<File path="notes.md" />\n`),
+        {
+          offered: { File: ["self-closing"] },
+          files,
+          *around(): Operation<void> {
+            yield* useProducer(produced);
+            yield* Execution.around({
+              *execute([request], next) {
+                policy.push("execute");
+                yield* next(request);
+              },
+            });
           },
-        });
-      },
-    });
+        },
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("the retained note");
-    expect(policy).toEqual(["execute"]);
-    expect(rootImports(attempt.events)).toHaveLength(1);
-    expect(produced).toHaveLength(1);
-    expect(files.performed).toEqual(["read notes.md"]);
-    expect(admissions(attempt.events)).toHaveLength(1);
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(attempt.output).toContain("the retained note");
+      expect(policy).toEqual(["execute"]);
+      expect(rootImports(attempt.events)).toHaveLength(1);
+      expect(produced).toHaveLength(1);
+      expect(files.performed).toEqual(["read notes.md"]);
+      expect(admissions(attempt.events)).toHaveLength(1);
+    },
+  );
 
-  it("U5-1: a mixed valid and invalid selection installs no partial allowance", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
+  journalCase(
+    "U5-1: a mixed valid and invalid selection installs no partial allowance",
+    ROOT_PATH,
+    function* (stream) {
+      const files = recordedFiles({ "notes.md": NOTE });
 
-    // One name this host could legitimately offer, and one it could not. The
-    // batch is validated whole, so the valid member is not installed on its
-    // own: nothing is filtered, repaired, or kept.
-    const attempt = yield* run(evaluating(`<File path="notes.md" />\n`), {
-      offered: { File: ["self-closing"], "not a name": ["self-closing"] },
-      files,
-    });
+      // One name this host could legitimately offer, and one it could not. The
+      // batch is validated whole, so the valid member is not installed on its
+      // own: nothing is filtered, repaired, or kept.
+      const attempt = yield* run(
+        evaluating(`<File path="notes.md" />\n`),
+        {
+          offered: { File: ["self-closing"], "not a name": ["self-closing"] },
+          files,
+        },
+        stream,
+      );
 
-    expect(attempt.failure).toContain("component name");
-    expect(files.performed).toEqual([]);
-    expect(admissions(attempt.events)).toHaveLength(0);
-  });
+      expect(attempt.failure).toContain("component name");
+      expect(files.performed).toEqual([]);
+      expect(admissions(attempt.events)).toHaveLength(0);
+    },
+  );
 });
 
 describe("Tier GS — the selection is read once, before public policy", () => {
@@ -432,48 +463,56 @@ describe("Tier GS — the selection is read once, before public policy", () => {
     expect(widened.failure).toContain("did not admit");
   });
 
-  it("U5-2: one property read and one import per selected name", function* () {
-    const reads: string[] = [];
-    const lookups: string[] = [];
-    const files = recordedFiles({ "notes.md": NOTE });
+  journalCase(
+    "U5-2: one property read and one import per selected name",
+    ROOT_PATH,
+    function* (stream) {
+      const reads: string[] = [];
+      const lookups: string[] = [];
+      const files = recordedFiles({ "notes.md": NOTE });
 
-    const attempt = yield* run(evaluating(`<File path="notes.md" />\n<File path="notes.md" />\n`), {
-      files,
-      installations: [
+      const attempt = yield* run(
+        evaluating(`<File path="notes.md" />\n<File path="notes.md" />\n`),
         {
-          *install(): Operation<void> {
-            yield* Component.around({
-              generated: (_args, next) => {
-                reads.push("generated");
-                return next();
+          files,
+          installations: [
+            {
+              *install(): Operation<void> {
+                yield* Component.around({
+                  generated: (_args, next) => {
+                    reads.push("generated");
+                    return next();
+                  },
+                  *importComponent([name, position], next) {
+                    lookups.push(name);
+                    return yield* next(name, position);
+                  },
+                });
+                yield* useSelection({ File: ["self-closing", "paired"] });
               },
-              *importComponent([name, position], next) {
-                lookups.push(name);
-                return yield* next(name, position);
-              },
-            });
-            yield* useSelection({ File: ["self-closing", "paired"] });
-          },
+            },
+          ],
         },
-      ],
-    });
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    // One read of the property for the whole execution.
-    expect(reads).toEqual(["generated"]);
-    // And one *resolution* for `File`, however many spellings were selected:
-    // capture resolves the name once, before the root import, and one name is
-    // one component. The generated imports the fragment then makes are observed
-    // through the same chain and answered by canonical execution, so they are
-    // not resolutions — which is why the count is taken at the boundary rather
-    // than over the whole run.
-    const resolved = lookups.slice(0, lookups.indexOf("__root__"));
-    expect(resolved).toEqual(["File"]);
-    // The fragment wrote the name twice and performed both reads, so the single
-    // resolution is not a fragment that ran nothing.
-    expect(lookups.filter((name) => name === "File")).toHaveLength(3);
-    expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
-  });
+      expect(attempt.failure).toBe(undefined);
+      // One read of the property for the whole execution.
+      expect(reads).toEqual(["generated"]);
+      // And one *resolution* for `File`, however many spellings were selected:
+      // capture resolves the name once, before the root import, and one name is
+      // one component. The generated imports the fragment then makes are observed
+      // through the same chain and answered by canonical execution, so they are
+      // not resolutions — which is why the count is taken at the boundary rather
+      // than over the whole run.
+      const resolved = lookups.slice(0, lookups.indexOf("__root__"));
+      expect(resolved).toEqual(["File"]);
+      // The fragment wrote the name twice and performed both reads, so the single
+      // resolution is not a fragment that ran nothing.
+      expect(lookups.filter((name) => name === "File")).toHaveLength(3);
+      expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
+    },
+  );
 
   it("U5-2: a policy's search-path replacement reaches authored imports, not the capture", function* () {
     // The one search path a document here can import a component from, and the
@@ -534,63 +573,79 @@ describe("Tier GS — the selection is read once, before public policy", () => {
     expect(widened.failure).toContain("did not admit");
   });
 
-  it("U5-2: a later ordinary authored registration still behaves contextually", function* () {
-    const told: string[] = [];
+  journalCase(
+    "U5-2: a later ordinary authored registration still behaves contextually",
+    ROOT_PATH,
+    function* (stream) {
+      const told: string[] = [];
 
-    // The selection is captured; an ordinary registration a document policy
-    // makes afterwards is an ordinary registration, visible to the authored
-    // document exactly as it always was.
-    const attempt = yield* run("<Later />\n", {
-      offered: { File: ["self-closing"] },
-      *around(): Operation<void> {
-        yield* Execution.around({
-          *execute([request], next) {
-            yield* registerComponents([
-              {
-                name: "Later",
-                origin: "test://later",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                // deno-lint-ignore require-yield
-                *fn(): Operation<string> {
-                  told.push("later ran");
-                  return "the later registration ran";
-                },
+      // The selection is captured; an ordinary registration a document policy
+      // makes afterwards is an ordinary registration, visible to the authored
+      // document exactly as it always was.
+      const attempt = yield* run(
+        "<Later />\n",
+        {
+          offered: { File: ["self-closing"] },
+          *around(): Operation<void> {
+            yield* Execution.around({
+              *execute([request], next) {
+                yield* registerComponents([
+                  {
+                    name: "Later",
+                    origin: "test://later",
+                    props: { type: "object", properties: {}, additionalProperties: false },
+                    // deno-lint-ignore require-yield
+                    *fn(): Operation<string> {
+                      told.push("later ran");
+                      return "the later registration ran";
+                    },
+                  },
+                ]);
+                yield* next(request);
               },
-            ]);
-            yield* next(request);
+            });
           },
-        });
-      },
-    });
+        },
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    expect(told).toEqual(["later ran"]);
-    expect(attempt.output).toContain("the later registration ran");
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(told).toEqual(["later ran"]);
+      expect(attempt.output).toContain("the later registration ran");
+    },
+  );
 });
 
 describe("Tier GS — what a selected name resolves to", () => {
-  it("U5-3: a registered function and a published provider answer both run", function* () {
-    const ran: string[] = [];
-    const A = implementation("Open", "the provider's answer ran");
+  journalCase(
+    "U5-3: a registered function and a published provider answer both run",
+    ROOT_PATH,
+    function* (stream) {
+      const ran: string[] = [];
+      const A = implementation("Open", "the provider's answer ran");
 
-    const attempt = yield* run(evaluating("<Local />\n<Open />\n"), {
-      installations: [
+      const attempt = yield* run(
+        evaluating("<Local />\n<Open />\n"),
         {
-          *install(): Operation<void> {
-            yield* useSelection({ Local: ["self-closing"], Open: ["self-closing"] });
-            yield* registerComponents([localComponent(ran)]);
-          },
-          componentAnswers: [answerProvider("Open", A.definition)],
+          installations: [
+            {
+              *install(): Operation<void> {
+                yield* useSelection({ Local: ["self-closing"], Open: ["self-closing"] });
+                yield* registerComponents([localComponent(ran)]);
+              },
+              componentAnswers: [answerProvider("Open", A.definition)],
+            },
+          ],
         },
-      ],
-    });
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    expect(ran).toEqual(["local ran"]);
-    expect(attempt.output).toContain("the local registration ran");
-    expect(attempt.output).toContain("the provider's answer ran");
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(ran).toEqual(["local ran"]);
+      expect(attempt.output).toContain("the local registration ran");
+      expect(attempt.output).toContain("the provider's answer ran");
+    },
+  );
 
   it("U5-3: a repository component is offered for what it declares, and no more", function* () {
     const dir = yield* useRepositoryComponents();
@@ -630,7 +685,7 @@ describe("Tier GS — what a selected name resolves to", () => {
     expect(silent.output).toBe(undefined);
   });
 
-  it("U5-3: an unpublished replacement refuses", function* () {
+  journalCase("U5-3: an unpublished replacement refuses", ROOT_PATH, function* (stream) {
     const ran: string[] = [];
     const replacement: FunctionComponentDefinition = {
       kind: "function",
@@ -653,55 +708,67 @@ describe("Tier GS — what a selected name resolves to", () => {
     // Ordinary import middleware answering with its own definition, publishing
     // nothing. It is a valid ordinary answer and it is not an implementation
     // this execution may retain for a selected name.
-    const attempt = yield* run(evaluating("<Local />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Local: ["self-closing"] });
-            yield* registerComponents([localComponent(ran)]);
-            yield* Component.around({
-              *importComponent([name, position], next) {
-                return name === "Local" ? replacement : yield* next(name, position);
-              },
-            });
+    const attempt = yield* run(
+      evaluating("<Local />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Local: ["self-closing"] });
+              yield* registerComponents([localComponent(ran)]);
+              yield* Component.around({
+                *importComponent([name, position], next) {
+                  return name === "Local" ? replacement : yield* next(name, position);
+                },
+              });
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toContain("neither canonical resolution's own answer");
     expect(ran).toEqual([]);
   });
 
-  it("U5-3: a replacement offering no generated use of the selected spelling refuses", function* () {
-    const ran: string[] = [];
+  journalCase(
+    "U5-3: a replacement offering no generated use of the selected spelling refuses",
+    ROOT_PATH,
+    function* (stream) {
+      const ran: string[] = [];
 
-    const attempt = yield* run(evaluating("<Open />\n"), {
-      installations: [
+      const attempt = yield* run(
+        evaluating("<Open />\n"),
         {
-          *install(): Operation<void> {
-            yield* useSelection({ Open: ["self-closing"] });
-          },
-          componentAnswers: [
-            answerProvider("Open", {
-              kind: "function",
-              name: "Open",
-              props: { type: "object", properties: {}, additionalProperties: false },
-              forms: ["self-closing"],
-              // deno-lint-ignore require-yield
-              *fn(): Operation<string> {
-                ran.push("unoffered ran");
-                return "the unoffered answer ran";
+          installations: [
+            {
+              *install(): Operation<void> {
+                yield* useSelection({ Open: ["self-closing"] });
               },
-            }),
+              componentAnswers: [
+                answerProvider("Open", {
+                  kind: "function",
+                  name: "Open",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  forms: ["self-closing"],
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    ran.push("unoffered ran");
+                    return "the unoffered answer ran";
+                  },
+                }),
+              ],
+            },
           ],
         },
-      ],
-    });
+        stream,
+      );
 
-    expect(attempt.failure).toContain("offers no generated use of it");
-    expect(ran).toEqual([]);
-  });
+      expect(attempt.failure).toContain("offers no generated use of it");
+      expect(ran).toEqual([]);
+    },
+  );
 
   it("U5-3: an unsupported answer refuses", function* () {
     // A repository Markdown component is a legitimate answer for an authored
@@ -843,29 +910,37 @@ describe("Tier GS — what a selected name resolves to", () => {
     expect(readings.length).toBeLessThanOrEqual(1);
   });
 
-  it("U5-3: the retained admission holds the identity the owner declared", function* () {
-    const ran: string[] = [];
+  journalCase(
+    "U5-3: the retained admission holds the identity the owner declared",
+    ROOT_PATH,
+    function* (stream) {
+      const ran: string[] = [];
 
-    // The positive control for the two refusals above: an ordinary declaration
-    // is retained with the URL its own metadata states, and that is the row the
-    // admission records.
-    const attempt = yield* run(evaluating("<Local />\n"), {
-      installations: [
+      // The positive control for the two refusals above: an ordinary declaration
+      // is retained with the URL its own metadata states, and that is the row the
+      // admission records.
+      const attempt = yield* run(
+        evaluating("<Local />\n"),
         {
-          *install(): Operation<void> {
-            yield* useSelection({ Local: ["self-closing"] });
-            yield* registerComponents([localComponent(ran)]);
-          },
+          installations: [
+            {
+              *install(): Operation<void> {
+                yield* useSelection({ Local: ["self-closing"] });
+                yield* registerComponents([localComponent(ran)]);
+              },
+            },
+          ],
         },
-      ],
-    });
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    expect(ran).toEqual(["local ran"]);
-    const admission = admissions(attempt.events)[0];
-    expect(JSON.stringify(admission)).toContain("https://executable.md/components/local/read");
-    yield* useScope();
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(ran).toEqual(["local ran"]);
+      const admission = admissions(attempt.events)[0];
+      expect(JSON.stringify(admission)).toContain("https://executable.md/components/local/read");
+      yield* useScope();
+    },
+  );
 });
 
 /** A Markdown definition, which is a legitimate answer and not an invocable one. */
