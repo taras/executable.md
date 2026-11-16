@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Tier PC — `<Parse>` and `<SafeParse>` (spec §6.12).
  *
@@ -22,7 +23,8 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { Json } from "../src/types.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/parse-components.test.ts");
+const OWNER = "packages/core/tests/parse-components.test.ts";
+const journalCase = journalCases(OWNER);
 
 interface Run {
   /** Rendered output, or the failure message when the document aborted. */
@@ -258,94 +260,105 @@ describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResour
 
   // Completion is the execution's settlement, so it waits for everything the
   // execution owns — including cleanup a host established at initialization.
-  it("PC11a: a Parse failure keeps earlier output and settles after owned cleanup", function* () {
-    yield* useStubFs({ "doc.md": laterEffect(SCHEMA_INVALID) });
-    const commands: string[] = [];
-    yield* API.Process.around({
-      // deno-lint-ignore require-yield
-      *exec([options]) {
-        commands.push(options.command.join(" "));
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
-    });
-    const live: string[] = [];
-    yield* DocumentOutput.around({
-      *output([text, exact], next) {
-        live.push(text);
-        return yield* next(text, exact);
-      },
-    });
-    const cleanupStarted = withResolvers<void>();
-    const release = withResolvers<void>();
-    yield* Execution.around({
-      *init(_args, next) {
-        yield* ensure(function* () {
-          cleanupStarted.resolve();
-          yield* release.operation;
-        });
-        yield* next();
-      },
-    });
+  journalCase(
+    "PC11a: a Parse failure keeps earlier output and settles after owned cleanup",
+    "doc.md",
+    function* (stream) {
+      yield* useStubFs({ "doc.md": laterEffect(SCHEMA_INVALID) });
+      const commands: string[] = [];
+      yield* API.Process.around({
+        // deno-lint-ignore require-yield
+        *exec([options]) {
+          commands.push(options.command.join(" "));
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+      const live: string[] = [];
+      yield* DocumentOutput.around({
+        *output([text, exact], next) {
+          live.push(text);
+          return yield* next(text, exact);
+        },
+      });
+      const cleanupStarted = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* Execution.around({
+        *init(_args, next) {
+          yield* ensure(function* () {
+            cleanupStarted.resolve();
+            yield* release.operation;
+          });
+          yield* next();
+        },
+      });
 
-    const stream = new InMemoryStream();
-    const execution = yield* execute({ path: "doc.md", stream });
-    let completed = false;
-    const completion = yield* spawn(function* () {
-      const outcome = yield* execution;
-      completed = true;
-      return outcome;
-    });
+      const execution = yield* execute({ path: "doc.md", stream });
+      let completed = false;
+      const completion = yield* spawn(function* () {
+        const outcome = yield* execution;
+        completed = true;
+        return outcome;
+      });
 
-    yield* cleanupStarted.operation;
-    for (let turn = 0; turn < 5; turn++) {
-      yield* sleep(0);
-    }
-    // Read while held, asserted after release: a failed assertion here would
-    // otherwise leave the execution's teardown waiting for ever.
-    const completedWhileHeld = completed;
-    const liveWhileHeld = live.join("");
-    const commandsWhileHeld = [...commands];
+      yield* cleanupStarted.operation;
+      for (let turn = 0; turn < 5; turn++) {
+        yield* sleep(0);
+      }
+      // Read while held, asserted after release: a failed assertion here would
+      // otherwise leave the execution's teardown waiting for ever.
+      const completedWhileHeld = completed;
+      const liveWhileHeld = live.join("");
+      const commandsWhileHeld = [...commands];
 
-    release.resolve();
-    const outcome = yield* completion;
-    expect(completedWhileHeld).toBe(false);
-    expect(liveWhileHeld).toContain("PREFIX");
-    expect(commandsWhileHeld).toEqual([]);
-    expect(outcome.ok).toBe(false);
-    expect(outcome.ok ? "" : outcome.error.message).toContain("content failed its schema");
+      release.resolve();
+      const outcome = yield* completion;
+      expect(completedWhileHeld).toBe(false);
+      expect(liveWhileHeld).toContain("PREFIX");
+      expect(commandsWhileHeld).toEqual([]);
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok ? "" : outcome.error.message).toContain("content failed its schema");
 
-    const recorded = retained(stream.snapshot());
-    expect(recorded.status).toBe("err");
-    expect(recorded.output).toContain("PREFIX");
-    expect(live.join("")).not.toContain("LATER_EFFECT");
-    expect(commands).toEqual([]);
-  });
+      const recorded = retained(stream.snapshot());
+      expect(recorded.status).toBe("err");
+      expect(recorded.output).toContain("PREFIX");
+      expect(live.join("")).not.toContain("LATER_EFFECT");
+      expect(commands).toEqual([]);
+    },
+  );
 
-  it("PC11b: SafeParse leaves invalid input to the document, which can still succeed", function* () {
+  const safeParseCase =
+    "PC11b: SafeParse leaves invalid input to the document, which can still succeed";
+  it(safeParseCase, function* () {
     for (const [content, keyword, path] of [
       ["nope", "parse", ""],
       ['{ "a": 1 }', "type", "/a"],
     ]) {
-      const source = [
-        `<SafeParse schema={${OBJECT_SCHEMA}} as="r">${content}</SafeParse>`,
-        "",
-        "<If condition={!r.ok}>",
-        "",
-        '<Each in={r.errors} let="issue">INPUT {r.input}|{issue.keyword}|{issue.instancePath}</Each>',
-        "",
-        "```sh exec",
-        "echo RECOVERED_EFFECT",
-        "```",
-        "",
-        "</If>",
-        "",
-      ].join("\n");
-      const { output, failed, commands, events } = yield* run(undefined, source);
-      expect(failed).toBe(false);
-      expect(output).toContain(`INPUT ${content}|${keyword}|${path}`);
-      expect(commands).toHaveLength(1);
-      expect(commands[0]).toContain("RECOVERED_EFFECT");
-      expect(retained(events).status).toBe("ok");
+      yield* captureTestJournal(
+        { owner: OWNER, name: safeParseCase },
+        "doc.md",
+        function* (stream) {
+          const source = [
+            `<SafeParse schema={${OBJECT_SCHEMA}} as="r">${content}</SafeParse>`,
+            "",
+            "<If condition={!r.ok}>",
+            "",
+            '<Each in={r.errors} let="issue">INPUT {r.input}|{issue.keyword}|{issue.instancePath}</Each>',
+            "",
+            "```sh exec",
+            "echo RECOVERED_EFFECT",
+            "```",
+            "",
+            "</If>",
+            "",
+          ].join("\n");
+          const { output, failed, commands, events } = yield* run(stream, source);
+          expect(failed).toBe(false);
+          expect(output).toContain(`INPUT ${content}|${keyword}|${path}`);
+          expect(commands).toHaveLength(1);
+          expect(commands[0]).toContain("RECOVERED_EFFECT");
+          expect(retained(events).status).toBe("ok");
+        },
+      );
     }
   });
 

@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Integration tests for execute (Tiers B, D, E from spec §11).
  *
@@ -28,7 +29,8 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText } from "./helpers.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/execute.test.ts");
+const OWNER = "packages/core/tests/execute.test.ts";
+const journalCase = journalCases(OWNER);
 
 /**
  * A stand-in child that behaves like one: it writes its output to the display
@@ -117,37 +119,40 @@ function* useFailingStdoutExec(): Operation<void> {
 
 describe("Tier B — durable import", () => {
   // B1: durableImportComponent golden run — journal shape
-  it("B1: import golden run — journal has import_component with path and content", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": "Hello world\n" });
-    yield* useStubExec();
+  journalCase(
+    "B1: import golden run — journal has import_component with path and content",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({ "README.md": "Hello world\n" });
+      yield* useStubExec();
 
-    yield* collect(
-      yield* execute({
-        path: "README.md",
-        stream,
-      }),
-    );
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      );
 
-    const events = stream.snapshot();
-    const imports = events.flatMap((e) =>
-      e.type === "yield" && e.description.type === "import_component" ? [e] : [],
-    );
+      const events = stream.snapshot();
+      const imports = events.flatMap((e) =>
+        e.type === "yield" && e.description.type === "import_component" ? [e] : [],
+      );
 
-    expect(imports.length).toBe(1);
+      expect(imports.length).toBe(1);
 
-    const rootImport = imports[0]!;
-    expect(rootImport).toMatchObject({
-      type: "yield",
-      description: { name: "__root__" },
-      result: { status: "ok", value: { path: "README.md" } },
-    });
+      const rootImport = imports[0]!;
+      expect(rootImport).toMatchObject({
+        type: "yield",
+        description: { name: "__root__" },
+        result: { status: "ok", value: { path: "README.md" } },
+      });
 
-    const result = rootImport.result;
-    expect(result.status).toBe("ok");
-    const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
-    expect(value.content).toContain("Hello world");
-  });
+      const result = rootImport.result;
+      expect(result.status).toBe("ok");
+      const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
+      expect(value.content).toContain("Hello world");
+    },
+  );
 
   // B2: durableImportComponent replay — stored result returned, no I/O
   it("B2: import replay — stored result returned, no file read", function* () {
@@ -227,8 +232,7 @@ describe("Tier B — durable import", () => {
   );
 
   // B12: root document as component — __root__ import, same journal shape
-  it("B12: root document imported as __root__", function* () {
-    const stream = new InMemoryStream();
+  journalCase("B12: root document imported as __root__", "doc.md", function* (stream) {
     yield* useStubFs({ "doc.md": "Root content\n" });
     yield* useStubExec();
 
@@ -253,39 +257,42 @@ describe("Tier B — durable import", () => {
   });
 
   // B13: dotted name resolution — Ns.Sub → components/Ns/Sub.md
-  it("B13: dotted component name resolves to nested path", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": "<Ui.Button />\n",
-      "components/Ui/Button.md": "Click me\n",
-    });
-    yield* useStubExec();
+  journalCase(
+    "B13: dotted component name resolves to nested path",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": "<Ui.Button />\n",
+        "components/Ui/Button.md": "Click me\n",
+      });
+      yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+      const result = asText(
+        yield* collect(
+          yield* execute({
+            path: "README.md",
+            stream,
+          }),
+        ),
+      );
 
-    expect(result).toContain("Click me");
+      expect(result).toContain("Click me");
 
-    const events = stream.snapshot();
-    const [compImport] = events.flatMap((e) =>
-      e.type === "yield" &&
-      e.description.type === "import_component" &&
-      e.description.name === "Ui.Button"
-        ? [e]
-        : [],
-    );
-    expect(compImport).toBeTruthy();
-    expect(compImport!.result).toMatchObject({
-      status: "ok",
-      value: { path: "components/Ui/Button.md" },
-    });
-  });
+      const events = stream.snapshot();
+      const [compImport] = events.flatMap((e) =>
+        e.type === "yield" &&
+        e.description.type === "import_component" &&
+        e.description.name === "Ui.Button"
+          ? [e]
+          : [],
+      );
+      expect(compImport).toBeTruthy();
+      expect(compImport!.result).toMatchObject({
+        status: "ok",
+        value: { path: "components/Ui/Button.md" },
+      });
+    },
+  );
 
   // B15: default resolver middleware — resolves via stat in search path order
   journalCase("B15: resolver searches component dirs in order", "README.md", function* (stream) {
@@ -312,31 +319,34 @@ describe("Tier B — durable import", () => {
 
 describe("Tier D — code execution and modifiers", () => {
   // D1: bash exec golden run
-  it("D1: bash exec golden run — stdout displayed, exec in journal", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": ["```bash exec", "echo hello", "```"].join("\n"),
-    });
-    yield* useStubExec();
+  journalCase(
+    "D1: bash exec golden run — stdout displayed, exec in journal",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": ["```bash exec", "echo hello", "```"].join("\n"),
+      });
+      yield* useStubExec();
 
-    const run = yield* displayed(function* () {
-      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
-    });
-    const result = run.value;
+      const run = yield* displayed(function* () {
+        return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+      });
+      const result = run.value;
 
-    // A foreground block's output reached the reader as it ran, and the
-    // document does not say it again (#441).
-    expect(run.stdout).toContain("hello");
-    expect(result).not.toContain("hello");
+      // A foreground block's output reached the reader as it ran, and the
+      // document does not say it again (#441).
+      expect(run.stdout).toContain("hello");
+      expect(result).not.toContain("hello");
 
-    const events = stream.snapshot();
-    const [execEvent] = events.flatMap((e) =>
-      e.type === "yield" && e.description.type === "exec" ? [e] : [],
-    );
-    expect(execEvent).toBeTruthy();
-    expect(Array.isArray(execEvent!.description.command)).toBeTruthy();
-    expect(execEvent!.result.status).toBe("ok");
-  });
+      const events = stream.snapshot();
+      const [execEvent] = events.flatMap((e) =>
+        e.type === "yield" && e.description.type === "exec" ? [e] : [],
+      );
+      expect(execEvent).toBeTruthy();
+      expect(Array.isArray(execEvent!.description.command)).toBeTruthy();
+      expect(execEvent!.result.status).toBe("ok");
+    },
+  );
 
   // D2: exec replay — command not re-executed
   it("D2: exec replay — stored stdout used, no re-execution", function* () {
@@ -409,9 +419,8 @@ describe("Tier D — code execution and modifiers", () => {
   );
 
   // D4: multi-line command — full script passed to -c
-  it("D4: multi-line command — full script in journal", function* () {
+  journalCase("D4: multi-line command — full script in journal", "README.md", function* (stream) {
     const multiLineScript = "echo line1\necho line2";
-    const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": ["```bash exec", multiLineScript, "```"].join("\n"),
     });
@@ -437,12 +446,11 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   // D5: python exec — python -c invocation
-  it("D5: python exec — python -c in command array", function* () {
+  journalCase("D5: python exec — python -c in command array", "README.md", function* (stream) {
     const files: Record<string, string> = {
       "README.md": ["```python exec", "print('hello')", "```"].join("\n"),
     };
 
-    const stream = new InMemoryStream();
     yield* useStubFs(files);
     // Custom exec middleware that handles python -c
     yield* API.Process.around({
@@ -474,30 +482,33 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   // D6: bash silent exec — chain: silent wraps exec, exec journals, silent returns empty
-  it("D6: bash silent exec — exec journals, output suppressed", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
-    });
-    yield* useStubExec();
+  journalCase(
+    "D6: bash silent exec — exec journals, output suppressed",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
+      });
+      yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+      const result = asText(
+        yield* collect(
+          yield* execute({
+            path: "README.md",
+            stream,
+          }),
+        ),
+      );
 
-    // Output should be empty (silent suppresses)
-    expect(result).not.toContain("secret");
+      // Output should be empty (silent suppresses)
+      expect(result).not.toContain("secret");
 
-    // Journal should still have exec event
-    const events = stream.snapshot();
-    const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
-    expect(execs.length).toBe(1);
-  });
+      // Journal should still have exec event
+      const events = stream.snapshot();
+      const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
+      expect(execs.length).toBe(1);
+    },
+  );
 
   // D7: silent exec replay — still produces empty output from stored result
   it("D7: silent exec replay — still empty output", function* () {
@@ -534,56 +545,62 @@ describe("Tier D — code execution and modifiers", () => {
   // D6b/D7b: `silent` suppresses output; it does not convert failure into
   // success (#307). The command's exit code and stderr are the chain's, so a
   // silenced failure is still a failure — with nothing of what it printed.
-  it("D6b: failing silent exec — output suppressed, failure still reported", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
-    });
-    yield* useFailingStdoutExec();
-
-    const run = yield* displayed(function* () {
-      return yield* failure(function* () {
-        return yield* collect(yield* execute({ path: "README.md", stream }));
+  journalCase(
+    "D6b: failing silent exec — output suppressed, failure still reported",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
       });
-    });
+      yield* useFailingStdoutExec();
 
-    // Silence hides both channels; it does not excuse the exit code.
-    expect(run.stdout).toBe("");
-    expect(run.value).toContain("Command failed (exit 3): why");
-  });
+      const run = yield* displayed(function* () {
+        return yield* failure(function* () {
+          return yield* collect(yield* execute({ path: "README.md", stream }));
+        });
+      });
 
-  it("D6c: a failing silent exec in documentation aborts before the next block", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": [
-        "```bash silent exec",
-        "echo secret",
-        "```",
-        "",
-        "```bash exec",
-        "echo later",
-        "```",
-        "",
-        "<Output>ok</Output>",
-      ].join("\n"),
-    });
-    yield* useFailingStdoutExec();
+      // Silence hides both channels; it does not excuse the exit code.
+      expect(run.stdout).toBe("");
+      expect(run.value).toContain("Command failed (exit 3): why");
+    },
+  );
 
-    const execution = yield* execute({ path: "README.md", stream });
-    const chunks: string[] = [];
-    yield* forEach(function* (chunk: string) {
-      chunks.push(chunk);
-    }, execution.output);
-    const result = yield* execution;
+  journalCase(
+    "D6c: a failing silent exec in documentation aborts before the next block",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": [
+          "```bash silent exec",
+          "echo secret",
+          "```",
+          "",
+          "```bash exec",
+          "echo later",
+          "```",
+          "",
+          "<Output>ok</Output>",
+        ].join("\n"),
+      });
+      yield* useFailingStdoutExec();
 
-    expect(result.ok).toBe(false);
-    expect(chunks.join("")).not.toContain("ok");
-    // The later block never ran — only the silenced one reached the journal.
-    const execs = stream
-      .snapshot()
-      .filter((e) => e.type === "yield" && e.description["type"] === "exec");
-    expect(execs.length).toBe(1);
-  });
+      const execution = yield* execute({ path: "README.md", stream });
+      const chunks: string[] = [];
+      yield* forEach(function* (chunk: string) {
+        chunks.push(chunk);
+      }, execution.output);
+      const result = yield* execution;
+
+      expect(result.ok).toBe(false);
+      expect(chunks.join("")).not.toContain("ok");
+      // The later block never ran — only the silenced one reached the journal.
+      const execs = stream
+        .snapshot()
+        .filter((e) => e.type === "yield" && e.description["type"] === "exec");
+      expect(execs.length).toBe(1);
+    },
+  );
 
   it("D7b: replay preserves a silent failure rather than replaying success", function* () {
     const stream = new InMemoryStream();
@@ -720,68 +737,71 @@ describe("Tier D — code execution and modifiers", () => {
 
 describe("execute", () => {
   // E1: Full document golden run
-  it("E1: full document golden run — root + component + exec", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": [
-        "---",
-        "title: My Project",
-        "---",
-        "",
-        "# {meta.title}",
-        "",
-        '<Greeting name="world" />',
-        "",
-        "```bash exec",
-        "ls ./src",
-        "```",
-      ].join("\n"),
-      "components/Greeting.md": [
-        "---",
-        "emoji: hi",
-        "",
-        "props:",
-        "  type: object",
-        "  properties:",
-        "    name:",
-        "      type: string",
-        "  required: [name]",
-        "  additionalProperties: false",
-        "---",
-        "",
-        "{meta.emoji} Hello, {props.name}!",
-      ].join("\n"),
-    });
-    yield* useStubExec();
+  journalCase(
+    "E1: full document golden run — root + component + exec",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": [
+          "---",
+          "title: My Project",
+          "---",
+          "",
+          "# {meta.title}",
+          "",
+          '<Greeting name="world" />',
+          "",
+          "```bash exec",
+          "ls ./src",
+          "```",
+        ].join("\n"),
+        "components/Greeting.md": [
+          "---",
+          "emoji: hi",
+          "",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    name:",
+          "      type: string",
+          "  required: [name]",
+          "  additionalProperties: false",
+          "---",
+          "",
+          "{meta.emoji} Hello, {props.name}!",
+        ].join("\n"),
+      });
+      yield* useStubExec();
 
-    const run = yield* displayed(function* () {
-      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
-    });
-    const result = run.value;
+      const run = yield* displayed(function* () {
+        return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+      });
+      const result = run.value;
 
-    expect(result).toContain("# My Project");
-    expect(result).toContain("hi Hello, world!");
-    // The listing was displayed as it arrived, not rendered into the document.
-    expect(run.stdout).toContain("main.ts");
-    expect(run.stdout).toContain("utils.ts");
+      expect(result).toContain("# My Project");
+      expect(result).toContain("hi Hello, world!");
+      // The listing was displayed as it arrived, not rendered into the document.
+      expect(run.stdout).toContain("main.ts");
+      expect(run.stdout).toContain("utils.ts");
 
-    const events = stream.snapshot();
-    expect(events.length).toBeGreaterThan(0);
+      const events = stream.snapshot();
+      expect(events.length).toBeGreaterThan(0);
 
-    // Should have import_component events for root and Greeting
-    const imports = events.filter(
-      (e) => e.type === "yield" && e.description["type"] === "import_component",
-    );
-    expect(imports.length).toBe(2);
+      // Should have import_component events for root and Greeting
+      const imports = events.filter(
+        (e) => e.type === "yield" && e.description["type"] === "import_component",
+      );
+      expect(imports.length).toBe(2);
 
-    // Should have exec event
-    const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
-    expect(execs.length).toBe(1);
+      // Should have exec event
+      const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
+      expect(execs.length).toBe(1);
 
-    // Should have close event
-    const closes = events.filter((e) => e.type === "close");
-    expect(closes.length).toBe(1);
-  });
+      // Should have close event
+      const closes = events.filter((e) => e.type === "close");
+      expect(closes.length).toBe(1);
+    },
+  );
 
   // E2: Full replay — zero file reads, zero exec calls
   it("E2: full replay — same output, no I/O", function* () {
@@ -860,34 +880,37 @@ describe("execute", () => {
   });
 
   // E8: Silent exec in full document
-  it("E8: silent exec — command runs, result journaled, output omitted", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": ["before", "", "```bash silent exec", "echo hidden", "```", "", "after"].join(
-        "\n",
-      ),
-    });
-    yield* useStubExec();
+  journalCase(
+    "E8: silent exec — command runs, result journaled, output omitted",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": ["before", "", "```bash silent exec", "echo hidden", "```", "", "after"].join(
+          "\n",
+        ),
+      });
+      yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+      const result = asText(
+        yield* collect(
+          yield* execute({
+            path: "README.md",
+            stream,
+          }),
+        ),
+      );
 
-    // Output should NOT contain the exec result
-    expect(result).not.toContain("hidden");
-    expect(result).toContain("before");
-    expect(result).toContain("after");
+      // Output should NOT contain the exec result
+      expect(result).not.toContain("hidden");
+      expect(result).toContain("before");
+      expect(result).toContain("after");
 
-    // But the journal should have the exec event
-    const events = stream.snapshot();
-    const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
-    expect(execs.length).toBe(1);
-  });
+      // But the journal should have the exec event
+      const events = stream.snapshot();
+      const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
+      expect(execs.length).toBe(1);
+    },
+  );
 
   // Simple text document — no components, no exec
   journalCase("simple text document — passthrough", "README.md", function* (stream) {
@@ -1145,8 +1168,7 @@ describe("execute", () => {
   });
 
   // Multiple components — verify all are imported and expanded
-  it("multiple components — all imported and expanded", function* () {
-    const stream = new InMemoryStream();
+  journalCase("multiple components — all imported and expanded", "README.md", function* (stream) {
     yield* useStubFs({
       "README.md": "<Header />\n<Footer />\n",
       "components/Header.md": "HEADER\n",
@@ -1175,8 +1197,7 @@ describe("execute", () => {
   });
 
   // Transitive components — A references B
-  it("transitive components — A → B, both imported", function* () {
-    const stream = new InMemoryStream();
+  journalCase("transitive components — A → B, both imported", "README.md", function* (stream) {
     yield* useStubFs({
       "README.md": "<Wrapper />\n",
       "components/Wrapper.md": "before\n<Inner />\nafter\n",
@@ -1227,37 +1248,40 @@ describe("execute", () => {
 });
 
 describe("Component Api dispatch — journal shape", () => {
-  it("import, exec, and eval journal entries keep their identities", function* () {
-    const stream = new InMemoryStream();
-    // The eval block is here for its journal entry, so it has to compile.
-    yield* useTempFileCompiler();
-    yield* useStubFs({
-      "README.md": "<Note />\n\n```bash exec\necho hi\n```\n\n```js eval\nconst x = 1;\n```\n",
-      "components/Note.md": "note!\n",
-    });
-    yield* useStubExec();
+  journalCase(
+    "import, exec, and eval journal entries keep their identities",
+    "README.md",
+    function* (stream) {
+      // The eval block is here for its journal entry, so it has to compile.
+      yield* useTempFileCompiler();
+      yield* useStubFs({
+        "README.md": "<Note />\n\n```bash exec\necho hi\n```\n\n```js eval\nconst x = 1;\n```\n",
+        "components/Note.md": "note!\n",
+      });
+      yield* useStubExec();
 
-    const output = yield* collect(yield* execute({ path: "README.md", stream }));
-    expect(output).toContain("note!");
+      const output = yield* collect(yield* execute({ path: "README.md", stream }));
+      expect(output).toContain("note!");
 
-    const events = stream.snapshot();
-    const imports = events.flatMap((e) =>
-      e.type === "yield" && e.description.type === "import_component" ? [e.description.name] : [],
-    );
-    expect(imports).toContain("__root__");
-    expect(imports).toContain("Note");
+      const events = stream.snapshot();
+      const imports = events.flatMap((e) =>
+        e.type === "yield" && e.description.type === "import_component" ? [e.description.name] : [],
+      );
+      expect(imports).toContain("__root__");
+      expect(imports).toContain("Note");
 
-    const execs = events.flatMap((e) =>
-      e.type === "yield" && e.description.type === "exec" ? [e] : [],
-    );
-    expect(execs.length).toBe(1);
+      const execs = events.flatMap((e) =>
+        e.type === "yield" && e.description.type === "exec" ? [e] : [],
+      );
+      expect(execs.length).toBe(1);
 
-    const evals = events.flatMap((e) =>
-      e.type === "yield" && e.description.type === "eval" ? [e.description.name] : [],
-    );
-    expect(evals.length).toBe(1);
-    expect(String(evals[0])).toMatch(/^eval:eval:root:\d+$/);
-  });
+      const evals = events.flatMap((e) =>
+        e.type === "yield" && e.description.type === "eval" ? [e.description.name] : [],
+      );
+      expect(evals.length).toBe(1);
+      expect(String(evals[0])).toMatch(/^eval:eval:root:\d+$/);
+    },
+  );
 });
 
 describe("component-declared output — document workflow", () => {
@@ -1374,131 +1398,154 @@ describe("component-declared output — document workflow", () => {
     expect(second).toContain("ROOT_SHOWN");
   });
 
-  it("diagnoses an invalid root <Output> and runs no body side effects", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output invalid>x</Output>\n</Wrapper>\n",
-    });
-    yield* useFailingExec(1, "should not run");
+  journalCase(
+    "diagnoses an invalid root <Output> and runs no body side effects",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md":
+          "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output invalid>x</Output>\n</Wrapper>\n",
+      });
+      yield* useFailingExec(1, "should not run");
 
-    // The preflight aggregate is raised like any other undecided error, so an
-    // invalid root reports it and settles failed.
-    const message = yield* failure(function* () {
-      return yield* collect(yield* execute({ path: "README.md", stream }));
-    });
+      // The preflight aggregate is raised like any other undecided error, so an
+      // invalid root reports it and settles failed.
+      const message = yield* failure(function* () {
+        return yield* collect(yield* execute({ path: "README.md", stream }));
+      });
 
-    expect(message).toContain("no props");
+      expect(message).toContain("no props");
 
-    const events = stream.snapshot();
-    const execEvents = events.flatMap((e) =>
-      e.type === "yield" && e.description.type === "exec" ? [e] : [],
-    );
-    expect(execEvents).toHaveLength(0);
-  });
+      const events = stream.snapshot();
+      const execEvents = events.flatMap((e) =>
+        e.type === "yield" && e.description.type === "exec" ? [e] : [],
+      );
+      expect(execEvents).toHaveLength(0);
+    },
+  );
 });
 
 describe("993 nested document execution", () => {
   for (const ready of [true, false]) {
     for (const reusable of [false, true]) {
-      it(`W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`, function* () {
-        const directory = yield* useTempDirectory("nested-output-");
-        yield* useHostFiles();
-        yield* useNormalizedOutput();
-        yield* API.Env.around(
-          {
-            *cwd() {
-              return directory;
+      journalCase(
+        `W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`,
+        "doc.md",
+        function* (stream) {
+          const directory = yield* useTempDirectory("nested-output-");
+          yield* useHostFiles();
+          yield* useNormalizedOutput();
+          yield* API.Env.around(
+            {
+              *cwd() {
+                return directory;
+              },
             },
-          },
-          { at: "min" },
-        );
-        const source = `<Let as="ready" value={${ready}} />docs<If condition={ready}><File path="complete">done</File><Output>Review complete.</Output><Else><File path="pending">waiting</File><Output>Review pending.</Output></Else></If>`;
-        yield* useStubFs({
-          "doc.md": reusable ? "<Reply />" : source,
-          ...(reusable ? { "components/Reply.md": source } : {}),
-        });
-        const writes: string[] = [];
-        yield* API.Files.around({
-          *writeTextFile([input], next) {
-            writes.push(input.path);
-            return yield* next(input);
-          },
-        });
-        const text = yield* collect(
-          yield* execute({ path: "doc.md", stream: new InMemoryStream() }),
-        );
-        expect(text).toBe(ready ? "Review complete." : "Review pending.");
-        expect(writes).toEqual([ready ? "complete" : "pending"]);
-        expect(yield* exists(`${directory}/complete`)).toBe(ready);
-        expect(yield* exists(`${directory}/pending`)).toBe(!ready);
-      });
+            { at: "min" },
+          );
+          const source = `<Let as="ready" value={${ready}} />docs<If condition={ready}><File path="complete">done</File><Output>Review complete.</Output><Else><File path="pending">waiting</File><Output>Review pending.</Output></Else></If>`;
+          yield* useStubFs({
+            "doc.md": reusable ? "<Reply />" : source,
+            ...(reusable ? { "components/Reply.md": source } : {}),
+          });
+          const writes: string[] = [];
+          yield* API.Files.around({
+            *writeTextFile([input], next) {
+              writes.push(input.path);
+              return yield* next(input);
+            },
+          });
+          const text = yield* collect(yield* execute({ path: "doc.md", stream }));
+          expect(text).toBe(ready ? "Review complete." : "Review pending.");
+          expect(writes).toEqual([ready ? "complete" : "pending"]);
+          expect(yield* exists(`${directory}/complete`)).toBe(ready);
+          expect(yield* exists(`${directory}/pending`)).toBe(!ready);
+        },
+      );
     }
   }
 
   for (const reusable of [false, true]) {
-    it(`W2: the direct Dir content route retains scoped files and restores cwd (${reusable})`, function* () {
+    const directoryCase = `W2: the direct Dir content route retains scoped files and restores cwd (${reusable})`;
+    it(directoryCase, function* () {
       const directory = yield* useTempDirectory("nested-dir-");
-      yield* ensureDir(`${directory}/reports`);
-      yield* writeTextFile(`${directory}/result.txt`, "ROOT");
-      yield* writeTextFile(`${directory}/reports/result.txt`, "REPORT");
-      yield* useHostFiles();
-      yield* useNormalizedOutput();
-      yield* API.Env.around(
-        {
-          *cwd() {
-            return directory;
-          },
+      yield* captureTestJournal(
+        { owner: OWNER, name: directoryCase },
+        `${directory}/doc.md`,
+        function* (stream) {
+          yield* ensureDir(`${directory}/reports`);
+          yield* writeTextFile(`${directory}/result.txt`, "ROOT");
+          yield* writeTextFile(`${directory}/reports/result.txt`, "REPORT");
+          yield* useHostFiles();
+          yield* useNormalizedOutput();
+          yield* API.Env.around(
+            {
+              *cwd() {
+                return directory;
+              },
+            },
+            { at: "min" },
+          );
+          const observed: unknown[] = [];
+          yield* registerComponents([
+            { origin: "993", name: "DirectDir", props: dirProps, fn: (props) => dirBody(props) },
+            {
+              origin: "993",
+              name: "Observe",
+              props: {
+                type: "object",
+                properties: { value: { type: "string" } },
+                required: ["value"],
+              },
+              *fn(props) {
+                observed.push(props.value);
+                return "";
+              },
+            },
+          ]);
+          const source =
+            'docs<DirectDir path="reports"><File path="result.txt" as="report" /><Output>{report}</Output></DirectDir><File path="result.txt" as="root" /><Observe value={root} />';
+          yield* ensureDir(`${directory}/components`);
+          yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
+          yield* writeTextFile(`${directory}/components/Report.md`, source);
+          expect(
+            yield* collect(
+              yield* execute({
+                path: `${directory}/doc.md`,
+                includes: [`${directory}/components`],
+                stream,
+              }),
+            ),
+          ).toBe("REPORT");
+          expect(observed).toEqual(["ROOT"]);
+          expect(yield* readTextFile(`${directory}/result.txt`)).toBe("ROOT");
         },
-        { at: "min" },
       );
-      const observed: unknown[] = [];
-      yield* registerComponents([
-        { origin: "993", name: "DirectDir", props: dirProps, fn: (props) => dirBody(props) },
-        {
-          origin: "993",
-          name: "Observe",
-          props: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
-          *fn(props) {
-            observed.push(props.value);
-            return "";
-          },
-        },
-      ]);
-      const source =
-        'docs<DirectDir path="reports"><File path="result.txt" as="report" /><Output>{report}</Output></DirectDir><File path="result.txt" as="root" /><Observe value={root} />';
-      yield* ensureDir(`${directory}/components`);
-      yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
-      yield* writeTextFile(`${directory}/components/Report.md`, source);
-      expect(
-        yield* collect(
-          yield* execute({
-            path: `${directory}/doc.md`,
-            includes: [`${directory}/components`],
-            stream: new InMemoryStream(),
-          }),
-        ),
-      ).toBe("REPORT");
-      expect(observed).toEqual(["ROOT"]);
-      expect(yield* readTextFile(`${directory}/result.txt`)).toBe("ROOT");
     });
   }
 
-  it("W3/W8: empty selection emits nothing and partial replay rebuilds ordered selection around completed effects", function* () {
+  const selectionCase =
+    "W3/W8: empty selection emits nothing and partial replay rebuilds ordered selection around completed effects";
+  it(selectionCase, function* () {
     yield* useNormalizedOutput();
     for (const body of [
       "docs<If condition={false}><Output>hidden</Output></If>",
       'docs<Each in={[]} let="n"><Output>hidden</Output></Each>',
     ]) {
-      yield* scoped(function* () {
-        yield* useStubFs({ "doc.md": body });
-        const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
-        const chunks: string[] = [];
-        yield* forEach(function* (chunk) {
-          chunks.push(chunk);
-        }, execution.output);
-        expect((yield* execution).ok).toBe(true);
-        expect(chunks).toEqual([]);
-      });
+      yield* captureTestJournal(
+        { owner: OWNER, name: selectionCase },
+        "doc.md",
+        function* (stream) {
+          yield* useStubFs({ "doc.md": body });
+          const execution = yield* execute({ path: "doc.md", stream });
+          const chunks: string[] = [];
+          yield* forEach(function* (chunk) {
+            chunks.push(chunk);
+          }, execution.output);
+          expect((yield* execution).ok).toBe(true);
+          expect(chunks).toEqual([]);
+        },
+      );
     }
     const source =
       "<If condition={true}><Output>A</Output></If>\n```bash exec silent\nfirst\n```\n<Output>B</Output>\n```bash exec silent\nsecond\n```\n<Output>C</Output>";

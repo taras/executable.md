@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Tier CB — `<CodeBlock>` (spec §6.19).
  *
@@ -36,7 +37,8 @@ import { registerComponents } from "../src/components/registration.ts";
 import type { Json } from "../src/types.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/code-block-component.test.ts");
+const OWNER = "packages/core/tests/code-block-component.test.ts";
+const journalCase = journalCases(OWNER);
 
 interface Run {
   /** Everything the document emitted, before any output middleware. */
@@ -147,20 +149,30 @@ function* captured(
 }
 
 describe("Tier CB — the envelope", () => {
-  it("CB1: an empty value is three backticks, two line feeds and nothing else", function* () {
-    const result = yield* directly(undefined, "");
+  const emptyValue = "CB1: an empty value is three backticks, two line feeds and nothing else";
+  journalCase(emptyValue, "doc.md", function* (stream) {
+    yield* captureTestJournal({ owner: OWNER, name: emptyValue }, "doc.md", function* (compared) {
+      const result = yield* directly(stream, "");
 
-    expect(result.failure).toBe("");
-    expect(result.output).toBe("```\n\n```");
-    expect(yield* captured(undefined, "")).toBe("```\n\n```");
+      expect(result.failure).toBe("");
+      expect(result.output).toBe("```\n\n```");
+      expect(yield* captured(compared, "")).toBe("```\n\n```");
+    });
   });
 
-  it("CB1: ordinary Markdown keeps its own lines, and gains no final line feed", function* () {
-    const value = "# Title\n\n- one\n- two";
-    const result = yield* directly(undefined, value);
+  const markdownValue = "CB1: ordinary Markdown keeps its own lines, and gains no final line feed";
+  journalCase(markdownValue, "doc.md", function* (stream) {
+    yield* captureTestJournal(
+      { owner: OWNER, name: markdownValue },
+      "doc.md",
+      function* (compared) {
+        const value = "# Title\n\n- one\n- two";
+        const result = yield* directly(stream, value);
 
-    expect(result.output).toBe("```\n# Title\n\n- one\n- two\n```");
-    expect(yield* captured(undefined, value)).toBe("```\n# Title\n\n- one\n- two\n```");
+        expect(result.output).toBe("```\n# Title\n\n- one\n- two\n```");
+        expect(yield* captured(compared, value)).toBe("```\n# Title\n\n- one\n- two\n```");
+      },
+    );
   });
 
   journalCase("CB1: the block lands where the element was written", "doc.md", function* (stream) {
@@ -178,7 +190,8 @@ describe("Tier CB — the envelope", () => {
 });
 
 describe("Tier CB — the fence the value cannot close", () => {
-  it("CB2: the fence is the longest backtick run plus one, never fewer than three", function* () {
+  const fenceCase = "CB2: the fence is the longest backtick run plus one, never fewer than three";
+  it(fenceCase, function* () {
     const cases: ReadonlyArray<readonly [string, number]> = [
       ["no backticks at all", 3],
       ["one ` here", 3],
@@ -193,48 +206,57 @@ describe("Tier CB — the fence the value cannot close", () => {
     ];
 
     for (const [value, length] of cases) {
-      const block = yield* captured(undefined, value);
-      const fence = "`".repeat(length);
+      yield* captureTestJournal({ owner: OWNER, name: fenceCase }, "doc.md", function* (stream) {
+        const block = yield* captured(stream, value);
+        const fence = "`".repeat(length);
 
-      expect(block).toBe(`${fence}\n${value}\n${fence}`);
-      // Stated twice on purpose: the complete string pins the layout, and this
-      // pins the count the layout was built from.
-      expect(block.split("\n")[0]?.length).toBe(length);
+        expect(block).toBe(`${fence}\n${value}\n${fence}`);
+        // Stated twice on purpose: the complete string pins the layout, and this
+        // pins the count the layout was built from.
+        expect(block.split("\n")[0]?.length).toBe(length);
+      });
     }
   });
 
-  it("CB2: a run broken by any other character is two runs, not one", function* () {
-    // Counting backticks without resetting would read five here and open a
-    // six-backtick fence.
-    expect(yield* captured(undefined, "```\n``")).toBe("````\n```\n``\n````");
-    expect(yield* captured(undefined, "``x``x``")).toBe("```\n``x``x``\n```");
+  const brokenRun = "CB2: a run broken by any other character is two runs, not one";
+  journalCase(brokenRun, "doc.md", function* (stream) {
+    yield* captureTestJournal({ owner: OWNER, name: brokenRun }, "doc.md", function* (compared) {
+      // Counting backticks without resetting would read five here and open a
+      // six-backtick fence.
+      expect(yield* captured(stream, "```\n``")).toBe("````\n```\n``\n````");
+      expect(yield* captured(compared, "``x``x``")).toBe("```\n``x``x``\n```");
+    });
   });
 });
 
 describe("Tier CB — the value is not read for anything else", () => {
-  it("CB3: removing the envelope recovers the source code units exactly", function* () {
-    const value = [
-      "   leading spaces",
-      "\ttab indented",
-      "",
-      "",
-      "carriage\r\nreturn line",
-      "`` two `````` six",
-      "trailing spaces   ",
-    ].join("\n");
-    const block = yield* captured(undefined, value);
+  journalCase(
+    "CB3: removing the envelope recovers the source code units exactly",
+    "doc.md",
+    function* (stream) {
+      const value = [
+        "   leading spaces",
+        "\ttab indented",
+        "",
+        "",
+        "carriage\r\nreturn line",
+        "`` two `````` six",
+        "trailing spaces   ",
+      ].join("\n");
+      const block = yield* captured(stream, value);
 
-    // The value's longest run is six backticks, so the fence is seven.
-    const fence = "`".repeat(7);
-    expect(block.startsWith(`${fence}\n`)).toBe(true);
-    expect(block.endsWith(`\n${fence}`)).toBe(true);
+      // The value's longest run is six backticks, so the fence is seven.
+      const fence = "`".repeat(7);
+      expect(block.startsWith(`${fence}\n`)).toBe(true);
+      expect(block.endsWith(`\n${fence}`)).toBe(true);
 
-    const recovered = block.slice(fence.length + 1, block.length - fence.length - 1);
-    expect(recovered.length).toBe(value.length);
-    for (let index = 0; index < value.length; index += 1) {
-      expect(recovered.charCodeAt(index)).toBe(value.charCodeAt(index));
-    }
-  });
+      const recovered = block.slice(fence.length + 1, block.length - fence.length - 1);
+      expect(recovered.length).toBe(value.length);
+      for (let index = 0; index < value.length; index += 1) {
+        expect(recovered.charCodeAt(index)).toBe(value.charCodeAt(index));
+      }
+    },
+  );
 });
 
 describe("Tier CB — the language token", () => {
@@ -246,18 +268,26 @@ describe("Tier CB — the language token", () => {
     },
   );
 
-  it("CB4: every accepted token renders on the opening fence, unchanged", function* () {
+  const acceptedLanguage = "CB4: every accepted token renders on the opening fence, unchanged";
+  it(acceptedLanguage, function* () {
     const accepted = ["markdown", "md", "json", "shell-session", "c++", "c#", "F", "x1._+#-"];
 
     for (const language of accepted) {
-      const result = yield* directly(undefined, "body", ` language="${language}"`);
+      yield* captureTestJournal(
+        { owner: OWNER, name: acceptedLanguage },
+        "doc.md",
+        function* (stream) {
+          const result = yield* directly(stream, "body", ` language="${language}"`);
 
-      expect(result.failure).toBe("");
-      expect(result.output).toBe("```" + language + "\nbody\n```");
+          expect(result.failure).toBe("");
+          expect(result.output).toBe("```" + language + "\nbody\n```");
+        },
+      );
     }
   });
 
-  it("CB4: a refused token fails validation and renders no fence", function* () {
+  const refusedLanguage = "CB4: a refused token fails validation and renders no fence";
+  it(refusedLanguage, function* () {
     const refused = [
       "",
       " ",
@@ -283,16 +313,22 @@ describe("Tier CB — the language token", () => {
     ];
 
     for (const language of refused) {
-      const result = yield* run(
-        undefined,
-        '<Value key="v" as="v" /><Value key="lang" as="lang" /><CodeBlock value={v} language={lang} />',
-        { v: "body", lang: language },
-      );
+      yield* captureTestJournal(
+        { owner: OWNER, name: refusedLanguage },
+        "doc.md",
+        function* (stream) {
+          const result = yield* run(
+            stream,
+            '<Value key="v" as="v" /><Value key="lang" as="lang" /><CodeBlock value={v} language={lang} />',
+            { v: "body", lang: language },
+          );
 
-      expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
-      expect(reported(result)).toContain("language");
-      expect(result.output).not.toContain("```");
-      expect(result.output).not.toContain("body");
+          expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
+          expect(reported(result)).toContain("language");
+          expect(result.output).not.toContain("```");
+          expect(result.output).not.toContain("body");
+        },
+      );
     }
   });
 });
@@ -310,12 +346,15 @@ describe("Tier CB — the invocation is refused before the body", () => {
     },
   );
 
-  it("CB5: a non-string value is refused rather than coerced", function* () {
+  const nonString = "CB5: a non-string value is refused rather than coerced";
+  it(nonString, function* () {
     for (const value of ["42", "true", "null", "{ text: 'x' }", "['x']"]) {
-      const result = yield* run(undefined, `<CodeBlock value={${value}} />`);
+      yield* captureTestJournal({ owner: OWNER, name: nonString }, "doc.md", function* (stream) {
+        const result = yield* run(stream, `<CodeBlock value={${value}} />`);
 
-      expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
-      expect(result.output).not.toContain("```");
+        expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
+        expect(result.output).not.toContain("```");
+      });
     }
   });
 

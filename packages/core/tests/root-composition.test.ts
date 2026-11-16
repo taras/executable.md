@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Tier RC — the root a run executes, after `Document` and `RootMetadata`.
  *
@@ -26,7 +27,8 @@ import { getExpansion } from "../src/expansion.ts";
 import { Document, RootMetadata } from "../api.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/root-composition.test.ts");
+const OWNER = "packages/core/tests/root-composition.test.ts";
+const journalCase = journalCases(OWNER);
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
@@ -103,9 +105,22 @@ function* useEnvelope(before: string, after: string): Operation<void> {
 const ROOT = ["# Heading", "", "body text", ""].join("\n");
 
 describe("RC1 — with no document middleware the root is the root", () => {
-  it("renders exactly what executing the document directly renders", function* () {
-    expect(yield* render(undefined, ROOT)).toBe(yield* scoped(() => render(undefined, ROOT)));
-    expect(yield* render(undefined, ROOT)).toContain("body text");
+  const directComparison = "renders exactly what executing the document directly renders";
+  journalCase(directComparison, "<eval>", function* (stream1) {
+    yield* captureTestJournal(
+      { owner: OWNER, name: directComparison },
+      "<eval>",
+      function* (stream3) {
+        yield* captureTestJournal(
+          { owner: OWNER, name: directComparison },
+          "<eval>",
+          function* (stream2) {
+            expect(yield* render(stream1, ROOT)).toBe(yield* scoped(() => render(stream2, ROOT)));
+            expect(yield* render(stream3, ROOT)).toContain("body text");
+          },
+        );
+      },
+    );
   });
 
   journalCase("keeps the document's own props, returns and value", "<eval>", function* (stream) {
@@ -173,26 +188,33 @@ describe("RC2 — a wrapper composes around the projected document", () => {
 });
 
 describe("RC3 — projection preserves the document's own identity", () => {
-  it("reports the authored source position, not a position in the envelope", function* () {
-    const source = ["# Heading", "", "<Probe />", ""].join("\n");
-    const plain: { id: string; path?: string; line?: number }[] = [];
-    yield* scoped(function* () {
-      yield* useProbe(plain);
-      yield* render(undefined, source);
-    });
-    const wrapped: { id: string; path?: string; line?: number }[] = [];
-    yield* scoped(function* () {
-      yield* useProbe(wrapped);
-      yield* useEnvelope("envelope line one\n\nenvelope line two\n\n", "\n\ntail\n");
-      yield* render(undefined, source);
-    });
-    expect(plain).toHaveLength(1);
-    expect(wrapped).toHaveLength(1);
-    expect(wrapped[0]?.path).toBe(plain[0]?.path);
-    expect(wrapped[0]?.line).toBe(plain[0]?.line);
-    // And with it the expansion identity: a wrapper that renumbered the
-    // document would give every durable element inside it a new identity.
-    expect(wrapped[0]?.id).toBe(plain[0]?.id);
+  const sourceComparison = "reports the authored source position, not a position in the envelope";
+  journalCase(sourceComparison, "<eval>", function* (stream1) {
+    yield* captureTestJournal(
+      { owner: OWNER, name: sourceComparison },
+      "<eval>",
+      function* (stream2) {
+        const source = ["# Heading", "", "<Probe />", ""].join("\n");
+        const plain: { id: string; path?: string; line?: number }[] = [];
+        yield* scoped(function* () {
+          yield* useProbe(plain);
+          yield* render(stream1, source);
+        });
+        const wrapped: { id: string; path?: string; line?: number }[] = [];
+        yield* scoped(function* () {
+          yield* useProbe(wrapped);
+          yield* useEnvelope("envelope line one\n\nenvelope line two\n\n", "\n\ntail\n");
+          yield* render(stream2, source);
+        });
+        expect(plain).toHaveLength(1);
+        expect(wrapped).toHaveLength(1);
+        expect(wrapped[0]?.path).toBe(plain[0]?.path);
+        expect(wrapped[0]?.line).toBe(plain[0]?.line);
+        // And with it the expansion identity: a wrapper that renumbered the
+        // document would give every durable element inside it a new identity.
+        expect(wrapped[0]?.id).toBe(plain[0]?.id);
+      },
+    );
   });
 
   journalCase(
@@ -210,19 +232,26 @@ describe("RC3 — projection preserves the document's own identity", () => {
 });
 
 describe("RC4 — the document's own contract survives a wrapper", () => {
-  it("keeps <Output> selecting what renders", function* () {
-    const source = ["hidden", "", "<Output>", "", "selected", "", "</Output>", ""].join("\n");
-    const plain = yield* render(undefined, source);
-    const wrapped = yield* scoped(function* () {
-      yield* useEnvelope("envelope\n\n", "");
-      return yield* render(undefined, source);
-    });
-    expect(plain).toContain("selected");
-    expect(plain).not.toContain("hidden");
-    // A document that declares `<Output>` decides what renders, and a wrapper
-    // does not overrule it: the envelope's own text sits outside the selected
-    // region, exactly as the document's unselected body does.
-    expect(wrapped).toBe(plain);
+  const outputComparison = "keeps <Output> selecting what renders";
+  journalCase(outputComparison, "<eval>", function* (stream1) {
+    yield* captureTestJournal(
+      { owner: OWNER, name: outputComparison },
+      "<eval>",
+      function* (stream2) {
+        const source = ["hidden", "", "<Output>", "", "selected", "", "</Output>", ""].join("\n");
+        const plain = yield* render(stream1, source);
+        const wrapped = yield* scoped(function* () {
+          yield* useEnvelope("envelope\n\n", "");
+          return yield* render(stream2, source);
+        });
+        expect(plain).toContain("selected");
+        expect(plain).not.toContain("hidden");
+        // A document that declares `<Output>` decides what renders, and a wrapper
+        // does not overrule it: the envelope's own text sits outside the selected
+        // region, exactly as the document's unselected body does.
+        expect(wrapped).toBe(plain);
+      },
+    );
   });
 
   journalCase(
@@ -248,16 +277,25 @@ describe("RC4 — the document's own contract survives a wrapper", () => {
 });
 
 describe("RC5 — RootMetadata changes the root's metadata and nothing else", () => {
-  it("composes the record the document's own interpolation reads", function* () {
-    const source = ["---", "title: authored", "---", "", "title is {meta.title}", ""].join("\n");
-    expect(yield* render(undefined, source)).toContain("title is authored");
-    const composed = yield* scoped(function* () {
-      yield* RootMetadata.around({
-        metadata: (_args, next) => ({ ...next(), title: "composed" }),
-      });
-      return yield* render(undefined, source);
-    });
-    expect(composed).toContain("title is composed");
+  const metadataComparison = "composes the record the document's own interpolation reads";
+  journalCase(metadataComparison, "<eval>", function* (stream1) {
+    yield* captureTestJournal(
+      { owner: OWNER, name: metadataComparison },
+      "<eval>",
+      function* (stream2) {
+        const source = ["---", "title: authored", "---", "", "title is {meta.title}", ""].join(
+          "\n",
+        );
+        expect(yield* render(stream1, source)).toContain("title is authored");
+        const composed = yield* scoped(function* () {
+          yield* RootMetadata.around({
+            metadata: (_args, next) => ({ ...next(), title: "composed" }),
+          });
+          return yield* render(stream2, source);
+        });
+        expect(composed).toContain("title is composed");
+      },
+    );
   });
 
   journalCase("leaves an imported component's own metadata alone", "<eval>", function* (stream) {
