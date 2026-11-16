@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
@@ -30,7 +31,9 @@ import { makeRegistry, makeStore } from "./support/fake-acp.ts";
 import { chmod, mkdtemp, realpath } from "node:fs/promises";
 
 describe("parent-owned headless REPL", () => {
-  it("H3: disconnect after accepted work reconnects exactly without resubmitting its effect", function* () {
+  const creatorCut =
+    "H3: disconnect after accepted work reconnects exactly without resubmitting its effect";
+  it(creatorCut, function* () {
     const held = yield* useHeadlessFixture();
     const source = '<Let as="once" value="single-disconnected-effect" /><Output>{once}</Output>';
     held.host.fake.script({
@@ -221,79 +224,84 @@ describe("parent-owned headless REPL", () => {
           path,
           '<Agent name="xmd"><Session name="worker"><XMD.Session as="child" /></Session></Agent><Block />',
         );
-        const stream = new InMemoryStream();
-        const provider = children.factory({
-          createRuntime: host.fake.create,
-          agentRegistry: makeRegistry({}),
-          sessionStore: makeStore(),
-        });
-        const creator = yield* spawn(function* () {
-          const execution = yield* executeInstalled({ path, stream }, [
-            children.installation,
-            {
-              components: agentIdentityComponents(),
-              *install() {
-                yield* installAgentComponents({
-                  rootProvider: {
-                    factory: provider,
-                    options: { defaultAgent: "xmd", permissionMode: "deny-all" },
-                  },
-                });
-              },
-            },
-            {
-              components: [
+        yield* captureTestJournal(
+          { owner: "packages/cli/tests/repl-headless.test.ts", name: creatorCut },
+          path,
+          function* (stream) {
+            const provider = children.factory({
+              createRuntime: host.fake.create,
+              agentRegistry: makeRegistry({}),
+              sessionStore: makeStore(),
+            });
+            const creator = yield* spawn(function* () {
+              const execution = yield* executeInstalled({ path, stream }, [
+                children.installation,
                 {
-                  name: "Block",
-                  origin: "test",
-                  props: { type: "object" },
-                  factory: () =>
-                    function* () {
-                      yield* suspend();
-                      return null;
-                    },
+                  components: agentIdentityComponents(),
+                  *install() {
+                    yield* installAgentComponents({
+                      rootProvider: {
+                        factory: provider,
+                        options: { defaultAgent: "xmd", permissionMode: "deny-all" },
+                      },
+                    });
+                  },
                 },
-              ],
-            },
-          ]);
-          const output = yield* execution.output;
-          let next = yield* output.next();
-          while (!next.done) {
-            next = yield* output.next();
-          }
-          return yield* execution;
-        });
-        yield* reached.operation;
-        const allocation = (yield* stream.readAll()).find(
-          (event) => event.type === "yield" && event.description.type === "xmd_session",
-        );
-        const address = z
-          .object({
-            result: z
-              .object({ value: z.object({ sessionId: z.string().uuid() }).strict() })
-              .passthrough(),
-          })
-          .passthrough()
-          .parse(allocation).result.value;
-        let joined = false;
-        const stopping = yield* spawn(function* () {
-          yield* creator.halt();
-          if (cut === "registered") {
-            expect(
-              (yield* attachmentDescriptor(yield* childAddressPath(address.sessionId))).owner,
-            ).toBe(address.sessionId);
+                {
+                  components: [
+                    {
+                      name: "Block",
+                      origin: "test",
+                      props: { type: "object" },
+                      factory: () =>
+                        function* () {
+                          yield* suspend();
+                          return null;
+                        },
+                    },
+                  ],
+                },
+              ]);
+              const output = yield* execution.output;
+              let next = yield* output.next();
+              while (!next.done) {
+                next = yield* output.next();
+              }
+              return yield* execution;
+            });
+            yield* reached.operation;
+            const allocation = (yield* stream.readAll()).find(
+              (event) => event.type === "yield" && event.description.type === "xmd_session",
+            );
+            const address = z
+              .object({
+                result: z
+                  .object({ value: z.object({ sessionId: z.string().uuid() }).strict() })
+                  .passthrough(),
+              })
+              .passthrough()
+              .parse(allocation).result.value;
+            let joined = false;
+            const stopping = yield* spawn(function* () {
+              yield* creator.halt();
+              if (cut === "registered") {
+                expect(
+                  (yield* attachmentDescriptor(yield* childAddressPath(address.sessionId))).owner,
+                ).toBe(address.sessionId);
+                expect(closed).toBe(false);
+                yield* children.close();
+              }
+              joined = true;
+            });
+            yield* closing.operation;
+            expect(joined).toBe(false);
             expect(closed).toBe(false);
+            release.resolve();
+            yield* stopping;
+            expect(closed).toBe(true);
             yield* children.close();
-          }
-          joined = true;
-        });
-        yield* closing.operation;
-        expect(joined).toBe(false);
-        expect(closed).toBe(false);
-        release.resolve();
-        yield* stopping;
-        expect(closed).toBe(true);
-        yield* children.close();
+          },
+        );
       });
     }
   });

@@ -1,3 +1,6 @@
+import type { ReplExecution } from "../src/repl/journal.ts";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
+import { INLINE_SOURCE_PATH } from "@executablemd/core";
 /**
  * Tier R3 — the words a reply may use, through the real evaluator (#883, J2/J3/J6).
  *
@@ -1434,10 +1437,25 @@ describe("Tier R3 — a shipped example prepares a draft and runs", () => {
     return exampleOf(chapter, read.value);
   }
 
+  function guideCase(
+    name: string,
+    id: string,
+    body: (entry: ReplExecution) => Operation<void>,
+  ): void {
+    it(name, () =>
+      captureReplEntry(
+        { owner: "packages/cli/tests/repl-sidekick-controls.test.ts", name },
+        id,
+        INLINE_SOURCE_PATH,
+        body,
+      ),
+    );
+  }
+
   /** Run one prepared draft the way an ordinary submission runs it. */
-  function* ranAsEntry(source: string): Operation<string> {
+  function* ranAsEntry(source: string, entry: ReplExecution): Operation<string> {
     const opened = yield* openReplSession({
-      execution: { id: "guide-example", stream: new InMemoryStream() },
+      execution: entry,
     });
     if (!opened.ok) {
       throw opened.error;
@@ -1474,87 +1492,105 @@ describe("Tier R3 — a shipped example prepares a draft and runs", () => {
     return { draft, fills: asked.requests.filter((one) => one === "fillDraft").length };
   }
 
-  it("R3: Entries fills the draft once, and the drafted program runs", function* () {
-    const { draft, fills } = yield* prepared("Entries");
-    expect(fills).toBe(1);
-    // Literal: the captured source reached the draft as source, not as output.
-    expect(draft).toContain('<Let as="names" value={["Ada", "Lin"]} />');
-    expect(yield* ranAsEntry(draft)).toContain("Hello, Ada!");
-  });
+  guideCase(
+    "R3: Entries fills the draft once, and the drafted program runs",
+    "guide-example",
+    function* (entry) {
+      const { draft, fills } = yield* prepared("Entries");
+      expect(fills).toBe(1);
+      // Literal: the captured source reached the draft as source, not as output.
+      expect(draft).toContain('<Let as="names" value={["Ada", "Lin"]} />');
+      expect(yield* ranAsEntry(draft, entry)).toContain("Hello, Ada!");
+    },
+  );
 
-  it("R3: Bindings keeps report contents local and publishes only its path and status", function* () {
-    const directory = yield* useTempDirectory("xmd-guide-bindings-");
-    yield* useHostFiles();
-    yield* useNormalizedOutput();
-    yield* API.Env.around(
-      {
-        *cwd(): Operation<string> {
-          return directory;
+  guideCase(
+    "R3: Bindings keeps report contents local and publishes only its path and status",
+    "guide-bindings",
+    function* (entry) {
+      const directory = yield* useTempDirectory("xmd-guide-bindings-");
+      yield* useHostFiles();
+      yield* useNormalizedOutput();
+      yield* API.Env.around(
+        {
+          *cwd(): Operation<string> {
+            return directory;
+          },
         },
-      },
-      { at: "min" },
-    );
-    const { draft, fills } = yield* prepared("Bindings");
-    expect(fills).toBe(1);
-    const stream = new InMemoryStream();
-    const opened = yield* openReplSession({ execution: { id: "guide-bindings", stream } });
-    if (!opened.ok) {
-      throw opened.error;
-    }
-    const session = opened.value;
-    const submitted = yield* session.submit(draft);
-    if (!submitted.ok) {
-      throw submitted.error;
-    }
-    const outcome = yield* submitted.value.join();
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
-    expect(session.overlay.output).toMatch(
-      /Report status:\s*ready\s+Report file: artifacts\/bindings-demo\.json/,
-    );
-    const report = JSON.parse(yield* readTextFile(join(directory, "artifacts/bindings-demo.json")));
-    expect(report).toEqual({ status: "ready", details: ["demonstration report"] });
-    const projected = projectRepl(yield* stream.readAll());
-    if (!projected.ok) {
-      throw projected.error;
-    }
-    const bindings = entryInitialBindings(projected.value);
-    expect(Object.keys(bindings).sort()).toEqual(["reportPath", "statusSummary"]);
-    expect(bindings.reportPath).toBe("artifacts/bindings-demo.json");
-    expect(typeof bindings.statusSummary).toBe("string");
-    if (typeof bindings.statusSummary !== "string") {
-      throw new Error("the Each capture did not publish text");
-    }
-    expect(bindings.statusSummary.trim()).toBe("ready");
-    for (const local of ["path", "reportText", "report"]) {
-      expect(Object.hasOwn(bindings, local)).toBe(false);
-    }
-  });
+        { at: "min" },
+      );
+      const { draft, fills } = yield* prepared("Bindings");
+      expect(fills).toBe(1);
+      const stream = entry.stream;
+      const opened = yield* openReplSession({ execution: entry });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const session = opened.value;
+      const submitted = yield* session.submit(draft);
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      const outcome = yield* submitted.value.join();
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      expect(session.overlay.output).toMatch(
+        /Report status:\s*ready\s+Report file: artifacts\/bindings-demo\.json/,
+      );
+      const report = JSON.parse(
+        yield* readTextFile(join(directory, "artifacts/bindings-demo.json")),
+      );
+      expect(report).toEqual({ status: "ready", details: ["demonstration report"] });
+      const projected = projectRepl(yield* stream.readAll());
+      if (!projected.ok) {
+        throw projected.error;
+      }
+      const bindings = entryInitialBindings(projected.value);
+      expect(Object.keys(bindings).sort()).toEqual(["reportPath", "statusSummary"]);
+      expect(bindings.reportPath).toBe("artifacts/bindings-demo.json");
+      expect(typeof bindings.statusSummary).toBe("string");
+      if (typeof bindings.statusSummary !== "string") {
+        throw new Error("the Each capture did not publish text");
+      }
+      expect(bindings.statusSummary.trim()).toBe("ready");
+      for (const local of ["path", "reportText", "report"]) {
+        expect(Object.hasOwn(bindings, local)).toBe(false);
+      }
+    },
+  );
 
-  it("R3: Effection drafts an executable fence, and the entry suspends and resumes", function* () {
-    const { draft, fills } = yield* prepared("Effection");
-    expect(fills).toBe(1);
-    // The executable fence belongs to the entry and survived as text: the reply
-    // was admitted *because* that fence was inside a passive one, and the draft
-    // holds it still executable.
-    expect(draft).toContain("```js eval");
-    expect(draft).toContain("yield* sleep(1)");
-    // And the outcome the chapter states, from the entry that actually ran it.
-    expect(yield* ranAsEntry(draft)).toContain("started then resumed");
-  });
+  guideCase(
+    "R3: Effection drafts an executable fence, and the entry suspends and resumes",
+    "guide-example",
+    function* (entry) {
+      const { draft, fills } = yield* prepared("Effection");
+      expect(fills).toBe(1);
+      // The executable fence belongs to the entry and survived as text: the reply
+      // was admitted *because* that fence was inside a passive one, and the draft
+      // holds it still executable.
+      expect(draft).toContain("```js eval");
+      expect(draft).toContain("yield* sleep(1)");
+      // And the outcome the chapter states, from the entry that actually ran it.
+      expect(yield* ranAsEntry(draft, entry)).toContain("started then resumed");
+    },
+  );
 
-  it("R3: Lifetimes drafts a resource, and its release is observed before the end", function* () {
-    const { draft, fills } = yield* prepared("Lifetimes");
-    expect(fills).toBe(1);
-    expect(draft).toContain("```js eval");
-    expect(draft).toContain("yield* resource(function* (provide)");
-    // The order the chapter states, which is the claim worth proving: the
-    // release is in the output, so it happened while the entry was still
-    // running rather than during its teardown.
-    const output = yield* ranAsEntry(draft);
-    expect(output).toContain("acquired, used handle, released");
-  });
+  guideCase(
+    "R3: Lifetimes drafts a resource, and its release is observed before the end",
+    "guide-example",
+    function* (entry) {
+      const { draft, fills } = yield* prepared("Lifetimes");
+      expect(fills).toBe(1);
+      expect(draft).toContain("```js eval");
+      expect(draft).toContain("yield* resource(function* (provide)");
+      // The order the chapter states, which is the claim worth proving: the
+      // release is in the output, so it happened while the entry was still
+      // running rather than during its teardown.
+      const output = yield* ranAsEntry(draft, entry);
+      expect(output).toContain("acquired, used handle, released");
+    },
+  );
 });
 
 /**

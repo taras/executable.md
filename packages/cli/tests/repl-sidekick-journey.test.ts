@@ -1,3 +1,5 @@
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
+import { INLINE_SOURCE_PATH } from "@executablemd/core";
 import { env } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
@@ -3571,7 +3573,9 @@ describe("975 — the shipped session component journey", () => {
 });
 
 describe("975 — entry cwd ends with its actual owner", () => {
-  it("restores after body failure and cancellation, then admits a manual successor", function* () {
+  const entryLifetime =
+    "restores after body failure and cancellation, then admits a manual successor";
+  it(entryLifetime, function* () {
     const project = yield* useTemporary("xmd-cwd-project-");
     const workspace = yield* useTemporary("xmd-cwd-workspace-");
     yield* useHostFiles();
@@ -3599,22 +3603,29 @@ describe("975 — entry cwd ends with its actual owner", () => {
     });
     const source =
       '<Dir path="inner"><Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">wait</Elicit></Dir>\n<File path="settled.md">settled</File>';
-    const failed = yield* openReplSession({
-      execution: { id: "failed", stream: new InMemoryStream() },
-      projectCwd: project,
-      workspace,
-    });
-    if (!failed.ok) {
-      throw failed.error;
-    }
-    const submission = yield* failed.value.submit(source, undefined, undefined, true);
-    if (!submission.ok) {
-      throw submission.error;
-    }
-    expect((yield* submission.value.join()).ok).toBe(false);
-    expect(seen[0]).toBe(join(workspace, "inner"));
-    expect(yield* cwd()).toBe(project);
-    expect(yield* yield* spawn(() => cwd())).toBe(project);
+    yield* captureReplEntry(
+      { owner: "packages/cli/tests/repl-sidekick-journey.test.ts", name: entryLifetime },
+      "failed",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const failed = yield* openReplSession({
+          execution: entry,
+          projectCwd: project,
+          workspace,
+        });
+        if (!failed.ok) {
+          throw failed.error;
+        }
+        const submission = yield* failed.value.submit(source, undefined, undefined, true);
+        if (!submission.ok) {
+          throw submission.error;
+        }
+        expect((yield* submission.value.join()).ok).toBe(false);
+        expect(seen[0]).toBe(join(workspace, "inner"));
+        expect(yield* cwd()).toBe(project);
+        expect(yield* yield* spawn(() => cwd())).toBe(project);
+      },
+    );
     mode = "cancel";
     const stream = new InMemoryStream();
     yield* scoped(function* () {
