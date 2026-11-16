@@ -7,6 +7,7 @@
  */
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
@@ -667,10 +668,13 @@ describe("Tier NS-D — slot prop reservation", () => {
   });
 });
 
+const journalCase = workspaceJournalCases("packages/core/tests/named-slots.test.ts", "doc.md", () =>
+  useTempDirectory("named-slots-test-"),
+);
+
 describe("Tier NS-E — renderChildren interaction", () => {
   beforeAll(() => useTempFileCompiler());
-  it("NS-E1: renderChildren includes all slots", function* () {
-    const tmpDir = yield* useTempDirectory("named-slots-test-");
+  journalCase("NS-E1: renderChildren includes all slots", function* (stream, tmpDir) {
     const sampleMd = yield* readTextFile(
       path.join(process.cwd(), "packages/core/components/Sample.md"),
     );
@@ -688,7 +692,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "</TestProvider>",
       ].join("\n"),
     });
-    const stream = new InMemoryStream();
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -701,42 +704,42 @@ describe("Tier NS-E — renderChildren interaction", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  it("NS-E2: Sample component with slotted content — all content captured", function* () {
-    const tmpDir = yield* useTempDirectory("named-slots-test-");
-    const sampleMd = yield* readTextFile(
-      path.join(process.cwd(), "packages/core/components/Sample.md"),
-    );
-    yield* writeFiles(tmpDir, {
-      "components/Sample.md": sampleMd,
-      "components/TestProvider.md": stubProvider("TestProvider"),
-      "components/X.md":
-        "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nX-CONTENT",
-      "components/Y.md":
-        "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nY-CONTENT",
-      "doc.md": [
-        '<TestProvider model="test-model">',
-        '<Sample model="test-model">',
-        '<X slot="prompt" />',
-        "<Y />",
-        "</Sample>",
-        "</TestProvider>",
-      ].join("\n"),
-    });
-    const stream = new InMemoryStream();
-    const output = yield* collect(
-      yield* execute({
-        path: path.join(tmpDir, "doc.md"),
-        stream,
-        includes: [path.join(tmpDir, "components"), tmpDir],
-      }),
-    );
-    // Both X and Y should be included in renderChildren output
-    expect(output).toContain("[sampled-by-test-model:");
-    expect(output).not.toContain("ERROR");
-  });
+  journalCase(
+    "NS-E2: Sample component with slotted content — all content captured",
+    function* (stream, tmpDir) {
+      const sampleMd = yield* readTextFile(
+        path.join(process.cwd(), "packages/core/components/Sample.md"),
+      );
+      yield* writeFiles(tmpDir, {
+        "components/Sample.md": sampleMd,
+        "components/TestProvider.md": stubProvider("TestProvider"),
+        "components/X.md":
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nX-CONTENT",
+        "components/Y.md":
+          "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nY-CONTENT",
+        "doc.md": [
+          '<TestProvider model="test-model">',
+          '<Sample model="test-model">',
+          '<X slot="prompt" />',
+          "<Y />",
+          "</Sample>",
+          "</TestProvider>",
+        ].join("\n"),
+      });
+      const output = yield* collect(
+        yield* execute({
+          path: path.join(tmpDir, "doc.md"),
+          stream,
+          includes: [path.join(tmpDir, "components"), tmpDir],
+        }),
+      );
+      // Both X and Y should be included in renderChildren output
+      expect(output).toContain("[sampled-by-test-model:");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
-  it("NS-E3: renderChildren preserves order", function* () {
-    const tmpDir = yield* useTempDirectory("named-slots-test-");
+  journalCase("NS-E3: renderChildren preserves order", function* (stream, tmpDir) {
     const sampleMd = yield* readTextFile(
       path.join(process.cwd(), "packages/core/components/Sample.md"),
     );
@@ -757,7 +760,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "</TestProvider>",
       ].join("\n"),
     });
-    const stream = new InMemoryStream();
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -864,8 +866,7 @@ describe("Tier NS-F — Edge cases", () => {
     expect(output).toContain("unclosed bold");
   });
 
-  it("NS-F7: journal shape unchanged", function* () {
-    const tmpDir = yield* useTempDirectory("named-slots-test-");
+  journalCase("NS-F7: journal shape unchanged", function* (stream, tmpDir) {
     yield* writeFiles(tmpDir, {
       "components/Layout.md": [
         "---",
@@ -878,7 +879,6 @@ describe("Tier NS-F — Edge cases", () => {
         "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER",
       "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
     });
-    const stream = new InMemoryStream();
     yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -1029,8 +1029,7 @@ describe("Tier NS-H — Nested projection points", () => {
     expect(errors).toHaveLength(1);
   });
 
-  it("NS-H7: nested inside a structural construct", function* () {
-    const tmpDir = yield* useTempDirectory("named-slots-test-");
+  journalCase("NS-H7: nested inside a structural construct", function* (stream, tmpDir) {
     yield* writeFiles(tmpDir, {
       "components/HostCap.md": [
         "---",
@@ -1044,15 +1043,14 @@ describe("Tier NS-H — Nested projection points", () => {
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
-        stream: new InMemoryStream(),
+        stream,
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     expect(output).toContain("host got: captured: MATERIAL");
   });
 
-  it("NS-H8: nested inside an iterating construct", function* () {
-    const tmpDir = yield* useTempDirectory("named-slots-test-");
+  journalCase("NS-H8: nested inside an iterating construct", function* (stream, tmpDir) {
     yield* writeFiles(tmpDir, {
       "components/EachHost.md": [
         "---",
@@ -1067,7 +1065,7 @@ describe("Tier NS-H — Nested projection points", () => {
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
-        stream: new InMemoryStream(),
+        stream,
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );

@@ -20,6 +20,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
@@ -131,7 +132,7 @@ function* useDocuments(names: string[], body: string): Operation<string[]> {
 }
 
 /** Execute one document, collecting the identifiers `<Probe />` saw. */
-function* executed(path: string, stream = new InMemoryStream()): Operation<string[]> {
+function* executed(path: string, stream: InMemoryStream): Operation<string[]> {
   const seen: string[] = [];
   yield* scoped(function* () {
     yield* registerComponents([
@@ -216,6 +217,8 @@ function* expandedBody(bodySegments: Segment[]): Operation<string[]> {
   });
   return seen;
 }
+
+const OWNER = "packages/core/tests/expansion-identity.test.ts";
 
 describe("Tier XP — expansion identity", () => {
   it("XP1: two elements written at different offsets get different identifiers", function* () {
@@ -735,19 +738,30 @@ describe("Tier XP — expansion identity", () => {
     expect(yield* expandedBody([element("Probe"), outputRegion()])).toEqual(first);
   });
 
-  it("XP19: the same element structure under two root documents differs", function* () {
+  const distinctRoots = "XP19: the same element structure under two root documents differs";
+  it(distinctRoots, function* () {
     const [here, there] = yield* useDocuments(["a.md", "b.md"], "<Probe />\n");
-    const first = yield* executed(here!);
-    const second = yield* executed(there!);
+    const label = { owner: OWNER, name: distinctRoots };
+    yield* captureTestJournal(label, here!, function* (stream) {
+      const first = yield* executed(here!, stream);
+      yield* captureTestJournal(label, there!, function* (secondStream) {
+        const second = yield* executed(there!, secondStream);
 
-    expect(first).toHaveLength(1);
-    expect(first[0]).not.toBe(second[0]);
+        expect(first).toHaveLength(1);
+        expect(first[0]).not.toBe(second[0]);
+      });
+    });
   });
 
-  it("XP20: one root document reproduces its identifiers", function* () {
+  const repeatedRoot = "XP20: one root document reproduces its identifiers";
+  it(repeatedRoot, function* () {
     const [only] = yield* useDocuments(["a.md"], "<Probe />\n\n<Probe />\n");
-
-    expect(yield* executed(only!)).toEqual(yield* executed(only!));
+    const label = { owner: OWNER, name: repeatedRoot };
+    yield* captureTestJournal(label, only!, function* (stream) {
+      yield* captureTestJournal(label, only!, function* (secondStream) {
+        expect(yield* executed(only!, stream)).toEqual(yield* executed(only!, secondStream));
+      });
+    });
   });
 
   // `<Case>` is consumed by its `<Switch>` and never reaches expansion's
