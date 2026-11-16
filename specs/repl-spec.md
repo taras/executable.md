@@ -1183,7 +1183,7 @@ the region at the same fixed control as Tab and dismisses the hints.
 | 1 | Sidekick Message |
 | 2 | Transcript |
 | 3 | Selected work |
-| 4 | Draft |
+| 4 | Round editor, or **+ New Round** when the editor is closed |
 | 5 | Tabs/Configure |
 | 6 | Right reading |
 | 7 | TODO |
@@ -1637,7 +1637,7 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; a readiness row; then compact History |
+| `160x36` and larger | an identity row; Transcript (36 columns), selected work or its Round editor (54 columns at this width), and Sidekick (70 columns); the drawer layer; a readiness row; then compact History |
 | `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
 | `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. Drawer guidance and the readiness row remain available |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
@@ -1692,15 +1692,18 @@ catalog does. **+ New Round** replaces that reading with an Executable
 Markdown editor, with a gold `Round n · draft` heading, the value below it and
 a round bar at the bottom. Its number follows the most recently admitted
 round, even when an earlier one was selected. At 72×20, the control opens the
-Entries view first. The editor takes focus and fills the selected work above
-the round bar. It keeps the Sidekick conversation and unsent Message.
+Entries view first. The gold heading stays visible above the focused editor,
+which fills the space down to the round bar. The Sidekick conversation and
+unsent Message stay available when you return to them.
 
 The bar shows `✎ draft`, **Send** and **X**. Send is dim and admits nothing
 while the draft is empty. X discards the draft and returns focus to
 **+ New Round**. A refused submission leaves the text in the editor. When
-Send admits a round, the live work replaces the editor and the bar offers
-**Stop** for that exact round while it runs. Unfiltered Transcript shows its
-`── Round n ──` separator alongside the existing conversation rows.
+Send admits a round, the live work replaces the editor and the bar shows
+`● running · user` and offers **Stop** for that exact round while it runs.
+History highlights the draft with `✎` while the editor is open and shows
+the running round with a spinner glyph after admission. Unfiltered Transcript
+shows the round's `── Round n ──` separator alongside the conversation rows.
 
 The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO**, and
 **Bindings**. With open tasks, the TODO label includes their count, as in
@@ -1958,7 +1961,7 @@ one, not because some text happens to begin with a brace.
 
 A reading of this screen with the colour thrown away loses nothing it needs. An
 outcome is spelled `[ok]` or `[err]`, a selected row keeps its `*`, a focused
-control keeps its `>`, the draft keeps its `>>`, and every state the emphasis
+control keeps its `>`, the Round editor heading says `draft`, and every state the emphasis
 distinguishes is also said in words. The emphasis is how the screen is read
 quickly; the text is how it is read at all.
 

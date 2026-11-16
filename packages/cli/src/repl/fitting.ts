@@ -1343,7 +1343,13 @@ export function* fitEditor(
       const first = stops[0]?.offset ?? 0;
       const last = stops.at(-1);
       const start = stops.find((stop) => stop.column >= left);
-      const end = stops.findLast((stop) => stop.column <= left + room);
+      let end: (typeof stops)[number] | undefined;
+      for (const stop of stops) {
+        if (stop.column > left + room) {
+          break;
+        }
+        end = stop;
+      }
       if (start === undefined || end === undefined || end.offset < start.offset) {
         display[at] = { text: "", runs: [] };
         continue;
