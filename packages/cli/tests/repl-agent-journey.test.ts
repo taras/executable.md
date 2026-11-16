@@ -1204,19 +1204,19 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
 
       yield* draftText(page, TYPED);
       expect(conversationFilter(page.screen())).toBe(filtered);
-      expect(page.screen().found(TYPED, { after: "DRAFT" })).toBe(1);
+      expect(page.screen().found(TYPED, DRAFT_VALUE)).toBe(1);
       expect(childrenShown(page.screen())).toHaveLength(1);
 
       const narrow = yield* page.resize({ columns: 72, rows: 20 });
       expect(narrow.rows.length).toBe(20);
-      expect(page.screen().found(TYPED, { after: "DRAFT" })).toBe(1);
+      expect(page.screen().found(TYPED, DRAFT_VALUE)).toBe(1);
       expect(narrow.rows.filter((line) => line.trimEnd().length > 72)).toEqual([]);
       expect(narrow.shows("Entries")).toBe(true);
 
       const back = yield* page.resize(WIDE);
       expect(back.rows.length).toBe(140);
       expect(conversationFilter(back)).toBe(filtered);
-      expect(page.screen().found(TYPED, { after: "DRAFT" })).toBe(1);
+      expect(page.screen().found(TYPED, DRAFT_VALUE)).toBe(1);
       expect(childrenShown(back)).toHaveLength(1);
 
       location = yield* leave(page);
@@ -1573,12 +1573,12 @@ function* beginJourney(options: {
 
 function* submitted(page: ReplPage, text: string, order: number): Operation<void> {
   yield* pasteDraft(page, text);
+  yield* page.key("Tab");
+  yield* page.until("Send focused", (frame) => frame.shows("> Send"));
   yield* page.key("Enter");
   yield* page.until(
     `the draft becoming entry ${order}`,
-    (frame) =>
-      railMark(frame, order) !== undefined &&
-      frame.found(text.trimEnd().split(/\s+/).at(-1) ?? text, DRAFT_VALUE) === 0,
+    (frame) => railMark(frame, order) !== undefined && !frame.shows("✎ draft"),
   );
 }
 

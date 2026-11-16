@@ -473,21 +473,22 @@ alone.
 
 ## One live journey
 
-Run `xmd repl`. The screen shows an empty draft, a Sessions list that says it is
+Run `xmd repl`. The screen shows **+ New Round**, a Sessions list that says it is
 empty, an Entries list with nothing in it yet, and a location of the form
 `xmd://repl/<execution>/entries` — the execution already exists, as an empty history
 file, before you have typed anything.
 
-Type or paste one XMD entry and press Enter. What was in the draft is now the
+Activate **+ New Round**, type or paste one XMD entry, then press Tab and Enter
+to activate **Send**. What was in the draft is now the
 entry, and an admitted entry is immutable. The run begins, and the screen fills
 in as it goes — the scopes the entry admitted, the bindings its `eval` blocks
 published, the source a generated fragment produced before that fragment was
 admitted, and each line the document rendered.
 
-Keep typing. The draft is always the *next* entry's, so it goes on taking
+Open the next draft. It is always the *next* entry's, so it goes on taking
 keystrokes while this entry runs and while you are reading an earlier position:
 an admitted entry is immutable, so there is never one those keystrokes could be
-editing. Press Enter before the entry ahead of it is done and Run says so, and
+editing. Activate Send before the entry ahead of it is done and the REPL says so, and
 what you typed stays exactly as you typed it, character for character. When that
 entry has both settled and finished coming down, the same draft becomes the next
 entry — and only then does it leave the input and the location.
@@ -1158,14 +1159,14 @@ One private grant ledger belongs to each inherited Prompt scope.
 
 ## Move between regions and edit within them
 
-From Draft, one Tab enters the tabs at Bindings without selecting it. Continue
-with Tab to reach the right reading, Message, History, Transcript, selected work
-and Draft again. Shift+Tab reverses the same cycle. Both directions use each
+From the Round editor, one Tab enters Send without activating it. Continue
+with Tab to reach the tabs, right reading, Message, History, Transcript, selected work
+and the editor again. When the editor is closed, the Draft region enters **+ New Round**. Shift+Tab reverses the same cycle. Both directions use each
 region's fixed entry; an absent region is skipped. Moving focus selects, sends
 and answers nothing.
 
 ```text
-Transcript -> Selected work -> Draft -> Tabs/Configure
+Transcript -> Selected work -> Draft -> Round actions -> Tabs/Configure
     ^                                      |
     |                                      v
  History <- Message <- TODO <- Right reading <-----+
@@ -1225,8 +1226,9 @@ paste occur at the caret. Up/Down follows displayed rows and retains the preferr
 visual column; Home/End reaches that row's boundaries. Plain arrows stay in the
 field. Alt+Up/Down reaches its local actions, and Tab leaves its region. Each
 value keeps its own caret through focus departure, modal coverage and resize;
-an explicitly replaced value or a new question starts at its end. Enter keeps
-each field's submission or Apply meaning. Control-J, a shifted Enter and
+an explicitly replaced value or a new question starts at its end. Enter in the
+Round editor inserts a newline. Enter on Send submits; other fields keep their
+submission or Apply meaning. Control-J, a shifted Enter and
 Terminal.app's Shift+Return insert a newline; releasing a key inserts nothing.
 Control-C in a focused Message that holds text clears it, as described under
 Message below.
@@ -1358,9 +1360,8 @@ row. The narrow profile uses compact state and action labels; longer reading
 directions wrap at the measured width. A refusal's explanation is paid out over
 rows the same way, at whole words.
 
-Two input destinations, named: `Draft` runs a document as this execution's next
-entry, and `Message Sidekick` asks the Sidekick. Enter in each one means its own
-thing. Typing and Backspace reach whichever holds focus and leave the other
+The Round editor holds this execution's next document. Its Send runs that
+document. Enter in `Message Sidekick` asks the Sidekick. Typing and Backspace reach whichever holds focus and leave the other
 exactly as it was. Both texts survive switching tabs, navigating History and
 resizing; the draft is in the location, and the message is this process's own and
 appears in no location. An empty box sends nothing.
@@ -1687,10 +1688,19 @@ shows that entry's exact source, its execution state and its results. Every name
 in that trail except the last one is a way back out to it: the reading is already
 at the last, and choosing an outer name leaves the reading there with the scopes
 beneath it no longer selected — the same thing choosing that scope's row in the
-catalog does. Below it is
-the **Draft**: one field whose heading row carries its own Send — or Stop, while
-an entry is running — and whose value takes the rows beneath. The Draft is always
-the next entry's text, and a blank row in it is a row.
+catalog does. **+ New Round** replaces that reading with an Executable
+Markdown editor, with a gold `Round n · draft` heading, the value below it and
+a round bar at the bottom. Its number follows the most recently admitted
+round, even when an earlier one was selected. At 72×20, the control opens the
+Entries view first. The editor takes focus and fills the selected work above
+the round bar. It keeps the Sidekick conversation and unsent Message.
+
+The bar shows `✎ draft`, **Send** and **X**. Send is dim and admits nothing
+while the draft is empty. X discards the draft and returns focus to
+**+ New Round**. A refused submission leaves the text in the editor. When
+Send admits a round, the live work replaces the editor and the bar offers
+**Stop** for that exact round while it runs. Unfiltered Transcript shows its
+`── Round n ──` separator alongside the existing conversation rows.
 
 The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO**, and
 **Bindings**. With open tasks, the TODO label includes their count, as in
@@ -2167,12 +2177,10 @@ counts, and the column is wide enough for every reading a badge can hold —
 including a cleanup wait, which says two things at once — so an element
 settling cannot reflow the document beside it.
 
-The Draft's value and a queued message are wrapped the same way. A queued
-message wraps between its origin and its `X`, and its continuation rows line up
+The Round editor keeps each source line on one row and scrolls it sideways to
+reveal the caret. A queued message wraps between its origin and its `X`, and its continuation rows line up
 with its text: a wrapped row is the same message, never a new one, and the `X`
-stays one control on its first row. The reference this screen follows clips
-source and scrolls the Draft sideways; this screen does neither, because a clip
-hides somebody's source and a control nobody can see is not one to focus.
+stays one control on its first row.
 
 A question's own read-only preview is measured the same way, at the width its
 drawer was given. A drawer row is one row, so a line left unwrapped has nowhere

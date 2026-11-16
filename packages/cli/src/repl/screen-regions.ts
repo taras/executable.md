@@ -40,6 +40,11 @@ const DRAFT_REGION: ReplFocusRegion = Object.freeze({
   rank: 3,
   axis: "horizontal",
 });
+const ROUND_ACTIONS_REGION: ReplFocusRegion = Object.freeze({
+  key: "round-actions",
+  rank: 3.5,
+  axis: "horizontal",
+});
 const TABS_REGION: ReplFocusRegion = Object.freeze({
   key: "tabs",
   rank: 4,
@@ -256,10 +261,13 @@ function screenPlacement(
     return { region: selected, entry: 1 };
   }
   if (key === "footer:input") {
-    return { region: DRAFT_REGION, entry: 0 };
+    return { region: outlet(DRAFT_REGION, facts), entry: 0 };
   }
-  if (key === "draft:send" || key === "draft:stop") {
-    return { region: DRAFT_REGION };
+  if (key === "draft:new") {
+    return { region: outlet(DRAFT_REGION, facts), entry: 1 };
+  }
+  if (key === "draft:send" || key === "draft:stop" || key === "draft:close") {
+    return { region: ROUND_ACTIONS_REGION, ...(key === "draft:send" ? { entry: 0 } : {}) };
   }
   if (key.startsWith("tab:")) {
     return { region: TABS_REGION, ...(key === "tab:bindings" ? { entry: 0 } : {}) };

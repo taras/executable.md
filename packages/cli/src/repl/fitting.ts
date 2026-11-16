@@ -1252,10 +1252,14 @@ export function* fitEditor(
   focused: boolean,
   store?: ReplPlainFitStore,
   classify: (text: string) => readonly ReplTokenRun[] = (text) => [{ text, token: "field-value" }],
+  mode?: "horizontal",
 ): Operation<Result<ReplEditor>> {
   const lines = caret.value.split("\n").map((text, at) => ({ key: `edit:${at}`, text }));
   // Reserve a blank cell for a caret after the last grapheme of a fitted row.
-  const fitted = yield* fitPlain(renderer, size, lines, Math.max(1, room - 1), store);
+  const fitted =
+    mode === "horizontal"
+      ? Ok(lines.map(({ key, text }) => ({ text, line: key, indent: 0 })))
+      : yield* fitPlain(renderer, size, lines, Math.max(1, room - 1), store);
   if (!fitted.ok) {
     return fitted;
   }
@@ -1318,6 +1322,34 @@ export function* fitEditor(
         ),
       ]),
     };
+  }
+  if (mode === "horizontal") {
+    const activeColumn =
+      rows[active]?.stops.find((stop) => stop.offset === caret.offset)?.column ?? 0;
+    const left = Math.max(0, activeColumn - room + 1);
+    for (const [at, one] of display.entries()) {
+      const stops = rows[at].stops;
+      const first = stops[0]?.offset ?? 0;
+      const last = stops.at(-1);
+      const start = stops.find((stop) => stop.column >= left);
+      const end = stops.findLast((stop) => stop.column <= left + room);
+      if (start === undefined || end === undefined || end.offset < start.offset) {
+        display[at] = { text: "", runs: [] };
+        continue;
+      }
+      const from = start.offset - first;
+      const to =
+        end.offset -
+        first +
+        (focused &&
+        at === active &&
+        end === last &&
+        end.column < left + room &&
+        end.offset === caret.offset
+          ? 1
+          : 0);
+      display[at] = { text: one.text.slice(from, to), runs: slicedRuns(one.runs, from, to) };
+    }
   }
   return Ok({ caret, rows, display, active });
 }

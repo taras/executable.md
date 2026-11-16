@@ -20,8 +20,8 @@ import { MOUNTED_DEADLINE_MS } from "./mounted-repl.ts";
 import type { Terminal } from "./mounted-repl.ts";
 import type { PageKey, ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
 
-/** The Draft's own heading, which its Send shares a row with. */
-export const DRAFT = " DRAFT";
+/** The suffix in the Round editor heading. */
+export const DRAFT = "· draft";
 
 /** The Sidekick tab, which its own Send is drawn below and right of. */
 export const SIDEKICK = "SIDEKICK";
@@ -97,7 +97,14 @@ export function* intoDraft(page: ReplPage, route: readonly PageKey[] = []): Oper
   if (route.length === 0) {
     yield* page.key("Ctrl+G");
     yield* page.key("4");
-    yield* page.until("Draft focus", (one) => one.found("> DRAFT") === 1);
+    const ready = yield* page.until(
+      "the Draft shortcut",
+      (one) => one.shows("> Round") || one.shows("> + New Round"),
+    );
+    if (ready.shows("> + New Round")) {
+      yield* page.key("Enter");
+      yield* page.until("Round editor focus", (one) => one.shows("> Round"));
+    }
     return;
   }
   for (const name of route) {
@@ -142,27 +149,22 @@ function* pressTab(
   }
 }
 
-/**
- * Put several lines in the Draft as one chunk, the way a paste arrives.
- *
- * The screen wraps a value into the rows its field has, so the arrival is read
- * from the last line's own words rather than from the whole text: a wrapped
- * value is not on the screen as one string.
- */
+/** Paste source into the editor and wait for a visible fragment near its caret. */
 export function* pasteDraft(
   page: ReplPage,
   text: string,
   route: readonly PageKey[] = [],
 ): Operation<void> {
   yield* intoDraft(page, route);
-  // The last word rather than the last line: a field fits a value into the
-  // rows it has, so a long line is not on the screen as one string.
-  const last = (text.trimEnd().split(/\s+/).at(-1) ?? "").slice(0, 24);
+  const line = text.trimEnd().split("\n").at(-1) ?? "";
+  const witness = (text.endsWith("\n") ? line.trimStart().slice(0, 12) : line.slice(-12)).trim();
   yield* page.type(text);
-  yield* page.until(
-    `the Draft holding ${JSON.stringify(last)}`,
-    (one) => one.found(last, DRAFT_VALUE) > 0,
-  );
+  if (witness !== "") {
+    yield* page.until(
+      `the Draft holding ${JSON.stringify(witness)}`,
+      (one) => one.found(witness, DRAFT_VALUE) > 0,
+    );
+  }
 }
 
 /** Put this text in the already active Draft. */
@@ -274,7 +276,8 @@ export function railMark(reading: ScreenReading, order: number): string | undefi
   // The cancelled mark is a hyphen, which is a range inside a class anywhere but
   // the end of one: it goes last, beside the mark a refused entry wears.
   const marks = Object.values(RAIL).filter((mark) => mark !== RAIL.cancelled);
-  return new RegExp(`(?:^|\\s)${order}\\s*([${marks.join("")}U-])`).exec(rail)?.[1];
+  const mark = new RegExp(`(?:^|\\s)${order}\\s*([${marks.join("")}U⠋-])`).exec(rail)?.[1];
+  return mark === "⠋" ? RAIL.unfinished : mark;
 }
 
 /** Whether a drawer is open: its own way out is the one every drawer draws. */

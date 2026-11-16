@@ -498,6 +498,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "session-filter") {
     return { kind: "toggle-session-filter" };
   }
+  if (select === "open-round-draft" || select === "close-round-draft") {
+    return { kind: select };
+  }
   if (select === "submit-draft") {
     return { kind: "submit" };
   }
@@ -643,6 +646,9 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
         };
       }
       if (event.key === "Enter") {
+        if (purpose === "draft" && fields(node.input)?.["block"] === true) {
+          return { kind: "type", text: "\n", ...owns };
+        }
         return submission(node.input);
       }
       return undefined;

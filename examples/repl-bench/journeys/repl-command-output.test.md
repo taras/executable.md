@@ -46,8 +46,11 @@ printf 'hidden-%s\n' stderr >&2
     </Let>
 
     <Repl.Focus.Draft />
+    <ReplBench.Key key="Enter" />
     <ReplBench.Type text={source} />
     <ReplBench.WaitForText text="printf 'hidden-%s" />
+    <ReplBench.Key key="Tab" />
+    <ReplBench.WaitForText text="> Send" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="1 ✓" />
     <ReplBench.WaitForText text="✓ COMPLETED" />

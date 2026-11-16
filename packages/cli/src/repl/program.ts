@@ -100,16 +100,15 @@ import {
   SIDEKICK_WINDOW,
   wheelDestination,
   createChatPreparationStore,
-  draftFieldWidth,
+  ROUND_EDITOR_BODY,
   configureNoticesOf,
-  draftLinesOf,
+  roundEditorVisible,
   NOTICE_INDENT,
   historyMapWidth,
   historyProbeOf,
   historySplitOf,
   wideHistoryWidths,
   queueTextWidth,
-  draftRowsOf,
   GUIDANCE_ROW,
   QUEUE_TEXT,
   queueLinesOf,
@@ -2343,7 +2342,19 @@ function* drive(
           // The entry exists now, so the draft that became it is finished — and
           // only the revision it was taken from. Somebody who typed while the
           // preflight was running keeps what they typed.
+          const previous = state;
           state = admitted(state, report.held);
+          if (report.held.by === "person") {
+            state = {
+              ...state,
+              humanRound: report.submission.entry,
+              draftOpen: false,
+              ...(previous.revisions.draft === report.held.revision
+                ? { draftCaret: undefined }
+                : {}),
+              route: { ...state.route, at: undefined, scopes: [report.submission.entry] },
+            };
+          }
           continue;
         }
         // A refusal leaves the draft exactly as it was and the history as it
@@ -2458,6 +2469,7 @@ function* drive(
           route,
           todoOpen,
           inspection: revealWork ? undefined : state.inspection,
+          draftOpen: digit === "3" ? false : state.draftOpen,
           restore: undefined,
         };
         const view = yield* inputView(candidate, at);
@@ -2506,7 +2518,14 @@ function* drive(
           hints.set(digit, undefined);
           continue;
         }
-        const key = JSON.stringify([route.surface, route.view, route.right, todoOpen, revealWork]);
+        const key = JSON.stringify([
+          route.surface,
+          route.view,
+          route.right,
+          todoOpen,
+          revealWork,
+          digit === "3",
+        ]);
         let descriptions = routes.get(key);
         if (descriptions === undefined) {
           const destination = yield* inputView(
@@ -2515,6 +2534,7 @@ function* drive(
               route,
               todoOpen,
               inspection: revealWork ? undefined : state.inspection,
+              draftOpen: digit === "3" ? false : state.draftOpen,
               restore: undefined,
             },
             view.size,
@@ -2532,13 +2552,15 @@ function* drive(
         if (hasRegion(descriptions, region)) {
           hints.set(
             digit,
-            revealWork
-              ? "closes inspection"
-              : route !== current
-                ? focusRouteHint(route, narrow)
-                : todoOpen
-                  ? "switches to the TODO tab"
-                  : "switches to the Sidekick tab",
+            digit === "3" && roundEditorVisible(view)
+              ? "shows selected work"
+              : revealWork
+                ? "closes inspection"
+                : route !== current
+                  ? focusRouteHint(route, narrow)
+                  : todoOpen
+                    ? "switches to the TODO tab"
+                    : "switches to the Sidekick tab",
           );
         }
       }
@@ -3803,7 +3825,10 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
 }
 
 function shortcutRevealsWork(view: ReplView, digit: string): boolean {
-  return (digit === "3" || digit === "4") && inlineInspectionOpen(view);
+  return (
+    (digit === "3" && roundEditorVisible(view)) ||
+    ((digit === "3" || digit === "4") && inlineInspectionOpen(view))
+  );
 }
 
 /**
@@ -5777,12 +5802,6 @@ export function* prepareFrame(
       wrapped.add(line.key);
     }
   }
-  // What the Draft's field has left, once this frame's own heading row and the
-  // control beside it have been measured. Settled here, before anything is
-  // mounted, and carried into every pass after it — the field is stated in the
-  // measuring ops and in the committed ops alike, because a width the two
-  // passes disagreed about is a control drawn where nothing measured it.
-  let field: number | undefined;
   let messageText: number | undefined;
   let historyRoom: number | undefined;
   let historySpace: number | undefined;
@@ -5808,7 +5827,6 @@ export function* prepareFrame(
     queueStatus: queueStatus.value,
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
     ...(historySpace === undefined ? {} : { historyGap: historySpace }),
-    ...(field === undefined ? {} : { draftField: field }),
     ...(messageText === undefined ? {} : { queueText: messageText }),
     ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
     ...(historyParts === undefined ? {} : { historySplit: historyParts }),
@@ -5879,7 +5897,6 @@ export function* prepareFrame(
   if (!fitted.ok) {
     return fitted;
   }
-  field = draftFieldWidth(probed.manifest, (id) => fitted.value.boundsOf(id)?.width);
   messageText = queueTextWidth(
     probed.manifest,
     (id) => fitted.value.boundsOf(id)?.width,
@@ -6160,20 +6177,20 @@ export function* prepareFrame(
   if (!rail.ok) {
     return rail;
   }
-  // The staged Draft's own value, fitted to the selected work it sits in. A
-  // fixed number of rows, so no measurement above depends on it.
-  //
+  const editorBounds = third.value.boundsOf(ROUND_EDITOR_BODY);
+  const editorWidth = Math.floor(editorBounds?.width ?? 0);
   const drafted =
-    draftLinesOf(view) === undefined || widths.surfaceBody < 1
+    !roundEditorVisible(view) || editorWidth < 1
       ? Ok(undefined)
       : yield* fitEditor(
           renderer,
           view.size,
           caretFor(view.state.draft, view.state.draftCaret),
-          widths.surfaceBody,
+          editorWidth,
           view.focused === "footer:input",
           draftStore,
           sourceRuns,
+          "horizontal",
         );
   if (!drafted.ok) {
     return drafted;
@@ -6181,7 +6198,7 @@ export function* prepareFrame(
   let draftRows: readonly string[] | undefined;
   if (drafted.value !== undefined) {
     editors.set("footer:input", drafted.value);
-    const count = draftRowsOf([]).length;
+    const count = Math.max(1, capacityOf(editorBounds));
     const from = Math.max(0, Math.min(drafted.value.active, drafted.value.display.length - count));
     const shown = drafted.value.display.slice(from, from + count).map((one) => one.text);
     draftRows = [...shown, ...Array.from({ length: count - shown.length }, () => "")];
@@ -6254,7 +6271,6 @@ export function* prepareFrame(
     refusal: refusalRows,
     rail: rail.value,
     drawer: envelope,
-    draftField: field,
     queueText: messageText,
     historyMap: historyRoom,
     historyGap: historySpace,
