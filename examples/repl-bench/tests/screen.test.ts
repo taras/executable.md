@@ -41,3 +41,21 @@ Deno.test("recognizes the focused composer among lookalike queue and TODO rows",
     backend.destroy();
   }
 });
+
+Deno.test("reads the complete focus legend without treating document text as shortcuts", () => {
+  const backend = createXtermBackend({ cols: size.columns, rows: size.rows });
+  try {
+    backend.feed(encoder.encode("XMD REPL\r\n[1] 1 5 move focus · Esc closes\r\n"));
+    assert.equal(viewport(backend, size).focusHints(), undefined);
+
+    const badge = paint(REPL_PALETTE.focusHint, "[1]");
+    backend.feed(
+      encoder.encode(
+        `${badge}  ${paint(REPL_PALETTE.drawerSurface, "1 2 8 move focus · Esc closes")}\r\n`,
+      ),
+    );
+    assert.deepEqual(viewport(backend, size).focusHints(), ["1", "2", "8"]);
+  } finally {
+    backend.destroy();
+  }
+});

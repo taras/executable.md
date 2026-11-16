@@ -49,8 +49,15 @@
       <Repl.Focus.Draft />
       <Terminal.WaitForText text="> DRAFT" bold={true} />
       <Terminal.Type text="narrow-draft" />
-      <Repl.Focus.Tabs />
-      <Terminal.WaitForText text="> DRAFT" bold={true} />
+      <Try>
+        <Repl.Focus.Tabs />
+        <Fail message="The narrow viewport does not offer the Tabs shortcut" />
+        <Catch as="unavailable">
+          <AssertStringIncludes actual={unavailable.message} expected="Focus shortcut [5] is unavailable" />
+        </Catch>
+      </Try>
+      <Terminal.Key key="Escape" />
+      <Terminal.WaitForText text="move focus · Esc closes" present={false} />
       <Terminal.Type text="-kept" />
       <Terminal.WaitForText text="narrow-draft-kept" />
 
@@ -58,7 +65,8 @@
       <Terminal.WaitForText text="> [history]" bold={true} />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="[close]" />
-      <Repl.Focus.Message />
+      <Terminal.Key key="Ctrl+G" />
+      <Terminal.Key key="1" />
       <Terminal.WaitForText text="[close]" />
       <Terminal.WaitForText text="message the sidekick" present={false} />
       <Terminal.Key key="Escape" />

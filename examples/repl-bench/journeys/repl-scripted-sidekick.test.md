@@ -101,9 +101,7 @@
       <ReplBench.WaitForText text="question" />
     </ReplBench.Region>
     <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="[answer sidekick]" as="answer" />
-    <ReplBench.Click at={answer} />
-    <ReplBench.WaitForText text="[submit]" />
+    <Repl.Sidekick.OpenAnswer />
     <ReplBench.Type text="held-value" />
     <ReplBench.WaitForText text="= held-value" />
     <ReplBench.Key key="ArrowLeft" />

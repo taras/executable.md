@@ -323,6 +323,61 @@ export function useDriver(options: Launch) {
                 ACTION_TIMEOUT,
               );
             }
+            case "focus-shortcut": {
+              const { digit, timeout = ACTION_TIMEOUT } = command;
+              if (lastFrame().focusHints() === undefined) {
+                send(keyToAnsi(parseKey("Ctrl+G")));
+              }
+              const hints = yield* wait(
+                `the numbered focus hints for shortcut [${digit}]`,
+                (frame) => frame.focusHints(),
+                timeout,
+              );
+              if (!hints.includes(digit)) {
+                throw new Error(
+                  `Focus shortcut [${digit}] is unavailable. Offered: ${hints.join(", ")}`,
+                );
+              }
+              send(digit);
+              // The REPL keeps the hints open when a numbered shortcut is refused.
+              return yield* wait(
+                `the REPL to accept focus shortcut [${digit}]`,
+                (frame) => (frame.focusHints() === undefined ? true : undefined),
+                timeout,
+              );
+            }
+            case "activate-sidekick": {
+              const { timeout = ACTION_TIMEOUT } = command;
+              const tab = yield* wait(
+                "the Sidekick tab",
+                (frame) => frame.sidekickControl(),
+                timeout,
+              );
+              if (lastFrame().composerFocused) {
+                throw new Error(
+                  "Move focus out of the Sidekick composer before testing tab activation",
+                );
+              }
+              click(tab);
+              return yield* wait(
+                "the Sidekick composer to gain focus after clicking its tab",
+                (frame) => (frame.composerFocused ? true : undefined),
+                timeout,
+              );
+            }
+            case "open-sidekick-answer": {
+              const { timeout = ACTION_TIMEOUT } = command;
+              const answer = yield* waitFor({ text: "[answer sidekick]", unique: true, timeout });
+              if (answer === null || lastFrame().sidekickAnswerFocused) {
+                throw new Error("Expected a pending Sidekick question with its editor closed");
+              }
+              click(answer);
+              return yield* wait(
+                "the Sidekick answer field to gain focus",
+                (frame) => (frame.sidekickAnswerFocused ? true : undefined),
+                timeout,
+              );
+            }
             case "type":
               if (command.text.includes("\x1b[201~")) {
                 throw new Error("Text contains the terminal’s paste delimiter");

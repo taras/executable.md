@@ -1,12 +1,11 @@
 <Test name="a saved Sidekick answer stays readable and ordinary Message continues after Stop" timeout="120s">
   <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-stopped-answer.md" columns={160} rows={36} waitTimeout="30s" expectExit={true} as="closed">
-    <Terminal.WaitForText text="SIDEKICK" row={1} as="sidekickTab" />
-    <Terminal.Click at={sidekickTab} />
+    <Repl.Focus.Draft />
+    <Repl.Sidekick.Activate />
     <ReplBench.Type text="Ask me to save a decision." />
     <ReplBench.WaitForText text="Ask me to save a decision." />
     <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="[answer sidekick]" as="answer" />
-    <ReplBench.Click at={answer} />
+    <Repl.Sidekick.OpenAnswer />
     <ReplBench.Type text="keep-answer" />
     <ReplBench.WaitForText text="= keep-answer" />
     <ReplBench.Key key="Enter" />

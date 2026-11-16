@@ -485,11 +485,15 @@ retained session again to verify that the current viewport supplies the size.
 | `Terminal.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
 | `Terminal.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
 | `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
+| `Repl.Sidekick.Activate` | Clicks the visible Sidekick tab and waits for the composer to gain focus. Start with focus elsewhere to exercise tab activation. |
+| `Repl.Sidekick.OpenAnswer` | Clicks the visible Sidekick answer control and waits for focus in the answer editor. |
 
 For builds with numbered focus shortcuts, use the component for the region
 that should receive the next input. For example, use `<Repl.Focus.Draft />`
-before typing an entry. Each component sends the corresponding shortcut and
-follows the [REPL focus rules](../../specs/repl-spec.md#move-between-regions-and-edit-within-them).
+before typing an entry. Each component checks that its digit is offered, sends
+it once, and waits for the REPL to dismiss the focus hints. An unavailable
+digit fails the step and reports the offered shortcuts. See the
+[REPL focus rules](../../specs/repl-spec.md#move-between-regions-and-edit-within-them).
 
 | Region | Component |
 | --- | --- |
@@ -508,9 +512,15 @@ screen inspection require an active launch. The acceptance journeys also use
 `ReplBench` and `ReplBench.*`. Set initial dimensions on the enclosing
 `Terminal`.
 
-`waitTimeout` sets the default `WaitForText` duration for an `<XMD.Repl>` body,
-including nested regions. It defaults to five seconds. Each bench supplies its
-own duration, including when it uses `resume`. The enclosing `<Test>` deadline
+Use the component that expresses the action you need. For a raw terminal gesture,
+wait for the specific visible result before sending input that depends on it.
+If the test exercises a burst of input, send the burst together and check its
+result. Keep assertions for the journey’s outcome in the test.
+
+`waitTimeout` sets the default wait duration for `WaitForText` and the
+`Repl.Focus.*` and `Repl.Sidekick.*` actions in an `<XMD.Repl>` body, including
+nested regions. It defaults to five seconds. Each bench supplies its own
+duration, including when it uses `resume`. The enclosing `<Test>` deadline
 can end a wait earlier.
 
 Set `sidekick-agent` to an agent name or an explicit Markdown TestAgent path.

@@ -421,10 +421,18 @@ const focusActions = Object.entries({
   SurfaceBar: "9",
 }).map(([area, key]) =>
   registration(`Repl.Focus.${area}`, function* () {
-    yield* action({ action: "key", key: "Ctrl+G" });
-    yield* action({ action: "key", key });
+    yield* action({ action: "focus-shortcut", digit: key, timeout: yield* WaitTimeout.get() });
   }),
 );
+
+const sidekickActions = [
+  registration("Repl.Sidekick.Activate", function* () {
+    yield* action({ action: "activate-sidekick", timeout: yield* WaitTimeout.get() });
+  }),
+  registration("Repl.Sidekick.OpenAnswer", function* () {
+    yield* action({ action: "open-sidekick-answer", timeout: yield* WaitTimeout.get() });
+  }),
+];
 
 const terminalActions = [
   registration(
@@ -558,6 +566,7 @@ export default Plugin({
         })),
         ...terminalActions,
         ...focusActions,
+        ...sidekickActions,
         ...terminalActions.map((entry) => ({
           ...entry,
           name: entry.name.replace("Terminal.", "ReplBench."),
