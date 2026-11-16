@@ -181,6 +181,7 @@ describe("the applicable corpus", () => {
       "Delivery",
       "DeliveryProgressCompletion",
       "DeliverySummaryRepair",
+      "DeliveryPublication",
       "Friction",
       "Implementation",
       "LaunchPolicy",
