@@ -27,6 +27,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 
+import { inertCommandText } from "../src/repl/command-output.ts";
+import { markdownLines } from "../src/repl/markdown.ts";
 import { entryReading, NO_READING, READING_STATUSES } from "../src/repl/source-reading.ts";
 import type { ReplReadingLine } from "../src/repl/source-reading.ts";
 import {
@@ -1648,4 +1650,203 @@ describe("S8 lines fitted together are cut as each is cut alone", () => {
       }
       expect(rowsOf(prepared.value)).toEqual(oracle.value);
     }));
+});
+
+/**
+ * #1342 — written Markdown as display lines.
+ *
+ * Input and output only: the mounted journey in `repl-sidekick-journey.test.ts`
+ * reads both production surfaces off real terminal cells. These rows hold the
+ * limits a streamed or arbitrary body reaches and that journey cannot stage
+ * through a live provider: a fence nobody closed, delimiters nobody closed, raw
+ * HTML, a carriage return and plain text that must draw exactly as it did.
+ */
+function markdownShown(source: string): string[] {
+  return markdownLines(source, "output").map((line) => line.text);
+}
+
+function markdownRoles(source: string): string[][] {
+  return markdownLines(source, "output").map((line) =>
+    line.runs.map((run) => `${run.token}:${run.text}`),
+  );
+}
+
+describe("1342 written Markdown as display lines", () => {
+  it("draws plain text exactly as its written lines, in the body's own role", function* () {
+    const plain = "\n\nfirst line\n   indented second\n\n\nafter two blank lines\n";
+    expect(markdownShown(plain)).toEqual(plain.split("\n"));
+    expect(
+      markdownLines(plain, "waiting").every((line) =>
+        line.runs.every((run) => run.token === "waiting"),
+      ),
+    ).toBe(true);
+    expect(markdownShown("")).toEqual([""]);
+  });
+
+  it("keeps the written spaces of a whitespace-only line, which still fits as one row", () =>
+    withRenderer(function* (renderer) {
+      expect(
+        markdownLines("foo\n   \nbar", "output").map((line) => ({
+          text: line.text,
+          runs: line.runs.map((run) => run.token),
+        })),
+      ).toEqual([
+        { text: "foo", runs: ["output"] },
+        { text: "   ", runs: ["output"] },
+        { text: "bar", runs: ["output"] },
+      ]);
+      expect(markdownShown("foo\n\n   \n\nbar\n  ")).toEqual(["foo", "", "   ", "", "bar", "  "]);
+      const lines = entryReading({
+        entry: entryOf('<Json value={{ a: 1 }} as="a" />', {
+          terminal: settled("ok", "foo\n   \nbar"),
+          settled: true,
+        }),
+        lifecycle: NO_LIFECYCLE,
+        live: "",
+        inspected: false,
+      }).output.lines;
+      const prepared = yield* prepareReading(renderer, WIDE, lines, 100);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      expect(prepared.value.rows.map((one) => one.text)).toEqual(["foo", "   ", "bar"]);
+    }));
+
+  it("keeps an unclosed fence's payload literal through the available end", function* () {
+    expect(markdownRoles("Before\n```ts\n  open payload\n\n# still code *here*")).toEqual([
+      ["output:Before"],
+      ["punctuation:```ts"],
+      ["markdown-code:  open payload"],
+      [],
+      ["markdown-code:# still code *here*"],
+    ]);
+    // A shorter run of the opener's character cannot close it, so it is payload.
+    expect(markdownRoles("````text\n   tail\n```")).toEqual([
+      ["punctuation:````text"],
+      ["markdown-code:   tail"],
+      ["markdown-code:```"],
+    ]);
+    expect(markdownRoles("~~~\nx\n```")).toEqual([
+      ["punctuation:~~~"],
+      ["markdown-code:x"],
+      ["markdown-code:```"],
+    ]);
+    expect(markdownRoles("````text\nx\n````` ")).toEqual([
+      ["punctuation:````text"],
+      ["markdown-code:x"],
+      ["punctuation:````` "],
+    ]);
+  });
+
+  it("reads unclosed delimiters, raw HTML and component-like text as written", function* () {
+    expect(markdownShown("**half bold and `half code")).toEqual(["**half bold and `half code"]);
+    expect(markdownShown('<Output>{said}</Output>\n<span title="x">raw</span>')).toEqual([
+      "<Output>{said}</Output>",
+      '<span title="x">raw</span>',
+    ]);
+  });
+
+  it("shows a link's label and never its target", function* () {
+    const lines = markdownLines("See [the label](https://example.test/secret) now", "output");
+    expect(lines.map((line) => line.text)).toEqual(["See the label now"]);
+    expect(lines[0].runs.find((run) => run.token === "markdown-link")?.text).toBe("the label");
+    expect(JSON.stringify(lines)).not.toContain("example.test");
+  });
+
+  it("keeps a task's marker, checkbox and first text on one line", function* () {
+    // Tight, loose and ordered items, each written once as itself.
+    expect(markdownRoles("- [ ] todo\n- [x] done")).toEqual([
+      ["punctuation:• [ ] ", "output:todo"],
+      ["punctuation:• [x] ", "output:done"],
+    ]);
+    expect(markdownRoles("- [ ] todo\n\n- [x] done")).toEqual([
+      ["punctuation:• [ ] ", "output:todo"],
+      [],
+      ["punctuation:• [x] ", "output:done"],
+    ]);
+    expect(markdownRoles("1. [ ] **first** step\n2. [x] second\n   more")).toEqual([
+      ["punctuation:1. [ ] ", "markdown-strong:first", "output: step"],
+      ["punctuation:2. [x] ", "output:second"],
+      ["punctuation:   ", "output:more"],
+    ]);
+  });
+
+  it("draws a reference as a link only where the body defines its label", function* () {
+    const lines = markdownLines(
+      "[known][r], [R][], [r] and [missing][x]\n\n[r]: https://example.test/defined",
+      "output",
+    );
+    expect(lines.map((line) => line.text)).toEqual([
+      "known, R, r and [missing][x]",
+      "",
+      "[r]: https://example.test/defined",
+    ]);
+    expect(
+      lines[0].runs.filter((run) => run.token === "markdown-link").map((run) => run.text),
+    ).toEqual(["known", "R", "r"]);
+    // A bare address the GFM grammar recognizes is a link too, drawn as written.
+    expect(markdownRoles("see https://bare.test/x now")).toEqual([
+      ["output:see ", "markdown-link:https://bare.test/x", "output: now"],
+    ]);
+  });
+
+  it("prepares a long emphasis run as written beside ordinary formatting", function* () {
+    const marks = "*".repeat(16_000);
+    const literal = `${marks}x${marks}`;
+    const output = `**before** ${literal} and _after_`;
+    const reading = entryReading({
+      entry: entryOf(output, { terminal: settled("ok", output), settled: true }),
+      lifecycle: NO_LIFECYCLE,
+      live: "",
+      inspected: false,
+    });
+
+    expect(reading.output.lines.map((line) => line.text)).toEqual([`before ${literal} and after`]);
+    expect(reading.output.lines[0].runs.map((run) => run.token)).toEqual([
+      "markdown-strong",
+      "output",
+      "markdown-em",
+    ]);
+  });
+
+  it("prepares a dense inline section without losing nearby Markdown", function* () {
+    const escaped = "\\" + "*".repeat(257);
+    const denseSections = [
+      `${"*a ".repeat(8_500)}x${" a*".repeat(8_500)}`,
+      `${`${escaped}a `.repeat(64)}x${` a${escaped}`.repeat(64)}`,
+    ];
+    for (const literal of denseSections) {
+      const output = `**before**\n\n${literal}\n\n[after](https://example.test/retained)`;
+      const reading = entryReading({
+        entry: entryOf(output, { terminal: settled("ok", output), settled: true }),
+        lifecycle: NO_LIFECYCLE,
+        live: "",
+        inspected: false,
+      });
+
+      expect(reading.output.lines.map((line) => line.text)).toEqual([
+        "before",
+        "",
+        literal.replaceAll("\\*", "*"),
+        "",
+        "after",
+      ]);
+      expect(reading.output.lines[0].runs[0].token).toBe("markdown-strong");
+      expect(reading.output.lines[4].runs[0].token).toBe("markdown-link");
+    }
+  });
+
+  it("makes controls inert before the lexer reads them", function* () {
+    const source = "a\rb \x1b]8;;https://x.test\x07link\x1b]8;;\x07 **c\x9b**";
+    const lines = markdownShown(source);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe(
+      inertCommandText("a\rb \x1b]8;;https://x.test\x07link\x1b]8;;\x07 c\x9b"),
+    );
+    expect(lines[0]).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+  });
+
+  it("keeps a code span's line break as a line break", function* () {
+    expect(markdownRoles("`one\ntwo`")).toEqual([["markdown-code:one"], ["markdown-code:two"]]);
+  });
 });

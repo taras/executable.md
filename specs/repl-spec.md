@@ -1463,7 +1463,8 @@ text waits until something computes it, an example in a fence is an example, and
 a prefix that cannot be read as a root shows nothing at all rather than source.
 Nothing of it has happened — no control has run, no entry has been filled, no
 turn is acknowledged — and a prefix that happens to read as finished is not
-permission to run it.
+permission to run it. The preview, the reply and every other conversation body
+are drawn as [written Markdown](#written-markdown-in-output-and-in-the-chat).
 
 An Output declaration can sit inside control flow or a scoped component. Its
 text waits for evaluation when an executable ancestor decides whether or how it
@@ -2034,7 +2035,8 @@ label becomes `Output`. A root that settled having rendered nothing reads `No
 rendered output.` and then the outcome it closed with, and a recorded reason
 beside it. A prefix that retained no output for its entry reads `No entry
 output recorded at this checkpoint.` — never text borrowed from a later
-position or from a run still going.
+position or from a run still going. Output text is drawn as
+[written Markdown](#written-markdown-in-output-and-in-the-chat).
 
 Which of those is shown is decided by what the record says, not by the words in
 it. A document whose own prose contains `failed` is still output; a root that
@@ -2084,6 +2086,62 @@ positions were ever counted in. A refused, absent or ambiguous admission keeps
 the producer: nothing is matched by name or by sibling order.
 
 Replacing what is displayed rewrites no submitted source and no record.
+
+### Written Markdown in Output and in the chat
+
+An entry's rendered Output and a Sidekick conversation body are drawn as the
+Markdown they were written in, by one display rule. In the chat the rule covers
+a person's message and the Sidekick's preview, reply and unfinished attempt. The
+speaker, origin, status and gutter in front of a body are not part of it: the
+body is formatted first, so a heading or a fence can begin on its first row.
+
+A heading is drawn as its text in the source-heading style. Strong text is bold,
+emphasis is italic and a link is underlined, each in the colour of the text
+around it; inline and fenced code take the code colour. An ordered item keeps the
+number it was written with, a bullet is drawn as `•`, and an item's further
+lines and nested items are set in under its marker. A task item's marker, its
+`[ ]` or `[x]` and the start of its text share one row, tight, loose or
+ordered. A link shows its label and nothing of its target: the target is not
+drawn, cannot be activated, and reaches the terminal as no hyperlink or other
+control sequence. A reference is a link only where the body defines its label,
+and a bare web or mail address is a link drawn as written.
+
+An emphasis run of more than 256 consecutive `*` or `_` characters stays
+literal. An inline section with more than 1,024 of those characters in shorter
+runs draws its emphasis markers as written. Other inline constructs in the
+section keep their formatting.
+
+A fence is drawn line for line. Its delimiter rows stay, as punctuation, and its
+payload keeps every indentation, blank line and line break, with any Markdown
+inside it left unformatted. A fence that has not closed holds everything after
+its opening row, and indented code is drawn the same way. Raw HTML, a
+component-like tag, a table, an image and a delimiter that never closed are drawn
+as the text they are. Each written line stays one logical line, so text with no
+Markdown in it is drawn line for line in the body's own style, and the measured
+wrapping in [Everything on this screen was measured](#everything-on-this-screen-was-measured)
+fits every row.
+
+The command-text conversion above makes every displayed run of both bodies inert
+before the Markdown is read, so a carriage return cannot become a line break and
+a control sequence stays readable text.
+
+Formatting changes display copies only. It draws exactly the body its owner
+supplies — the selected live or retained Output, the admitted preview, the
+evaluated reply, the saved message — and adds or removes nothing of it. Retained
+Output, saved messages and replies, their raw inspection and copy routes, and
+every read keep that body exactly as it was supplied, link targets included.
+Evaluation can make a reply differ from the source the agent wrote, and
+settlement can supply computed text the preview never held; each stage is
+drawn from its own body, and the same body is drawn the same way at every stage.
+A cold reopen draws the retained body. Source, command stdout and stderr,
+recorded feedback, title and headline
+previews, an entry's work rows in the chat, the Draft and the composer keep their
+own presentation.
+
+A body is read again only when its text changes. The selected reading and the
+chat each hold the bodies their latest frame drew, so a Draft or composer edit
+reads none, and a streamed delta reads the one reply it changed. A body that
+changes, closes or leaves the view is let go at the next frame.
 
 ## Everything on this screen was measured
 

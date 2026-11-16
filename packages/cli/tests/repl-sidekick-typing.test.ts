@@ -28,7 +28,10 @@ import {
   SIDEKICK_WINDOW,
   SESSIONS_WINDOW,
 } from "../src/repl/application.ts";
-import { createPlainFitStore } from "../src/repl/fitting.ts";
+import { createFitStore, createPlainFitStore } from "../src/repl/fitting.ts";
+import { createMarkdownStore } from "../src/repl/markdown.ts";
+import type { ReplMarkdownLine, ReplMarkdownStore } from "../src/repl/markdown.ts";
+import { initialState } from "../src/repl/application.ts";
 import { prepareFrame } from "../src/repl/program.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import { OTHER_MOUNTED_AGENT, awaited } from "./support/mounted-repl.ts";
@@ -616,5 +619,142 @@ describe("1048 — reuse Transcript facts", () => {
       expect(sequence.rows.some((one) => one.label.includes("streaming update"))).toBe(false);
     }
     expect(store.prepare(original, 48)).toEqual(first);
+  });
+});
+
+/**
+ * #1342 — a written body is formatted once for as long as frames keep asking.
+ *
+ * The bodies a frame formats are held by the owner of that frame's preparation:
+ * the reading's fit store for the selected entry's Output, the chat
+ * preparation store for conversation bodies. A spy over the real store records
+ * every answer it gives. The formatter returns a new array each time it reads a
+ * body, so an answer that is the same object as an earlier one was not read
+ * again — which a count of renders or a warm machine could not show.
+ */
+describe("1342 — formatted bodies are kept for the frames that ask again", () => {
+  function spied() {
+    const real = createMarkdownStore();
+    const answers: { readonly source: string; readonly lines: readonly ReplMarkdownLine[] }[] = [];
+    const store: ReplMarkdownStore = {
+      lines(source, role) {
+        const lines = real.lines(source, role);
+        answers.push({ source, lines });
+        return lines;
+      },
+      settle: () => real.settle(),
+    };
+    return { answers, store };
+  }
+
+  /** The answers since `from` for the one body holding this marker. */
+  function answered(
+    answers: readonly { readonly source: string; readonly lines: readonly ReplMarkdownLine[] }[],
+    from: number,
+    marker: string,
+  ): readonly (readonly ReplMarkdownLine[])[] {
+    return answers.slice(from).flatMap((one) => (one.source.includes(marker) ? [one.lines] : []));
+  }
+
+  it("keeps the selected entry's Output across Draft-only frames and drops it once unselected", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    const read = yield* generateTypingHistory(page, 2, 32);
+    const renderer = yield* useReplRenderer(WIDE);
+    const { answers, store: formatted } = spied();
+    const store = { ...createFitStore(), formatted };
+    const base = initialState(read.execution);
+    const at = (entry: string, draft: string) =>
+      typingView(read, WIDE, {
+        ...base,
+        draft,
+        route: { ...base.route, scopes: [entry] },
+      });
+    const [first, second] = read.model.entries;
+
+    const frame = function* (view: ReplView) {
+      const from = answers.length;
+      const prepared = yield* prepareFrame(renderer, view, store);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      return from;
+    };
+    const one = yield* frame(at(first.key, "a"));
+    const [cold] = answered(answers, one, "R000-BEGIN");
+    expect(cold).not.toBe(undefined);
+    for (const draft of ["ab", "abc", "abcd"]) {
+      const next = yield* frame(at(first.key, draft));
+      const again = answered(answers, next, "R000-BEGIN");
+      expect(again.length).toBeGreaterThan(0);
+      for (const lines of again) {
+        expect(lines).toBe(cold);
+      }
+    }
+    // Another entry's Output, and then the first again: the first was dropped
+    // when a frame stopped asking for it, so it is read anew.
+    const other = yield* frame(at(second.key, "abcd"));
+    expect(answered(answers, other, "TAIL-BEGIN").length).toBeGreaterThan(0);
+    expect(answered(answers, other, "R000-BEGIN")).toEqual([]);
+    const back = yield* frame(at(first.key, "abcd"));
+    const [reread] = answered(answers, back, "R000-BEGIN");
+    expect(reread).toEqual(cold);
+    expect(reread).not.toBe(cold);
+  });
+
+  it("formats only the reply a streamed delta changed, and nothing on a Draft-only frame", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    const read = yield* generateTypingHistory(page, 2, 32);
+    const renderer = yield* useReplRenderer(WIDE);
+    const { answers, store: formatted } = spied();
+    const store = createChatPreparationStore(createPlainFitStore(), formatted);
+    const original = typingView(read, WIDE);
+    const reading = original.live.sidekick;
+    if (reading === undefined) {
+      throw new Error("The fixture did not produce a chat.");
+    }
+    const streamed = (said: string) =>
+      typingView(read, WIDE, original.state, {
+        ...reading,
+        chat: [
+          ...reading.chat,
+          {
+            ...reading.chat[reading.chat.length - 1],
+            key: "streaming-reply",
+            kind: "preview",
+            text: said,
+            hasOutput: true,
+          },
+        ],
+      });
+    const first = yield* store.prepare(streamed("# Streamed **reply**"), renderer, 48);
+    expect(first.ok).toBe(true);
+    const cold = new Map(answers.map((one) => [one.source, one.lines]));
+    expect(cold.size).toBeGreaterThan(2);
+
+    const from = answers.length;
+    const delta = yield* store.prepare(
+      streamed("# Streamed **reply**\n\n- [ ] and a task"),
+      renderer,
+      48,
+    );
+    expect(delta.ok).toBe(true);
+    const asked = answers.slice(from);
+    const changed = asked.filter((one) => !cold.has(one.source));
+    expect(changed.map((one) => one.source)).toEqual(["# Streamed **reply**\n\n- [ ] and a task"]);
+    for (const one of asked.filter((each) => cold.has(each.source))) {
+      expect([one.source, one.lines]).toEqual([one.source, cold.get(one.source)]);
+      expect(one.lines).toBe(cold.get(one.source));
+    }
+
+    // A frame that moved only the Draft composes nothing, so asks for nothing.
+    const quiet = answers.length;
+    const drafted = streamed("# Streamed **reply**\n\n- [ ] and a task");
+    const redraw = yield* store.prepare(
+      { ...drafted, state: { ...drafted.state, draft: "typed" } },
+      renderer,
+      48,
+    );
+    expect(redraw.ok).toBe(true);
+    expect(answers.length).toBe(quiet);
   });
 });

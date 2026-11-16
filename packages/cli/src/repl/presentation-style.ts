@@ -29,6 +29,15 @@ export type ReplPresentationRole =
   | "source"
   /** A heading written in the source being shown. */
   | "source-heading"
+  /**
+   * Written Markdown emphasis and a link's label: the row's own colour, with
+   * the weight, slant or underline the Markdown asked for.
+   */
+  | "markdown-strong"
+  | "markdown-em"
+  | "markdown-link"
+  /** Written Markdown code, inline or fenced. */
+  | "markdown-code"
   /** The characters that open and close a tag: `<`, `</`, `>`, `/>`. */
   | "xmd-delimiter"
   /** What a tag is called. */
@@ -322,6 +331,7 @@ export const REPL_PALETTE = Object.freeze({
  * stated as that flag rather than as an escape this product writes itself.
  */
 export const BOLD = 1;
+const ITALIC = 4;
 const UNDERLINE = 8;
 
 /** What one row's text is drawn with. */
@@ -358,13 +368,20 @@ export function runStyleOf(
         ? REPL_PALETTE.heading
         : row.role === "todo-completed" && !focused
           ? REPL_PALETTE.historical
-          : colourOf(role, row.inspected),
+          : colourOf(INHERITS_ROW_COLOUR.has(role) ? row.role : role, row.inspected),
     attrs:
       attrsOf(role) |
       (row.role === "todo-completed" ? 64 | (focused ? 0 : 2) : 0) |
       (focused ? BOLD | UNDERLINE : 0),
   });
 }
+
+/** Roles that say how text is written rather than what it is. */
+const INHERITS_ROW_COLOUR: ReadonlySet<ReplPresentationRole> = new Set([
+  "markdown-strong",
+  "markdown-em",
+  "markdown-link",
+]);
 
 /**
  * What one row's whole measured width is painted with, or none where the pane it
@@ -420,6 +437,8 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "todo-completed":
       return REPL_PALETTE.historical;
     case "todo-em":
+    case "markdown-strong":
+    case "markdown-em":
     case "output":
     case "field-value":
       return REPL_PALETTE.output;
@@ -427,6 +446,7 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "drawer-title":
     case "action":
     case "navigate":
+    case "markdown-link":
       return REPL_PALETTE.heading;
     case "field-label":
     case "json-null":
@@ -442,6 +462,7 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "xmd-attribute":
       return REPL_PALETTE.attribute;
     case "xmd-value":
+    case "markdown-code":
       return REPL_PALETTE.quoted;
     case "reference-brace":
       return REPL_PALETTE.brace;
@@ -532,7 +553,10 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
 function attrsOf(role: ReplPresentationRole): number {
   switch (role) {
     case "todo-em":
-      return 4;
+    case "markdown-em":
+      return ITALIC;
+    case "markdown-link":
+      return UNDERLINE;
     case "todo-completed":
       return 64 | 2;
     case "pane-heading":
@@ -540,6 +564,7 @@ function attrsOf(role: ReplPresentationRole): number {
     case "question-title":
     case "field-label":
     case "source-heading":
+    case "markdown-strong":
       return BOLD;
     default:
       return 0;

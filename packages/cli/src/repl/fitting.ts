@@ -45,6 +45,8 @@ import type { ReplTerminalSize } from "./terminal.ts";
 import type { ReplReadingLine } from "./source-reading.ts";
 import { READING_STATUSES } from "./source-reading.ts";
 import { runText, tokenRuns } from "./description.ts";
+import { createMarkdownStore } from "./markdown.ts";
+import type { ReplMarkdownStore } from "./markdown.ts";
 import type { ReplTokenRun } from "./description.ts";
 
 /** What a reading could not be fitted into. */
@@ -164,6 +166,12 @@ export interface ReplFitGeometry {
  * cheaper comparison that is already cheap.
  */
 export interface ReplFitStore {
+  /**
+   * The reading's written Output as formatted lines, held for the same
+   * lifetime as its geometry: every frame builds the reading again, and a
+   * body that has not changed is not read again.
+   */
+  readonly formatted: ReplMarkdownStore;
   /** The geometry retained for these exact inputs, or none. */
   held(
     lines: readonly ReplReadingLine[],
@@ -293,6 +301,7 @@ export function createFitStore(): ReplFitStore {
     held.shape.length === lines.length &&
     held.shape.every((one, at) => one.text === lines[at].text && one.depth === lines[at].depth);
   return {
+    formatted: createMarkdownStore(),
     held(lines, room, size) {
       return same(lines, room, size) ? held?.geometry : undefined;
     },
@@ -1164,7 +1173,7 @@ function row(
  * value on both of them. A run the slice does not touch is absent rather than
  * empty, which is what keeps the list concatenating to exactly the row's text.
  */
-function slicedRuns(
+export function slicedRuns(
   runs: readonly ReplTokenRun[],
   from: number,
   to: number,

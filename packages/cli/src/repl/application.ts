@@ -121,7 +121,9 @@ import type { SidekickFeedback } from "./sidekick/model.ts";
 import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandOutput } from "./command-output.ts";
 import type { ReplReading } from "./source-reading.ts";
-import { readingRuns, fitPlain } from "./fitting.ts";
+import { readingRuns, fitPlain, slicedRuns } from "./fitting.ts";
+import { createMarkdownStore, markdownLines } from "./markdown.ts";
+import type { ReplMarkdownLine, ReplMarkdownStore } from "./markdown.ts";
 import type { ReplPlainFitStore } from "./fitting.ts";
 import type { ReplRenderer } from "./renderer.ts";
 import type { Operation } from "effection";
@@ -4079,6 +4081,12 @@ type ReplChatComposed =
       /** The origin drawn over the first four cells of its first row, where marked. */
       readonly mark?: ReplOriginMark;
       readonly action?: { readonly [name: string]: Json };
+      /**
+       * The logical lines a written body is drawn as, with its Markdown runs.
+       * They join with line breaks to exactly `text`; without them every line
+       * is drawn in the row's own role.
+       */
+      readonly lines?: readonly ReplMarkdownLine[];
     }
   | {
       readonly kind: "control";
@@ -4093,6 +4101,8 @@ function sidekickComposedRows(
   /** The staged composition's associated work, where this reading is drawn there. */
   staging: ReplChatStaging | undefined,
   showUsage: boolean,
+  /** Where the caller holds the bodies it has already formatted, if anywhere. */
+  formatted?: ReplMarkdownStore,
 ): readonly ReplChatComposed[] {
   if (
     staging !== undefined &&
@@ -4100,7 +4110,7 @@ function sidekickComposedRows(
     reading.refusal === undefined &&
     (reading.setup === undefined || reading.setup.phase === "activated")
   ) {
-    return workspaceChatComposed(reading, staging);
+    return workspaceChatComposed(reading, staging, formatted);
   }
   const items: ReplChatComposed[] = [];
   /** One row of readable text, which a width still has to cut into rows. */
@@ -4168,9 +4178,11 @@ function sidekickComposedRows(
     };
     if (item.kind === "person") {
       items.push(
-        text(
+        chatBody(
+          formatted,
           `sidekick:${item.key}`,
-          `  ${item.origin?.kind === "todo" ? "TODO change" : item.origin?.kind === "acp" ? "ACP (" + item.origin.attachment + ")" : "you"}: ${item.text}`,
+          `  ${item.origin?.kind === "todo" ? "TODO change" : item.origin?.kind === "acp" ? "ACP (" + item.origin.attachment + ")" : "you"}: `,
+          item.text,
           styleOf("source"),
         ),
       );
@@ -4186,11 +4198,13 @@ function sidekickComposedRows(
       // nothing saved still said this, so it stays, said as the attempt it is
       // rather than as an answer or a failure anybody recorded.
       items.push(
-        text(
+        chatBody(
+          formatted,
           `sidekick:${item.key}`,
           item.incomplete === true
-            ? `  ${reading.agent} (unfinished): ${item.text}`
-            : `  ${reading.agent} (preview): ${item.text}`,
+            ? `  ${reading.agent} (unfinished): `
+            : `  ${reading.agent} (preview): `,
+          item.text,
           item.incomplete === true ? styleOf("failed-outcome") : styleOf("waiting"),
         ),
       );
@@ -4232,7 +4246,9 @@ function sidekickComposedRows(
         // What that turn had actually said, as the literal Output its saved
         // source projects. Said after the reason, because the reason is why
         // there is no more of it.
-        items.push(text(`sidekick:${item.key}:said`, `  ${item.text}`, styleOf("source")));
+        items.push(
+          chatBody(formatted, `sidekick:${item.key}:said`, "  ", item.text, styleOf("source")),
+        );
       }
       if (asked !== undefined && reading.current) {
         items.push(
@@ -4260,7 +4276,9 @@ function sidekickComposedRows(
       if (item.hasOutput) {
         // And what it had already rendered, after the reason, because the
         // reason is why there is no more of it.
-        items.push(text(`sidekick:${item.key}:said`, `  ${item.text}`, styleOf("output")));
+        items.push(
+          chatBody(formatted, `sidekick:${item.key}:said`, "  ", item.text, styleOf("output")),
+        );
       }
       metadata();
       continue;
@@ -4275,7 +4293,15 @@ function sidekickComposedRows(
       metadata();
       continue;
     }
-    items.push(text(`sidekick:${item.key}`, `  ${reading.agent}: ${item.text}`, styleOf("output")));
+    items.push(
+      chatBody(
+        formatted,
+        `sidekick:${item.key}`,
+        `  ${reading.agent}: `,
+        item.text,
+        styleOf("output"),
+      ),
+    );
     metadata();
   }
   if (reading.savedRecovery !== undefined) {
@@ -4304,14 +4330,59 @@ function sidekickComposedRows(
  * that row — a description, a reveal, a test — still finds it. The rest are
  * derived display rows under it, and are not messages, turns or records.
  */
-function chatLinesOf(
-  key: string,
-  text: string,
-): readonly { readonly key: string; readonly text: string }[] {
-  return text.split("\n").map((own, offset) => ({
-    key: offset === 0 ? key : `${key}::${offset}`,
-    text: own,
+function chatLinesOf(one: Extract<ReplChatComposed, { kind: "text" }>): readonly ReplChatLine[] {
+  const shown =
+    one.lines ??
+    one.text
+      .split("\n")
+      .map((text) => ({ text, runs: tokenRuns([{ text, token: one.style.role }]) }));
+  return shown.map((own, offset) => ({
+    key: offset === 0 ? one.key : `${one.key}::${offset}`,
+    text: own.text,
+    runs: own.runs,
   }));
+}
+
+interface ReplChatLine {
+  readonly key: string;
+  readonly text: string;
+  readonly runs: readonly ReplTokenRun[];
+}
+
+/**
+ * A written body behind its lead, as the Markdown it was written in.
+ *
+ * The body is formatted before anything is put in front of it, so a heading or
+ * a fence can begin on the first line. The lead goes before the first line and
+ * the gutter before every line, both in the row's own role.
+ */
+function chatBody(
+  formatted: ReplMarkdownStore | undefined,
+  key: string,
+  lead: string,
+  body: string,
+  style: ReplRowStyle,
+  gutter = "",
+  marked: {
+    readonly mark?: ReplOriginMark;
+    readonly action?: { readonly [name: string]: Json };
+  } = {},
+): ReplChatComposed {
+  const lines = (formatted?.lines(body, style.role) ?? markdownLines(body, style.role)).map(
+    (one, at) => {
+      const before = at === 0 ? `${gutter}${lead}` : gutter;
+      const runs = tokenRuns([{ text: before, token: style.role }, ...one.runs]);
+      return Object.freeze({ text: `${before}${one.text}`, runs });
+    },
+  );
+  return Object.freeze({
+    kind: "text" as const,
+    key,
+    text: lines.map((one) => one.text).join("\n"),
+    style,
+    lines: Object.freeze(lines),
+    ...marked,
+  });
 }
 
 /**
@@ -4323,9 +4394,9 @@ function chatLinesOf(
  */
 export function sidekickChatLines(
   reading: ReplSidekickReading | undefined,
-): readonly { readonly key: string; readonly text: string }[] {
+): readonly ReplChatLine[] {
   return sidekickComposedRows(reading, undefined, true).flatMap((one) =>
-    one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
+    one.kind === "text" ? chatLinesOf(one) : [],
   );
 }
 
@@ -4342,6 +4413,8 @@ type ReplChatPreparedRow =
       readonly kind: "text";
       readonly key: string;
       readonly label: string;
+      /** What each part of `label` is. Concatenates to exactly `label`. */
+      readonly runs: readonly ReplTokenRun[];
       readonly item: Extract<ReplChatComposed, { kind: "text" }>;
       readonly first: boolean;
     };
@@ -4367,22 +4440,25 @@ function chatSequence(
       rows.push(one);
       continue;
     }
-    for (const own of chatLinesOf(one.key, one.text)) {
+    for (const own of chatLinesOf(one)) {
       const pieces = cuts.get(own.key);
       if (pieces === undefined) {
         rows.push({
           kind: "text",
           key: own.key,
           label: own.text,
+          runs: own.runs,
           item: one,
           first: own.key === one.key,
         });
       } else {
         for (const piece of pieces) {
+          const indent = " ".repeat(piece.indent);
           rows.push({
             kind: "text",
             key: piece.key,
-            label: `${" ".repeat(piece.indent)}${piece.text}`,
+            label: `${indent}${piece.text}`,
+            runs: tokenRuns([{ text: indent, token: one.style.role }, ...piece.runs]),
             item: one,
             first: own.key === one.key && !piece.continuation,
           });
@@ -4402,13 +4478,17 @@ function materializeChatRow(one: ReplChatPreparedRow, focused: string | undefine
   }
   const { action, mark } = one.item;
   if (one.first && action !== undefined && mark !== undefined) {
-    const label = mark.text + one.label.slice(CONTROL_ROOM.length + MARKER_ROOM.length);
+    const behind = CONTROL_ROOM.length + MARKER_ROOM.length;
+    const label = mark.text + one.label.slice(behind);
     return row(one.key, label, action, one.item.style, {
       here: focused,
-      runs: markedRuns(mark, label, one.item.style.role),
+      runs: tokenRuns([
+        { text: mark.text, token: mark.role },
+        ...slicedRuns(one.runs, behind, one.label.length),
+      ]),
     });
   }
-  return chatRow(one.key, one.label, one.item, one.first);
+  return chatRow(one.key, one.label, one.runs, one.item, one.first);
 }
 
 function chatWindow(view: ReplView, context: ReplPresentationContext): readonly Described[] {
@@ -4505,7 +4585,14 @@ export interface ReplChatPreparationStore {
   materialize: typeof materializeChatRow;
 }
 
-export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPreparationStore {
+export function createChatPreparationStore(
+  cuts: ReplPlainFitStore,
+  /**
+   * The bodies the last composition formatted. A streamed delta changes one
+   * reply, and only that one is formatted again.
+   */
+  formatted: ReplMarkdownStore = createMarkdownStore(),
+): ReplChatPreparationStore {
   let held:
     | {
         readonly facts: ReturnType<typeof chatFacts>;
@@ -4534,7 +4621,9 @@ export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPre
         view.live.sidekick,
         chatStagingOf(view),
         view.state.showUsage === true,
+        formatted,
       );
+      formatted.settle();
       const notice = view.restorationNotice;
       const composed: readonly ReplChatComposed[] =
         notice === undefined
@@ -4548,9 +4637,7 @@ export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPre
                 style: styleOf("metadata"),
               },
             ];
-      const lines = composed.flatMap((one) =>
-        one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
-      );
+      const lines = composed.flatMap((one) => (one.kind === "text" ? chatLinesOf(one) : []));
       // Prune before suspension too: a refused or cancelled fit owns no old candidates.
       cuts.settle(
         lines.map((one) => one.text),
@@ -4586,13 +4673,14 @@ export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPre
 function chatRow(
   key: string,
   label: string,
+  runs: readonly ReplTokenRun[],
   one: { readonly style: ReplRowStyle; readonly mark?: ReplOriginMark },
   first: boolean,
 ): Described {
   const mark = one.mark;
   const room = CONTROL_ROOM + MARKER_ROOM;
   if (!first || mark === undefined || !label.startsWith(room)) {
-    return line(key, label, one.style);
+    return line(key, label, one.style, runs);
   }
   const drawn = mark.text + label.slice(room.length);
   return line(
@@ -4601,7 +4689,8 @@ function chatRow(
     one.style,
     tokenRuns([
       { text: CONTROL_ROOM, token: one.style.role },
-      ...markedRuns(mark, drawn, one.style.role),
+      { text: mark.text, token: mark.role },
+      ...slicedRuns(runs, room.length, label.length),
     ]),
   );
 }
@@ -7055,8 +7144,10 @@ function readingRows(prepared: ReplPreparedReading): readonly Described[] {
  * belongs to the entry producing it — the last one this prefix admitted, since
  * entries are serial — so a reader looking at an earlier entry is given that
  * entry's retained reading rather than text from the run that is still going.
+ *
+ * `formatted` is where the caller holds the Output it has already formatted.
  */
-export function readingOf(view: ReplView): ReplReading {
+export function readingOf(view: ReplView, formatted?: ReplMarkdownStore): ReplReading {
   const key = view.selection.entry?.key;
   const entry =
     key === undefined
@@ -7071,6 +7162,7 @@ export function readingOf(view: ReplView): ReplReading {
     live: livesHere(view.model, view.selection) ? view.live.output : "",
     commandOutput: view.live.commandOutput?.find((one) => one.entry === entry.key)?.chunks ?? [],
     inspected: view.state.route.at !== undefined,
+    formatted,
   });
 }
 
@@ -12418,6 +12510,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
 function workspaceChatComposed(
   reading: ReplSidekickReading,
   staging: ReplChatStaging,
+  formatted: ReplMarkdownStore | undefined,
 ): readonly ReplChatComposed[] {
   const items: ReplChatComposed[] = [];
   const text = (
@@ -12462,14 +12555,16 @@ function workspaceChatComposed(
     const key = `sidekick:${item.key}`;
     if (item.kind === "person") {
       items.push(
-        text(
+        chatBody(
+          formatted,
           key,
+          "",
           item.text,
           styleOf("source", {
             selected: staging.inspection?.kind === "person" && staging.inspection.key === item.key,
           }),
-          originMark(item.origin),
-          inspectionAction("person", item.key),
+          `${CONTROL_ROOM}${MARKER_ROOM}`,
+          { mark: originMark(item.origin), action: inspectionAction("person", item.key) },
         ),
       );
     } else if (item.kind === "preview") {
@@ -12477,15 +12572,17 @@ function workspaceChatComposed(
       // run and no turn is acknowledged, so this is not a reply yet — and a
       // row that differed from one only by its colour would tell a reader
       // nothing they could read. `(unfinished)` below is the other ending.
-      const output = trimLeadingBlankLines(item.text);
       items.push(
-        text(
+        chatBody(
+          formatted,
           key,
           item.incomplete === true
-            ? `${reading.agent} (unfinished): ${output}`
-            : `${reading.agent} (preview): ${output}`,
+            ? `${reading.agent} (unfinished): `
+            : `${reading.agent} (preview): `,
+          trimLeadingBlankLines(item.text),
           item.incomplete === true ? styleOf("failed-outcome") : styleOf("waiting"),
-          SIDEKICK_MARK,
+          `${CONTROL_ROOM}${MARKER_ROOM}`,
+          { mark: SIDEKICK_MARK },
         ),
       );
     } else if (item.kind === "saved") {
@@ -12549,17 +12646,23 @@ function workspaceChatComposed(
     } else if (item.hasOutput) {
       const saved = savedTurns.get(`${item.conversation}:${item.turn}`);
       items.push(
-        text(
+        chatBody(
+          formatted,
           key,
+          "",
           trimLeadingBlankLines(item.text),
           styleOf("output", {
             selected:
               staging.inspection?.kind === "exchange" && staging.inspection.key === saved?.key,
           }),
-          SIDEKICK_MARK,
-          item.request !== undefined && saved !== undefined
-            ? inspectionAction("exchange", saved.key)
-            : undefined,
+          `${CONTROL_ROOM}${MARKER_ROOM}`,
+          {
+            mark: SIDEKICK_MARK,
+            action:
+              item.request !== undefined && saved !== undefined
+                ? inspectionAction("exchange", saved.key)
+                : undefined,
+          },
         ),
       );
     }
