@@ -88,13 +88,17 @@ function* useProbes(seen: Probes): Operation<void> {
   ]);
 }
 
-/** A directory the contextual cwd points at, removed when the test ends. */
-function* useWorkspace(files: Record<string, string>): Operation<string> {
+/** A fixture directory removed when its owning scope ends. */
+function* createWorkspace(files: Record<string, string>): Operation<string> {
   const root = yield* until(mkdtemp(join(tmpdir(), "xmd-targets-")));
   yield* ensure(() => rm(root, { recursive: true, force: true }));
   for (const [name, content] of Object.entries(files)) {
     yield* writeTextFile(join(root, name), content);
   }
+  return root;
+}
+
+function* useWorkspaceHost(root: string): Operation<void> {
   yield* API.Env.around(
     {
       *cwd() {
@@ -104,6 +108,11 @@ function* useWorkspace(files: Record<string, string>): Operation<string> {
     { at: "min" },
   );
   yield* useHostFiles();
+}
+
+function* useWorkspace(files: Record<string, string>): Operation<string> {
+  const root = yield* createWorkspace(files);
+  yield* useWorkspaceHost(root);
   return root;
 }
 
@@ -243,11 +252,12 @@ describe("Tier TX — targeted execution", () => {
 
   const tx6Name = "TX6: a file root and an inline root behave identically";
   journalCase(tx6Name, "<eval>", function* (secondStream) {
-    const workspace = yield* useWorkspace({ "doc.md": SECTIONS });
+    const workspace = yield* createWorkspace({ "doc.md": SECTIONS });
     yield* captureTestJournal(
       { owner: OWNER, name: tx6Name },
       formatDocumentReference(join(workspace, "doc.md"), "Beta"),
       function* (firstStream) {
+        yield* useWorkspaceHost(workspace);
         const fromFile: Probes = { names: [], ids: [] };
         const fromText: Probes = { names: [], ids: [] };
         const fileText = yield* run(
