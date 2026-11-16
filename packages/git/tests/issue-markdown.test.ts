@@ -59,6 +59,29 @@ function* stated(observation: ScenarioObservation): Operation<ScenarioObservatio
 }
 
 describe("workflow Issue scenarios", () => {
+  function stagedCase(document: string, attempt: string): void {
+    const name = `${document} states a contract that holds`;
+    const path = pathOf(document);
+    it(name, function* () {
+      const fixture = yield* useScenarioFixture();
+      // The second attempt inherits the same staged history. The asserting
+      // document owns a fresh root and reads the staged evidence through the fixture.
+      yield* fixture.stage(attempt);
+      yield* fixture.stage(attempt);
+      yield* captureTestJournal(
+        {
+          owner: "packages/git/tests/issue-markdown.test.ts",
+          suite: "workflow Issue scenarios",
+          name,
+        },
+        path,
+        function* (stream) {
+          yield* stated(yield* fixture.observe(path, stream));
+        },
+      );
+    });
+  }
+
   for (const name of SCENARIOS) {
     const title = `${name} states a contract that holds`;
     const path = pathOf(name);
@@ -83,15 +106,7 @@ describe("workflow Issue scenarios", () => {
     }
   }
 
-  it("IssueDurability.test.md states a contract that holds", function* () {
-    const fixture = yield* useScenarioFixture();
-    // Staged from the one checked-in attempt document, twice. The second is a
-    // replay: same run, same document, same request — which is the only way to
-    // put a run in the state this scenario is about.
-    yield* fixture.stage("IssueDurability.attempt.stage.md");
-    yield* fixture.stage("IssueDurability.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueDurability.test.md")));
-  });
+  stagedCase("IssueDurability.test.md", "IssueDurability.attempt.stage.md");
 
   it("an issue effect retains where its <Issue> was written", function* () {
     const fixture = yield* useScenarioFixture();
@@ -119,12 +134,7 @@ describe("workflow Issue scenarios", () => {
     });
   });
 
-  it("IssueReadDurability.test.md states a contract that holds", function* () {
-    const fixture = yield* useScenarioFixture();
-    yield* fixture.stage("IssueReadDurability.attempt.stage.md");
-    yield* fixture.stage("IssueReadDurability.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueReadDurability.test.md")));
-  });
+  stagedCase("IssueReadDurability.test.md", "IssueReadDurability.attempt.stage.md");
 
   // Each hazard is its own run. They cannot share one: a process that ended
   // after its create ended, so a second request in the same execution is a
@@ -136,29 +146,12 @@ describe("workflow Issue scenarios", () => {
     "IssueRecoveryClosed",
     "IssueRecoveryEdited",
   ]) {
-    it(`${hazard}.test.md states a contract that holds`, function* () {
-      const fixture = yield* useScenarioFixture();
-      yield* fixture.stage(`${hazard}.attempt.stage.md`);
-      yield* fixture.stage(`${hazard}.attempt.stage.md`);
-      yield* stated(yield* fixture.observe(pathOf(`${hazard}.test.md`)));
-    });
+    stagedCase(`${hazard}.test.md`, `${hazard}.attempt.stage.md`);
   }
 
-  it("IssueReadSubstituted.test.md states a contract that holds", function* () {
-    const fixture = yield* useScenarioFixture();
-    // Staged twice so the second attempt shows there was nothing to restore.
-    yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
-    yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueReadSubstituted.test.md")));
-  });
+  stagedCase("IssueReadSubstituted.test.md", "IssueReadSubstituted.attempt.stage.md");
 
-  it("IssueRecovery.test.md states a contract that holds", function* () {
-    const fixture = yield* useScenarioFixture();
-    // The interrupted attempt first, then one that inherits what it left.
-    yield* fixture.stage("IssueRecovery.attempt.stage.md");
-    yield* fixture.stage("IssueRecovery.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueRecovery.test.md")));
-  });
+  stagedCase("IssueRecovery.test.md", "IssueRecovery.attempt.stage.md");
 });
 
 /**
