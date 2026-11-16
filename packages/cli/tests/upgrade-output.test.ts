@@ -31,8 +31,14 @@ import {
   UPGRADE_REPLACE_RETURNS,
   UPGRADE_VERIFY_RETURNS,
 } from "../src/compiled-upgrade.ts";
-import { runUpgrade } from "../src/upgrade.ts";
+import { runUpgrade, UPGRADE_COMMAND_IDENTITY } from "../src/upgrade.ts";
 import type { UpgradeAssembly, UpgradeConsumer } from "../src/upgrade.ts";
+
+import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+
+const OWNER = "packages/cli/tests/upgrade-output.test.ts";
+const journalCase = journalCases(OWNER);
 
 const INSTALLED = "0.10.2";
 const RELEASE = "v0.11.0";
@@ -147,7 +153,7 @@ function assemblyFor(phases: Phases): UpgradeAssembly {
   };
 }
 
-function install(consume: UpgradeConsumer, phases: Phases = {}) {
+function install(stream: InMemoryStream, consume: UpgradeConsumer, phases: Phases = {}) {
   return runUpgrade({
     command: {
       requestedTag: null,
@@ -156,7 +162,7 @@ function install(consume: UpgradeConsumer, phases: Phases = {}) {
       allowPrerelease: false,
     },
     assembly: assemblyFor(phases),
-    stream: new InMemoryStream(),
+    stream,
     consume,
   });
 }
@@ -164,114 +170,133 @@ function install(consume: UpgradeConsumer, phases: Phases = {}) {
 describe("Tier UO — the upgrade transcript", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("UO1: each milestone reaches the reader before the next phase begins", function* () {
-    // The decisive case. A run that buffered everything and wrote it at the end
-    // produces byte-identical output, so the only way to tell streaming from
-    // buffering is to look at what has already arrived while a later phase has
-    // not started.
-    const arrived: string[] = [];
-    const soFar = () => arrived.join("");
-    let atVerify = "";
-    let atReplace = "";
+  journalCase(
+    "UO1: each milestone reaches the reader before the next phase begins",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      // The decisive case. A run that buffered everything and wrote it at the end
+      // produces byte-identical output, so the only way to tell streaming from
+      // buffering is to look at what has already arrived while a later phase has
+      // not started.
+      const arrived: string[] = [];
+      const soFar = () => arrived.join("");
+      let atVerify = "";
+      let atReplace = "";
 
-    const outcome = yield* install(
-      // deno-lint-ignore require-yield
-      function* (chunk) {
-        arrived.push(chunk);
-      },
-      {
+      const outcome = yield* install(
+        stream,
         // deno-lint-ignore require-yield
-        *beforeVerify() {
-          atVerify = soFar();
+        function* (chunk) {
+          arrived.push(chunk);
         },
-        // deno-lint-ignore require-yield
-        *beforeReplace() {
-          atReplace = soFar();
+        {
+          // deno-lint-ignore require-yield
+          *beforeVerify() {
+            atVerify = soFar();
+          },
+          // deno-lint-ignore require-yield
+          *beforeReplace() {
+            atReplace = soFar();
+          },
         },
-      },
-    );
+      );
 
-    expect(outcome.ok).toBe(true);
+      expect(outcome.ok).toBe(true);
 
-    // Before verification started, the reader already had the selection and the
-    // download — and nothing about verification or replacement.
-    expect(atVerify).toContain("Selected release: v0.11.0 (newer than installed version 0.10.2)");
-    expect(atVerify).toContain(`Downloaded binary: ${ASSET}`);
-    expect(atVerify).not.toContain("Verified: SHA-256");
-    expect(atVerify).not.toContain("Installed xmd");
+      // Before verification started, the reader already had the selection and the
+      // download — and nothing about verification or replacement.
+      expect(atVerify).toContain("Selected release: v0.11.0 (newer than installed version 0.10.2)");
+      expect(atVerify).toContain(`Downloaded binary: ${ASSET}`);
+      expect(atVerify).not.toContain("Verified: SHA-256");
+      expect(atVerify).not.toContain("Installed xmd");
 
-    // Before replacement started, verification had landed too.
-    expect(atReplace).toContain("Verified: SHA-256 checksum and version 0.11.0");
-    expect(atReplace).not.toContain("Installed xmd");
+      // Before replacement started, verification had landed too.
+      expect(atReplace).toContain("Verified: SHA-256 checksum and version 0.11.0");
+      expect(atReplace).not.toContain("Installed xmd");
 
-    // And the installation summary is last.
-    expect(soFar()).toContain("Installed xmd 0.11.0 (replaced 0.10.2).");
+      // And the installation summary is last.
+      expect(soFar()).toContain("Installed xmd 0.11.0 (replaced 0.10.2).");
 
-    // Blank runs are collapsed to one blank line, and the transcript ends with
-    // exactly one newline. A branch the command did not take leaves the engine
-    // emitting the blank lines that surrounded it, and this document has enough
-    // branches that a reader would otherwise meet a dozen at a time.
-    expect(soFar()).not.toMatch(/\n{3}/);
-    expect(soFar().startsWith("#")).toBe(true);
-    expect(soFar().endsWith("\n")).toBe(true);
-    expect(soFar().endsWith("\n\n")).toBe(false);
-  });
+      // Blank runs are collapsed to one blank line, and the transcript ends with
+      // exactly one newline. A branch the command did not take leaves the engine
+      // emitting the blank lines that surrounded it, and this document has enough
+      // branches that a reader would otherwise meet a dozen at a time.
+      expect(soFar()).not.toMatch(/\n{3}/);
+      expect(soFar().startsWith("#")).toBe(true);
+      expect(soFar().endsWith("\n")).toBe(true);
+      expect(soFar().endsWith("\n\n")).toBe(false);
+    },
+  );
 
-  it("UO2: every consumer drains the same stream, and nothing is printed twice", function* () {
+  const identical = "UO2: every consumer drains the same stream, and nothing is printed twice";
+  journalCase(identical, UPGRADE_COMMAND_IDENTITY, function* (stream) {
     // The three shapes the command supports: a terminal writing as it goes, a
     // pipe writing once at the end, and a test observing. All read the same
     // `execution.output`, so the bytes cannot differ between them.
     const streamed: string[] = [];
     const first = yield* install(
+      stream,
       // deno-lint-ignore require-yield
       function* (chunk) {
         streamed.push(chunk);
       },
     );
 
-    const buffered: string[] = [];
-    const second = yield* install(
-      // deno-lint-ignore require-yield
-      function* (chunk) {
-        buffered.push(chunk);
+    yield* captureTestJournal(
+      { owner: OWNER, name: identical },
+      UPGRADE_COMMAND_IDENTITY,
+      function* (otherStream) {
+        const buffered: string[] = [];
+        const second = yield* install(
+          otherStream,
+          // deno-lint-ignore require-yield
+          function* (chunk) {
+            buffered.push(chunk);
+          },
+        );
+
+        expect(first.ok).toBe(true);
+        expect(second.ok).toBe(true);
+        expect(streamed.join("")).toBe(buffered.join(""));
+        // More than one chunk, or the progressive claim above would be vacuous.
+        expect(streamed.length).toBeGreaterThan(1);
+
+        // The completion value is never handed back for printing: a text root's
+        // value is the text the consumer already has, and returning it would invite
+        // the caller to say everything twice.
+        expect(first.ok ? first.value : "unreachable").toBe(undefined);
       },
     );
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    expect(streamed.join("")).toBe(buffered.join(""));
-    // More than one chunk, or the progressive claim above would be vacuous.
-    expect(streamed.length).toBeGreaterThan(1);
-
-    // The completion value is never handed back for printing: a text root's
-    // value is the text the consumer already has, and returning it would invite
-    // the caller to say everything twice.
-    expect(first.ok ? first.value : "unreachable").toBe(undefined);
   });
 
-  it("UO3: a consumer that fails cancels the run and reports rather than hanging", function* () {
-    let replaced = false;
-    const outcome = yield* install(
-      // deno-lint-ignore require-yield
-      function* (chunk) {
-        if (chunk.includes("Downloaded binary:")) {
-          throw new Error("the terminal went away");
-        }
-      },
-      {
+  journalCase(
+    "UO3: a consumer that fails cancels the run and reports rather than hanging",
+    UPGRADE_COMMAND_IDENTITY,
+    function* (stream) {
+      let replaced = false;
+      const outcome = yield* install(
+        stream,
         // deno-lint-ignore require-yield
-        *beforeReplace() {
-          replaced = true;
+        function* (chunk) {
+          if (chunk.includes("Downloaded binary:")) {
+            throw new Error("the terminal went away");
+          }
         },
-      },
-    );
+        {
+          // deno-lint-ignore require-yield
+          *beforeReplace() {
+            replaced = true;
+          },
+        },
+      );
 
-    expect(outcome.ok).toBe(false);
-    expect(outcome.ok ? "" : outcome.error.message).toContain("the terminal went away");
-    // The document was cancelled, so the phase after the failing chunk never
-    // ran. A consumer failure is not a reason to finish replacing a binary.
-    expect(replaced).toBe(false);
-  });
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok ? "" : outcome.error.message).toContain("the terminal went away");
+      // The document was cancelled, so the phase after the failing chunk never
+      // ran. A consumer failure is not a reason to finish replacing a binary.
+      expect(replaced).toBe(false);
+    },
+  );
 
   it("UO4: the durable stream records the run and grants it nothing", function* () {
     // The journal is evidence, never input. This asserts the first half — that

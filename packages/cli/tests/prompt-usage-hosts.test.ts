@@ -44,6 +44,11 @@ import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { sleep } from "effection";
 
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/cli/tests/prompt-usage-hosts.test.ts");
+const PROMPT_SOURCE = "hosts.md";
+
 const HOST: PromptUsageHost = { host: "deno-source", xmd: { version: "0.0.0-hosts" } };
 
 const RETAINED = {
@@ -110,7 +115,7 @@ function usageIn(events: readonly DurableEvent[]): (PromptUsage | undefined)[] {
 function* promptOnce(stream: DurableStream): Operation<void> {
   yield* collect(
     yield* executeInstalled(
-      { ...retainedSource("hosts.md", "<Prompt>measure me</Prompt>"), stream },
+      { ...retainedSource(PROMPT_SOURCE, "<Prompt>measure me</Prompt>"), stream },
       [{ components: agentIdentityComponents() }],
     ),
   );
@@ -132,55 +137,64 @@ function expectRetained(usage: PromptUsage | undefined, adapterVersion: string):
 }
 
 describe("Tier HU — Prompt usage through the host assemblies", () => {
-  it("HU1: an ordinary run's agent stack retains usage in the run's own history", function* () {
-    yield* useHostFiles();
-    const root = yield* useRoot();
-    const fake = createFakeAcp();
-    fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
-    yield* scoped(function* () {
-      const stack = stackAt(root);
-      yield* installAgentProviderStack(stack, leaf(stack, fake));
-      yield* promptOnce(stream);
-    });
-    const [usage] = usageIn(yield* stream.readAll());
-    expectRetained(usage, "0.70.0");
-  });
-
-  it("HU2: the Plan writer's dependencies retain usage the same way", function* () {
-    yield* useHostFiles();
-    const root = yield* useRoot();
-    const fake = createFakeAcp();
-    fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
-    yield* scoped(function* () {
-      const stack = stackAt(root);
-      const host = yield* useScope();
-      yield* installAgentProviderStack(
-        stack,
-        planWriterDependencies({ stack, acp: leaf(stack, fake) }, root, host),
-      );
-      yield* promptOnce(stream);
-    });
-    expectRetained(usageIn(yield* stream.readAll())[0], "0.70.0");
-  });
-
-  it("HU3: the REPL profile, through its headless wrapper, retains usage", function* () {
-    yield* useHostFiles();
-    const root = yield* useRoot();
-    const fake = createFakeAcp();
-    fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
-    yield* scoped(function* () {
-      const stack = stackAt(root);
-      yield* assembleReplProfile(stack, NO_PLUGINS, {
-        acp: leaf(stack, fake),
-        planWriterRoot: join(root, "plans"),
+  journalCase(
+    "HU1: an ordinary run's agent stack retains usage in the run's own history",
+    PROMPT_SOURCE,
+    function* (stream) {
+      yield* useHostFiles();
+      const root = yield* useRoot();
+      const fake = createFakeAcp();
+      fake.script({ reply: "ok", usage: RETAINED });
+      yield* scoped(function* () {
+        const stack = stackAt(root);
+        yield* installAgentProviderStack(stack, leaf(stack, fake));
+        yield* promptOnce(stream);
       });
-      yield* promptOnce(stream);
-    });
-    expectRetained(usageIn(yield* stream.readAll())[0], "0.70.0");
-  });
+      const [usage] = usageIn(yield* stream.readAll());
+      expectRetained(usage, "0.70.0");
+    },
+  );
+
+  journalCase(
+    "HU2: the Plan writer's dependencies retain usage the same way",
+    PROMPT_SOURCE,
+    function* (stream) {
+      yield* useHostFiles();
+      const root = yield* useRoot();
+      const fake = createFakeAcp();
+      fake.script({ reply: "ok", usage: RETAINED });
+      yield* scoped(function* () {
+        const stack = stackAt(root);
+        const host = yield* useScope();
+        yield* installAgentProviderStack(
+          stack,
+          planWriterDependencies({ stack, acp: leaf(stack, fake) }, root, host),
+        );
+        yield* promptOnce(stream);
+      });
+      expectRetained(usageIn(yield* stream.readAll())[0], "0.70.0");
+    },
+  );
+
+  journalCase(
+    "HU3: the REPL profile, through its headless wrapper, retains usage",
+    PROMPT_SOURCE,
+    function* (stream) {
+      yield* useHostFiles();
+      const root = yield* useRoot();
+      const fake = createFakeAcp();
+      fake.script({ reply: "ok", usage: RETAINED });
+      yield* scoped(function* () {
+        const stack = stackAt(root);
+        yield* assembleReplProfile(stack, NO_PLUGINS, {
+          acp: leaf(stack, fake),
+          planWriterRoot: join(root, "plans"),
+        });
+        yield* promptOnce(stream);
+      });
+      expectRetained(usageIn(yield* stream.readAll())[0], "0.70.0");
+    },
+  );
 
   it("HU4: the Sidekick's held conversation retains usage through its own assembly", function* () {
     yield* useHostFiles();
@@ -250,22 +264,25 @@ describe("Tier HU — Prompt usage through the host assemblies", () => {
     });
   });
 
-  it("HU6: a host that states no usage facts collects none, and runs the same turn", function* () {
-    yield* useHostFiles();
-    const root = yield* useRoot();
-    const fake = createFakeAcp();
-    fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
-    yield* scoped(function* () {
-      const stack: AgentStack = {
-        ...stackAt(root),
-        sessions: { advertiseNativeLaunch: [], advertiseClientNativeAttachment: [] },
-      };
-      yield* installAgentProviderStack(stack, leaf(stack, fake));
-      yield* promptOnce(stream);
-    });
-    expect(usageIn(yield* stream.readAll())).toEqual([undefined]);
-  });
+  journalCase(
+    "HU6: a host that states no usage facts collects none, and runs the same turn",
+    PROMPT_SOURCE,
+    function* (stream) {
+      yield* useHostFiles();
+      const root = yield* useRoot();
+      const fake = createFakeAcp();
+      fake.script({ reply: "ok", usage: RETAINED });
+      yield* scoped(function* () {
+        const stack: AgentStack = {
+          ...stackAt(root),
+          sessions: { advertiseNativeLaunch: [], advertiseClientNativeAttachment: [] },
+        };
+        yield* installAgentProviderStack(stack, leaf(stack, fake));
+        yield* promptOnce(stream);
+      });
+      expect(usageIn(yield* stream.readAll())).toEqual([undefined]);
+    },
+  );
 
   it("HU7: a REPL entry retains usage through the entry publisher, and the Sidekick through its owner", function* () {
     yield* useHostFiles();
