@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
@@ -996,46 +997,53 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     },
   );
 
-  rootCase(
-    "CIV26: delegating twice, or delegating another name, names nothing",
-    function* (stream) {
-      // Each of these reaches this import's terminal — that is not the failure.
-      // What fails is what the frame then holds: two selections, or one for a
-      // component the element never wrote.
-      const ways: readonly ("twice" | "another name")[] = ["twice", "another name"];
-      for (const what of ways) {
-        const seen = record();
-        yield* run(
-          "<Probe />\n",
-          [probe(seen), probe(seen, "Other")],
-          function* () {
-            yield* Component.around(
-              {
-                *importComponent([name, position], next) {
-                  // Only the element's own import. The root is imported through the
-                  // same operation, and redirecting that is a different mistake.
-                  if (name !== "Probe") {
-                    return yield* next(name, position);
-                  }
-                  if (what === "twice") {
-                    yield* next(name, position);
-                    return yield* next(name, position);
-                  }
-                  return yield* next("Other", position);
+  const multipleDelegations = "CIV26: delegating twice, or delegating another name, names nothing";
+  it(multipleDelegations, function* () {
+    // Each of these reaches this import's terminal — that is not the failure.
+    // What fails is what the frame then holds: two selections, or one for a
+    // component the element never wrote.
+    const ways: readonly ("twice" | "another name")[] = ["twice", "another name"];
+    for (const what of ways) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: multipleDelegations },
+        "<eval>",
+        function* (stream) {
+          const seen = record();
+          yield* run(
+            "<Probe />\n",
+            [probe(seen), probe(seen, "Other")],
+            function* () {
+              yield* Component.around(
+                {
+                  *importComponent([name, position], next) {
+                    // Only the element's own import. The root is imported through the
+                    // same operation, and redirecting that is a different mistake.
+                    if (name !== "Probe") {
+                      return yield* next(name, position);
+                    }
+                    if (what === "twice") {
+                      yield* next(name, position);
+                      return yield* next(name, position);
+                    }
+                    return yield* next("Other", position);
+                  },
                 },
-              },
-              { at: "max" },
-            );
-          },
-          undefined,
-          stream,
-        );
+                { at: "max" },
+              );
+            },
+            undefined,
+            stream,
+          );
 
-        expect([what, seen.taken]).toEqual([what, []]);
-        expect([what, seen.refusals]).toHaveLength(2);
-      }
-    },
-  );
+          expect([what, seen.taken]).toEqual([what, []]);
+          expect([what, seen.refusals.length]).toEqual([what, 1]);
+          if (what === "another name") {
+            expect(seen.refusals[0]).toContain("this claimant answers for <Other />");
+          }
+        },
+      );
+    }
+  });
 
   it("CIV29: a foreign copy's nested import resolves, and is nobody's delegation", function* () {
     // A handler starts an import of its own while the authored import is still
