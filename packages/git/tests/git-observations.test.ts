@@ -9,10 +9,12 @@
  * repository can answer.
  */
 
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Json } from "@executablemd/durable-streams";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import { join } from "node:path";
 import { utimes } from "node:fs/promises";
@@ -202,6 +204,9 @@ function propertiesOf(schema: Json): Record<string, Json> {
 }
 
 /** The four reads, with the smallest invocation each one accepts. */
+const JOURNAL_OWNER = "packages/git/tests/git-observations.test.ts";
+const journalCase = journalCases(JOURNAL_OWNER);
+
 const FOUR_ELEMENTS: readonly { readonly name: string; readonly source: string }[] = [
   { name: "Git.Files", source: '<Git.Files as="bound" />' },
   { name: "Git.Changes", source: '<Git.Changes compare="staged" as="bound" />' },
@@ -239,7 +244,11 @@ interface NeutralOptions {
  * adds is exactly what it is about: a Repository that answers and no reads, or
  * reads supplied through the same contextual Api a native host answers.
  */
-function runNeutralDocument(source: string, options: NeutralOptions = {}): Operation<Json> {
+function runNeutralDocument(
+  source: string,
+  options: NeutralOptions,
+  stream: InMemoryStream,
+): Operation<Json> {
   return scoped(function* () {
     yield* useCompositionComponents();
     if (options.components !== undefined) {
@@ -260,9 +269,7 @@ function runNeutralDocument(source: string, options: NeutralOptions = {}): Opera
     if (asked !== undefined) {
       yield* GitQuery.around(suppliedReads(asked), { at: "min" });
     }
-    return yield* collect(
-      yield* execute({ ...inlineSource(source), stream: new InMemoryStream() }),
-    );
+    return yield* collect(yield* execute({ ...inlineSource(source), stream }));
   });
 }
 
@@ -722,53 +729,66 @@ describe("GO4 — the patch a comparison produces", () => {
 });
 
 describe("GO5 — pages are bounded, complete, and about one observation", () => {
-  it("defaults to 100 records, follows every page once, and honors a larger limit", function* () {
-    const root = yield* useManagedRoot();
-    const fixture = yield* useGeneratedFixture(1002);
-    const seen: Json[] = [];
+  {
+    const name = "defaults to 100 records, follows every page once, and honors a larger limit";
+    journalCase(name, "<eval>", function* (stream) {
+      yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
+        yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream3) {
+          const root = yield* useManagedRoot();
+          const fixture = yield* useGeneratedFixture(1002);
+          const seen: Json[] = [];
 
-    yield* runOrdinaryDocument(
-      ['<Git.Files as="page" />', "", "<Captured value={page} />", ""].join("\n"),
-      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-    );
-    expect(paths(seen[0])).toHaveLength(100);
-    expect(object(seen[0]).next).not.toBe(null);
+          yield* runOrdinaryDocument(
+            ['<Git.Files as="page" />', "", "<Captured value={page} />", ""].join("\n"),
+            { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+            stream,
+          );
+          expect(paths(seen[0])).toHaveLength(100);
+          expect(object(seen[0]).next).not.toBe(null);
 
-    // Every page, followed through the ordinary Api with the cursor the
-    // previous page supplied, until it says there is no more.
-    const followed: string[] = [];
-    yield* runOrdinaryDocument("<Follows />\n", {
-      root,
-      cwd: fixture.root,
-      components: [
-        followingProbe("Follows", function* (place) {
-          let cursor: string | null = null;
-          for (;;) {
-            const page: GitFilesResult = yield* GitQuery.operations.files({
-              ...place,
-              request: { kind: "files", prefix: null, limit: 100, cursor },
-            });
-            followed.push(...page.paths);
-            if (page.next === null) {
-              break;
-            }
-            cursor = page.next.cursor;
-          }
-        }),
-      ],
+          // Every page, followed through the ordinary Api with the cursor the
+          // previous page supplied, until it says there is no more.
+          const followed: string[] = [];
+          yield* runOrdinaryDocument(
+            "<Follows />\n",
+            {
+              root,
+              cwd: fixture.root,
+              components: [
+                followingProbe("Follows", function* (place) {
+                  let cursor: string | null = null;
+                  for (;;) {
+                    const page: GitFilesResult = yield* GitQuery.operations.files({
+                      ...place,
+                      request: { kind: "files", prefix: null, limit: 100, cursor },
+                    });
+                    followed.push(...page.paths);
+                    if (page.next === null) {
+                      break;
+                    }
+                    cursor = page.next.cursor;
+                  }
+                }),
+              ],
+            },
+            stream2,
+          );
+          expect(followed).toEqual([...fixture.paths]);
+          expect(new Set(followed).size).toBe(followed.length);
+
+          // One read for all of them, which is the claim that there is no hidden cap.
+          const whole: Json[] = [];
+          yield* runOrdinaryDocument(
+            ['<Git.Files limit={1002} as="all" />', "", "<Captured value={all} />", ""].join("\n"),
+            { root, cwd: fixture.root, components: [capturingProbe(whole)] },
+            stream3,
+          );
+          expect(paths(whole[0])).toEqual([...fixture.paths]);
+          expect(object(whole[0]).next).toBe(null);
+        });
+      });
     });
-    expect(followed).toEqual([...fixture.paths]);
-    expect(new Set(followed).size).toBe(followed.length);
-
-    // One read for all of them, which is the claim that there is no hidden cap.
-    const whole: Json[] = [];
-    yield* runOrdinaryDocument(
-      ['<Git.Files limit={1002} as="all" />', "", "<Captured value={all} />", ""].join("\n"),
-      { root, cwd: fixture.root, components: [capturingProbe(whole)] },
-    );
-    expect(paths(whole[0])).toEqual([...fixture.paths]);
-    expect(object(whole[0]).next).toBe(null);
-  });
+  }
 
   ordinaryCase("pages changes at a limit of one and at the default", function* (runFresh) {
     const root = yield* useManagedRoot();
@@ -805,64 +825,74 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
     });
   });
 
-  it("windows a patch at the default, above 65536, and reassembles the whole text", function* () {
-    const root = yield* useManagedRoot();
-    const fixture = yield* useGeneratedFixture(1002);
-    for (const path of fixture.paths) {
-      yield* writeFixtureFile(fixture.root, path, "changed\n");
-    }
-    const seen: Json[] = [];
-    const windows: string[] = [];
-    let whole = "";
+  {
+    const name = "windows a patch at the default, above 65536, and reassembles the whole text";
+    journalCase(name, "<eval>", function* (stream) {
+      yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
+        const root = yield* useManagedRoot();
+        const fixture = yield* useGeneratedFixture(1002);
+        for (const path of fixture.paths) {
+          yield* writeFixtureFile(fixture.root, path, "changed\n");
+        }
+        const seen: Json[] = [];
+        const windows: string[] = [];
+        let whole = "";
 
-    yield* runOrdinaryDocument(
-      ['<Git.Diff compare="unstaged" as="first" />', "", "<Captured value={first} />", ""].join(
-        "\n",
-      ),
-      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-    );
-    const first = object(seen[0]);
-    expect([...String(first.text)]).toHaveLength(4096);
-    expect(first.offset).toBe(0);
-    expect(first.next).not.toBe(null);
+        yield* runOrdinaryDocument(
+          ['<Git.Diff compare="unstaged" as="first" />', "", "<Captured value={first} />", ""].join(
+            "\n",
+          ),
+          { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+          stream,
+        );
+        const first = object(seen[0]);
+        expect([...String(first.text)]).toHaveLength(4096);
+        expect(first.offset).toBe(0);
+        expect(first.next).not.toBe(null);
 
-    yield* runOrdinaryDocument("<Follows />\n", {
-      root,
-      cwd: fixture.root,
-      components: [
-        followingProbe("Follows", function* (place) {
-          let offset = 0;
-          let cursor: string | null = null;
-          for (;;) {
-            const page: GitDiffResult = yield* GitQuery.operations.diff({
-              ...place,
-              request: {
-                kind: "diff",
-                comparison: { compare: "unstaged" },
-                paths: null,
-                offset,
-                limit: 70000,
-                cursor,
-              },
-            });
-            windows.push(page.text);
-            if (page.next === null) {
-              whole = windows.join("");
-              expect(page.length).toBe([...whole].length);
-              break;
-            }
-            offset = page.next.offset;
-            cursor = page.next.cursor;
-          }
-        }),
-      ],
+        yield* runOrdinaryDocument(
+          "<Follows />\n",
+          {
+            root,
+            cwd: fixture.root,
+            components: [
+              followingProbe("Follows", function* (place) {
+                let offset = 0;
+                let cursor: string | null = null;
+                for (;;) {
+                  const page: GitDiffResult = yield* GitQuery.operations.diff({
+                    ...place,
+                    request: {
+                      kind: "diff",
+                      comparison: { compare: "unstaged" },
+                      paths: null,
+                      offset,
+                      limit: 70000,
+                      cursor,
+                    },
+                  });
+                  windows.push(page.text);
+                  if (page.next === null) {
+                    whole = windows.join("");
+                    expect(page.length).toBe([...whole].length);
+                    break;
+                  }
+                  offset = page.next.offset;
+                  cursor = page.next.cursor;
+                }
+              }),
+            ],
+          },
+          stream2,
+        );
+
+        // A limit above the old proposed cap is honored, and the windows are the
+        // whole patch rather than a prefix of it.
+        expect([...(windows[0] ?? "")]).toHaveLength(70000);
+        expect(whole).toBe(fixture.output("diff", "--no-ext-diff", "--no-textconv", "--no-color"));
+      });
     });
-
-    // A limit above the old proposed cap is honored, and the windows are the
-    // whole patch rather than a prefix of it.
-    expect([...(windows[0] ?? "")]).toHaveLength(70000);
-    expect(whole).toBe(fixture.output("diff", "--no-ext-diff", "--no-textconv", "--no-color"));
-  });
+  }
 
   it("keeps generated fixture commits free of automatic maintenance", function* () {
     const fixture = yield* useGeneratedFixture(1002);
@@ -1117,74 +1147,84 @@ describe("GO6 — a changed observation cannot be paged over", () => {
 });
 
 describe("GO7 — a file is read as one commit holds it", () => {
-  it("windows the committed text, stays on its commit, and reassembles it", function* () {
-    const root = yield* useManagedRoot();
-    const fixture = yield* useFileFixture();
-    const seen: Json[] = [];
-    const windows: string[] = [];
+  {
+    const name = "windows the committed text, stays on its commit, and reassembles it";
+    journalCase(name, "<eval>", function* (stream) {
+      yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
+        const root = yield* useManagedRoot();
+        const fixture = yield* useFileFixture();
+        const seen: Json[] = [];
+        const windows: string[] = [];
 
-    yield* runOrdinaryDocument(
-      [
-        '<Git.File commit="HEAD~1" path="big.txt" as="first" />',
-        "",
-        "<Captured value={first} />",
-        "",
-      ].join("\n"),
-      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-    );
+        yield* runOrdinaryDocument(
+          [
+            '<Git.File commit="HEAD~1" path="big.txt" as="first" />',
+            "",
+            "<Captured value={first} />",
+            "",
+          ].join("\n"),
+          { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+          stream,
+        );
 
-    const first = object(seen[0]);
-    expect(first.commit).toBe(fixture.f1);
-    expect(first.path).toBe("big.txt");
-    expect(first.offset).toBe(0);
-    expect(first.length).toBe([...LONG_BLOB].length);
-    // The default window, counted in code points: the astral character is the
-    // last one in it and arrives whole.
-    expect([...String(first.text)]).toHaveLength(4096);
-    expect(String(first.text).endsWith(ASTRAL)).toBe(true);
-    expect(first.next).toEqual({
-      commit: fixture.f1,
-      path: "big.txt",
-      offset: 4096,
-      limit: 4096,
+        const first = object(seen[0]);
+        expect(first.commit).toBe(fixture.f1);
+        expect(first.path).toBe("big.txt");
+        expect(first.offset).toBe(0);
+        expect(first.length).toBe([...LONG_BLOB].length);
+        // The default window, counted in code points: the astral character is the
+        // last one in it and arrives whole.
+        expect([...String(first.text)]).toHaveLength(4096);
+        expect(String(first.text).endsWith(ASTRAL)).toBe(true);
+        expect(first.next).toEqual({
+          commit: fixture.f1,
+          path: "big.txt",
+          offset: 4096,
+          limit: 4096,
+        });
+        windows.push(String(first.text));
+
+        // The branch and the working copy both move before the continuation is
+        // followed, so a read that resolved `HEAD~1` again would read another file.
+        fixture.run("commit", "--allow-empty", "-m", "third");
+        yield* writeFixtureFile(fixture.root, "big.txt", "working copy\n");
+
+        yield* runOrdinaryDocument(
+          "<Follows />\n",
+          {
+            root,
+            cwd: fixture.root,
+            components: [
+              followingProbe("Follows", function* (place) {
+                let offset = 4096;
+                for (;;) {
+                  const page: GitFileResult = yield* GitQuery.operations.file({
+                    ...place,
+                    request: {
+                      kind: "file",
+                      commit: fixture.f1,
+                      path: "big.txt",
+                      offset,
+                      limit: 70000,
+                    },
+                  });
+                  expect(page.commit).toBe(fixture.f1);
+                  windows.push(page.text);
+                  if (page.next === null) {
+                    break;
+                  }
+                  offset = page.next.offset;
+                }
+              }),
+            ],
+          },
+          stream2,
+        );
+
+        expect(windows.join("")).toBe(LONG_BLOB);
+      });
     });
-    windows.push(String(first.text));
-
-    // The branch and the working copy both move before the continuation is
-    // followed, so a read that resolved `HEAD~1` again would read another file.
-    fixture.run("commit", "--allow-empty", "-m", "third");
-    yield* writeFixtureFile(fixture.root, "big.txt", "working copy\n");
-
-    yield* runOrdinaryDocument("<Follows />\n", {
-      root,
-      cwd: fixture.root,
-      components: [
-        followingProbe("Follows", function* (place) {
-          let offset = 4096;
-          for (;;) {
-            const page: GitFileResult = yield* GitQuery.operations.file({
-              ...place,
-              request: {
-                kind: "file",
-                commit: fixture.f1,
-                path: "big.txt",
-                offset,
-                limit: 70000,
-              },
-            });
-            expect(page.commit).toBe(fixture.f1);
-            windows.push(page.text);
-            if (page.next === null) {
-              break;
-            }
-            offset = page.next.offset;
-          }
-        }),
-      ],
-    });
-
-    expect(windows.join("")).toBe(LONG_BLOB);
-  });
+  }
 
   ordinaryCase(
     "answers a middle window, an empty window past the end, and an empty file",
@@ -1239,67 +1279,73 @@ describe("GO7 — a file is read as one commit holds it", () => {
     },
   );
 
-  it("refuses an unusable revision, an absent path, a tree, a gitlink and a nontext blob", function* () {
-    const root = yield* useManagedRoot();
-    const fixture = yield* useFileFixture();
-    const main = yield* useObservationFixture();
+  {
+    const name =
+      "refuses an unusable revision, an absent path, a tree, a gitlink and a nontext blob";
+    it(name, function* () {
+      const root = yield* useManagedRoot();
+      const fixture = yield* useFileFixture();
+      const main = yield* useObservationFixture();
 
-    const refusals: { source: string; cwd: string; reason: string }[] = [
-      {
-        source: `<Git.File commit="no-such-revision" path="big.txt" as="x" />`,
-        cwd: fixture.root,
-        reason: "invalid-revision",
-      },
-      {
-        source: `<Git.File commit="${fixture.f1}" path="not/there.txt" as="x" />`,
-        cwd: fixture.root,
-        reason: "absent-path",
-      },
-      {
-        source: `<Git.File commit="${fixture.f1}" path="dir" as="x" />`,
-        cwd: fixture.root,
-        reason: "nontext-blob",
-      },
-      // Both spellings of the same directory. The argument Git receives is a
-      // pathspec rather than a lookup, so `dir/` matches the *contents* of the
-      // directory — and a read that took the first record would answer this
-      // with the blob at `dir/inside.txt` under a path claiming to be `dir/`.
-      {
-        source: `<Git.File commit="${fixture.f1}" path="dir/" as="x" />`,
-        cwd: fixture.root,
-        reason: "nontext-blob",
-      },
-      // A file is not a directory either way round: a trailing slash on one
-      // matches nothing at all, which is an absent path rather than that file.
-      {
-        source: `<Git.File commit="${fixture.f1}" path="empty.txt/" as="x" />`,
-        cwd: fixture.root,
-        reason: "absent-path",
-      },
-      {
-        source: `<Git.File commit="${main.c2}" path="nested" as="x" />`,
-        cwd: main.root,
-        reason: "nontext-blob",
-      },
-      {
-        source: `<Git.File commit="${fixture.f1}" path="bad.bin" as="x" />`,
-        cwd: fixture.root,
-        reason: "nontext-blob",
-      },
-      {
-        source: `<Git.File commit="${fixture.f1}" path="nul.bin" as="x" />`,
-        cwd: fixture.root,
-        reason: "nontext-blob",
-      },
-    ];
+      const refusals: { source: string; cwd: string; reason: string }[] = [
+        {
+          source: `<Git.File commit="no-such-revision" path="big.txt" as="x" />`,
+          cwd: fixture.root,
+          reason: "invalid-revision",
+        },
+        {
+          source: `<Git.File commit="${fixture.f1}" path="not/there.txt" as="x" />`,
+          cwd: fixture.root,
+          reason: "absent-path",
+        },
+        {
+          source: `<Git.File commit="${fixture.f1}" path="dir" as="x" />`,
+          cwd: fixture.root,
+          reason: "nontext-blob",
+        },
+        // Both spellings of the same directory. The argument Git receives is a
+        // pathspec rather than a lookup, so `dir/` matches the *contents* of the
+        // directory — and a read that took the first record would answer this
+        // with the blob at `dir/inside.txt` under a path claiming to be `dir/`.
+        {
+          source: `<Git.File commit="${fixture.f1}" path="dir/" as="x" />`,
+          cwd: fixture.root,
+          reason: "nontext-blob",
+        },
+        // A file is not a directory either way round: a trailing slash on one
+        // matches nothing at all, which is an absent path rather than that file.
+        {
+          source: `<Git.File commit="${fixture.f1}" path="empty.txt/" as="x" />`,
+          cwd: fixture.root,
+          reason: "absent-path",
+        },
+        {
+          source: `<Git.File commit="${main.c2}" path="nested" as="x" />`,
+          cwd: main.root,
+          reason: "nontext-blob",
+        },
+        {
+          source: `<Git.File commit="${fixture.f1}" path="bad.bin" as="x" />`,
+          cwd: fixture.root,
+          reason: "nontext-blob",
+        },
+        {
+          source: `<Git.File commit="${fixture.f1}" path="nul.bin" as="x" />`,
+          cwd: fixture.root,
+          reason: "nontext-blob",
+        },
+      ];
 
-    for (const entry of refusals) {
-      const raised_ = yield* raised(
-        runOrdinaryDocument(`${entry.source}\n`, { root, cwd: entry.cwd }),
-      );
-      expect(`${entry.source}: ${reasonOf(raised_)}`).toBe(`${entry.source}: ${entry.reason}`);
-    }
-  });
+      for (const entry of refusals) {
+        yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream) {
+          const raised_ = yield* raised(
+            runOrdinaryDocument(`${entry.source}\n`, { root, cwd: entry.cwd }, stream),
+          );
+          expect(`${entry.source}: ${reasonOf(raised_)}`).toBe(`${entry.source}: ${entry.reason}`);
+        });
+      }
+    });
+  }
 
   ordinaryCase("still reads a directory's own child by its exact path", function* (runFresh) {
     const root = yield* useManagedRoot();
@@ -1442,28 +1488,39 @@ describe("GO8 — a read runs no repository-defined program and changes nothing"
 });
 
 describe("GO9 — which checkout answers, and what cannot choose one", () => {
-  it("distinguishes two sibling checkouts of one repository by their content", function* () {
-    const root = yield* useManagedRoot();
-    const fixture = yield* useObservationFixture();
-    const linked = yield* useLinkedWorktree(fixture);
-    yield* writeFixtureFile(linked.root, "only-linked.txt", "linked\n");
-    linked.run("add", "--", "only-linked.txt");
-    linked.run("commit", "-m", "linked only");
-    const seen: Json[] = [];
+  {
+    const name = "distinguishes two sibling checkouts of one repository by their content";
+    journalCase(name, "<eval>", function* (stream) {
+      yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
+        const root = yield* useManagedRoot();
+        const fixture = yield* useObservationFixture();
+        const linked = yield* useLinkedWorktree(fixture);
+        yield* writeFixtureFile(linked.root, "only-linked.txt", "linked\n");
+        linked.run("add", "--", "only-linked.txt");
+        linked.run("commit", "-m", "linked only");
+        const seen: Json[] = [];
 
-    yield* runOrdinaryDocument(
-      ['<Git.Files limit={1000} as="files" />', "", "<Captured value={files} />", ""].join("\n"),
-      { root, cwd: linked.root, components: [capturingProbe(seen)] },
-    );
-    expect(paths(seen[0])).toContain("only-linked.txt");
+        yield* runOrdinaryDocument(
+          ['<Git.Files limit={1000} as="files" />', "", "<Captured value={files} />", ""].join(
+            "\n",
+          ),
+          { root, cwd: linked.root, components: [capturingProbe(seen)] },
+          stream,
+        );
+        expect(paths(seen[0])).toContain("only-linked.txt");
 
-    const primary: Json[] = [];
-    yield* runOrdinaryDocument(
-      ['<Git.Files limit={1000} as="files" />', "", "<Captured value={files} />", ""].join("\n"),
-      { root, cwd: fixture.root, components: [capturingProbe(primary)] },
-    );
-    expect(paths(primary[0])).not.toContain("only-linked.txt");
-  });
+        const primary: Json[] = [];
+        yield* runOrdinaryDocument(
+          ['<Git.Files limit={1000} as="files" />', "", "<Captured value={files} />", ""].join(
+            "\n",
+          ),
+          { root, cwd: fixture.root, components: [capturingProbe(primary)] },
+          stream2,
+        );
+        expect(paths(primary[0])).not.toContain("only-linked.txt");
+      });
+    });
+  }
 
   it("refuses a foreign selection and an edited one before reaching a host", function* () {
     const root = yield* useManagedRoot();
@@ -1560,46 +1617,58 @@ describe("GO10 — the comparison sees an edit the index's own times would hide"
 });
 
 describe("GO11 — the authored contract, before a provider is reached", () => {
-  it("refuses a missing binding, a paired form, an extra prop and a mismatched comparison", function* () {
-    const root = yield* useManagedRoot();
-    const fixture = yield* useObservationFixture();
-    const counted = countingOrdinaryHost();
+  {
+    const name =
+      "refuses a missing binding, a paired form, an extra prop and a mismatched comparison";
+    it(name, function* () {
+      const root = yield* useManagedRoot();
+      const fixture = yield* useObservationFixture();
+      const counted = countingOrdinaryHost();
 
-    const refused: { source: string; reason: string }[] = [
-      { source: "<Git.Files />", reason: "refused" },
-      { source: '<Git.Files as="files">content</Git.Files>', reason: "unexpected-content" },
-      { source: '<Git.Files unknown="x" as="files" />', reason: "refused" },
-      { source: '<Git.Files limit={0} as="files" />', reason: "refused" },
-      {
-        source: '<Git.Changes compare="commits" base="HEAD" as="changes" />',
-        reason: "invalid-invocation",
-      },
-      {
-        source: '<Git.Changes compare="unstaged" base="HEAD" head="HEAD" as="changes" />',
-        reason: "invalid-invocation",
-      },
-      { source: '<Git.Diff compare="staged" offset={-1} as="diff" />', reason: "refused" },
-      { source: '<Git.File commit="HEAD" as="source" />', reason: "refused" },
-      {
-        source: '<Git.File commit="HEAD" path="/absolute.ts" as="source" />',
-        reason: "invalid-invocation",
-      },
-      {
-        source: '<Git.File commit="HEAD" path="a/../../escape.ts" as="source" />',
-        reason: "invalid-invocation",
-      },
-    ];
+      const refused: { source: string; reason: string }[] = [
+        { source: "<Git.Files />", reason: "refused" },
+        { source: '<Git.Files as="files">content</Git.Files>', reason: "unexpected-content" },
+        { source: '<Git.Files unknown="x" as="files" />', reason: "refused" },
+        { source: '<Git.Files limit={0} as="files" />', reason: "refused" },
+        {
+          source: '<Git.Changes compare="commits" base="HEAD" as="changes" />',
+          reason: "invalid-invocation",
+        },
+        {
+          source: '<Git.Changes compare="unstaged" base="HEAD" head="HEAD" as="changes" />',
+          reason: "invalid-invocation",
+        },
+        { source: '<Git.Diff compare="staged" offset={-1} as="diff" />', reason: "refused" },
+        { source: '<Git.File commit="HEAD" as="source" />', reason: "refused" },
+        {
+          source: '<Git.File commit="HEAD" path="/absolute.ts" as="source" />',
+          reason: "invalid-invocation",
+        },
+        {
+          source: '<Git.File commit="HEAD" path="a/../../escape.ts" as="source" />',
+          reason: "invalid-invocation",
+        },
+      ];
 
-    for (const entry of refused) {
-      const raised_ = yield* raised(
-        runOrdinaryDocument(`${entry.source}\n`, { root, cwd: fixture.root, host: counted.host }),
-      );
-      expect(`${entry.source}: ${refusalKind(raised_)}`).toBe(`${entry.source}: ${entry.reason}`);
-    }
+      for (const entry of refused) {
+        yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream) {
+          const raised_ = yield* raised(
+            runOrdinaryDocument(
+              `${entry.source}\n`,
+              { root, cwd: fixture.root, host: counted.host },
+              stream,
+            ),
+          );
+          expect(`${entry.source}: ${refusalKind(raised_)}`).toBe(
+            `${entry.source}: ${entry.reason}`,
+          );
+        });
+      }
 
-    // Not one of them reached a repository: no read ran, and no `git` for one.
-    expect(subcommands(counted.counters)).toEqual([]);
-  });
+      // Not one of them reached a repository: no read ran, and no `git` for one.
+      expect(subcommands(counted.counters)).toEqual([]);
+    });
+  }
 
   it("declares exactly the four names, forms, props, results and defaults", function* () {
     const registered = COMPOSITION_REGISTRATIONS.filter((entry) =>
@@ -1675,83 +1744,98 @@ describe("GO11 — the authored contract, before a provider is reached", () => {
 });
 
 describe("GO12 — availability is the installed provider's, with no fallback", () => {
-  it("refuses all four on a host that installs nothing for them", function* () {
-    for (const element of FOUR_ELEMENTS) {
-      const raised_ = yield* raised(runNeutralDocument(`${element.source}\n`));
-      // A neutral host has no Repository provider either, so the refusal is
-      // the first absent one — and nothing falls back to the caller's own
-      // filesystem on the way.
-      expect(`${element.name}: ${raised_ === undefined ? "answered" : "refused"}`).toBe(
-        `${element.name}: refused`,
-      );
-    }
-  });
-
-  it("reaches the reads' own absent-provider refusal once a repository is selected", function* () {
-    for (const element of FOUR_ELEMENTS) {
-      const raised_ = yield* raised(
-        runNeutralDocument(`${element.source}\n`, { repository: true }),
-      );
-      expect(`${element.name}: ${raised_ instanceof GitObservationProviderError}`).toBe(
-        `${element.name}: true`,
-      );
-    }
-  });
-
-  it("answers through the same Api when a host supplies the four methods", function* () {
-    const asked: string[] = [];
-    const seen: Json[] = [];
-
-    yield* runNeutralDocument(
-      [
-        '<Git.Files prefix="a/" as="files" />',
-        "",
-        "<Captured value={files} />",
-        "",
-        '<Git.Changes compare="staged" as="changes" />',
-        "",
-        "<Captured value={changes} />",
-        "",
-        '<Git.Diff compare="staged" as="diff" />',
-        "",
-        "<Captured value={diff} />",
-        "",
-        '<Git.File commit="HEAD~1" path="a/b.ts" as="source" />',
-        "",
-        "<Captured value={source} />",
-        "",
-      ].join("\n"),
-      { repository: true, reads: asked, components: [capturingProbe(seen)] },
-    );
-
-    // The request each component composed, in the order they ran.
-    expect(asked).toEqual([
-      'files {"cursor":null,"kind":"files","limit":100,"prefix":"a/"}',
-      'changes {"comparison":{"compare":"staged"},"cursor":null,"kind":"changes","limit":100,"paths":null}',
-      'diff {"comparison":{"compare":"staged"},"cursor":null,"kind":"diff","limit":4096,"offset":0,"paths":null}',
-      'file {"commit":"HEAD~1","kind":"file","limit":4096,"offset":0,"path":"a/b.ts"}',
-    ]);
-    // And the typed JSON each one bound.
-    expect(seen[0]).toEqual({ paths: ["a/b.ts"], next: null });
-    expect(seen[1]).toEqual({
-      comparison: { compare: "staged", base: null },
-      changes: [],
-      next: null,
+  {
+    const name = "refuses all four on a host that installs nothing for them";
+    it(name, function* () {
+      for (const element of FOUR_ELEMENTS) {
+        yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream) {
+          const raised_ = yield* raised(runNeutralDocument(`${element.source}\n`, {}, stream));
+          // A neutral host has no Repository provider either, so the refusal is
+          // the first absent one — and nothing falls back to the caller's own
+          // filesystem on the way.
+          expect(`${element.name}: ${raised_ === undefined ? "answered" : "refused"}`).toBe(
+            `${element.name}: refused`,
+          );
+        });
+      }
     });
-    expect(seen[2]).toEqual({
-      comparison: { compare: "staged", base: null },
-      text: "",
-      offset: 0,
-      length: 0,
-      next: null,
+  }
+
+  {
+    const name = "reaches the reads' own absent-provider refusal once a repository is selected";
+    it(name, function* () {
+      for (const element of FOUR_ELEMENTS) {
+        yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream) {
+          const raised_ = yield* raised(
+            runNeutralDocument(`${element.source}\n`, { repository: true }, stream),
+          );
+          expect(`${element.name}: ${raised_ instanceof GitObservationProviderError}`).toBe(
+            `${element.name}: true`,
+          );
+        });
+      }
     });
-    expect(seen[3]).toEqual({
-      commit: "0".repeat(40),
-      path: "a/b.ts",
-      text: "supplied",
-      offset: 0,
-      length: 8,
-      next: null,
-    });
-  });
+  }
+
+  journalCase(
+    "answers through the same Api when a host supplies the four methods",
+    "<eval>",
+    function* (stream) {
+      const asked: string[] = [];
+      const seen: Json[] = [];
+
+      yield* runNeutralDocument(
+        [
+          '<Git.Files prefix="a/" as="files" />',
+          "",
+          "<Captured value={files} />",
+          "",
+          '<Git.Changes compare="staged" as="changes" />',
+          "",
+          "<Captured value={changes} />",
+          "",
+          '<Git.Diff compare="staged" as="diff" />',
+          "",
+          "<Captured value={diff} />",
+          "",
+          '<Git.File commit="HEAD~1" path="a/b.ts" as="source" />',
+          "",
+          "<Captured value={source} />",
+          "",
+        ].join("\n"),
+        { repository: true, reads: asked, components: [capturingProbe(seen)] },
+        stream,
+      );
+
+      // The request each component composed, in the order they ran.
+      expect(asked).toEqual([
+        'files {"cursor":null,"kind":"files","limit":100,"prefix":"a/"}',
+        'changes {"comparison":{"compare":"staged"},"cursor":null,"kind":"changes","limit":100,"paths":null}',
+        'diff {"comparison":{"compare":"staged"},"cursor":null,"kind":"diff","limit":4096,"offset":0,"paths":null}',
+        'file {"commit":"HEAD~1","kind":"file","limit":4096,"offset":0,"path":"a/b.ts"}',
+      ]);
+      // And the typed JSON each one bound.
+      expect(seen[0]).toEqual({ paths: ["a/b.ts"], next: null });
+      expect(seen[1]).toEqual({
+        comparison: { compare: "staged", base: null },
+        changes: [],
+        next: null,
+      });
+      expect(seen[2]).toEqual({
+        comparison: { compare: "staged", base: null },
+        text: "",
+        offset: 0,
+        length: 0,
+        next: null,
+      });
+      expect(seen[3]).toEqual({
+        commit: "0".repeat(40),
+        path: "a/b.ts",
+        text: "supplied",
+        offset: 0,
+        length: 8,
+        next: null,
+      });
+    },
+  );
 });
