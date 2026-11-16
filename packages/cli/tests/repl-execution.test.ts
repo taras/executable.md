@@ -20,12 +20,18 @@ import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-str
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { createContext, ensure, race, scoped, sleep, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { randomUUID } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
+import { Writable } from "node:stream";
+import { withFailureJournal } from "@executablemd/testing";
+import { partitionEntrySegments, ROOT_IMPORT } from "../src/repl/entries.ts";
+import { useTestDiagnostics } from "../src/test-diagnostics.ts";
+import type { DeliverySink } from "../src/stdout-delivery.ts";
 
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
@@ -229,11 +235,42 @@ function* readAll(holder: ReplExecution): Operation<DurableEvent[]> {
   return yield* holder.stream.readAll();
 }
 
-describe("REPL execution: submitting one entry", () => {
-  beforeAll(() => useTempFileCompiler());
+const REFERENCE_PATH = join(REFERENCE_DIRECTORY, "entry.md");
 
-  it("X1: admits the exact source, binds, generates, asks, and settles", function* () {
-    const holder = execution();
+function captureReferenceEntry(
+  body: (holder: ReplExecution) => Operation<void>,
+  sink: DeliverySink = process.stderr,
+): Operation<void> {
+  return scoped(function* () {
+    const diagnostics = yield* useTestDiagnostics(sink);
+    const journal = diagnostics.execution("root", REFERENCE_PATH).journal(() => false);
+    yield* withFailureJournal(
+      {
+        ...journal,
+        *save(events) {
+          const partition = partitionEntrySegments(events);
+          if (!partition.ok) {
+            throw partition.error;
+          }
+          if (partition.value.length > 1) {
+            throw new Error("reference execution holds more than one admitted entry");
+          }
+          const [entry] = partition.value;
+          if (entry !== undefined) {
+            yield* journal.save(entry.events);
+          }
+        },
+      },
+      (stream) => body({ id: "kf39sla2", stream }),
+    );
+  });
+}
+
+function admitReferenceEntry(
+  check?: (holder: ReplExecution) => Operation<void>,
+  sink?: DeliverySink,
+): Operation<void> {
+  return captureReferenceEntry(function* (holder) {
     const source = yield* referenceSource();
     const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
@@ -273,40 +310,139 @@ describe("REPL execution: submitting one entry", () => {
     expect(session.model.settled).toBe(true);
     expect(session.model.terminal?.output).toContain("Decision: approve");
     expect(session.overlay.output).toBe(session.model.terminal?.output);
-  });
+    if (check !== undefined) {
+      yield* check(holder);
+    }
+  }, sink);
+}
 
-  it("X1: the overlay reports its output as the document prints it", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+describe("REPL execution: submitting one entry", () => {
+  beforeAll(() => useTempFileCompiler());
 
-    // Output is the one thing in the overlay that no record describes: a
-    // document that prints and nothing else reprojects nothing, so a reader
-    // watching the history would never learn that the overlay had moved.
-    const reported: string[] = [];
-    yield* spawn(function* (): Operation<void> {
-      const outputs = yield* session.outputs;
-      let next = yield* outputs.next();
-      while (!next.done) {
-        reported.push(next.value);
-        next = yield* outputs.next();
-      }
+  it("X1: admits the exact source, binds, generates, asks, and settles", () =>
+    admitReferenceEntry());
+
+  it("X1: the overlay reports its output as the document prints it", () =>
+    captureReferenceEntry(function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+
+      // Output is the one thing in the overlay that no record describes: a
+      // document that prints and nothing else reprojects nothing, so a reader
+      // watching the history would never learn that the overlay had moved.
+      const reported: string[] = [];
+      yield* spawn(function* (): Operation<void> {
+        const outputs = yield* session.outputs;
+        let next = yield* outputs.next();
+        while (!next.done) {
+          reported.push(next.value);
+          next = yield* outputs.next();
+        }
+      });
+
+      const question = yield* nextQuestion(session);
+
+      // Reported while the run is still holding at its question, rather than
+      // collected and handed over once it finished.
+      expect(reported.length).toBeGreaterThan(0);
+      const latest = reported[reported.length - 1];
+      expect(latest).toContain("About to evaluate:");
+      // What it reported is what the overlay holds: the same text, not a chunk
+      // the reader would have to accumulate itself.
+      expect(latest).toBe(session.overlay.output);
+      expect(session.model.terminal).toBe(undefined);
+
+      question.submit({ decision: "approve" });
+      yield* session.join();
+    }));
+
+  it("saves the joined reference entry only when its case fails after admission", function* () {
+    const directory = yield* useTempDirectory("xmd-repl-entry-journal-");
+    const failed = join(directory, "failed");
+    const passed = join(directory, "passed");
+    const empty = join(directory, "empty");
+    const lines: string[] = [];
+    const sink = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk));
+        done();
+      },
     });
 
-    const question = yield* nextQuestion(session);
+    function atArtifactRoot(artifacts: string, body: Operation<void>): Operation<void> {
+      return scoped(function* () {
+        yield* API.Env.around({
+          *env([name], next) {
+            return name === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(name);
+          },
+        });
+        yield* body;
+      });
+    }
 
-    // Reported while the run is still holding at its question, rather than
-    // collected and handed over once it finished.
-    expect(reported.length).toBeGreaterThan(0);
-    const latest = reported[reported.length - 1];
-    expect(latest).toContain("About to evaluate:");
-    // What it reported is what the overlay holds: the same text, not a chunk
-    // the reader would have to accumulate itself.
-    expect(latest).toBe(session.overlay.output);
-    expect(session.model.terminal).toBe(undefined);
+    let recorded: DurableEvent[] = [];
+    let assertionFailure: unknown;
+    let caught: unknown;
+    try {
+      yield* atArtifactRoot(
+        failed,
+        admitReferenceEntry(function* (holder) {
+          recorded = yield* readAll(holder);
+          try {
+            expect(
+              recorded.some(
+                (event) => event.type === "yield" && event.description.name === ROOT_IMPORT,
+              ),
+            ).toBe(false);
+          } catch (error) {
+            assertionFailure = error;
+            throw error;
+          }
+        }, sink),
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).toBe(assertionFailure);
 
-    question.submit({ decision: "approve" });
-    yield* session.join();
+    const partition = partitionEntrySegments(recorded);
+    if (!partition.ok) {
+      throw partition.error;
+    }
+    expect(partition.value).toHaveLength(1);
+    const [entry] = partition.value;
+    expect(entry.settled).toBe(true);
+
+    const invocations = yield* readdir(failed);
+    expect(invocations).toHaveLength(1);
+    const invocation = join(failed, invocations[0]);
+    expect(yield* readdir(invocation)).toEqual(["root-1.jsonl"]);
+    const journal = join(invocation, "root-1.jsonl");
+    expect(yield* readRecords(journal)).toEqual(entry.events);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`journal saved: ${journal} (root 1 `);
+    expect(lines[0]).toContain("packages/cli/tests/fixtures/repl/entry.md)");
+
+    yield* atArtifactRoot(passed, admitReferenceEntry(undefined, sink));
+    expect(yield* exists(passed)).toBe(false);
+
+    const beforeAdmission = new Error("pre-admission failure");
+    let emptyFailure: unknown;
+    try {
+      yield* atArtifactRoot(
+        empty,
+        captureReferenceEntry(function* (holder) {
+          expect(yield* readAll(holder)).toEqual([]);
+          throw beforeAdmission;
+        }, sink),
+      );
+    } catch (error) {
+      emptyFailure = error;
+    }
+    expect(emptyFailure).toBe(beforeAdmission);
+    expect(yield* exists(empty)).toBe(false);
+    expect(lines).toHaveLength(1);
   });
 
   it("X1: the generated fragment is shown before it is admitted, and follows the binding", function* () {

@@ -19,7 +19,7 @@ import { ensure } from "effection";
 import type { Operation } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute, fileSource, inlineSource, rootSourcePath } from "@executablemd/core";
 import type {
@@ -29,6 +29,9 @@ import type {
   HostProfileRequest,
   WorkflowRunScope,
 } from "../src/execution-host.ts";
+
+import { withFailureJournal } from "../src/failure-journal.ts";
+import type { FailureJournalHost } from "../src/failure-journal.ts";
 
 /** What the stub observed, so a test can assert about the request itself. */
 export interface StubHostLog {
@@ -46,6 +49,7 @@ export interface StubExecutionHost {
 }
 
 export interface StubHostOptions {
+  readonly childJournal?: (source: string) => FailureJournalHost<ChildSettlement>;
   /** The files the child reads. Usually the same map the outer document uses. */
   readonly files: Record<string, string>;
   /**
@@ -72,16 +76,16 @@ export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
     *runChild(invocation: ChildInvocation): Operation<ChildSettlement> {
       const request = invocation.request;
       log.requests.push(request);
-      // Installed here, in the child's own isolated scope: the harness detached
-      // it from this document's, so the child reads nothing this document
-      // installed.
-      yield* useStubFs(options.files);
-      const onTeardown = options.onTeardown;
-      if (onTeardown !== undefined) {
-        yield* ensure(() => onTeardown());
+      function* install(): Operation<void> {
+        yield* useStubFs(options.files);
+        const onTeardown = options.onTeardown;
+        if (onTeardown !== undefined) {
+          yield* ensure(() => onTeardown());
+        }
       }
 
       if (options.emit !== undefined) {
+        yield* install();
         yield* options.emit((text: string) => invocation.chunk(text));
         return { outcome: { kind: "settled", result: { ok: true, value: "" } }, output: "" };
       }
@@ -90,31 +94,35 @@ export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
         request.source === undefined
           ? fileSource(request.target ?? "")
           : inlineSource(request.source);
-      log.roots.push(rootSourcePath(root));
-      // Retention follows the profile, exactly as the production run host reads
-      // `--journal`: a transient child keeps nothing and answers with no
-      // snapshot, so "a transient run allocates no journal" is observable
-      // rather than asserted.
-      const diagnostic = request.journal !== "transient";
-      const stream = new InMemoryStream();
-      const child = yield* execute({
-        ...root,
-        stream,
-        props: request.props,
-        retainProcessOutput: diagnostic,
-      });
-      const output = yield* forEach(function* (chunk: string) {
-        yield* invocation.chunk(chunk);
-      }, child.output);
-      const result = yield* child;
-      const journal: readonly DurableEvent[] | undefined = diagnostic
-        ? yield* stream.readAll()
-        : undefined;
-      return {
-        outcome: { kind: "settled", result },
-        output,
-        ...(journal === undefined ? {} : { journal }),
-      };
+      const source = rootSourcePath(root);
+
+      function* run(stream: DurableStream): Operation<ChildSettlement> {
+        yield* install();
+        log.roots.push(source);
+        const diagnostic = request.journal !== "transient";
+        const child = yield* execute({
+          ...root,
+          stream,
+          props: request.props,
+          retainProcessOutput: diagnostic,
+        });
+        const output = yield* forEach(function* (chunk: string) {
+          yield* invocation.chunk(chunk);
+        }, child.output);
+        const result = yield* child;
+        const journal: readonly DurableEvent[] | undefined = diagnostic
+          ? yield* stream.readAll()
+          : undefined;
+        return {
+          outcome: { kind: "settled", result },
+          output,
+          ...(journal === undefined ? {} : { journal }),
+        };
+      }
+
+      return yield* options.childJournal === undefined
+        ? run(new InMemoryStream())
+        : withFailureJournal(options.childJournal(source), run);
     },
     // deno-lint-ignore require-yield
     *useWorkflowRun({ id }: { readonly id?: string }): Operation<WorkflowRunScope> {
