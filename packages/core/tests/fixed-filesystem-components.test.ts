@@ -30,6 +30,7 @@
  * copy of core, which is Deno-only and lives in `syntax-loaded-copy.test.ts`.
  */
 
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Ok, ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
@@ -53,7 +54,21 @@ import { mkdtemp, readdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const OWNER = "packages/core/tests/fixed-filesystem-components.test.ts";
+function fixtureCase(
+  name: string,
+  body: (fixture: Fixture, stream: InMemoryStream) => Operation<void>,
+): void {
+  it(name, function* () {
+    const fixture = yield* useFixture();
+    yield* captureTestJournal({ owner: OWNER, name }, join(fixture.workspace, "doc.md"), (stream) =>
+      body(fixture, stream),
+    );
+  });
+}
+
 /** The registry visible in the current scope. */
+
 function currentRegistry(): Operation<ComponentRegistry> {
   return Component.operations.registry;
 }
@@ -131,6 +146,7 @@ function* useWorkspaceCwd(fixture: Fixture): Operation<void> {
  * before any later installation exists.
  */
 function observeEnclosingCwd(
+  stream: InMemoryStream,
   fixture: Fixture,
   source: string,
 ): Operation<{ failure: string; enclosing: string }> {
@@ -140,9 +156,7 @@ function observeEnclosingCwd(
     yield* useWorkspaceCwd(fixture);
     let failure = "";
     try {
-      yield* collect(
-        yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
-      );
+      yield* collect(yield* execute({ path, stream, includes: [fixture.workspace] }));
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
@@ -153,7 +167,12 @@ function observeEnclosingCwd(
   });
 }
 
-function run(fixture: Fixture, source: string, install?: () => Operation<void>): Operation<string> {
+function run(
+  fixture: Fixture,
+  source: string,
+  install?: () => Operation<void>,
+  stream = new InMemoryStream(),
+): Operation<string> {
   return scoped(function* () {
     const path = join(fixture.workspace, "doc.md");
     yield* writeTextFile(path, source);
@@ -162,7 +181,7 @@ function run(fixture: Fixture, source: string, install?: () => Operation<void>):
       yield* install();
     }
     const output: Json = yield* collect(
-      yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+      yield* execute({ path, stream, includes: [fixture.workspace] }),
     );
     return String(output);
   });
@@ -217,83 +236,92 @@ function answerImport(
 }
 
 describe("Tier FX — the complete journey, with no repository vocabulary", () => {
-  it("FX1: core and a Files provider enter, write, read and delete; markers never run", function* () {
-    const fixture = yield* useFixture();
-    yield* writeMarkers(fixture);
+  fixtureCase(
+    "FX1: core and a Files provider enter, write, read and delete; markers never run",
+    function* (fixture, stream) {
+      yield* writeMarkers(fixture);
 
-    const output = yield* run(
-      fixture,
-      [
-        '<Dir path="notes">',
-        '<File path="message.md">first</File>',
-        '<File path="message.md" as="message" />',
-        "{message}",
-        '<File.Delete path="message.md" />',
-        "</Dir>",
-      ].join("\n"),
-    );
+      const output = yield* run(
+        fixture,
+        [
+          '<Dir path="notes">',
+          '<File path="message.md">first</File>',
+          '<File path="message.md" as="message" />',
+          "{message}",
+          '<File.Delete path="message.md" />',
+          "</Dir>",
+        ].join("\n"),
+        undefined,
+        stream,
+      );
 
-    // The read text, and none of the three markers: selection answered with
-    // core's components even though a candidate for each name was on disk.
-    expect(output).toContain("first");
-    expect(output).not.toContain("MARKER");
+      // The read text, and none of the three markers: selection answered with
+      // core's components even though a candidate for each name was on disk.
+      expect(output).toContain("first");
+      expect(output).not.toContain("MARKER");
 
-    // The directory the document entered is still there, and the file it
-    // deleted is gone. A restored working directory removes nothing.
-    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-    expect(yield* entries(join(fixture.workspace, "notes"))).toEqual([]);
-  });
+      // The directory the document entered is still there, and the file it
+      // deleted is gone. A restored working directory removes nothing.
+      expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+      expect(yield* entries(join(fixture.workspace, "notes"))).toEqual([]);
+    },
+  );
 
-  it("FX1b: Files middleware transforms the write, and the later read returns it", function* () {
-    const fixture = yield* useFixture();
+  fixtureCase(
+    "FX1b: Files middleware transforms the write, and the later read returns it",
+    function* (fixture, stream) {
+      const output = yield* run(
+        fixture,
+        [
+          '<Dir path="notes">',
+          '<File path="message.md">first</File>',
+          '<File path="message.md" as="message" />',
+          "{message}",
+          "</Dir>",
+        ].join("\n"),
+        function* () {
+          yield* Files.around({
+            *writeTextFile([input], next) {
+              return yield* next({ ...input, content: `${input.content}-transformed` });
+            },
+          });
+        },
+        stream,
+      );
 
-    const output = yield* run(
-      fixture,
-      [
-        '<Dir path="notes">',
-        '<File path="message.md">first</File>',
-        '<File path="message.md" as="message" />',
-        "{message}",
-        "</Dir>",
-      ].join("\n"),
-      function* () {
-        yield* Files.around({
-          *writeTextFile([input], next) {
-            return yield* next({ ...input, content: `${input.content}-transformed` });
-          },
-        });
-      },
-    );
+      // A fixed name is not a fixed provider. The body still performs its write
+      // through contextual Files, so what the handler stored is what the read
+      // finds — and what the document renders.
+      expect(output).toContain("first-transformed");
+      expect(yield* readTextFile(join(fixture.workspace, "notes", "message.md"))).toBe(
+        "first-transformed",
+      );
+    },
+  );
 
-    // A fixed name is not a fixed provider. The body still performs its write
-    // through contextual Files, so what the handler stored is what the read
-    // finds — and what the document renders.
-    expect(output).toContain("first-transformed");
-    expect(yield* readTextFile(join(fixture.workspace, "notes", "message.md"))).toBe(
-      "first-transformed",
-    );
-  });
+  fixtureCase(
+    "FX1c: the enclosing working directory is restored for a later sibling",
+    function* (fixture, stream) {
+      const output = yield* run(
+        fixture,
+        [
+          '<Dir path="notes">',
+          '<File path="inside.md">in</File>',
+          "</Dir>",
+          '<File path="outside.md">out</File>',
+          '<File path="outside.md" as="seen" />',
+          "{seen}",
+        ].join("\n"),
+        undefined,
+        stream,
+      );
 
-  it("FX1c: the enclosing working directory is restored for a later sibling", function* () {
-    const fixture = yield* useFixture();
-
-    const output = yield* run(
-      fixture,
-      [
-        '<Dir path="notes">',
-        '<File path="inside.md">in</File>',
-        "</Dir>",
-        '<File path="outside.md">out</File>',
-        '<File path="outside.md" as="seen" />',
-        "{seen}",
-      ].join("\n"),
-    );
-
-    expect(output).toContain("out");
-    expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
-    expect(yield* exists(join(fixture.workspace, "outside.md"))).toBe(true);
-    expect(yield* exists(join(fixture.workspace, "notes", "outside.md"))).toBe(false);
-  });
+      expect(output).toContain("out");
+      expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
+      expect(yield* exists(join(fixture.workspace, "outside.md"))).toBe(true);
+      expect(yield* exists(join(fixture.workspace, "notes", "outside.md"))).toBe(false);
+    },
+  );
 });
 
 describe("Tier FX — nothing else may claim the names", () => {
@@ -385,106 +413,123 @@ describe("Tier FX — nothing else may claim the names", () => {
     });
   });
 
-  it("FX2c: a same-name local implementation is never loaded, and open names still win", function* () {
-    const fixture = yield* useFixture();
+  fixtureCase(
+    "FX2c: a same-name local implementation is never loaded, and open names still win",
+    function* (fixture, stream) {
+      // A candidate that would be fatal if it were ever imported. Selection
+      // refuses it by name, so its top level never runs — which is the difference
+      // between losing selection and being loaded and then ignored.
+      yield* writeTextFile(
+        join(fixture.workspace, "Dir.ts"),
+        'throw new Error("the local Dir implementation was loaded");\n',
+      );
+      // An open name beside it, to show the include itself is live.
+      yield* writeTextFile(join(fixture.workspace, "Kept.md"), "kept by the repository\n");
 
-    // A candidate that would be fatal if it were ever imported. Selection
-    // refuses it by name, so its top level never runs — which is the difference
-    // between losing selection and being loaded and then ignored.
-    yield* writeTextFile(
-      join(fixture.workspace, "Dir.ts"),
-      'throw new Error("the local Dir implementation was loaded");\n',
-    );
-    // An open name beside it, to show the include itself is live.
-    yield* writeTextFile(join(fixture.workspace, "Kept.md"), "kept by the repository\n");
+      const output = yield* run(
+        fixture,
+        ['<Dir path="notes">', "<Kept />", "</Dir>"].join("\n"),
+        undefined,
+        stream,
+      );
 
-    const output = yield* run(fixture, ['<Dir path="notes">', "<Kept />", "</Dir>"].join("\n"));
-
-    expect(output).toContain("kept by the repository");
-    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-  });
+      expect(output).toContain("kept by the repository");
+      expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+    },
+  );
 });
 
 describe("Tier FX — the final import answer is verified", () => {
-  it("FX3: middleware may observe and delegate every fixed import", function* () {
-    const fixture = yield* useFixture();
-    const seen: string[] = [];
+  fixtureCase(
+    "FX3: middleware may observe and delegate every fixed import",
+    function* (fixture, stream) {
+      const seen: string[] = [];
 
-    const output = yield* run(
-      fixture,
-      [
-        '<Dir path="notes">',
-        '<File path="message.md">first</File>',
-        '<File.Delete path="message.md" />',
-        "</Dir>",
-      ].join("\n"),
-      function* () {
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            seen.push(name);
-            return yield* next(name, position);
-          },
-        });
-      },
-    );
-
-    expect(output).not.toContain("MARKER");
-    for (const name of FIXED) {
-      expect(seen).toContain(name);
-    }
-  });
-
-  it("FX3b: a replacement is refused before the body or any provider call", function* () {
-    for (const name of FIXED) {
-      const fixture = yield* useFixture();
-      const reached: string[] = [];
-
-      const refused = yield* raised(() =>
-        run(
-          fixture,
-          [
-            '<Dir path="notes">',
-            '<File path="message.md">first</File>',
-            '<File.Delete path="message.md" />',
-            "</Dir>",
-          ].join("\n"),
-          function* () {
-            yield* Files.around({
-              *ensureDirectory([input], next) {
-                reached.push("ensureDirectory");
-                return yield* next(input);
-              },
-              *writeTextFile([input], next) {
-                reached.push("writeTextFile");
-                return yield* next(input);
-              },
-              *deleteFile([input], next) {
-                reached.push("deleteFile");
-                return yield* next(input);
-              },
-            });
-            yield* answerImport(name, () => ({
-              kind: "function",
-              name,
-              props: { type: "object", properties: {}, additionalProperties: false },
-              // deno-lint-ignore require-yield
-              *fn(): Operation<string> {
-                reached.push("replacement");
-                return "replaced";
-              },
-            }))();
-          },
-        ),
+      const output = yield* run(
+        fixture,
+        [
+          '<Dir path="notes">',
+          '<File path="message.md">first</File>',
+          '<File.Delete path="message.md" />',
+          "</Dir>",
+        ].join("\n"),
+        function* () {
+          yield* Component.around({
+            *importComponent([name, position], next) {
+              seen.push(name);
+              return yield* next(name, position);
+            },
+          });
+        },
+        stream,
       );
 
-      expect(refused).toContain("canonical execution did not produce");
-      expect(reached).not.toContain("replacement");
-      // `<Dir>` is refused at the first element, so nothing inside it runs. The
-      // other two are refused after the directory exists, which is the element
-      // before them succeeding rather than this one partly succeeding.
-      if (name === "Dir") {
-        expect(reached).toEqual([]);
+      expect(output).not.toContain("MARKER");
+      for (const name of FIXED) {
+        expect(seen).toContain(name);
       }
+    },
+  );
+
+  const replacedDefinition = "FX3b: a replacement is refused before the body or any provider call";
+  it(replacedDefinition, function* () {
+    for (const name of FIXED) {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: OWNER, name: replacedDefinition },
+        join(fixture.workspace, "doc.md"),
+        function* (stream) {
+          const reached: string[] = [];
+
+          const refused = yield* raised(() =>
+            run(
+              fixture,
+              [
+                '<Dir path="notes">',
+                '<File path="message.md">first</File>',
+                '<File.Delete path="message.md" />',
+                "</Dir>",
+              ].join("\n"),
+              function* () {
+                yield* Files.around({
+                  *ensureDirectory([input], next) {
+                    reached.push("ensureDirectory");
+                    return yield* next(input);
+                  },
+                  *writeTextFile([input], next) {
+                    reached.push("writeTextFile");
+                    return yield* next(input);
+                  },
+                  *deleteFile([input], next) {
+                    reached.push("deleteFile");
+                    return yield* next(input);
+                  },
+                });
+                yield* answerImport(name, () => ({
+                  kind: "function",
+                  name,
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    reached.push("replacement");
+                    return "replaced";
+                  },
+                }))();
+              },
+              stream,
+            ),
+          );
+
+          expect(refused).toContain("canonical execution did not produce");
+          expect(reached).not.toContain("replacement");
+          // `<Dir>` is refused at the first element, so nothing inside it runs. The
+          // other two are refused after the directory exists, which is the element
+          // before them succeeding rather than this one partly succeeding.
+          if (name === "Dir") {
+            expect(reached).toEqual([]);
+          }
+        },
+      );
     }
   });
 
@@ -581,15 +626,10 @@ describe("Tier FX — the final import answer is verified", () => {
     expect(yield* readTextFile(join(later.workspace, "valid.md"))).toBe("still a string path");
   });
 
-  it("FX3c2: another name's issued definition is refused", function* () {
-    const fixture = yield* useFixture();
-
+  fixtureCase("FX3c2: another name's issued definition is refused", function* (fixture, stream) {
     const swapped = yield* raised(() =>
       run(
         fixture,
-        // `<File>` first, so its definition has been issued by the time the
-        // `<Dir>` import is answered with it. An answer holding a definition
-        // this execution never issued is the other refusal, below.
         '<File path="earlier.md">x</File>\n<Dir path="notes">\n<File path="m.md">first</File>\n</Dir>',
         function* () {
           const other = fixedFilesystemDefinition("File");
@@ -598,57 +638,66 @@ describe("Tier FX — the final import answer is verified", () => {
           }
           yield* answerImport("Dir", () => other)();
         },
+        stream,
       ),
     );
     expect(swapped).toContain("produced for another component");
   });
 
-  it("FX3d: a rebuilt definition is refused, however exactly it matches", function* () {
-    const fixture = yield* useFixture();
+  fixtureCase(
+    "FX3d: a rebuilt definition is refused, however exactly it matches",
+    function* (fixture, stream) {
+      // A dispatcher built from the same declaration, so every field matches and
+      // the function is not the one this execution retained. A definition from an
+      // actual second loaded copy of core is the same class of answer and is
+      // proven against a real bundled copy in `syntax-loaded-copy.test.ts`, which
+      // is Deno-only; this file runs under every supported runtime.
+      const rebuilt: FunctionComponentDefinition = {
+        kind: "function",
+        name: "File",
+        props: { type: "object", properties: { path: { type: "string" } } },
+        fn: formDispatcher(fileForm),
+      };
 
-    // A dispatcher built from the same declaration, so every field matches and
-    // the function is not the one this execution retained. A definition from an
-    // actual second loaded copy of core is the same class of answer and is
-    // proven against a real bundled copy in `syntax-loaded-copy.test.ts`, which
-    // is Deno-only; this file runs under every supported runtime.
-    const rebuilt: FunctionComponentDefinition = {
-      kind: "function",
-      name: "File",
-      props: { type: "object", properties: { path: { type: "string" } } },
-      fn: formDispatcher(fileForm),
-    };
+      const refused = yield* raised(() =>
+        run(
+          fixture,
+          '<File path="message.md">first</File>',
+          answerImport("File", () => rebuilt),
+          stream,
+        ),
+      );
 
-    const refused = yield* raised(() =>
-      run(
-        fixture,
-        '<File path="message.md">first</File>',
-        answerImport("File", () => rebuilt),
-      ),
-    );
+      expect(refused).toContain("canonical execution did not produce");
+      expect(yield* exists(join(fixture.workspace, "message.md"))).toBe(false);
+    },
+  );
 
-    expect(refused).toContain("canonical execution did not produce");
-    expect(yield* exists(join(fixture.workspace, "message.md"))).toBe(false);
-  });
-
-  it("FX3e: middleware may still refuse a fixed import by throwing", function* () {
-    const fixture = yield* useFixture();
-
-    const refused = yield* raised(() =>
-      run(fixture, '<File path="message.md">first</File>', function* () {
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            if (name === "File") {
-              throw new Error("this host refuses File");
-            }
-            return yield* next(name, position);
+  fixtureCase(
+    "FX3e: middleware may still refuse a fixed import by throwing",
+    function* (fixture, stream) {
+      const refused = yield* raised(() =>
+        run(
+          fixture,
+          '<File path="message.md">first</File>',
+          function* () {
+            yield* Component.around({
+              *importComponent([name, position], next) {
+                if (name === "File") {
+                  throw new Error("this host refuses File");
+                }
+                return yield* next(name, position);
+              },
+            });
           },
-        });
-      }),
-    );
+          stream,
+        ),
+      );
 
-    expect(refused).toContain("this host refuses File");
-    expect(yield* exists(join(fixture.workspace, "message.md"))).toBe(false);
-  });
+      expect(refused).toContain("this host refuses File");
+      expect(yield* exists(join(fixture.workspace, "message.md"))).toBe(false);
+    },
+  );
 
   it("FX3f: every fixed name is claimed by the tier that verifies it", function* () {
     for (const name of FIXED) {
@@ -685,131 +734,143 @@ describe("Tier FX — the dispatcher authenticates its own invocation", () => {
 
 describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
   for (const tag of ["Dir", "InDirectory"]) {
-    it(`FX5: ${tag} restores the enclosing directory in its owner after failure`, function* () {
-      const fixture = yield* useFixture();
-      yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
-      yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
+    fixtureCase(
+      `FX5: ${tag} restores the enclosing directory in its owner after failure`,
+      function* (fixture, stream) {
+        yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
+        yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
 
-      // `<Fail>` rather than a filesystem refusal: a File failure is a printed
-      // error this component owns, and what this case is about is the directory
-      // ownership surviving a body that ends the run.
-      const { failure, enclosing } = yield* observeEnclosingCwd(
-        fixture,
-        [
-          `<${tag} path="notes">`,
-          '<File path="inside.md">in</File>',
-          '<Fail message="stop inside the directory" />',
-          `</${tag}>`,
-        ].join("\n"),
-      );
+        // `<Fail>` rather than a filesystem refusal: a File failure is a printed
+        // error this component owns, and what this case is about is the directory
+        // ownership surviving a body that ends the run.
+        const { failure, enclosing } = yield* observeEnclosingCwd(
+          stream,
+          fixture,
+          [
+            `<${tag} path="notes">`,
+            '<File path="inside.md">in</File>',
+            '<Fail message="stop inside the directory" />',
+            `</${tag}>`,
+          ].join("\n"),
+        );
 
-      expect(failure).toContain("stop inside the directory");
-      // Read in the owner that installed it, so a stale cwd would show here.
-      expect(enclosing).toBe(fixture.workspace);
+        expect(failure).toContain("stop inside the directory");
+        // Read in the owner that installed it, so a stale cwd would show here.
+        expect(enclosing).toBe(fixture.workspace);
 
-      // The directory the failed body ran in survives. There is no teardown
-      // deletion and no rollback.
-      expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-      expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
-    });
+        // The directory the failed body ran in survives. There is no teardown
+        // deletion and no rollback.
+        expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+        expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
+      },
+    );
   }
 
-  it("FX5b: a refused ensure begins no content and binds no directory", function* () {
-    const fixture = yield* useFixture();
-    // A file where the directory would go, so the ensure is refused rather than
-    // failing for a reason of the test's own making.
-    yield* writeTextFile(join(fixture.workspace, "notes"), "not a directory\n");
-    const reached: string[] = [];
+  fixtureCase(
+    "FX5b: a refused ensure begins no content and binds no directory",
+    function* (fixture, stream) {
+      // A file where the directory would go, so the ensure is refused rather than
+      // failing for a reason of the test's own making.
+      yield* writeTextFile(join(fixture.workspace, "notes"), "not a directory\n");
+      const reached: string[] = [];
 
-    const refused = yield* raised(() =>
-      run(
+      const refused = yield* raised(() =>
+        run(
+          fixture,
+          ['<Dir path="notes">', '<File path="inside.md">in</File>', "</Dir>"].join("\n"),
+          function* () {
+            yield* Files.around({
+              *writeTextFile([input], next) {
+                reached.push(`write:${input.path}`);
+                return yield* next(input);
+              },
+            });
+          },
+          stream,
+        ),
+      );
+
+      expect(refused).toContain("could not be used");
+      expect(reached).toEqual([]);
+      expect(yield* readTextFile(join(fixture.workspace, "notes"))).toBe("not a directory\n");
+    },
+  );
+
+  fixtureCase(
+    "FX5c: a directory that is already there keeps what is in it",
+    function* (fixture, stream) {
+      yield* ensureDir(join(fixture.workspace, "notes"));
+      yield* writeTextFile(join(fixture.workspace, "notes", "kept.md"), "kept\n");
+
+      yield* run(
         fixture,
-        ['<Dir path="notes">', '<File path="inside.md">in</File>', "</Dir>"].join("\n"),
-        function* () {
-          yield* Files.around({
-            *writeTextFile([input], next) {
-              reached.push(`write:${input.path}`);
-              return yield* next(input);
-            },
-          });
-        },
-      ),
-    );
+        ['<Dir path="notes">', '<File path="added.md">added</File>', "</Dir>"].join("\n"),
+        undefined,
+        stream,
+      );
 
-    expect(refused).toContain("could not be used");
-    expect(reached).toEqual([]);
-    expect(yield* readTextFile(join(fixture.workspace, "notes"))).toBe("not a directory\n");
-  });
-
-  it("FX5c: a directory that is already there keeps what is in it", function* () {
-    const fixture = yield* useFixture();
-    yield* ensureDir(join(fixture.workspace, "notes"));
-    yield* writeTextFile(join(fixture.workspace, "notes", "kept.md"), "kept\n");
-
-    yield* run(
-      fixture,
-      ['<Dir path="notes">', '<File path="added.md">added</File>', "</Dir>"].join("\n"),
-    );
-
-    expect(yield* entries(join(fixture.workspace, "notes"))).toEqual(["added.md", "kept.md"]);
-    expect(yield* readTextFile(join(fixture.workspace, "notes", "kept.md"))).toBe("kept\n");
-  });
+      expect(yield* entries(join(fixture.workspace, "notes"))).toEqual(["added.md", "kept.md"]);
+      expect(yield* readTextFile(join(fixture.workspace, "notes", "kept.md"))).toBe("kept\n");
+    },
+  );
 
   for (const tag of ["Dir", "InDirectory"]) {
-    it(`FX5d: ${tag} restores the directory after joined cancellation`, function* () {
-      const fixture = yield* useFixture();
-      yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
-      yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
-      const inside = withResolvers<void>();
-      const outcome: string[] = [];
-      let enclosing = "";
+    fixtureCase(
+      `FX5d: ${tag} restores the directory after joined cancellation`,
+      function* (fixture, stream) {
+        yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
+        yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
+        const inside = withResolvers<void>();
+        const outcome: string[] = [];
+        let enclosing = "";
 
-      yield* scoped(function* () {
-        const path = join(fixture.workspace, "doc.md");
-        yield* writeTextFile(
-          path,
-          [`<${tag} path="notes">`, '<File path="held.md">held</File>', `</${tag}>`].join("\n"),
-        );
-        // Installed by *this* scope, which is the owner restoration has to be
-        // observed in. The execution runs in a child task, so halting it unwinds
-        // the Dir invocation while this scope is still live to be read.
-        yield* useWorkspaceCwd(fixture);
-        yield* Files.around({
-          *writeTextFile([input], next) {
-            const result = yield* next(input);
-            inside.resolve();
-            yield* suspend();
-            return result;
-          },
-        });
-
-        const task = yield* spawn(function* () {
-          const output = yield* collect(
-            yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+        yield* scoped(function* () {
+          const path = join(fixture.workspace, "doc.md");
+          yield* writeTextFile(
+            path,
+            [`<${tag} path="notes">`, '<File path="held.md">held</File>', `</${tag}>`].join("\n"),
           );
-          outcome.push(String(output));
+          // Installed by *this* scope, which is the owner restoration has to be
+          // observed in. The execution runs in a child task, so halting it unwinds
+          // the Dir invocation while this scope is still live to be read.
+          yield* useWorkspaceCwd(fixture);
+          yield* Files.around({
+            *writeTextFile([input], next) {
+              const result = yield* next(input);
+              inside.resolve();
+              yield* suspend();
+              return result;
+            },
+          });
+
+          const task = yield* spawn(function* () {
+            const output = yield* collect(
+              yield* execute({ path, stream, includes: [fixture.workspace] }),
+            );
+            outcome.push(String(output));
+          });
+
+          // Halted exactly here: the directory exists, the working directory is
+          // installed and the write inside it has completed. Synchronized through
+          // the operation rather than timed, and joined before anything is read.
+          yield* inside.operation;
+          yield* task.halt();
+          enclosing = yield* cwd();
+          expect(
+            yield* Files.operations.readTextFile({ cwd: enclosing, path: "outside.md" }),
+          ).toEqual(Ok("outside"));
         });
 
-        // Halted exactly here: the directory exists, the working directory is
-        // installed and the write inside it has completed. Synchronized through
-        // the operation rather than timed, and joined before anything is read.
-        yield* inside.operation;
-        yield* task.halt();
-        enclosing = yield* cwd();
-        expect(
-          yield* Files.operations.readTextFile({ cwd: enclosing, path: "outside.md" }),
-        ).toEqual(Ok("outside"));
-      });
+        // Nothing settled, and the enclosing directory is the one this scope
+        // installed rather than the directory the cancelled body entered.
+        expect(outcome).toEqual([]);
+        expect(enclosing).toBe(fixture.workspace);
 
-      // Nothing settled, and the enclosing directory is the one this scope
-      // installed rather than the directory the cancelled body entered.
-      expect(outcome).toEqual([]);
-      expect(enclosing).toBe(fixture.workspace);
-
-      // The directory the cancelled body entered is still there: a restored
-      // working directory is not a deletion.
-      expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-    });
+        // The directory the cancelled body entered is still there: a restored
+        // working directory is not a deletion.
+        expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+      },
+    );
   }
 });
 

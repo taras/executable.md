@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier CR — component registration and resolution (spec §5.3).
@@ -37,9 +38,23 @@ import type {
   Json as CoreJson,
 } from "../src/types.ts";
 
+const OWNER = "packages/core/tests/component-registration.test.ts";
+function fixtureCase(
+  name: string,
+  body: (dir: string, stream: InMemoryStream) => Operation<void>,
+): void {
+  it(name, function* () {
+    const dir = yield* useFixture();
+    yield* captureTestJournal({ owner: OWNER, name }, join(dir, "doc.md"), (stream) =>
+      body(dir, stream),
+    );
+  });
+}
+
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
 /** A directory for one test's files, removed when the test scope closes. */
+
 function useFixture(): Operation<string> {
   return resource(function* (provide) {
     const dir = yield* until(mkdtemp(join(tmpdir(), "cr-test-")));
@@ -113,14 +128,16 @@ function* thrown(body: () => Operation<unknown>): Operation<Error | undefined> {
   }
 }
 
-function run(dir: string, includes: string[] = [dir]): Operation<Json> {
+function run(
+  dir: string,
+  includes: string[] = [dir],
+  stream = new InMemoryStream(),
+): Operation<Json> {
   return scoped(function* () {
     // `API.Files` has no host default, and `<TempDir>` is one of the components
     // these cases resolve.
     yield* useHostFiles();
-    return yield* collect(
-      yield* execute({ path: join(dir, "doc.md"), stream: new InMemoryStream(), includes }),
-    );
+    return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes }));
   });
 }
 
@@ -513,92 +530,100 @@ describe("Tier CR — installation order never decides", () => {
 });
 
 describe("Tier CR — what a document gets", () => {
-  it("CR22: a repository component replaces one of core's, end to end", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Parse>ignored</Parse>\n");
-    yield* writeTextFile(join(dir, "Parse.md"), "MINE\n");
+  fixtureCase(
+    "CR22: a repository component replaces one of core's, end to end",
+    function* (dir, stream) {
+      yield* writeTextFile(join(dir, "doc.md"), "<Parse>ignored</Parse>\n");
+      yield* writeTextFile(join(dir, "Parse.md"), "MINE\n");
 
-    expect(String(yield* run(dir))).toContain("MINE");
-  });
+      expect(String(yield* run(dir, undefined, stream))).toContain("MINE");
+    },
+  );
 
-  it("CR22b: a repository Json.md replaces core's serializer, `as` and all", function* () {
-    const dir = yield* useFixture();
-    // `as` is the engine's, so the override takes it the way every text
-    // component does: what it rendered is captured and read back later.
-    yield* writeTextFile(
-      join(dir, "doc.md"),
-      '<Json value={{ serialized: true }} as="captured" />\n\nCAPTURED:{captured}\n',
-    );
-    // The override declares `value` as an ordinary prop: `captures` belongs to
-    // the registration core made, and a repository file makes none.
-    yield* writeTextFile(
-      join(dir, "Json.md"),
-      ["---", "props:", "  value: { type: object }", "---", "", "MINE"].join("\n"),
-    );
+  fixtureCase(
+    "CR22b: a repository Json.md replaces core's serializer, `as` and all",
+    function* (dir, stream) {
+      // `as` is the engine's, so the override takes it the way every text
+      // component does: what it rendered is captured and read back later.
+      yield* writeTextFile(
+        join(dir, "doc.md"),
+        '<Json value={{ serialized: true }} as="captured" />\n\nCAPTURED:{captured}\n',
+      );
+      // The override declares `value` as an ordinary prop: `captures` belongs to
+      // the registration core made, and a repository file makes none.
+      yield* writeTextFile(
+        join(dir, "Json.md"),
+        ["---", "props:", "  value: { type: object }", "---", "", "MINE"].join("\n"),
+      );
 
-    // Core's own would have bound the object as JSON text; the repository file
-    // renders a word instead, so the binding says which one ran.
-    // The override's own rendering keeps the line structure a Markdown
-    // component produces, so the marker and the word are matched together
-    // rather than spelled as one literal.
-    const rendered = String(yield* run(dir));
-    expect(rendered).toMatch(/CAPTURED:\s*MINE/);
-    expect(rendered).not.toContain("serialized");
-  });
+      // Core's own would have bound the object as JSON text; the repository file
+      // renders a word instead, so the binding says which one ran.
+      // The override's own rendering keeps the line structure a Markdown
+      // component produces, so the marker and the word are matched together
+      // rather than spelled as one literal.
+      const rendered = String(yield* run(dir, undefined, stream));
+      expect(rendered).toMatch(/CAPTURED:\s*MINE/);
+      expect(rendered).not.toContain("serialized");
+    },
+  );
 
   // The capture belongs to the definition that was selected, not to the name.
   // An override is an ordinary Markdown component, so its `value` crosses the
   // prop JSON boundary exactly as any other component's would.
-  it("CR22c: an override crosses the ordinary prop boundary, absence and all", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Json value={undefined} />\n");
-    // `required` is what makes this discriminating: on the ordinary boundary
-    // this operand is an absence, so the required check is what answers it. A
-    // definition treated as capturing would strip `value` before validation
-    // and reach the body instead.
-    yield* writeTextFile(
-      join(dir, "Json.md"),
-      [
-        "---",
-        "required: [value]",
-        "props:",
-        "  value: { type: 'string' }",
-        "---",
-        "",
-        "override saw the projection",
-      ].join("\n"),
-    );
+  fixtureCase(
+    "CR22c: an override crosses the ordinary prop boundary, absence and all",
+    function* (dir, stream) {
+      yield* writeTextFile(join(dir, "doc.md"), "<Json value={undefined} />\n");
+      // `required` is what makes this discriminating: on the ordinary boundary
+      // this operand is an absence, so the required check is what answers it. A
+      // definition treated as capturing would strip `value` before validation
+      // and reach the body instead.
+      yield* writeTextFile(
+        join(dir, "Json.md"),
+        [
+          "---",
+          "required: [value]",
+          "props:",
+          "  value: { type: 'string' }",
+          "---",
+          "",
+          "override saw the projection",
+        ].join("\n"),
+      );
 
-    // Core's `<Json>` fails this exact operand as "no JSON text", because its
-    // capture is handed the authored `undefined`. The override is handed the
-    // ordinary reading of the same text, where `undefined` means the prop is
-    // not there — the behavior every non-capturing component has (§6.5).
-    const rendered = yield* reportOf(() => run(dir));
-    expect(rendered).toContain("value");
-    expect(rendered).toContain("required");
-    expect(rendered).not.toContain("no JSON text");
-    expect(rendered).not.toContain("override saw the projection");
-  });
+      // Core's `<Json>` fails this exact operand as "no JSON text", because its
+      // capture is handed the authored `undefined`. The override is handed the
+      // ordinary reading of the same text, where `undefined` means the prop is
+      // not there — the behavior every non-capturing component has (§6.5).
+      const rendered = yield* reportOf(() => run(dir, undefined, stream));
+      expect(rendered).toContain("value");
+      expect(rendered).toContain("required");
+      expect(rendered).not.toContain("no JSON text");
+      expect(rendered).not.toContain("override saw the projection");
+    },
+  );
 
-  it("CR22d: a repository CodeBlock.md replaces core's fence, end to end", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), '<CodeBlock value="fenced" />\n');
-    // `value` is an ordinary prop on both sides, so the override receives the
-    // same string core's registration would have been handed. Nothing about
-    // core's registration travels with the name.
-    yield* writeTextFile(
-      join(dir, "CodeBlock.md"),
-      ["---", "props:", "  value: { type: string }", "---", "", "OVERRIDE:{props.value}"].join(
-        "\n",
-      ),
-    );
+  fixtureCase(
+    "CR22d: a repository CodeBlock.md replaces core's fence, end to end",
+    function* (dir, stream) {
+      yield* writeTextFile(join(dir, "doc.md"), '<CodeBlock value="fenced" />\n');
+      // `value` is an ordinary prop on both sides, so the override receives the
+      // same string core's registration would have been handed. Nothing about
+      // core's registration travels with the name.
+      yield* writeTextFile(
+        join(dir, "CodeBlock.md"),
+        ["---", "props:", "  value: { type: string }", "---", "", "OVERRIDE:{props.value}"].join(
+          "\n",
+        ),
+      );
 
-    // Core's own would have wrapped the string in a fence; the override writes
-    // it bare, so the output says which one ran and what it was given.
-    const rendered = String(yield* run(dir));
-    expect(rendered).toContain("OVERRIDE:fenced");
-    expect(rendered).not.toContain("```");
-  });
+      // Core's own would have wrapped the string in a fence; the override writes
+      // it bare, so the output says which one ran and what it was given.
+      const rendered = String(yield* run(dir, undefined, stream));
+      expect(rendered).toContain("OVERRIDE:fenced");
+      expect(rendered).not.toContain("```");
+    },
+  );
 
   it("CR23: a broken local component fails instead of falling back to core's", function* () {
     const dir = yield* useFixture();
@@ -621,78 +646,84 @@ describe("Tier CR — what a document gets", () => {
     expect(output).not.toContain("VISIBLE");
   });
 
-  it("CR24: a structural name is not satisfied by a file named after it", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Content />\n");
-    yield* writeTextFile(join(dir, "Content.md"), "SHOULD NOT RENDER\n");
+  fixtureCase(
+    "CR24: a structural name is not satisfied by a file named after it",
+    function* (dir, stream) {
+      yield* writeTextFile(join(dir, "doc.md"), "<Content />\n");
+      yield* writeTextFile(join(dir, "Content.md"), "SHOULD NOT RENDER\n");
 
-    const output = yield* reportOf(() => run(dir));
-    expect(output).not.toContain("SHOULD NOT RENDER");
-    expect(output).toContain("reserved");
-  });
+      const output = yield* reportOf(() => run(dir, undefined, stream));
+      expect(output).not.toContain("SHOULD NOT RENDER");
+      expect(output).toContain("reserved");
+    },
+  );
 
   // The counterpart to CR24, and the positive half of the terminal-grid
   // withdrawal: `Terminal.Grid` and `Terminal` are ordinary names now, so a
   // file named after either one does render — and renders *its own* body,
   // which is what no syntax or validation row can show.
-  it("CR24c: a repository Terminal.Grid.md and Terminal.md each run their own body", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(
-      join(dir, "doc.md"),
-      '<Terminal.Grid columns={2}>\n<Terminal title="Agent" />\n</Terminal.Grid>\n',
-    );
-    yield* ensureDir(join(dir, "Terminal"));
-    yield* writeTextFile(
-      join(dir, "Terminal/Grid.md"),
-      [
-        "---",
-        "props:",
-        "  columns: { type: number }",
-        "---",
-        "",
-        "GRID:{props.columns}",
-        "",
-        "<Content />",
-      ].join("\n"),
-    );
-    yield* writeTextFile(
-      join(dir, "Terminal.md"),
-      ["---", "props:", "  title: { type: string }", "---", "", "PANE:{props.title}"].join("\n"),
-    );
-
-    const rendered = String(yield* run(dir));
-    // Each definition's own body, with its own props: the grid laid nothing
-    // out and the pane opened nothing — they are Markdown components.
-    expect(rendered).toContain("GRID:2");
-    expect(rendered).toContain("PANE:Agent");
-  });
-
-  it("CR24d: a registration may claim both names, and its own fn answers", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Terminal.Grid />\n\n<Terminal />\n");
-
-    const rendered = yield* scoped(function* () {
-      yield* useHostFiles();
-      yield* registerComponents([
-        registration("Terminal.Grid", "installed-grid"),
-        registration("Terminal", "installed-pane"),
-      ]);
-      return String(
-        yield* collect(
-          yield* execute({
-            path: join(dir, "doc.md"),
-            stream: new InMemoryStream(),
-            includes: [dir],
-          }),
-        ),
+  fixtureCase(
+    "CR24c: a repository Terminal.Grid.md and Terminal.md each run their own body",
+    function* (dir, stream) {
+      yield* writeTextFile(
+        join(dir, "doc.md"),
+        '<Terminal.Grid columns={2}>\n<Terminal title="Agent" />\n</Terminal.Grid>\n',
       );
-    });
+      yield* ensureDir(join(dir, "Terminal"));
+      yield* writeTextFile(
+        join(dir, "Terminal/Grid.md"),
+        [
+          "---",
+          "props:",
+          "  columns: { type: number }",
+          "---",
+          "",
+          "GRID:{props.columns}",
+          "",
+          "<Content />",
+        ].join("\n"),
+      );
+      yield* writeTextFile(
+        join(dir, "Terminal.md"),
+        ["---", "props:", "  title: { type: string }", "---", "", "PANE:{props.title}"].join("\n"),
+      );
 
-    // `registration()` renders its origin, so the text names which of the two
-    // registrations answered each element.
-    expect(rendered).toContain("installed-grid");
-    expect(rendered).toContain("installed-pane");
-  });
+      const rendered = String(yield* run(dir, undefined, stream));
+      // Each definition's own body, with its own props: the grid laid nothing
+      // out and the pane opened nothing — they are Markdown components.
+      expect(rendered).toContain("GRID:2");
+      expect(rendered).toContain("PANE:Agent");
+    },
+  );
+
+  fixtureCase(
+    "CR24d: a registration may claim both names, and its own fn answers",
+    function* (dir, stream) {
+      yield* writeTextFile(join(dir, "doc.md"), "<Terminal.Grid />\n\n<Terminal />\n");
+
+      const rendered = yield* scoped(function* () {
+        yield* useHostFiles();
+        yield* registerComponents([
+          registration("Terminal.Grid", "installed-grid"),
+          registration("Terminal", "installed-pane"),
+        ]);
+        return String(
+          yield* collect(
+            yield* execute({
+              path: join(dir, "doc.md"),
+              stream,
+              includes: [dir],
+            }),
+          ),
+        );
+      });
+
+      // `registration()` renders its origin, so the text names which of the two
+      // registrations answered each element.
+      expect(rendered).toContain("installed-grid");
+      expect(rendered).toContain("installed-pane");
+    },
+  );
 
   // Selection stats against the process's directory, so loading has to as well.
   // `<TempDir>` rebinds the contextual `Env.cwd` for its content, and a
@@ -701,20 +732,29 @@ describe("Tier CR — what a document gets", () => {
   // The search path has to be *relative* for this to bite: an absolute one is
   // used verbatim and never consults a working directory at all, which is why
   // the fixture lives under the process's own directory.
-  it("CR24b: a relative repository component loads inside a rebound cwd", function* () {
-    yield* useComponentModuleLoader();
-    const dir = yield* useLocalFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<TempDir>\n<Widget />\n</TempDir>\n");
-    yield* writeTextFile(
-      join(dir, "Widget.ts"),
-      [
-        "export const props = { type: 'object', properties: {}, additionalProperties: false };",
-        "export default function*() { return 'LOADED'; }",
-      ].join("\n"),
-    );
+  {
+    const caseName = "CR24b: a relative repository component loads inside a rebound cwd";
+    it(caseName, function* () {
+      yield* useComponentModuleLoader();
+      const dir = yield* useLocalFixture();
+      yield* captureTestJournal(
+        { owner: OWNER, name: caseName },
+        join(dir, "doc.md"),
+        function* (stream) {
+          yield* writeTextFile(join(dir, "doc.md"), "<TempDir>\n<Widget />\n</TempDir>\n");
+          yield* writeTextFile(
+            join(dir, "Widget.ts"),
+            [
+              "export const props = { type: 'object', properties: {}, additionalProperties: false };",
+              "export default function*() { return 'LOADED'; }",
+            ].join("\n"),
+          );
 
-    expect(String(yield* run(dir))).toContain("LOADED");
-  });
+          expect(String(yield* run(dir, undefined, stream))).toContain("LOADED");
+        },
+      );
+    });
+  }
 });
 
 describe("Tier CR — inspection describes without running", () => {
