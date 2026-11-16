@@ -20,7 +20,9 @@ import type {
   IdentityComponent,
 } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
-import { useHeldHost } from "./support/held-host.ts";
+import { heldHostCases, useHeldHost } from "./support/held-host.ts";
+
+const heldHostCase = heldHostCases("packages/core/tests/component-invocation-hooks.test.ts");
 
 const props = { type: "object", properties: {}, additionalProperties: false };
 function declaration(body: () => Operation<unknown>, name = "Observed"): IdentityComponent {
@@ -39,145 +41,153 @@ function* text(): Operation<string> {
 }
 
 describe("Installation-owned component observation", () => {
-  it("R4a/R6: preserves dual-form dispatch, generated identity and accepted values", function* () {
-    const events: string[] = [];
-    const observations: ComponentInvocationObservation[] = [];
-    const values: unknown[] = [];
-    const names: string[] = [];
-    let projected = 0;
-    const component: IdentityComponent = {
-      name: "Observed",
-      origin: "test://observation",
-      props: {
-        type: "object",
-        properties: {
-          nested: {
-            type: "object",
-            properties: { label: { type: "string", default: "default" } },
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-      },
-      captures: ["raw"],
-      returns: {
-        type: "object",
-        properties: { form: { type: "string" }, accepted: { type: "boolean", default: true } },
-        required: ["form", "accepted"],
-        additionalProperties: false,
-      },
-      forms: ["self-closing", "paired"],
-      generated: {
-        "self-closing": { identity: "https://executable.md/test/observed/read", effect: "read" },
-        paired: { identity: "https://executable.md/test/observed/write", effect: "write" },
-      },
-      factory(claim) {
-        function body(form: string) {
-          return function* (input: Record<string, Json>, invocation: Parameters<typeof claim>[0]) {
-            const name = yield* claim(invocation);
-            names.push(name);
-            if (form === "write") {
-              yield* content();
-            }
-            const nested = input.nested;
-            if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
-              nested.label = "changed";
-            }
-            yield createDurableOperation({ type: "observed", name }, function* () {
-              events.push(form);
-              return form;
-            });
-            return { form };
-          };
-        }
-        return formDispatcher({
-          forms: "both",
-          "self-closing": body("read"),
-          paired: body("write"),
-        });
-      },
-    };
-    const hooks: ComponentInvocationHooks = {
-      *before(observation) {
-        expect(projected).toBe(observations.length < 2 ? 0 : 1);
-        observations.push(observation);
-        expect(Object.isFrozen(observation)).toBe(true);
-        expect(Object.isFrozen(observation.props.nested)).toBe(true);
-        expect(observation.props).toEqual({ nested: { label: "default" } });
-        yield* sleep(0);
-      },
-      *after(observation, outcome, cancelled) {
-        expect(observations.includes(observation)).toBe(true);
-        expect(cancelled).toBe(false);
-        expect(observation.props).toEqual({ nested: { label: "default" } });
-        if (outcome.ok) {
-          values.push(outcome.value);
-        }
-        yield* sleep(0);
-      },
-    };
-    const installation: ExecutionInstallation = {
-      components: [component],
-      componentInvocations: hooks,
-      *install() {
-        hooks.before = function* () {
-          throw new Error("late mutation");
-        };
-        hooks.after = hooks.before;
-        yield* registerComponents([
-          {
-            name: "Projected",
-            origin: "test://projection",
-            props,
-            *fn() {
-              projected++;
-              yield* sleep(0);
-              return "content";
+  heldHostCase(
+    "R4a/R6: preserves dual-form dispatch, generated identity and accepted values",
+    function* (stream) {
+      const events: string[] = [];
+      const observations: ComponentInvocationObservation[] = [];
+      const values: unknown[] = [];
+      const names: string[] = [];
+      let projected = 0;
+      const component: IdentityComponent = {
+        name: "Observed",
+        origin: "test://observation",
+        props: {
+          type: "object",
+          properties: {
+            nested: {
+              type: "object",
+              properties: { label: { type: "string", default: "default" } },
+              additionalProperties: false,
             },
           },
-        ]);
-        yield* Component.around({ generated: () => ({ Observed: ["self-closing", "paired"] }) });
-      },
-    };
-    const held = yield* useHeldHost({
-      installations: [installation],
-      root: {
-        path: "hooks.md",
+          additionalProperties: false,
+        },
+        captures: ["raw"],
+        returns: {
+          type: "object",
+          properties: { form: { type: "string" }, accepted: { type: "boolean", default: true } },
+          required: ["form", "accepted"],
+          additionalProperties: false,
+        },
+        forms: ["self-closing", "paired"],
+        generated: {
+          "self-closing": { identity: "https://executable.md/test/observed/read", effect: "read" },
+          paired: { identity: "https://executable.md/test/observed/write", effect: "write" },
+        },
+        factory(claim) {
+          function body(form: string) {
+            return function* (
+              input: Record<string, Json>,
+              invocation: Parameters<typeof claim>[0],
+            ) {
+              const name = yield* claim(invocation);
+              names.push(name);
+              if (form === "write") {
+                yield* content();
+              }
+              const nested = input.nested;
+              if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+                nested.label = "changed";
+              }
+              yield createDurableOperation({ type: "observed", name }, function* () {
+                events.push(form);
+                return form;
+              });
+              return { form };
+            };
+          }
+          return formDispatcher({
+            forms: "both",
+            "self-closing": body("read"),
+            paired: body("write"),
+          });
+        },
+      };
+      const hooks: ComponentInvocationHooks = {
+        *before(observation) {
+          expect(projected).toBe(observations.length < 2 ? 0 : 1);
+          observations.push(observation);
+          expect(Object.isFrozen(observation)).toBe(true);
+          expect(Object.isFrozen(observation.props.nested)).toBe(true);
+          expect(observation.props).toEqual({ nested: { label: "default" } });
+          yield* sleep(0);
+        },
+        *after(observation, outcome, cancelled) {
+          expect(observations.includes(observation)).toBe(true);
+          expect(cancelled).toBe(false);
+          expect(observation.props).toEqual({ nested: { label: "default" } });
+          if (outcome.ok) {
+            values.push(outcome.value);
+          }
+          yield* sleep(0);
+        },
+      };
+      const installation: ExecutionInstallation = {
+        components: [component],
+        componentInvocations: hooks,
+        *install() {
+          hooks.before = function* () {
+            throw new Error("late mutation");
+          };
+          hooks.after = hooks.before;
+          yield* registerComponents([
+            {
+              name: "Projected",
+              origin: "test://projection",
+              props,
+              *fn() {
+                projected++;
+                yield* sleep(0);
+                return "content";
+              },
+            },
+          ]);
+          yield* Component.around({ generated: () => ({ Observed: ["self-closing", "paired"] }) });
+        },
+      };
+      const held = yield* useHeldHost({
+        stream,
+        installations: [installation],
+        root: {
+          path: "hooks.md",
+          source:
+            '<Let as="inputs" value={{}} /><Observed nested={inputs} raw={undefined} slot="named" as="read" />\n<Observed nested={{}} as="write"><Projected /></Observed>\n<Held />',
+        },
+        inside: function* () {
+          const caller = yield* Component.operations.env;
+          expect(caller?.values.inputs).toEqual({});
+          expect(caller?.values.read).toEqual({ form: "read", accepted: true });
+          expect(caller?.values.write).toEqual({ form: "write", accepted: true });
+        },
+      });
+      expect(events).toEqual(["read", "write"]);
+      const evaluated = yield* held.execution.evaluateGeneratedXmdRoot({
+        id: "dual",
         source:
-          '<Let as="inputs" value={{}} /><Observed nested={inputs} raw={undefined} slot="named" as="read" />\n<Observed nested={{}} as="write"><Projected /></Observed>\n<Held />',
-      },
-      inside: function* () {
-        const caller = yield* Component.operations.env;
-        expect(caller?.values.inputs).toEqual({});
-        expect(caller?.values.read).toEqual({ form: "read", accepted: true });
-        expect(caller?.values.write).toEqual({ form: "write", accepted: true });
-      },
-    });
-    expect(events).toEqual(["read", "write"]);
-    const evaluated = yield* held.execution.evaluateGeneratedXmdRoot({
-      id: "dual",
-      source:
-        '<Observed nested={{}} as="a" />\n<Observed nested={{}} as="b">body</Observed>\n<Output><Json value={[a,b]} /></Output>',
-      allow: ["read", "write"],
-    });
-    expect(evaluated.ok).toBe(true);
-    expect(events).toEqual(["read", "write", "read", "write"]);
-    expect(values).toEqual([
-      { form: "read", accepted: true },
-      { form: "write", accepted: true },
-      { form: "read", accepted: true },
-      { form: "write", accepted: true },
-    ]);
-    expect(new Set(names).size).toBe(4);
-    expect(new Set(observations).size).toBe(4);
-    const refused = yield* held.execution.evaluateGeneratedXmdRoot({
-      id: "readonly",
-      source: '<Observed nested={{}} as="denied">body</Observed>',
-      allow: ["read"],
-    });
-    expect(refused.ok).toBe(false);
-    expect(events).toHaveLength(4);
-  });
+          '<Observed nested={{}} as="a" />\n<Observed nested={{}} as="b">body</Observed>\n<Output><Json value={[a,b]} /></Output>',
+        allow: ["read", "write"],
+      });
+      expect(evaluated.ok).toBe(true);
+      expect(events).toEqual(["read", "write", "read", "write"]);
+      expect(values).toEqual([
+        { form: "read", accepted: true },
+        { form: "write", accepted: true },
+        { form: "read", accepted: true },
+        { form: "write", accepted: true },
+      ]);
+      expect(new Set(names).size).toBe(4);
+      expect(new Set(observations).size).toBe(4);
+      const refused = yield* held.execution.evaluateGeneratedXmdRoot({
+        id: "readonly",
+        source: '<Observed nested={{}} as="denied">body</Observed>',
+        allow: ["read"],
+      });
+      expect(refused.ok).toBe(false);
+      expect(events).toHaveLength(4);
+    },
+    "hooks.md",
+  );
 
   it("R4b: independently optional callbacks and invalid inputs", function* () {
     for (const mode of ["none", "before", "after"]) {
