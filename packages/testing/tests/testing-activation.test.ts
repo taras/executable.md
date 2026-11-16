@@ -113,6 +113,8 @@ function useSentinel(sentinels: string[]): Operation<void> {
   ]);
 }
 
+const activationCase = journalCases("packages/testing/tests/testing-activation.test.ts");
+
 /**
  * Run `document` under a composition of the caller's choosing.
  *
@@ -120,8 +122,6 @@ function useSentinel(sentinels: string[]): Operation<void> {
  * this harness needs are already in place — the position from which a handler
  * would see everything a real one does.
  */
-const activationCase = journalCases("packages/testing/tests/testing-activation.test.ts");
-
 function runComposed(
   document: string,
   compose: Operation<unknown>,
@@ -501,7 +501,7 @@ describe("complete testing activation", () => {
 
   // An ended boundary's credential is retired, so a `<Test>` written after it
   // is refused exactly as one written before it.
-  it("expires with the boundary that established it", function* () {
+  activationCase("expires with the boundary that established it", "README.md", function* (stream) {
     const attempt = yield* runComposed(
       [
         "<Testing>",
@@ -511,6 +511,7 @@ describe("complete testing activation", () => {
         "",
       ].join("\n"),
       incompleteActivation(),
+      stream,
     );
     expect(attempt.sentinels).toEqual(["inside"]);
     expect(errorOf(attempt)?.message).toContain(REFUSAL);
