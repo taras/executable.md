@@ -26,6 +26,7 @@ import { API, Permissions } from "@executablemd/runtime";
 import { Elicitation, isJsonObject, registerComponents, retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { sidekickRequests } from "../src/repl/sidekick/requests.ts";
 import {
   sidekickCeilingInstallation,
@@ -284,7 +285,10 @@ function* history(f: Fixture) {
   return { path, bytes: yield* readTextFile(path) };
 }
 
-function control(root: Root, source: string) {
+const journalCase = journalCases("packages/cli/tests/repl-unfinished-entry.test.ts");
+const OBSERVATION_SOURCE = "observation-host";
+
+function control(root: Root, source: string, stream = new InMemoryStream()) {
   return scoped(function* () {
     const observations: unknown[] = [];
     const journal: ControlJournal = {
@@ -303,8 +307,8 @@ function control(root: Root, source: string) {
     const released = withResolvers<void>();
     const host = yield* executeInstalled(
       {
-        ...retainedSource("observation-host", "<ObservationHost />"),
-        stream: new InMemoryStream(),
+        ...retainedSource(OBSERVATION_SOURCE, "<ObservationHost />"),
+        stream,
       },
       [
         sidekickCeilingInstallation(ceiling),
@@ -697,24 +701,29 @@ describe("joined entry diagnostics", () => {
     expect(f.host.fake.prompts).toHaveLength(0);
   });
 
-  it("E8: Guide.Recovery teaches the supported disposition through the real normalized control", function* () {
-    const f = yield* fixture();
-    const rendered = yield* control(
-      f.root,
-      '<Guide.Recovery as="guide" /><Output>{guide}</Output>',
-    );
-    const text = rendered.response.output;
-    expect(text).toContain("<REPL.Entry.Source entry={2} />");
-    expect(text).toContain('outcome: "failed"');
-    expect(text).toContain("Entry Stop refuses because no task remains");
-    expect(text).toContain("unfinished segment permits");
-    expect(text).toContain("it can run unrecorded work");
-    expect(text).toContain("Passive Sidekick conversation reconstruction sends no turn");
-    expect(text).toContain("all three execution members are");
-    expect(text).toContain("Do not blindly resend or reopen");
-    expect(f.host.fake.prompts).toHaveLength(0);
-    console.log("RECOVERY_GUIDE_RENDER_BEGIN\n" + text + "\nRECOVERY_GUIDE_RENDER_END");
-  });
+  journalCase(
+    "E8: Guide.Recovery teaches the supported disposition through the real normalized control",
+    OBSERVATION_SOURCE,
+    function* (stream) {
+      const f = yield* fixture();
+      const rendered = yield* control(
+        f.root,
+        '<Guide.Recovery as="guide" /><Output>{guide}</Output>',
+        stream,
+      );
+      const text = rendered.response.output;
+      expect(text).toContain("<REPL.Entry.Source entry={2} />");
+      expect(text).toContain('outcome: "failed"');
+      expect(text).toContain("Entry Stop refuses because no task remains");
+      expect(text).toContain("unfinished segment permits");
+      expect(text).toContain("it can run unrecorded work");
+      expect(text).toContain("Passive Sidekick conversation reconstruction sends no turn");
+      expect(text).toContain("all three execution members are");
+      expect(text).toContain("Do not blindly resend or reopen");
+      expect(f.host.fake.prompts).toHaveLength(0);
+      console.log("RECOVERY_GUIDE_RENDER_BEGIN\n" + text + "\nRECOVERY_GUIDE_RENDER_END");
+    },
+  );
 
   for (const composed of [false, true]) {
     it(`E7: protected backend diagnostics cross original disclosure with contextual composition=${composed}`, function* () {
