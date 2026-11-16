@@ -12,10 +12,12 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -233,8 +235,15 @@ describe("Tier SO — each run compiles with a compiler of its own", () => {
  * host changed in between. A validator remembered from the first run would let
  * the second run accept props its schema no longer allows.
  */
+const OWNER = "packages/core/tests/state-ownership.test.ts";
+const journalCase = journalCases(OWNER);
+
 describe("Tier SO — two executions of a registered component", () => {
-  function run(files: Record<string, string>, schema: PropsSchema): Operation<Json> {
+  function run(
+    stream: InMemoryStream,
+    files: Record<string, string>,
+    schema: PropsSchema,
+  ): Operation<Json> {
     return scoped(function* () {
       yield* registerComponents([
         {
@@ -248,11 +257,12 @@ describe("Tier SO — two executions of a registered component", () => {
         },
       ]);
       yield* useStubFs(files);
-      return yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() }));
+      return yield* collect(yield* execute({ path: "doc.md", stream }));
     });
   }
 
-  it("SO13: validates the second run against the schema the host now declares", function* () {
+  const tightenedSchema = "SO13: validates the second run against the schema the host now declares";
+  journalCase(tightenedSchema, "doc.md", function* (stream) {
     const schema: PropsSchema = {
       type: "object",
       properties: { a: { type: "string" }, b: { type: "string" } },
@@ -260,7 +270,7 @@ describe("Tier SO — two executions of a registered component", () => {
       additionalProperties: false,
     };
 
-    const first = String(yield* run({ "doc.md": '<Widget a="one" />' }, schema));
+    const first = String(yield* run(stream, { "doc.md": '<Widget a="one" />' }, schema));
     expect(first).toContain("widget:one");
 
     // The host tightens the contract between runs, on the object it registered.
@@ -268,13 +278,19 @@ describe("Tier SO — two executions of a registered component", () => {
 
     // The invocation no longer satisfies the schema, and nothing recovers the
     // refusal, so the second run reports it instead of rendering a widget.
-    let second = "";
-    try {
-      second = String(yield* run({ "doc.md": '<Widget a="two" />' }, schema));
-    } catch (error) {
-      second = error instanceof Error ? error.message : String(error);
-    }
-    expect(second).toContain("required property");
-    expect(second).not.toContain("widget:two");
+    yield* captureTestJournal(
+      { owner: OWNER, name: tightenedSchema },
+      "doc.md",
+      function* (secondStream) {
+        let second = "";
+        try {
+          second = String(yield* run(secondStream, { "doc.md": '<Widget a="two" />' }, schema));
+        } catch (error) {
+          second = error instanceof Error ? error.message : String(error);
+        }
+        expect(second).toContain("required property");
+        expect(second).not.toContain("widget:two");
+      },
+    );
   });
 });

@@ -19,6 +19,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
@@ -144,7 +145,8 @@ function importEvents(stream: InMemoryStream) {
     );
 }
 
-const journalCase = journalCases("packages/core/tests/inline-root.test.ts");
+const OWNER = "packages/core/tests/inline-root.test.ts";
+const journalCase = journalCases(OWNER);
 
 describe("Tier IR — inline root documents", () => {
   it("IR1: inspection reports the <eval> identity and reads nothing", function* () {
@@ -356,36 +358,38 @@ describe("Tier IR — inline root documents", () => {
     },
   );
 
-  journalCase(
-    "IR11: props are validated and defaulted for a supplied root",
-    INLINE_SOURCE_PATH,
-    function* (stream) {
-      yield* useNoFs();
-      const source = [
-        "---",
-        "props:",
-        "  name:",
-        "    type: string",
-        "  loud:",
-        "    type: boolean",
-        "    default: false",
-        "required: [name]",
-        "---",
-        "",
-        "{props.name} {props.loud}",
-      ].join("\n");
+  const rootProps = "IR11: props are validated and defaulted for a supplied root";
+  journalCase(rootProps, INLINE_SOURCE_PATH, function* (stream) {
+    yield* useNoFs();
+    const source = [
+      "---",
+      "props:",
+      "  name:",
+      "    type: string",
+      "  loud:",
+      "    type: boolean",
+      "    default: false",
+      "required: [name]",
+      "---",
+      "",
+      "{props.name} {props.loud}",
+    ].join("\n");
 
-      const output = asText(
-        yield* collect(yield* execute({ ...inlineSource(source), props: { name: "Ada" }, stream })),
-      );
-      expect(output).toContain("Ada false");
+    const output = asText(
+      yield* collect(yield* execute({ ...inlineSource(source), props: { name: "Ada" }, stream })),
+    );
+    expect(output).toContain("Ada false");
 
-      const missing = new InMemoryStream();
-      const result = yield* execute({ ...inlineSource(source), stream: missing });
-      const completion = yield* result;
-      expect(completion.ok).toBe(false);
-    },
-  );
+    yield* captureTestJournal(
+      { owner: OWNER, name: rootProps },
+      INLINE_SOURCE_PATH,
+      function* (missing) {
+        const result = yield* execute({ ...inlineSource(source), stream: missing });
+        const completion = yield* result;
+        expect(completion.ok).toBe(false);
+      },
+    );
+  });
 
   journalCase(
     "IR12: running a supplied root writes nothing",

@@ -17,10 +17,11 @@
  * would have let the read before it through.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { describe } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -36,7 +37,8 @@ import { answerProvider } from "./support/answer-provider.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 
-const journalCase = journalCases("packages/core/tests/generated-composition.test.ts");
+const OWNER = "packages/core/tests/generated-composition.test.ts";
+const journalCase = journalCases(OWNER);
 const ROOT_PATH = "workflows/agent.md";
 const NOTE = "the retained note\n";
 const OTHER = "the other note\n";
@@ -82,7 +84,7 @@ function both(files: RecordedFiles): ExecutionInstallation {
 function run(
   source: string,
   installations: readonly ExecutionInstallation[],
-  stream: InMemoryStream = new InMemoryStream(),
+  stream: InMemoryStream,
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
@@ -566,20 +568,28 @@ describe("Try generated admission", () => {
       },
     );
   }
-  it("admits literal recovery without exporting Catch locals or admitting property access and calls", function* () {
+  const literalRecovery =
+    "admits literal recovery without exporting Catch locals or admitting property access and calls";
+  journalCase(literalRecovery, ROOT_PATH, function* (stream) {
     const files = recordedFiles();
     const capturedRead = '<File path="missing.md" as="missing" />';
     const text = `<Try>${capturedRead}<Catch as="error"><Let as="local" value="inside" />literal fallback</Catch><Finally>finished</Finally></Try>`;
-    const result = yield* run(evaluating(text), [reading(files)]);
+    const result = yield* run(evaluating(text), [reading(files)], stream);
     expect(String(result)).toContain("literal fallback");
     for (const expression of ["local", "error.message", "error.toString()"]) {
       const candidate =
         expression === "local"
           ? text + `<Let as="escaped" value={local} />`
           : `<Try>${capturedRead}<Catch as="error"><Let as="value" value={${expression}} /></Catch></Try>`;
-      const fresh = recordedFiles();
-      yield* refusal(run(evaluating(candidate), [reading(fresh)]));
-      expect(fresh.performed).toEqual([]);
+      yield* captureTestJournal(
+        { owner: OWNER, name: literalRecovery },
+        ROOT_PATH,
+        function* (refusalStream) {
+          const fresh = recordedFiles();
+          yield* refusal(run(evaluating(candidate), [reading(fresh)], refusalStream));
+          expect(fresh.performed).toEqual([]);
+        },
+      );
     }
   });
 });
