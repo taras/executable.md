@@ -122,7 +122,13 @@ function parseMarkdown(text: string) {
           while (context.char(to) === next) {
             to += 1;
           }
-          if (to - from > MAX_EMPHASIS_RUN) {
+          // Escape can consume a run's first marker before Emphasis sees it.
+          // Use the same source run as the section's budget counts.
+          let start = from;
+          while (to - start <= MAX_EMPHASIS_RUN && context.char(start - 1) === next) {
+            start -= 1;
+          }
+          if (to - start > MAX_EMPHASIS_RUN) {
             return to;
           }
           if (checked !== context) {

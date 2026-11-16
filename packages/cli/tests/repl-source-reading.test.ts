@@ -1810,24 +1810,30 @@ describe("1342 written Markdown as display lines", () => {
   });
 
   it("prepares a dense inline section without losing nearby Markdown", function* () {
-    const literal = `${"*a ".repeat(8_500)}x${" a*".repeat(8_500)}`;
-    const output = `**before**\n\n${literal}\n\n[after](https://example.test/retained)`;
-    const reading = entryReading({
-      entry: entryOf(output, { terminal: settled("ok", output), settled: true }),
-      lifecycle: NO_LIFECYCLE,
-      live: "",
-      inspected: false,
-    });
+    const escaped = "\\" + "*".repeat(257);
+    const denseSections = [
+      `${"*a ".repeat(8_500)}x${" a*".repeat(8_500)}`,
+      `${`${escaped}a `.repeat(64)}x${` a${escaped}`.repeat(64)}`,
+    ];
+    for (const literal of denseSections) {
+      const output = `**before**\n\n${literal}\n\n[after](https://example.test/retained)`;
+      const reading = entryReading({
+        entry: entryOf(output, { terminal: settled("ok", output), settled: true }),
+        lifecycle: NO_LIFECYCLE,
+        live: "",
+        inspected: false,
+      });
 
-    expect(reading.output.lines.map((line) => line.text)).toEqual([
-      "before",
-      "",
-      literal,
-      "",
-      "after",
-    ]);
-    expect(reading.output.lines[0].runs[0].token).toBe("markdown-strong");
-    expect(reading.output.lines[4].runs[0].token).toBe("markdown-link");
+      expect(reading.output.lines.map((line) => line.text)).toEqual([
+        "before",
+        "",
+        literal.replaceAll("\\*", "*"),
+        "",
+        "after",
+      ]);
+      expect(reading.output.lines[0].runs[0].token).toBe("markdown-strong");
+      expect(reading.output.lines[4].runs[0].token).toBe("markdown-link");
+    }
   });
 
   it("makes controls inert before the lexer reads them", function* () {
