@@ -3579,14 +3579,15 @@ describe("975 — entry cwd ends with its actual owner", () => {
     const project = yield* useTemporary("xmd-cwd-project-");
     const workspace = yield* useTemporary("xmd-cwd-workspace-");
     yield* useHostFiles();
-    yield* API.Env.around(
-      {
-        *cwd() {
-          return project;
+    const useProjectCwd = () =>
+      API.Env.around(
+        {
+          *cwd() {
+            return project;
+          },
         },
-      },
-      { at: "min" },
-    );
+        { at: "min" },
+      );
     const seen: string[] = [];
     let mode = "fail";
     yield* Elicitation.around({
@@ -3608,6 +3609,7 @@ describe("975 — entry cwd ends with its actual owner", () => {
       "failed",
       INLINE_SOURCE_PATH,
       function* (entry) {
+        yield* useProjectCwd();
         const failed = yield* openReplSession({
           execution: entry,
           projectCwd: project,
@@ -3626,6 +3628,7 @@ describe("975 — entry cwd ends with its actual owner", () => {
         expect(yield* yield* spawn(() => cwd())).toBe(project);
       },
     );
+    yield* useProjectCwd();
     mode = "cancel";
     const stream = new InMemoryStream();
     yield* scoped(function* () {

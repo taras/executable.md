@@ -179,7 +179,9 @@ describe("parent-owned headless REPL", () => {
     yield* held.task.halt();
     expect(accesses).toBe(0);
   });
-  it("H3: cancellation before readiness joins startup; after registration only the parent closes the child", function* () {
+  const startupCut =
+    "H3: cancellation before readiness joins startup; after registration only the parent closes the child";
+  it(startupCut, function* () {
     for (const cut of ["before-ready", "registered"]) {
       yield* scoped(function* () {
         yield* usePosixSidekickTransport(process.platform);
@@ -225,7 +227,7 @@ describe("parent-owned headless REPL", () => {
           '<Agent name="xmd"><Session name="worker"><XMD.Session as="child" /></Session></Agent><Block />',
         );
         yield* captureTestJournal(
-          { owner: "packages/cli/tests/repl-headless.test.ts", name: creatorCut },
+          { owner: "packages/cli/tests/repl-headless.test.ts", name: startupCut },
           path,
           function* (stream) {
             const provider = children.factory({
