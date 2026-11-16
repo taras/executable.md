@@ -173,18 +173,25 @@ function* runDoc(
 
 const SUITE = "Tier AC — agent components";
 
+function captureAgentDocument(
+  name: string,
+  body: (stream: InMemoryStream, directory: string) => Operation<void>,
+): Operation<void> {
+  const dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`);
+  return captureTestJournal(
+    { owner: "packages/agent/tests/agent-components.test.ts", suite: SUITE, name },
+    path.join(dir, "doc.md"),
+    (stream) => body(stream, dir),
+  );
+}
+
 function agentCase(
   name: string,
   body: (run: (doc: string) => ReturnType<typeof runDoc>) => Operation<void>,
 ): void {
-  it(name, () => {
-    const dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`);
-    return captureTestJournal(
-      { owner: "packages/agent/tests/agent-components.test.ts", suite: SUITE, name },
-      path.join(dir, "doc.md"),
-      (stream) => body((doc) => runDoc(doc, stream, dir)),
-    );
-  });
+  it(name, () =>
+    captureAgentDocument(name, (stream, dir) => body((doc) => runDoc(doc, stream, dir))),
+  );
 }
 
 describe(SUITE, () => {
@@ -265,34 +272,39 @@ describe(SUITE, () => {
   // The composition the whole component exists for, black box: a value bound by
   // `<Let>`, rendered by `<Json>`, consumed and retained by `<Prompt>`. Import
   // graphs cannot prove authored syntax, so the exact bytes are pinned here.
-  it("AC21: <Prompt> sends and retains exactly what <Json> rendered", function* () {
-    const stub = createStubProvider();
-    yield* installStub(stub);
-    const stream = new InMemoryStream();
-    const { result } = yield* runDoc(
-      '<Let as="schema" value={{ type: "object", required: ["bump"] }} />\n\n' +
-        "<Prompt>before<Json value={schema} />after</Prompt>\n",
-      stream,
-    );
-    expect(result.ok).toBe(true);
+  {
+    const name = "AC21: <Prompt> sends and retains exactly what <Json> rendered";
+    it(name, () =>
+      captureAgentDocument(name, function* (stream, dir) {
+        const stub = createStubProvider();
+        yield* installStub(stub);
+        const { result } = yield* runDoc(
+          '<Let as="schema" value={{ type: "object", required: ["bump"] }} />\n\n' +
+            "<Prompt>before<Json value={schema} />after</Prompt>\n",
+          stream,
+          dir,
+        );
+        expect(result.ok).toBe(true);
 
-    const expected = 'before{\n  "type": "object",\n  "required": [\n    "bump"\n  ]\n}after';
-    expect(stub.promptCalls.length).toBe(1);
-    // Two-space JSON, the authored bytes on either side, and no newline of its
-    // own between them.
-    expect(stub.promptCalls[0]!.content).toBe(expected);
+        const expected = 'before{\n  "type": "object",\n  "required": [\n    "bump"\n  ]\n}after';
+        expect(stub.promptCalls.length).toBe(1);
+        // Two-space JSON, the authored bytes on either side, and no newline of its
+        // own between them.
+        expect(stub.promptCalls[0]!.content).toBe(expected);
 
-    const events = yield* stream.readAll();
-    const prompts = events.filter(
-      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+        const events = yield* stream.readAll();
+        const prompts = events.filter(
+          (event) => event.type === "yield" && event.description.type === "agent_prompt",
+        );
+        expect(prompts.length).toBe(1);
+        const entry = prompts[0]!;
+        if (entry.type === "yield") {
+          // `<Prompt>` still owns its own record, holding the text it consumed.
+          expect(entry.description.input).toBe(expected);
+        }
+      }),
     );
-    expect(prompts.length).toBe(1);
-    const entry = prompts[0]!;
-    if (entry.type === "yield") {
-      // `<Prompt>` still owns its own record, holding the text it consumed.
-      expect(entry.description.input).toBe(expected);
-    }
-  });
+  }
 
   agentCase("AC4: as binding captures the response instead of emitting it", function* (runFresh) {
     const stub = createStubProvider();
@@ -460,72 +472,81 @@ describe(SUITE, () => {
     expect(stub.promptCalls.length).toBe(2);
   });
 
-  it("AC15: journal entries carry the full prompt record", function* () {
-    const stub = createStubProvider(() => ({
-      status: "failed",
-      stopReason: "max_tokens",
-      deltas: ["partial"],
-    }));
-    yield* installStub(stub);
-    const stream = new InMemoryStream();
-    yield* runDoc('<Prompt text="describe" />\n', stream);
-
-    const events = yield* stream.readAll();
-    const prompts = events.filter(
-      (event) => event.type === "yield" && event.description.type === "agent_prompt",
-    );
-    expect(prompts.length).toBe(1);
-    const entry = prompts[0]!;
-    if (entry.type === "yield") {
-      expect(entry.description.name).toMatch(/^prompt:.*#0$/);
-      expect(entry.description.input).toBe("describe");
-      expect(entry.result.status).toBe("ok");
-      if (entry.result.status === "ok") {
-        expect(entry.result.value).toMatchObject({
-          sequence: 0,
-          agent: "stub-agent",
-          sessionKey: "stub:default",
+  {
+    const name = "AC15: journal entries carry the full prompt record";
+    it(name, () =>
+      captureAgentDocument(name, function* (stream, dir) {
+        const stub = createStubProvider(() => ({
           status: "failed",
           stopReason: "max_tokens",
-          text: "partial",
+          deltas: ["partial"],
+        }));
+        yield* installStub(stub);
+        yield* runDoc('<Prompt text="describe" />\n', stream, dir);
+
+        const events = yield* stream.readAll();
+        const prompts = events.filter(
+          (event) => event.type === "yield" && event.description.type === "agent_prompt",
+        );
+        expect(prompts.length).toBe(1);
+        const entry = prompts[0]!;
+        if (entry.type === "yield") {
+          expect(entry.description.name).toMatch(/^prompt:.*#0$/);
+          expect(entry.description.input).toBe("describe");
+          expect(entry.result.status).toBe("ok");
+          if (entry.result.status === "ok") {
+            expect(entry.result.value).toMatchObject({
+              sequence: 0,
+              agent: "stub-agent",
+              sessionKey: "stub:default",
+              status: "failed",
+              stopReason: "max_tokens",
+              text: "partial",
+            });
+          }
+        }
+      }),
+    );
+  }
+
+  {
+    const name = "AC17: throwOnError failures journal a raised marker; plain failures do not";
+    it(name, () =>
+      captureAgentDocument(name, function* (stream, dir) {
+        const stub = createStubProvider((content) =>
+          content.includes("boom") ? { status: "failed", stopReason: "refusal" } : {},
+        );
+        yield* installStub(stub);
+        yield* runDoc('<Prompt text="plain-boom" />\n', stream, dir);
+
+        const events = yield* stream.readAll();
+        const plain = events.find(
+          (event) => event.type === "yield" && event.description.type === "agent_prompt",
+        );
+        if (plain && plain.type === "yield" && plain.result.status === "ok") {
+          const value = plain.result.value;
+          if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+            expect(value.raised).toBe(undefined);
+          }
+        }
+
+        yield* captureAgentDocument(name, function* (thrown, thrownDir) {
+          yield* runDoc('<Prompt text="boom" throwOnError />\n', thrown, thrownDir);
+          const thrownEvents = yield* thrown.readAll();
+          const raisedEntry = thrownEvents.find(
+            (event) => event.type === "yield" && event.description.type === "agent_prompt",
+          );
+          expect(raisedEntry).toBeDefined();
+          if (raisedEntry && raisedEntry.type === "yield" && raisedEntry.result.status === "ok") {
+            const value = raisedEntry.result.value;
+            if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+              expect(value.raised).toBe(true);
+            }
+          }
         });
-      }
-    }
-  });
-
-  it("AC17: throwOnError failures journal a raised marker; plain failures do not", function* () {
-    const stub = createStubProvider((content) =>
-      content.includes("boom") ? { status: "failed", stopReason: "refusal" } : {},
+      }),
     );
-    yield* installStub(stub);
-    const stream = new InMemoryStream();
-    yield* runDoc('<Prompt text="plain-boom" />\n', stream);
-
-    const events = yield* stream.readAll();
-    const plain = events.find(
-      (event) => event.type === "yield" && event.description.type === "agent_prompt",
-    );
-    if (plain && plain.type === "yield" && plain.result.status === "ok") {
-      const value = plain.result.value;
-      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-        expect(value.raised).toBe(undefined);
-      }
-    }
-
-    const thrown = new InMemoryStream();
-    yield* runDoc('<Prompt text="boom" throwOnError />\n', thrown);
-    const thrownEvents = yield* thrown.readAll();
-    const raisedEntry = thrownEvents.find(
-      (event) => event.type === "yield" && event.description.type === "agent_prompt",
-    );
-    expect(raisedEntry).toBeDefined();
-    if (raisedEntry && raisedEntry.type === "yield" && raisedEntry.result.status === "ok") {
-      const value = raisedEntry.result.value;
-      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-        expect(value.raised).toBe(true);
-      }
-    }
-  });
+  }
 
   it("AC18: full replay omits raised failures from aggregate restoration", function* () {
     const stream = new InMemoryStream();
