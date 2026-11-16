@@ -37,7 +37,7 @@ import {
   readingRuns,
   reserveFor,
 } from "../src/repl/fitting.ts";
-import type { ReplPreparedReading } from "../src/repl/fitting.ts";
+import type { ReplFittedLine, ReplPreparedReading } from "../src/repl/fitting.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import type { ReplCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
@@ -1482,7 +1482,7 @@ describe("S8 lines fitted together are cut as each is cut alone", () => {
         );
         expect(warm.ok).toBe(true);
         const together = yield* fitPlain(renderer, WIDE, lines, room, store);
-        const oracle = [];
+        const oracle: ReplFittedLine[] = [];
         for (const one of lines) {
           const single = yield* fitPlain(renderer, WIDE, [one], room);
           if (!single.ok) {
@@ -1560,7 +1560,7 @@ describe("S8 lines fitted together are cut as each is cut alone", () => {
       for (const room of [60, 61, 100]) {
         const lines = texts.map((text, at) => ({ key: `n${at}`, text }));
         const together = yield* fitPlain(renderer, size, lines, room);
-        const oracle = [];
+        const oracle: ReplFittedLine[] = [];
         for (const one of lines) {
           const single = yield* fitPlain(renderer, size, [one], room);
           expect(single.ok).toBe(true);
