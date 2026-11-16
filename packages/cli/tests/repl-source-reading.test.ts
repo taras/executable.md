@@ -1683,6 +1683,35 @@ describe("1342 written Markdown as display lines", () => {
     expect(markdownShown("")).toEqual([""]);
   });
 
+  it("keeps the written spaces of a whitespace-only line, which still fits as one row", () =>
+    withRenderer(function* (renderer) {
+      expect(
+        markdownLines("foo\n   \nbar", "output").map((line) => ({
+          text: line.text,
+          runs: line.runs.map((run) => run.token),
+        })),
+      ).toEqual([
+        { text: "foo", runs: ["output"] },
+        { text: "   ", runs: ["output"] },
+        { text: "bar", runs: ["output"] },
+      ]);
+      expect(markdownShown("foo\n\n   \n\nbar\n  ")).toEqual(["foo", "", "   ", "", "bar", "  "]);
+      const lines = entryReading({
+        entry: entryOf('<Json value={{ a: 1 }} as="a" />', {
+          terminal: settled("ok", "foo\n   \nbar"),
+          settled: true,
+        }),
+        lifecycle: NO_LIFECYCLE,
+        live: "",
+        inspected: false,
+      }).output.lines;
+      const prepared = yield* prepareReading(renderer, WIDE, lines, 100);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      expect(prepared.value.rows.map((one) => one.text)).toEqual(["foo", "   ", "bar"]);
+    }));
+
   it("keeps an unclosed fence's payload literal through the available end", function* () {
     expect(markdownRoles("Before\n```ts\n  open payload\n\n# still code *here*")).toEqual([
       ["output:Before"],
@@ -1690,6 +1719,22 @@ describe("1342 written Markdown as display lines", () => {
       ["markdown-code:  open payload"],
       [],
       ["markdown-code:# still code *here*"],
+    ]);
+    // A shorter run of the opener's character cannot close it, so it is payload.
+    expect(markdownRoles("````text\n   tail\n```")).toEqual([
+      ["punctuation:````text"],
+      ["markdown-code:   tail"],
+      ["markdown-code:```"],
+    ]);
+    expect(markdownRoles("~~~\nx\n```")).toEqual([
+      ["punctuation:~~~"],
+      ["markdown-code:x"],
+      ["markdown-code:```"],
+    ]);
+    expect(markdownRoles("````text\nx\n````` ")).toEqual([
+      ["punctuation:````text"],
+      ["markdown-code:x"],
+      ["punctuation:````` "],
     ]);
   });
 

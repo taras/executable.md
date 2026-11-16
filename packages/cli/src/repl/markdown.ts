@@ -60,33 +60,37 @@ export function markdownLines(
 }
 
 /**
- * Block tokens as lines, blank lines counted from the newlines between them.
+ * Block tokens as lines, with the lines written between them.
  *
- * The blank rows between two blocks are the line breaks the source put there
- * less the one that ends the earlier block. At the start and end of the
- * outermost body every break is a row, as splitting the text on its line breaks
- * gives. A nested body leaves its trailing breaks to the container holding it.
+ * The rows between two blocks are the lines the source wrote there, spaces
+ * included: the text after the earlier block's last line break and before the
+ * next block. At the start and end of the outermost body every one of those
+ * lines is a row, as splitting the text on its line breaks gives. A nested body
+ * leaves its leading and trailing lines to the container holding it.
  */
 function blocks(tokens: readonly Token[], role: ReplPresentationRole, outermost: boolean): Line[] {
   const lines: Line[] = [];
-  let pending = 0;
+  let gap = "";
   let any = false;
+  const between = (written: readonly string[]) => {
+    for (const one of written) {
+      lines.push(one.length === 0 ? [] : [{ text: one, token: role }]);
+    }
+  };
   for (const token of tokens) {
     if (token.type === "space") {
-      pending += breaks(token.raw);
+      gap += token.raw;
       continue;
     }
-    for (let blank = any ? pending - 1 : outermost ? pending : 0; blank > 0; blank -= 1) {
-      lines.push([]);
-    }
+    const written = gap.split("\n");
+    between(any ? written.slice(1, -1) : outermost ? written.slice(0, -1) : []);
     lines.push(...block(token, role));
-    pending = trailing(token.raw);
+    gap = token.raw.slice(withoutTrailingBreaks(token.raw).length);
     any = true;
   }
   if (outermost) {
-    for (let blank = any ? pending : pending + 1; blank > 0; blank -= 1) {
-      lines.push([]);
-    }
+    const written = gap.split("\n");
+    between(any ? written.slice(1) : written);
   }
   return lines;
 }
@@ -130,7 +134,7 @@ function code(raw: string, indented: boolean): Line[] {
   if (indented) {
     return written.map((one) => [{ text: one, token: "markdown-code" }]);
   }
-  const closed = written.length > 1 && FENCE.test(written[written.length - 1]);
+  const closed = written.length > 1 && closes(written[0], written[written.length - 1]);
   return written.map((one, at) => [
     {
       text: one,
@@ -139,7 +143,21 @@ function code(raw: string, indented: boolean): Line[] {
   ]);
 }
 
-const FENCE = /^ {0,3}(?:`{3,}|~{3,})\s*$/;
+/**
+ * Whether a line closes the fence this opening line began: the same character,
+ * at least as many of it, and nothing after them but spaces. A shorter run or
+ * the other character is payload.
+ */
+function closes(opening: string, line: string): boolean {
+  const opened = /^ {0,3}(`{3,}|~{3,})/.exec(opening)?.[1];
+  const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+  return (
+    opened !== undefined &&
+    closing !== undefined &&
+    closing[0] === opened[0] &&
+    closing.length >= opened.length
+  );
+}
 
 interface Item {
   readonly raw: string;
@@ -284,8 +302,4 @@ function withoutTrailingBreaks(raw: string): string {
 
 function trailing(raw: string): number {
   return raw.length - raw.replace(/\n+$/, "").length;
-}
-
-function breaks(raw: string): number {
-  return raw.split("\n").length - 1;
 }

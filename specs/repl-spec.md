@@ -2117,12 +2117,16 @@ The command-text conversion above makes every displayed run of both bodies inert
 before the Markdown is read, so a carriage return cannot become a line break and
 a control sequence stays readable text.
 
-Formatting changes display copies only. Retained Output, saved messages and
-replies, their raw inspection and copy routes, and every read keep the Markdown
-exactly as written, link targets included. Live Output and the retained result
-that replaces it are drawn by the same rule, as are a preview and the reply it
-becomes, so settling and a cold reopen show what the last live frame showed.
-Source, command stdout and stderr, recorded feedback, title and headline
+Formatting changes display copies only. It draws exactly the body its owner
+supplies — the selected live or retained Output, the admitted preview, the
+evaluated reply, the saved message — and adds or removes nothing of it. Retained
+Output, saved messages and replies, their raw inspection and copy routes, and
+every read keep that body exactly as it was supplied, link targets included.
+Evaluation can make a reply differ from the source the agent wrote, and
+settlement can supply computed text the preview never held; each stage is
+drawn from its own body, and the same body is drawn the same way at every stage.
+A cold reopen draws the retained body. Source, command stdout and stderr,
+recorded feedback, title and headline
 previews, an entry's work rows in the chat, the Draft and the composer keep their
 own presentation.
 
