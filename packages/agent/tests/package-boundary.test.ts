@@ -1,3 +1,5 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { fileJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier PB — the boundary between Core and the Agent package.
  *
@@ -18,7 +20,6 @@ import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { execute } from "@executablemd/core";
 import type { DocumentExecution, Json } from "@executablemd/core";
 import { Agent } from "@executablemd/agent/api";
@@ -84,10 +85,10 @@ const echo: AgentProviderFactory = function* (options) {
 };
 
 function* run(
+  dir: string,
   doc: string,
   start: (docPath: string) => Operation<DocumentExecution>,
 ): Operation<{ output: string; result: Result<Json> }> {
-  const dir = path.join(os.tmpdir(), `xmd-pb-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -102,6 +103,9 @@ function* run(
     return { output: next.value, result: yield* execution };
   });
 }
+
+const OWNER = "packages/agent/tests/package-boundary.test.ts";
+const fileCase = fileJournalCases(OWNER, "xmd-pb-", "doc.md");
 
 const DOCUMENT = '<Session name="review">\n<Prompt text="hello" />\n</Session>\n';
 
@@ -135,34 +139,45 @@ describe("Tier PB — Core resolves no Agent package", () => {
     }
   });
 
-  it("PB4: a Core-only execution cannot resolve the Agent vocabulary", function* () {
+  const vocabulary = "PB4: a Core-only execution cannot resolve the Agent vocabulary";
+  it(vocabulary, function* () {
     for (const [doc, name] of [
       [DOCUMENT, "Session"],
       ['<Prompt text="hello" />\n', "Prompt"],
     ] as const) {
-      const { output, result } = yield* run(doc, (docPath) =>
-        execute({ path: docPath, stream: new InMemoryStream() }),
+      const dir = path.join(os.tmpdir(), `xmd-pb-${randomUUID()}`);
+      yield* captureTestJournal(
+        { owner: OWNER, name: vocabulary },
+        path.join(dir, "doc.md"),
+        function* (stream) {
+          const { output, result } = yield* run(dir, doc, (docPath) =>
+            execute({ path: docPath, stream }),
+          );
+          expect(output).not.toContain("[hello]");
+          expect(!result.ok && result.error.message).toContain(`Cannot resolve component: ${name}`);
+        },
       );
-      expect(output).not.toContain("[hello]");
-      expect(!result.ok && result.error.message).toContain(`Cannot resolve component: ${name}`);
     }
   });
 
-  it("PB5: the Agent package installed over Core answers the same document", function* () {
-    const { output, result } = yield* run(DOCUMENT, function* (docPath) {
-      yield* installAgentComponents({
-        rootProvider: {
-          factory: echo,
-          options: { defaultAgent: "pb", permissionMode: "deny-all" },
-        },
+  fileCase(
+    "PB5: the Agent package installed over Core answers the same document",
+    function* (stream, dir) {
+      const { output, result } = yield* run(dir, DOCUMENT, function* (docPath) {
+        yield* installAgentComponents({
+          rootProvider: {
+            factory: echo,
+            options: { defaultAgent: "pb", permissionMode: "deny-all" },
+          },
+        });
+        return yield* executeInstalled({ path: docPath, stream }, [
+          { components: agentIdentityComponents() },
+        ]);
       });
-      return yield* executeInstalled({ path: docPath, stream: new InMemoryStream() }, [
-        { components: agentIdentityComponents() },
-      ]);
-    });
-    if (!result.ok) {
-      throw result.error;
-    }
-    expect(output).toContain("[hello]");
-  });
+      if (!result.ok) {
+        throw result.error;
+      }
+      expect(output).toContain("[hello]");
+    },
+  );
 });

@@ -1,3 +1,5 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier XP — cross-package resolution (issue #202 acceptance).
  *
@@ -24,7 +26,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import {
   collect,
   Component,
@@ -155,7 +157,7 @@ function* writeStandIns(workspace: string): Operation<void> {
 }
 
 /** Execute a document invoking every registered name, and return its text. */
-function runDocument(workspace: string, order: Order): Operation<string> {
+function runDocument(workspace: string, order: Order, stream: InMemoryStream): Operation<string> {
   return scoped(function* () {
     const path = join(workspace, "doc.md");
     // Self-closing, so nothing is handed content to expand.
@@ -163,7 +165,7 @@ function runDocument(workspace: string, order: Order): Operation<string> {
     yield* useTempFileCompiler();
     yield* installAll(order);
     const output = yield* collect(
-      yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [workspace] }, [
+      yield* executeInstalled({ path, stream, includes: [workspace] }, [
         { components: agentIdentityComponents() },
       ]),
     );
@@ -216,6 +218,9 @@ function describeOrigin(info: ComponentInfo): string {
   }
 }
 
+const OWNER = "packages/test-agent/tests/cross-package-resolution.test.ts";
+const workspaceCase = workspaceJournalCases(OWNER, "doc.md", useWorkspace);
+
 describe("Tier XP — cross-package resolution", () => {
   /**
    * The inventory below is what every other case iterates, so a name missing
@@ -235,32 +240,40 @@ describe("Tier XP — cross-package resolution", () => {
     expect(installed).toEqual([...AGENT, ...TESTING, ...TEST_AGENT].sort());
   });
 
-  it("XP1: a repository component runs in place of every registered default", function* () {
-    const workspace = yield* useWorkspace();
+  workspaceCase(
+    "XP1: a repository component runs in place of every registered default",
+    function* (stream, workspace) {
+      yield* writeStandIns(workspace);
+
+      const output = yield* runDocument(workspace, "agent-first", stream);
+
+      // Rendered output, not a resolver answer: each marker is evidence that the
+      // repository file is what executed for that name.
+      for (const name of REGISTERED) {
+        expect(output).toContain(marker(name));
+      }
+    },
+  );
+
+  const orderCase = "XP2: which installer ran first changes nothing about what executed";
+  workspaceCase(orderCase, function* (stream, workspace) {
     yield* writeStandIns(workspace);
 
-    const output = yield* runDocument(workspace, "agent-first");
+    const first = yield* runDocument(workspace, "agent-first", stream);
+    yield* captureTestJournal(
+      { owner: OWNER, name: orderCase },
+      join(workspace, "doc.md"),
+      function* (secondStream) {
+        const second = yield* runDocument(workspace, "test-agent-first", secondStream);
 
-    // Rendered output, not a resolver answer: each marker is evidence that the
-    // repository file is what executed for that name.
-    for (const name of REGISTERED) {
-      expect(output).toContain(marker(name));
-    }
-  });
-
-  it("XP2: which installer ran first changes nothing about what executed", function* () {
-    const workspace = yield* useWorkspace();
-    yield* writeStandIns(workspace);
-
-    const first = yield* runDocument(workspace, "agent-first");
-    const second = yield* runDocument(workspace, "test-agent-first");
-
-    // Installation order is not a resolution mechanism, so the two runs produce
-    // the same document — not merely the same set of resolved origins.
-    expect(second).toBe(first);
-    for (const name of REGISTERED) {
-      expect(second).toContain(marker(name));
-    }
+        // Installation order is not a resolution mechanism, so the two runs produce
+        // the same document — not merely the same set of resolved origins.
+        expect(second).toBe(first);
+        for (const name of REGISTERED) {
+          expect(second).toContain(marker(name));
+        }
+      },
+    );
   });
 
   it("XP3: each package's names carry that package's origin, and none is reserved", function* () {
@@ -282,30 +295,32 @@ describe("Tier XP — cross-package resolution", () => {
     expect([...(yield* resolveAll("test-agent-first")).entries()]).toEqual([...resolved.entries()]);
   });
 
-  it("XP4: a structural name still outranks all three installers", function* () {
-    const workspace = yield* useWorkspace();
-    yield* writeTextFile(join(workspace, "Each.md"), "SHOULD NOT RENDER\n");
-    const path = join(workspace, "doc.md");
-    yield* writeTextFile(path, '<Each in={[1, 2]} let="n">[{n}]</Each>\n');
+  workspaceCase(
+    "XP4: a structural name still outranks all three installers",
+    function* (stream, workspace) {
+      yield* writeTextFile(join(workspace, "Each.md"), "SHOULD NOT RENDER\n");
+      const path = join(workspace, "doc.md");
+      yield* writeTextFile(path, '<Each in={[1, 2]} let="n">[{n}]</Each>\n');
 
-    const observed = yield* scoped(function* () {
-      yield* useTempFileCompiler();
-      yield* installAll("test-agent-first");
-      return {
-        info: yield* inspectComponent({ name: "Each", includes: [workspace] }),
-        output: String(
-          yield* collect(
-            yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [workspace] }, [
-              { components: agentIdentityComponents() },
-            ]),
+      const observed = yield* scoped(function* () {
+        yield* useTempFileCompiler();
+        yield* installAll("test-agent-first");
+        return {
+          info: yield* inspectComponent({ name: "Each", includes: [workspace] }),
+          output: String(
+            yield* collect(
+              yield* executeInstalled({ path, stream, includes: [workspace] }, [
+                { components: agentIdentityComponents() },
+              ]),
+            ),
           ),
-        ),
-      };
-    });
+        };
+      });
 
-    expect(describeOrigin(observed.info)).toBe("structural:Each");
-    // The construct ran, not the file named after it.
-    expect(observed.output).toContain("[1][2]");
-    expect(observed.output).not.toContain("SHOULD NOT RENDER");
-  });
+      expect(describeOrigin(observed.info)).toBe("structural:Each");
+      // The construct ran, not the file named after it.
+      expect(observed.output).toContain("[1][2]");
+      expect(observed.output).not.toContain("SHOULD NOT RENDER");
+    },
+  );
 });

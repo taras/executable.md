@@ -1,3 +1,4 @@
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, withResolvers } from "effection";
@@ -208,31 +209,39 @@ describe(
     });
     for (const setting of ["model", "effort"]) {
       for (const kind of ["absent", "mismatch"]) {
-        it(`reports exact ${setting} ${kind} evidence before any Prompt`, function* () {
+        const name = `reports exact ${setting} ${kind} evidence before any Prompt`;
+        it(name, function* () {
           yield* withCertificationFixture(function* (f) {
-            const mode = kind + "-" + setting;
-            const report = reportFor(f.command(mode));
-            const failures: unknown[] = [];
-            const value = setting === "model" ? "selected" : "high";
-            const result = yield* document(
-              f,
-              mode,
-              `<Session name="target" ${setting}="${value}"><Prompt text="must not send" /></Session>`,
-              report,
-              failures,
-            );
-            expect(result.ok).toBe(false);
-            expect(failures).toEqual([
-              {
-                reason: kind === "absent" ? "selector-unavailable" : "configuration-mismatch",
-                setting,
+            yield* captureTestJournal(
+              { owner: "packages/acp/tests/agent-certification.test.ts", name },
+              join(f.dir, "document.md"),
+              function* (stream) {
+                const mode = kind + "-" + setting;
+                const report = reportFor(f.command(mode));
+                const failures: unknown[] = [];
+                const value = setting === "model" ? "selected" : "high";
+                const result = yield* document(
+                  f,
+                  mode,
+                  `<Session name="target" ${setting}="${value}"><Prompt text="must not send" /></Session>`,
+                  report,
+                  failures,
+                  stream,
+                );
+                expect(result.ok).toBe(false);
+                expect(failures).toEqual([
+                  {
+                    reason: kind === "absent" ? "selector-unavailable" : "configuration-mismatch",
+                    setting,
+                  },
+                ]);
+                const row =
+                  setting === "model" ? report.capabilities.model : report.capabilities.effort;
+                expect(row.outcome).toBe(kind === "absent" ? "unsupported" : "failure");
+                expect((yield* f.methods()).includes("session/prompt")).toBe(false);
+                expect(JSON.stringify(report)).not.toContain("must not send");
               },
-            ]);
-            const row =
-              setting === "model" ? report.capabilities.model : report.capabilities.effort;
-            expect(row.outcome).toBe(kind === "absent" ? "unsupported" : "failure");
-            expect((yield* f.methods()).includes("session/prompt")).toBe(false);
-            expect(JSON.stringify(report)).not.toContain("must not send");
+            );
           });
         });
       }
