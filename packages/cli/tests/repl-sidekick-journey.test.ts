@@ -94,7 +94,10 @@ import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
+import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
+  closeDrawer,
+  COMPOSER,
   COMPOSER_VALUE,
   composerHolds,
   draftHolds,
@@ -5203,5 +5206,417 @@ describe("1183 — a follow-up sent during live automatic feedback", () => {
     const known = yield* projected(after.chat);
     expect(known.unestablished).toEqual([]);
     expect(known.recoveryPending).toBe(false);
+  });
+});
+
+/**
+ * #1342 — written Markdown in the chat and in an entry's Output.
+ *
+ * One real exchange: the scripted reply streams its Output in three held
+ * pieces and then submits a real entry whose document is Markdown. Both bodies
+ * are read off the mounted terminal's own cells at the wide and narrow sizes,
+ * after a cold reopen, and against the strings their existing readers retain.
+ * Each formatted word is followed by `plain`, so its style is compared with the
+ * ordinary cell beside it, and each is spelled so that only the formatted
+ * reading contains it: Source, the raw inspection and the chat's copy of the
+ * entry's Output all keep the punctuation around it.
+ */
+describe("1342 — written Markdown in the chat and in entry Output", () => {
+  const WIDE_SIZE = { columns: 160, rows: 36 };
+  const NARROW_SIZE = { columns: 72, rows: 20 };
+  const ENTRY_MARKDOWN = [
+    "# Entrymark heading",
+    "",
+    "**entrybold** plain",
+    "*entryslant* plain",
+    "`entrycode` plain",
+    "[entrylabel](https://example.test/entry-target) plain",
+    "Entry prose keeps going past the edge of the reading so that the measured fit wraps it, with **entrytail** plain after the wrap and 界 é at the end.",
+    "",
+    "1. entry first",
+    "2. entry second",
+    "",
+    "```text",
+    "  entryfence indent",
+    "",
+    "# entryfence *literal*",
+    "```",
+    "<span>entry raw html</span>",
+    "Entryend marker.",
+  ].join("\n");
+  const CHAT_MARKDOWN = [
+    "# Chatmark heading",
+    "",
+    "**chatbold** plain",
+    "*chatslant* plain",
+    "`chatcode` plain",
+    "[chatlabel](https://example.test/chat-target) plain",
+    "chatctl \x1b\x07 done",
+    "",
+    "- chat first",
+    "- chat second",
+    "",
+    "```text",
+    "  chatfence indent",
+    "",
+    "# chatfence *literal*",
+    "```",
+    "Chatend marker.",
+  ].join("\n");
+  const SUBMISSION = [
+    '<Let as="code" select="code">',
+    "````xmd",
+    ENTRY_MARKDOWN,
+    "````",
+    "</Let>",
+    "<REPL.EntryInput>{code}</REPL.EntryInput>",
+    "<REPL.Submit />",
+    "",
+  ].join("\n");
+  const REPLY = `<Output>\n${CHAT_MARKDOWN}\n</Output>\n${SUBMISSION}`;
+  // Held after an unclosed strong delimiter, and again inside an open fence.
+  const BOLD_OPEN = REPLY.indexOf("plain");
+  const FENCE_OPEN = REPLY.indexOf("\n# chatfence");
+  const PIECES = [
+    REPLY.slice(0, BOLD_OPEN - 3),
+    REPLY.slice(BOLD_OPEN - 3, FENCE_OPEN),
+    REPLY.slice(FENCE_OPEN),
+  ];
+
+  /** The cells of the mounted emulator, which a substring search cannot see. */
+  function inkAt(page: ReplPage, at: { readonly column: number; readonly row: number }) {
+    const screen = page.repl.terminal.screen;
+    if (screen === undefined) {
+      throw new Error("the mounted terminal has no screen");
+    }
+    return screen.styleAt(at.column, at.row);
+  }
+
+  /** One match: the cell it starts in, and the offset into its row's text. */
+  interface Spot {
+    readonly column: number;
+    readonly row: number;
+    readonly offset: number;
+  }
+
+  /**
+   * The cell an offset into a row's text was drawn in.
+   *
+   * A wide glyph is one code unit over two cells and a combining sequence
+   * several units in one, so the two differ on a row holding either.
+   */
+  function columnOf(page: ReplPage, row: number, offset: number): number {
+    const cells = page.repl.terminal.screen?.cells()[row] ?? [];
+    let at = 0;
+    for (const [column, cell] of cells.entries()) {
+      if (cell === "") {
+        continue;
+      }
+      if (at >= offset) {
+        return column;
+      }
+      at += cell.length;
+    }
+    return cells.length;
+  }
+
+  /** The text from one cell onward on a row, as the emulator holds it. */
+  function fromColumn(page: ReplPage, row: number, column: number): string {
+    return (page.repl.terminal.screen?.cells()[row] ?? []).slice(column).join("");
+  }
+
+  /** Where this text starts on the screen, wherever its first cell holds. */
+  function cellsOf(
+    page: ReplPage,
+    reading: ScreenReading,
+    text: string,
+    holds: (style: ReturnType<typeof inkAt>, row: string, column: number) => boolean = () => true,
+  ): Spot[] {
+    const found: Spot[] = [];
+    for (const [row, line] of reading.rows.entries()) {
+      for (let at = line.indexOf(text); at !== -1; at = line.indexOf(text, at + 1)) {
+        const column = columnOf(page, row, at);
+        if (holds(inkAt(page, { column, row }), line, at)) {
+          found.push({ column, row, offset: at });
+        }
+      }
+    }
+    return found;
+  }
+
+  /** The one place this text is drawn without the Markdown written around it. */
+  function formatted(page: ReplPage, reading: ScreenReading, text: string): Spot {
+    const found = cellsOf(page, reading, text, (_style, line, at) => {
+      const before = line.slice(Math.max(0, at - 2), at);
+      const after = line[at + text.length] ?? "";
+      return !/[*`[_]$/.test(before) && before !== "# " && !/^[*`\]_]/.test(after);
+    });
+    if (found.length !== 1) {
+      throw new Error(`${found.length} formatted ${text}:\n${reading.rows.join("\n")}`);
+    }
+    return found[0];
+  }
+
+  /** The style of the `plain` cell that follows a formatted word on its row. */
+  function plainAfter(page: ReplPage, reading: ScreenReading, at: Spot) {
+    const offset = reading.rows[at.row].indexOf(" plain", at.offset) + 1;
+    expect(offset).toBeGreaterThan(at.offset);
+    return inkAt(page, { column: columnOf(page, at.row, offset), row: at.row });
+  }
+
+  /** Wheel one reading until this holds, through the reading's own scroll. */
+  function* reveal(
+    page: ReplPage,
+    what: string,
+    holds: (reading: ScreenReading) => boolean,
+    at: (reading: ScreenReading) => { readonly column: number; readonly row: number },
+    direction: "up" | "down",
+  ): Operation<ScreenReading> {
+    for (let step = 0; step < 40 && !holds(page.screen()); step += 1) {
+      const index = page.screen().index;
+      yield* page.wheel(direction, at(page.screen()));
+      yield* page.until(what, (one) => one.index > index || holds(one));
+    }
+    return yield* page.until(what, holds);
+  }
+
+  /** Where the chat scrolls: above the composer, which stays put. */
+  function inChat(reading: ScreenReading): { readonly column: number; readonly row: number } {
+    const composer = reading.locate(COMPOSER);
+    return { column: composer.column, row: composer.row - 3 };
+  }
+
+  /** One formatted body, read off the cells: `word` is `chat` or `entry`. */
+  function* readsFormatted(page: ReplPage, word: "chat" | "entry"): Operation<void> {
+    const reading = page.screen();
+    const heading = formatted(page, reading, `${word === "chat" ? "Chat" : "Entry"}mark heading`);
+    expect(inkAt(page, heading).attrs).toContain(1);
+    expect(inkAt(page, heading).foreground).toBe(REPL_PALETTE.sourceHeading);
+
+    const bold = formatted(page, reading, `${word}bold`);
+    expect(inkAt(page, bold).attrs).toContain(1);
+    expect(plainAfter(page, reading, bold).attrs).not.toContain(1);
+    expect(inkAt(page, bold).foreground).toBe(plainAfter(page, reading, bold).foreground);
+
+    const slant = formatted(page, reading, `${word}slant`);
+    expect(inkAt(page, slant).attrs).toContain(3);
+    expect(plainAfter(page, reading, slant).attrs).not.toContain(3);
+
+    const code = formatted(page, reading, `${word}code`);
+    expect(inkAt(page, code).foreground).toBe(REPL_PALETTE.quoted);
+    expect(plainAfter(page, reading, code).foreground).not.toBe(REPL_PALETTE.quoted);
+
+    // A label and nothing of its target, and no action of its own: the row is
+    // read, not activated.
+    const label = formatted(page, reading, `${word}label`);
+    expect(inkAt(page, label).attrs).toContain(4);
+    expect(plainAfter(page, reading, label).attrs).not.toContain(4);
+    expect(reading.rows[label.row]).not.toContain(`${word}-target`);
+    expect(reading.rows[label.row]).not.toContain("](");
+
+    // The fence: its payload literal and in code, its indentation in place,
+    // its blank line a row and the Markdown inside it unformatted.
+    const indent = cellsOf(
+      page,
+      reading,
+      `${word}fence indent`,
+      (style) => style.foreground === REPL_PALETTE.quoted,
+    );
+    expect(indent).toHaveLength(1);
+    const payload = indent[0];
+    expect(fromColumn(page, payload.row, payload.column - 2).startsWith("  ")).toBe(true);
+    expect(fromColumn(page, payload.row - 1, payload.column - 2)).toMatch(/^```text\s*(│|$)/);
+    expect(inkAt(page, { column: payload.column - 2, row: payload.row - 1 }).foreground).toBe(
+      REPL_PALETTE.punctuation,
+    );
+    expect(
+      fromColumn(page, payload.row + 1, payload.column - 2)
+        .slice(0, 20)
+        .trim(),
+    ).toBe("");
+    expect(
+      fromColumn(page, payload.row + 2, payload.column - 2).startsWith(`# ${word}fence *literal*`),
+    ).toBe(true);
+    expect(inkAt(page, { column: payload.column - 2, row: payload.row + 2 }).foreground).toBe(
+      REPL_PALETTE.quoted,
+    );
+  }
+
+  it("1342 MD1: both bodies format at wide and narrow sizes, stream, reopen and keep their text", function* () {
+    const host = yield* useMountedHost();
+    let location = "";
+    let execution = "";
+    yield* scoped(function* (): Operation<void> {
+      const page = yield* useReplPage({ host, size: WIDE_SIZE });
+      const repl = page.repl;
+      repl.fake.script({ deltas: PIECES, holdsEachPiece: true });
+      repl.fake.script({ reply: "<Output>Receipt read.</Output>\n" });
+      yield* sendMessage(page, "Show the Markdown fixture.");
+
+      // A prefix ending inside a strong delimiter reads as what it literally
+      // is, beside a heading already formatted on the first body row.
+      yield* repl.fake.streamingTurns(1);
+      const first = yield* page.until("the first preview", (one) =>
+        one.shows(`${MOUNTED_AGENT} (preview): Chatmark heading`),
+      );
+      const previewHeading = formatted(page, first, "Chatmark heading");
+      expect(inkAt(page, previewHeading).attrs).toContain(1);
+      expect(first.shows("**chatbold")).toBe(true);
+
+      // The delimiter closes in the next piece and the same item converges on
+      // the formatted run. The fence it ends inside is not Output yet, so the
+      // preview withholds it rather than showing a partial block.
+      repl.fake.releaseDeltas();
+      yield* repl.fake.streamingTurns(1);
+      const closing = yield* page.until("the closed delimiter in the preview", (one) =>
+        one.shows("chatbold plain"),
+      );
+      expect(inkAt(page, formatted(page, closing, "chatbold")).attrs).toContain(1);
+      expect(closing.shows("**chatbold")).toBe(false);
+      expect(closing.shows(`${MOUNTED_AGENT} (preview)`)).toBe(true);
+      expect(closing.shows("chatfence")).toBe(false);
+
+      repl.fake.releaseDeltas();
+      yield* page.until("the receipt", (one) => saidBySidekick(one, "Receipt read."));
+      yield* page.until("the pane at rest", sidekickIdle);
+      expect(page.screen().shows("(preview)")).toBe(false);
+
+      // The retained strings keep every byte of the Markdown, targets included.
+      const read = yield* settledReading(repl);
+      execution = read.execution;
+      expect(read.model.entries.map((entry) => entry.terminal?.output)).toEqual([ENTRY_MARKDOWN]);
+      const responses = read.chat.flatMap((record) =>
+        record.kind === "response" && record.output !== undefined ? [record.output] : [],
+      );
+      expect(responses[0]).toContain(CHAT_MARKDOWN);
+
+      // Wide: the entry's Output in the centre, the chat on the right.
+      yield* readsFormatted(page, "entry");
+      // The long line starts on the row after the label, so a bold run past
+      // its first fitted row was carried onto a continuation.
+      expect(formatted(page, page.screen(), "entrytail").row).toBeGreaterThan(
+        formatted(page, page.screen(), "entrylabel").row + 1,
+      );
+      expect(inkAt(page, formatted(page, page.screen(), "entrytail")).attrs).toContain(1);
+      expect(page.screen().shows("• chat first")).toBe(false);
+      expect(page.screen().shows("1. entry first")).toBe(true);
+      expect(page.screen().shows("<span>entry raw html</span>")).toBe(true);
+      expect(page.screen().shows("Entryend marker.")).toBe(true);
+      yield* reveal(
+        page,
+        "the chat's own heading",
+        (one) => one.shows("[S] Chatmark heading") && one.shows("Chatend marker."),
+        inChat,
+        "up",
+      );
+      yield* readsFormatted(page, "chat");
+      expect(page.screen().shows("• chat first")).toBe(true);
+      expect(page.screen().shows("chatctl \\x1b\\x07 done")).toBe(true);
+
+      // The raw inspection of that exchange is still the Markdown as written.
+      yield* page.press("[S] Chatmark heading");
+      const drawer = yield* page.until("the exchange inspection", (one) =>
+        one.shows("**chatbold** plain"),
+      );
+      expect(drawer.shows("[chatlabel](https://example.test/chat-target) plain")).toBe(true);
+      expect(drawer.shows("Sidekick · 2 saved turns")).toBe(true);
+      yield* closeDrawer(page);
+
+      // Narrow: the routed chat, then the Entries reading in the same outlet.
+      yield* page.resize(NARROW_SIZE);
+      yield* reveal(
+        page,
+        "the narrow chat's heading",
+        (one) => one.shows("[S] Chatmark heading"),
+        inChat,
+        "up",
+      );
+      const narrowHeading = formatted(page, page.screen(), "Chatmark heading");
+      expect(inkAt(page, narrowHeading).attrs).toContain(1);
+      const narrowBold = formatted(page, page.screen(), "chatbold");
+      expect(inkAt(page, narrowBold).attrs).toContain(1);
+      yield* reveal(
+        page,
+        "the narrow chat's fence",
+        (one) => one.shows("# chatfence *literal*") && one.shows("chatfence indent"),
+        inChat,
+        "down",
+      );
+      expect(
+        cellsOf(
+          page,
+          page.screen(),
+          "chatfence indent",
+          (style) => style.foreground === REPL_PALETTE.quoted,
+        ),
+      ).toHaveLength(1);
+
+      yield* page.press("Entries");
+      yield* page.until("the narrow Entries catalog", (one) => one.shows("[close]"));
+      yield* closeDrawer(page);
+      // The shared catalog and reading scroll together below the selected
+      // entry's trail, which stays put.
+      const output = (one: ScreenReading) => ({
+        column: 4,
+        row: one.rows.findIndex((row) => row.includes("› Entry 1")) + 4,
+      });
+      yield* reveal(
+        page,
+        "the narrow entry heading",
+        (one) => one.shows("Entrymark heading") && one.shows("entrylabel plain"),
+        output,
+        "down",
+      );
+      const entryLabel = formatted(page, page.screen(), "entrylabel");
+      expect(inkAt(page, entryLabel).attrs).toContain(4);
+      expect(page.screen().rows[entryLabel.row]).not.toContain("entry-target");
+      yield* reveal(
+        page,
+        "the narrow entry fence",
+        (one) => one.shows("# entryfence *literal*"),
+        output,
+        "down",
+      );
+      const narrowFence = cellsOf(
+        page,
+        page.screen(),
+        "entryfence indent",
+        (style) => style.foreground === REPL_PALETTE.quoted,
+      );
+      expect(narrowFence).toHaveLength(1);
+      expect(
+        page
+          .screen()
+          .rows[narrowFence[0].row].slice(narrowFence[0].column - 2, narrowFence[0].column),
+      ).toBe("  ");
+
+      yield* page.resize(WIDE_SIZE);
+      page.repl.terminal.end();
+      yield* awaited("the first command joined", () => page.repl.outcome() !== undefined);
+      const result = page.repl.outcome();
+      if (result === undefined || !result.ok) {
+        throw new Error("the first command failed");
+      }
+      location = result.value.location;
+    });
+
+    // Cold: the same bodies from what was retained, with no provider turn.
+    const before = host.fake.prompts.length;
+    const cold = yield* useReplPage({ host, size: WIDE_SIZE, location });
+    yield* cold.until("the reopened entry", (one) => one.shows("Entrymark heading"));
+    yield* readsFormatted(cold, "entry");
+    yield* reveal(
+      cold,
+      "the reopened chat's heading",
+      (one) => one.shows("[S] Chatmark heading") && one.shows("Chatend marker."),
+      inChat,
+      "up",
+    );
+    yield* readsFormatted(cold, "chat");
+    expect(cold.screen().shows("(preview)")).toBe(false);
+    expect(host.fake.prompts).toHaveLength(before);
+    const reopened = yield* settledReading(cold.repl);
+    expect(reopened.execution).toBe(execution);
+    expect(reopened.model.entries.map((entry) => entry.terminal?.output)).toEqual([ENTRY_MARKDOWN]);
   });
 });

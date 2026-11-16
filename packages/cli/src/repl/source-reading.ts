@@ -49,6 +49,7 @@ import { tokenRuns } from "./description.ts";
 import type { ReplTokenRun } from "./description.ts";
 import { sourceRuns, trimLeadingBlankLines } from "./presentation-text.ts";
 import { inertCommandText } from "./command-output.ts";
+import { markdownLines } from "./markdown.ts";
 import type { ReplCommandChunk } from "./command-output.ts";
 
 /** What this terminal draws for each phase, glyph and word together. */
@@ -227,7 +228,11 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
       return Object.freeze({
         caption: "Output · live",
         captionStyle: styleOf("waiting", { inspected }),
-        lines: plain(trimLeadingBlankLines(live), "output:live", styleOf("output", { inspected })),
+        lines: written(
+          trimLeadingBlankLines(live),
+          "output:live",
+          styleOf("output", { inspected }),
+        ),
       });
     }
     return Object.freeze({
@@ -240,7 +245,7 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
     return Object.freeze({
       caption: "Output",
       captionStyle: styleOf("pane-heading", { inspected }),
-      lines: plain(
+      lines: written(
         trimLeadingBlankLines(terminal.output),
         "output",
         styleOf("output", { inspected }),
@@ -277,6 +282,27 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
       ...reason,
     ]),
   });
+}
+
+/**
+ * Rendered Output as the Markdown it was written in, in lines nothing has been
+ * observed in. The live text and the retained result take the same path, so a
+ * settled reading draws what its last live frame drew.
+ */
+function written(text: string, prefix: string, style: ReplRowStyle): readonly ReplReadingLine[] {
+  return Object.freeze(
+    markdownLines(text, style.role).map((one, index) =>
+      Object.freeze({
+        key: `${prefix}:${index}`,
+        text: one.text,
+        runs: one.runs,
+        rail: "rail-pending" as const,
+        depth: 0,
+        badge: undefined,
+        style,
+      }),
+    ),
+  );
 }
 
 /** Text as lines nothing has been observed in. */

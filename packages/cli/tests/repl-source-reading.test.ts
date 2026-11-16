@@ -27,6 +27,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 
+import { inertCommandText } from "../src/repl/command-output.ts";
+import { markdownLines } from "../src/repl/markdown.ts";
 import { entryReading, NO_READING, READING_STATUSES } from "../src/repl/source-reading.ts";
 import type { ReplReadingLine } from "../src/repl/source-reading.ts";
 import {
@@ -1648,4 +1650,75 @@ describe("S8 lines fitted together are cut as each is cut alone", () => {
       }
       expect(rowsOf(prepared.value)).toEqual(oracle.value);
     }));
+});
+
+/**
+ * #1342 — written Markdown as display lines.
+ *
+ * Input and output only: the mounted journey in `repl-sidekick-journey.test.ts`
+ * reads both production surfaces off real terminal cells. These rows hold the
+ * limits a streamed or arbitrary body reaches and that journey cannot stage
+ * through a live provider: a fence nobody closed, delimiters nobody closed, raw
+ * HTML, a carriage return and plain text that must draw exactly as it did.
+ */
+function markdownShown(source: string): string[] {
+  return markdownLines(source, "output").map((line) => line.text);
+}
+
+function markdownRoles(source: string): string[][] {
+  return markdownLines(source, "output").map((line) =>
+    line.runs.map((run) => `${run.token}:${run.text}`),
+  );
+}
+
+describe("1342 written Markdown as display lines", () => {
+  it("draws plain text exactly as its written lines, in the body's own role", function* () {
+    const plain = "\n\nfirst line\n   indented second\n\n\nafter two blank lines\n";
+    expect(markdownShown(plain)).toEqual(plain.split("\n"));
+    expect(
+      markdownLines(plain, "waiting").every((line) =>
+        line.runs.every((run) => run.token === "waiting"),
+      ),
+    ).toBe(true);
+    expect(markdownShown("")).toEqual([""]);
+  });
+
+  it("keeps an unclosed fence's payload literal through the available end", function* () {
+    expect(markdownRoles("Before\n```ts\n  open payload\n\n# still code *here*")).toEqual([
+      ["output:Before"],
+      ["punctuation:```ts"],
+      ["markdown-code:  open payload"],
+      [],
+      ["markdown-code:# still code *here*"],
+    ]);
+  });
+
+  it("reads unclosed delimiters, raw HTML and component-like text as written", function* () {
+    expect(markdownShown("**half bold and `half code")).toEqual(["**half bold and `half code"]);
+    expect(markdownShown('<Output>{said}</Output>\n<span title="x">raw</span>')).toEqual([
+      "<Output>{said}</Output>",
+      '<span title="x">raw</span>',
+    ]);
+  });
+
+  it("shows a link's label and never its target", function* () {
+    const lines = markdownLines("See [the label](https://example.test/secret) now", "output");
+    expect(lines.map((line) => line.text)).toEqual(["See the label now"]);
+    expect(lines[0].runs.find((run) => run.token === "markdown-link")?.text).toBe("the label");
+    expect(JSON.stringify(lines)).not.toContain("example.test");
+  });
+
+  it("makes controls inert before the lexer reads them", function* () {
+    const source = "a\rb \x1b]8;;https://x.test\x07link\x1b]8;;\x07 **c\x9b**";
+    const lines = markdownShown(source);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe(
+      inertCommandText("a\rb \x1b]8;;https://x.test\x07link\x1b]8;;\x07 c\x9b"),
+    );
+    expect(lines[0]).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+  });
+
+  it("keeps a code span's line break as a line break", function* () {
+    expect(markdownRoles("`one\ntwo`")).toEqual([["markdown-code:one"], ["markdown-code:two"]]);
+  });
 });

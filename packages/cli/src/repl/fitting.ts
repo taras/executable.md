@@ -1164,7 +1164,7 @@ function row(
  * value on both of them. A run the slice does not touch is absent rather than
  * empty, which is what keeps the list concatenating to exactly the row's text.
  */
-function slicedRuns(
+export function slicedRuns(
   runs: readonly ReplTokenRun[],
   from: number,
   to: number,
