@@ -1,4 +1,4 @@
-import type { UsageCoverage, UsageReading } from "@executablemd/core";
+import type { UsageCoverage, UsageReading } from "@executablemd/agent/api";
 import type { Check } from "./evidence.ts";
 
 /** One acknowledged Prompt, as the shareable report states it. */

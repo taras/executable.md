@@ -10,7 +10,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { AgentOptions } from "@executablemd/core";
+import type { AgentOptions } from "@executablemd/agent/api";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "../src/agent-options.ts";
 
 /** One command line, as the dispatcher passes it: the command still at head. */

@@ -17,39 +17,36 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { Agent } from "../src/agent/agent-api.ts";
-import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
-import { executeInstalled, useAgentConversation } from "../host.ts";
-import type { ExecutionInstallation } from "../host.ts";
-import { agentIdentityComponents, installAgentComponents } from "../src/agent/components.ts";
-import { registerAgentProvider } from "../src/agent/provider-api.ts";
-import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
-import type { AgentLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
-import { AgentConversationProvider } from "../src/agent/conversation-provider.ts";
-import type { AgentSessionRequest } from "../src/agent/session-request.ts";
-import type { ProviderSessionConfiguration } from "../src/agent/session-setup.ts";
+import { Agent } from "../src/agent-api.ts";
+import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent-api.ts";
+import { executeInstalled } from "@executablemd/core/host";
+import { useAgentConversation } from "../host.ts";
+import type { ExecutionInstallation } from "@executablemd/core/host";
+import { agentIdentityComponents, installAgentComponents } from "../src/components.ts";
+import { registerAgentProvider } from "../src/provider-api.ts";
+import type { AgentProviderFactory } from "../src/provider-api.ts";
+import type { AgentLaunchCoordinator } from "../src/launch-coordinator.ts";
+import { AgentConversationProvider } from "../src/conversation-provider.ts";
+import type { AgentSessionRequest } from "../src/session-request.ts";
+import type { ProviderSessionConfiguration } from "../src/session-setup.ts";
 import {
   completedPromptUsage,
   observePermissionDecisions,
   parsePromptRecord,
   readCompletedPrompts,
-} from "../src/agent/journal.ts";
-import {
-  promptUsageDestination,
-  readPromptUsage,
-  serializePromptUsage,
-} from "../src/agent/usage.ts";
-import { createLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
-import { registerComponents } from "../src/components/registration.ts";
-import type { SecretScanner } from "../src/secrets/scanner.ts";
-import type { SecretFinding } from "../src/secrets/findings.ts";
-import type { PromptUsage, PromptUsageReporter } from "../src/agent/usage.ts";
-import { useSecretDetection, useSecretScannerFactory } from "../src/secrets/policy.ts";
-import { attachInputOwner, createInputOwner } from "../src/secrets/inputs.ts";
+} from "../src/journal.ts";
+import { promptUsageDestination, readPromptUsage, serializePromptUsage } from "../src/usage.ts";
+import { createLaunchCoordinator } from "../src/launch-coordinator.ts";
+import { registerComponents } from "../../core/src/components/registration.ts";
+import type { SecretScanner } from "../../core/src/secrets/scanner.ts";
+import type { SecretFinding } from "../../core/src/secrets/findings.ts";
+import type { PromptUsage, PromptUsageReporter } from "../src/usage.ts";
+import { useSecretDetection, useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
+import { attachInputOwner, createInputOwner } from "../../core/src/secrets/inputs.ts";
 import { createContext } from "effection";
-import { retainablePromptUsage } from "../src/agent/usage.ts";
-import { createSecretScanner } from "../src/secrets/scanner.ts";
-import type { Json } from "../src/types.ts";
+import { retainablePromptUsage } from "../src/usage.ts";
+import { createSecretScanner } from "../../core/src/secrets/scanner.ts";
+import type { Json } from "../../core/src/types.ts";
 
 const AGENT = "usage-agent";
 

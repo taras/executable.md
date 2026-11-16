@@ -15,19 +15,15 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute } from "../src/execute.ts";
-import { registerComponents } from "../src/components/registration.ts";
-import { Agent } from "../src/agent/agent-api.ts";
-import type { PermissionOutcome, PermissionRequest } from "../src/agent/agent-api.ts";
-import { registerAgentProvider } from "../src/agent/provider-api.ts";
-import { useLaunchInstallation, useProviderInstallation } from "../src/agent/launch-install.ts";
-import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
-import {
-  installApproveAll,
-  installApproveReads,
-  installAskPermission,
-} from "../src/agent/permission.ts";
-import { installAgentComponents } from "../src/agent/components.ts";
+import { execute } from "../../core/src/execute.ts";
+import { registerComponents } from "../../core/src/components/registration.ts";
+import { Agent } from "../src/agent-api.ts";
+import type { PermissionOutcome, PermissionRequest } from "../src/agent-api.ts";
+import { registerAgentProvider } from "../src/provider-api.ts";
+import { useLaunchInstallation, useProviderInstallation } from "../src/launch-install.ts";
+import type { AgentProviderFactory, AgentProviderOptions } from "../src/provider-api.ts";
+import { installApproveAll, installApproveReads, installAskPermission } from "../src/permission.ts";
+import { installAgentComponents } from "../src/components.ts";
 import type { Json } from "@executablemd/core";
 
 /** A provider factory that records the options it is handed. */

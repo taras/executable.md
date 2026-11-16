@@ -17,13 +17,13 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Agent } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
 import type {
   AgentLaunchRequest,
   AgentLaunchCoordinator,
   LaunchRecord,
   PreparedLaunchRecord,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import {
   API,
   createDenoAgentSessionCoordinator,

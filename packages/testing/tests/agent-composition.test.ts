@@ -14,10 +14,12 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { agentIdentityComponents } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
-import { Agent, execute, installAgentComponents } from "@executablemd/core";
-import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
+import { execute } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { installAgentComponents } from "@executablemd/agent/host";
+import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/agent/api";
 import { installTestingComponents } from "../mod.ts";
 import type { Json } from "@executablemd/core";
 

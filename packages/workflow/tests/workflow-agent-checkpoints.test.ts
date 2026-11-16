@@ -16,23 +16,20 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { executeInstalled, parsePromptRecord } from "@executablemd/core/host";
-import { useAgentPromptPublisher } from "@executablemd/core/host";
-import {
-  Agent,
-  agentIdentityComponents,
-  collect,
-  inlineSource,
-  installAgentComponents,
-} from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { parsePromptRecord } from "@executablemd/agent/host";
+import { useAgentPromptPublisher } from "@executablemd/agent/host";
+import { collect, inlineSource } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import type { Json } from "@executablemd/core";
 import type {
   AgentPromptEvent,
   AgentLaunchCoordinator,
   AgentProviderFactory,
-  Json,
   PromptUsage,
   Session,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";

@@ -28,8 +28,8 @@
 import { Buffer } from "node:buffer";
 import type { Operation } from "effection";
 import { prepareElicitation, validateParsed } from "@executablemd/core";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
-import type { PromptRecord } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
+import type { PromptRecord } from "@executablemd/agent/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, EffectDescription, Json, Result } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../../suspension/answer.ts";

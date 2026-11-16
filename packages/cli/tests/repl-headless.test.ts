@@ -20,8 +20,9 @@ import { attachmentDescriptor, requestAttachment } from "../src/sidekick-acp/cli
 import { Reply, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
 import { z } from "zod";
 import { childAddressPath, useHeadlessChildren } from "../src/headless/host.ts";
-import { agentIdentityComponents, installAgentComponents } from "@executablemd/core";
-import { executeInstalled, useAgentConversation } from "@executablemd/core/host";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import { executeInstalled } from "@executablemd/core/host";
+import { useAgentConversation } from "@executablemd/agent/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";

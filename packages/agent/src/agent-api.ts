@@ -116,7 +116,7 @@ export type ChildAnswerPromptEvent =
         | {
             readonly status: "invalid";
             readonly reason: "schema";
-            readonly issues: readonly import("../validate.ts").NormalizedIssue[];
+            readonly issues: readonly import("@executablemd/core").NormalizedIssue[];
           }
         | { readonly status: "invalid"; readonly reason: "response-format" };
     }

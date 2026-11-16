@@ -23,17 +23,23 @@
 
 import { Err, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { Execution } from "../execute.ts";
-import { registerComponents } from "../components/registration.ts";
-import { contributeDocumentation } from "../documentation-api.ts";
-import { agentDocumentation } from "../component-documentation.ts";
-import { CORE_ORIGIN } from "../components/registry.ts";
-import { createReplayStream } from "../replay-stream.ts";
-import { documented } from "../components/documentation.ts";
-import type { ComponentRegistration } from "../components/registration.ts";
-import type { Json } from "../types.ts";
+import {
+  registerComponents,
+  contributeDocumentation,
+  packageDocumentation,
+  createReplayStream,
+  documented,
+} from "@executablemd/core";
+import type {
+  DocumentationContribution,
+  DocumentationReader,
+  ComponentRegistration,
+  Json,
+} from "@executablemd/core";
+import { Execution } from "@executablemd/core/api";
+import type { IdentityComponent } from "@executablemd/core/host";
+import { AGENT_ORIGIN } from "./origin.ts";
 import { sessionComponent } from "./function-components.ts";
-import type { IdentityComponent } from "../invocation-identity.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
 import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
@@ -93,7 +99,7 @@ export function agentIdentityComponents(): readonly IdentityComponent[] {
   return [
     {
       name: "Session",
-      origin: CORE_ORIGIN,
+      origin: AGENT_ORIGIN,
       props: SESSION_PROPS,
       ...documented({
         description:
@@ -122,7 +128,7 @@ export function agentIdentityComponents(): readonly IdentityComponent[] {
 export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   {
     name: "AgentProvider",
-    origin: CORE_ORIGIN,
+    origin: AGENT_ORIGIN,
     fn: AgentProvider,
     props: AGENT_PROVIDER_PROPS,
     ...documented({
@@ -137,7 +143,7 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
   {
     name: "Agent",
-    origin: CORE_ORIGIN,
+    origin: AGENT_ORIGIN,
     fn: AgentComponent,
     props: AGENT_PROPS,
     ...documented({
@@ -151,7 +157,7 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
   {
     name: "Session.Launch",
-    origin: CORE_ORIGIN,
+    origin: AGENT_ORIGIN,
     fn: SessionLaunch,
     props: SESSION_LAUNCH_PROPS,
     ...documented({
@@ -166,7 +172,7 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
   {
     name: "Prompt",
-    origin: CORE_ORIGIN,
+    origin: AGENT_ORIGIN,
     fn: Prompt,
     props: PROMPT_PROPS,
     ...documented({
@@ -181,7 +187,7 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
   {
     name: "ApproveAll",
-    origin: CORE_ORIGIN,
+    origin: AGENT_ORIGIN,
     fn: ApproveAll,
     props: NO_PROPS_SCHEMA,
     ...documented({
@@ -195,7 +201,7 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
   {
     name: "AskPermission",
-    origin: CORE_ORIGIN,
+    origin: AGENT_ORIGIN,
     fn: AskPermission,
     props: NO_PROPS_SCHEMA,
     ...documented({
@@ -208,6 +214,20 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     }),
   },
 ];
+
+export function agentDocumentation(
+  read?: DocumentationReader,
+): Operation<DocumentationContribution> {
+  return packageDocumentation(
+    new URL("./components.md", import.meta.url),
+    { owner: AGENT_ORIGIN, asset: "packages/agent/src/components.md" },
+    [
+      ...AGENT_REGISTRATIONS.map((registration) => registration.name),
+      ...agentIdentityComponents().map((component) => component.name),
+    ],
+    read,
+  );
+}
 
 /**
  * The agent vocabulary, as declarations and nothing else.

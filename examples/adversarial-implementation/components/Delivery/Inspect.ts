@@ -1,4 +1,4 @@
-import { Agent } from "@executablemd/core/api";
+import { Agent } from "@executablemd/agent/api";
 import type { Operation } from "effection";
 import { z } from "zod";
 import { describeFailure, isFilesFailure } from "./failure.ts";

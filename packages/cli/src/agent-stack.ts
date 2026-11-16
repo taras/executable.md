@@ -15,12 +15,9 @@
  * session assembly enter.
  */
 
-import {
-  installAgentComponents,
-  installPermissionMode,
-  registerAgentProvider,
-} from "@executablemd/core";
-import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
+import { registerAgentProvider } from "@executablemd/agent/api";
+import { installAgentComponents, installPermissionMode } from "@executablemd/agent/host";
+import type { AgentProviderFactory, PermissionMode } from "@executablemd/agent/api";
 import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, createAcpxSessionStore, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";

@@ -40,8 +40,9 @@ import type { EntryPlacement } from "./entry-placement.ts";
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { validateBindingName } from "@executablemd/core";
-import { AGENT_PROMPT, parsePromptRecord, readElicitationSchema } from "@executablemd/core/host";
-import type { PromptRecord } from "@executablemd/core/host";
+import { readElicitationSchema } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
+import type { PromptRecord } from "@executablemd/agent/host";
 import { projectUsage, type ReplUsage } from "./usage.ts";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 

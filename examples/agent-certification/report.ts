@@ -1,4 +1,4 @@
-import type { SessionConfiguration } from "@executablemd/core";
+import type { SessionConfiguration } from "@executablemd/agent/api";
 import { z } from "zod";
 
 export const capability = z.enum([

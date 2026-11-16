@@ -29,7 +29,7 @@
  */
 
 import type { Operation } from "effection";
-import type { AgentPromptPublication, AgentPromptPublisher } from "@executablemd/core/host";
+import type { AgentPromptPublication, AgentPromptPublisher } from "@executablemd/agent/host";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 import { withEnlistedJournalRoute } from "./journal-route.ts";

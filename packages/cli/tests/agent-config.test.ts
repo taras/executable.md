@@ -9,7 +9,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { PermissionMode } from "@executablemd/core";
+import type { PermissionMode } from "@executablemd/agent/api";
 import { resolveAgentConfig } from "../src/agent-config.ts";
 import type { AgentFlags } from "../src/agent-config.ts";
 

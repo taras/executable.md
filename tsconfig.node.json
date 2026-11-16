@@ -17,6 +17,8 @@
       "@executablemd/core/host/node": ["./packages/core/component-modules/node.ts"],
       "@executablemd/core/host/bun": ["./packages/core/component-modules/bun.ts"],
       "@executablemd/acp": ["./packages/acp/mod.ts"],
+      "@executablemd/agent/api": ["./packages/agent/api.ts"],
+      "@executablemd/agent/host": ["./packages/agent/host.ts"],
       "@executablemd/cli": ["./packages/cli/src/cli.ts"],
       "@executablemd/cli/api": ["./packages/cli/api.ts"],
       "@executablemd/core": ["./packages/core/mod.ts"],
@@ -37,6 +39,7 @@
   },
   "include": [
     "packages/acp/**/*.ts",
+    "packages/agent/**/*.ts",
     "packages/cli/**/*.ts",
     "packages/core/**/*.ts",
     "packages/durable-streams/**/*.ts",

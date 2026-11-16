@@ -35,14 +35,9 @@ import {
   serializeDurableEvent,
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import {
-  Agent,
-  agentIdentityComponents,
-  Elicitation,
-  installAgentComponents,
-  registerComponents,
-  useTempFileCompiler,
-} from "@executablemd/core";
+import { Elicitation, registerComponents, useTempFileCompiler } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type {
   AgentPromptEvent,
   PermissionMode,
@@ -51,8 +46,8 @@ import type {
   PermissionRequest,
   PromptOptions,
   Session,
-} from "@executablemd/core";
-import type { AgentProviderFactory } from "@executablemd/core";
+} from "@executablemd/agent/api";
+import type { AgentProviderFactory } from "@executablemd/agent/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { API } from "@executablemd/runtime";

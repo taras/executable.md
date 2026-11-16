@@ -2,9 +2,9 @@ import { exists, readdir, readTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
 import { join, resolve } from "node:path";
 import { parseDurableEvent } from "@executablemd/durable-streams";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
-import type { PromptRecord } from "@executablemd/core/host";
-import type { PromptUsage, ReportedTokens, UsageReading } from "@executablemd/core";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
+import type { PromptRecord } from "@executablemd/agent/host";
+import type { PromptUsage, ReportedTokens, UsageReading } from "@executablemd/agent/api";
 
 /** How one check came out. */
 export type Outcome = "verified" | "limited" | "unavailable" | "failed" | "not_run";

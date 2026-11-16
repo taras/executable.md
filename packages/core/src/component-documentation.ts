@@ -21,58 +21,10 @@ import { buildDocumentationIndex } from "./documentation-index.ts";
 import type { DocumentationIndex, DocumentationSource } from "./documentation-index.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
-import { AGENT_REGISTRATIONS, agentIdentityComponents } from "./agent/components.ts";
 
 /** Where core's own documentation lives, as a URL beside this module. */
 export function componentDocumentationUrl(): URL {
   return new URL("./components/components.md", import.meta.url);
-}
-
-/**
- * Where the Agent registrations' documentation lives.
- *
- * Beside `agent/components.ts`, which is the boundary that registers them. They
- * carry core's origin, so they are core's components for the join; what makes
- * them a separate file is that they are a separate registration boundary, and
- * documentation belongs beside the code it documents.
- */
-export function agentDocumentationUrl(): URL {
-  return new URL("./agent/components.md", import.meta.url);
-}
-
-/**
- * The Agent registrations' contribution, for a host that installs them.
- *
- * Offered rather than assumed: a run that registers no Agent components has no
- * Agent components to document, and demanding their documentation would refuse
- * an index for a profile that is complete without them.
- */
-export function* agentDocumentation(
-  read: DocumentationReader = packagedAssetReader,
-): Operation<DocumentationContribution> {
-  return {
-    source: yield* readPackagedDocumentation(
-      agentDocumentationUrl(),
-      { owner: CORE_ORIGIN, asset: "packages/core/src/agent/components.md" },
-      read,
-    ),
-    supplies: agentComponentNames(),
-  };
-}
-
-/**
- * Every component the Agent registration boundary supplies, by name.
- *
- * Built when asked rather than at module scope. The Agent bootstrap imports this
- * module for its own contribution, so a module-scoped set built from
- * `AGENT_REGISTRATIONS` would read that array before its own module finished
- * evaluating, depending on which of the two was loaded first.
- */
-function agentComponentNames(): ReadonlySet<string> {
-  return new Set([
-    ...AGENT_REGISTRATIONS.map((registration) => registration.name),
-    ...agentIdentityComponents().map((component) => component.name),
-  ]);
 }
 
 /** Core's documentation source, read from the package rather than the caller. */

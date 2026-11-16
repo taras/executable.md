@@ -1,5 +1,28 @@
-import { withInvocation, InvocationTeardownError } from "../invocation.ts";
-import { durabilityFailure, filesFatalFailure, firstCause } from "../errors.ts";
+import {
+  content,
+  getExpansion,
+  hasContent,
+  InvocationTeardownError,
+  raise,
+  scanSecrets,
+  secretPolicy,
+  withInvocation,
+} from "@executablemd/core";
+import type {
+  ComponentInvocation,
+  FunctionComponent,
+  Json,
+  PropsSchema,
+  Expansion,
+} from "@executablemd/core";
+import {
+  clearsLiveOutput,
+  durabilityFailure,
+  filesFatalFailure,
+  hasCause,
+  hasInvocationTeardown,
+} from "@executablemd/core/host";
+import type { IdentityClaimant } from "@executablemd/core/host";
 /**
  * The agent components (specs/acp-client-spec.md §Components).
  *
@@ -18,16 +41,10 @@ import { durabilityFailure, filesFatalFailure, firstCause } from "../errors.ts";
 
 import { scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Task } from "effection";
-import { content, hasContent, raise } from "../component-api.ts";
-import { getExpansion } from "../expansion.ts";
 
 import { openSessionRequest } from "./session-request.ts";
 
-import type { ComponentInvocation, FunctionComponent } from "../types.ts";
-import type { IdentityClaimant } from "../invocation-identity.ts";
 import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
-import type { Json, PropsSchema } from "../types.ts";
-import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
 import { sessionOf } from "./session-use.ts";
 import type {
@@ -74,7 +91,6 @@ import type {
   AgentPromptHandle,
   AgentPromptPublisher,
 } from "./publication.ts";
-import { clearsLiveOutput, secretPolicy, scanSecrets } from "../secrets/policy.ts";
 import type { Stream, Subscription } from "effection";
 import type { AgentPromptEvent } from "./agent-api.ts";
 
@@ -976,14 +992,9 @@ export function* runPrompt(
     if (fatal !== undefined) {
       throw fatal;
     }
-    if (
-      firstCause(error, (cause) =>
-        cause instanceof InvocationTeardownError ? cause : undefined,
-      ) !== undefined
-    ) {
+    if (hasInvocationTeardown(error)) {
       const initiating = turnFailure ?? held?.failure;
-      throw initiating === undefined ||
-        firstCause(error, (cause) => (cause === initiating ? initiating : undefined)) !== undefined
+      throw initiating === undefined || hasCause(error, initiating)
         ? error
         : new AggregateError([initiating, error], "agent prompt and release both failed", {
             cause: initiating,

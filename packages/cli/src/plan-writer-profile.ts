@@ -34,19 +34,19 @@ import { mkdir, readdir, rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { retainedSource, useNormalizedOutput, useTerminalOutput } from "@executablemd/core";
+import { registerAgentProvider } from "@executablemd/agent/api";
 import {
   agentIdentityComponents,
   installAgentComponents,
   installPermissionMode,
   installPromptFailurePolicy,
-  registerAgentProvider,
-  retainedSource,
-  useNormalizedOutput,
-  useTerminalOutput,
-} from "@executablemd/core";
-import type { AgentProviderOptions, Json } from "@executablemd/core";
+} from "@executablemd/agent/host";
+import type { Json } from "@executablemd/core";
+import type { AgentProviderOptions } from "@executablemd/agent/api";
 import type { MarkdownComponent } from "@executablemd/core/host";
-import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
+import { executeInstalled } from "@executablemd/core/host";
+import { installInvocationAgentProvider } from "@executablemd/agent/host";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import type { DurableStream } from "@executablemd/durable-streams";

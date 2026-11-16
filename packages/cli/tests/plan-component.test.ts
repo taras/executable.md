@@ -23,13 +23,8 @@ import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { forEach } from "@effectionx/stream-helpers";
-import {
-  agentIdentityComponents,
-  collect,
-  installAgentComponents,
-  retainedSource,
-  useNormalizedOutput,
-} from "@executablemd/core";
+import { collect, retainedSource, useNormalizedOutput } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { content, registerComponents, validateDocument } from "@executablemd/core";
 import { executeInstalled, sourceDigest } from "@executablemd/core/host";

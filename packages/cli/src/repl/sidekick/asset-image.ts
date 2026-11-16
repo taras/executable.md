@@ -1,4 +1,4 @@
-import type { PromptImage } from "@executablemd/core/api";
+import type { PromptImage } from "@executablemd/agent/api";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { Operation } from "effection";

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { agentSessionKeyDigest } from "@executablemd/runtime";
 import { Err, Ok } from "effection";

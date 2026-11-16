@@ -102,6 +102,9 @@ importers:
       '@executablemd/acp':
         specifier: workspace:*
         version: link:packages/acp
+      '@executablemd/agent':
+        specifier: workspace:*
+        version: link:packages/agent
       '@executablemd/cli':
         specifier: workspace:*
         version: link:packages/cli
@@ -168,6 +171,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.9.0
         version: 1.9.0(zod@4.6.7)
+      '@executablemd/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
@@ -187,6 +193,27 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
+  packages/agent:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: 0.6.0
+        version: 0.6.0(effection@4.1.0)
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.7
+
   packages/cli:
     dependencies:
       '@agentclientprotocol/sdk':
@@ -198,6 +225,9 @@ importers:
       '@executablemd/acp':
         specifier: workspace:*
         version: link:../acp
+      '@executablemd/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
@@ -399,6 +429,9 @@ importers:
       '@executablemd/acp':
         specifier: workspace:*
         version: link:../acp
+      '@executablemd/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
@@ -541,6 +574,9 @@ importers:
       '@effectionx/fs':
         specifier: 0.3.0
         version: 0.3.0(effection@4.1.0)
+      '@executablemd/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core

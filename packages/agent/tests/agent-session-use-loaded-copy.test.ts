@@ -29,11 +29,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import type { Session, SessionConfiguration } from "../src/agent/agent-api.ts";
-import { claimsConfiguration, configurationOf, isSessionUse } from "../src/agent/session-use.ts";
+import type { Session, SessionConfiguration } from "../src/agent-api.ts";
+import { claimsConfiguration, configurationOf, isSessionUse } from "../src/session-use.ts";
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
-const SESSION_USE_MODULE = fileURLToPath(new URL("../src/agent/session-use.ts", import.meta.url));
+const SESSION_USE_MODULE = fileURLToPath(new URL("../src/session-use.ts", import.meta.url));
 
 const SESSION: Session = { sessionKey: "xmd:v1:review", cwd: "/repo" };
 

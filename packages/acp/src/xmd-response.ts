@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentPromptEvent } from "@executablemd/core";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
 
 const identity: z.ZodString = z.string().min(1).max(512);
 const json: z.ZodJSONSchema = z.json();

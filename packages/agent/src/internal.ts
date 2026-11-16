@@ -14,7 +14,7 @@ import type { Operation } from "effection";
 import type { PermissionMode, Session } from "./agent-api.ts";
 import type { AgentPromptPublisher } from "./publication.ts";
 import type { AgentPromptError } from "./errors.ts";
-import type { Expansion } from "../expansion.ts";
+import type { Expansion } from "@executablemd/core";
 
 /** `path:line:column`, `line:column`, or `unknown` — the durable effect key. */
 export function formatLocation(metadata: Expansion): string {

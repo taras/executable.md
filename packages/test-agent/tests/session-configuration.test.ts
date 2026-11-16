@@ -4,13 +4,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation, Result } from "effection";
 import * as path from "node:path";
-import {
-  agentIdentityComponents,
-  content,
-  registerComponents,
-  inlineSource,
-  installAgentComponents,
-} from "@executablemd/core";
+import { content, registerComponents, inlineSource } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import { installAnswerProvider } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { forEach } from "@effectionx/stream-helpers";

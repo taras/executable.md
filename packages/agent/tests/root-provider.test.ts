@@ -16,22 +16,22 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute } from "../src/execute.ts";
-import { Agent } from "../src/agent/agent-api.ts";
-import { sessionOf } from "../src/agent/session-use.ts";
-import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
-import { AgentPromptError } from "../src/agent/errors.ts";
+import { execute } from "../../core/src/execute.ts";
+import { Agent } from "../src/agent-api.ts";
+import { sessionOf } from "../src/session-use.ts";
+import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent-api.ts";
+import { AgentPromptError } from "../src/errors.ts";
 import {
   AgentProviderInstallError,
   installAgentProvider,
   registerAgentProvider,
-} from "../src/agent/provider-api.ts";
-import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
-import type { AgentLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
-import type { AgentSessionSetup } from "../src/agent/session-setup.ts";
-import type { ProviderSessionConfiguration } from "../src/agent/provider-configuration.ts";
-import { openSessionRequest } from "../src/agent/session-request.ts";
-import { installAgentComponents } from "../src/agent/components.ts";
+} from "../src/provider-api.ts";
+import type { AgentProviderFactory, AgentProviderOptions } from "../src/provider-api.ts";
+import type { AgentLaunchCoordinator } from "../src/launch-coordinator.ts";
+import type { AgentSessionSetup } from "../src/session-setup.ts";
+import type { ProviderSessionConfiguration } from "../src/provider-configuration.ts";
+import { openSessionRequest } from "../src/session-request.ts";
+import { installAgentComponents } from "../src/components.ts";
 import type { Json } from "@executablemd/core";
 
 interface ProviderState {

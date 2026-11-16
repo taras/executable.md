@@ -24,7 +24,7 @@
 
 import { each, race, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
-import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/core";
+import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/agent/api";
 import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./xmd-response.ts";

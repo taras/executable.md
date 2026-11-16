@@ -48,16 +48,15 @@ import type { Operation, Result } from "effection";
 import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import {
-  Agent,
   Syntax,
-  agentIdentityComponents,
-  installAgentComponents,
   useNormalizedOutput,
   Component,
   Execution,
   retainedSource,
   useTempFileCompiler,
 } from "@executablemd/core";
+import { Agent } from "@executablemd/agent/api";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type { SyntaxSymbols, FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";

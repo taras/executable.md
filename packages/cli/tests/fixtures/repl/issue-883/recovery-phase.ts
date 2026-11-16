@@ -28,7 +28,7 @@ import { ensure, main, Ok, race, spawn, suspend, until, withResolvers } from "ef
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
 
 import { ReplHost } from "../../../../src/repl/host.ts";
 import { installReplHost } from "../../../../src/repl-assembly.ts";
@@ -79,7 +79,7 @@ import {
   resolveSessionDetails,
 } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
-import { installAgentComponents } from "@executablemd/core";
+import { installAgentComponents } from "@executablemd/agent/host";
 import type { FakeAcp } from "../../../support/fake-acp.ts";
 
 /** The conversation and response a reply's control belongs to. */

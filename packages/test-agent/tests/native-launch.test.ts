@@ -16,14 +16,15 @@
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { agentIdentityComponents, useTempFileCompiler } from "@executablemd/core";
+import { useTempFileCompiler } from "@executablemd/core";
+import { agentIdentityComponents } from "@executablemd/agent/host";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { installAgentComponents } from "@executablemd/core";
+import { installAgentComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
 import { API, installControlledLauncher, useHostFiles } from "@executablemd/runtime";

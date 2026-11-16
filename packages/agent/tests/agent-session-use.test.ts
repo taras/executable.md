@@ -14,7 +14,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { Session } from "../src/agent/agent-api.ts";
+import type { Session } from "../src/agent-api.ts";
 import {
   AgentSessionUseError,
   claimsConfiguration,
@@ -23,7 +23,7 @@ import {
   issueSessionUse,
   readSessionUse,
   sessionOf,
-} from "../src/agent/session-use.ts";
+} from "../src/session-use.ts";
 
 const SESSION: Session = { sessionKey: "xmd:v1:a", cwd: "/repo", agentSessionId: "agent-1" };
 

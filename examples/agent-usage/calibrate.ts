@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import type { PromptUsage } from "@executablemd/core";
+import type { PromptUsage } from "@executablemd/agent/api";
 import { ALLOWANCE, HELP, parseSelection, Refusal } from "./selection.ts";
 import type { Selection } from "./selection.ts";
 import {

@@ -26,14 +26,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import {
-  agentIdentityComponents,
   collect,
   Component,
   execute,
   inspectComponent,
-  installAgentComponents,
   useTempFileCompiler,
 } from "@executablemd/core";
+import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
 import type { ComponentInfo } from "@executablemd/core";
 import { installTestingComponents } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";

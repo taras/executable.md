@@ -567,11 +567,13 @@ const INSPECTION_MODELS =
   '{id:"small",efforts:{selected:"low",options:["low"]}},' +
   '{id:"sol",efforts:{selected:"medium",options:["medium","high"]}}]}';
 
+const INSPECTION_AGENT_API = new URL("../../agent/api.ts", import.meta.url).href;
+
 const INSPECTION_PROBE = doc(
   '<AgentProvider name="acpx" defaultAgent="codex">',
   "",
   "```js ephemeral eval",
-  'import { Agent } from "@executablemd/core";',
+  `import { Agent } from ${JSON.stringify(INSPECTION_AGENT_API)};`,
   'const choices = yield* Agent.operations.options("codex", { model: "sol" });',
   'if (choices.agent !== "codex" || choices.model?.selected !== "sol" ||',
   '    choices.model?.options.map((choice) => choice.id).join(",") !== "small,sol" ||',
@@ -595,7 +597,8 @@ function inspectionHost(observe = false): string {
   const runtime = new URL("../../runtime/mod.ts", import.meta.url).href;
   const install = cliRuntime() === "deno" ? "useDataUriCompiler" : "useTempFileCompiler";
   return doc(
-    `import { Agent, registerComponents, ${install} } from ${JSON.stringify(core)};`,
+    `import { registerComponents, ${install} } from ${JSON.stringify(core)};`,
+    `import { Agent } from ${JSON.stringify(INSPECTION_AGENT_API)};`,
     `import { writeTextFile } from ${JSON.stringify(runtime)};`,
     'import { fileURLToPath } from "node:url";',
     'const trace = fileURLToPath(new URL("./inspection-events.json", import.meta.url));',

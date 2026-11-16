@@ -105,29 +105,24 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, Result, Stream, Task } from "effection";
+import { GeneratedXmdRootError, previewGeneratedXmdRoot } from "@executablemd/core/host";
 import {
   AGENT_PROMPT,
   AgentReplyWithheldError,
-  GeneratedXmdRootError,
   parsePromptRecord,
-  previewGeneratedXmdRoot,
   useAgentPromptPublisher,
-} from "@executablemd/core/host";
-import type {
-  AgentPromptHandle,
-  AgentPromptPublisher,
-  ExecutionInstallation,
-  GeneratedXmdRootResult,
-} from "@executablemd/core/host";
+} from "@executablemd/agent/host";
+import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
+import type { AgentPromptHandle, AgentPromptPublisher } from "@executablemd/agent/host";
 import { serializeError } from "@executablemd/durable-streams";
-import { useAgentConversation } from "@executablemd/core/host";
-import type { AgentConversation } from "@executablemd/core/host";
+import { useAgentConversation } from "@executablemd/agent/host";
+import type { AgentConversation } from "@executablemd/agent/host";
 import type {
   AgentOptions,
   AgentOptionsRequest,
   PromptImage,
   SessionConfiguration,
-} from "@executablemd/core";
+} from "@executablemd/agent/api";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 
 import { ReplHost } from "../host.ts";

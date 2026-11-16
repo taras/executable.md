@@ -53,6 +53,7 @@
   "devDependencies": {
     "@durable-streams/server": "^0.3.8",
     "@executablemd/acp": "workspace:*",
+    "@executablemd/agent": "workspace:*",
     "@executablemd/cli": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
