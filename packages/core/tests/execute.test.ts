@@ -8,7 +8,7 @@
  *   Golden run — InMemoryStream() (empty) + useStubFs(files) → assert output + journal
  *   Replay    — reuse same InMemoryStream (has events) + useNoIO() → zero I/O
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
@@ -26,9 +26,15 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "../../test-support/failure-journal.ts";
 
-const journalCase = journalCases("packages/core/tests/execute.test.ts");
+const OWNER = "packages/core/tests/execute.test.ts";
+
+function journalCase(name: string, source: string, body: (stream: InMemoryStream) => Operation<void>): void {
+  it(name, function* () {
+    yield* body(yield* useJournalStream(source));
+  });
+}
 
 /**
  * A stand-in child that behaves like one: it writes its output to the display
@@ -116,6 +122,7 @@ function* useFailingStdoutExec(): Operation<void> {
 }
 
 describe("Tier B — durable import", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // B1: durableImportComponent golden run — journal shape
   it("B1: import golden run — journal has import_component with path and content", function* () {
     const stream = new InMemoryStream();
@@ -311,6 +318,7 @@ describe("Tier B — durable import", () => {
 });
 
 describe("Tier D — code execution and modifiers", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // D1: bash exec golden run
   it("D1: bash exec golden run — stdout displayed, exec in journal", function* () {
     const stream = new InMemoryStream();
@@ -719,6 +727,7 @@ describe("Tier D — code execution and modifiers", () => {
 });
 
 describe("execute", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // E1: Full document golden run
   it("E1: full document golden run — root + component + exec", function* () {
     const stream = new InMemoryStream();
@@ -1261,6 +1270,7 @@ describe("Component Api dispatch — journal shape", () => {
 });
 
 describe("component-declared output — document workflow", () => {
+  beforeEach(journalBeforeEach(OWNER));
   journalCase(
     "applies <Output> to an imported component invoked from a streaming root",
     "README.md",
