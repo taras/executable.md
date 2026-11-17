@@ -63,6 +63,8 @@ export interface TestDiagnostics {
   execution(kind: "root" | "child", source: string): ExecutionDiagnostics;
   /** The first failure to deliver a progress line, or `Ok` when none failed. */
   delivery(): Result<void>;
+  /** Counts recorded by root documents. Nested execution results are evidence. */
+  results(): Readonly<{ pass: number; fail: number }>;
 }
 
 /** What one execution is observed and preserved through. */
@@ -102,15 +104,35 @@ function* artifactDirectory(working: string): Operation<string> {
  * diagnostics drains what was accepted before it returns — on success, failure
  * and cancellation alike — and nothing is written after that.
  */
-export function useTestDiagnostics(
+export function* useTestDiagnostics(
+  sink: DeliverySink,
+  mode?: JournalCase | boolean,
+): Operation<TestDiagnostics> {
+  const testCase = typeof mode === "boolean" ? undefined : mode;
+  return yield* (yield* prepareTestDiagnostics(sink, testCase, mode === true))();
+}
+
+/** Capture the artifact location before work whose diagnostics open after it joins. */
+export function* prepareTestDiagnostics(
   sink: DeliverySink,
   testCase?: JournalCase,
-): Operation<TestDiagnostics> {
+  failuresOnly = false,
+): Operation<() => Operation<TestDiagnostics>> {
+  const working = yield* cwd();
+  const directory = yield* artifactDirectory(working);
+  const shown = relativeTo(working);
   const attribution = testCase === undefined ? undefined : { ...testCase };
+  return () => testDiagnosticsAt(sink, directory, shown, attribution, failuresOnly);
+}
+
+function testDiagnosticsAt(
+  sink: DeliverySink,
+  directory: string,
+  shown: (source: string) => string,
+  attribution: JournalCase | undefined,
+  failuresOnly: boolean,
+): Operation<TestDiagnostics> {
   return resource(function* (provide) {
-    const working = yield* cwd();
-    const directory = yield* artifactDirectory(working);
-    const shown = relativeTo(working);
     const owner = yield* useScope();
     const lines = createQueue<string, void>();
     let delivery: Result<void> = Ok(undefined);
@@ -136,6 +158,7 @@ export function useTestDiagnostics(
     });
 
     const counts = { root: 0, child: 0 };
+    const results = { pass: 0, fail: 0 };
     yield* provide({
       execution(kind, source) {
         const ordinal = ++counts[kind];
@@ -145,7 +168,21 @@ export function useTestDiagnostics(
         const named = `${kind} ${ordinal} ${displayedSource}`;
         const context = kind === "root" ? "" : `${named}: `;
         return {
-          observe: () => observe(owner, shown, (line) => emit(`${context}${line}`)),
+          observe: () =>
+            observe(
+              owner,
+              shown,
+              (line, failure = false) => {
+                if (!failuresOnly || failure) {
+                  emit(`${context}${line}`);
+                }
+              },
+              (status) => {
+                if (kind === "root") {
+                  results[status] += 1;
+                }
+              },
+            ),
           journal: <T>(failed: (value: T) => boolean): FailureJournalHost<T> => ({
             failed,
             *save(events: readonly DurableEvent[]) {
@@ -153,7 +190,12 @@ export function useTestDiagnostics(
               if (attribution !== undefined) {
                 yield* writeTextFile(
                   `${stem}.case.json`,
-                  JSON.stringify({ ...attribution, kind, ordinal, source: displayedSource }) + "\n",
+                  JSON.stringify({
+                    ...attribution,
+                    kind,
+                    ordinal,
+                    source: displayedSource,
+                  }) + "\n",
                 );
               }
               yield* writeTextFile(file, events.map(serializeDurableEvent).join(""));
@@ -167,6 +209,7 @@ export function useTestDiagnostics(
         };
       },
       delivery: () => delivery,
+      results: () => results,
     });
   });
 }
@@ -224,7 +267,8 @@ interface ObservedTest {
 function* observe(
   owner: Scope,
   shown: (path: string) => string,
-  report: (line: string) => void,
+  report: (line: string, failure?: boolean) => void,
+  record: (status: TestResult["status"]) => void,
 ): Operation<void> {
   const tests = new Map<string, ObservedTest[]>();
   let current: ObservedTest | undefined;
@@ -246,12 +290,12 @@ function* observe(
         }
         if (phase.phase === "complete") {
           if (active) {
-            report(`${phase.result.ok ? "done" : "failed"} ${what}`);
+            report(`${phase.result.ok ? "done" : "failed"} ${what}`, !phase.result.ok);
           }
         } else if (phase.phase === "cancelled") {
           interrupted(test, what);
           if (active) {
-            report(`cancelled ${what}`);
+            report(`cancelled ${what}`, true);
           }
         }
         yield* each.next();
@@ -298,7 +342,7 @@ function* observe(
       result.error?.kind ?? "error",
       ...(test?.interrupted === undefined ? [] : [`interrupted ${test.interrupted}`]),
     ];
-    report(`fail ${name} at ${where} (${why.join("; ")})`);
+    report(`fail ${name} at ${where} (${why.join("; ")})`, true);
   };
 
   yield* Component.around({
@@ -352,7 +396,7 @@ function* observe(
           if (!settled && !test.recorded) {
             const detail =
               test.interrupted === undefined ? "" : ` (interrupted ${test.interrupted})`;
-            report(`cancelled ${named} at ${test.shown}${detail}`);
+            report(`cancelled ${named} at ${test.shown}${detail}`, true);
           }
         }
       }
@@ -362,6 +406,7 @@ function* observe(
   yield* Test.around({
     *record([result], next) {
       finished(result);
+      record(result.status);
       yield* next(result);
     },
   });
