@@ -81,10 +81,34 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+### Choose a reporter
+
+The default `--reporter=pretty` prints the rendered report on stdout and
+progress on stderr. Use `--reporter=failures` for a compact report in CI or a
+Sidekick Round.
+
+```sh
+xmd test ./tests --reporter=failures
+```
+
+The failures reporter omits the rendered report, directory headings, test
+starts, and successful outcomes. It writes failure and cancellation
+diagnostics and journal paths to stderr. A completed invocation ends with one
+summary on stderr.
+
+```text
+[xmd test] 11 passed | 1 failed (324ms) · 1 of 3 documents failed
+```
+
+The counts cover tests recorded by the root documents. Nested executions can
+add diagnostics and journals. Exit status and journal retention follow the same
+rules for either reporter. Output that commands write directly to the terminal
+keeps its normal routing.
+
 ### Progress and failure journals
 
-While `xmd test` runs, it writes a short progress report to stderr, so a pipe or
-CI log shows which test is running and which operation a timeout interrupted:
+The pretty reporter writes live progress to stderr. A pipe or CI log shows
+which test is running and which operation a timeout interrupted.
 
 ```text
 [xmd test] start test "held" at suite.test.md:1:1
@@ -240,8 +264,8 @@ registrations, and testing sessions belong to one document and are torn down
 before the next one starts. A document that declares no tests fails on its own
 rather than inheriting an earlier document's results.
 
-Each document's report is preceded by a heading naming its relative path, and a
-failure is reported against that path. A failing document does not stop the
+The pretty reporter precedes each document's report with a heading naming its
+relative path. Both reporters identify a failed document by that path. A failing document does not stop the
 run; the remaining documents still execute, and a closing line names how many
 of them failed. The run exits `0` only when every discovered document passes,
 and `1` when any document fails or when no document matches.
@@ -930,7 +954,7 @@ the first failure of either portion. With a selection it resolves that shard and
 invokes its files serially, in sorted order, each through that runtime's
 one-file command:
 
-- Deno — `deno test --allow-all --frozen <file>`
+- Deno — `deno test --allow-all --frozen --reporter=dot <file>`
 - Node — `tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 <file>`
 - Bun — `bun test --timeout=300000 <file>`
 
@@ -941,8 +965,11 @@ source entrypoint, resolved from the runner's checkout:
 - Node — `tsx --tsconfig tsconfig.node.json packages/cli/src/node.ts`
 - Bun — `bun packages/cli/src/bun.ts`
 
-The CLI receives `test <file>` and runs from the repository root with its inherited
-environment (`PATH`, the Deno cache and install variables, `XDG_CACHE_HOME`,
+The CLI runs from the repository root. A shard names each Markdown suite when
+it starts and passes `test <file> --reporter=failures`. Weight measurement
+passes the same arguments. Local unsharded runs use the default reporter.
+Deno weight measurement also uses the same dot reporter as Deno shards.
+The CLI inherits the environment (`PATH`, the Deno cache and install variables, `XDG_CACHE_HOME`,
 `TMPDIR` and `XMD_TEST_ARTIFACTS`). Individually registered suites use the
 CLI's default includes and file permissions. Deno launches of `Plan`,
 `NativeSessionLaunch` and `SessionConfiguration` select the test-only worker
@@ -988,8 +1015,9 @@ A malformed runtime, index, or count is refused before any test process starts.
 A numeric failure does not prevent the files assigned after it: the shard
 continues, retains the first failed file and its status, and exits with that
 status once every assigned file has had its chance. A status without a numeric
-code — a signalled child — is failure. Native output is neither captured,
-truncated, nor replaced by a summary.
+code — a signalled child — is failure. The shard streams the output its
+selected reporter emits. Deno's dot reporter keeps failure details and omits
+test console logs.
 
 Cancellation is distinct from failure. Halting a shard halts the process group
 of the file it is running, releases that file's scratch state and starts no
