@@ -22,7 +22,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { collect } from "../src/collect.ts";
 import { GlobError } from "../src/components/Glob.ts";
 import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";

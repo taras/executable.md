@@ -1,4 +1,4 @@
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -22,9 +22,7 @@ import type { SourceOrigin } from "../src/scanner.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-
-const journalCase = journalCases("packages/core/tests/switch.test.ts");
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 interface SwitchRun {
   segments: Segment[];
@@ -653,6 +651,7 @@ describe("Tier SWITCH / CASE — error observation", () => {
  * with a selected control that proves the counter would have moved.
  */
 describe("Tier SWITCH / CASE — only the selected body works", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/switch.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   const PROBE_DOC = (selector: string) =>
@@ -693,7 +692,7 @@ describe("Tier SWITCH / CASE — only the selected body works", () => {
     return scoped(function* () {
       const reads: string[] = [];
       const commands: string[] = [];
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream("test.md");
       const files: Record<string, string> = {
         "components/Probe.md": "PROBE_BODY",
         "test.md": PROBE_DOC(selector),
@@ -784,6 +783,7 @@ describe("Tier SWITCH / CASE — only the selected body works", () => {
  * Api itself.
  */
 describe("Tier SWITCH / CASE — provider boundary", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/switch.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   function runSampleProbe(selector: string): Operation<{ calls: string[]; output: string }> {
@@ -812,9 +812,8 @@ describe("Tier SWITCH / CASE — provider boundary", () => {
         },
       });
 
-      const output = asText(
-        yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
-      );
+      const stream = yield* useJournalStream("test.md");
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
       return { calls, output };
     });
   }
@@ -834,64 +833,59 @@ describe("Tier SWITCH / CASE — provider boundary", () => {
 });
 
 describe("Tier SWITCH / CASE — document execution", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/switch.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
-  journalCase(
-    "SW55: a <Return> in the selected case satisfies the value body that owns it",
-    "test.md",
-    function* (journal) {
-      yield* useStubFs({
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Switch value="ship">',
-          '<Case value="hold"><Return value="held" /></Case>',
-          '<Case value="ship"><Return value="picked" /></Case>',
-          "</Switch>",
-          "",
-        ].join("\n"),
-        "test.md": '<Verdict as="v" />\n\nGot {v}\n',
-      });
-      yield* useEchoExec();
+  it("SW55: a <Return> in the selected case satisfies the value body that owns it", function* () {
+    const journal = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "Verdict.md": [
+        "---",
+        "returns:",
+        "  type: string",
+        "---",
+        "",
+        '<Switch value="ship">',
+        '<Case value="hold"><Return value="held" /></Case>',
+        '<Case value="ship"><Return value="picked" /></Case>',
+        "</Switch>",
+        "",
+      ].join("\n"),
+      "test.md": '<Verdict as="v" />\n\nGot {v}\n',
+    });
+    yield* useEchoExec();
 
-      const output = asText(yield* collect(yield* execute({ path: "test.md", stream: journal })));
-      expect(output).toContain("Got picked");
-      expect(output).not.toContain("held");
-    },
-  );
+    const output = asText(yield* collect(yield* execute({ path: "test.md", stream: journal })));
+    expect(output).toContain("Got picked");
+    expect(output).not.toContain("held");
+  });
 
-  journalCase(
-    "SW56: a <Switch> projected through <Content /> reads the caller's bindings",
-    "test.md",
-    function* (journal) {
-      yield* useStubFs({
-        "components/Wrap.md": "<Content />",
-        "test.md": [
-          "```js eval",
-          "const state = 'waiting';",
-          "```",
-          "<Wrap>",
-          "<Switch value={state}>",
-          "<Case value={'ready'}>READY</Case>",
-          "<Case value={'waiting'}>WAITING</Case>",
-          "</Switch>",
-          "</Wrap>",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("SW56: a <Switch> projected through <Content /> reads the caller's bindings", function* () {
+    const journal = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/Wrap.md": "<Content />",
+      "test.md": [
+        "```js eval",
+        "const state = 'waiting';",
+        "```",
+        "<Wrap>",
+        "<Switch value={state}>",
+        "<Case value={'ready'}>READY</Case>",
+        "<Case value={'waiting'}>WAITING</Case>",
+        "</Switch>",
+        "</Wrap>",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = asText(yield* collect(yield* execute({ path: "test.md", stream: journal })));
-      expect(output).toContain("WAITING");
-      expect(output).not.toContain("READY");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    const output = asText(yield* collect(yield* execute({ path: "test.md", stream: journal })));
+    expect(output).toContain("WAITING");
+    expect(output).not.toContain("READY");
+    expect(output).not.toContain("ERROR");
+  });
 
   it("SW57: only the selected case reaches the journal", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": [
         "```js eval",

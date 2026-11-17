@@ -16,7 +16,7 @@
  * capability acquires it *once*, however many times it is asked for.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { all, scoped, spawn } from "effection";
 import type { Operation } from "effection";
@@ -36,9 +36,9 @@ import { useRunComposition } from "../src/deno/run-composition/provider.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { Repository } from "@executablemd/git/api";
 import type { RepositoryHost, GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
-const journalCase = journalCases("packages/git/tests/run-composition-lazy.test.ts");
+const OWNER = "packages/git/tests/run-composition-lazy.test.ts";
 
 /** Every acquisition this provider can make, counted where it happens. */
 interface Acquisitions {
@@ -79,7 +79,11 @@ function counting(seen: Acquisitions, directory: string): RepositoryHost {
 }
 
 /** One document, run with the provider installed over a counting host. */
-function* run(stream: InMemoryStream, source: string, seen: Acquisitions): Operation<string> {
+function* run(
+  stream: InMemoryStream | undefined,
+  source: string,
+  seen: Acquisitions,
+): Operation<string> {
   const directory = yield* useTempDirectory("xmd-lazy");
   const root = yield* useTempDirectory("xmd-lazy-root");
   return String(
@@ -98,12 +102,18 @@ function* run(stream: InMemoryStream, source: string, seen: Acquisitions): Opera
           return undefined;
         },
       });
-      return yield* collect(yield* execute({ ...inlineSource(source), stream }));
+      return yield* collect(
+        yield* execute({
+          ...inlineSource(source),
+          stream: stream ?? (yield* useJournalStream("<eval>")),
+        }),
+      );
     }),
   );
 }
 
 describe("what the ordinary repository provider acquires, and when", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("acquires nothing at installation", function* () {
     const seen = counters();
     const directory = yield* useTempDirectory("xmd-lazy");
@@ -114,21 +124,17 @@ describe("what the ordinary repository provider acquires, and when", () => {
     expect(seen).toEqual({ directories: 0, commands: [], identities: 0 });
   });
 
-  journalCase(
-    "acquires nothing for a document that writes no repository component",
-    "<eval>",
-    function* (stream) {
-      const seen = counters();
-      const rendered = yield* run(stream, "a plain document\n", seen);
-      // The document really ran — an empty render would satisfy every count.
-      expect(rendered).toContain("a plain document");
-      expect(seen).toEqual({ directories: 0, commands: [], identities: 0 });
-    },
-  );
-
-  journalCase("acquires no repository capability for a bare <Dir>", "<eval>", function* (stream) {
+  it("acquires nothing for a document that writes no repository component", function* () {
     const seen = counters();
-    const rendered = yield* run(stream, '<Dir path="notes">local work only</Dir>\n', seen);
+    const rendered = yield* run(undefined, "a plain document\n", seen);
+    // The document really ran — an empty render would satisfy every count.
+    expect(rendered).toContain("a plain document");
+    expect(seen).toEqual({ directories: 0, commands: [], identities: 0 });
+  });
+
+  it("acquires no repository capability for a bare <Dir>", function* () {
+    const seen = counters();
+    const rendered = yield* run(undefined, '<Dir path="notes">local work only</Dir>\n', seen);
     expect(rendered).toContain("local work only");
     // `<Dir>` makes a directory. It selects no repository, runs no `git`, opens
     // no session and reads no identity.

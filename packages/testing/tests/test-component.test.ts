@@ -6,7 +6,7 @@
  * being made.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -18,14 +18,14 @@ import { Component, registerComponents, useTempFileCompiler } from "@executablem
 import type { ErrorSegment } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
 import { absorbTestFailure, Staging } from "../src/test-component.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { documentCases, runDoc, withFreshDocument } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
 
 const OWNER = "packages/testing/tests/test-component.test.ts";
-const journalCase = journalCases(OWNER);
-const documentCase = documentCases(OWNER);
+const documentCase = documentCases();
 
 describe("<Test> as a function component", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** An eval block whose retained work fails while the test is dismantled. */
@@ -88,66 +88,61 @@ describe("<Test> as a function component", () => {
     },
   );
 
-  journalCase(
-    "keeps actual Files infrastructure failure globally terminal inside canonical Test",
-    "README.md",
-    function* (stream) {
-      let fatal: unknown;
-      let later = 0;
-      let released = false;
-      yield* registerComponents([
-        {
-          name: "LaterTestWork",
-          origin: "test-interaction",
-          props: { type: "object" },
-          *fn() {
-            later++;
-            return "later work";
-          },
+  it("keeps actual Files infrastructure failure globally terminal inside canonical Test", function* () {
+    let fatal: unknown;
+    let later = 0;
+    let released = false;
+    const stream = yield* useJournalStream("README.md");
+    yield* registerComponents([
+      {
+        name: "LaterTestWork",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          later++;
+          return "later work";
         },
-        {
-          name: "TestFilesInfra",
-          origin: "test-interaction",
-          props: { type: "object" },
-          *fn() {
-            yield* ensure(() => {
-              released = true;
-            });
-            yield* API.Files.around({
-              *readTextFile() {
-                throw new Error("broken provider");
-              },
-            });
-            try {
-              yield* invokeFiles(
-                API.Files.operations.readTextFile({ cwd: ".", path: "notes.txt" }),
-              );
-            } catch (error) {
-              fatal = filesFatalFailure(error);
-              throw error;
-            }
-            return "unreachable";
-          },
+      },
+      {
+        name: "TestFilesInfra",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          yield* ensure(() => {
+            released = true;
+          });
+          yield* API.Files.around({
+            *readTextFile() {
+              throw new Error("broken provider");
+            },
+          });
+          try {
+            yield* invokeFiles(API.Files.operations.readTextFile({ cwd: ".", path: "notes.txt" }));
+          } catch (error) {
+            fatal = filesFatalFailure(error);
+            throw error;
+          }
+          return "unreachable";
         },
-      ]);
-      const run = yield* runDoc(
-        {
-          "README.md":
-            '<Testing><Test name="infra"><TestFilesInfra /></Test><Test name="later"><LaterTestWork /></Test></Testing>',
-        },
-        { stream },
-      );
-      expect(released).toBe(true);
-      expect(fatal).toBeDefined();
-      expect(run.completion.ok).toBe(false);
-      if (!run.completion.ok) {
-        expect(filesFatalFailure(run.completion.error)).toBe(fatal);
-      }
-      expect(later).toBe(0);
-      expect(run.results).toHaveLength(0);
-      expect(stream.snapshot().filter((event) => event.type === "close")).toHaveLength(0);
-    },
-  );
+      },
+    ]);
+    const run = yield* runDoc(
+      {
+        "README.md":
+          '<Testing><Test name="infra"><TestFilesInfra /></Test><Test name="later"><LaterTestWork /></Test></Testing>',
+      },
+      { stream },
+    );
+    expect(released).toBe(true);
+    expect(fatal).toBeDefined();
+    expect(run.completion.ok).toBe(false);
+    if (!run.completion.ok) {
+      expect(filesFatalFailure(run.completion.error)).toBe(fatal);
+    }
+    expect(later).toBe(0);
+    expect(run.results).toHaveLength(0);
+    expect(stream.snapshot().filter((event) => event.type === "close")).toHaveLength(0);
+  });
 
   // The raise interceptor answers nearest-first so <AssertThrows> can catch a
   // diagnostic before the test claims it. That must not cost the property the
@@ -313,33 +308,30 @@ describe("<Test> as a function component", () => {
   // Staging defers the journal write, so the thing to pin is that deferring it
   // does not reorder it: results are recorded and journalled in discovery
   // order, including the one an upgrade rewrote after its test had returned.
-  journalCase(
-    "records and journals in discovery order when a middle test tears down badly",
-    "README.md",
-    function* (stream) {
-      const doc = [
-        "<Testing>",
-        '<Test name="one"><Assert expr={true} /></Test>',
-        '<Test name="two">',
-        FAILING_CLEANUP,
-        "<Assert expr={true} /></Test>",
-        '<Test name="three"><Assert expr={true} /></Test>',
-        "</Testing>",
-        "",
-      ].join("\n");
+  it("records and journals in discovery order when a middle test tears down badly", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="one"><Assert expr={true} /></Test>',
+      '<Test name="two">',
+      FAILING_CLEANUP,
+      "<Assert expr={true} /></Test>",
+      '<Test name="three"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
 
-      const run = yield* runDoc({ "README.md": doc }, { stream });
+    const stream = yield* useJournalStream("README.md");
+    const run = yield* runDoc({ "README.md": doc }, { stream });
 
-      expect(run.results.map((r) => [r.name, r.error?.kind])).toEqual([
-        ["one", undefined],
-        ["two", "teardown"],
-        ["three", undefined],
-      ]);
-      const journalled = yield* entriesOf(stream, "test_result");
-      expect(journalled).toHaveLength(3);
-      expect(journalled).toEqual([...journalled].sort((a, b) => a.localeCompare(b)));
-    },
-  );
+    expect(run.results.map((r) => [r.name, r.error?.kind])).toEqual([
+      ["one", undefined],
+      ["two", "teardown"],
+      ["three", undefined],
+    ]);
+    const journalled = yield* entriesOf(stream, "test_result");
+    expect(journalled).toHaveLength(3);
+    expect(journalled).toEqual([...journalled].sort((a, b) => a.localeCompare(b)));
+  });
 
   // A root run has no <Testing> element, so nothing in the document flushes the
   // last test. The region useTesting installs settles inside durableRun, before
@@ -377,9 +369,10 @@ describe("<Test> as a function component", () => {
 
   // The root region is flush-only: it reports no outcome of its own, so a root
   // run's journal looks exactly like one without it.
-  journalCase("writes no boundary entry for a root run", "README.md", function* (stream) {
+  it("writes no boundary entry for a root run", function* () {
     const doc = ['<Test name="solo"><Assert expr={true} /></Test>', ""].join("\n");
 
+    const stream = yield* useJournalStream("README.md");
     yield* runDoc({ "README.md": doc }, { stream, testing: true });
 
     expect(yield* entriesOf(stream, "testing_boundary")).toEqual([]);
