@@ -17,7 +17,12 @@
  * fence, and E8's joined teardown before publication.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   Err,
@@ -74,6 +79,8 @@ import type {
   GitHostObservation,
   GitHostProvider,
 } from "@executablemd/git/api";
+
+const JOURNAL_OWNER = "packages/git/tests/git-host-owned.test.ts";
 
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-7","entry-2"]';
 const SITE = "site-9f2c";
@@ -320,8 +327,9 @@ function refusingGitHostAppends(inner: InMemoryStream): DurableStream {
 }
 
 describe("Tier OW — owner-specified external Git-host reconciliation", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("OW1: reconciles under exactly the stated owner and site, with no workflow run", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
 
     const seen = yield* runOwned({ stream, provider: host.provider });
@@ -362,6 +370,7 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
   });
 
   it("OW2: another owner, another site and a second occurrence are separate work", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const identity = (owner: string, site: string) => ({ runId: owner, expansionId: site });
     const complete = (owner: string, site: string): CompleteGitHostEffectRequest => ({
       identity: identity(owner, site),
@@ -379,7 +388,6 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
     // They are two occurrences at two positions, which is allowed: telling them
     // apart is the engine's positional matching, and nothing deduplicates by
     // name.
-    const stream = new InMemoryStream();
     const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
     const seen = yield* runOwned({ stream, provider: host.provider, calls: 2 });
 
@@ -420,7 +428,7 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
   });
 
   it("OW4: a completion the caller cannot account for is fatal and publishes nothing", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
     const refusal = new Error("this completion names a push this invocation did not describe");
 
@@ -487,7 +495,7 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
   });
 
   it("OW6: attempt resources survive both phases, and a held cleanup holds publication", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const order: string[] = [];
     stream.onAppend = (event) => {
       if (event.type === "yield" && event.description.type === GIT_HOST_EFFECT) {
@@ -569,45 +577,49 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
     ]);
   });
 
-  it("OW7: a cleanup failure publishes neither a success nor an authored refusal", function* () {
-    const broken = new Error("the attempt's own scratch directory could not be removed");
+  {
+    const name = "OW7: a cleanup failure publishes neither a success nor an authored refusal";
+    it(name, function* () {
+      const succeeded = yield* useJournalStream("<eval>");
+      yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (refused) {
+        const broken = new Error("the attempt's own scratch directory could not be removed");
 
-    // A successful reconciliation whose teardown then fails.
-    const succeeded = new InMemoryStream();
-    const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
-    const success = yield* runOwned({
-      stream: succeeded,
-      provider: host.provider,
-      *resource(): Operation<void> {
-        yield* ensure(function* () {
-          throw broken;
+        // A successful reconciliation whose teardown then fails.
+        const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+        const success = yield* runOwned({
+          stream: succeeded,
+          provider: host.provider,
+          *resource(): Operation<void> {
+            yield* ensure(function* () {
+              throw broken;
+            });
+          },
         });
-      },
-    });
 
-    expect(success.records).toEqual([]);
-    expect(host.performed).toHaveLength(1);
-    // The outcome object survived unwinding, and surviving is not enough: the
-    // attempt is no longer holding what it authored, so nothing is published.
-    expect(gitHostYields(succeeded.snapshot())).toEqual([]);
+        expect(success.records).toEqual([]);
+        expect(host.performed).toHaveLength(1);
+        // The outcome object survived unwinding, and surviving is not enough: the
+        // attempt is no longer holding what it authored, so nothing is published.
+        expect(gitHostYields(succeeded.snapshot())).toEqual([]);
 
-    // And an ordinary conflict the worker authored, on the same terms.
-    const refused = new InMemoryStream();
-    const conflicted = recordingProvider(answering(Ok(CONFLICT)));
-    const second = yield* runOwned({
-      stream: refused,
-      provider: conflicted.provider,
-      *resource(): Operation<void> {
-        yield* ensure(function* () {
-          throw broken;
+        // And an ordinary conflict the worker authored, on the same terms.
+        const conflicted = recordingProvider(answering(Ok(CONFLICT)));
+        const second = yield* runOwned({
+          stream: refused,
+          provider: conflicted.provider,
+          *resource(): Operation<void> {
+            yield* ensure(function* () {
+              throw broken;
+            });
+          },
         });
-      },
-    });
 
-    expect(second.records).toEqual([]);
-    expect(second.failures[0]).not.toBeInstanceOf(GitHostConflictError);
-    expect(gitHostYields(refused.snapshot())).toEqual([]);
-  });
+        expect(second.records).toEqual([]);
+        expect(second.failures[0]).not.toBeInstanceOf(GitHostConflictError);
+        expect(gitHostYields(refused.snapshot())).toEqual([]);
+      });
+    });
+  }
 
   it("OW8: a refused append is the first failure, and nothing is published after it", function* () {
     const backing = new InMemoryStream();
@@ -626,46 +638,50 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
     expect(gitHostYields(backing.snapshot())).toEqual([]);
   });
 
-  it("OW9: the stated identity and request are read once, before anything suspends", function* () {
-    const stream = new InMemoryStream();
-    const host = recordingProvider(answering(Ok(COMPATIBLE)));
+  {
+    const name = "OW9: the stated identity and request are read once, before anything suspends";
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
+      yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (empty) {
+        const host = recordingProvider(answering(Ok(COMPATIBLE)));
 
-    // A request object the caller keeps and edits while the attempt runs. What
-    // was reconciled is the reading taken before the first suspension.
-    const mutable: { kind: string; inputs: Json; naturalKey: Json } = {
-      kind: PUSH.kind,
-      inputs: { remote: "origin", branch: "review/push", commit: "9fceb02" },
-      naturalKey: { ref: "refs/heads/review/push" },
-    };
-    const seen = yield* runOwned({
-      stream,
-      request: mutable,
-      provider: host.provider,
-      validate: () => {
-        mutable.kind = "git-pull-request";
-        mutable.inputs = { remote: "elsewhere" };
-      },
-    });
+        // A request object the caller keeps and edits while the attempt runs. What
+        // was reconciled is the reading taken before the first suspension.
+        const mutable: { kind: string; inputs: Json; naturalKey: Json } = {
+          kind: PUSH.kind,
+          inputs: { remote: "origin", branch: "review/push", commit: "9fceb02" },
+          naturalKey: { ref: "refs/heads/review/push" },
+        };
+        const seen = yield* runOwned({
+          stream,
+          request: mutable,
+          provider: host.provider,
+          validate: () => {
+            mutable.kind = "git-pull-request";
+            mutable.inputs = { remote: "elsewhere" };
+          },
+        });
 
-    expect(seen.failures).toEqual([]);
-    expect(recordOf(seen).request.kind).toBe(PUSH.kind);
-    expect(recordOf(seen).request.inputs).toEqual({
-      remote: "origin",
-      branch: "review/push",
-      commit: "9fceb02",
-    });
+        expect(seen.failures).toEqual([]);
+        expect(recordOf(seen).request.kind).toBe(PUSH.kind);
+        expect(recordOf(seen).request.inputs).toEqual({
+          remote: "origin",
+          branch: "review/push",
+          commit: "9fceb02",
+        });
 
-    // And an identity member that names no history refuses before any of it.
-    const empty = new InMemoryStream();
-    const refused = yield* runOwned({
-      stream: empty,
-      owner: "",
-      provider: forbiddenProvider(),
+        // And an identity member that names no history refuses before any of it.
+        const refused = yield* runOwned({
+          stream: empty,
+          owner: "",
+          provider: forbiddenProvider(),
+        });
+        expect(refused.failures).toHaveLength(1);
+        expect(refused.constructions).toBe(0);
+        expect(gitHostYields(empty.snapshot())).toEqual([]);
+      });
     });
-    expect(refused.failures).toHaveLength(1);
-    expect(refused.constructions).toBe(0);
-    expect(gitHostYields(empty.snapshot())).toEqual([]);
-  });
+  }
 
   it("OW10: an unauthored throw inside the attempt withholds what it raised", function* () {
     const stream = new InMemoryStream();
@@ -687,7 +703,7 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
   });
 
   it("OW11: a provider the attempt cannot construct publishes nothing", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const unavailable = new Error("this host lends no transport for that locator");
 
     const seen = yield* runOwned({

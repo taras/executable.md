@@ -1,3 +1,8 @@
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 /**
  * Tier SL1 — `<Slice>` (spec §6.21).
  *
@@ -26,7 +31,7 @@
  * anything.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -34,7 +39,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 import { useStubFs } from "@executablemd/runtime/test";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
@@ -162,7 +167,10 @@ function controlled(): Harness {
 }
 
 /** Run `source` as the document, with `values` reachable through `<Value>`. */
+const OWNER = "packages/core/tests/slice-component.test.ts";
+
 function run(
+  stream: InMemoryStream,
   source: string,
   values: Record<string, string> = {},
   harness?: Harness,
@@ -183,7 +191,7 @@ function run(
       ),
     );
 
-    const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
+    const execution = yield* execute({ path: "doc.md", stream });
     const output = yield* forEach(function* () {}, execution.output);
     const outcome = yield* execution;
     return {
@@ -206,13 +214,14 @@ function excerpt(start: number, end: number, total: number, payload: string): st
 }
 
 /** One `<Slice>` over a `<Value>`, with nothing else in the document. */
-function* over(value: string, attributes = ""): Operation<Run> {
-  return yield* run(`<Slice${attributes}><Value key="v" /></Slice>`, { v: value });
+function* over(stream: InMemoryStream, value: string, attributes = ""): Operation<Run> {
+  return yield* run(stream, `<Slice${attributes}><Value key="v" /></Slice>`, { v: value });
 }
 
 /** The exact string `as` bound, at the capture boundary. */
-function* captured(value: string, attributes = ""): Operation<Json> {
+function* captured(stream: InMemoryStream, value: string, attributes = ""): Operation<Json> {
   const result = yield* run(
+    stream,
     `<Slice${attributes} as="window"><Value key="v" /></Slice><Probe value={window} />`,
     { v: value },
   );
@@ -235,106 +244,164 @@ const SEVEN = "A\u{1F600}BCDEF";
 const BOUNDARY = `${"a".repeat(4095)}\u{1F600}z`;
 
 describe("Tier SL1 — S1: windows, defaults, clamping and the exact note", () => {
-  it("S1: the omitted window is [0, 4096) and counts code points, not UTF-16 units", function* () {
-    expect(Array.from(BOUNDARY).length).toBe(4097);
-    expect(BOUNDARY.length).toBe(4098);
+  beforeEach(journalBeforeEach(OWNER));
+  {
+    const name = "S1: the omitted window is [0, 4096) and counts code points, not UTF-16 units";
+    it(name, function* () {
+      const stream = yield* useJournalStream("doc.md");
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        expect(Array.from(BOUNDARY).length).toBe(4097);
+        expect(BOUNDARY.length).toBe(4098);
 
-    const result = yield* over(BOUNDARY);
-    const expected = excerpt(0, 4096, 4097, `${"a".repeat(4095)}\u{1F600}`);
+        const result = yield* over(stream, BOUNDARY);
+        const expected = excerpt(0, 4096, 4097, `${"a".repeat(4095)}\u{1F600}`);
 
-    expect(result.failure).toBe("");
-    expect(result.output).toBe(expected);
-    expect(yield* captured(BOUNDARY)).toBe(expected);
-    // Stated separately: the window holds the emoji whole, so no half of a
-    // surrogate pair reached the document.
-    expect(Array.from(result.output.slice(note(0, 4096, 4097).length + 1)).length).toBe(4096);
-    expect(result.output.endsWith("\u{1F600}")).toBe(true);
-  });
-
-  it("S1: a middle window, an end window, and a start before the beginning", function* () {
-    expect(yield* over(SEVEN, " offset={1} length={3}")).toMatchObject({
-      failure: "",
-      output: excerpt(1, 4, 7, "\u{1F600}BC"),
+        expect(result.failure).toBe("");
+        expect(result.output).toBe(expected);
+        expect(yield* captured(stream2, BOUNDARY)).toBe(expected);
+        // Stated separately: the window holds the emoji whole, so no half of a
+        // surrogate pair reached the document.
+        expect(Array.from(result.output.slice(note(0, 4096, 4097).length + 1)).length).toBe(4096);
+        expect(result.output.endsWith("\u{1F600}")).toBe(true);
+      });
     });
-    expect(yield* captured(SEVEN, " offset={1} length={3}")).toBe(excerpt(1, 4, 7, "\u{1F600}BC"));
+  }
 
-    expect((yield* over(SEVEN, " offset={-3} length={4096}")).output).toBe(excerpt(4, 7, 7, "DEF"));
+  {
+    const name = "S1: a middle window, an end window, and a start before the beginning";
+    it(name, function* () {
+      const stream = yield* useJournalStream("doc.md");
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream3) {
+          yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream4) {
+            yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream5) {
+              expect(yield* over(stream, SEVEN, " offset={1} length={3}")).toMatchObject({
+                failure: "",
+                output: excerpt(1, 4, 7, "\u{1F600}BC"),
+              });
+              expect(yield* captured(stream2, SEVEN, " offset={1} length={3}")).toBe(
+                excerpt(1, 4, 7, "\u{1F600}BC"),
+              );
 
-    // Clamped to zero rather than wrapping or refusing, and the whole input is
-    // then covered — so the body comes back with no note at all.
-    expect((yield* over(SEVEN, " offset={-99} length={4096}")).output).toBe(SEVEN);
-    expect((yield* over(SEVEN, " offset={-99} length={2}")).output).toBe(
-      excerpt(0, 2, 7, "A\u{1F600}"),
-    );
-  });
+              expect((yield* over(stream3, SEVEN, " offset={-3} length={4096}")).output).toBe(
+                excerpt(4, 7, 7, "DEF"),
+              );
 
-  it("S1: a start at or beyond the end is an empty window that still says so", function* () {
-    for (const offset of [7, 8, 400]) {
-      const result = yield* over(SEVEN, ` offset={${offset}} length={4}`);
+              // Clamped to zero rather than wrapping or refusing, and the whole input is
+              // then covered — so the body comes back with no note at all.
+              expect((yield* over(stream4, SEVEN, " offset={-99} length={4096}")).output).toBe(
+                SEVEN,
+              );
+              expect((yield* over(stream5, SEVEN, " offset={-99} length={2}")).output).toBe(
+                excerpt(0, 2, 7, "A\u{1F600}"),
+              );
+            });
+          });
+        });
+      });
+    });
+  }
 
-      expect(result.failure).toBe("");
-      expect(result.output).toBe(`${note(7, 7, 7)}\n`);
-    }
-  });
+  {
+    const name = "S1: a start at or beyond the end is an empty window that still says so";
+    it(name, function* () {
+      for (const offset of [7, 8, 400]) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* () {
+          const stream = yield* useJournalStream("doc.md");
+          const result = yield* over(stream, SEVEN, ` offset={${offset}} length={4}`);
 
-  it("S1: empty content is the empty string, in both authored spellings", function* () {
-    expect(yield* run("<Slice></Slice>")).toMatchObject({ failure: "", output: "" });
-    expect(yield* run("<Slice />")).toMatchObject({ failure: "", output: "" });
-    expect(yield* captured("", " length={4}")).toBe("");
-  });
+          expect(result.failure).toBe("");
+          expect(result.output).toBe(`${note(7, 7, 7)}\n`);
+        });
+      }
+    });
+  }
 
-  it("S1: a positive integer length has no maximum, so 10000 is not capped at 4096", function* () {
-    const long = "b".repeat(5000);
-    const result = yield* over(long, " length={10000}");
+  {
+    const name = "S1: empty content is the empty string, in both authored spellings";
+    it(name, function* () {
+      const stream = yield* useJournalStream("doc.md");
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream3) {
+          expect(yield* run(stream, "<Slice></Slice>")).toMatchObject({ failure: "", output: "" });
+          expect(yield* run(stream2, "<Slice />")).toMatchObject({ failure: "", output: "" });
+          expect(yield* captured(stream3, "", " length={4}")).toBe("");
+        });
+      });
+    });
+  }
 
-    expect(result.failure).toBe("");
-    // The complete original, with no note: a 4096 cap would have reported
-    // `[0, 4096) of 5000` here.
-    expect(result.output).toBe(long);
-    expect(result.output).not.toContain("Text excerpt");
-    expect(yield* captured(long, " length={10000}")).toBe(long);
-  });
+  {
+    const name = "S1: a positive integer length has no maximum, so 10000 is not capped at 4096";
+    it(name, function* () {
+      const stream = yield* useJournalStream("doc.md");
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        const long = "b".repeat(5000);
+        const result = yield* over(stream, long, " length={10000}");
 
-  it("S1: authored whitespace counts, and is neither trimmed nor normalized", function* () {
-    const padded = yield* run("<Slice length={4096}>  padded  body  </Slice>");
-    expect(padded.failure).toBe("");
-    expect(padded.output).toBe("  padded  body  ");
+        expect(result.failure).toBe("");
+        // The complete original, with no note: a 4096 cap would have reported
+        // `[0, 4096) of 5000` here.
+        expect(result.output).toBe(long);
+        expect(result.output).not.toContain("Text excerpt");
+        expect(yield* captured(stream2, long, " length={10000}")).toBe(long);
+      });
+    });
+  }
 
-    // The same authored content, partially: the total counts every space, and
-    // the payload keeps the two it begins with.
-    const cut = yield* run("<Slice length={9}>  padded  body  </Slice>");
-    expect(cut.output).toBe(excerpt(0, 9, 16, "  padded "));
-  });
+  {
+    const name = "S1: authored whitespace counts, and is neither trimmed nor normalized";
+    it(name, function* () {
+      const stream = yield* useJournalStream("doc.md");
+      yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream2) {
+        const padded = yield* run(stream, "<Slice length={4096}>  padded  body  </Slice>");
+        expect(padded.failure).toBe("");
+        expect(padded.output).toBe("  padded  body  ");
+
+        // The same authored content, partially: the total counts every space, and
+        // the payload keeps the two it begins with.
+        const cut = yield* run(stream2, "<Slice length={9}>  padded  body  </Slice>");
+        expect(cut.output).toBe(excerpt(0, 9, 16, "  padded "));
+      });
+    });
+  }
 });
 
 describe("Tier SL1 — S2: an invalid window runs no body", () => {
-  it("S2: every refused argument is ordinary prop validation, and nothing expands", function* () {
-    const refused = [
-      " offset={1.5}",
-      ' offset="x"',
-      " offset={true}",
-      " length={0}",
-      " length={-1}",
-      " length={2.5}",
-      ' length="x"',
-      " window={1}",
-    ];
+  {
+    const name = "S2: every refused argument is ordinary prop validation, and nothing expands";
+    it(name, function* () {
+      const refused = [
+        " offset={1.5}",
+        ' offset="x"',
+        " offset={true}",
+        " length={0}",
+        " length={-1}",
+        " length={2.5}",
+        ' length="x"',
+        " window={1}",
+      ];
 
-    for (const attributes of refused) {
-      const result = yield* run(`<Slice${attributes}><Tripwire /></Slice>`);
+      for (const attributes of refused) {
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream) {
+          const result = yield* run(stream, `<Slice${attributes}><Tripwire /></Slice>`);
 
-      expect(reported(result)).toContain("Prop validation failed for <Slice />");
-      // Decided before the body: the content never expanded, so there is no
-      // completed work for a window to have been taken from.
-      expect(result.tripped).toBe(0);
-      expect(result.output).not.toContain("TRIPPED");
-      expect(result.output).not.toContain("Text excerpt");
-    }
-  });
+          expect(reported(result)).toContain("Prop validation failed for <Slice />");
+          // Decided before the body: the content never expanded, so there is no
+          // completed work for a window to have been taken from.
+          expect(result.tripped).toBe(0);
+          expect(result.output).not.toContain("TRIPPED");
+          expect(result.output).not.toContain("Text excerpt");
+        });
+      }
+    });
+  }
 });
 
 describe("Tier SL1 — S3: one completion, and captures that stay complete", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("S3: the window waits for the producer, and cuts nothing it captured", function* () {
+    const stream = yield* useJournalStream("doc.md");
     const harness = controlled();
     const source =
       '<Slice length={1} as="window">X<Held as="payload" /><Probe value={payload} />' +
@@ -342,7 +409,7 @@ describe("Tier SL1 — S3: one completion, and captures that stay complete", () 
 
     const result = yield* scoped(function* (): Operation<Run> {
       try {
-        const running = yield* spawn(() => run(source, { after: "AFTER" }, harness));
+        const running = yield* spawn(() => run(stream, source, { after: "AFTER" }, harness));
         yield* harness.entered;
 
         // Held: the producer has started and has not returned, so the window
@@ -382,10 +449,16 @@ describe("Tier SL1 — S3: one completion, and captures that stay complete", () 
 });
 
 describe("Tier SL1 — S4: one window over the combined rendering", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("S4: enclosed renderings share one window, and siblings outside are untouched", function* () {
-    const result = yield* run('HEAD<Slice length={3}>AB<Value key="piece" />EF</Slice>TAIL', {
-      piece: "CD",
-    });
+    const stream = yield* useJournalStream("doc.md");
+    const result = yield* run(
+      stream,
+      'HEAD<Slice length={3}>AB<Value key="piece" />EF</Slice>TAIL',
+      {
+        piece: "CD",
+      },
+    );
 
     expect(result.failure).toBe("");
     // One window over `ABCDEF`, not one per child and not one over the whole
@@ -399,13 +472,16 @@ describe("Tier SL1 — S4: one window over the combined rendering", () => {
 });
 
 describe("Tier SL1 — S5: nesting is ordinary inside-out text", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("S5: the outer window counts the inner note and may cut it", function* () {
+    const stream = yield* useJournalStream("doc.md");
     const inner = excerpt(1, 4, 7, "\u{1F600}BC");
     // The inner rendering is seventy code points: a sixty-six point note, its
     // line feed, and the three points it selected.
     expect(Array.from(inner).length).toBe(70);
 
     const result = yield* run(
+      stream,
       `<Slice offset={0} length={4}><Slice offset={1} length={3}><Value key="v" /></Slice></Slice>`,
       { v: SEVEN },
     );
@@ -419,8 +495,11 @@ describe("Tier SL1 — S5: nesting is ordinary inside-out text", () => {
 });
 
 describe("Tier SL1 — S6: failed work is not an empty successful excerpt", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("S6: a content failure settles the root and publishes no window", function* () {
+    const stream = yield* useJournalStream("doc.md");
     const result = yield* run(
+      stream,
       '<Slice length={2} as="window">PREFIX<Fail message="the producer gave up" /></Slice>' +
         '<Probe value={window} /><Value key="after" />',
       { after: "AFTER" },
@@ -439,7 +518,9 @@ describe("Tier SL1 — S6: failed work is not an empty successful excerpt", () =
 });
 
 describe("Tier SL1 — S7: cancellation owns the teardown", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("S7: halting the owner joins the producer's cleanup and publishes nothing", function* () {
+    const stream = yield* useJournalStream("doc.md");
     const harness = controlled();
     const source =
       '<Slice length={1} as="window">X<Held as="payload" /></Slice>' +
@@ -447,7 +528,7 @@ describe("Tier SL1 — S7: cancellation owns the teardown", () => {
 
     yield* scoped(function* () {
       try {
-        const running = yield* spawn(() => run(source, { after: "AFTER" }, harness));
+        const running = yield* spawn(() => run(stream, source, { after: "AFTER" }, harness));
         yield* harness.entered;
         expect(harness.producer.starts).toBe(1);
 
@@ -482,8 +563,13 @@ describe("Tier SL1 — S7: cancellation owns the teardown", () => {
 });
 
 describe("993 selected Slice input", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("W6: returns the ordinary excerpt without publishing the original selected string", function* () {
-    const result = yield* run("<Slice length={2}>documentation<Output>ABCD</Output>tail</Slice>");
+    const stream = yield* useJournalStream("doc.md");
+    const result = yield* run(
+      stream,
+      "<Slice length={2}>documentation<Output>ABCD</Output>tail</Slice>",
+    );
     expect(result.failure).toBe("");
     expect(result.output).toBe(excerpt(0, 2, 4, "AB"));
     expect(result.output).not.toContain("ABCD");

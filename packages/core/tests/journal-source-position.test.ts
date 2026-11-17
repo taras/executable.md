@@ -1,3 +1,4 @@
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 /**
  * Tier JSP — where an authored durable operation says it was written.
  *
@@ -16,7 +17,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, until } from "effection";
 import type { Operation } from "effection";
@@ -95,69 +96,78 @@ function sourceOf(events: DurableEvent[], type: string, name?: string): unknown 
   return found.description[SOURCE_POSITION_FIELD];
 }
 
+const OWNER = "packages/core/tests/journal-source-position.test.ts";
+
 describe("Tier JSP — authored source in the journal", () => {
   // The document holds an eval block, and a root that cannot compile one now
   // settles that failure rather than printing it.
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
-  it("JSP1: component imports, commands and eval blocks retain where they were written", function* () {
-    const path = yield* useDocument();
-    const stream = new InMemoryStream();
-    yield* useMark();
-    yield* collect(yield* execute({ path, stream }));
+  {
+    const name = "JSP1: component imports, commands and eval blocks retain where they were written";
+    it(name, function* () {
+      const path = yield* useDocument();
+      const stream = yield* useJournalStream(path);
+      yield* useMark();
+      yield* collect(yield* execute({ path, stream }));
 
-    const events = yield* stream.readAll();
-    for (const event of events) {
-      if (
-        event.type === "yield" &&
-        ["eval", "import_component"].includes(event.description.type) &&
-        event.description.name !== "__root__"
-      ) {
-        expect(event.description["executablemd.source-owner"]).toEqual({
-          coroutineId: "root",
-          index: 0,
-        });
+      const events = yield* stream.readAll();
+      for (const event of events) {
+        if (
+          event.type === "yield" &&
+          ["eval", "import_component"].includes(event.description.type) &&
+          event.description.name !== "__root__"
+        ) {
+          expect(event.description["executablemd.source-owner"]).toEqual({
+            coroutineId: "root",
+            index: 0,
+          });
+        }
       }
-    }
 
-    expect(sourceOf(events, "import_component", "Mark")).toEqual({
-      path,
-      offset: DOCUMENT.indexOf("<Mark />"),
-      line: lineOf("<Mark />"),
-      column: 1,
+      expect(sourceOf(events, "import_component", "Mark")).toEqual({
+        path,
+        offset: DOCUMENT.indexOf("<Mark />"),
+        line: lineOf("<Mark />"),
+        column: 1,
+      });
+      expect(sourceOf(events, "exec")).toEqual({
+        path,
+        offset: DOCUMENT.indexOf("```bash exec"),
+        line: lineOf("```bash exec"),
+        column: 1,
+      });
+      expect(sourceOf(events, "eval")).toEqual({
+        path,
+        offset: DOCUMENT.indexOf("```js eval"),
+        line: lineOf("```js eval"),
+        column: 1,
+      });
     });
-    expect(sourceOf(events, "exec")).toEqual({
-      path,
-      offset: DOCUMENT.indexOf("```bash exec"),
-      line: lineOf("```bash exec"),
-      column: 1,
+  }
+
+  {
+    const name = "JSP2: the root import and the root Close carry no authored source";
+    it(name, function* () {
+      const path = yield* useDocument();
+      const stream = yield* useJournalStream(path);
+      yield* useMark();
+      yield* collect(yield* execute({ path, stream }));
+
+      const events = yield* stream.readAll();
+
+      // The root is the run's own entry rather than an element somebody wrote.
+      expect(sourceOf(events, "import_component", "__root__")).toBeUndefined();
+
+      const close = events.find((event) => event.type === "close" && event.coroutineId === "root");
+      expect(close).toBeDefined();
+      expect(close && "description" in close).toBe(false);
     });
-    expect(sourceOf(events, "eval")).toEqual({
-      path,
-      offset: DOCUMENT.indexOf("```js eval"),
-      line: lineOf("```js eval"),
-      column: 1,
-    });
-  });
-
-  it("JSP2: the root import and the root Close carry no authored source", function* () {
-    const path = yield* useDocument();
-    const stream = new InMemoryStream();
-    yield* useMark();
-    yield* collect(yield* execute({ path, stream }));
-
-    const events = yield* stream.readAll();
-
-    // The root is the run's own entry rather than an element somebody wrote.
-    expect(sourceOf(events, "import_component", "__root__")).toBeUndefined();
-
-    const close = events.find((event) => event.type === "close" && event.coroutineId === "root");
-    expect(close).toBeDefined();
-    expect(close && "description" in close).toBe(false);
-  });
+  }
 
   it("JSP3: an inline document's position names the inline document", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     yield* useMark();
     const root = inlineSource("<Mark />\n");
     yield* collect(yield* execute({ ...root, stream }));

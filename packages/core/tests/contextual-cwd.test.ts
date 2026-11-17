@@ -14,12 +14,12 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * will rest on.
  */
 
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { Stdio } from "@effectionx/process";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 /**
  * The boundary under test: a component that installs a directory as the
@@ -104,7 +105,7 @@ function writeDocument(fixture: Fixture, source: string): Operation<void> {
  * document (#441), so what these cases inspect — the directory a command
  * reported — is collected from the display.
  */
-function run(fixture: Fixture): Operation<Json> {
+function run(fixture: Fixture, stream: InMemoryStream): Operation<Json> {
   return scoped(function* () {
     let displayed = "";
     yield* useComponentModuleLoader();
@@ -117,7 +118,7 @@ function run(fixture: Fixture): Operation<Json> {
     yield* collect(
       yield* execute({
         path: join(fixture.root, "doc.md"),
-        stream: new InMemoryStream(),
+        stream,
         includes: [fixture.root],
       }),
     );
@@ -132,28 +133,32 @@ function lines(output: Json): string[] {
     .filter((line) => line.length > 0);
 }
 
+const OWNER = "packages/core/tests/contextual-cwd.test.ts";
 const PWD = "```sh exec\npwd\n```";
 
 describe("Tier CW — Contextual working directory", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   // CW1: the contract a component rebinding `Env.cwd` depends on.
   it("CW1: an exec block inside the boundary runs in the contextual directory", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     yield* writeDocument(fixture, `<InDirectory path="${fixture.target}">\n${PWD}\n</InDirectory>`);
 
-    expect(lines(yield* run(fixture))).toEqual([fixture.target]);
+    expect(lines(yield* run(fixture, stream))).toEqual([fixture.target]);
   });
 
   // CW2: the boundary ends where the element does.
   it("CW2: an exec block after the boundary runs in the original directory", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     yield* writeDocument(
       fixture,
       `<InDirectory path="${fixture.target}">\n${PWD}\n</InDirectory>\n\n${PWD}`,
     );
 
-    const reported = lines(yield* run(fixture));
+    const reported = lines(yield* run(fixture, stream));
     expect(reported[0]).toBe(fixture.target);
     expect(reported[1]).toBe(yield* until(realpath(process.cwd())));
   });
@@ -163,6 +168,7 @@ describe("Tier CW — Contextual working directory", () => {
   // observes teardown at the process API boundary.
   it("CW3: a daemon starts in the contextual directory and is stopped afterwards", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     const marker = join(fixture.root, "daemon.txt");
     const timeline = yield* useDaemonTimeline();
     yield* writeDocument(
@@ -182,7 +188,7 @@ describe("Tier CW — Contextual working directory", () => {
       ].join("\n"),
     );
 
-    yield* run(fixture);
+    yield* run(fixture, stream);
 
     const reported = (yield* readTextFile(marker)).trim();
     expect(reported).toBe(fixture.target);
@@ -193,6 +199,7 @@ describe("Tier CW — Contextual working directory", () => {
   // they always did.
   it("CW5: without an override both exec and daemon use the process directory", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     const marker = join(fixture.root, "plain.txt");
     yield* writeDocument(
       fixture,
@@ -208,7 +215,7 @@ describe("Tier CW — Contextual working directory", () => {
     );
 
     const here = yield* until(realpath(process.cwd()));
-    expect(lines(yield* run(fixture))[0]).toBe(here);
+    expect(lines(yield* run(fixture, stream))[0]).toBe(here);
     expect((yield* readTextFile(marker)).trim()).toBe(here);
     // The fixture's own directories were never involved.
     expect(yield* exists(fixture.target)).toBe(true);
@@ -216,8 +223,10 @@ describe("Tier CW — Contextual working directory", () => {
 });
 
 describe("1113: Cwd reports the performing scope", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: reads and captures launch cwd without filesystem permission or a newline", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     yield* useComponentModuleLoader();
     yield* API.Env.around(
       {
@@ -229,15 +238,14 @@ describe("1113: Cwd reports the performing scope", () => {
     );
     yield* Permissions.around({ files: () => false });
     yield* writeDocument(fixture, '<Cwd as="directory" /><Output>[{directory}]<Cwd /></Output>');
-    const output = yield* collect(
-      yield* execute({ path: join(fixture.root, "doc.md"), stream: new InMemoryStream() }),
-    );
+    const output = yield* collect(yield* execute({ path: join(fixture.root, "doc.md"), stream }));
     expect(output).toBe(`[${fixture.target}]${fixture.target}`);
     expect(yield* cwd()).toBe(fixture.target);
   });
 
   it("1113: wrapper Content observes projection cwd and a sibling restores the launch directory", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     yield* useComponentModuleLoader();
     yield* API.Env.around(
       {
@@ -256,7 +264,7 @@ describe("1113: Cwd reports the performing scope", () => {
         yield* execute({
           path: join(fixture.root, "doc.md"),
           includes: [fixture.root],
-          stream: new InMemoryStream(),
+          stream,
         }),
       ),
     ).toBe(`${fixture.target}|${fixture.root}`);
@@ -265,8 +273,10 @@ describe("1113: Cwd reports the performing scope", () => {
 });
 
 describe("1113: source location does not set execution cwd", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: Cwd and the supported shell report P when the source is elsewhere", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
     yield* useTempFileCompiler();
     yield* useComponentModuleLoader();
     yield* API.Env.around(
@@ -287,9 +297,7 @@ describe("1113: source location does not set execution cwd", () => {
         "<Output><Json value={{ directory, stdout: process.stdout }} /></Output>",
       ].join("\n"),
     );
-    const output = yield* collect(
-      yield* execute({ path: join(fixture.root, "doc.md"), stream: new InMemoryStream() }),
-    );
+    const output = yield* collect(yield* execute({ path: join(fixture.root, "doc.md"), stream }));
     expect(JSON.parse(String(output))).toEqual({
       directory: fixture.target,
       stdout: fixture.target + "\n",

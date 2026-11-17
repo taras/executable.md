@@ -12,7 +12,7 @@
  * the component a document resolves.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -22,7 +22,6 @@ import { join } from "node:path";
 import process from "node:process";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, env, Files, useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
@@ -37,6 +36,7 @@ import type {
   FunctionComponentDefinition,
   Json,
 } from "../src/types.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 /** Core's own registered definition, so what runs is what a document resolves. */
 function core(name: string): FunctionComponentDefinition {
@@ -116,6 +116,8 @@ function useFixture(): Operation<string> {
     yield* provide(yield* until(realpath(dir)));
   });
 }
+
+const OWNER = "packages/core/tests/query-component.test.ts";
 
 describe("Tier QRY — the two ordinary modes", () => {
   const DATA: Record<string, Json> = {
@@ -413,6 +415,7 @@ describe("Tier QRY — what the engine can reach", () => {
 });
 
 describe("Tier QRY — two producers, each run once, over the page they supplied", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const FIXTURE = JSON.stringify(
     {
       records: [
@@ -447,9 +450,11 @@ describe("Tier QRY — two producers, each run once, over the page they supplied
 
   it("Q4: a file read once and a glob listed once answer several queries", function* () {
     const dir = yield* useFixture();
+    const path = join(dir, "doc.md");
+    const stream = yield* useJournalStream(path);
     yield* writeTextFile(join(dir, "input.json"), FIXTURE);
     yield* writeTextFile(
-      join(dir, "doc.md"),
+      path,
       [
         '<File path="input.json" as="text" />',
         `<Query value={text} yq='from_json | [.records[] | select(.status == "failed") | {"name": .name}]' as="failed" />`,
@@ -464,7 +469,6 @@ describe("Tier QRY — two producers, each run once, over the page they supplied
     );
 
     const calls: Calls = { reads: [], globs: [] };
-    const stream = new InMemoryStream();
     const output = yield* scoped(function* () {
       // The document's own working directory, installed explicitly the way an
       // entrypoint does: `<File>` and `<Glob>` resolve against `Env.cwd`
@@ -480,7 +484,7 @@ describe("Tier QRY — two producers, each run once, over the page they supplied
       );
       yield* useHostFiles();
       yield* watched(calls);
-      return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }));
+      return yield* collect(yield* execute({ path, stream, includes: [dir] }));
     });
 
     const rendered = String(output);

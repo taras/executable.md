@@ -10,12 +10,12 @@
  * survived, rather than searching a rendered message.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
-import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
+import { StaleInputError } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,7 @@ import type {
   Json,
   Segment,
 } from "../src/types.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
@@ -211,7 +212,10 @@ function reachableFrom(error: unknown, seen = new Set<unknown>()): unknown[] {
   return [error, ...nestedCauses(error).flatMap((cause) => reachableFrom(cause, seen))];
 }
 
+const OWNER = "packages/core/tests/failure-printing.test.ts";
+
 describe("Tier CF — failing is the default", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CF1: an unmarked component's failure fails the operation, and nothing follows", function* () {
     const boom = new Error("boom");
     const result = yield* run("<Boom />\n\nAFTER\n", { Boom: throwing("Boom", boom) });
@@ -223,9 +227,11 @@ describe("Tier CF — failing is the default", () => {
   });
 
   it("CF1b: a registered default fails by default, with nothing after it", function* () {
-    const boom = new Error("registered boom");
     const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Widget />\n\nAFTER\n");
+    const path = join(dir, "doc.md");
+    const stream = yield* useJournalStream(path);
+    const boom = new Error("registered boom");
+    yield* writeTextFile(path, "<Widget />\n\nAFTER\n");
 
     const registration: ComponentRegistration = {
       name: "Widget",
@@ -247,8 +253,8 @@ describe("Tier CF — failing is the default", () => {
       });
       yield* registerComponents([registration]);
       const execution = yield* execute({
-        path: join(dir, "doc.md"),
-        stream: new InMemoryStream(),
+        path,
+        stream,
         includes: [dir],
       });
       const subscription = yield* execution.output;

@@ -15,9 +15,8 @@
  * sentinel message being nowhere in the failure.
  */
 
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
-
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -228,6 +227,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
 
   it("FAIL3: does nothing beneath an unselected <If>, and the root returns", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -239,6 +239,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
         '<Return value={"approved"} />',
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(result.outcome).toEqual({ ok: true, value: "approved" });
@@ -375,7 +376,8 @@ describe("Tier FAIL — invocations that never raise the authored message", () =
   for (const [title, source, expected] of refusals) {
     it(title, function* () {
       const dir = yield* useDir();
-      const result = yield* run(dir, source);
+      const stream = yield* useJournalStream(join(dir, "doc.md"));
+      const result = yield* run(dir, source, { stream });
 
       expect(failureOf(result).message).toContain(expected);
       // The refusal happened first: nothing anywhere carries the message a
@@ -444,7 +446,9 @@ describe("Tier FAIL — position, durability and precedence", () => {
 
   it("FAIL10: a repository Fail.md is chosen ahead of core's", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(dir, `<Fail message=${JSON.stringify(SENTINEL)} />\n`, {
+      stream,
       files: {
         "Fail.md": [
           "---",

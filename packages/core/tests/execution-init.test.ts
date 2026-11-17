@@ -1,8 +1,13 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { Execution } from "../api.ts";
 import { parseFilesFatal } from "@executablemd/runtime";
 import { fatalCause } from "../src/errors.ts";
@@ -13,14 +18,12 @@ import { useSelection } from "./support/generated-selection.ts";
 import { Documentation } from "../src/documentation-api.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 
+const OWNER = "packages/core/tests/execution-init.test.ts";
+
 const State = createContext<{ id: number } | undefined>("executablemd.test.init.state", undefined);
 
-function* run(text = "hello\n"): Operation<string> {
-  return String(
-    yield* collect(
-      yield* execute({ ...inlineSource(text), stream: new InMemoryStream(), includes: [] }),
-    ),
-  );
+function* run(stream: InMemoryStream, text = "hello\n"): Operation<string> {
+  return String(yield* collect(yield* execute({ ...inlineSource(text), stream, includes: [] })));
 }
 
 function* failure(operation: Operation<unknown>): Operation<unknown> {
@@ -33,33 +36,42 @@ function* failure(operation: Operation<unknown>): Operation<unknown> {
 }
 
 describe("Tier EI — execution-owned initialization", () => {
-  it("EI1: the public descriptors agree, default init is no-op and each fresh owner dispatches once", function* () {
-    expect(Execution).toBe(RootExecution);
-    yield* Execution.operations.init();
-    expect(yield* State.get()).toBe(undefined);
-    let calls = 0;
-    yield* Execution.around({
-      *init(_args, next) {
-        calls += 1;
-        yield* State.set({ id: calls });
-        yield* next();
-      },
+  beforeEach(journalBeforeEach(OWNER));
+  {
+    const name =
+      "EI1: the public descriptors agree, default init is no-op and each fresh owner dispatches once";
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
+      yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
+        expect(Execution).toBe(RootExecution);
+        yield* Execution.operations.init();
+        expect(yield* State.get()).toBe(undefined);
+        let calls = 0;
+        yield* Execution.around({
+          *init(_args, next) {
+            calls += 1;
+            yield* State.set({ id: calls });
+            yield* next();
+          },
+        });
+        const execution = yield* execute({
+          ...inlineSource("hello\n"),
+          stream,
+          includes: [],
+        });
+        expect(String(yield* collect(execution))).toContain("hello");
+        const completed = yield* execution;
+        expect(yield* execution).toBe(completed);
+        expect(calls).toBe(1);
+        yield* run(stream2);
+        expect(calls).toBe(2);
+        expect(yield* State.get()).toBe(undefined);
+      });
     });
-    const execution = yield* execute({
-      ...inlineSource("hello\n"),
-      stream: new InMemoryStream(),
-      includes: [],
-    });
-    expect(String(yield* collect(execution))).toContain("hello");
-    const completed = yield* execution;
-    expect(yield* execution).toBe(completed);
-    expect(calls).toBe(1);
-    yield* run();
-    expect(calls).toBe(2);
-    expect(yield* State.get()).toBe(undefined);
-  });
+  }
 
   it("EI2: initialization precedes assembly, captured documentation and execution/document policy", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const order: string[] = [];
     yield* Execution.around({
       *init(_args, next) {
@@ -86,7 +98,7 @@ describe("Tier EI — execution-owned initialization", () => {
       },
     });
     const execution = yield* executeInstalled(
-      { ...inlineSource("<Syntax />\n"), includes: [], stream: new InMemoryStream() },
+      { ...inlineSource("<Syntax />\n"), includes: [], stream },
       [
         {
           *install() {
@@ -111,6 +123,7 @@ describe("Tier EI — execution-owned initialization", () => {
    * protected at. That half is `generated-selection` U5-2's.
    */
   it("EI3: init cannot rewrite captured admissions or declarations", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const admitted: string[] = [];
     const admissions: JournalAdmission[] = [
       function* () {
@@ -119,7 +132,12 @@ describe("Tier EI — execution-owned initialization", () => {
     ];
     const source = "CAPTURED DECLARATION\n";
     const declarations = [
-      Markdown({ name: "Kept", origin: "test://init/kept", source, digest: sourceDigest(source) }),
+      Markdown({
+        name: "Kept",
+        origin: "test://init/kept",
+        source,
+        digest: sourceDigest(source),
+      }),
     ];
     const files = recordedFiles({ "note.md": "CAPTURED PROFILE" });
     yield* Execution.around({
@@ -134,10 +152,9 @@ describe("Tier EI — execution-owned initialization", () => {
       },
     });
     const text = "<Kept />\n<Evaluate text={'<File path=\"note.md\" />'} />\n";
-    const execution = yield* executeInstalled(
-      { ...inlineSource(text), includes: [], stream: new InMemoryStream() },
-      [{ admissions, declarations }],
-    );
+    const execution = yield* executeInstalled({ ...inlineSource(text), includes: [], stream }, [
+      { admissions, declarations },
+    ]);
     const output = String(yield* collect(execution));
     expect(admitted).toEqual(["original"]);
     expect(output).toContain("CAPTURED DECLARATION");
@@ -146,11 +163,11 @@ describe("Tier EI — execution-owned initialization", () => {
   });
 
   it("EI4: initializer failure settles only after acquired teardown and reaches no policy or root", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const entered = withResolvers<void>();
     const release = withResolvers<void>();
     const cleanup = withResolvers<void>();
     const phases: string[] = [];
-    const stream = new InMemoryStream();
     yield* Execution.around({
       *init() {
         yield* ensure(function* () {
@@ -184,11 +201,11 @@ describe("Tier EI — execution-owned initialization", () => {
   });
 
   it("EI5: deterministic cancellation during init joins cleanup before halt returns", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const entered = withResolvers<void>();
     const cleaning = withResolvers<void>();
     const release = withResolvers<void>();
     const phases: string[] = [];
-    const stream = new InMemoryStream();
     yield* Execution.around({
       *init() {
         yield* ensure(function* () {
@@ -221,58 +238,77 @@ describe("Tier EI — execution-owned initialization", () => {
     expect(phases).toEqual(["released"]);
   });
 
-  it("EI6: concurrent owners get independent state inherited by ordinary descendants", function* () {
-    let counter = 0;
-    const both = withResolvers<void>();
-    const release = withResolvers<void>();
-    const seen: number[] = [];
-    yield* Execution.around({
-      *init(_args, next) {
-        yield* State.set({ id: ++counter });
-        yield* next();
-      },
-      *execute([request], next) {
-        seen.push((yield* State.expect())?.id ?? 0);
-        if (seen.length === 2) {
-          both.resolve();
-        }
-        yield* release.operation;
-        const parent = yield* State.get();
-        expect(yield* scoped(() => State.get())).toBe(parent);
-        yield* next(request);
-      },
-    });
-    const first = yield* spawn(() => run());
-    const second = yield* spawn(() => run());
-    yield* both.operation;
-    expect([...seen].sort((a, b) => a - b)).toEqual([1, 2]);
-    expect(yield* State.get()).toBe(undefined);
-    release.resolve();
-    yield* first;
-    yield* second;
-    expect(yield* scoped(() => State.get())).toBe(undefined);
-  });
-
-  it("EI7: a no-op initializer invents no Files provider; explicit initialization supplies one", function* () {
-    expect(parseFilesFatal(fatalCause(yield* failure(run('<File path="note.md" />'))))).toEqual({
-      type: "executablemd.runtime.files-fatal/v1",
-      kind: "provider-unavailable",
-    });
-    const files = recordedFiles({ "note.md": "INSTALLED BY INIT" });
-    const output = yield* scoped(function* () {
-      yield* Execution.around({
-        *init(_args, next) {
-          yield* useRecordedFiles(files);
-          yield* next();
-        },
+  {
+    const name = "EI6: concurrent owners get independent state inherited by ordinary descendants";
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
+      yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
+        let counter = 0;
+        const both = withResolvers<void>();
+        const release = withResolvers<void>();
+        const seen: number[] = [];
+        yield* Execution.around({
+          *init(_args, next) {
+            yield* State.set({ id: ++counter });
+            yield* next();
+          },
+          *execute([request], next) {
+            seen.push((yield* State.expect())?.id ?? 0);
+            if (seen.length === 2) {
+              both.resolve();
+            }
+            yield* release.operation;
+            const parent = yield* State.get();
+            expect(yield* scoped(() => State.get())).toBe(parent);
+            yield* next(request);
+          },
+        });
+        const first = yield* spawn(() => run(stream));
+        const second = yield* spawn(() => run(stream2));
+        yield* both.operation;
+        expect([...seen].sort((a, b) => a - b)).toEqual([1, 2]);
+        expect(yield* State.get()).toBe(undefined);
+        release.resolve();
+        yield* first;
+        yield* second;
+        expect(yield* scoped(() => State.get())).toBe(undefined);
       });
-      return yield* run('<File path="note.md" />');
     });
-    expect(output).toContain("INSTALLED BY INIT");
-    expect(files.performed).toEqual(["read note.md"]);
-    expect(parseFilesFatal(fatalCause(yield* failure(run('<File path="note.md" />'))))).toEqual({
-      type: "executablemd.runtime.files-fatal/v1",
-      kind: "provider-unavailable",
+  }
+
+  {
+    const name =
+      "EI7: a no-op initializer invents no Files provider; explicit initialization supplies one";
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
+      yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
+        yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream3) {
+          expect(
+            parseFilesFatal(fatalCause(yield* failure(run(stream, '<File path="note.md" />')))),
+          ).toEqual({
+            type: "executablemd.runtime.files-fatal/v1",
+            kind: "provider-unavailable",
+          });
+          const files = recordedFiles({ "note.md": "INSTALLED BY INIT" });
+          const output = yield* scoped(function* () {
+            yield* Execution.around({
+              *init(_args, next) {
+                yield* useRecordedFiles(files);
+                yield* next();
+              },
+            });
+            return yield* run(stream2, '<File path="note.md" />');
+          });
+          expect(output).toContain("INSTALLED BY INIT");
+          expect(files.performed).toEqual(["read note.md"]);
+          expect(
+            parseFilesFatal(fatalCause(yield* failure(run(stream3, '<File path="note.md" />')))),
+          ).toEqual({
+            type: "executablemd.runtime.files-fatal/v1",
+            kind: "provider-unavailable",
+          });
+        });
+      });
     });
-  });
+  }
 });
