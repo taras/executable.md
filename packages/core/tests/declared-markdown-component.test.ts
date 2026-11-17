@@ -654,8 +654,18 @@ describe("Tier DM — the name is claimed rather than offered", () => {
       },
     };
 
-    const undeclared = yield* run("<Virtual />\n", [], [substitute]);
-    const declaring = yield* run("<Virtual />\n", [declared(POLICY_SOURCE)], [substitute]);
+    const undeclared = yield* run(
+      "<Virtual />\n",
+      [],
+      [substitute],
+      yield* useJournalStream(ROOT_PATH),
+    );
+    const declaring = yield* run(
+      "<Virtual />\n",
+      [declared(POLICY_SOURCE)],
+      [substitute],
+      yield* useJournalStream(ROOT_PATH),
+    );
 
     expect(undeclared).toContain("the handler answered.");
     expect(declaring).toEqual(undeclared);
@@ -689,6 +699,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
             },
           },
         ],
+        yield* useJournalStream(ROOT_PATH),
       ),
     );
 
@@ -1956,6 +1967,8 @@ function* refusedBy(operation: Operation<unknown>): Operation<Error> {
 }
 
 describe("Tier MDK — the declaration states its kind", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   // deno-lint-ignore require-yield
   it("MDK1: the constructor states the kind and changes nothing else", function* () {
     const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
@@ -2009,7 +2022,9 @@ describe("Tier MDK — the declaration states its kind", () => {
     const declarations = [declared(POLICY_SOURCE)];
 
     // Selection and expansion.
-    expect(String(yield* run("<Policy />\n", declarations))).toContain("The policy ran.");
+    expect(
+      String(yield* run("<Policy />\n", declarations, [], yield* useJournalStream(ROOT_PATH))),
+    ).toContain("The policy ran.");
 
     // Inspection reports the same declared contract.
     const info = yield* inspectComponent({ name: "Policy", includes: [], declarations });
@@ -2030,10 +2045,14 @@ describe("Tier MDK — the declaration states its kind", () => {
 
     // And the private closure still resolves only inside the declaring bytes.
     const withPrivate = [declared(WITH_PRIVATE, { privates: [secret()] })];
-    expect(String(yield* run("<Policy />\n", withPrivate))).toContain("policy says");
-    expect(yield* refusal(run('<Secret as="answer" />\n', withPrivate))).toContain(
-      "Cannot resolve component: Secret",
-    );
+    expect(
+      String(yield* run("<Policy />\n", withPrivate, [], yield* useJournalStream(ROOT_PATH))),
+    ).toContain("policy says");
+    expect(
+      yield* refusal(
+        run('<Secret as="answer" />\n', withPrivate, [], yield* useJournalStream(ROOT_PATH)),
+      ),
+    ).toContain("Cannot resolve component: Secret");
   });
 
   it("MDK2: the kind is what admission reads first, before any other member", function* () {
@@ -2482,13 +2501,20 @@ describe("Tier ED — one catalog, two arms", () => {
     const root = yield* workspace({ "Deck.md": "The repository file ran.\n" });
     const repository = yield* inspectComponent({ name: "Deck", includes: [root] });
     expect(repository.kind).toBe("markdown");
-    expect(String(yield* run("<Deck />\n", [], [], new InMemoryStream(), [root]))).toContain(
-      "The repository file ran.",
-    );
+    expect(
+      String(yield* run("<Deck />\n", [], [], yield* useJournalStream(ROOT_PATH), [root])),
+    ).toContain("The repository file ran.");
 
     // And the engine's own structural behavior is what it always was.
     expect(
-      String(yield* run("<If condition={true}>branch taken</If>\n", [], [], new InMemoryStream())),
+      String(
+        yield* run(
+          "<If condition={true}>branch taken</If>\n",
+          [],
+          [],
+          yield* useJournalStream(ROOT_PATH),
+        ),
+      ),
     ).toContain("branch taken");
   });
 });
