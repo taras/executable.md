@@ -26,7 +26,9 @@ import { API } from "@executablemd/runtime";
 import type { DirectoryEntry, LinkStatResult, StatResult } from "@executablemd/runtime";
 import { repositoryComponentName } from "../src/components/candidates.ts";
 import {
+  capturedDocumentation,
   CORE_COMPONENT_NAMES,
+  documentationIndexFor,
   inspectComponent,
   inspectSyntax,
   PROTECTED_COMPONENT_NAMES,
@@ -35,7 +37,7 @@ import {
   RESERVED_STRUCTURAL,
   STRUCTURAL_DECLARATIONS,
 } from "../mod.ts";
-import { AGENT_REGISTRATIONS, agentIdentityComponents } from "@executablemd/agent/host";
+import { agentIdentityComponents, useAgentComponents } from "@executablemd/agent/host";
 import type {
   CompleteComponentSyntaxEntry,
   InstalledStructuralSyntaxEntry,
@@ -1387,15 +1389,19 @@ describe("Tier SY: inspection is observation, never execution", () => {
 });
 
 describe("Tier SY: first-party documentation", () => {
-  it("SY28: gives every core and Agent default a description", function* () {
-    const catalog = yield* scoped(function* () {
+  it("SY28: documents every core and Agent default", function* () {
+    const { catalog, docs } = yield* scoped(function* () {
       yield* useTree({});
-      yield* registerComponents(AGENT_REGISTRATIONS);
-      return yield* inspectSyntax({ includes: [], components: agentIdentityComponents() });
+      yield* useAgentComponents();
+      return {
+        catalog: yield* inspectSyntax({ includes: [], components: agentIdentityComponents() }),
+        docs: documentationIndexFor(yield* capturedDocumentation()),
+      };
     });
 
     const undocumented = builtIn(catalog).filter(
-      (entry) => entry.description === undefined || entry.description.length === 0,
+      (entry) =>
+        !entry.description?.trim() && !docs.documentationFor(entry.name, entry.origin)?.trim(),
     );
     expect(names(undocumented)).toEqual([]);
     for (const name of [...CORE_COMPONENT_NAMES, "Agent", "Prompt", "Session"]) {

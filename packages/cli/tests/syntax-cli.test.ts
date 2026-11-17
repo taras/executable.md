@@ -25,9 +25,19 @@ import { randomUUID } from "node:crypto";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { API } from "@executablemd/runtime";
-import { CORE_COMPONENT_NAMES } from "@executablemd/core";
+import {
+  capturedDocumentation,
+  CORE_COMPONENT_NAMES,
+  documentationIndexFor,
+} from "@executablemd/core";
+import { Syntax } from "@executablemd/core/api";
 import type { PropsSchema, SyntaxSymbols } from "@executablemd/core";
-import { renderSyntaxJson, renderSyntaxMarkdown, syntaxSymbols } from "../src/syntax.ts";
+import {
+  renderSyntaxJson,
+  renderSyntaxMarkdown,
+  syntaxSymbols,
+  useCommandSyntax,
+} from "../src/syntax.ts";
 import { installPlugins } from "../src/plugin-host.ts";
 import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 
@@ -283,9 +293,16 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX2: documents every complete built-in in the profile", function* () {
-    const catalog = yield* syntaxSymbols([]);
+    const { catalog, docs } = yield* scoped(function* () {
+      yield* useCommandSyntax([]);
+      return {
+        catalog: yield* Syntax.operations.symbols,
+        docs: documentationIndexFor(yield* capturedDocumentation()),
+      };
+    });
     const undocumented = catalog.categories[1].entries.filter(
-      (entry) => entry.description === undefined || entry.description.trim().length === 0,
+      (entry) =>
+        !entry.description?.trim() && !docs.documentationFor(entry.name, entry.origin)?.trim(),
     );
 
     expect(names(undocumented)).toEqual([]);
@@ -569,8 +586,13 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
       "**Forms:** `<File.Copy />`",
       "| `from` | `string` | yes |",
       "| `to` | `string` | yes |",
-      "Copy a file into an existing directory.",
-      '<File.Copy from="reports/test.log" to="evidence/test.log" />',
+      [
+        "Copy a file into an existing directory.",
+        "",
+        "```mdx",
+        '<File.Copy from="reports/test.log" to="evidence/test.log" />',
+        "```",
+      ].join("\n"),
     ]) {
       expect(named.stdout).toContain(text);
     }

@@ -3617,9 +3617,11 @@ yield* registrar.around(function* (request, next) {
 
 A registration may also carry `description`, `as` and `context` — the same three
 descriptive fields Markdown frontmatter carries, with the same meaning and the
-same absence of behavior. Every component a first-party package registers
-declares a description, and decides explicitly whether `as` and `context` apply
-to it rather than leaving an omitted field to mean either.
+same absence of behavior. A first-party component supplies its description in
+the registration or in its section of the package's `components.md` (§5.3.1).
+The compact catalog includes descriptions from registrations. Named help also
+includes the matching Markdown sections. First-party registrations specify
+whether `as` and `context` apply.
 
 **A return binds by reference.** `as` binds the value the component returned —
 the object itself, not a rendering of it — so a component can hand its caller
@@ -13565,7 +13567,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
 | SY7/SY7c/SY18 | Owned names keep their origin | A flat dotted candidate, an unreachable subtree and a link behind a prefix leave `<File.Delete>` reported with canonical core's own origin rather than a registration's |
 | SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
-| SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
+| SY28 | First-party documentation | Every complete built-in in the core and Agent profile has a registration description or a nonempty package documentation section |
 | SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
 
 ### Tier DV — Document validation
@@ -13779,7 +13781,7 @@ would bind differently — belongs to `EP`, where profile capture is tested.
 | # | Test | Verify |
 |---|------|--------|
 | SX1–SX3 | The run profile | Core, Agent, testing and web defaults and `<Session>` are described from the declarations the runtime installers register, with no execution claimant minted |
-| SX2 | Documentation completeness | Every complete built-in in the profile states a description, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
+| SX2 | Documentation completeness | Every complete built-in has a registration description or a nonempty package documentation section, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied symbols with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no symbols |
