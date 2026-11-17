@@ -20,18 +20,12 @@ export interface ComponentDocumentation {
 /**
  * The same prose, as a first-party declaration is required to state it.
  *
- * `as` and `context` are `string | null` rather than optional, so a first-party
- * declaration decides whether each one applies instead of leaving an omitted
- * field to mean either "not applicable" or "forgotten". `null` is the explicit
- * "this component takes no binding" / "this component reads no content", and it
- * contributes no field to the public catalog.
- *
- * The public registration contract stays the optional strings above: this is
- * the discipline first-party packages hold themselves to, not a rule imposed on
- * anybody who registers a component.
+ * Each field is explicit. Use `null` for a description supplied by the package's
+ * `components.md`, for a component with no binding to describe, or for one that
+ * reads no content. A null field is omitted from the public catalog.
  */
 export interface FirstPartyDocumentation {
-  readonly description: string;
+  readonly description: string | null;
   readonly as: string | null;
   readonly context: string | null;
 }
@@ -40,7 +34,7 @@ export interface FirstPartyDocumentation {
 export function documented(documentation: FirstPartyDocumentation): ComponentDocumentation {
   const { description, as, context } = documentation;
   return {
-    description,
+    ...(description === null ? {} : { description }),
     ...(as === null ? {} : { as }),
     ...(context === null ? {} : { context }),
   };
