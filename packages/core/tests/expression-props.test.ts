@@ -5,8 +5,9 @@
  * parseExpressionValue changes, and integration with expansion/validation.
  */
 
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { parseExpressionValue, scanSegments } from "../src/scanner.ts";
@@ -153,15 +154,14 @@ describe("Tier ES — parseExpressionValue", () => {
 // Tier EP — Expression prop evaluation (integration)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const expressionCase = workspaceJournalCases(
-  "packages/core/tests/expression-props.test.ts",
-  "doc.md",
-  () => useTempDirectory("expr-props-test-"),
-);
+const OWNER = "packages/core/tests/expression-props.test.ts";
 
 describe("Tier EP — Expression prop evaluation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
-  expressionCase("EP1: bare identifier resolves from env", function* (stream, tmpDir) {
+  it("EP1: bare identifier resolves from env", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Display.md": [
         "---",
@@ -186,7 +186,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  expressionCase("EP2: member expression resolves", function* (stream, tmpDir) {
+  it("EP2: member expression resolves", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Show.md": [
         "---",
@@ -213,7 +215,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("length=3");
   });
 
-  expressionCase("EP3: comparison expression resolves", function* (stream, tmpDir) {
+  it("EP3: comparison expression resolves", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Check.md": [
         "---",
@@ -240,7 +244,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("active=true");
   });
 
-  expressionCase("EP5: arithmetic expression", function* (stream, tmpDir) {
+  it("EP5: arithmetic expression", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Sum.md": [
         "---",
@@ -268,7 +274,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("total=30");
   });
 
-  expressionCase("EP6: JSON literal still resolves at scan time", function* (stream, tmpDir) {
+  it("EP6: JSON literal still resolves at scan time", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Num.md": [
         "---",
@@ -290,7 +298,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("count=42");
   });
 
-  expressionCase("EP11: string attribute unaffected", function* (stream, tmpDir) {
+  it("EP11: string attribute unaffected", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Greet.md": [
         "---",
@@ -311,7 +321,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("hello world");
   });
 
-  expressionCase("EP13: undefined binding → error", function* (stream, tmpDir) {
+  it("EP13: undefined binding → error", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Show.md": [
         "---",
@@ -332,7 +344,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("nonexistent");
   });
 
-  expressionCase("EP14: non-serializable result → error", function* (stream, tmpDir) {
+  it("EP14: non-serializable result → error", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Show.md": [
         "---",
@@ -358,7 +372,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("non-serializable");
   });
 
-  expressionCase("EP15: no binding in env → reference error", function* (stream, tmpDir) {
+  it("EP15: no binding in env → reference error", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Show.md": [
         "---",
@@ -380,7 +396,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("someVar");
   });
 
-  expressionCase("EP16: syntax error in expression → error", function* (stream, tmpDir) {
+  it("EP16: syntax error in expression → error", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Show.md": [
         "---",
@@ -400,7 +418,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("Failed to evaluate expression prop");
   });
 
-  expressionCase("EP17: mixed resolved and eval props", function* (stream, tmpDir) {
+  it("EP17: mixed resolved and eval props", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Mixed.md": [
         "---",
@@ -435,7 +455,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("name=hello");
   });
 
-  expressionCase("EP18: expression prop passes validation", function* (stream, tmpDir) {
+  it("EP18: expression prop passes validation", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Typed.md": [
         "---",
@@ -457,7 +479,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  expressionCase("EP19: expression prop fails validation", function* (stream, tmpDir) {
+  it("EP19: expression prop fails validation", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Typed.md": [
         "---",
@@ -480,7 +504,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("must be number");
   });
 
-  expressionCase("EP20: expression prop with slot", function* (stream, tmpDir) {
+  it("EP20: expression prop with slot", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Layout.md": [
         "---",
@@ -552,7 +578,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output2).toBe(output1);
   });
 
-  expressionCase("EP22: nested component receives expression prop", function* (stream, tmpDir) {
+  it("EP22: nested component receives expression prop", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Outer.md": [
         "---",
@@ -586,7 +614,9 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("inner-data=from-outer");
   });
 
-  expressionCase("EP23: children with expression props", function* (stream, tmpDir) {
+  it("EP23: children with expression props", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Parent.md": [
         "---",
@@ -631,6 +661,7 @@ describe("Tier EP — Expression prop evaluation", () => {
  * boundary the two of them share.
  */
 describe("Tier EU — a prop that evaluates to undefined", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -654,25 +685,26 @@ describe("Tier EU — a prop that evaluates to undefined", () => {
     ].join("\n");
   }
 
-  expressionCase(
-    "EU1: a member that is not there is a prop that is not there",
-    function* (stream, tmpDir) {
-      yield* writeFiles(tmpDir, {
-        "components/Probe.md": probe(["    value: {}"]),
-        "doc.md": [
-          "```js eval",
-          "const record = { present: 1 };",
-          "```",
-          "",
-          "<Probe value={record.missing} />",
-        ].join("\n"),
-      });
-      const output = yield* said(tmpDir, stream);
-      expect(output).toContain("own=false");
-    },
-  );
+  it("EU1: a member that is not there is a prop that is not there", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(["    value: {}"]),
+      "doc.md": [
+        "```js eval",
+        "const record = { present: 1 };",
+        "```",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, stream);
+    expect(output).toContain("own=false");
+  });
 
-  expressionCase("EU2: a literal `undefined` takes that same path", function* (stream, tmpDir) {
+  it("EU2: a literal `undefined` takes that same path", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Probe.md": probe(["    value: {}"]),
       "doc.md": "<Probe value={undefined} />",
@@ -681,7 +713,9 @@ describe("Tier EU — a prop that evaluates to undefined", () => {
     expect(output).toContain("own=false");
   });
 
-  expressionCase("EU3: a declared default answers the absence", function* (stream, tmpDir) {
+  it("EU3: a declared default answers the absence", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Probe.md": probe(
         ["    value:", "      type: string", '      default: "fallback"'],
@@ -701,102 +735,98 @@ describe("Tier EU — a prop that evaluates to undefined", () => {
     expect(output).toContain("own=true value=fallback");
   });
 
-  expressionCase(
-    "EU4: a required prop is missing, and the body does not run",
-    function* (stream, tmpDir) {
-      yield* writeFiles(tmpDir, {
-        "components/Probe.md": [
-          "---",
-          "props:",
-          "  type: object",
-          "  properties:",
-          "    value: {}",
-          "  required:",
-          "    - value",
-          "  additionalProperties: false",
-          "---",
-          "THE BODY RAN",
-        ].join("\n"),
-        "doc.md": [
-          "```js eval",
-          "const record = {};",
-          "```",
-          "",
-          "<Probe value={record.missing} />",
-        ].join("\n"),
-      });
-      const output = yield* said(tmpDir, stream);
-      expect(output).toContain("value");
-      expect(output).toContain("required");
-      expect(output).not.toContain("THE BODY RAN");
-    },
-  );
+  it("EU4: a required prop is missing, and the body does not run", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    value: {}",
+        "  required:",
+        "    - value",
+        "  additionalProperties: false",
+        "---",
+        "THE BODY RAN",
+      ].join("\n"),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, stream);
+    expect(output).toContain("value");
+    expect(output).toContain("required");
+    expect(output).not.toContain("THE BODY RAN");
+  });
 
-  expressionCase(
-    "EU5: `null` is a value the author wrote, not an absence",
-    function* (stream, tmpDir) {
-      yield* writeFiles(tmpDir, {
-        "components/Probe.md": probe(
-          ["    value:", '      type: ["string", "null"]'],
-          'own=${Object.hasOwn(props, "value")} value=${String(props.value)};',
-        ),
-        "doc.md": [
-          "```js eval",
-          "const record = {};",
-          "```",
-          "",
-          "<Probe value={null} />",
-          "",
-          "<Probe value={record.missing} />",
-        ].join("\n"),
-      });
-      const output = yield* said(tmpDir, stream);
-      expect(output).toContain("own=true value=null;");
-      expect(output).toContain("own=false value=undefined;");
-    },
-  );
+  it("EU5: `null` is a value the author wrote, not an absence", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(
+        ["    value:", '      type: ["string", "null"]'],
+        'own=${Object.hasOwn(props, "value")} value=${String(props.value)};',
+      ),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={null} />",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, stream);
+    expect(output).toContain("own=true value=null;");
+    expect(output).toContain("own=false value=undefined;");
+  });
 
-  expressionCase(
-    "EU6: an expression that throws is still the failure it was",
-    function* (stream, tmpDir) {
-      yield* writeFiles(tmpDir, {
-        "components/Probe.md": probe(["    value: {}"]),
-        "doc.md": [
-          "```js eval",
-          "const record = { boom() { throw new Error('no value here'); } };",
-          "```",
-          "",
-          "<Probe value={record.boom()} />",
-        ].join("\n"),
-      });
-      const output = yield* said(tmpDir, stream);
-      expect(output).toContain("Failed to evaluate expression prop");
-      expect(output).toContain("no value here");
-    },
-  );
+  it("EU6: an expression that throws is still the failure it was", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(["    value: {}"]),
+      "doc.md": [
+        "```js eval",
+        "const record = { boom() { throw new Error('no value here'); } };",
+        "```",
+        "",
+        "<Probe value={record.boom()} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, stream);
+    expect(output).toContain("Failed to evaluate expression prop");
+    expect(output).toContain("no value here");
+  });
 
-  expressionCase(
-    "EU7: a nested `undefined` keeps its native JSON reading",
-    function* (stream, tmpDir) {
-      yield* writeFiles(tmpDir, {
-        "components/Probe.md": probe(
-          ["    value:", "      type: object"],
-          "json=${JSON.stringify(props.value)}",
-        ),
-        "doc.md": [
-          "```js eval",
-          "const record = {};",
-          "```",
-          "",
-          "<Probe value={{ a: record.missing, b: [record.missing, 1], c: 2 }} />",
-        ].join("\n"),
-      });
-      const output = yield* said(tmpDir, stream);
-      // One `JSON.stringify` decides everything below the root, as it always
-      // has: an object member goes, an array entry becomes `null`.
-      expect(output).toContain('json={"b":[null,1],"c":2}');
-    },
-  );
+  it("EU7: a nested `undefined` keeps its native JSON reading", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(
+        ["    value:", "      type: object"],
+        "json=${JSON.stringify(props.value)}",
+      ),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={{ a: record.missing, b: [record.missing, 1], c: 2 }} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, stream);
+    // One `JSON.stringify` decides everything below the root, as it always
+    // has: an object member goes, an array entry becomes `null`.
+    expect(output).toContain('json={"b":[null,1],"c":2}');
+  });
 
   it("EU8: nothing durable holds it, and replay reconstructs the same props", function* () {
     const document = [
