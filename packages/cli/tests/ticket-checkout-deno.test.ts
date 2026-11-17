@@ -12,9 +12,13 @@
  * cancelled read is not reported until its sibling's cleanup has finished.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ensure, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
@@ -37,7 +41,6 @@ import { git } from "../../git/tests/support/git-remotes.ts";
 import { actionProbe, capturingProbe } from "../../git/tests/support/observations.ts";
 
 const OWNER = "packages/cli/tests/ticket-checkout-deno.test.ts";
-const journalCase = journalCases(OWNER);
 
 const COMPONENTS = fileURLToPath(
   new URL("../../../examples/adversarial-implementation/components", import.meta.url),
@@ -165,7 +168,9 @@ function requested(invocation: GitChangesInvocation): string {
 }
 
 describe("Ticket.Checkout — staged and unstaged reads", () => {
-  journalCase("starts both reads before either answers", "<eval>", function* (stream) {
+  beforeEach(journalBeforeEach(OWNER));
+  it("starts both reads before either answers", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const checkout = yield* useCheckout("xmd-checkout-barrier");
     const entered: string[] = [];
     const both = withResolvers<void>();
@@ -239,160 +244,149 @@ describe("Ticket.Checkout — staged and unstaged reads", () => {
     yield* observe([change(odd, "A"), change("tracked.txt", "M")], [change("tracked.txt", "M")]);
   });
 
-  journalCase(
-    "reads again after HEAD and the working tree move within one execution",
-    "<eval>",
-    function* (stream) {
-      const checkout = yield* useCheckout("xmd-checkout-fresh");
-      const before = checkout.run("rev-parse", "HEAD");
-      const seen: Json[] = [];
-      yield* runChecked(
-        stream,
-        [
-          checkoutOf(checkout.root, "first"),
-          "",
-          "<Captured value={first} />",
-          "",
-          "<Move />",
-          "",
-          checkoutOf(checkout.root, "second"),
-          "",
-          "<Captured value={second} />",
-          "",
-        ].join("\n"),
-        checkout,
-        {
-          components: [
-            capturingProbe(seen),
-            actionProbe("Move", function* () {
-              yield* checkout.write("tracked.txt", "moved\n");
-              checkout.run("commit", "--quiet", "-am", "moved");
-              yield* checkout.write("tracked.txt", "dirty\n");
-            }),
-          ],
-        },
-      );
-      const after = checkout.run("rev-parse", "HEAD");
-      expect(after).not.toBe(before);
-      expect(seen).toEqual([
-        expected(before, [], []),
-        expected(after, [], [change("tracked.txt", "M")]),
-      ]);
-    },
-  );
+  it("reads again after HEAD and the working tree move within one execution", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const checkout = yield* useCheckout("xmd-checkout-fresh");
+    const before = checkout.run("rev-parse", "HEAD");
+    const seen: Json[] = [];
+    yield* runChecked(
+      stream,
+      [
+        checkoutOf(checkout.root, "first"),
+        "",
+        "<Captured value={first} />",
+        "",
+        "<Move />",
+        "",
+        checkoutOf(checkout.root, "second"),
+        "",
+        "<Captured value={second} />",
+        "",
+      ].join("\n"),
+      checkout,
+      {
+        components: [
+          capturingProbe(seen),
+          actionProbe("Move", function* () {
+            yield* checkout.write("tracked.txt", "moved\n");
+            checkout.run("commit", "--quiet", "-am", "moved");
+            yield* checkout.write("tracked.txt", "dirty\n");
+          }),
+        ],
+      },
+    );
+    const after = checkout.run("rev-parse", "HEAD");
+    expect(after).not.toBe(before);
+    expect(seen).toEqual([
+      expected(before, [], []),
+      expected(after, [], [change("tracked.txt", "M")]),
+    ]);
+  });
 
-  journalCase(
-    "refuses a checkout the ambient repository does not select",
-    "<eval>",
-    function* (stream) {
-      const checkout = yield* useCheckout("xmd-checkout-ambient");
-      const foreign = yield* useCheckout("xmd-checkout-foreign");
-      let refusal: unknown;
-      try {
-        yield* runChecked(stream, checkoutOf(foreign.root), checkout);
-      } catch (error) {
-        refusal = error;
-      }
-      expect(refusal).toBeInstanceOf(Error);
-      expect(String(refusal)).toContain(
-        "GitOperationAdmissionError: <Git.Changes> is not admitted against this run's retained " +
-          "state: the directory it was written in is inside none of the checkouts this execution " +
-          "selected for the repository in scope.",
-      );
-    },
-  );
+  it("refuses a checkout the ambient repository does not select", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const checkout = yield* useCheckout("xmd-checkout-ambient");
+    const foreign = yield* useCheckout("xmd-checkout-foreign");
+    let refusal: unknown;
+    try {
+      yield* runChecked(stream, checkoutOf(foreign.root), checkout);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(Error);
+    expect(String(refusal)).toContain(
+      "GitOperationAdmissionError: <Git.Changes> is not admitted against this run's retained " +
+        "state: the directory it was written in is inside none of the checkouts this execution " +
+        "selected for the repository in scope.",
+    );
+  });
 });
 
 describe("Ticket.Checkout — one owner for both reads", () => {
-  journalCase(
-    "reports a failed read only after its sibling's cleanup has finished",
-    "<eval>",
-    function* (stream) {
-      const checkout = yield* useCheckout("xmd-checkout-failure");
-      const held = withResolvers<void>();
-      const gate = withResolvers<void>();
-      const order: string[] = [];
-      const task = yield* spawn(function* () {
-        try {
-          yield* readCheckout(stream, checkout, {
-            *around() {
-              yield* GitQuery.around({
-                *changes(args, _next): Operation<GitChangesResult> {
-                  if (requested(args[0]) === "staged") {
-                    yield* ensure(function* () {
-                      order.push("cleanup started");
-                      yield* gate.operation;
-                      order.push("cleanup finished");
-                    });
-                    held.resolve();
-                    yield* suspend();
-                  }
-                  yield* held.operation;
-                  throw new Error("the unstaged read failed");
-                },
-              });
-            },
-          });
-        } catch (error) {
-          order.push("caller settled");
-          return error;
-        }
-        throw new Error("the checkout read did not fail");
-      });
-      yield* held.operation;
-      // Long enough for a caller that does not wait for cleanup to settle first.
-      yield* sleep(200);
-      expect(order).toEqual(["cleanup started"]);
-      gate.resolve();
-      const error = yield* task;
-      expect(String(error)).toContain("the unstaged read failed");
-      expect(order).toEqual(["cleanup started", "cleanup finished", "caller settled"]);
-    },
-  );
-
-  journalCase(
-    "does not finish halting until every held read has cleaned up",
-    "<eval>",
-    function* (stream) {
-      const checkout = yield* useCheckout("xmd-checkout-cancel");
-      const entered: string[] = [];
-      const both = withResolvers<void>();
-      const gate = withResolvers<void>();
-      const order: string[] = [];
-      const task = yield* spawn(function* () {
+  beforeEach(journalBeforeEach(OWNER));
+  it("reports a failed read only after its sibling's cleanup has finished", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const checkout = yield* useCheckout("xmd-checkout-failure");
+    const held = withResolvers<void>();
+    const gate = withResolvers<void>();
+    const order: string[] = [];
+    const task = yield* spawn(function* () {
+      try {
         yield* readCheckout(stream, checkout, {
           *around() {
             yield* GitQuery.around({
               *changes(args, _next): Operation<GitChangesResult> {
-                const compare = requested(args[0]);
-                yield* ensure(function* () {
-                  yield* gate.operation;
-                  order.push(`${compare} cleaned up`);
-                });
-                entered.push(compare);
-                if (entered.length === 2) {
-                  both.resolve();
+                if (requested(args[0]) === "staged") {
+                  yield* ensure(function* () {
+                    order.push("cleanup started");
+                    yield* gate.operation;
+                    order.push("cleanup finished");
+                  });
+                  held.resolve();
+                  yield* suspend();
                 }
-                yield* suspend();
-                throw new Error("a held read resumed");
+                yield* held.operation;
+                throw new Error("the unstaged read failed");
               },
             });
           },
         });
+      } catch (error) {
+        order.push("caller settled");
+        return error;
+      }
+      throw new Error("the checkout read did not fail");
+    });
+    yield* held.operation;
+    // Long enough for a caller that does not wait for cleanup to settle first.
+    yield* sleep(200);
+    expect(order).toEqual(["cleanup started"]);
+    gate.resolve();
+    const error = yield* task;
+    expect(String(error)).toContain("the unstaged read failed");
+    expect(order).toEqual(["cleanup started", "cleanup finished", "caller settled"]);
+  });
+
+  it("does not finish halting until every held read has cleaned up", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const checkout = yield* useCheckout("xmd-checkout-cancel");
+    const entered: string[] = [];
+    const both = withResolvers<void>();
+    const gate = withResolvers<void>();
+    const order: string[] = [];
+    const task = yield* spawn(function* () {
+      yield* readCheckout(stream, checkout, {
+        *around() {
+          yield* GitQuery.around({
+            *changes(args, _next): Operation<GitChangesResult> {
+              const compare = requested(args[0]);
+              yield* ensure(function* () {
+                yield* gate.operation;
+                order.push(`${compare} cleaned up`);
+              });
+              entered.push(compare);
+              if (entered.length === 2) {
+                both.resolve();
+              }
+              yield* suspend();
+              throw new Error("a held read resumed");
+            },
+          });
+        },
       });
-      yield* both.operation;
-      const halting = yield* spawn(function* () {
-        yield* task.halt();
-        order.push("halted");
-      });
-      yield* sleep(200);
-      expect(order).toEqual([]);
-      gate.resolve();
-      yield* halting;
-      expect(new Set(order.slice(0, 2))).toEqual(
-        new Set(["staged cleaned up", "unstaged cleaned up"]),
-      );
-      expect(order[2]).toBe("halted");
-    },
-  );
+    });
+    yield* both.operation;
+    const halting = yield* spawn(function* () {
+      yield* task.halt();
+      order.push("halted");
+    });
+    yield* sleep(200);
+    expect(order).toEqual([]);
+    gate.resolve();
+    yield* halting;
+    expect(new Set(order.slice(0, 2))).toEqual(
+      new Set(["staged cleaned up", "unstaged cleaned up"]),
+    );
+    expect(order[2]).toBe("halted");
+  });
 });

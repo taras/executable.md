@@ -19,7 +19,7 @@ import { API, Config, timeoutExec } from "@executablemd/runtime";
 import type { ConfigApi } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { journalCases } from "../../test-support/journal-cases.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";

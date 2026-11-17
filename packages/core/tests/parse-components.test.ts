@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 /**
  * Tier PC — `<Parse>` and `<SafeParse>` (spec §6.12).
  *

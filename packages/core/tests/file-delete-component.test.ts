@@ -18,8 +18,12 @@
  * symlinks rather than following them.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -99,11 +103,12 @@ function run(
   fixture: Fixture,
   source: string,
   install?: () => Operation<void>,
-  stream = new InMemoryStream(),
+  suppliedStream?: InMemoryStream,
 ): Operation<string> {
   return scoped(function* () {
     const path = join(fixture.workspace, "doc.md");
     yield* writeTextFile(path, source);
+    const stream = suppliedStream ?? (yield* useJournalStream(path));
     yield* useWorkspaceCwd(fixture);
     if (install) {
       yield* install();
@@ -200,13 +205,14 @@ function fixtureCase(
 ): void {
   it(name, function* () {
     const fixture = yield* useFixture();
-    yield* captureTestJournal({ owner: OWNER, name }, join(fixture.workspace, "doc.md"), (stream) =>
-      body(fixture, stream),
-    );
+    const source = join(fixture.workspace, "doc.md");
+    const stream = yield* useJournalStream(source);
+    yield* body(fixture, stream);
   });
 }
 
 describe("Tier FD — File.Delete", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // FD1: the ordinary case, and the whole of what a success looks like from the
   // document: the file is gone, and nothing is rendered or bound in its place.
   fixtureCase(

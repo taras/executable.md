@@ -33,6 +33,7 @@ import {
   journalBeforeEach,
   useJournalStream,
 } from "@executablemd/test-support/failure-journal";
+const OWNER = "packages/agent/tests/agent-components.test.ts";
 
 interface StubResponse {
   status?: "completed" | "failed" | "cancelled";
@@ -107,7 +108,11 @@ function createStubStream(
         sessionKey: `stub:${typeof options?.session === "string" ? options.session : "default"}`,
         cwd: "/stub",
       };
-      const call: StubPromptCall = { content, agent, sessionKey: session.sessionKey };
+      const call: StubPromptCall = {
+        content,
+        agent,
+        sessionKey: session.sessionKey,
+      };
       if (options?.timeout !== undefined) {
         call.timeout = options.timeout;
       }
@@ -184,7 +189,7 @@ function captureAgentDocument(
 ): Operation<void> {
   const dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`);
   return captureTestJournal(
-    { owner: "packages/agent/tests/agent-components.test.ts", suite: SUITE, name },
+    { owner: OWNER, suite: SUITE, name },
     path.join(dir, "doc.md"),
     (stream) => body(stream, dir),
   );
@@ -198,7 +203,7 @@ function agentCase(
 }
 
 describe(SUITE, () => {
-  beforeEach(journalBeforeEach("packages/agent/tests/agent-components.test.ts"));
+  beforeEach(journalBeforeEach(OWNER));
   agentCase(
     "AC1: wrapper <Prompt> always sends rendered children, untrimmed",
     function* (runFresh) {
@@ -374,7 +379,11 @@ describe(SUITE, () => {
     function* (runFresh) {
       const stub = createStubProvider((content) => {
         if (content.includes("first-fail")) {
-          return { status: "failed", stopReason: "max_tokens", deltas: ["partial-one "] };
+          return {
+            status: "failed",
+            stopReason: "max_tokens",
+            deltas: ["partial-one "],
+          };
         }
         if (content.includes("second-fail")) {
           return { status: "failed", stopReason: "refusal", deltas: [] };
@@ -415,7 +424,10 @@ describe(SUITE, () => {
   );
 
   agentCase("AC8: throwOnError aborts the document immediately", function* (runFresh) {
-    const stub = createStubProvider(() => ({ status: "failed", stopReason: "refusal" }));
+    const stub = createStubProvider(() => ({
+      status: "failed",
+      stopReason: "refusal",
+    }));
     yield* installStub(stub);
     const { output, result } = yield* runFresh(
       '<Prompt text="boom" throwOnError />\n\nnever reached\n',
@@ -557,7 +569,11 @@ describe(SUITE, () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root.0",
-      description: { type: "agent_prompt", name: "prompt:doc.md:1:1#0", input: "a" },
+      description: {
+        type: "agent_prompt",
+        name: "prompt:doc.md:1:1#0",
+        input: "a",
+      },
       result: {
         status: "ok",
         value: {
@@ -575,7 +591,11 @@ describe(SUITE, () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root.1",
-      description: { type: "agent_prompt", name: "prompt:doc.md:2:1#0", input: "b" },
+      description: {
+        type: "agent_prompt",
+        name: "prompt:doc.md:2:1#0",
+        input: "b",
+      },
       result: {
         status: "ok",
         value: {

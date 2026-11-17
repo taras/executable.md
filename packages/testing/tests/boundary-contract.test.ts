@@ -4,14 +4,16 @@
  * the report from one that aborts the boundary and loses it.
  */
 
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases } from "./helpers.ts";
 
-const documentCase = documentCases("packages/testing/tests/boundary-contract.test.ts");
+const documentCase = documentCases();
 
 describe("Tier TC — the <Testing> boundary", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/boundary-contract.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   // The gap found while planning PR 3: `<Testing>` does not intercept raises —
@@ -75,6 +77,7 @@ describe("Tier TC — the <Testing> boundary", () => {
 });
 
 describe("Tier TC — what a <Test> keeps when it fails", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/boundary-contract.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   // The behavior `content()` cannot express: a test that fails partway still

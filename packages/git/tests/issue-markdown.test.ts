@@ -69,25 +69,9 @@ describe("workflow Issue scenarios", () => {
   for (const name of SCENARIOS) {
     const title = `${name} states a contract that holds`;
     const path = pathOf(name);
-    if (name === "IssueRead.test.md" || name === "IssueUpsert.test.md") {
-      it(title, () =>
-        captureTestJournal(
-          {
-            owner: "packages/git/tests/issue-markdown.test.ts",
-            suite: "workflow Issue scenarios",
-            name: title,
-          },
-          path,
-          function* (stream) {
-            yield* stated(yield* runScenario(path, stream));
-          },
-        ),
-      );
-    } else {
-      it(title, function* () {
-        yield* stated(yield* runScenario(path));
-      });
-    }
+    it(title, function* () {
+      yield* stated(yield* runScenario(path, yield* useJournalStream(path)));
+    });
   }
 
   it("IssueDurability.test.md states a contract that holds", function* () {

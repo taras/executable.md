@@ -14,7 +14,7 @@
  * and canonical execution reads that answer once before public policy.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, sleep, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -33,7 +33,11 @@ import {
 import type { GeneratedEvaluationOptions } from "../src/deno/workspace/evaluate.ts";
 import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
 const ROOT_PATH = "workflows/agent.md";
@@ -359,6 +363,7 @@ describe("Tier WGX — the selection a workflow run offers", () => {
 });
 
 describe("Tier WGX — what an admitted request may reach is live", () => {
+  beforeEach(journalBeforeEach(OWNER));
   journalCase(
     "WGX6: a host that bounds no request offers `<Fetch>` not at all",
     ROOT_PATH,
@@ -412,7 +417,8 @@ describe("Tier WGX — what an admitted request may reach is live", () => {
 
   {
     const name = "WGX9: a bound this host stated cannot be moved by editing what it was given";
-    journalCase(name, ROOT_PATH, function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
       yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream2) {
         yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream3) {
           yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream4) {
@@ -455,7 +461,8 @@ describe("Tier WGX — what an admitted request may reach is live", () => {
 
   {
     const name = "WGX13: a header a transformation added is compared as the transport will send it";
-    journalCase(name, ROOT_PATH, function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
       yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream2) {
         // The real terminal and a real server, because this row is about the
         // difference between the request a policy read and the request that goes
