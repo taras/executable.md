@@ -32,8 +32,8 @@ import { protectedInputPlugin, protectedInputChild } from "./support/protected-i
  * assembly. It is the only observation here that a value cannot stand in for.
  */
 
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { call, ensure, Err, Ok, resource, scoped } from "effection";
@@ -76,6 +76,8 @@ import type {
 } from "../src/workflow.ts";
 import { runWorkflowManagement } from "../src/workflow-management.ts";
 import { retainedSource } from "../../workflow/tests/support/storage.ts";
+
+const OWNER = "packages/cli/tests/workflow-suspension.test.ts";
 
 const SCHEMA = { type: "object", properties: { approved: { type: "boolean" } } };
 
@@ -459,6 +461,7 @@ function body(): (execution: WorkflowExecution) => Operation<Result<void>> {
 }
 
 describe("Tier WFS — a suspended run and its no-input resumes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("WFS1: suspends, exits 2, releases the lock, and resumes into the same wait", function* () {
     const root = yield* useRunStore();
     const fixture = yield* useFixture();
@@ -745,44 +748,40 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     expect(answers(path)[0]?.state).toBe("pending");
   });
 
-  const journalCase = journalCases("packages/cli/tests/workflow-suspension.test.ts");
-  journalCase(
-    "WFS3: an ordinary execution outside a workflow run is unaffected",
-    "<eval>",
-    function* (stream) {
-      // No workflow host, no run, no controller: `suspendFor()` has no run to
-      // derive an identity from, so it refuses rather than reaching for one.
-      yield* registerComponents([
-        {
-          name: "Wait",
-          origin: "tier-wfs",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          *fn() {
-            yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
-            return "";
-          },
+  it("WFS3: an ordinary execution outside a workflow run is unaffected", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    // No workflow host, no run, no controller: `suspendFor()` has no run to
+    // derive an identity from, so it refuses rather than reaching for one.
+    yield* registerComponents([
+      {
+        name: "Wait",
+        origin: "tier-wfs",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+          return "";
         },
-      ]);
+      },
+    ]);
 
-      let thrown: unknown;
-      try {
-        yield* collect(yield* execute({ ...inlineSource("<Wait />\n"), stream }));
-      } catch (error) {
-        thrown = error;
-      }
+    let thrown: unknown;
+    try {
+      yield* collect(yield* execute({ ...inlineSource("<Wait />\n"), stream }));
+    } catch (error) {
+      thrown = error;
+    }
 
-      expect(String(thrown)).toContain("workflow run");
+    expect(String(thrown)).toContain("workflow run");
 
-      // Nothing was published: an ordinary run's journal is untouched by a
-      // suspension it could not have.
-      const events = yield* stream.readAll();
-      expect(
-        events.filter(
-          (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
-        ),
-      ).toHaveLength(0);
-    },
-  );
+    // Nothing was published: an ordinary run's journal is untouched by a
+    // suspension it could not have.
+    const events = yield* stream.readAll();
+    expect(
+      events.filter(
+        (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
+      ),
+    ).toHaveLength(0);
+  });
 });
 
 /**
