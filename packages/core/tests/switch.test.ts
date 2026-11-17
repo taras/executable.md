@@ -22,10 +22,7 @@ import type { SourceOrigin } from "../src/scanner.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 interface SwitchRun {
   segments: Segment[];
