@@ -12,9 +12,12 @@
  * fixture unlinks its symlinks rather than following them.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
@@ -886,12 +889,17 @@ describe("Tier FL — File", () => {
   // FL16: props are validated like any component's — no name-specific check.
   it("FL16: a missing path and an undeclared prop are both rejected", function* () {
     const fixture = yield* useFixture();
+    const document = join(fixture.workspace, "doc.md");
 
     // Ordinary prop validation, uncaught, so each one is the run's outcome.
-    const missing = yield* reportOf(() => run(fixture, "<File />"));
+    const missingStream = yield* useJournalStream(document);
+    const missing = yield* reportOf(() => runWith(fixture, "<File />", missingStream));
     expect(missing).toContain("path");
 
-    const extra = yield* reportOf(() => run(fixture, '<File path="a.md" encoding="utf16" />'));
+    const extraStream = yield* useJournalStream(document);
+    const extra = yield* reportOf(() =>
+      runWith(fixture, '<File path="a.md" encoding="utf16" />', extraStream),
+    );
     expect(extra).toContain("additional properties");
   });
 
@@ -1287,13 +1295,26 @@ describe("Tier FL — File", () => {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "parent"), "not a directory");
 
-    const reading = text(yield* run(fixture, '<File path="parent/child.txt" />'));
+    const document = join(fixture.workspace, "doc.md");
+    const reading = text(
+      yield* runWith(
+        fixture,
+        '<File path="parent/child.txt" />',
+        yield* useJournalStream(document),
+      ),
+    );
     expect(reading).toContain(
       'cannot read "parent/child.txt": a component of the path is not a directory.',
     );
     expectNoAbsolutePaths(reading, fixture);
 
-    const writing = text(yield* run(fixture, '<File path="parent/child.txt">content</File>'));
+    const writing = text(
+      yield* runWith(
+        fixture,
+        '<File path="parent/child.txt">content</File>',
+        yield* useJournalStream(document),
+      ),
+    );
     expect(writing).toContain(
       'cannot write "parent/child.txt": a component of the path is not a directory.',
     );
@@ -1307,17 +1328,24 @@ describe("Tier FL — File", () => {
   // and the printed error should say so.
   it("FL25: the working directory itself is contained, and reported as a directory", function* () {
     const fixture = yield* useFixture();
+    const document = join(fixture.workspace, "doc.md");
 
-    const reading = text(yield* run(fixture, '<File path="." />'));
+    const reading = text(
+      yield* runWith(fixture, '<File path="." />', yield* useJournalStream(document)),
+    );
     expect(reading).toContain('cannot read ".": it is a directory, not a text file.');
     expect(reading).not.toContain("outside the working directory");
 
-    const writing = text(yield* run(fixture, '<File path=".">content</File>'));
+    const writing = text(
+      yield* runWith(fixture, '<File path=".">content</File>', yield* useJournalStream(document)),
+    );
     expect(writing).toContain('cannot write ".": it is a directory, not a text file.');
     expect(writing).not.toContain("outside the working directory");
 
     // A path that normalizes to the directory reads the same way.
-    const normalized = text(yield* run(fixture, '<File path="sub/.." />'));
+    const normalized = text(
+      yield* runWith(fixture, '<File path="sub/.." />', yield* useJournalStream(document)),
+    );
     expect(normalized).toContain("it is a directory, not a text file.");
     expect(normalized).not.toContain("outside the working directory");
   });
@@ -1407,7 +1435,7 @@ describe("Tier FL — the authored form decides the effect", () => {
       const rendered = yield* runWith(
         fixture,
         `<Says />\n\n<File path="notes.md" />\n\n<Says />\n`,
-        new InMemoryStream(),
+        yield* useJournalStream(join(fixture.workspace, "doc.md")),
         function* () {
           yield* useLyingContent(script, answered);
           yield* useFileCalls(calls);
@@ -1440,7 +1468,7 @@ describe("Tier FL — the authored form decides the effect", () => {
       yield* runWith(
         fixture,
         `<Says />\n\n<File path="out.md">the authored bytes</File>\n\n<Says />\n`,
-        new InMemoryStream(),
+        yield* useJournalStream(join(fixture.workspace, "doc.md")),
         function* () {
           yield* useLyingContent(script, answered);
           yield* useFileCalls(calls);
@@ -1463,7 +1491,7 @@ describe("Tier FL — the authored form decides the effect", () => {
     const rendered = yield* runWith(
       fixture,
       `<File path="notes.md" />\n\n<File path="out.md">the authored bytes</File>\n`,
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.workspace, "doc.md")),
       function* () {
         yield* useFileCalls(calls);
       },

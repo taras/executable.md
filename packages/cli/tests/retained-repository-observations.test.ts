@@ -27,7 +27,7 @@
  * therefore resolved nothing and selected nothing.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, race, sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -53,9 +53,9 @@ import type {
 } from "../src/repl/repositories/observation-records.ts";
 import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.ts";
 import { Elicitation } from "@executablemd/core";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useObservationFixture, writeFixtureFile } from "../../git/tests/support/observations.ts";
 import {
-  captureObservationEntry,
   entryCounters,
   methodsCalled,
   readKinds,
@@ -67,6 +67,8 @@ import {
 import { commonDirectoryOf } from "../../git/tests/support/run-composition.ts";
 import { denoCommitVerifier } from "@executablemd/git/deno";
 import type { CommitVerifier } from "@executablemd/git/deno";
+
+const OWNER = "packages/cli/tests/retained-repository-observations.test.ts";
 
 /** This payload as an object a case can change one member of. */
 function objectOf(payload: Json): Record<string, Json> {
@@ -255,9 +257,11 @@ function checkoutOf(fixture: { root: string }, common: string): ReplObservationC
 }
 
 describe("ROB1 — a completed read answers from its record", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("restores all four pages with no git, through a link pointing elsewhere", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
     const first = entryCounters();
     const source = [
       '<Git.Files limit={1000} as="files" />',
@@ -277,7 +281,6 @@ describe("ROB1 — a completed read answers from its record", () => {
       "<Json value={source} />",
       "",
     ].join("\n");
-    const stream = new InMemoryStream();
     yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 5;\n");
     const live = yield* runEntry(place, source, stream, first);
     expect(live.refusal).toBe(undefined);
@@ -288,7 +291,6 @@ describe("ROB1 — a completed read answers from its record", () => {
       "diff",
       "file",
     ]);
-
     // Everything the first entry read is now wrong: the files are gone, the
     // checkout is gone, and the directory the entry was opened through points
     // somewhere else.
@@ -307,6 +309,7 @@ describe("ROB1 — a completed read answers from its record", () => {
 });
 
 describe("ROB2 — the record is closed, and named by the request it carries", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("round-trips all four pages and one refusal", function* () {
     const fixture = yield* useObservationFixture();
     const common = commonDirectoryOf({ root: fixture.root, home: fixture.home, run: fixture.run });
@@ -398,12 +401,8 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
   it("refuses a version, a fingerprint, a name, a page and a route it cannot read", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
-    const live = yield* runEntry(
-      place,
-      '<Git.Files as="files" />\n',
-      new InMemoryStream(),
-      entryCounters(),
-    );
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
+    const live = yield* runEntry(place, '<Git.Files as="files" />\n', stream, entryCounters());
     expect(live.refusal).toBe(undefined);
     const recorded = observations(live.events);
     expect(recorded).toHaveLength(1);
@@ -447,7 +446,10 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
         name,
         {
           ...objectOf(sound),
-          checkout: { ...objectOf(soundCheckout(sound)), root: "/unregistered/other-checkout" },
+          checkout: {
+            ...objectOf(soundCheckout(sound)),
+            root: "/unregistered/other-checkout",
+          },
         },
       ],
       [
@@ -495,12 +497,13 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
   it("refuses a well-shaped wrong route before reusing a completed or unfinished page", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
     const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
 
     // A settled entry, and the same entry left at a question: the route has to
     // be refused before either is reused, and a completed terminal is reused
     // without the body that checks the live registry ever being entered.
-    const settled = yield* runEntry(place, source, new InMemoryStream(), entryCounters());
+    const settled = yield* runEntry(place, source, stream, entryCounters());
     expect(settled.refusal).toBe(undefined);
     const unfinished = yield* leftEntry(
       place,
@@ -539,8 +542,9 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
   it("admits a completed page whose checkout has been deleted since", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
     const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
-    const live = yield* runEntry(place, source, new InMemoryStream(), entryCounters());
+    const live = yield* runEntry(place, source, stream, entryCounters());
     expect(live.refusal).toBe(undefined);
 
     // The control the route check must not break: a cold reuse whose checkout
@@ -584,6 +588,7 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
 });
 
 describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const replacement = "creates no record when a replacement answers above the provider";
   it(replacement, function* () {
     const fixture = yield* useObservationFixture();
@@ -591,45 +596,40 @@ describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
     const counted = entryCounters();
     const answered: string[] = [];
 
-    yield* captureObservationEntry(
-      { owner: "packages/cli/tests/retained-repository-observations.test.ts", name: replacement },
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
+    const run = yield* runEntry(
       place,
-      function* (stream) {
-        const run = yield* runEntry(
-          place,
-          ['<Git.Diff compare="unstaged" as="diff" />', "", "<Json value={diff} />", ""].join("\n"),
-          stream,
-          counted,
-          {
-            *between(): Operation<void> {
-              yield* GitQuery.around({
-                // deno-lint-ignore require-yield
-                *diff([invocation]: [GitDiffInvocation]): Operation<GitDiffResult> {
-                  answered.push(invocation.request.kind);
-                  return {
-                    comparison: { compare: "unstaged" },
-                    text: "answered above",
-                    offset: 0,
-                    length: 14,
-                    next: null,
-                  };
-                },
-              });
+      ['<Git.Diff compare="unstaged" as="diff" />', "", "<Json value={diff} />", ""].join("\n"),
+      stream,
+      counted,
+      {
+        *between(): Operation<void> {
+          yield* GitQuery.around({
+            // deno-lint-ignore require-yield
+            *diff([invocation]: [GitDiffInvocation]): Operation<GitDiffResult> {
+              answered.push(invocation.request.kind);
+              return {
+                comparison: { compare: "unstaged" },
+                text: "answered above",
+                offset: 0,
+                length: 14,
+                next: null,
+              };
             },
-          },
-        );
-
-        expect(run.refusal).toBe(undefined);
-        expect(answered).toEqual(["diff"]);
-        expect(run.output).toContain("answered above");
-        // Answered entirely above the provider, so no provider was reached: no
-        // native read, no scratch directory and no observation record.
-        expect(observations(run.events)).toEqual([]);
-        // Ambient discovery still happened — the component asks which repository is
-        // in scope before it asks anything of it — but not one native *read* ran.
-        expect(readKinds(counted)).toEqual([]);
+          });
+        },
       },
     );
+
+    expect(run.refusal).toBe(undefined);
+    expect(answered).toEqual(["diff"]);
+    expect(run.output).toContain("answered above");
+    // Answered entirely above the provider, so no provider was reached: no
+    // native read, no scratch directory and no observation record.
+    expect(observations(run.events)).toEqual([]);
+    // Ambient discovery still happened — the component asks which repository is
+    // in scope before it asks anything of it — but not one native *read* ran.
+    expect(readKinds(counted)).toEqual([]);
   });
 
   const delegation = "records the request a delegating replacement actually passed down";
@@ -638,46 +638,43 @@ describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
     const place = yield* useEntryPlace(fixture);
     const counted = entryCounters();
 
-    yield* captureObservationEntry(
-      { owner: "packages/cli/tests/retained-repository-observations.test.ts", name: delegation },
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
+    const run = yield* runEntry(
       place,
-      function* (stream) {
-        const run = yield* runEntry(
-          place,
-          ['<Git.Diff compare="unstaged" as="diff" />', ""].join("\n"),
-          stream,
-          counted,
-          {
-            *between(): Operation<void> {
-              yield* GitQuery.around({
-                diff: ([invocation]: [GitDiffInvocation], next): Operation<GitDiffResult> =>
-                  next({ ...invocation, request: { ...invocation.request, limit: 7 } }),
-              });
-            },
-          },
-        );
-
-        expect(run.refusal).toBe(undefined);
-        const recorded = observations(run.events);
-        expect(recorded).toHaveLength(1);
-        // The request the provider received, not the one the document wrote.
-        expect(recorded[0]?.record.request.query).toEqual({
-          kind: "diff",
-          comparison: { compare: "unstaged" },
-          paths: null,
-          offset: 0,
-          limit: 7,
-          cursor: null,
-        });
+      ['<Git.Diff compare="unstaged" as="diff" />', ""].join("\n"),
+      stream,
+      counted,
+      {
+        *between(): Operation<void> {
+          yield* GitQuery.around({
+            diff: ([invocation]: [GitDiffInvocation], next): Operation<GitDiffResult> =>
+              next({ ...invocation, request: { ...invocation.request, limit: 7 } }),
+          });
+        },
       },
     );
+
+    expect(run.refusal).toBe(undefined);
+    const recorded = observations(run.events);
+    expect(recorded).toHaveLength(1);
+    // The request the provider received, not the one the document wrote.
+    expect(recorded[0]?.record.request.query).toEqual({
+      kind: "diff",
+      comparison: { compare: "unstaged" },
+      paths: null,
+      offset: 0,
+      limit: 7,
+      cursor: null,
+    });
   });
 });
 
 describe("ROB4 — a saved refusal replays, and a new read sees today", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("retains an ordinary bad-revision refusal and raises it again with no git", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
     const first = entryCounters();
     const source = [
       "<PrintErrors>",
@@ -687,7 +684,7 @@ describe("ROB4 — a saved refusal replays, and a new read sees today", () => {
       "",
     ].join("\n");
 
-    const live = yield* runEntry(place, source, new InMemoryStream(), first, {});
+    const live = yield* runEntry(place, source, stream, first, {});
     expect(live.refusal).toBe(undefined);
     expect(live.output).toContain("names no commit in the selected repository");
     const recorded = observations(live.events);
@@ -802,9 +799,11 @@ function countingVerifier(count: { starts: number }): CommitVerifier {
 }
 
 describe("ROB6 — a commit read's page and verification receipt are history", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("replays a verified read with no Git and no verifier after everything moved", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
     const head = fixture.run("rev-parse", "HEAD");
     const source = [
       '<Git.Commit ref="HEAD" verify={true} yq="." as="commit" />',
@@ -814,7 +813,7 @@ describe("ROB6 — a commit read's page and verification receipt are history", (
     ].join("\n");
     const first = entryCounters();
     const verified = { starts: 0 };
-    const live = yield* runEntry(place, source, new InMemoryStream(), first, {
+    const live = yield* runEntry(place, source, stream, first, {
       verifier: countingVerifier(verified),
     });
     expect(live.refusal).toBe(undefined);
@@ -845,6 +844,7 @@ describe("ROB6 — a commit read's page and verification receipt are history", (
   it("binds nothing and records nothing when cancelled inside the verifier", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
     const reached = withResolvers<void>();
     const release = withResolvers<void>();
     let finished = false;
@@ -857,7 +857,6 @@ describe("ROB6 — a commit read's page and verification receipt are history", (
         finished = true;
       }
     };
-    const stream = new InMemoryStream();
     try {
       const task = yield* spawn(() =>
         runEntry(

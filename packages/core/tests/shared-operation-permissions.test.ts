@@ -21,13 +21,13 @@
  * observable.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, Permissions, useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import type { Json } from "@executablemd/durable-streams";
 import { mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -48,6 +48,7 @@ import { cwd } from "@executablemd/runtime";
 
 const ROOT_PATH = "document.md";
 const SOURCE = "the source note\n";
+const OWNER = "packages/core/tests/shared-operation-permissions.test.ts";
 
 interface Fixture {
   readonly workspace: string;
@@ -231,11 +232,9 @@ function run(fixture: Fixture, source: string): Operation<Json> {
   return scoped(function* () {
     yield* useHost(fixture);
     yield* useRegions();
+    const stream = yield* useJournalStream(ROOT_PATH);
     return yield* collect(
-      yield* executeInstalled(
-        { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
-        [ceiling()],
-      ),
+      yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream }, [ceiling()]),
     );
   });
 }
@@ -317,12 +316,13 @@ function useLoopback(): Operation<Loopback> {
 }
 
 describe("absolute directory permission", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("authored Dir refuses without content, then opts in and restores the enclosing cwd", function* () {
     const fixture = yield* useFixture();
     yield* useHost(fixture);
     const source = `<Dir path=${JSON.stringify(fixture.workspace)}><File path="source.txt" /></Dir>`;
     const denied = yield* executeInstalled(
-      { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+      { ...retainedSource(ROOT_PATH, source), stream: yield* useJournalStream(ROOT_PATH) },
       [],
     );
     let failure = "";
@@ -337,7 +337,7 @@ describe("absolute directory permission", () => {
       { at: "min" },
     );
     const allowed = yield* executeInstalled(
-      { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+      { ...retainedSource(ROOT_PATH, source), stream: yield* useJournalStream(ROOT_PATH) },
       [],
     );
     expect(String(yield* collect(allowed))).toContain(SOURCE.trim());
@@ -360,7 +360,7 @@ describe("absolute directory permission", () => {
           ROOT_PATH,
           `<PrintErrors><RelativeOnly>${source}</RelativeOnly></PrintErrors>${source}`,
         ),
-        stream: new InMemoryStream(),
+        stream: yield* useJournalStream(ROOT_PATH),
       },
       [],
     );
@@ -372,6 +372,7 @@ describe("absolute directory permission", () => {
 });
 
 describe("Tier PRM — authored, generated and direct operations under one restriction", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PRM1: every class of read is answered inside the region", function* () {
     const fixture = yield* useFixture();
     const output = String(
@@ -536,7 +537,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
                   "",
                 ].join("\n"),
               ),
-              stream: new InMemoryStream(),
+              stream: yield* useJournalStream(ROOT_PATH),
             },
             [ceiling()],
           ),
@@ -584,7 +585,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
                 `<Evaluate allow={["read","write"]} text={'<File path="source.txt" as="note" />\\n` +
                   `<File path="made.txt">from the fragment</File>\\n'} />\n`,
               ),
-              stream: new InMemoryStream(),
+              stream: yield* useJournalStream(ROOT_PATH),
             },
             [ceiling()],
           ),
@@ -619,7 +620,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
                 `<Evaluate text={'<Fetch url="${admitted.url}" as="answer" />\\n` +
                   `<Json value={answer} />\\n'} />\n`,
               ),
-              stream: new InMemoryStream(),
+              stream: yield* useJournalStream(ROOT_PATH),
             },
             [reading()],
           ),
@@ -660,7 +661,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
                 `<Evaluate text={'<Fetch url="${admitted.url}" as="answer" />\\n` +
                   `<Json value={answer} />\\n'} />\n`,
               ),
-              stream: new InMemoryStream(),
+              stream: yield* useJournalStream(ROOT_PATH),
             },
             [reading()],
           ),
@@ -716,7 +717,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
       // request goes out.
       yield* collect(
         yield* executeInstalled(
-          { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+          { ...retainedSource(ROOT_PATH, source), stream: yield* useJournalStream(ROOT_PATH) },
           [admitting],
         ),
       );
@@ -736,7 +737,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         try {
           yield* collect(
             yield* executeInstalled(
-              { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+              { ...retainedSource(ROOT_PATH, source), stream: yield* useJournalStream(ROOT_PATH) },
               [admitting],
             ),
           );
@@ -799,7 +800,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
                 // of it.
                 [element, "", "<Editing>", "", element, "", "</Editing>", ""].join("\n"),
               ),
-              stream: new InMemoryStream(),
+              stream: yield* useJournalStream(ROOT_PATH),
             },
             [reading()],
           ),
@@ -856,7 +857,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
               ROOT_PATH,
               ["<Editing>", "", element, "", "</Editing>", "", element, ""].join("\n"),
             ),
-            stream: new InMemoryStream(),
+            stream: yield* useJournalStream(ROOT_PATH),
           },
           [reading()],
         ),
@@ -894,6 +895,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
 });
 
 describe("1113: permission ceilings across projection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const operation of ["read", "absolute"]) {
     for (const structural of [false, true]) {
       it(`1113: ${structural ? "Markdown Content" : "programmatic content()"} carries ${operation} denial through a permitting receiver`, function* () {
@@ -935,7 +937,7 @@ describe("1113: permission ceilings across projection", () => {
                   `<PrintErrors><${region}><Permitting>${child}</Permitting></${region}></PrintErrors><File path="source.txt" />`,
                 ),
                 includes: [fixture.workspace],
-                stream: new InMemoryStream(),
+                stream: yield* useJournalStream(ROOT_PATH),
               },
               [ceiling()],
             ),
@@ -964,7 +966,7 @@ describe("1113: permission ceilings across projection", () => {
           {
             ...retainedSource(ROOT_PATH, source),
             includes: [fixture.workspace],
-            stream: new InMemoryStream(),
+            stream: yield* useJournalStream(ROOT_PATH),
           },
           [ceiling()],
         ),
