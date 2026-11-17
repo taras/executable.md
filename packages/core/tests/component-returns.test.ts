@@ -725,7 +725,6 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV12: halting after selection publishes no value and completes teardown", function* () {
-      const stream = yield* useJournalStream("doc.md");
       const reached = withResolvers<void>();
       const torn: string[] = [];
       const globals = globalThis as Record<string, unknown>;
@@ -741,12 +740,14 @@ describe("Tier RV — component return values", () => {
         const dir = path.join(os.tmpdir(), `returns-halt-${randomUUID()}`);
         yield* ensureDir(dir);
         yield* ensure(() => rm(dir, { recursive: true, force: true }));
+        const documentPath = path.join(dir, "doc.md");
+        const stream = yield* useJournalStream(documentPath);
         yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
         yield* until(
           symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"),
         );
         yield* writeTextFile(
-          path.join(dir, "doc.md"),
+          documentPath,
           [
             "---",
             "returns:",
@@ -779,7 +780,7 @@ describe("Tier RV — component return values", () => {
         const outcome: string[] = [];
         const task = yield* spawn(function* () {
           const execution = yield* execute({
-            path: path.join(dir, "doc.md"),
+            path: documentPath,
             stream,
             includes: [dir],
           });
