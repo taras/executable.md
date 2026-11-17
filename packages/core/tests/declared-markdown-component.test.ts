@@ -1967,6 +1967,8 @@ function* refusedBy(operation: Operation<unknown>): Operation<Error> {
 }
 
 describe("Tier MDK — the declaration states its kind", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   // deno-lint-ignore require-yield
   it("MDK1: the constructor states the kind and changes nothing else", function* () {
     const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
