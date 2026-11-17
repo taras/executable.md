@@ -110,8 +110,6 @@ an explicit empty details string and excludes arbitrary raw `acp.data`.
 The uniquely named `XMD prompt diagnostic:` seam bounds this correction in Tier AV.
 Real adapter-child failures pass through this runtime into production Prompt
 publication and cold REPL Journal queries of `promptError`.
-The same projection is available through the runtime entry for classified
-resume refusals before a runtime turn exists or writes its prompt (#1388).
 
 Other arbitrary adapter data remains unavailable through this selected result.
 This correction establishes no cause for the historical `Internal error` incident,

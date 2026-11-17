@@ -322,8 +322,6 @@ type AcpRuntimeTurnResultError = {
   detailCode?: string;
   retryable?: boolean;
 };
-/** XMD prompt diagnostic: bounded runtime failure projection, also used before a turn exists. */
-export declare function projectRuntimeError(error: unknown): AcpRuntimeTurnResultError;
 /** XMD prompt usage: quota counters, under the adapter's own names. */
 type AcpRuntimeQuotaTokens = {
   totalTokens?: number;

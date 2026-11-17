@@ -217,7 +217,7 @@ function turn(
   };
 }
 
-describe("1388 — resume retention: exact request ownership", () => {
+describe("resume retention: exact request ownership", () => {
   const message: SidekickRecord = {
     kind: "message",
     id: "message-1",
@@ -4918,7 +4918,7 @@ describe("1183 — the exact live feedback request is the only exception", () =>
   });
 });
 
-describe("1388 — resume retention and 1269 — mounted retained recovery corrections", () => {
+describe("resume retention and mounted retained recovery corrections", () => {
   const savedText = "Continue the exact saved instruction.";
   const oldText = "Original chat remains readable.";
   const entryText = "An established entry remains readable.";

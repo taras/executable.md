@@ -2052,8 +2052,8 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   terminal in `checkpoint.ts` and `events.ts`. Cancellation and failure never
   acquire one, and no local runtime metadata patch remains. The pinned
   in-process runtime preserves normalized origin and selected protocol
-  code/message/details in the runtime failure projection used for terminal and
-  pre-prompt resume failures. Arbitrary `acp.data` remains
+  code/message/details at `failRuntimeTurn`. XMD selects the same fields from
+  pre-prompt resume errors and their causes. Arbitrary `acp.data` remains
   excluded. The shared/queue result projection is unchanged. The generated correction and its matching declaration are recorded in vendor provenance and offline Tier AV.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before
