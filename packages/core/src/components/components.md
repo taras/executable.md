@@ -179,6 +179,8 @@ the directories above it as needed.
 
 ## File.Copy
 
+Read the [File.Copy specification](https://github.com/taras/executable.md/blob/main/specs/executable-mdx-spec.md#6133-copying-a-file-filecopy).
+
 ## File.Delete
 
 Deletes a file, relative to the working directory.
