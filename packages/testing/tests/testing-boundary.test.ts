@@ -8,27 +8,38 @@
  * component replace `<Testing>` entirely.
  */
 
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import {
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { registerComponents, useTempFileCompiler } from "@executablemd/core";
 import { documentCases, runDoc } from "./helpers.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
-const documentCase = documentCases("packages/testing/tests/testing-boundary.test.ts");
+const documentCase = documentCases(
+  "packages/testing/tests/testing-boundary.test.ts",
+);
 import type { DocRun } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
 
 const OWNER = "packages/testing/tests/testing-boundary.test.ts";
-const journalCase = journalCases(OWNER);
 
 /** Every journalled boundary entry, by the name it recorded. */
 function* boundaryEntries(stream: InMemoryStream): Operation<string[]> {
   const events = yield* stream.readAll();
   const names: string[] = [];
   for (const event of events) {
-    if (event.type === "yield" && event.description.type === "testing_boundary") {
+    if (
+      event.type === "yield" && event.description.type === "testing_boundary"
+    ) {
       names.push(String(event.description.name));
     }
   }
@@ -45,7 +56,10 @@ const BOOM = new Error("the component failed");
  * how expansion stops partway rather than printing — no middleware standing
  * in for a failure, just a component that fails.
  */
-function stopping(files: Record<string, string>, stream: InMemoryStream): Operation<DocRun> {
+function stopping(
+  files: Record<string, string>,
+  stream: InMemoryStream,
+): Operation<DocRun> {
   return scoped(function* () {
     yield* registerComponents([
       {
@@ -64,36 +78,34 @@ function stopping(files: Record<string, string>, stream: InMemoryStream): Operat
 
 describe("Tier TB — a boundary that never finished", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
-  journalCase(
-    "TB1: a stopped body reports no outcome and journals nothing",
-    "README.md",
-    function* (stream) {
-      const doc = [
-        "<Testing>",
-        '<Test name="t"><Assert expr={true} /></Test>',
-        "",
-        "<Boom />",
-        "",
-        "AFTER",
-        "",
-        "</Testing>",
-        "",
-      ].join("\n");
+  it("TB1: a stopped body reports no outcome and journals nothing", function* () {
+    const stream = yield* useJournalStream("README.md");
+    const doc = [
+      "<Testing>",
+      '<Test name="t"><Assert expr={true} /></Test>',
+      "",
+      "<Boom />",
+      "",
+      "AFTER",
+      "",
+      "</Testing>",
+      "",
+    ].join("\n");
 
-      const run = yield* stopping({ "README.md": doc }, stream);
+    const run = yield* stopping({ "README.md": doc }, stream);
 
-      // The original failure reaches completion, by identity…
-      expect(run.completion.ok).toBe(false);
-      expect(run.completion.ok === false && run.completion.error).toBe(BOOM);
-      // …nothing after it rendered…
-      expect(run.output).not.toContain("AFTER");
-      // …no outcome was observed for a boundary that never finished…
-      expect(run.boundaries).toEqual([]);
-      // …and nothing was journalled for it.
-      expect(yield* boundaryEntries(stream)).toEqual([]);
-    },
-  );
+    // The original failure reaches completion, by identity…
+    expect(run.completion.ok).toBe(false);
+    expect(run.completion.ok === false && run.completion.error).toBe(BOOM);
+    // …nothing after it rendered…
+    expect(run.output).not.toContain("AFTER");
+    // …no outcome was observed for a boundary that never finished…
+    expect(run.boundaries).toEqual([]);
+    // …and nothing was journalled for it.
+    expect(yield* boundaryEntries(stream)).toEqual([]);
+  });
 
   it("TB2: replaying that journal hydrates no boundary outcome", function* () {
     const stream = new InMemoryStream();
@@ -107,31 +119,28 @@ describe("Tier TB — a boundary that never finished", () => {
     expect(yield* boundaryEntries(stream)).toEqual([]);
   });
 
-  journalCase(
-    "TB3: a body that only printed is complete, and does report",
-    "README.md",
-    function* (stream) {
-      const doc = [
-        "<PrintErrors>",
-        "<Testing>",
-        "",
-        "<Missing />",
-        "",
-        '<Test name="t"><Assert expr={true} /></Test>',
-        "",
-        "</Testing>",
-        "</PrintErrors>",
-        "",
-      ].join("\n");
+  it("TB3: a body that only printed is complete, and does report", function* () {
+    const stream = yield* useJournalStream("README.md");
+    const doc = [
+      "<PrintErrors>",
+      "<Testing>",
+      "",
+      "<Missing />",
+      "",
+      '<Test name="t"><Assert expr={true} /></Test>',
+      "",
+      "</Testing>",
+      "</PrintErrors>",
+      "",
+    ].join("\n");
 
-      // No interceptor, and a region that prints: the error settles as a printed
-      // error, so the projection finishes and the boundary is a real count.
-      const run = yield* runDoc({ "README.md": doc }, { stream });
+    // No interceptor, and a region that prints: the error settles as a printed
+    // error, so the projection finishes and the boundary is a real count.
+    const run = yield* runDoc({ "README.md": doc }, { stream });
 
-      expect(run.boundaries).toEqual([{ tests: 1, failed: 0 }]);
-      expect(yield* boundaryEntries(stream)).toHaveLength(1);
-    },
-  );
+    expect(run.boundaries).toEqual([{ tests: 1, failed: 0 }]);
+    expect(yield* boundaryEntries(stream)).toHaveLength(1);
+  });
 });
 
 describe("Tier TB — a repository component replaces <Testing>", () => {
