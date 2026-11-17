@@ -1,5 +1,4 @@
 import { captureTestJournal } from "@executablemd/test-support/failure-journal";
-import { fileJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier PB — the boundary between Core and the Agent package.
  *
@@ -105,7 +104,6 @@ function* run(
 }
 
 const OWNER = "packages/agent/tests/package-boundary.test.ts";
-const fileCase = fileJournalCases(OWNER, "xmd-pb-", "doc.md");
 
 const DOCUMENT = '<Session name="review">\n<Prompt text="hello" />\n</Session>\n';
 
@@ -160,24 +158,29 @@ describe("Tier PB — Core resolves no Agent package", () => {
     }
   });
 
-  fileCase(
-    "PB5: the Agent package installed over Core answers the same document",
-    function* (stream, dir) {
-      const { output, result } = yield* run(dir, DOCUMENT, function* (docPath) {
-        yield* installAgentComponents({
-          rootProvider: {
-            factory: echo,
-            options: { defaultAgent: "pb", permissionMode: "deny-all" },
-          },
+  const positiveCase = "PB5: the Agent package installed over Core answers the same document";
+  it(positiveCase, function* () {
+    const dir = path.join(os.tmpdir(), `xmd-pb-${randomUUID()}`);
+    yield* captureTestJournal(
+      { owner: OWNER, name: positiveCase },
+      path.join(dir, "doc.md"),
+      function* (stream) {
+        const { output, result } = yield* run(dir, DOCUMENT, function* (docPath) {
+          yield* installAgentComponents({
+            rootProvider: {
+              factory: echo,
+              options: { defaultAgent: "pb", permissionMode: "deny-all" },
+            },
+          });
+          return yield* executeInstalled({ path: docPath, stream }, [
+            { components: agentIdentityComponents() },
+          ]);
         });
-        return yield* executeInstalled({ path: docPath, stream }, [
-          { components: agentIdentityComponents() },
-        ]);
-      });
-      if (!result.ok) {
-        throw result.error;
-      }
-      expect(output).toContain("[hello]");
-    },
-  );
+        if (!result.ok) {
+          throw result.error;
+        }
+        expect(output).toContain("[hello]");
+      },
+    );
+  });
 });
