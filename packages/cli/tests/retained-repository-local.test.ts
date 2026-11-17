@@ -46,6 +46,7 @@ import {
   fileWriteSuccess,
   filesFailure,
   hostFilesHandler,
+  parseFilesFailure,
   Permissions,
 } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput } from "@executablemd/runtime";
@@ -53,7 +54,13 @@ import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
-import { collect, Elicitation, inlineSource, useNormalizedOutput } from "@executablemd/core";
+import {
+  collect,
+  Elicitation,
+  inlineSource,
+  registerComponents,
+  useNormalizedOutput,
+} from "@executablemd/core";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { denoReplEntry } from "../src/deno-repositories.ts";
@@ -1538,6 +1545,130 @@ describe("retained File.Copy", () => {
     expect(yield* readTextFile(outside)).toBe("seed\n");
   });
 
+  it("keeps an uncovered or synthetic direct call separate from a later retained copy", function* () {
+    const fixture = yield* useFixture();
+    const placement = { cwd: fixture.root, projectCwd: fixture.checkout };
+    const a = "outside.md";
+    const b = "checkout/copy.md";
+    const doc = "<CopyPair />";
+    type Mode = "live" | "replay" | "insert" | "synthetic";
+    const observed: string[] = [];
+    function install(mode: Mode) {
+      return (function* () {
+        yield* registerComponents([
+          {
+            name: "CopyPair",
+            origin: "test",
+            props: { type: "object", properties: {} },
+            *fn() {
+              for (const destination of [a, b]) {
+                const outcome = yield* API.Files.operations.copyFile({
+                  cwd: fixture.root,
+                  source: "checkout/seed.md",
+                  destination,
+                });
+                observed.push(
+                  outcome.ok ? "ok" : (parseFilesFailure(outcome.error)?.reason ?? "failed"),
+                );
+              }
+              return "";
+            },
+          },
+        ]);
+        yield* API.Files.around(
+          {
+            *copyFile([input], next) {
+              observed.push(input.destination);
+              if (input.destination === a && mode === "synthetic") {
+                return Ok(undefined);
+              }
+              return yield* next(
+                input.destination === a && mode === "insert"
+                  ? { ...input, destination: "checkout/insert.md" }
+                  : input,
+              );
+            },
+          },
+          { at: "min" },
+        );
+        yield* API.Fs.around({
+          *lstat([path], next) {
+            if (path.endsWith("/" + a) || path.endsWith("/" + b) || path.endsWith("/insert.md")) {
+              observed.push("observe " + path);
+            }
+            return yield* next(path);
+          },
+        });
+      })();
+    }
+
+    const fresh = yield* run(fixture, doc, new InMemoryStream(), counters(), {
+      ...placement,
+      between: () => install("live"),
+    });
+    expect(fresh.refusal).toBe(undefined);
+    expect(localRecords(fresh.events).map((record) => record.ordinal)).toEqual([1]);
+    expect(recordsOf(fresh.events, REPL_REPOSITORY_SELECTION)).toHaveLength(1);
+    yield* writeTextFile(join(fixture.checkout, "copy.md"), "historical edit");
+
+    observed.length = 0;
+    const replayed = counters();
+    const resumed = yield* run(fixture, doc, unfinished(fresh.events), replayed, {
+      ...placement,
+      between: () => install("replay"),
+    });
+    expect(resumed.refusal).toBe(undefined);
+    expect(observed).toEqual([a, "observe " + join(fixture.root, a), "occupied", "ok"]);
+    expect(replayed.discoveries).toEqual([]);
+    expect(yield* readTextFile(join(fixture.root, a))).toBe("seed\n");
+    expect(yield* readTextFile(join(fixture.root, b))).toBe("historical edit");
+
+    observed.length = 0;
+    const inserted = yield* run(fixture, doc, unfinished(fresh.events), counters(), {
+      ...placement,
+      between: () => install("insert"),
+    });
+    expect(inserted.refusal).toContain("precede retained history");
+    expect(observed).toEqual([a]);
+    expect(yield* exists(join(fixture.checkout, "insert.md"))).toBe(false);
+    expect(localRecords(inserted.events)).toEqual(localRecords(fresh.events));
+
+    yield* rm(join(fixture.root, a));
+    yield* rm(join(fixture.root, b));
+    observed.length = 0;
+    const synthetic = yield* run(fixture, doc, new InMemoryStream(), counters(), {
+      ...placement,
+      between: () => install("synthetic"),
+    });
+    expect(synthetic.refusal).toBe(undefined);
+    expect(localRecords(synthetic.events).map((record) => record.ordinal)).toEqual([1]);
+    expect(yield* exists(join(fixture.root, a))).toBe(false);
+  });
+
+  it("distinguishes equal received pairs in one coroutine and starts each child at zero", function* () {
+    const fixture = yield* useFixture();
+    const one = '<File.Copy source="seed.md" destination="equal.md" />';
+    const doc = [
+      one,
+      one,
+      "<All>",
+      '<Spawn><File.Copy source="seed.md" destination="left.md" /></Spawn>',
+      '<Spawn><File.Copy source="seed.md" destination="right.md" /></Spawn>',
+      "</All>",
+    ].join("\n");
+    const first = yield* run(fixture, doc, new InMemoryStream(), counters());
+    expect(first.refusal).toBe(undefined);
+    expect(
+      localRecords(first.events)
+        .map((record) => record.ordinal)
+        .sort(),
+    ).toEqual([0, 0, 0, 1]);
+    const names = recordNames(first.events);
+    expect(new Set(names).size).toBe(4);
+    const resumed = yield* run(fixture, doc, unfinished(first.events), counters());
+    expect(resumed.refusal).toBe(undefined);
+  });
+
   it("refuses occupancy after a native copy whose acknowledgement was halted", function* () {
     const fixture = yield* useFixture();
     const events: DurableEvent[] = [];
@@ -1590,7 +1721,9 @@ describe("retained File.Copy", () => {
       );
       return yield* stream.readAll();
     });
-    expect(localRecords(first).map((record) => record.operation)).toEqual(["file-copy"]);
+    expect(localRecords(first).map((record) => [record.operation, record.ordinal])).toEqual([
+      ["file-copy", 0],
+    ]);
     expect(recordsOf(first, REPL_REPOSITORY_SELECTION)).toEqual([]);
     yield* writeTextFile(join(owned, "copy.md"), "changed");
     yield* scoped(function* () {

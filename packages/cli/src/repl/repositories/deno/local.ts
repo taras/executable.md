@@ -42,6 +42,7 @@ import type {
 import { StaleInputError } from "@executablemd/durable-streams";
 import { asFilesFatal, FilesInvariantError } from "@executablemd/runtime";
 import {
+  copyOrdinalFromName,
   parseReplLocalRecord,
   parseReplSelectionRecord,
   replLocalFingerprint,
@@ -77,6 +78,7 @@ export interface LocalOperation {
   readonly operation: ReplLocalOperation;
   /** What the document asked for. Names the record; never live state. */
   readonly request: ReplLocalRequest;
+  readonly ordinal?: number;
   /** The ordinary composed call, run only when no result is saved. */
   perform(): Operation<Result<ReplLocalValue>>;
 }
@@ -136,21 +138,49 @@ export function retainedSelectionAhead(): Operation<boolean> {
 }
 
 /** Whether this operation's own saved result stands at the cursor. */
-export function* retainedResultAhead(
-  name: string,
-  operation?: ReplLocalOperation,
-): Operation<boolean> {
-  if (operation !== "file-copy") {
-    return yield* retainedRecordAhead(REPL_REPOSITORY_LOCAL, name);
-  }
+export function retainedResultAhead(name: string): Operation<boolean> {
+  return retainedRecordAhead(REPL_REPOSITORY_LOCAL, name);
+}
+
+export function* copyReplayContext(): Operation<DurableContext> {
   const context = yield* DurableContext.expect();
+  const failure = context.durability?.failure;
+  if (failure !== undefined) {
+    throw failure;
+  }
+  if (context.replayIndex.abandonedHistory(context.coroutineId)) {
+    throw new ReplLocalRecordError("Cannot continue File.Copy after abandoning retained history.");
+  }
+  return context;
+}
+
+export function* retainedCopyAhead(ordinal: number): Operation<boolean> {
+  const context = yield* copyReplayContext();
   const description = context.replayIndex.peekYield(context.coroutineId)?.description;
-  const prefix = replLocalRecordName({ operation, fingerprint: "" }).slice(0, -2);
-  return (
-    description?.type === REPL_REPOSITORY_LOCAL &&
-    typeof description.name === "string" &&
-    description.name.startsWith(prefix)
-  );
+  const retained =
+    description?.type === REPL_REPOSITORY_LOCAL ? copyOrdinalFromName(description.name) : undefined;
+  if (retained !== undefined && retained < ordinal) {
+    throw yield* failCopy(
+      new ReplLocalRecordError("A retained file-copy occurrence was passed over."),
+    );
+  }
+  return retained === ordinal;
+}
+
+export function* failCopy(error: unknown): Operation<Error> {
+  const context = yield* DurableContext.expect();
+  const state = (context.durability ??= {});
+  return (state.failure ??= classify(error));
+}
+
+export function* checkCopyPublication(): Operation<void> {
+  const context = yield* copyReplayContext();
+  if (
+    context.replayIndex.peekYield(context.coroutineId) !== undefined ||
+    context.replayIndex.hasClose(context.coroutineId)
+  ) {
+    throw new ReplLocalRecordError("A new file-copy outcome would precede retained history.");
+  }
 }
 
 /**
@@ -202,11 +232,8 @@ export function recordedLocalOperation(
 }
 
 function* recording(operation: LocalOperation): Operation<Result<ReplLocalValue>> {
-  const fingerprint = yield* replLocalFingerprint({
-    operation: operation.operation,
-    request: operation.request,
-  });
-  const name = replLocalRecordName({ operation: operation.operation, fingerprint });
+  const fingerprint = yield* replLocalFingerprint(operation);
+  const name = replLocalRecordName({ ...operation, fingerprint });
 
   // Whatever comes back is journal data on a replay, so it is handed on as the
   // unknown it is and parsed below rather than trusted as this code's own.
@@ -220,9 +247,8 @@ function* recording(operation: LocalOperation): Operation<Result<ReplLocalValue>
         throw outcome.error;
       }
       return replLocalRecordJson({
-        operation: operation.operation,
+        ...operation,
         fingerprint,
-        request: operation.request,
         outcome,
       });
     },
@@ -236,7 +262,11 @@ function* recording(operation: LocalOperation): Operation<Result<ReplLocalValue>
         "says about work already done is unknown.",
     );
   }
-  if (parsed.operation !== operation.operation || parsed.fingerprint !== fingerprint) {
+  if (
+    parsed.operation !== operation.operation ||
+    parsed.fingerprint !== fingerprint ||
+    parsed.ordinal !== operation.ordinal
+  ) {
     throw new ReplLocalRecordError(
       `the saved result standing where "${operation.operation}" belongs describes another ` +
         "operation, so this history does not say what happened here.",

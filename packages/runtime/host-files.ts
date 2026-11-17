@@ -98,6 +98,7 @@ import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
+import { routeHostCopy } from "./files-host.ts";
 import { Permissions } from "./permissions.ts";
 import type {
   FileCopyInput,
@@ -657,6 +658,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("copy", "resolution", "resolved-escape");
     }
 
+    yield* routeHostCopy(from.path, to.path);
     notify(observe, { operation: "copy", phase: "target" });
     try {
       const info = yield* API.Fs.operations.stat(from.path);

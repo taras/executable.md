@@ -140,18 +140,19 @@ function* localEvent(
   request: ReplLocalRequest,
   outcome = Ok(operation === "file-write" ? fileWriteSuccess("host-committed") : undefined),
   name?: string,
+  ordinal?: number,
 ): Operation<DurableEvent> {
-  const fingerprint = yield* replLocalFingerprint({ operation, request });
+  const fingerprint = yield* replLocalFingerprint({ operation, request, ordinal });
   return {
     type: "yield",
     coroutineId: "root",
     description: {
       type: REPL_REPOSITORY_LOCAL,
-      name: name ?? replLocalRecordName({ operation, fingerprint }),
+      name: name ?? replLocalRecordName({ operation, fingerprint, ordinal }),
     },
     result: {
       status: "ok",
-      value: replLocalRecordJson({ operation, fingerprint, request, outcome }),
+      value: replLocalRecordJson({ operation, fingerprint, request, outcome, ordinal }),
     },
   };
 }
@@ -532,6 +533,46 @@ describe("which histories one entry will continue", () => {
         }),
       ]),
     ).toBe(undefined);
+  });
+
+  it("admits ordered physical copies with gaps and refuses malformed occurrences", function* () {
+    const pair = { cwd: "/work", source: "seed", path: "copy" };
+    const first = yield* localEvent("file-copy", pair, undefined, undefined, 0);
+    const later = yield* localEvent(
+      "file-copy",
+      pair,
+      Err(
+        filesFailure({
+          operation: "copy",
+          phase: "target",
+          reason: "occupied",
+        }),
+      ),
+      undefined,
+      3,
+    );
+    expect(yield* refusalOf([first, { ...first, coroutineId: "root.0" }, later])).toBe(undefined);
+    expect((yield* refusalOf([first, first]))?.reason).toBe("malformed-record");
+    expect((yield* refusalOf([later, first]))?.reason).toBe("malformed-record");
+    for (const ordinal of [undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const invalid = yield* localEvent("file-copy", pair, undefined, undefined, ordinal);
+      expect((yield* refusalOf([invalid]))?.reason).toBe("malformed-record");
+    }
+    const wrongName = yield* localEvent("file-copy", pair, undefined, "invalid name", 0);
+    expect((yield* refusalOf([wrongName]))?.reason).toBe("request-fingerprint");
+    for (const extra of [{ extra: true }, { fingerprint: "tampered" }]) {
+      expect(
+        yield* refusalOf([
+          {
+            ...first,
+            result: {
+              status: "ok",
+              value: { ...Object(saved(first)), ...extra },
+            },
+          },
+        ]),
+      ).toBeDefined();
+    }
   });
 
   it("refuses a record whose request no longer produces its name", function* () {

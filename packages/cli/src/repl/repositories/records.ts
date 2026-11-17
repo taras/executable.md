@@ -121,6 +121,7 @@ export interface ReplAmbientCheckout {
 export interface ReplLocalRecord {
   readonly version: typeof REPL_REPOSITORY_VERSION;
   readonly operation: ReplLocalOperation;
+  readonly ordinal?: number;
   /** The digest of the version, operation kind and authored request. */
   readonly fingerprint: string;
   readonly request: ReplLocalRequest;
@@ -148,14 +149,39 @@ export interface ReplSelectionRecord {
 export function replLocalRecordName(record: {
   readonly operation: ReplLocalOperation;
   readonly fingerprint: string;
+  readonly ordinal?: number;
 }): string {
   return canonicalJson([
     RECORD_PREFIX,
     "local",
     REPL_REPOSITORY_VERSION,
     record.operation,
+    ...(record.ordinal === undefined ? [] : [record.ordinal]),
     record.fingerprint,
   ]);
+}
+
+export function copyOrdinalFromName(name: string): number | undefined {
+  try {
+    const fields: unknown = JSON.parse(name);
+    if (
+      Array.isArray(fields) &&
+      fields.length === 6 &&
+      fields[0] === RECORD_PREFIX &&
+      fields[1] === "local" &&
+      fields[2] === REPL_REPOSITORY_VERSION &&
+      fields[3] === "file-copy" &&
+      typeof fields[5] === "string"
+    ) {
+      return copyOrdinal(fields[4]);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function copyOrdinal(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 /** The stable name the entry's ambient routing record is journaled under. */
@@ -167,11 +193,13 @@ export function replSelectionRecordName(record: { readonly fingerprint: string }
 export function replLocalFingerprint(input: {
   readonly operation: ReplLocalOperation;
   readonly request: ReplLocalRequest;
+  readonly ordinal?: number;
 }): Operation<string> {
   return digest({
     version: REPL_REPOSITORY_VERSION,
     operation: input.operation,
     request: requestJson(input.request),
+    ...(input.ordinal === undefined ? {} : { ordinal: input.ordinal }),
   });
 }
 
@@ -186,11 +214,13 @@ export function replLocalRecordJson(input: {
   readonly fingerprint: string;
   readonly request: ReplLocalRequest;
   readonly outcome: Result<ReplLocalValue>;
+  readonly ordinal?: number;
 }): Json {
   const stated = {
     version: REPL_REPOSITORY_VERSION,
     operation: input.operation,
     fingerprint: input.fingerprint,
+    ...(input.ordinal === undefined ? {} : { ordinal: input.ordinal }),
     request: requestJson(input.request),
   };
   if (input.outcome.ok) {
@@ -229,10 +259,13 @@ export function replSelectionRecordJson(input: {
  * happened and may not. The caller refuses rather than guessing.
  */
 export function parseReplLocalRecord(value: unknown): ReplLocalRecord | undefined {
-  const refusal = members(value, ["version", "operation", "fingerprint", "request", "refusal"]);
+  const fields = ["version", "operation", "fingerprint", "request"];
+  const refusal =
+    members(value, [...fields, "refusal"]) ?? members(value, [...fields, "ordinal", "refusal"]);
   const success =
     refusal === undefined
-      ? members(value, ["version", "operation", "fingerprint", "request", "success"])
+      ? (members(value, [...fields, "success"]) ??
+        members(value, [...fields, "ordinal", "success"]))
       : undefined;
   const read = refusal ?? success;
   if (read === undefined) {
@@ -244,6 +277,10 @@ export function parseReplLocalRecord(value: unknown): ReplLocalRecord | undefine
   const fingerprint = string(read["fingerprint"]);
   const operation = parseReplLocalOperation(read["operation"]);
   if (fingerprint === undefined || operation === undefined) {
+    return undefined;
+  }
+  const ordinal = copyOrdinal(read.ordinal);
+  if (operation === "file-copy" ? ordinal === undefined : Object.hasOwn(read, "ordinal")) {
     return undefined;
   }
   const request = parseReplLocalRequest(read["request"], operation);
@@ -266,6 +303,7 @@ export function parseReplLocalRecord(value: unknown): ReplLocalRecord | undefine
     version: REPL_REPOSITORY_VERSION,
     operation,
     fingerprint,
+    ...(ordinal === undefined ? {} : { ordinal }),
     request,
     outcome,
   });

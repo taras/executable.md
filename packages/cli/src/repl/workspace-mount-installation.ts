@@ -1,13 +1,13 @@
 import { hostFileAccessReason, filesFailure, fileWriteFailure } from "@executablemd/runtime";
 import type { HostFilesAccess } from "@executablemd/runtime";
-import { Err } from "effection";
+import { Err, lift } from "effection";
 import { admitReplRepositoryHistory } from "./repositories/admission.ts";
 import { cwd } from "@executablemd/runtime";
 import type { Operation, Result } from "effection";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { WorkspaceMountTable } from "../workspace-mounts.ts";
-import { liveCopyTargets, useEntryFileRecorder } from "./file-recorder.ts";
+import { useEntryFileRecorder } from "./file-recorder.ts";
 import type { EntryFileCalls } from "./file-recorder.ts";
 import { createMountPolicy } from "./mount-files.ts";
 import type { AwaitedMountPolicy } from "./mount-files.ts";
@@ -49,6 +49,10 @@ export function workspaceMountInstallation(
       } else {
         const directory = yield* cwd();
         const policy = yield* createMountPolicy(mounts, directory);
+        const roots = [
+          ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
+          ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
+        ];
         const files = yield* useEntryFileRecorder(
           function* (operation, request, perform, authored): Operation<Result<ReplLocalValue>> {
             yield* policy.guard();
@@ -59,17 +63,8 @@ export function workspaceMountInstallation(
               }
             }
             const name = yield* localRecordName({ operation, request });
-            if (yield* retainedResultAhead(name, operation)) {
+            if (yield* retainedResultAhead(name)) {
               return yield* recordedLocalOperation({ operation, request, perform });
-            }
-            const roots = [
-              ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
-              ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
-            ];
-            const copy =
-              operation === "file-copy" ? yield* liveCopyTargets(request, limits) : undefined;
-            if (copy !== undefined && !copy.ok) {
-              return copy;
             }
             const permitted =
               roots.length === 0 ||
@@ -79,22 +74,19 @@ export function workspaceMountInstallation(
                 (operation !== "dir-ensure" ||
                   !isAbsolute(request.path) ||
                   (yield* Permissions.operations.files("absolute"))));
-            const reason =
-              copy !== undefined
-                ? undefined
-                : permitted
-                  ? yield* hostFileAccessReason(
-                      limits,
-                      operation === "file-read"
-                        ? "read"
-                        : operation === "file-write"
-                          ? "write"
-                          : operation === "file-delete"
-                            ? "delete"
-                            : "ensure-directory",
-                      request,
-                    )
-                  : "permission-denied";
+            const reason = permitted
+              ? yield* hostFileAccessReason(
+                  limits,
+                  operation === "file-read"
+                    ? "read"
+                    : operation === "file-write"
+                      ? "write"
+                      : operation === "file-delete"
+                        ? "delete"
+                        : "ensure-directory",
+                  request,
+                )
+              : "permission-denied";
             if (reason !== undefined) {
               return Err(
                 operation === "file-write"
@@ -113,15 +105,13 @@ export function workspaceMountInstallation(
             }
             if (roots.length > 0) {
               const directory = (yield* API.Fs.operations.realpath(request.cwd)) ?? request.cwd;
-              const target =
-                copy?.value.destination ??
-                (isAbsolute(request.path)
-                  ? resolve(
-                      (yield* API.Fs.operations.realpath(dirname(request.path))) ??
-                        dirname(request.path),
-                      basename(request.path),
-                    )
-                  : resolve(directory, request.path));
+              const target = isAbsolute(request.path)
+                ? resolve(
+                    (yield* API.Fs.operations.realpath(dirname(request.path))) ??
+                      dirname(request.path),
+                    basename(request.path),
+                  )
+                : resolve(directory, request.path);
               for (const directory of roots) {
                 const root = (yield* API.Fs.operations.realpath(directory)) ?? resolve(directory);
                 const suffix = relative(root, target);
@@ -146,6 +136,19 @@ export function workspaceMountInstallation(
               });
             }
             return yield* perform();
+          },
+          {
+            guard: () => policy.guard(),
+            *route(_source, destination) {
+              for (const directory of roots) {
+                const root = (yield* API.Fs.operations.realpath(directory)) ?? resolve(directory);
+                const at = relative(root, destination);
+                if (at !== ".." && !at.startsWith(".." + sep) && !isAbsolute(at)) {
+                  return lift(() => undefined)();
+                }
+              }
+              return undefined;
+            },
           },
         );
         entry = { files, policy };
