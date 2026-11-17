@@ -35,7 +35,8 @@
  */
 
 import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -365,6 +366,7 @@ function useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Operation<
 }
 
 describe("Tier SYN — what one occurrence answers", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
   it("SYN1: the bare form renders the symbols once, and `as` binds the same text", function* () {
     const { installation } = stating(symbolsOf("Marker"));
     const bare = yield* run("<Syntax />\n", [installation]);
@@ -383,18 +385,16 @@ describe("Tier SYN — what one occurrence answers", () => {
     expect(String(captured).split("### `<Marker>`").length - 1).toBe(1);
   });
 
-  journalCase(
-    "SYN2: it renders exactly what the shared Markdown renderer produces",
-    function* (stream) {
-      const symbols = symbolsOf("Marker", "Other");
-      const { installation } = stating(symbols);
-      const bare = yield* run('<Syntax as="symbols" />{symbols}', [installation], stream);
-      // The same function `xmd syntax` renders with, not a second one that agrees
-      // today: an invocation and the command cannot describe one profile in two
-      // sets of words.
-      expect(String(bare)).toBe(renderSyntaxMarkdown(symbols));
-    },
-  );
+  it("SYN2: it renders exactly what the shared Markdown renderer produces", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const symbols = symbolsOf("Marker", "Other");
+    const { installation } = stating(symbols);
+    const bare = yield* run('<Syntax as="symbols" />{symbols}', [installation], stream);
+    // The same function `xmd syntax` renders with, not a second one that agrees
+    // today: an invocation and the command cannot describe one profile in two
+    // sets of words.
+    expect(String(bare)).toBe(renderSyntaxMarkdown(symbols));
+  });
 
   it("SYN3: a paired spelling and an authored prop refuse before any reference", function* () {
     const paired = stating(symbolsOf("Marker"));

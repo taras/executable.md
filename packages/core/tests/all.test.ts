@@ -18,8 +18,9 @@
  */
 
 import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -406,32 +407,31 @@ const TWO_GATES = [
 
 describe("Tier ALL — PA1: both children are live, and output follows the source", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
 
-  journalCase(
-    "ALL1: releasing the second child first appends it first and renders it second",
-    function* (stream) {
-      const result = yield* run(TWO_GATES, {
-        stream: stream,
-        *drive(shared) {
-          // Both children have to be live at once before either is released:
-          // a sequential expansion can never satisfy this, because the second
-          // child would not start until the first had finished.
-          yield* shared.arrival("one");
-          yield* shared.arrival("two");
-          expect(shared.arrived).toEqual(["one", "two"]);
-          shared.release("two");
-          yield* shared.append("two");
-          shared.release("one");
-        },
-      });
+  it("ALL1: releasing the second child first appends it first and renders it second", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const result = yield* run(TWO_GATES, {
+      stream: stream,
+      *drive(shared) {
+        // Both children have to be live at once before either is released:
+        // a sequential expansion can never satisfy this, because the second
+        // child would not start until the first had finished.
+        yield* shared.arrival("one");
+        yield* shared.arrival("two");
+        expect(shared.arrived).toEqual(["one", "two"]);
+        shared.release("two");
+        yield* shared.append("two");
+        shared.release("one");
+      },
+    });
 
-      expect(result.ok).toBe(true);
-      // Completion order decided the journal; it did not decide the document.
-      expect(gateOrder(result.events)).toEqual(["two", "one"]);
-      expect(result.output).toContain("[one][two]");
-      expect(result.output).not.toContain("[two][one]");
-    },
-  );
+    expect(result.ok).toBe(true);
+    // Completion order decided the journal; it did not decide the document.
+    expect(gateOrder(result.events)).toEqual(["two", "one"]);
+    expect(result.output).toContain("[one][two]");
+    expect(result.output).not.toContain("[two][one]");
+  });
 
   it("ALL2: no child output is published before the join succeeds", function* () {
     const emitted: string[] = [];
@@ -461,46 +461,46 @@ describe("Tier ALL — PA1: both children are live, and output follows the sourc
 
 describe("Tier ALL — PA2: durable identity follows the source", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
 
-  journalCase(
-    "ALL3: children close on source-ordered coroutines under the one that reached <All>",
-    function* (stream) {
-      const result = yield* run(TWO_GATES, {
-        stream: stream,
-        *drive(shared) {
-          yield* shared.arrival("one");
-          yield* shared.arrival("two");
-          shared.release("two");
-          yield* shared.append("two");
-          shared.release("one");
-        },
-      });
+  it("ALL3: children close on source-ordered coroutines under the one that reached <All>", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const result = yield* run(TWO_GATES, {
+      stream: stream,
+      *drive(shared) {
+        yield* shared.arrival("one");
+        yield* shared.arrival("two");
+        shared.release("two");
+        yield* shared.append("two");
+        shared.release("one");
+      },
+    });
 
-      expect(result.ok).toBe(true);
-      const coroutines = gateCoroutines(result.events);
-      // Source order, not completion order: "two" finished first and is still
-      // the second child.
-      expect(coroutines.get("one")).toBe("root.0");
-      expect(coroutines.get("two")).toBe("root.1");
-      expect(closes(result.events)).toEqual([
-        { id: "root.1", status: "ok" },
-        { id: "root.0", status: "ok" },
-        { id: "root", status: "ok" },
-      ]);
-      // Each child closes with exactly the markdown it rendered, and with what
-      // that markdown is: a run says whether those bytes are prose or a program's
-      // approved source, because the segments they came from do not leave the
-      // child and a replay has nothing else to read the disposition from.
-      expect(new Map(childCloseValues(result.events))).toEqual(
-        new Map([
-          ["root.1", { runs: [{ text: "[two]", exact: false, selection: [] }] }],
-          ["root.0", { runs: [{ text: "[one]", exact: false, selection: [] }] }],
-        ]),
-      );
-    },
-  );
+    expect(result.ok).toBe(true);
+    const coroutines = gateCoroutines(result.events);
+    // Source order, not completion order: "two" finished first and is still
+    // the second child.
+    expect(coroutines.get("one")).toBe("root.0");
+    expect(coroutines.get("two")).toBe("root.1");
+    expect(closes(result.events)).toEqual([
+      { id: "root.1", status: "ok" },
+      { id: "root.0", status: "ok" },
+      { id: "root", status: "ok" },
+    ]);
+    // Each child closes with exactly the markdown it rendered, and with what
+    // that markdown is: a run says whether those bytes are prose or a program's
+    // approved source, because the segments they came from do not leave the
+    // child and a replay has nothing else to read the disposition from.
+    expect(new Map(childCloseValues(result.events))).toEqual(
+      new Map([
+        ["root.1", { runs: [{ text: "[two]", exact: false, selection: [] }] }],
+        ["root.0", { runs: [{ text: "[one]", exact: false, selection: [] }] }],
+      ]),
+    );
+  });
 
-  journalCase("ALL4: nesting produces hierarchical child identities", function* (stream) {
+  it("ALL4: nesting produces hierarchical child identities", function* () {
+    const stream = yield* useJournalStream("test.md");
     const result = yield* run(
       [
         "<All>",
@@ -533,7 +533,8 @@ describe("Tier ALL — PA2: durable identity follows the source", () => {
     expect(coroutines.get("outer")).toBe("root.1");
   });
 
-  journalCase("ALL5: a complete replay runs no spawned work at all", function* (stream) {
+  it("ALL5: a complete replay runs no spawned work at all", function* () {
+    const stream = yield* useJournalStream("test.md");
     const live = harness();
     const first = yield* run(TWO_GATES, {
       shared: live,
