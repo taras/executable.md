@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 /**
  * The durable envelope an owned Issue operation runs inside, and the
  * compatibility it owes the profile that used to be the only one.

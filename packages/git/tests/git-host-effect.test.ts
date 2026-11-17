@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { journalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier GH — one shared reconciliation for every external Git-host effect.

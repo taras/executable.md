@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 /**
  * Tier CB — `<CodeBlock>` (spec §6.19).
  *
