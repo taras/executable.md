@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier XP — cross-package resolution (issue #202 acceptance).

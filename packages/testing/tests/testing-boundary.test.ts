@@ -8,38 +8,24 @@
  * component replace `<Testing>` entirely.
  */
 
-import {
-  beforeAll,
-  beforeEach,
-  describe,
-  it,
-} from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { registerComponents, useTempFileCompiler } from "@executablemd/core";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, runDoc } from "./helpers.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
 
-const documentCase = documentCases(
-  "packages/testing/tests/testing-boundary.test.ts",
-);
+const documentCase = documentCases();
 import type { DocRun } from "./helpers.ts";
-
-const OWNER = "packages/testing/tests/testing-boundary.test.ts";
 
 /** Every journalled boundary entry, by the name it recorded. */
 function* boundaryEntries(stream: InMemoryStream): Operation<string[]> {
   const events = yield* stream.readAll();
   const names: string[] = [];
   for (const event of events) {
-    if (
-      event.type === "yield" && event.description.type === "testing_boundary"
-    ) {
+    if (event.type === "yield" && event.description.type === "testing_boundary") {
       names.push(String(event.description.name));
     }
   }
@@ -56,10 +42,7 @@ const BOOM = new Error("the component failed");
  * how expansion stops partway rather than printing — no middleware standing
  * in for a failure, just a component that fails.
  */
-function stopping(
-  files: Record<string, string>,
-  stream: InMemoryStream,
-): Operation<DocRun> {
+function stopping(files: Record<string, string>, stream: InMemoryStream): Operation<DocRun> {
   return scoped(function* () {
     yield* registerComponents([
       {
@@ -78,10 +61,9 @@ function stopping(
 
 describe("Tier TB — a boundary that never finished", () => {
   beforeAll(() => useTempFileCompiler());
-  beforeEach(journalBeforeEach(OWNER));
 
   it("TB1: a stopped body reports no outcome and journals nothing", function* () {
-    const stream = yield* useJournalStream("README.md");
+    const stream = new InMemoryStream();
     const doc = [
       "<Testing>",
       '<Test name="t"><Assert expr={true} /></Test>',
@@ -120,7 +102,7 @@ describe("Tier TB — a boundary that never finished", () => {
   });
 
   it("TB3: a body that only printed is complete, and does report", function* () {
-    const stream = yield* useJournalStream("README.md");
+    const stream = new InMemoryStream();
     const doc = [
       "<PrintErrors>",
       "<Testing>",
@@ -144,6 +126,7 @@ describe("Tier TB — a boundary that never finished", () => {
 });
 
 describe("Tier TB — a repository component replaces <Testing>", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/testing-boundary.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   documentCase(

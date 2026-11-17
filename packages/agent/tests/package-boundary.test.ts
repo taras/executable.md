@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { fileJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier PB — the boundary between Core and the Agent package.

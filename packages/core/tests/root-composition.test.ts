@@ -1,4 +1,3 @@
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 /**
  * Tier RC — the root a run executes, after `Document` and `RootMetadata`.
  *
@@ -13,7 +12,7 @@ import { captureTestJournal } from "@executablemd/test-support/failure-journal";
  * composition that quietly changes a document nobody asked to change.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -25,10 +24,13 @@ import { inlineSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { getExpansion } from "../src/expansion.ts";
 import { Document, RootMetadata } from "../api.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/root-composition.test.ts";
-const journalCase = journalCases(OWNER);
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
@@ -41,7 +43,7 @@ function* render(
   const value = yield* collect(
     yield* execute({
       ...inlineSource(source),
-      stream: stream ?? new InMemoryStream(),
+      stream: stream ?? (yield* useJournalStream("<eval>")),
       ...(props === undefined ? {} : { props }),
     }),
   );
@@ -56,7 +58,7 @@ function* settled(
 ): Operation<Json> {
   const execution = yield* execute({
     ...inlineSource(source),
-    stream: stream ?? new InMemoryStream(),
+    stream: stream ?? (yield* useJournalStream("<eval>")),
     ...(props === undefined ? {} : { props }),
   });
   yield* collect(execution);
@@ -67,7 +69,7 @@ function* settled(
 /** Render one inline root, or the failure it raised, as text. */
 function* rendered(stream: InMemoryStream | undefined, source: string): Operation<string> {
   try {
-    return yield* render(stream, source);
+    return yield* render(undefined, source);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -105,25 +107,21 @@ function* useEnvelope(before: string, after: string): Operation<void> {
 const ROOT = ["# Heading", "", "body text", ""].join("\n");
 
 describe("RC1 — with no document middleware the root is the root", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const directComparison = "renders exactly what executing the document directly renders";
-  journalCase(directComparison, "<eval>", function* (stream1) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: directComparison },
-      "<eval>",
-      function* (stream3) {
-        yield* captureTestJournal(
-          { owner: OWNER, name: directComparison },
-          "<eval>",
-          function* (stream2) {
-            expect(yield* render(stream1, ROOT)).toBe(yield* scoped(() => render(stream2, ROOT)));
-            expect(yield* render(stream3, ROOT)).toContain("body text");
-          },
-        );
-      },
-    );
+  it(directComparison, function* () {
+    const label = { owner: OWNER, name: directComparison };
+    yield* captureTestJournal(label, "<eval>", function* (first) {
+      yield* captureTestJournal(label, "<eval>", function* (third) {
+        yield* captureTestJournal(label, "<eval>", function* (second) {
+          expect(yield* render(first, ROOT)).toBe(yield* scoped(() => render(second, ROOT)));
+          expect(yield* render(third, ROOT)).toContain("body text");
+        });
+      });
+    });
   });
 
-  journalCase("keeps the document's own props, returns and value", "<eval>", function* (stream) {
+  it("keeps the document's own props, returns and value", function* () {
     const source = [
       "---",
       "props:",
@@ -137,32 +135,29 @@ describe("RC1 — with no document middleware the root is the root", () => {
       "<Return value={props.who} />",
       "",
     ].join("\n");
-    expect(yield* settled(stream, source, { who: "caller" })).toBe("caller");
+    expect(yield* settled(undefined, source, { who: "caller" })).toBe("caller");
   });
 });
 
 describe("RC2 — a wrapper composes around the projected document", () => {
-  journalCase(
-    "renders the envelope with the original document inside it",
-    "<eval>",
-    function* (stream) {
-      const output = yield* scoped(function* () {
-        yield* useEnvelope("before\n\n", "\n\nafter");
-        return yield* render(stream, ROOT);
-      });
-      expect(output).toContain("before");
-      expect(output).toContain("body text");
-      expect(output).toContain("after");
-      expect(output.indexOf("before")).toBeLessThan(output.indexOf("body text"));
-      expect(output.indexOf("body text")).toBeLessThan(output.indexOf("after"));
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
+  it("renders the envelope with the original document inside it", function* () {
+    const output = yield* scoped(function* () {
+      yield* useEnvelope("before\n\n", "\n\nafter");
+      return yield* render(undefined, ROOT);
+    });
+    expect(output).toContain("before");
+    expect(output).toContain("body text");
+    expect(output).toContain("after");
+    expect(output.indexOf("before")).toBeLessThan(output.indexOf("body text"));
+    expect(output.indexOf("body text")).toBeLessThan(output.indexOf("after"));
+  });
 
-  journalCase("nests two wrappers with the first one outermost", "<eval>", function* (stream) {
+  it("nests two wrappers with the first one outermost", function* () {
     const output = yield* scoped(function* () {
       yield* useEnvelope("one open\n\n", "\n\none close");
       yield* useEnvelope("two open\n\n", "\n\ntwo close");
-      return yield* render(stream, ROOT);
+      return yield* render(undefined, ROOT);
     });
     const order = ["one open", "two open", "body text", "two close", "one close"];
     const positions = order.map((token) => output.indexOf(token));
@@ -170,41 +165,37 @@ describe("RC2 — a wrapper composes around the projected document", () => {
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   });
 
-  journalCase(
-    "projects the document once for every placeholder a wrapper writes",
-    "<eval>",
-    function* (stream) {
-      const output = yield* scoped(function* () {
-        yield* Document.around({
-          *document(_args, next) {
-            return `${yield* next()}\n\n${yield* next()}`;
-          },
-        });
-        return yield* render(stream, "once\n");
+  it("projects the document once for every placeholder a wrapper writes", function* () {
+    const output = yield* scoped(function* () {
+      yield* Document.around({
+        *document(_args, next) {
+          return `${yield* next()}\n\n${yield* next()}`;
+        },
       });
-      expect(output.split("once").length - 1).toBe(2);
-    },
-  );
+      return yield* render(undefined, "once\n");
+    });
+    expect(output.split("once").length - 1).toBe(2);
+  });
 });
 
 describe("RC3 — projection preserves the document's own identity", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const sourceComparison = "reports the authored source position, not a position in the envelope";
-  journalCase(sourceComparison, "<eval>", function* (stream1) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: sourceComparison },
-      "<eval>",
-      function* (stream2) {
+  it(sourceComparison, function* () {
+    const label = { owner: OWNER, name: sourceComparison };
+    yield* captureTestJournal(label, "<eval>", function* (plainStream) {
+      yield* captureTestJournal(label, "<eval>", function* (wrappedStream) {
         const source = ["# Heading", "", "<Probe />", ""].join("\n");
         const plain: { id: string; path?: string; line?: number }[] = [];
         yield* scoped(function* () {
           yield* useProbe(plain);
-          yield* render(stream1, source);
+          yield* render(plainStream, source);
         });
         const wrapped: { id: string; path?: string; line?: number }[] = [];
         yield* scoped(function* () {
           yield* useProbe(wrapped);
           yield* useEnvelope("envelope line one\n\nenvelope line two\n\n", "\n\ntail\n");
-          yield* render(stream2, source);
+          yield* render(wrappedStream, source);
         });
         expect(plain).toHaveLength(1);
         expect(wrapped).toHaveLength(1);
@@ -213,36 +204,32 @@ describe("RC3 — projection preserves the document's own identity", () => {
         // And with it the expansion identity: a wrapper that renumbered the
         // document would give every durable element inside it a new identity.
         expect(wrapped[0]?.id).toBe(plain[0]?.id);
-      },
-    );
+      });
+    });
   });
 
-  journalCase(
-    "leaves an authored <Document /> an ordinary unresolved component",
-    "<eval>",
-    function* (stream) {
-      // Nothing in the document's own segments is ever read for a placeholder:
-      // only the envelope this engine scanned is. So an author who writes the
-      // name reaches component resolution, and there is no component there.
-      const output = yield* rendered(stream, "<Document />\n");
-      expect(output).not.toContain("<Document />\n<Document />");
-      expect(output).toMatch(/Document/);
-    },
-  );
+  it("leaves an authored <Document /> an ordinary unresolved component", function* () {
+    // Nothing in the document's own segments is ever read for a placeholder:
+    // only the envelope this engine scanned is. So an author who writes the
+    // name reaches component resolution, and there is no component there.
+    const output = yield* rendered(undefined, "<Document />\n");
+    expect(output).not.toContain("<Document />\n<Document />");
+    expect(output).toMatch(/Document/);
+  });
 });
 
 describe("RC4 — the document's own contract survives a wrapper", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const outputComparison = "keeps <Output> selecting what renders";
-  journalCase(outputComparison, "<eval>", function* (stream1) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: outputComparison },
-      "<eval>",
-      function* (stream2) {
+  it(outputComparison, function* () {
+    const label = { owner: OWNER, name: outputComparison };
+    yield* captureTestJournal(label, "<eval>", function* (plainStream) {
+      yield* captureTestJournal(label, "<eval>", function* (wrappedStream) {
         const source = ["hidden", "", "<Output>", "", "selected", "", "</Output>", ""].join("\n");
-        const plain = yield* render(stream1, source);
+        const plain = yield* render(plainStream, source);
         const wrapped = yield* scoped(function* () {
           yield* useEnvelope("envelope\n\n", "");
-          return yield* render(stream2, source);
+          return yield* render(wrappedStream, source);
         });
         expect(plain).toContain("selected");
         expect(plain).not.toContain("hidden");
@@ -250,55 +237,51 @@ describe("RC4 — the document's own contract survives a wrapper", () => {
         // does not overrule it: the envelope's own text sits outside the selected
         // region, exactly as the document's unselected body does.
         expect(wrapped).toBe(plain);
-      },
-    );
+      });
+    });
   });
 
-  journalCase(
-    "keeps a value root's <Return> settling the run's value",
-    "<eval>",
-    function* (stream) {
-      const source = [
-        "---",
-        "returns:",
-        "  type: string",
-        "---",
-        "",
-        '<Return value="settled" />',
-        "",
-      ].join("\n");
-      const value = yield* scoped(function* () {
-        yield* useEnvelope("envelope\n\n", "");
-        return yield* settled(stream, source);
-      });
-      expect(value).toBe("settled");
-    },
-  );
+  it("keeps a value root's <Return> settling the run's value", function* () {
+    const source = [
+      "---",
+      "returns:",
+      "  type: string",
+      "---",
+      "",
+      '<Return value="settled" />',
+      "",
+    ].join("\n");
+    const value = yield* scoped(function* () {
+      yield* useEnvelope("envelope\n\n", "");
+      return yield* settled(undefined, source);
+    });
+    expect(value).toBe("settled");
+  });
 });
 
 describe("RC5 — RootMetadata changes the root's metadata and nothing else", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const metadataComparison = "composes the record the document's own interpolation reads";
-  journalCase(metadataComparison, "<eval>", function* (stream1) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: metadataComparison },
-      "<eval>",
-      function* (stream2) {
+  it(metadataComparison, function* () {
+    const label = { owner: OWNER, name: metadataComparison };
+    yield* captureTestJournal(label, "<eval>", function* (plainStream) {
+      yield* captureTestJournal(label, "<eval>", function* (composedStream) {
         const source = ["---", "title: authored", "---", "", "title is {meta.title}", ""].join(
           "\n",
         );
-        expect(yield* render(stream1, source)).toContain("title is authored");
+        expect(yield* render(plainStream, source)).toContain("title is authored");
         const composed = yield* scoped(function* () {
           yield* RootMetadata.around({
             metadata: (_args, next) => ({ ...next(), title: "composed" }),
           });
-          return yield* render(stream2, source);
+          return yield* render(composedStream, source);
         });
         expect(composed).toContain("title is composed");
-      },
-    );
+      });
+    });
   });
 
-  journalCase("leaves an imported component's own metadata alone", "<eval>", function* (stream) {
+  it("leaves an imported component's own metadata alone", function* () {
     const composed = yield* scoped(function* () {
       yield* RootMetadata.around({ metadata: () => ({ title: "composed" }) });
       yield* registerComponents([
@@ -312,7 +295,7 @@ describe("RC5 — RootMetadata changes the root's metadata and nothing else", ()
           },
         },
       ]);
-      return yield* render(stream, ["root {meta.title}", "", "<Inner />", ""].join("\n"));
+      return yield* render(undefined, ["root {meta.title}", "", "<Inner />", ""].join("\n"));
     });
     expect(composed).toContain("root composed");
     expect(composed).toContain("inner body");
@@ -322,20 +305,17 @@ describe("RC5 — RootMetadata changes the root's metadata and nothing else", ()
 });
 
 describe("RC6 — a wrapper is held to the same structure a document is", () => {
-  journalCase(
-    "diagnoses an envelope whose own structure a document could not write",
-    "<eval>",
-    function* (stream) {
-      // `<Return>` in a text body is a structural violation wherever it is
-      // written, and the composed body is what the preflight walks — so a wrapper
-      // is refused on the terms the document would have been, and the document's
-      // own body never runs.
-      const failure = yield* scoped(function* () {
-        yield* useEnvelope('<Return value="x" />\n\n', "");
-        return yield* rendered(stream, ROOT);
-      });
-      expect(failure).toContain("<Return>");
-      expect(failure).not.toContain("body text");
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
+  it("diagnoses an envelope whose own structure a document could not write", function* () {
+    // `<Return>` in a text body is a structural violation wherever it is
+    // written, and the composed body is what the preflight walks — so a wrapper
+    // is refused on the terms the document would have been, and the document's
+    // own body never runs.
+    const failure = yield* scoped(function* () {
+      yield* useEnvelope('<Return value="x" />\n\n', "");
+      return yield* rendered(undefined, ROOT);
+    });
+    expect(failure).toContain("<Return>");
+    expect(failure).not.toContain("body text");
+  });
 });

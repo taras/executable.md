@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep } from "effection";
@@ -7,11 +7,13 @@ import { API } from "@executablemd/runtime";
 import { useFailingExec } from "@executablemd/runtime/test";
 import { TestFailureError } from "../src/test-api.ts";
 import { createTestHandlers } from "../src/handlers.ts";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, failureOf, runDoc } from "./helpers.ts";
 
-const documentCase = documentCases("packages/testing/tests/testing-mode.test.ts");
+const documentCase = documentCases();
 
 describe("testing mode", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/testing-mode.test.ts"));
   beforeAll(() => useTempFileCompiler());
   documentCase("skips <Test> entirely during regular execution", function* (runFresh) {
     const execCalls: string[] = [];

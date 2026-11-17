@@ -1,4 +1,3 @@
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 /**
  * Tier CB — `<CodeBlock>` (spec §6.19).
  *
@@ -24,7 +23,7 @@ import { captureTestJournal } from "@executablemd/test-support/failure-journal";
  * inferred.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -35,10 +34,13 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { Json } from "../src/types.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/code-block-component.test.ts";
-const journalCase = journalCases(OWNER);
 
 interface Run {
   /** Everything the document emitted, before any output middleware. */
@@ -109,7 +111,10 @@ function run(
       },
     ]);
 
-    const execution = yield* execute({ path: "doc.md", stream: stream ?? new InMemoryStream() });
+    const execution = yield* execute({
+      path: "doc.md",
+      stream: stream ?? (yield* useJournalStream("doc.md")),
+    });
     const output = yield* forEach(function* () {}, execution.output);
     const outcome = yield* execution;
     return {
@@ -127,7 +132,7 @@ function* directly(
   value: string,
   attributes = "",
 ): Operation<Run> {
-  return yield* run(stream, `<Value key="v" as="v" /><CodeBlock value={v}${attributes} />`, {
+  return yield* run(undefined, `<Value key="v" as="v" /><CodeBlock value={v}${attributes} />`, {
     v: value,
   });
 }
@@ -149,35 +154,36 @@ function* captured(
 }
 
 describe("Tier CB — the envelope", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const emptyValue = "CB1: an empty value is three backticks, two line feeds and nothing else";
-  journalCase(emptyValue, "doc.md", function* (stream) {
-    yield* captureTestJournal({ owner: OWNER, name: emptyValue }, "doc.md", function* (compared) {
-      const result = yield* directly(stream, "");
-
-      expect(result.failure).toBe("");
-      expect(result.output).toBe("```\n\n```");
-      expect(yield* captured(compared, "")).toBe("```\n\n```");
+  it(emptyValue, function* () {
+    const label = { owner: OWNER, name: emptyValue };
+    yield* captureTestJournal(label, "doc.md", function* (stream) {
+      yield* captureTestJournal(label, "doc.md", function* (compared) {
+        const result = yield* directly(stream, "");
+        expect(result.failure).toBe("");
+        expect(result.output).toBe("```\n\n```");
+        expect(yield* captured(compared, "")).toBe("```\n\n```");
+      });
     });
   });
 
   const markdownValue = "CB1: ordinary Markdown keeps its own lines, and gains no final line feed";
-  journalCase(markdownValue, "doc.md", function* (stream) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: markdownValue },
-      "doc.md",
-      function* (compared) {
+  it(markdownValue, function* () {
+    const label = { owner: OWNER, name: markdownValue };
+    yield* captureTestJournal(label, "doc.md", function* (stream) {
+      yield* captureTestJournal(label, "doc.md", function* (compared) {
         const value = "# Title\n\n- one\n- two";
         const result = yield* directly(stream, value);
-
         expect(result.output).toBe("```\n# Title\n\n- one\n- two\n```");
         expect(yield* captured(compared, value)).toBe("```\n# Title\n\n- one\n- two\n```");
-      },
-    );
+      });
+    });
   });
 
-  journalCase("CB1: the block lands where the element was written", "doc.md", function* (stream) {
+  it("CB1: the block lands where the element was written", function* () {
     const result = yield* run(
-      stream,
+      undefined,
       '<Value key="v" as="v" />before\n\n<CodeBlock value={v} />\n\nafter\n',
       { v: "shown" },
     );
@@ -190,6 +196,7 @@ describe("Tier CB — the envelope", () => {
 });
 
 describe("Tier CB — the fence the value cannot close", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const fenceCase = "CB2: the fence is the longest backtick run plus one, never fewer than three";
   it(fenceCase, function* () {
     const cases: ReadonlyArray<readonly [string, number]> = [
@@ -219,54 +226,50 @@ describe("Tier CB — the fence the value cannot close", () => {
   });
 
   const brokenRun = "CB2: a run broken by any other character is two runs, not one";
-  journalCase(brokenRun, "doc.md", function* (stream) {
-    yield* captureTestJournal({ owner: OWNER, name: brokenRun }, "doc.md", function* (compared) {
-      // Counting backticks without resetting would read five here and open a
-      // six-backtick fence.
-      expect(yield* captured(stream, "```\n``")).toBe("````\n```\n``\n````");
-      expect(yield* captured(compared, "``x``x``")).toBe("```\n``x``x``\n```");
+  it(brokenRun, function* () {
+    const label = { owner: OWNER, name: brokenRun };
+    yield* captureTestJournal(label, "doc.md", function* (stream) {
+      yield* captureTestJournal(label, "doc.md", function* (compared) {
+        // Counting backticks without resetting would read five here and open a
+        // six-backtick fence.
+        expect(yield* captured(stream, "```\n``")).toBe("````\n```\n``\n````");
+        expect(yield* captured(compared, "``x``x``")).toBe("```\n``x``x``\n```");
+      });
     });
   });
 });
 
 describe("Tier CB — the value is not read for anything else", () => {
-  journalCase(
-    "CB3: removing the envelope recovers the source code units exactly",
-    "doc.md",
-    function* (stream) {
-      const value = [
-        "   leading spaces",
-        "\ttab indented",
-        "",
-        "",
-        "carriage\r\nreturn line",
-        "`` two `````` six",
-        "trailing spaces   ",
-      ].join("\n");
-      const block = yield* captured(stream, value);
+  it("CB3: removing the envelope recovers the source code units exactly", function* () {
+    const value = [
+      "   leading spaces",
+      "\ttab indented",
+      "",
+      "",
+      "carriage\r\nreturn line",
+      "`` two `````` six",
+      "trailing spaces   ",
+    ].join("\n");
+    const block = yield* captured(undefined, value);
 
-      // The value's longest run is six backticks, so the fence is seven.
-      const fence = "`".repeat(7);
-      expect(block.startsWith(`${fence}\n`)).toBe(true);
-      expect(block.endsWith(`\n${fence}`)).toBe(true);
+    // The value's longest run is six backticks, so the fence is seven.
+    const fence = "`".repeat(7);
+    expect(block.startsWith(`${fence}\n`)).toBe(true);
+    expect(block.endsWith(`\n${fence}`)).toBe(true);
 
-      const recovered = block.slice(fence.length + 1, block.length - fence.length - 1);
-      expect(recovered.length).toBe(value.length);
-      for (let index = 0; index < value.length; index += 1) {
-        expect(recovered.charCodeAt(index)).toBe(value.charCodeAt(index));
-      }
-    },
-  );
+    const recovered = block.slice(fence.length + 1, block.length - fence.length - 1);
+    expect(recovered.length).toBe(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      expect(recovered.charCodeAt(index)).toBe(value.charCodeAt(index));
+    }
+  });
 });
 
 describe("Tier CB — the language token", () => {
-  journalCase(
-    "CB4: an omitted language leaves the opening fence bare",
-    "doc.md",
-    function* (stream) {
-      expect((yield* captured(stream, "plain")).split("\n")[0]).toBe("```");
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
+  it("CB4: an omitted language leaves the opening fence bare", function* () {
+    expect((yield* captured(undefined, "plain")).split("\n")[0]).toBe("```");
+  });
 
   const acceptedLanguage = "CB4: every accepted token renders on the opening fence, unchanged";
   it(acceptedLanguage, function* () {
@@ -278,7 +281,6 @@ describe("Tier CB — the language token", () => {
         "doc.md",
         function* (stream) {
           const result = yield* directly(stream, "body", ` language="${language}"`);
-
           expect(result.failure).toBe("");
           expect(result.output).toBe("```" + language + "\nbody\n```");
         },
@@ -334,59 +336,55 @@ describe("Tier CB — the language token", () => {
 });
 
 describe("Tier CB — the invocation is refused before the body", () => {
-  journalCase(
-    "CB5: a missing value is the engine's own required-prop refusal",
-    "doc.md",
-    function* (stream) {
-      const result = yield* run(stream, "<CodeBlock />");
+  beforeEach(journalBeforeEach(OWNER));
+  it("CB5: a missing value is the engine's own required-prop refusal", function* () {
+    const result = yield* run(undefined, "<CodeBlock />");
 
-      expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
-      expect(reported(result)).toContain("value");
-      expect(result.output).not.toContain("```");
-    },
-  );
+    expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
+    expect(reported(result)).toContain("value");
+    expect(result.output).not.toContain("```");
+  });
 
   const nonString = "CB5: a non-string value is refused rather than coerced";
   it(nonString, function* () {
     for (const value of ["42", "true", "null", "{ text: 'x' }", "['x']"]) {
       yield* captureTestJournal({ owner: OWNER, name: nonString }, "doc.md", function* (stream) {
         const result = yield* run(stream, `<CodeBlock value={${value}} />`);
-
         expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
         expect(result.output).not.toContain("```");
       });
     }
   });
 
-  journalCase("CB5: an unknown prop is refused, and nothing renders", "doc.md", function* (stream) {
-    const result = yield* directly(stream, "body", ' fence="~~~"');
+  it("CB5: an unknown prop is refused, and nothing renders", function* () {
+    const result = yield* directly(undefined, "body", ' fence="~~~"');
 
     expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
     expect(reported(result)).toContain("fence");
     expect(result.output).not.toContain("body");
   });
 
-  journalCase(
-    "CB5: paired content is refused by form, and the content never expands",
-    "doc.md",
-    function* (stream) {
-      const result = yield* run(
-        stream,
-        '<Value key="v" as="v" /><CodeBlock value={v}><Tripwire /></CodeBlock>',
-        { v: "body" },
-      );
+  it("CB5: paired content is refused by form, and the content never expands", function* () {
+    const result = yield* run(
+      undefined,
+      '<Value key="v" as="v" /><CodeBlock value={v}><Tripwire /></CodeBlock>',
+      { v: "body" },
+    );
 
-      expect(reported(result)).toContain("<CodeBlock value={…} />");
-      expect(result.tripped).toBe(0);
-      expect(result.output).not.toContain("TRIPPED");
-      expect(result.output).not.toContain("```");
-    },
-  );
+    expect(reported(result)).toContain("<CodeBlock value={…} />");
+    expect(result.tripped).toBe(0);
+    expect(result.output).not.toContain("TRIPPED");
+    expect(result.output).not.toContain("```");
+  });
 
-  journalCase("CB5: empty paired content is still the paired form", "doc.md", function* (stream) {
-    const result = yield* run(stream, '<Value key="v" as="v" /><CodeBlock value={v}></CodeBlock>', {
-      v: "body",
-    });
+  it("CB5: empty paired content is still the paired form", function* () {
+    const result = yield* run(
+      undefined,
+      '<Value key="v" as="v" /><CodeBlock value={v}></CodeBlock>',
+      {
+        v: "body",
+      },
+    );
 
     expect(reported(result)).toContain("<CodeBlock value={…} />");
     expect(result.output).not.toContain("```");
