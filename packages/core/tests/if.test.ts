@@ -876,6 +876,7 @@ describe("Tier IF — error observation", () => {
  * to be observed, so this counts calls at the Sample Api.
  */
 describe("Tier IF — provider boundary", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   function runSampleProbe(
