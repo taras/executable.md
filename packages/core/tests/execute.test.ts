@@ -440,7 +440,7 @@ describe("Tier D — code execution and modifiers", () => {
       "README.md": ["```python exec", "print('hello')", "```"].join("\n"),
     };
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs(files);
     // Custom exec middleware that handles python -c
     yield* API.Process.around({
@@ -955,7 +955,7 @@ describe("execute", () => {
     // Track exec calls via mutable flag
     let execCalled = false;
 
-    const stream = yield* useJournalStream("README.md");
+    const stream = new InMemoryStream();
     yield* useStubFs(files);
     // Custom exec middleware that tracks calls
     yield* API.Process.around({
