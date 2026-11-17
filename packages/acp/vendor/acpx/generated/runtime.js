@@ -1798,7 +1798,15 @@ var AcpRuntimeManager = class {
 					stopReason: "cancelled"
 				};
 				else {
-					const response = await this.runRuntimePrompt(task, turn, sessionId);
+					// XMD Claude configuration: read the actual attachment before prompt dispatch.
+					const observed = await withTimeout(turn.client.observeClaudeConfiguration(sessionId, task.input.requestedModel, task.input), task.input.timeoutMs ?? this.options.timeoutMs);
+					if (observed && (observed.matches !== true || observed.model && task.input.requestedEffort !== void 0 && observed.effort !== task.input.requestedEffort)) {
+						throw new Error("Claude did not verify the requested configuration on the prompt attachment.");
+					}
+					const configuration = typeof observed?.model === "string" && observed.model.length > 0
+						? { model: observed.model, ...(typeof observed.effort === "string" ? { effort: observed.effort } : {}) } : void 0;
+					const response = this.cancelRuntimeTurnBeforePrompt(task) ? { stopReason: "cancelled" } :
+						await this.runRuntimePrompt(task, turn, sessionId, configuration);
 					// XMD prompt usage: selected before the response metadata is projected.
 					Object.assign(usage, xmdPromptUsageReadings(response));
 					this.updateCompletedRuntimeTurn(turn);
@@ -1820,7 +1828,8 @@ var AcpRuntimeManager = class {
 		}
 		task.settleResult(withXmdPromptUsage(terminalResult, usage));
 	}
-	async runRuntimePrompt(task, turn, sessionId) {
+	async runRuntimePrompt(task, turn, sessionId, configuration) {
+		// XMD Claude configuration: carry the observation only after the prompt is written.
 		return await runPromptTurn({
 			client: turn.client,
 			sessionId,
@@ -1828,7 +1837,7 @@ var AcpRuntimeManager = class {
 			timeoutMs: task.input.timeoutMs ?? this.options.timeoutMs,
 			conversation: turn.conversation,
 			promptMessageId: turn.promptMessageId,
-			onPromptRequestWritten: () => task.promptStarted.resolve(),
+			onPromptRequestWritten: () => task.promptStarted.resolve(configuration),
 			onElicitation: task.input.onElicitation,
 			onPermissionRequest: task.input.onPermissionRequest,
 			authority: task.input
@@ -2195,9 +2204,21 @@ var AcpRuntimeManager = class {
 		yield* turn.events;
 		yield legacyTerminalEventFromTurnResult(await turn.result);
 	}
-	getStatus(handle) {
+	// XMD Claude configuration: configuration transactions read the connected backend.
+	getStatus(handle, sessionMode, verifyConfiguration, requestedModel) {
 		this.assertOpen();
-		return this.trackTask(this.readStatus(handle));
+		if (!verifyConfiguration) return this.trackTask(this.readStatus(handle));
+		const recordId = handle.acpxRecordId ?? handle.sessionKey;
+		return this.withManagerLock(this.runtimeOperationLocks, recordId, async () => {
+			const record = await this.requireRecord(recordId);
+			if (!record.agentCapabilities?._meta?.["executablemd.claude-configuration/v1"]) return await this.readStatus(handle);
+			// XMD Claude configuration: a cold read uses the normal control attachment owner.
+			return await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connectedRecord }) => {
+				const status = runtimeStatusFromRecord(connectedRecord);
+				status.details.claudeConfiguration = await withTimeout(client.observeClaudeConfiguration(sessionId, requestedModel), this.options.timeoutMs);
+				return status;
+			}, void 0, void 0, requestedModel);
+		});
 	}
 	async readStatus(handle) {
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
@@ -2246,11 +2267,12 @@ var AcpRuntimeManager = class {
 		}, { replacingConfigOption: { key: "model" } }, authority);
 	}
 	// XMD requested model: ordinary and restoring writes carry the same request.
-	async setConfigOption(handle, key, value, sessionMode = "persistent", authority, requestedModel) {
+	async setConfigOption(handle, key, value, sessionMode = "persistent", authority, requestedModel, restoreContextWindow) {
+		// XMD Claude configuration: carry exact context for an owned restoration.
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
-		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, requestedModel), authority);
+		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, requestedModel, restoreContextWindow), authority);
 	}
-	async setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, requestedModel) {
+	async setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, requestedModel, restoreContextWindow) {
 		const record = await this.requireRecord(handle.acpxRecordId ?? handle.sessionKey);
 		assertControlAuthority(authority);
 		const controller = this.activeControllers.get(record.acpxRecordId);
@@ -2259,7 +2281,7 @@ var AcpRuntimeManager = class {
 			return response;
 		}
 		return await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connectedRecord }) => {
-			const configId = resolveSupportedConfigOptionId(connectedRecord, key);
+			const configId = restoreContextWindow === void 0 ? resolveSupportedConfigOptionId(connectedRecord, key) : key;
 			const models = advertisedModelState(connectedRecord.acpx);
 			const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
 				configId,
@@ -2267,12 +2289,13 @@ var AcpRuntimeManager = class {
 				models,
 				agentCommand: connectedRecord.agentCommand
 			});
-			const response = await client.setSessionConfigOption(sessionId, configId, value, models, authority);
+			// XMD Claude configuration: rollback changes the exact prior wire model and context.
+			const response = await client.setSessionConfigOption(sessionId, configId, value, models, authority, restoreContextWindow);
 			connectedRecord.acpx = applyConfigOptionSelection(connectedRecord.acpx, configId, value, response, modelConfigId, resolvedValue);
 			return response;
 		}, { replacingConfigOption: {
 			key,
-			resolve: (connectedRecord) => resolveSupportedConfigOptionId(connectedRecord, key)
+			resolve: (connectedRecord) => restoreContextWindow === void 0 ? resolveSupportedConfigOptionId(connectedRecord, key) : key
 		// XMD requested model: this control may construct the attaching client.
 		} }, authority, requestedModel);
 	}
@@ -2936,6 +2959,8 @@ var AcpxRuntime = class {
 			assertActive: input.assertActive,
 			onElicitation: input.onElicitation,
 			onPermissionRequest: input.onPermissionRequest,
+			// XMD Claude configuration: verify the requested effort on this attachment.
+			requestedEffort: input.requestedEffort,
 			// XMD requested model: consumed only by this attaching client.
 			requestedModel
 		}));
@@ -2987,9 +3012,10 @@ var AcpxRuntime = class {
 		const { handle } = this.resolveManagerHandle(input.handle);
 		return capabilitiesFromRecord(await this.options.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey));
 	}
+	// XMD Claude configuration: direct in-process verification; shared status remains passive.
 	async getStatus(input) {
-		const { handle } = this.resolveManagerHandle(input.handle);
-		return await (await this.getManager()).getStatus(handle);
+		const { handle, state } = this.resolveManagerHandle(input.handle);
+		return await (await this.getManager()).getStatus(handle, state.mode, input.verifyConfiguration, input.requestedModel);
 	}
 	async setMode(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
@@ -3003,7 +3029,7 @@ var AcpxRuntime = class {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
 		// XMD requested model: validate before manager work begins.
 		const requestedModel = requestedModelOf(input);
-		return await (await this.getManager()).setConfigOption(handle, input.key, input.value, state.mode, input, requestedModel);
+		return await (await this.getManager()).setConfigOption(handle, input.key, input.value, state.mode, input, requestedModel, input.restoreContextWindow);
 	}
 	async cancel(input) {
 		const { handle } = this.resolveManagerHandle(input.handle);

@@ -4978,7 +4978,7 @@ function* perform(
         // A record in this history and nothing else: no handle, no provider
         // call and no turn. So it is taken while a message cycle runs, and the
         // turn already in flight keeps the settings it was handed.
-        const saved = yield* chat.owner.configure(desired);
+        const saved = yield* chat.owner.configure(desired, intent.selected);
         chat.saved(intent.conversation, intent.revision, saved);
       });
       if (refused !== undefined) {

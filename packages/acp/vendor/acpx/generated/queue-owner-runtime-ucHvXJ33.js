@@ -3081,9 +3081,15 @@ var AcpClient = class {
 	}
 	/** XMD requested model: only its presence reaches Claude load/resume metadata, never session/new. */
 	continuationMeta() {
-		const meta = this.sessionMeta();
+		// XMD Claude configuration: saved startup model applies only to session/new.
 		const { command, args } = resolveAgentCommandParts(this.options.agentCommand, this.options.agentArgv);
-		if (this.options.requestedModel === void 0 || !isClaudeAcpCommand(command, args)) return meta;
+		const claude = isClaudeAcpCommand(command, args);
+		const options = this.options.sessionOptions;
+		const meta = claude && this.supportsClaudeConfiguration()
+			? buildClaudeCodeOptionsMeta({ ...options, model: void 0 }, true)
+			: this.sessionMeta();
+		if (this.options.requestedModel === void 0 || !claude) return meta;
+		// XMD Claude configuration: explicit intent is metadata only.
 		return {
 			...meta,
 			"executablemd.has-explicit-model/v1": true
@@ -3265,14 +3271,27 @@ var AcpClient = class {
 			modeId
 		}), authority, (error) => maybeWrapSessionControlError("session/set_mode", error, `for mode "${modeId}"`));
 	}
-	async setSessionConfigOption(sessionId, configId, value, models, authority) {
+	// XMD Claude configuration: negotiate the maintained adapter's read on this client.
+	supportsClaudeConfiguration() {
+		return this.initResult?.agentCapabilities?._meta?.["executablemd.claude-configuration/v1"] === true;
+	}
+	async observeClaudeConfiguration(sessionId, requestedModel, authority) {
+		if (!this.supportsClaudeConfiguration()) return;
+		const connection = this.getConnection();
+		return await this.runConnectionRequest(() => connection.agent.request("_executablemd/session_configuration", {
+			sessionId, requestedModel
+		}), authority);
+	}
+	async setSessionConfigOption(sessionId, configId, value, models, authority, restoreContextWindow) {
+		// XMD Claude configuration: only rollback can restore an unlisted exact model.
 		assertControlAuthority(authority);
-		const resolvedValue = models?.configId === configId ? this.resolveSessionModelId(value, models) : value;
+		const resolvedValue = restoreContextWindow === void 0 && models?.configId === configId ? this.resolveSessionModelId(value, models) : value;
 		const connection = this.getConnection();
 		return normalizeConfigOptionAcknowledgement(await this.runConnectionRequest(() => connection.agent.request(methods.agent.session.setConfigOption, {
 			sessionId,
 			configId,
-			value: resolvedValue
+			value: resolvedValue,
+			...restoreContextWindow === void 0 ? {} : { _meta: { "executablemd.restore-context/v1": restoreContextWindow } }
 		}), authority, (error) => maybeWrapSessionControlError("session/set_config_option", error, `for "${configId}"="${value}"`)));
 	}
 	async setSessionModel(sessionId, modelId, models, authority) {
@@ -5246,10 +5265,21 @@ async function replaySessionPreferences(params) {
 		});
 		const effectiveModels = resolveModeReplayModels(modeMetadata, params.sessionModels);
 		const replacingModel = replacesModel(params.replacingConfigOption, effectiveModels, params.originalAcpx);
+		// XMD Claude configuration: retain the active native model and effort on load/resume.
+		const observes = !params.createdFreshSession && params.client.supportsClaudeConfiguration?.();
+		const priorControls = params.originalAcpx?.config_options ?? [];
+		const currentControls = params.record.acpx?.config_options ?? [];
+		const observedKeys = new Set(["model", "effort", ...[...priorControls, ...currentControls]
+			.filter((option) => option.category === "model" || option.category === "thought_level")
+			.map((option) => option.id)]);
+		// XMD Claude configuration: skip stale entries before replay checks or setters.
+		const desiredConfigOptions = observes
+			? Object.fromEntries(Object.entries(params.desiredConfigOptions).filter(([key]) => !observedKeys.has(key)))
+			: replacingModel ? {} : params.desiredConfigOptions;
 		modelReplay = await replayDesiredModel({
 			client: params.client,
 			sessionId: params.sessionId,
-			desiredModelId: replacingModel ? void 0 : params.desiredModelId,
+			desiredModelId: observes || replacingModel ? void 0 : params.desiredModelId,
 			replay,
 			previousSessionId: params.originalSessionId,
 			record: params.record,
@@ -5263,7 +5293,8 @@ async function replaySessionPreferences(params) {
 			client: params.client,
 			record: params.record,
 			sessionId: params.sessionId,
-			desiredConfigOptions: replacingModel ? {} : params.desiredConfigOptions,
+			// XMD Claude configuration: unrelated controls retain their replay owner.
+			desiredConfigOptions,
 			replay,
 			acceptedConfigOptions: modelReplay.configOptions,
 			replacingConfigOption: replacingModel ? void 0 : params.replacingConfigOption,

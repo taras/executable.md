@@ -2887,7 +2887,16 @@ function* useAcpxProviderState(
     return {
       agent: agentName,
       sessionKey,
-      readStatus: () => until(readStatus.call(runtime, { handle: entry.handle })),
+      verify: agentName === "claude" && configuration !== undefined,
+      readStatus: () =>
+        until(
+          readStatus.call(runtime, {
+            handle: entry.handle,
+            ...(agentName === "claude" && configuration !== undefined
+              ? { verifyConfiguration: true, ...modelRequest(configuration) }
+              : {}),
+          }),
+        ),
       /**
        * One write, and the Promise it started, owned by this operation.
        *
@@ -2899,7 +2908,7 @@ function* useAcpxProviderState(
        * yields, so restoration cannot begin until this exact write is done
        * moving the conversation.
        */
-      write(optionId, value) {
+      write(optionId, value, restoreContextWindow) {
         return scoped(function* (): Operation<void> {
           if (writeOption === undefined) {
             throw new AcpConfigurationError(
@@ -2925,6 +2934,7 @@ function* useAcpxProviderState(
               handle: entry.handle,
               key: optionId,
               value,
+              ...(restoreContextWindow === undefined ? {} : { restoreContextWindow }),
               // The same attempt's requested model for ordinary and restoring
               // writes alike: either may be the one that reconnects.
               ...modelRequest(configuration),
@@ -2990,10 +3000,16 @@ function* useAcpxProviderState(
       configuration,
     );
     return {
-      ...(configuration.model === undefined ? {} : { model: selectors.model?.set.selected ?? "" }),
+      ...(configuration.model === undefined
+        ? {}
+        : {
+            model: selectors.native?.matches
+              ? configuration.model
+              : (selectors.model?.set.selected ?? ""),
+          }),
       ...(configuration.effort === undefined
         ? {}
-        : { effort: selectors.effort?.set.selected ?? "" }),
+        : { effort: selectors.native?.effort ?? selectors.effort?.set.selected ?? "" }),
     };
   }
 
@@ -3195,7 +3211,8 @@ function* useAcpxProviderState(
           // under the wrong model is a turn that cannot be taken back, so the
           // values are applied and verified first and the turn only follows a
           // configuration this provider put into force.
-          if (desired !== undefined) {
+          const verifyAtDispatch = desired !== undefined && agentName === "claude";
+          if (desired !== undefined && !verifyAtDispatch) {
             yield* configureSession(agentName, entry, desired);
           }
 
@@ -3232,37 +3249,38 @@ function* useAcpxProviderState(
           // The runtime that made this handle, never "the" runtime: a turn
           // started through another partition would be a second child in a
           // conversation the first already owns.
-          const turn = entry.runtime.runtime.startTurn({
-            handle: entry.handle,
-            text: content,
-            ...(options?.images === undefined ? {} : { attachments: [...options.images] }),
-            mode: "prompt",
-            requestId,
-            timeoutMs,
-            ...modelRequest(desired),
-            ...(callbacks === undefined
-              ? {}
-              : {
-                  onElicitation: (request, context) =>
-                    scope
-                      .run(function* (): Operation<
-                        Result<import("./acpx-runtime.ts").AcpElicitationResponse>
-                      > {
-                        try {
-                          return Ok(yield* callbacks.elicitation(request, context.signal));
-                        } catch (error) {
-                          return Err(toError(error));
-                        }
-                      })
-                      .then((result) => {
-                        if (!result.ok) {
-                          throw result.error;
-                        }
-                        return result.value;
-                      }),
-                }),
-          });
-          activeTurns.add(turn);
+          const start = () =>
+            entry.runtime.runtime.startTurn({
+              handle: entry.handle,
+              text: content,
+              ...(options?.images === undefined ? {} : { attachments: [...options.images] }),
+              mode: "prompt",
+              requestId,
+              timeoutMs,
+              ...modelRequest(desired),
+              ...(desired?.effort === undefined ? {} : { requestedEffort: desired.effort }),
+              ...(callbacks === undefined
+                ? {}
+                : {
+                    onElicitation: (request, context) =>
+                      scope
+                        .run(function* (): Operation<
+                          Result<import("./acpx-runtime.ts").AcpElicitationResponse>
+                        > {
+                          try {
+                            return Ok(yield* callbacks.elicitation(request, context.signal));
+                          } catch (error) {
+                            return Err(toError(error));
+                          }
+                        })
+                        .then((result) => {
+                          if (!result.ok) {
+                            throw result.error;
+                          }
+                          return result.value;
+                        }),
+                  }),
+            });
           const usage: TurnUsage | undefined =
             reportUsage === undefined || promptUsageHost === undefined
               ? undefined
@@ -3280,8 +3298,13 @@ function* useAcpxProviderState(
                         },
                       }),
                 });
+          const dispatched: { turn?: AcpRuntimeTurn } = {};
           let completed = false;
           yield* ensure(function* () {
+            const turn = dispatched.turn;
+            if (turn === undefined) {
+              return;
+            }
             activeTurns.delete(turn);
             if (!completed) {
               try {
@@ -3292,9 +3315,7 @@ function* useAcpxProviderState(
             }
           });
 
-          // Registered after the turn exists and before its events are
-          // consumed, so a permission request arriving mid-turn reaches the
-          // turn it belongs to and nothing else.
+          // Register before dispatch so the first permission request reaches its turn.
           const denials = { denied: false };
           if (strict) {
             const sessionKey = entry.session.sessionKey;
@@ -3306,18 +3327,58 @@ function* useAcpxProviderState(
             });
           }
 
+          let observedConfiguration: SessionConfiguration | void = undefined;
+          const awaitsMaterialization =
+            constructing &&
+            adapterFor(agentName)?.acceptance === "first-turn-acceptance" &&
+            prepared.kind === "details";
+          function startTracked(): AcpRuntimeTurn {
+            const turn = start();
+            dispatched.turn = turn;
+            activeTurns.add(turn);
+            return turn;
+          }
+          function* dispatch(): Operation<void> {
+            yield* scoped(function* () {
+              const turn = startTracked();
+              let accepted = false;
+              yield* ensure(function* () {
+                if (accepted) {
+                  return;
+                }
+                yield* until(turn.cancel());
+                yield* until(turn.result);
+                completed = true;
+              });
+              try {
+                observedConfiguration = yield* until(turn.promptStarted);
+              } catch (error) {
+                throw sessionResumeFailure(error, entry.session.sessionKey);
+              }
+              accepted = true;
+            });
+          }
+          if (desired !== undefined && verifyAtDispatch) {
+            yield* applySessionConfiguration(
+              configurationTarget(agentName, entry, true, desired),
+              desired,
+              dispatch,
+            );
+          } else if (awaitsMaterialization) {
+            startTracked();
+          } else {
+            yield* dispatch();
+          }
+          const turn = dispatched.turn;
+          if (turn === undefined) {
+            throw new Error("The prompt dispatch did not produce a turn.");
+          }
           if (
             constructing &&
             adapterFor(agentName)?.acceptance === "first-turn-acceptance" &&
             prepared.kind === "details"
           ) {
             yield* materialize(entry, prepared.details, turn, usage);
-          } else {
-            try {
-              yield* until(turn.promptStarted);
-            } catch (error) {
-              throw sessionResumeFailure(error, entry.session.sessionKey);
-            }
           }
 
           const channel = createChannel<AgentPromptEvent, string>();
@@ -3331,7 +3392,7 @@ function* useAcpxProviderState(
               // under. A record is written from this, so it has to be what
               // actually ran rather than what an element once held. A name
               // resolves to the session it named, which carries no settings.
-              { agent: agentName, session: ranIn ?? entry.session },
+              { agent: agentName, session: ranIn ?? entry.session, observedConfiguration },
               channel,
               () => {
                 completed = true;

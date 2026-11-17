@@ -286,13 +286,12 @@ describe(
       });
     });
 
-    it("CR3: an unflagged use keeps the provider-default behavior, even after a flagged one", function* () {
+    it("CR3: an unchanged cold use preserves the live model regardless of an earlier selection", function* () {
       const world = yield* useWorld("fable");
       yield* scoped(function* () {
         const runtime = runtimeFor(world);
         yield* ensure(() => until(runtime.shutdown()));
-        // Never configured: the global preference governs, as it always has,
-        // and each resume reasserts it.
+        // The global preference seeds fresh selection.
         yield* ownedTurn(world, runtime, "first");
         yield* ownedTurn(world, runtime, "second");
         const unconfigured = observed(yield* logged(world));
@@ -300,21 +299,20 @@ describe(
           "claude-fable-5-1",
           "claude-fable-5-1",
         ]);
-        expect(unconfigured.modelWrites).toEqual(["fable"]);
+        expect(unconfigured.modelWrites).toEqual([]);
       });
 
       const flagged = yield* useWorld("fable");
       yield* scoped(function* () {
         const runtime = runtimeFor(flagged);
         yield* ensure(() => until(runtime.shutdown()));
-        // A flagged use leaves nothing behind for a later unflagged one: that
-        // reconnect reasserts the global preference and the saved selection is
-        // replayed over it, exactly as before.
+        // Resuming a configured conversation without a new choice gives the
+        // native model no new selection authority.
         yield* established(flagged, runtime, EXPLICIT);
         const before = (yield* logged(flagged)).length;
         yield* ownedTurn(flagged, runtime, "unflagged");
         const after = observed((yield* logged(flagged)).slice(before));
-        expect(after.modelWrites).toEqual(["fable", EXPLICIT]);
+        expect(after.modelWrites).toEqual([]);
         expect(after.prompts.map((prompt) => prompt.model)).toEqual([EXPLICIT]);
       });
     });
@@ -360,12 +358,39 @@ describe(
         yield* ensure(() => until(runtime.shutdown()));
         yield* established(world, runtime, EXPLICIT);
         const session = observed(yield* logged(world)).prompts[0]?.session;
-        // A native owner changed the model while ACP held nothing.
+        const earlier = yield* until(runtime.ensureSession(input(world, EXPLICIT)));
+        const checked = yield* until(
+          runtime.getStatus({
+            handle: earlier,
+            requestedModel: EXPLICIT,
+            verifyConfiguration: true,
+          }),
+        );
+        expect(checked.details?.claudeConfiguration).toMatchObject({
+          model: EXPLICIT,
+          matches: true,
+        });
+        yield* until(runtime.close({ handle: earlier, reason: "the checked client was lost" }));
+        // The attachment that checked the model cannot certify the next client.
         const conversation = join(world.state, `${encodeURIComponent(session ?? "")}.json`);
         const persisted = JSON.parse(yield* readTextFile(conversation));
         yield* writeTextFile(conversation, JSON.stringify({ ...persisted, model: ANOTHER }));
 
         const before = (yield* logged(world)).length;
+        const late = runtime.startTurn({
+          handle: earlier,
+          text: "before selection",
+          mode: "prompt",
+          requestId: "late-check",
+          requestedModel: EXPLICIT,
+        });
+        expect(yield* until(late.result)).toMatchObject({
+          status: "failed",
+          error: { message: expect.stringContaining("did not verify") },
+        });
+        expect(observed((yield* logged(world)).slice(before)).prompts).toEqual([]);
+        yield* until(runtime.close({ handle: earlier, reason: "refused final attachment" }));
+        yield* ownedWrite(world, runtime, "model", EXPLICIT, EXPLICIT);
         yield* ownedTurn(world, runtime, "after native", EXPLICIT);
         const after = observed((yield* logged(world)).slice(before));
         // The reconnect saw the real change, so the selection is written back
@@ -375,7 +400,7 @@ describe(
       });
     });
 
-    it("CR6: an unrepresentable or unreadable resumed model refuses before any prompt", function* () {
+    it("CR6: an offered alias verifies its native model and an unreadable resume refuses", function* () {
       const world = yield* useWorld();
       const aliasOnly = JSON.stringify([
         {
@@ -395,14 +420,14 @@ describe(
         const runtime = runtimeFor(world, { FAKE_CLAUDE_MODELS: aliasOnly });
         yield* ensure(() => until(runtime.shutdown()));
         yield* ownedWrite(world, runtime, "model", "fable", "fable");
-        // The backend reports the concrete model behind the alias. Nothing offered
-        // names it exactly, so a use naming its own model refuses rather than
-        // inventing that row or reading it as the alias.
-        const refused = yield* refusalOfTurn(world, runtime, "flagged", "fable");
-        expect(refused).toContain("claude-fable-5-1");
-        expect(observed(yield* logged(world)).prompts).toEqual([]);
-        // Without the fact, the existing behavior stands.
+        expect(yield* ownedTurn(world, runtime, "flagged", "fable")).toEqual({
+          status: "completed",
+        });
         expect(yield* ownedTurn(world, runtime, "unflagged")).toEqual({ status: "completed" });
+        expect(observed(yield* logged(world)).prompts.map((event) => event.model)).toEqual([
+          "claude-fable-5-1",
+          "claude-fable-5-1",
+        ]);
       });
 
       const unreadable = yield* useWorld();
@@ -416,6 +441,18 @@ describe(
         const refused = yield* refusalOfTurn(unreadable, failing, "flagged", EXPLICIT);
         expect(refused).toContain("could not report the model it runs");
         expect(observed(yield* logged(unreadable)).prompts.length).toBe(prompts);
+
+        const wrong = runtimeFor(unreadable, { FAKE_CLAUDE_CONFIRMATION: "mismatch" });
+        yield* ensure(() => until(wrong.shutdown()));
+        const before = (yield* logged(unreadable)).length;
+        expect(
+          yield* refusalOfTurn(unreadable, wrong, "wrong native identity", EXPLICIT),
+        ).toContain("identity confirmation failed");
+        const attempted = (yield* logged(unreadable)).slice(before);
+        expect(observed(attempted)).toEqual({ modelWrites: [], prompts: [] });
+        expect(
+          attempted.filter((entry) => entry.event === "started").map((entry) => entry.resumed),
+        ).toEqual([true]);
       });
     });
   },
@@ -581,8 +618,9 @@ function deliveredCoordinator(): AgentLaunchCoordinator {
 function* configuredPrompt(
   configuration: SessionConfiguration | undefined,
   text: string,
+  name = "sidekick",
 ): Operation<Session> {
-  const issuance = openSessionRequest(undefined, "sidekick");
+  const issuance = openSessionRequest(undefined, name);
   issuance.configure(configuration);
   try {
     const use = yield* Agent.operations.session(issuance.request);
@@ -676,6 +714,101 @@ describe(
         const changed = observed((yield* logged(world)).slice(change));
         expect(changed.modelWrites).toEqual([ANOTHER]);
         expect(changed.prompts).toEqual([{ session, model: ANOTHER, effort: "high" }]);
+        const nativeId = sessionOf(first)?.agentSessionId;
+        if (nativeId === undefined || session === undefined) {
+          throw new Error("the prepared adapter did not establish a native session");
+        }
+        for (const model of ["claude-opus-5-5", "claude-fable-5-2"]) {
+          for (const record of world.records.values()) {
+            const prior = record.acpx;
+            record.acpx = {
+              ...prior,
+              session_options: { ...prior?.session_options, model: EXPLICIT },
+              desired_config_options: {
+                ...prior?.desired_config_options,
+                model: ANOTHER,
+                effort: "low",
+              },
+            };
+          }
+          yield* writeTextFile(
+            join(world.state, `${encodeURIComponent(session)}.json`),
+            JSON.stringify({ model, effort: "high" }),
+          );
+          const from = (yield* logged(world)).length;
+          const use = yield* configuredPrompt(undefined, `unchanged ${model}`);
+          expect(sessionOf(use)?.agentSessionId).toBe(nativeId);
+          const events = (yield* logged(world)).slice(from);
+          expect(observed(events)).toEqual({
+            modelWrites: [],
+            prompts: [{ session, model, effort: "high" }],
+          });
+          expect(events.filter((event) => event.control === "effort")).toEqual([]);
+          const cold = events.filter((event) => event.event === "started");
+          expect(cold.length).toBeGreaterThan(0);
+          expect(cold.every((event) => event.resumed && event.session === session)).toBe(true);
+          expect(events.filter((event) => event.event === "exit")).toHaveLength(cold.length);
+          const launches = events.flatMap((event) =>
+            event.argv === undefined ? [] : [event.argv],
+          );
+          expect(launches).toHaveLength(cold.length);
+          expect(
+            launches.flat().some((arg) => arg === "--model" || arg.startsWith("--model=")),
+          ).toBe(false);
+        }
+
+        function* refused(
+          configuration: SessionConfiguration,
+          name = "sidekick",
+        ): Operation<string> {
+          try {
+            yield* configuredPrompt(configuration, "refused", name);
+            return "";
+          } catch (error) {
+            return String(error);
+          }
+        }
+
+        const variant = { model: "sonnet[1m]", effort: "high" };
+        const variantStart = (yield* logged(world)).length;
+        yield* configuredPrompt(variant, "verified variant");
+        expect(observed((yield* logged(world)).slice(variantStart))).toEqual({
+          modelWrites: ["sonnet[1m]"],
+          prompts: [{ session, model: ANOTHER, effort: "high" }],
+        });
+
+        const persisted = join(world.state, `${encodeURIComponent(session)}.json`);
+        for (const rejectRestoration of [false, true]) {
+          yield* writeTextFile(
+            persisted,
+            JSON.stringify({
+              model: "claude-opus-5-5",
+              effort: "high",
+              contextWindow: 200_000,
+              contradictVariant: true,
+              rejectRestoration,
+            }),
+          );
+          const start = (yield* logged(world)).length;
+          const failure = yield* refused(variant);
+          expect(failure).toContain("did not apply the model");
+          const attempts = (yield* logged(world)).slice(start);
+          expect(observed(attempts).prompts).toEqual([]);
+          if (!rejectRestoration) {
+            const writes = attempts
+              .filter((event) => event.control === "set_model" || event.control === "effort")
+              .map((event) => (event.control === "effort" ? event.effort : event.model));
+            expect(writes).toEqual(["sonnet[1m]", "claude-opus-5-5", "high"]);
+          } else {
+            expect(failure).toContain("Restoring the prior configuration failed");
+            expect(yield* refused(variant)).toContain("will not be used again");
+          }
+        }
+        const beforeFresh = (yield* logged(world)).length;
+        expect(yield* refused(variant, "fresh")).toContain(
+          "cannot verify the requested context variant",
+        );
+        expect(observed((yield* logged(world)).slice(beforeFresh)).prompts).toEqual([]);
       });
     });
   },
@@ -689,9 +822,9 @@ function* refusalOfTurn(
   requestedModel: string,
 ): Operation<string> {
   return yield* scoped(function* () {
-    const handle = yield* until(runtime.ensureSession(input(world, requestedModel)));
-    yield* ensure(() => until(runtime.close({ handle, reason: "refused" })));
     try {
+      const handle = yield* until(runtime.ensureSession(input(world, requestedModel)));
+      yield* ensure(() => until(runtime.close({ handle, reason: "refused" })));
       const turn = runtime.startTurn({
         handle,
         text,

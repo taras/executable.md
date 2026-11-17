@@ -17,7 +17,7 @@ import { VIEWPORT } from "./components/viewport.ts";
 import { boundaries, caretFor, eraseAt, insertAt } from "./caret.ts";
 import type { ReplCaret } from "./caret.ts";
 
-import type { MessageOrigin } from "./sidekick/history.ts";
+import type { MessageOrigin, PreferenceChoices } from "./sidekick/history.ts";
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { AgentOption, AgentOptions, SessionConfiguration } from "@executablemd/agent/api";
@@ -843,6 +843,7 @@ export interface ReplConfiguring {
   readonly model: string | undefined;
   /** The effort this would ask for, which belongs to `model`. */
   readonly effort: string | undefined;
+  readonly selected: PreferenceChoices;
   /** Whether the agent field is the one text acts on. */
   readonly naming: boolean;
   /** Why the last Apply did not happen, for the drawer to say. */
@@ -871,6 +872,7 @@ export const NOT_CONFIGURING: ReplConfiguring = Object.freeze({
   agent: "",
   model: undefined,
   effort: undefined,
+  selected: Object.freeze({}),
   naming: false,
   refusal: undefined,
   offered: undefined,
@@ -1313,6 +1315,7 @@ export type ReplIntent =
       readonly revision: number;
       readonly model?: string;
       readonly effort?: string;
+      readonly selected: PreferenceChoices;
     }
   /**
    * Start a new conversation with this agent, by the exact name entered.
@@ -3170,6 +3173,7 @@ export function reduceRepl(
             agent: live.sidekick?.agent ?? "",
             model: live.sidekick?.requested?.model,
             effort: live.sidekick?.requested?.effort,
+            selected: Object.freeze({}),
             // What the agent advertised, kept across a close for the
             // conversation it was read of. Choices are not selections: a list
             // this agent gave for this conversation is still true, so
@@ -3242,6 +3246,7 @@ export function reduceRepl(
           // of the one before it behind rather than carrying a level that
           // model may not have at all.
           effort: undefined,
+          selected: Object.freeze({ model: true }),
           refusal: undefined,
           revision: state.configuring.revision + 1,
         }),
@@ -3267,6 +3272,7 @@ export function reduceRepl(
         configuring: Object.freeze({
           ...state.configuring,
           effort: action.effort,
+          selected: Object.freeze({ ...state.configuring.selected, effort: true }),
           refusal: undefined,
           revision: state.configuring.revision + 1,
         }),
@@ -3311,6 +3317,7 @@ export function reduceRepl(
           kind: "save-configuration",
           conversation: held.conversation,
           revision: held.revision,
+          selected: held.selected,
           ...(held.model === undefined ? {} : { model: held.model }),
           ...(held.effort === undefined ? {} : { effort: held.effort }),
         },

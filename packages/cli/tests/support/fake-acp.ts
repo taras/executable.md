@@ -102,6 +102,7 @@ export interface ScriptedTurn {
    * may promote.
    */
   readonly accepted?: boolean;
+  readonly observedConfiguration?: { model: string; effort?: string };
   /**
    * Leave this turn unfinished until it is cancelled.
    *
@@ -950,7 +951,7 @@ export function createFakeAcp(): FakeAcp {
 
           return {
             requestId: input.requestId,
-            promptStarted: Promise.resolve(),
+            promptStarted: Promise.resolve(turn.observedConfiguration),
             materialized,
             events: {
               [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {

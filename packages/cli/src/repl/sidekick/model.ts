@@ -47,6 +47,7 @@ import { parseDurableEvent } from "@executablemd/durable-streams";
 import type {
   ConversationRecord,
   ControlRecord,
+  PreferencePositions,
   ResponseRecord,
   RetainedPrefix,
   SidekickRecord,
@@ -130,6 +131,11 @@ export interface SidekickConversation {
    * while they were still being applied carries no member and supplies none.
    */
   readonly verified: SessionConfiguration | undefined;
+  readonly claudeConfiguration?: {
+    readonly continued: boolean;
+    readonly pending: PreferencePositions;
+    readonly settings: SessionConfiguration;
+  };
 }
 
 /**
@@ -911,8 +917,11 @@ function slot(conversation: string, response: string, at: number): string {
  * those is a file describing something that did not happen, and rounding it to
  * the nearest readable shape would show somebody a conversation they never had.
  */
-export function projectSidekick(records: readonly SidekickRecord[]): Result<SidekickReading> {
-  const projected = projectHistory(records);
+export function projectSidekick(
+  records: readonly SidekickRecord[],
+  handingOff?: { readonly conversation: string; readonly message: number },
+): Result<SidekickReading> {
+  const projected = projectHistory(records, handingOff);
   return projected.ok ? Ok(projected.value.reading) : projected;
 }
 
@@ -924,13 +933,25 @@ export interface ProjectedHistory {
 }
 
 /** {@link projectSidekick}, keeping the record positions a live owner's exception needs. */
-export function projectHistory(records: readonly SidekickRecord[]): Result<ProjectedHistory> {
+export function projectHistory(
+  records: readonly SidekickRecord[],
+  handingOff?: { readonly conversation: string; readonly message: number },
+): Result<ProjectedHistory> {
   // The request boundaries first, by the same rules the live owner reads them
   // by. Everything below that associates a message, a reply or an orientation
   // with a saved turn asks these rather than comparing numbers.
   const requests = requestsFromHistory(records);
   if (!requests.ok) {
     return requests;
+  }
+  const latestUncertain = new Map<string, number>();
+  for (const request of requests.value) {
+    if (
+      request.turn === undefined &&
+      !(request.conversation === handingOff?.conversation && request.message === handingOff.message)
+    ) {
+      latestUncertain.set(request.conversation, request.at);
+    }
   }
   const recovery = recoveryFacts(records, requests.value);
   if (!recovery.ok) {
@@ -1043,6 +1064,9 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
        * prefer over it.
        */
       verified: Map<number, SessionConfiguration>;
+      nativeSession: boolean;
+      selected: Partial<Record<"model" | "effort", number>>;
+      lastOutcome: number;
     }
   >();
   const order: string[] = [];
@@ -1099,6 +1123,9 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
   const delivered = new Map<string, number>();
   const feedback = new Map<string, SidekickFeedback>();
   const readingRequest = new Map<string, SidekickRequest>();
+  const legacySelections = new Set<number>();
+  const consumedSelections = { model: new Set<number>(), effort: new Set<number>() };
+  const settings = ["model", "effort"] as const;
   const responses = new Map<string, number>();
   function acceptedFeedback(
     record: Pick<SidekickFeedback, "conversation" | "response" | "text">,
@@ -1170,6 +1197,9 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
             completed: new Map<number, string>(),
             at: new Map<number, number>(),
             verified: new Map<number, SessionConfiguration>(),
+            nativeSession: false,
+            selected: {},
+            lastOutcome: -1,
           });
           order.push(record.conversation);
         } else {
@@ -1190,13 +1220,30 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
         }
         break;
       }
-      case "preferences":
+      case "preferences": {
         preferences = {
           conversation: record.conversation,
           model: record.model,
           effort: record.effort,
         };
+        const held = conversations.get(record.conversation)!;
+        if (held.agent !== "claude") {
+          break;
+        }
+        const request = readingRequest.get(record.conversation);
+        const legacy = record.selected === undefined && (request?.at ?? -1) <= held.lastOutcome;
+        if (legacy) {
+          legacySelections.add(index);
+          held.selected = {};
+        }
+        if (record.selected?.model || (legacy && record.model !== null)) {
+          held.selected = { model: index };
+        }
+        if (record.selected?.effort || (legacy && record.effort !== null)) {
+          held.selected.effort = index;
+        }
         break;
+      }
       case "reference":
         // Retained as the orientation a turn was *offered*. It is not chat and
         // not an operation; what it is for is proving what an agent knew — and
@@ -1246,6 +1293,38 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
           // that failed, so the next turn is past it.
           held.attempted.add(turn);
         }
+        const request = readingRequest.get(record.conversation);
+        const ownsOutcome = turn !== undefined && request?.turn === turn;
+        if (record.selectedAt !== undefined) {
+          if (held.agent !== "claude" || !ownsOutcome) {
+            return Err(
+              new SidekickProjectionError(
+                `this chat history associates configuration with an unowned Claude turn (record ${position}).`,
+              ),
+            );
+          }
+          for (const setting of settings) {
+            const at = record.selectedAt[setting];
+            if (at === undefined) {
+              continue;
+            }
+            const preference = records[at];
+            if (
+              at >= index ||
+              preference?.kind !== "preferences" ||
+              preference.conversation !== record.conversation ||
+              preference[setting] === null ||
+              !(preference.selected?.[setting] || legacySelections.has(at)) ||
+              consumedSelections[setting].has(at)
+            ) {
+              return Err(
+                new SidekickProjectionError(
+                  `this chat history associates ${setting} with an invalid preference (record ${position}).`,
+                ),
+              );
+            }
+          }
+        }
         if (turn === undefined || canonical.result.status !== "ok") {
           // A turn whose outcome the journal does not hold is an unfinished
           // fact rather than a completed turn. It establishes nothing.
@@ -1255,6 +1334,17 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
         if (prompt === undefined) {
           break;
         }
+        if (ownsOutcome) {
+          held.lastOutcome = index;
+          if (record.selectedAt === undefined) {
+            for (const setting of settings) {
+              const at = held.selected[setting];
+              if (at !== undefined && legacySelections.has(at) && at < request.at) {
+                delete held.selected[setting];
+              }
+            }
+          }
+        }
         // What the conversation was actually running under, as Core saved it.
         // Present only once the provider said the turn started — a prompt that
         // failed while its settings were still being applied ran under none —
@@ -1263,6 +1353,18 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
         // which is why it is read before the branch below.
         if (prompt.configuration !== undefined) {
           held.verified.set(turn, prompt.configuration);
+          for (const setting of settings) {
+            const at = record.selectedAt?.[setting];
+            if (at !== undefined) {
+              consumedSelections[setting].add(at);
+              if (held.selected[setting] === at) {
+                delete held.selected[setting];
+              }
+            }
+          }
+        }
+        if (prompt.agentSessionId) {
+          held.nativeSession = true;
         }
         // This turn as a unit of work, whatever became of it. A failed or
         // cancelled turn is still a turn somebody did, and its own record is
@@ -1554,6 +1656,23 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
       conversations: Object.freeze(
         order.map((id): SidekickConversation => {
           const held = conversations.get(id)!;
+          const pending = { ...held.selected };
+          const uncertainAt = latestUncertain.get(id) ?? -1;
+          for (const setting of settings) {
+            const at = pending[setting];
+            if (at !== undefined && at < uncertainAt && legacySelections.has(at)) {
+              delete pending[setting];
+            }
+          }
+          const selected: SessionConfiguration = Object.fromEntries(
+            settings.flatMap((setting) => {
+              const at = pending[setting];
+              const preference = at === undefined ? undefined : records[at];
+              return preference?.kind === "preferences" && preference[setting] !== null
+                ? [[setting, preference[setting]]]
+                : [];
+            }),
+          );
           return Object.freeze({
             id,
             agent: held.agent,
@@ -1571,6 +1690,15 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
               [...held.completed.keys()].sort((left, right) => left - right),
             ),
             verified: lastVerified(held.verified),
+            ...(held.agent === "claude"
+              ? {
+                  claudeConfiguration: Object.freeze({
+                    continued: held.nativeSession,
+                    pending: Object.freeze(pending),
+                    settings: Object.freeze(selected),
+                  }),
+                }
+              : {}),
           });
         }),
       ),

@@ -31,6 +31,13 @@ export interface RecognizedSelector {
 export interface AgentOptionSelectors {
   readonly model: RecognizedSelector | null;
   readonly effort: RecognizedSelector | null;
+  readonly variantUnavailable?: true;
+  readonly native?: {
+    readonly model: string;
+    readonly effort?: string;
+    readonly contextWindow?: number;
+    readonly matches: boolean;
+  };
 }
 
 /**
@@ -181,6 +188,7 @@ function recognize(
   setting: string,
   category: string,
   id: string,
+  observed?: string,
 ): RecognizedSelector | null {
   const found = candidate(entries, setting, category, id);
   if (found === undefined) {
@@ -196,12 +204,12 @@ function recognize(
         `select from it`,
     );
   }
-  const selected = text(found.currentValue);
+  const selected = observed ?? text(found.currentValue);
   if (selected === undefined) {
     throw malformed(`this agent's ${setting} selector reports no current value`);
   }
   const options = choices(found.options, setting);
-  if (!options.some((entry) => entry.id === selected)) {
+  if (observed === undefined && !options.some((entry) => entry.id === selected)) {
     throw malformed(
       `this agent reports the ${setting} "${selected}" as current and does not offer it, so ` +
         `what this conversation is running under is not something it stated`,
@@ -217,14 +225,31 @@ function recognize(
  * recognized is read strictly, because a selector read past is a selector
  * written to by guesswork.
  */
-export function readAgentOptions(status: AcpRuntimeStatus): AgentOptionSelectors {
+export function readAgentOptions(status: AcpRuntimeStatus, verify = false): AgentOptionSelectors {
   const entries = advertised(status);
   if (entries === undefined) {
     return { model: null, effort: null };
   }
+  const report =
+    verify && isRecord(status.details) ? status.details.claudeConfiguration : undefined;
+  const model = isRecord(report) ? text(report.model) : undefined;
+  const native =
+    isRecord(report) && model !== undefined
+      ? {
+          model,
+          effort: text(report.effort),
+          contextWindow:
+            typeof report.contextWindow === "number" && report.contextWindow > 0
+              ? report.contextWindow
+              : undefined,
+          matches: report.matches === true,
+        }
+      : undefined;
   return {
-    model: recognize(entries, "model", "model", "model"),
-    effort: recognize(entries, "effort", "thought_level", "effort"),
+    model: recognize(entries, "model", "model", "model", native?.model),
+    effort: recognize(entries, "effort", "thought_level", "effort", native?.effort),
+    ...(native === undefined ? {} : { native }),
+    ...(isRecord(report) && report.variantUnavailable === true ? { variantUnavailable: true } : {}),
   };
 }
 
@@ -277,12 +302,13 @@ export interface ConfigurationTarget {
   readonly agent: string;
   readonly sessionKey: string;
   readStatus(): Operation<AcpRuntimeStatus>;
-  write(optionId: string, value: string): Operation<void>;
+  write(optionId: string, value: string, restoreContextWindow?: number): Operation<void>;
   markUnusable(): void;
+  readonly verify?: boolean;
 }
 
 function* read(target: ConfigurationTarget): Operation<AgentOptionSelectors> {
-  return readAgentOptions(yield* target.readStatus());
+  return readAgentOptions(yield* target.readStatus(), target.verify);
 }
 
 /**
@@ -301,11 +327,15 @@ function* read(target: ConfigurationTarget): Operation<AgentOptionSelectors> {
 export function* applySessionConfiguration(
   target: ConfigurationTarget,
   request: SessionConfiguration,
+  beforeSettled?: () => Operation<void>,
 ): Operation<AgentOptionSelectors> {
   return yield* scoped(function* (): Operation<AgentOptionSelectors> {
     const initial = yield* read(target);
     const priorModel = initial.model?.set.selected;
-    const priorEffort = initial.effort?.set.selected;
+    const priorEffort = initial.native ? initial.native.effort : initial.effort?.set.selected;
+    const priorWindow = initial.native?.contextWindow;
+    const modelMatches = (state: AgentOptionSelectors): boolean =>
+      state.native?.matches ?? state.model?.set.selected === request.model;
     // A started write is a write that may have landed, so this is set before
     // one is issued rather than after it answers: an adapter that applies the
     // value and then fails its response has still applied it.
@@ -317,21 +347,37 @@ export function* applySessionConfiguration(
     function* restore(): Operation<boolean> {
       try {
         const current = yield* read(target);
-        if (priorModel !== undefined && current.model !== null) {
-          if (current.model.set.selected !== priorModel) {
-            yield* target.write(current.model.optionId, priorModel);
+        if (
+          priorModel !== undefined &&
+          current.model !== null &&
+          (current.model.set.selected !== priorModel ||
+            current.native?.contextWindow !== priorWindow)
+        ) {
+          if (initial.native !== undefined && priorWindow === undefined) {
+            return false;
           }
+          yield* target.write(current.model.optionId, priorModel, priorWindow);
         }
         const refreshed = yield* read(target);
-        if (priorEffort !== undefined && refreshed.effort !== null) {
-          if (refreshed.effort.set.selected !== priorEffort) {
-            yield* target.write(refreshed.effort.optionId, priorEffort);
+        if (
+          priorEffort !== undefined &&
+          (refreshed.native ? refreshed.native.effort : refreshed.effort?.set.selected) !==
+            priorEffort
+        ) {
+          const optionId = refreshed.effort?.optionId ?? initial.effort?.optionId;
+          if (optionId === undefined && priorWindow === undefined) {
+            return false;
           }
+          yield* target.write(optionId ?? "effort", priorEffort, priorWindow);
         }
         const verified = yield* read(target);
-        const modelBack = priorModel === undefined || verified.model?.set.selected === priorModel;
-        const effortBack =
-          priorEffort === undefined || verified.effort?.set.selected === priorEffort;
+        const modelBack =
+          (priorModel === undefined || verified.model?.set.selected === priorModel) &&
+          verified.native?.contextWindow === priorWindow;
+        const restoredEffort = verified.native
+          ? verified.native.effort
+          : verified.effort?.set.selected;
+        const effortBack = priorEffort === undefined || restoredEffort === priorEffort;
         return modelBack && effortBack;
       } catch {
         return false;
@@ -362,6 +408,13 @@ export function* applySessionConfiguration(
 
     try {
       if (request.model !== undefined) {
+        if (initial.variantUnavailable) {
+          throw configurationFailure(
+            `Claude cannot verify the requested context variant "${request.model}" before its first prompt`,
+            "configuration-mismatch",
+            "model",
+          );
+        }
         if (initial.model === null) {
           throw configurationFailure(
             modelUnavailable(target.agent),
@@ -374,7 +427,7 @@ export function* applySessionConfiguration(
             unknownModel(target.agent, request.model, initial.model.set),
           );
         }
-        if (initial.model.set.selected !== request.model) {
+        if (!modelMatches(initial)) {
           touched = true;
           yield* target.write(initial.model.optionId, request.model);
         }
@@ -383,7 +436,7 @@ export function* applySessionConfiguration(
       // The refreshed answer, and the only source of effort choices for the
       // model this conversation is now on.
       const refreshed = request.model === undefined ? initial : yield* read(target);
-      if (request.model !== undefined && refreshed.model?.set.selected !== request.model) {
+      if (request.model !== undefined && !modelMatches(refreshed)) {
         throw configurationFailure(
           `this agent did not apply the model "${request.model}" to session ` +
             `"${target.sessionKey}", and reports "${refreshed.model?.set.selected ?? "nothing"}"`,
@@ -393,6 +446,9 @@ export function* applySessionConfiguration(
       }
 
       if (request.effort === undefined) {
+        if (beforeSettled !== undefined) {
+          yield* beforeSettled();
+        }
         settled = true;
         return refreshed;
       }
@@ -406,13 +462,19 @@ export function* applySessionConfiguration(
           invalidEffort(model ?? "the current model", request.effort, refreshed.effort.set),
         );
       }
-      if (refreshed.effort.set.selected !== request.effort) {
+      if (
+        (refreshed.native ? refreshed.native.effort : refreshed.effort.set.selected) !==
+        request.effort
+      ) {
         touched = true;
         yield* target.write(refreshed.effort.optionId, request.effort);
       }
 
       const verified = yield* read(target);
-      if (verified.effort?.set.selected !== request.effort) {
+      if (
+        (verified.native ? verified.native.effort : verified.effort?.set.selected) !==
+        request.effort
+      ) {
         throw configurationFailure(
           `this agent did not apply the effort level "${request.effort}" to session ` +
             `"${target.sessionKey}", and reports "${verified.effort?.set.selected ?? "nothing"}"`,
@@ -420,13 +482,16 @@ export function* applySessionConfiguration(
           "effort",
         );
       }
-      if (request.model !== undefined && verified.model?.set.selected !== request.model) {
+      if (request.model !== undefined && !modelMatches(verified)) {
         throw configurationFailure(
           `this agent stopped reporting the model "${request.model}" for session ` +
             `"${target.sessionKey}" while its effort level was applied`,
           "configuration-mismatch",
           "model",
         );
+      }
+      if (beforeSettled !== undefined) {
+        yield* beforeSettled();
       }
       settled = true;
       return verified;

@@ -129,7 +129,12 @@ import { ReplHost } from "../host.ts";
 import { readPromptImage } from "./asset-image.ts";
 import { API } from "@executablemd/runtime";
 import { conversationStream, failedOutcome } from "./history.ts";
-import type { SidekickRecord, SidekickWriter } from "./history.ts";
+import type {
+  PreferenceChoices,
+  PreferencePositions,
+  SidekickRecord,
+  SidekickWriter,
+} from "./history.ts";
 import {
   applicableHumanStop,
   projectHistory,
@@ -630,7 +635,7 @@ export interface SidekickOwner {
    * that has not produced one yet there is nothing for it to be about, and it
    * refuses rather than attaching itself to whichever setup wins.
    */
-  configure(desired: SessionConfiguration): Operation<Result<void>>;
+  configure(desired: SessionConfiguration, selected?: PreferenceChoices): Operation<Result<void>>;
   /**
    * Run this Sidekick's work under a different agent from now on.
    *
@@ -900,12 +905,17 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * by text, recency or ordinal: `begin()` turns it into a handle, and
      * everything after that is addressed by that exact object.
      */
-    let registering: ResponseAt | undefined;
+    interface TurnRegistration {
+      readonly at: ResponseAt;
+      readonly selectedAt: PreferencePositions | undefined;
+    }
+    let registering: TurnRegistration | undefined;
+    let publishing: TurnRegistration | undefined;
     let preparingInput:
       | { readonly at: ResponseAt; prepare(text: string): Operation<void> }
       | undefined;
     /** Which response each begun turn belongs to, by the handle it began with. */
-    const begun = new WeakMap<object, ResponseAt>();
+    const begun = new WeakMap<object, TurnRegistration>();
 
     /**
      * The turn a Sessions reading would draw, or none because none is running.
@@ -1008,7 +1018,8 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      */
     const publisher: AgentPromptPublisher = {
       *begin(text): Operation<AgentPromptHandle> {
-        const slot = registering;
+        const registration = registering;
+        const slot = registration?.at;
         registering = undefined;
         const preparing = preparingInput;
         preparingInput = undefined;
@@ -1018,8 +1029,8 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // A fresh object every turn, even for identical input: identity is the
         // whole mechanism, so two turns that look alike are still two turns.
         const handle = {};
-        if (slot !== undefined) {
-          begun.set(handle, slot);
+        if (registration !== undefined) {
+          begun.set(handle, registration);
         }
         if (slot !== undefined && watching !== undefined && watching.at === slot) {
           // The turn exists now, so the Sessions row does. Announced here and
@@ -1032,7 +1043,8 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         return handle;
       },
       *observe({ begun: handle, text }): Operation<void> {
-        const slot = typeof handle === "object" && handle !== null ? begun.get(handle) : undefined;
+        const slot =
+          typeof handle === "object" && handle !== null ? begun.get(handle)?.at : undefined;
         if (slot === undefined || watching === undefined || watching.at !== slot) {
           // A turn this process is no longer watching: stopped, replaced, or
           // already answered. It changes nothing.
@@ -1057,10 +1069,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         moved();
       },
       *publish(publication): Operation<void> {
-        const slot =
+        const registration =
           typeof publication.begun === "object" && publication.begun !== null
             ? begun.get(publication.begun)
             : undefined;
+        const slot = registration?.at;
         const key = publication.association?.sessionKey;
         // This publication's own association, for the exact row it began. A
         // key established here makes that live turn a member of its provider
@@ -1079,7 +1092,12 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           // while the record is still in flight has a turn to show.
           moved();
         }
-        yield* publication.append();
+        publishing = registration;
+        try {
+          yield* publication.append();
+        } finally {
+          publishing = undefined;
+        }
       },
     };
 
@@ -1173,7 +1191,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           );
         }
         const opened = yield* useAgentConversation({
-          history: conversationStream(writer, conversation, records),
+          history: conversationStream(writer, conversation, records, () =>
+            publishing?.at.conversation === conversation ? publishing.selectedAt : undefined,
+          ),
           id: conversation,
           agent,
           // This conversation's own publisher, beside what the assembly
@@ -2108,7 +2128,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return yield* ready.value.handle.options(request);
     }
 
-    function* configure(desired: SessionConfiguration): Operation<Result<void>> {
+    function* configure(
+      desired: SessionConfiguration,
+      selected: PreferenceChoices = {
+        ...(desired.model === undefined ? {} : { model: true }),
+        ...(desired.effort === undefined ? {} : { effort: true }),
+      },
+    ): Operation<Result<void>> {
       // Saving is not inspecting. A preference is a record in this history and
       // nothing else: it opens no handle, asks the provider nothing and sends no
       // turn, so there is nothing about a running cycle that it has to wait for.
@@ -2123,6 +2149,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         ...(desired.model === undefined ? {} : { model: desired.model }),
         ...(desired.effort === undefined ? {} : { effort: desired.effort }),
       };
+      const choices = selection() === "claude" ? Object.freeze({ ...selected }) : undefined;
       if (held !== undefined) {
         if (!reading.ok) {
           // An unreadable history is raised rather than answered: adding to an
@@ -2133,7 +2160,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         if (!paired.ok) {
           return paired;
         }
-        return yield* saving(paired.value, held, requested);
+        return yield* saving(paired.value, held, requested, choices);
       }
       if (busy) {
         // Working, and no conversation active yet — so this is a first setup
@@ -2154,7 +2181,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       if (!ready.ok) {
         return ready;
       }
-      return yield* saving(ready.value.paired, ready.value.id, requested);
+      return yield* saving(ready.value.paired, ready.value.id, requested, choices);
     }
 
     /**
@@ -2170,12 +2197,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       paired: PairedChatStorage,
       conversation: string,
       requested: SessionConfiguration,
+      selected?: PreferenceChoices,
     ): Operation<Result<void>> {
       yield* paired.writer.append({
         kind: "preferences",
         conversation,
         model: requested.model ?? null,
         effort: requested.effort ?? null,
+        ...(selected === undefined ? {} : { selected }),
       });
       yield* refresh();
       const settled = history();
@@ -2718,8 +2747,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         turn: null,
       };
       watching = live;
-      registering = at;
       yield* ensure(() => {
+        if (registering?.at === at) {
+          registering = undefined;
+        }
         if (watching === live) {
           // Cancelled or unwound before anything saved the outcome. What was
           // shown stays, as an attempt that did not finish.
@@ -2727,29 +2758,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         }
       });
 
-      // Under what this conversation was asked to run under, every turn of it.
-      // A preference is a standing fact about the conversation rather than a
-      // one-shot: the provider writes nothing for a setting already selected,
-      // and a turn that carried the request only once would leave a later one
-      // running under whatever a restarted agent came up on.
-      //
-      // Read *here*, from the records as they stand, rather than from the
-      // snapshot this response started with. Everything above suspended — the
-      // orientation, the retained message, the root's acknowledgement of it —
-      // and somebody may have saved a setting while it did. The snapshot still
-      // supplies the ordinal and what this conversation has been told, which a
-      // preference write does not change; it cannot supply this.
-      const settings = projectSidekick(yield* paired.writer.readAll());
-      if (!settings.ok) {
-        // An unreadable history refuses rather than falling back to an older
-        // preference: sending a turn under settings this history cannot
-        // establish is the one outcome nobody can correct afterwards.
-        return settings;
-      }
-      // And handed over immediately. Nothing between this choice and the call
-      // may suspend: a save acknowledged in that gap belongs to the next turn,
-      // and a turn that picked up a setting after Core had its request would be
-      // running under one thing while the history says another.
       const deliveringInput = sending.kind === "feedback" ? sending.of : carried;
       let asked: { readonly at: number } | undefined;
       const preparing = {
@@ -2790,9 +2798,38 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           todo?.finishPrompt(false);
         }
       });
+      const settings = projectSidekick(
+        yield* paired.writer.readAll(),
+        sending.kind === "message" ? { conversation, message: turn } : undefined,
+      );
+      if (!settings.ok) {
+        return settings;
+      }
+      const claude = settings.value.conversations.find(
+        (one) => one.id === conversation,
+      )?.claudeConfiguration;
+      const configuration = claude?.continued
+        ? Object.keys(claude.settings).length === 0
+          ? undefined
+          : claude.settings
+        : desired(settings.value, conversation);
+      const selectedAt =
+        claude === undefined
+          ? undefined
+          : {
+              ...(claude.pending.model !== undefined &&
+              configuration?.model === claude.settings.model
+                ? { model: claude.pending.model }
+                : {}),
+              ...(claude.pending.effort !== undefined &&
+              configuration?.effort === claude.settings.effort
+                ? { effort: claude.pending.effort }
+                : {}),
+            };
+      registering = { at, selectedAt };
       const replied = yield* handle.prompt(
         request,
-        desired(settings.value, conversation),
+        configuration,
         sending.kind === "feedback" ? sending.images : sending.finished?.images,
       );
       // A withheld reply is a completion the provider made, so the TODO batch

@@ -390,6 +390,35 @@ function answer(settled: Result<Result<string>>): string {
 }
 
 describe("Tier HC — a host conversation across the provider's own commit window", () => {
+  it("reopening retains the started attachment's verbatim settings", function* () {
+    const target = host();
+    const history = new InMemoryStream();
+    target.harness.script({});
+    target.harness.script({
+      observedConfiguration: { model: "claude-fable-5-2", effort: "high" },
+      result: { status: "failed", error: { message: "failed after prompt dispatch" } },
+    });
+    const ran = yield* withConversation(history, target.installation, function* (chat) {
+      expect((yield* chat.prompt("initial turn")).ok).toBe(true);
+      expect((yield* chat.prompt("continued turn")).ok).toBe(false);
+    });
+    expect(ran.ok).toBe(true);
+    const { stream, lines } = yield* reread(history);
+    const priorEnsures = target.harness.ensureCalls.length;
+    const reopened = yield* withConversation(stream, target.installation, function* () {
+      const saved = turns(yield* stream.readAll());
+      expect(saved.at(-1)?.record.configuration).toEqual({
+        model: "claude-fable-5-2",
+        effort: "high",
+      });
+      expect(saved.at(-1)?.record.agentSessionId).toBe(NATIVE);
+    });
+    expect(reopened.ok).toBe(true);
+    expect(target.harness.ensureCalls).toHaveLength(priorEnsures);
+    expect(asked(target)).toEqual(["initial turn", "continued turn"]);
+    expect((yield* stream.readAll()).map(serializeDurableEvent)).toEqual(lines);
+  });
+
   /**
    * The window SM9 describes, met by a conversation rather than by a document.
    *

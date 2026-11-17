@@ -1117,21 +1117,6 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
   for (const [name, environment, refusal] of [
     ["absent", { FAKE_CLAUDE_CONTEXT_USAGE: "absent" }, "reported no model"],
     ["failed", { FAKE_CLAUDE_CONTEXT_USAGE: "fail" }, "could not report the model it runs"],
-    [
-      "unrepresentable",
-      {
-        FAKE_CLAUDE_MODELS: JSON.stringify([
-          {
-            value: "default",
-            resolvedModel: "claude-fable-5-1",
-            displayName: "D",
-            description: "",
-          },
-          { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
-        ]),
-      },
-      "none of its offered models names exactly",
-    ],
   ] as const) {
     it(`EA17: a marked resume refuses a ${name} observation as an invalid request`, function* () {
       const { adapter, sessionId, cwd } = yield* useResumable("fable", environment);
@@ -1154,16 +1139,15 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
     });
   }
 
-  it("EA18: without the marker, resume and new keep the existing model choice", function* () {
-    const { adapter, sessionId, cwd } = yield* useResumable("claude-fable-5");
+  it("EA18: unmarked resume preserves an unlisted model and fresh selection keeps its defaults", function* () {
+    const { adapter, sessionId, cwd } = yield* useResumable("claude-fable-5-2");
     const resumed = yield* adapter.request("session/resume", {
       sessionId,
       cwd,
       mcpServers: [],
     });
-    // The global preference is reasserted, exactly as before.
-    expect(reportedModel(resumed)).toBe("fable");
-    expect(yield* modelWrites(adapter)).toEqual(["fable"]);
+    expect(reportedModel(resumed)).toBe("claude-fable-5-2");
+    expect(yield* modelWrites(adapter)).toEqual([]);
     // A fresh session ignores the marker: there is nothing resumed to observe.
     const fresh = yield* adapter.request("session/new", {
       cwd,

@@ -44,6 +44,7 @@ import {
   awaitedFact,
   MOUNTED_AGENT,
   OTHER_MOUNTED_AGENT,
+  useMountedHost,
 } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
@@ -95,8 +96,11 @@ const NAMED: Readonly<Record<string, string>> = Object.freeze({
 import {
   PAIRED_DIRECTORY,
   readSidekickRecords,
+  serializeSidekickRecord,
   SIDEKICK_FILE,
 } from "../src/repl/sidekick/history.ts";
+import { ReplHost } from "../src/repl/host.ts";
+import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { until } from "effection";
@@ -1879,6 +1883,160 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     },
     effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
   } as const;
+
+  it("a verified Claude turn consumes its own Apply and keeps a later same-model Apply", function* () {
+    const host = yield* useMountedHost({
+      sidekickAgent: "claude",
+      usageAcp: {
+        agentRegistry: makeRegistry({ claude: "claude-cmd" }),
+        advertiseNativeLaunch: [],
+        advertiseClientNativeAttachment: [],
+      },
+    });
+    const page = yield* useReplPage({ host });
+    const { fake } = page.repl;
+    fake.configuration(OFFERED);
+    fake.script({ reply: "<Output>First Claude turn.</Output>" });
+    yield* conversed(page, "hello", "First Claude turn.");
+    fake.script({
+      reply: "<Output>Continued Claude turn.</Output>",
+      observedConfiguration: { model: "claude-opus-5-5" },
+    });
+    yield* conversed(page, "continue", "Continued Claude turn.");
+    yield* openConfigure(page);
+    yield* page.until("the verbatim verified model", (one) =>
+      drawerShows(one, "Verified: model=claude-opus-5-5"),
+    );
+    yield* offeredChoice(page, "Fast");
+    yield* chooseNamed(page, "fast");
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
+
+    fake.script({ reply: "<Output>Held Claude turn.</Output>", held: true });
+    yield* sendMessage(page, "hold this");
+    yield* fake.holdingTurns(1);
+    expect(fake.turns.at(-1)?.requestedModel).toBe("fast");
+
+    yield* openConfigure(page);
+    yield* offeredChoice(page, "Fast");
+    yield* chooseNamed(page, "fast");
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
+    fake.releaseTurn();
+    yield* page.until(
+      "the held reply and idle Sidekick",
+      (one) => one.shows("Held Claude turn.") && sidekickIdle(one),
+    );
+
+    fake.script({ reply: "<Output>Later Apply.</Output>" });
+    yield* conversed(page, "apply the newer selection", "Later Apply.");
+    expect(fake.turns.at(-1)?.requestedModel).toBe("fast");
+
+    // Applying the prefilled values does not create another model request.
+    yield* openConfigure(page);
+    yield* offeredChoice(page, "Fast");
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
+    fake.script({ reply: "<Output>Ordinary continuation.</Output>" });
+    yield* conversed(page, "continue", "Ordinary continuation.");
+    expect(fake.turns.at(-1)?.requestedModel).toBeUndefined();
+
+    const { chat } = yield* settledReading(page.repl);
+    const applies = chat.flatMap((record, at) =>
+      record.kind === "preferences" && record.selected?.model ? [at] : [],
+    );
+    expect(applies).toHaveLength(2);
+    expect(
+      chat.flatMap((record) =>
+        record.kind === "event" && record.selectedAt?.model !== undefined
+          ? [record.selectedAt.model]
+          : [],
+      ),
+    ).toEqual(applies);
+
+    yield* openConfigure(page);
+    yield* offeredChoice(page, "Fast");
+    yield* chooseNamed(page, "fast");
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
+    const beforeRefusal = fake.turns.length;
+    fake.configuration(undefined);
+    yield* sendMessage(page, "try the pending selection");
+    yield* page.until(
+      "the pre-start refusal",
+      (one) =>
+        one.shows("Model choices are unavailable for claude.") && one.shows("[Resume queue]"),
+    );
+    expect(fake.turns).toHaveLength(beforeRefusal);
+
+    fake.configuration(OFFERED);
+    fake.script({ failure: "failed after the native prompt started" });
+    yield* page.press("[Resume queue]");
+    yield* sendMessage(page, "try the pending selection again");
+    yield* fake.startedTurns(beforeRefusal + 1);
+    expect(fake.turns.at(-1)?.requestedModel).toBe("fast");
+    yield* page.until(
+      "the post-start failure",
+      (one) => one.shows("failed after the native prompt started") && one.shows("[Resume queue]"),
+    );
+    yield* page.press("[Resume queue]");
+    fake.script({ reply: "<Output>The retry consumed the choice.</Output>" });
+    yield* conversed(page, "continue", "The retry consumed the choice.");
+    expect(fake.turns.at(-1)?.requestedModel).toBeUndefined();
+
+    yield* openConfigure(page);
+    yield* offeredChoice(page, "High");
+    yield* chooseNamed(page, "high");
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
+    const beforeEffort = fake.configCalls.length;
+    fake.script({ reply: "<Output>Only effort changed.</Output>" });
+    yield* conversed(page, "continue with high effort", "Only effort changed.");
+    expect(fake.turns.at(-1)?.requestedModel).toBeUndefined();
+    expect(fake.configCalls.slice(beforeEffort).filter((call) => call.startsWith("set "))).toEqual([
+      "set effort=high",
+    ]);
+
+    const retained = yield* settledReading(page.repl);
+    const active = [...retained.chat]
+      .reverse()
+      .find((record) => record.kind === "conversation" && record.phase === "activated");
+    if (active?.kind !== "conversation") {
+      throw new Error("The first Claude turn never activated its conversation.");
+    }
+    page.repl.terminal.end();
+    yield* awaited("the first REPL to join", () => page.repl.outcome() !== undefined);
+    const closed = page.repl.outcome();
+    if (!closed?.ok) {
+      throw new Error("The first REPL did not close cleanly.");
+    }
+    const storage = join(host.root, PAIRED_DIRECTORY, retained.execution, SIDEKICK_FILE);
+    yield* ReplHost.operations.appendRecord(
+      storage,
+      serializeSidekickRecord({
+        kind: "preferences",
+        conversation: active.conversation,
+        model: "fast",
+        effort: null,
+      }),
+    );
+    const beforeReopen = fake.turns.length;
+    const cold = yield* useReplPage({ host, location: closed.value.location });
+    expect(fake.turns).toHaveLength(beforeReopen);
+    fake.script({ reply: "<Output>Legacy Apply reached the next turn.</Output>" });
+    yield* conversed(cold, "apply the retained choice", "Legacy Apply reached the next turn.");
+    expect(fake.turns.at(-1)?.requestedModel).toBe("fast");
+
+    const history = (yield* settledReading(cold.repl)).chat;
+    const uncertain = history.map((record) => record.kind).lastIndexOf("message");
+    const ambiguous = projectSidekick(history.slice(0, uncertain + 1));
+    if (!ambiguous.ok) {
+      throw ambiguous.error;
+    }
+    expect(ambiguous.value.requests.at(-1)?.turn).toBeUndefined();
+    expect(ambiguous.value.preferences?.model).toBe("fast");
+    expect(ambiguous.value.conversations.at(-1)?.claudeConfiguration?.pending).toEqual({});
+  });
 
   it("CFG8: a save queues behind the reply being written, and both land in order", function* () {
     const gate = appendGate();

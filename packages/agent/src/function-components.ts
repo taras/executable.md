@@ -406,6 +406,7 @@ interface ConsumedTurn {
    * the one that actually ran.
    */
   ranIn?: Session;
+  observedConfiguration?: import("./agent-api.ts").SessionConfiguration;
   status?: PromptRecord["status"];
   stopReason?: string;
   failure?: SerializedPromptFailure;
@@ -512,6 +513,7 @@ interface HeldPromptTurn {
   readonly images: PromptOptions["images"];
   admitted: boolean;
   stream?: Stream<AgentPromptEvent, string>;
+  observedConfiguration?: import("./agent-api.ts").SessionConfiguration;
   /** The native subscription reached its own `done`. */
   settled: boolean;
   /** What the native subscription threw, if it failed on the way out. */
@@ -698,6 +700,12 @@ function* installHeldPromptTerminal(
                 if (event.done) {
                   checked.settled = true;
                   checked.text = event.value;
+                } else if (
+                  event.value.type === "started" &&
+                  event.value.session === direct.session &&
+                  event.value.observedConfiguration !== undefined
+                ) {
+                  checked.observedConfiguration = { ...event.value.observedConfiguration };
                 }
                 return event;
               },
@@ -921,6 +929,9 @@ export function* runPrompt(
           // For a configured turn that is the authentic use it was verified
           // under, which is what the record is written from.
           result.ranIn = event.session;
+          if (held === undefined && event.observedConfiguration !== undefined) {
+            result.observedConfiguration = { ...event.observedConfiguration };
+          }
           if (event.session.agentSessionId !== undefined) {
             result.agentSessionId = event.session.agentSessionId;
           }
@@ -1041,8 +1052,9 @@ export function* runPrompt(
   // the conversation was under these settings: a prompt that failed while they
   // were still being applied ran under nothing, and one that started and then
   // failed still ran under exactly them.
-  const configuration = yield* sessionUseConfiguration(consumed.ranIn);
-  if (configuration !== undefined && consumed.started === true) {
+  const observed = held?.observedConfiguration ?? consumed.observedConfiguration;
+  const configuration = observed ?? (yield* sessionUseConfiguration(consumed.ranIn));
+  if (configuration !== undefined && (consumed.started === true || observed !== undefined)) {
     record.configuration = configuration;
   }
   if (consumed.stopReason !== undefined) {

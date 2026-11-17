@@ -123,6 +123,8 @@ type AcpRuntimeTurnInput = AcpControlAuthority & {
   onPermissionRequest?: AcpPermissionHandler;
   /** Handles ACP elicitation requests owned by this prompt turn. */
   onElicitation?: AcpElicitationHandler;
+  /** XMD Claude configuration: the effort requested on the final attachment. */
+  requestedEffort?: string;
   /** XMD requested model: the model requested by this turn's use; see `AcpRuntimeEnsureInput.requestedModel`. */
   requestedModel?: string;
 };
@@ -366,7 +368,8 @@ interface AcpRuntimeTurn {
   readonly materialized: Promise<AcpRuntimeMaterialization>;
   readonly requestId: string;
   /** Resolves after the underlying writable transport accepts the prompt request. */
-  readonly promptStarted: Promise<void>;
+  // XMD Claude configuration: the exact settings observed for this written prompt.
+  readonly promptStarted: Promise<void | { model: string; effort?: string }>;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   /**
    * Canonical completion signal for the turn. Resolves only after final record
@@ -408,6 +411,9 @@ interface AcpRuntime {
   }): Promise<AcpRuntimeCapabilities> | AcpRuntimeCapabilities;
   getStatus?(input: {
     handle: AcpRuntimeHandle;
+    // XMD Claude configuration: read the actual backend for an in-place transaction.
+    verifyConfiguration?: boolean;
+    requestedModel?: string;
     signal?: AbortSignal;
   }): Promise<AcpRuntimeStatus>;
   /** Authority gates dispatch; an issued control still settles its response and saved state. */
@@ -423,6 +429,8 @@ interface AcpRuntime {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
+    /** XMD Claude configuration: prior native window for model restoration. */
+    restoreContextWindow?: number;
     /** XMD requested model: the model requested by this write's use; see `AcpRuntimeEnsureInput.requestedModel`. */
     requestedModel?: string;
   }): Promise<SetSessionConfigOptionResponse | void>;
@@ -779,6 +787,9 @@ export declare class SharedAcpRuntime {
   runTurn(input: AcpRuntimeTurnInput): AsyncGenerator<AcpRuntimeEvent, void, any>;
   getStatus(input: {
     handle: AcpRuntimeHandle;
+    // XMD Claude configuration: read the actual backend for an in-place transaction.
+    verifyConfiguration?: boolean;
+    requestedModel?: string;
   }): Promise<AcpRuntimeStatus>;
   getCapabilities(input?: {
     handle?: AcpRuntimeHandle;
@@ -808,6 +819,8 @@ export declare class SharedAcpRuntime {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
+    /** XMD Claude configuration: prior native window for model restoration. */
+    restoreContextWindow?: number;
     /** XMD requested model: the model requested by this write's use; see `AcpRuntimeEnsureInput.requestedModel`. */
     requestedModel?: string;
   }): Promise<SetSessionConfigOptionResponse>;
@@ -862,7 +875,8 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
   startTurn(input: AcpRuntimeTurnInput): {
     requestId: string;
     readonly materialized: Promise<AcpRuntimeMaterialization>;
-    readonly promptStarted: Promise<void>;
+    // XMD Claude configuration: the exact settings observed for this written prompt.
+  readonly promptStarted: Promise<void | { model: string; effort?: string }>;
     events: {
       [Symbol.asyncIterator](): AsyncGenerator<AcpRuntimeEvent, void, any>;
     };
@@ -880,6 +894,9 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
   }): Promise<AcpRuntimeCapabilities>;
   getStatus(input: {
     handle: AcpRuntimeHandle;
+    // XMD Claude configuration: read the actual backend for an in-place transaction.
+    verifyConfiguration?: boolean;
+    requestedModel?: string;
     signal?: AbortSignal;
   }): Promise<AcpRuntimeStatus>;
   setMode(input: AcpControlAuthority & {
@@ -894,6 +911,8 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
+    /** XMD Claude configuration: prior native window for model restoration. */
+    restoreContextWindow?: number;
     /** XMD requested model: the model requested by this write's use; see `AcpRuntimeEnsureInput.requestedModel`. */
     requestedModel?: string;
   }): Promise<SetSessionConfigOptionResponse>;

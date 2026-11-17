@@ -249,3 +249,14 @@ Normalization, record readback and IPC keep that field. This changes launch-opti
 plumbing only; the Claude adapter and SDK producer inputs are unchanged. The
 `claude-workflow-role` CLI profile selects these options for workflow roles.
 Ordinary interactive sessions retain their original defaults.
+
+### Claude configuration on the connected session
+
+The `XMD Claude configuration:` changes apply to the maintained adapter
+advertising its native observation request. Load and resume omit saved startup
+model metadata. Replay skips the saved model and the retained/current model
+and effort control keys. In-process transactions can read that connection's
+model, context window and attested effort. Immediately before prompt dispatch,
+ACPX verifies requested configuration against the attachment about to receive
+the prompt. The prompt-written signal carries that attachment's observation.
+Exact model restoration supplies the transaction's prior context window.

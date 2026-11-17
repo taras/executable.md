@@ -131,7 +131,12 @@ export type ChildAnswerPromptEvent =
 
 export type AgentPromptEvent =
   | ChildAnswerPromptEvent
-  | { type: "started"; agent: Agent; session: Session }
+  | {
+      type: "started";
+      agent: Agent;
+      session: Session;
+      observedConfiguration?: SessionConfiguration;
+    }
   | { type: "text_delta"; text: string }
   | {
       type: "terminal";

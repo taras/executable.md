@@ -3619,6 +3619,24 @@ and `prompt`; an unreadable preference refuses rather than falling back. A save
 acknowledged before handoff belongs to that turn; one acknowledged after belongs
 to the next.
 
+For an established Claude conversation, Apply records which settings the person
+selected in this drawer. Prefilled values still supply the Asked reading. A
+model choice counts even when it repeats the saved selection. It supersedes a
+pending effort choice from the previous model. An effort-only Apply leaves the
+pending model choice in place. A fresh conversation uses its full saved
+configuration.
+
+The held Claude turn receives only the outstanding choices for its conversation.
+Its Prompt outcome and the Sidekick record positions of the choices it received
+are saved together in the conversation stream. A verified start consumes those
+exact choices, including when the turn later fails or is cancelled. A pre-start
+refusal leaves them pending. A later Apply has a different position even when its
+values are identical. Reopening derives this same state from the acknowledged
+records. An older preference without recorded choice actions remains eligible
+when the history establishes an Apply after the last settled turn and before any
+later handoff. The Asked reading still shows a saved preference whose ordering
+does not establish a pending choice.
+
 The shared chat writer serializes physical append and in-memory publication as
 one operation for messages, feedback, controls, canonical turn events and
 preferences. Callers queue in arrival order. A cancelled waiter removes only
@@ -3651,10 +3669,8 @@ drawer. A route drawer in front of Configure owns Escape while it is there: the
 first one closes that drawer and exposes the Configure held underneath with
 every choice still in it, and the next one closes Configure. A Configure that is
 not the thing on the screen — behind another pane, another tab, or a drawer in
-front of it — consumes no Escape at all. A saved model or effort is used by the *next* turn, which
-is where an agent can actually be asked: saving asks nothing of it, stops
-nothing, and leaves a turn already running on the settings it was given. A
-setting left out asks for no change to it and resets nothing.
+front of it — consumes no Escape at all. Saving leaves a running turn on the
+settings it was given. A setting left out of a turn asks for no change.
 
 Entering a different agent is explicitly starting a new conversation, and the
 control says so before it is pressed. The old chat and what it was with stay in
@@ -3681,8 +3697,8 @@ differs. After a host Codex upgrade, the installed build must confirm the
 original conversation on a live load before Sidekick uses it. The Sidekick's
 own controls apply to every turn as it is built — no
 provider tools, no MCP servers, strict permission routing and every native
-permission request denied — and the turn's model and effort are applied and
-read back before it is sent. Reopening asks for nothing. A resume, identity,
+permission request denied — and the settings requested for the turn are applied
+and read back before it is sent. Reopening asks for nothing. A resume, identity,
 build or configuration the provider cannot actually perform fails that message
 and leaves the chat, its turns and its history standing; nothing is created in
 their place, and the person is told why rather than being given a new
@@ -3707,10 +3723,8 @@ the agent has answered for itself; an agent that cannot be reached is refused in
 its own words, leaving the conversation a person was in exactly where it was.
 Nothing falls back to another agent, and making the change sends nothing.
 
-Which model and effort it runs under is a request this history holds and the
-next turn puts into effect, because a configuration can only be asked of an
-agent on a turn. It is applied model first — effort levels belong to a model —
-and read back, so a turn that happened ran under what was asked for. An agent
+The turn applies any requested configuration model first, because effort levels
+belong to a model. It verifies the requested settings before sending. An agent
 that refuses the request leaves the turn unsent and says what it does offer, and
 the request stays recorded: a Sidekick that quietly dropped it would answer as
 something nobody chose. What a person chooses between is the agent's own answer,

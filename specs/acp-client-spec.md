@@ -392,10 +392,10 @@ Session accepts optional `model` and `effort` props:
 Values are exact provider ids — whatever the agent advertises, spelled the way
 it spells them. XMD translates no alias and substitutes no near value.
 
-Omission is not a value. With neither prop the conversation keeps whatever it
-is already using and nothing is read or written about either setting; with only
-`model` the effort level is left alone; with only `effort` it applies to the
-model the conversation is already on.
+Omission requests no configuration change. With neither prop the conversation
+keeps its settings. With only `model` the effort level is left alone. With only
+`effort` it applies to the current model. A prepared Claude reconnect also reports
+the settings it observes.
 
 Configuration is not an `Agent.session()` argument. Session middleware receives
 only a name or opaque request and returns the Session selected by its final
@@ -503,21 +503,27 @@ checks `requestedModel !== undefined` and derives the existing
 `_meta["executablemd.has-explicit-model/v1"]: true` marker. The model string
 stays within the runtime; `session/new` and other adapters carry no marker.
 
-On such a resume the prepared Claude adapter reasserts no environment or
-settings model. It reads the model the resumed backend reports and advertises
-that exact string as the current model selection — no picker alias, default
-row, context-hint reconstruction or requested value substitutes for it. An
-unreadable or empty report, or one no offered model names exactly, refuses the
-load or resume as an invalid request before any prompt; this includes a
-concrete model offered only through an alias, and a context hint the offered
-ids do not spell. Fresh, unconfigured and effort-only sessions keep the
-adapter's existing initialization.
+A verified load or resume with the prepared Claude adapter first observes the
+native conversation. Startup metadata omits the saved model. The adapter reads
+the backend's exact model and available context evidence, and reports effective
+effort when the backend attests it. It applies no environment or settings model
+and leaves native effort in place. A missing or unreadable model refuses before
+prompting. The current model may be absent from the offered list.
 
-ACPX's reconnect replay of a saved model selection writes nothing when the
-resumed session already reports exactly that saved id. A different reported id
-is written back through the existing replay, and the steps above verify it.
-Repeated operations under an unchanged selection therefore add no model write,
-while a genuine change is written once and verified before the next prompt.
+ACPX skips the saved model and retained model and effort controls on this
+attachment before validating replay values. It identifies model-valued controls
+from the retained and live selectors, and continues to replay unrelated
+controls. Explicit intent is supplied by the final authentic use.
+
+A deliberate choice still names an offered row. The prepared adapter compares
+the chosen model or its SDK-reported resolved identity against the native
+observation. A context variant also requires evidence for that variant from
+the active Query. A fresh variant without live pre-prompt evidence refuses.
+The check runs on the attachment that forwards the prompt. If configuration
+may have been applied before a failure, restoration verifies the exact prior
+native model and context first, then effort. The transaction may restore its
+own observed prior model outside the catalog. Unverified restoration fences the
+session.
 
 The configured-session carrier is issued by the Agent package after `session()` resolves an
 exact value registered by the installed provider. An Agent-owned
@@ -571,8 +577,9 @@ because effort choices belong to a model.
 Reading is strict about the selector it recognized and incurious about the
 rest. A selector with the wrong type, two equally preferred candidates, a
 duplicate value id, a missing id or name, or a current value the agent does not
-offer fails the operation rather than reading as "this agent offers you
-nothing".
+offer fails discovery. The prepared Claude configuration transaction accepts
+a native current observation outside the offered list. Only offered rows are
+eligible for fresh selection and deliberate changes.
 
 ## The provider-factory seam
 
@@ -1122,7 +1129,11 @@ The configuration is retained only after the provider emits `started`: a turn
 that started is one the provider put under exactly those settings, while a
 configuration refusal started no turn and retains none. A prompt that starts
 and later fails or is cancelled retains the configuration it ran under. An
-unconfigured prompt omits it. A `sequence` records execution order explicitly,
+unconfigured prompt ordinarily omits it. A prepared Claude continuation
+retains the exact observed model and any attested effort from the attachment
+bound to its started event. This records the settings in use while the final
+authentic Session remains the authority for what may change.
+A `sequence` records execution order explicitly,
 and per-location ordinals keep durable identities stable across Each loops.
 
 For a held conversation the retained `input` is the final composed text the

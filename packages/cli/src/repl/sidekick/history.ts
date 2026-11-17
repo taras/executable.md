@@ -68,6 +68,7 @@ import {
 } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, SerializedError } from "@executablemd/durable-streams";
 import { call, ensure, Ok, scoped, withResolvers } from "effection";
+import { AGENT_PROMPT } from "@executablemd/agent/host";
 import type { Operation, Result } from "effection";
 import { createHash } from "node:crypto";
 
@@ -202,6 +203,17 @@ export interface PreferencesRecord {
   readonly conversation: string;
   readonly model: string | null;
   readonly effort: string | null;
+  readonly selected?: PreferenceChoices;
+}
+
+export interface PreferenceChoices {
+  readonly model?: true;
+  readonly effort?: true;
+}
+
+export interface PreferencePositions {
+  readonly model?: number;
+  readonly effort?: number;
 }
 
 /**
@@ -270,6 +282,7 @@ export interface EventRecord {
   readonly conversation: string;
   readonly sequence: number;
   readonly event: string;
+  readonly selectedAt?: PreferencePositions;
 }
 
 /** What a completed turn's response actually rendered to. */
@@ -597,7 +610,7 @@ function conversationOf(value: Record<string, unknown>): ConversationRecord | un
 }
 
 function preferences(value: Record<string, unknown>): PreferencesRecord | undefined {
-  if (!exactly(value, ["kind", "conversation", "model", "effort"])) {
+  if (!exactly(value, ["kind", "conversation", "model", "effort"], ["selected"])) {
     return undefined;
   }
   const held = str(value.conversation);
@@ -609,7 +622,28 @@ function preferences(value: Record<string, unknown>): PreferencesRecord | undefi
   if (model === undefined || effort === undefined) {
     return undefined;
   }
-  return { kind: "preferences", conversation: held, model, effort };
+  const selected = value.selected;
+  if (selected === undefined) {
+    return { kind: "preferences", conversation: held, model, effort };
+  }
+  if (
+    !plain(selected) ||
+    !exactly(selected, [], ["model", "effort"]) ||
+    (Object.hasOwn(selected, "model") && (selected.model !== true || model === null)) ||
+    (Object.hasOwn(selected, "effort") && (selected.effort !== true || effort === null))
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "preferences",
+    conversation: held,
+    model,
+    effort,
+    selected: {
+      ...(selected.model === true ? { model: true } : {}),
+      ...(selected.effort === true ? { effort: true } : {}),
+    },
+  };
 }
 
 function reference(value: Record<string, unknown>): ReferenceRecord | undefined {
@@ -665,7 +699,7 @@ function message(value: Record<string, unknown>): MessageRecord | undefined {
 }
 
 function eventRecord(value: Record<string, unknown>): EventRecord | undefined {
-  if (!exactly(value, ["kind", "conversation", "sequence", "event"])) {
+  if (!exactly(value, ["kind", "conversation", "sequence", "event"], ["selectedAt"])) {
     return undefined;
   }
   const held = str(value.conversation);
@@ -676,10 +710,40 @@ function eventRecord(value: Record<string, unknown>): EventRecord | undefined {
   }
   // The canonical record it carries has to be one, or this line is describing a
   // turn nobody can read back.
-  if (!parseDurableEvent(event).ok) {
+  const parsed = parseDurableEvent(event);
+  if (!parsed.ok) {
     return undefined;
   }
-  return { kind: "event", conversation: held, sequence, event };
+  const selectedAt = value.selectedAt;
+  if (selectedAt === undefined) {
+    return { kind: "event", conversation: held, sequence, event };
+  }
+  if (
+    !plain(selectedAt) ||
+    !exactly(selectedAt, [], ["model", "effort"]) ||
+    parsed.value.type !== "yield" ||
+    parsed.value.description.type !== AGENT_PROMPT
+  ) {
+    return undefined;
+  }
+  const model = whole(selectedAt.model);
+  const effort = whole(selectedAt.effort);
+  if (
+    (Object.hasOwn(selectedAt, "model") && model === undefined) ||
+    (Object.hasOwn(selectedAt, "effort") && effort === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "event",
+    conversation: held,
+    sequence,
+    event,
+    selectedAt: {
+      ...(model === undefined ? {} : { model }),
+      ...(effort === undefined ? {} : { effort }),
+    },
+  };
 }
 
 function response(value: Record<string, unknown>): ResponseRecord | undefined {
@@ -1359,6 +1423,7 @@ export function conversationStream(
   writer: SidekickWriter,
   conversation: string,
   retained: readonly SidekickRecord[] = [],
+  selection?: () => PreferencePositions | undefined,
 ): DurableStream {
   let sequence = retained.filter(
     (record) => record.kind === "event" && record.conversation === conversation,
@@ -1382,11 +1447,16 @@ export function conversationStream(
       return events;
     },
     *append(event: DurableEvent): Operation<void> {
+      const selectedAt =
+        event.type === "yield" && event.description.type === AGENT_PROMPT
+          ? selection?.()
+          : undefined;
       yield* writer.append({
         kind: "event",
         conversation,
         sequence: sequence,
         event: serializeDurableEvent(event),
+        ...(selectedAt === undefined ? {} : { selectedAt }),
       });
       sequence += 1;
     },

@@ -106,6 +106,7 @@ export interface ScriptedTurn {
   accepted?: boolean;
   /** Withhold acceptance until `accept()`, however the turn itself is driven. */
   manualAcceptance?: boolean;
+  observedConfiguration?: { model: string; effort?: string };
 }
 
 export interface FakeTurn {
@@ -540,7 +541,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
               refuse();
             },
             turn: {
-              promptStarted: Promise.resolve(),
+              promptStarted: Promise.resolve(script.observedConfiguration),
               requestId: input.requestId,
               events: {
                 [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {

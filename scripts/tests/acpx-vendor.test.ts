@@ -40,6 +40,7 @@ const SEAMS: readonly string[] = [
   "XMD requested model:",
   "XMD workflow role controls:",
   "XMD exact-model replay:",
+  "XMD Claude configuration:",
   "XMD verified resume:",
   "XMD retained command:",
 ];

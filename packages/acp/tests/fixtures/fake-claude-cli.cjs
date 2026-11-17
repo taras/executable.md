@@ -55,6 +55,26 @@ const CATALOG = STATE_DIR
             supportedEffortLevels: ["low", "medium", "high"],
           },
           {
+            value: "opus",
+            resolvedModel: "claude-opus-4-6",
+            displayName: "Opus",
+            description: "",
+          },
+          {
+            value: "claude-fable-5-1",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "Fable 5.1",
+            description: "",
+          },
+          {
+            value: "sonnet[1m]",
+            resolvedModel: "claude-sonnet-5-5",
+            displayName: "Sonnet 1M",
+            description: "",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high"],
+          },
+          {
             value: "fable",
             resolvedModel: "claude-fable-5-1",
             displayName: "Fable",
@@ -255,9 +275,16 @@ function answerStateful(message) {
       response: { subtype: "success", request_id: message.request_id, response },
     });
   if (request.subtype === "set_model") {
-    state.model = request.model ?? "default";
+    const model = request.model ?? "default";
+    if (model === "sonnet[1m]" && state.contradictVariant) {
+      state.model = "claude-sonnet-5-5";
+      state.effort = "low";
+    } else if (!(state.rejectRestoration && model === "claude-opus-5-5")) {
+      state.model = model;
+    }
+    state.contextWindow = model === "sonnet[1m]" && !state.contradictVariant ? 1_000_000 : 200_000;
     persist();
-    log({ control: "set_model", session: SESSION, model: state.model });
+    log({ control: "set_model", session: SESSION, model });
     succeed({});
     return true;
   }
@@ -268,6 +295,10 @@ function answerStateful(message) {
       log({ control: "effort", session: SESSION, effort: state.effort ?? null });
     }
     succeed({});
+    return true;
+  }
+  if (request.subtype === "get_settings") {
+    succeed({ effective: { effortLevel: state.effort } });
     return true;
   }
   if (request.subtype === "get_context_usage") {
@@ -287,7 +318,7 @@ function answerStateful(message) {
       categories: [],
       totalTokens: 0,
       maxTokens: 200000,
-      rawMaxTokens: 200000,
+      rawMaxTokens: state.contextWindow ?? 200_000,
       percentage: 0,
       gridRows: [],
       model: process.env.FAKE_CLAUDE_CONTEXT_USAGE === "absent" ? undefined : running(),
@@ -342,7 +373,12 @@ process.stdin.on("data", (chunk) => {
         // Only Query failure releases this lookup, so setup cannot outrun the contradiction.
         continue;
       }
-      if (STATE_DIR && answerStateful(message)) {
+      if (
+        (STATE_DIR ||
+          message.request?.subtype === "get_context_usage" ||
+          message.request?.subtype === "get_settings") &&
+        answerStateful(message)
+      ) {
         continue;
       }
       emit({

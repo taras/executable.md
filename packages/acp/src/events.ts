@@ -24,7 +24,12 @@
 
 import { each, race, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
-import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/agent/api";
+import type {
+  AgentPromptCheckpoint,
+  AgentPromptEvent,
+  Session,
+  SessionConfiguration,
+} from "@executablemd/agent/api";
 import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./xmd-response.ts";
@@ -34,6 +39,7 @@ import type { TurnUsage } from "./usage.ts";
 export interface TurnIdentity {
   agent: string;
   session: Session;
+  observedConfiguration?: SessionConfiguration | void;
 }
 
 /**
@@ -65,7 +71,14 @@ export function* consumeTurn(
   closeFailed?: () => Operation<void>,
   usage?: TurnUsage,
 ): Operation<void> {
-  yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
+  yield* channel.send({
+    type: "started",
+    agent: identity.agent,
+    session: identity.session,
+    ...(identity.observedConfiguration === undefined
+      ? {}
+      : { observedConfiguration: identity.observedConfiguration }),
+  });
   let text = "";
   let terminal: AgentPromptEvent;
   let named: AgentPromptCheckpoint | undefined;
