@@ -100,6 +100,7 @@ describe("REPL foreground command presentation E1", () => {
     );
     yield* awaitedFact("the child holding after both writes", () => exists(ready));
     expect(yield* exists(release)).toBe(false);
+    yield* page.until("the admitted editor closes", (one) => !one.shows("✎ draft"));
     yield* pasteDraft(page, "unsent entry draft");
     yield* page.until("the unsent draft", (one) => one.shows("unsent entry draft"));
     yield* page.type("\x073");
@@ -467,6 +468,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
     yield* intoDraft(page);
     expect(page.screen().shows("entry draft remains")).toBe(true);
     yield* page.type("\x073");
+    yield* page.until("the retained reading resumes", (one) => !one.shows("✎ draft"));
     expect(frozen.shows("cleanup-after-history")).toBe(false);
     expect(frozen.shows("Command stderr")).toBe(false);
     yield* page.press("[live]");

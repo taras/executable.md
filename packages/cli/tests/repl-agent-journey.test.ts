@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { decodeLocation } from "../src/repl/route.ts";
+import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
 import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
@@ -863,7 +863,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
     const cold = createFakeAcp();
     yield* scoped(function* (): Operation<void> {
-      const at = `${location.split("?")[0]}/${selected.key}`;
+      const at = encodeLocation({ ...routeOf(location), scopes: [selected.key] });
       const { page } = yield* beginJourney({ fake: cold, hostRoot, size: WIDE, location: at });
 
       yield* entrySettles(page, 1, "ok");
@@ -881,7 +881,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
       const transcript = page
         .screen()
-        .rows.map((row) => row.slice(page.screen().locate(DRAFT_HEADING).column))
+        .rows.map((row) => row.slice(page.screen().locate("Entries ›").column))
         .join("\n");
       expect(transcript).toContain("TWO-DONE");
       expect(transcript).not.toContain("ONE-DONE");
@@ -1008,7 +1008,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     expect(route.at).toBe("yield:root:3");
     expect(route.inspect).toBe(true);
     expect(route.surface).toBe("entries");
-    expect(route.scopes).toEqual([]);
+    expect(route.scopes).toEqual(["entry-1"]);
   });
 
   it("J3: a location this host cannot read refuses before any replay", function* () {

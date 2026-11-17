@@ -913,7 +913,7 @@ describe("headless live UI", () => {
       yield* held.view.connect(yield* useReplScreen());
     });
     yield* visible(parent.terminal, "[detach]");
-    pressAt(parent.terminal, yield* locate(parent.terminal, "+ New Round"));
+    parent.terminal.feed("\x074\r");
     yield* visible(parent.terminal, "· draft");
     parent.terminal.feed("parent draft remains");
     yield* visible(parent.terminal, "parent draft remains");
