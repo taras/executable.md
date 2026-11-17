@@ -229,7 +229,7 @@ import { readingLines } from "./source-reading.ts";
 import { inertCommandText } from "./command-output.ts";
 import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
-import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
+import { admitRows, capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
 import { resolveWheel, resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
@@ -2367,7 +2367,7 @@ function* drive(
         // is true of the document, and readiness moving on does not make it
         // admissible — dropping that one would take away the only explanation
         // of why the draft is still sitting there.
-        state = Object.freeze({ ...state, refusal: report.refusal });
+        state = Object.freeze({ ...state, refusal: report.refusal, refusalPosition: undefined });
         refusedByReadiness = report.byReadiness;
       }
     }
@@ -3145,7 +3145,7 @@ function* drive(
         });
       }
       if (performed.refusal !== undefined) {
-        state = Object.freeze({ ...state, refusal: performed.refusal });
+        state = Object.freeze({ ...state, refusal: performed.refusal, refusalPosition: undefined });
         refusedByReadiness = performed.refusedByReadiness === true;
       } else if (transition.state.refusal === undefined) {
         // The action was taken, or refused for its own reasons and then cleared.
@@ -5736,10 +5736,26 @@ export function* prepareFrame(
     return header;
   }
   const headerLimit = Math.max(1, Math.floor(view.size.rows / 4));
-  const headerRefusal = header.value.slice(0, headerLimit).map((row) => row.text);
-  if (header.value.length > headerLimit) {
-    const last = headerRefusal[headerRefusal.length - 1];
-    headerRefusal[headerRefusal.length - 1] = `${last.slice(0, -1)}…`;
+  const refusalPosition = view.state.refusalPosition;
+  const headerRefusalWindow =
+    header.value.length > headerLimit
+      ? admitRows({
+          offset: refusalPosition?.reason === view.state.refusal ? (refusalPosition?.from ?? 0) : 0,
+          total: header.value.length,
+          capacity: headerLimit - 1,
+        })
+      : undefined;
+  const headerRefusal = (
+    headerRefusalWindow === undefined
+      ? header.value
+      : header.value.slice(
+          headerRefusalWindow.from,
+          headerRefusalWindow.from + headerRefusalWindow.count,
+        )
+  ).map((row) => row.text);
+  if (headerRefusalWindow !== undefined) {
+    const { from, count, total } = headerRefusalWindow;
+    headerRefusal.push(`Wheel here to read the refusal · ${from + 1}–${from + count} of ${total}`);
   }
   const drawerRoom = widths.drawer ?? 0;
   const help =
@@ -5859,6 +5875,7 @@ export function* prepareFrame(
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     headerRefusal,
+    headerRefusalWindow,
     drawerHelp,
     todo: todoRows.value,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
@@ -6287,6 +6304,7 @@ export function* prepareFrame(
     todo: todoRows.value,
     notices: notices.value,
     details: details.value,
+    headerRefusalWindow,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -6306,6 +6324,7 @@ export function* prepareFrame(
     message: shown,
     guidance: guidanceRows,
     headerRefusal,
+    headerRefusalWindow,
     drawerHelp,
     refusal: refusalRows,
     rail: rail.value,

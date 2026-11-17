@@ -33,6 +33,7 @@ import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { EntrySegmentStream } from "../src/repl/entries.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
+import { decodeLocation } from "../src/repl/route.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplActionCandidate, ReplBounds } from "../src/repl/layout.ts";
 import { admitActions } from "../src/repl/layout-admission.ts";
@@ -62,7 +63,7 @@ import { usePresenter, viewportBounds, windowOf } from "./fixtures/repl/presenta
 import type { Observed, Presenter } from "./fixtures/repl/presentation.ts";
 import { journalModel, projected } from "./fixtures/repl/journals.ts";
 import { referenceEvents, agentReferenceEvents } from "./fixtures/repl/reference.ts";
-import { awaited } from "./support/mounted-repl.ts";
+import { awaited, mountedReading } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import { entrySettles, intoDraft, pasteDraft } from "./support/screen-journeys.ts";
@@ -1614,6 +1615,62 @@ describe("Owned narrow guidance and pane navigation routes", () => {
 });
 
 describe("Owned footer, History and single-field inventory", () => {
+  it("keeps the full execution refusal readable from the narrow identity header", function* () {
+    // The long search path ends row five with a supplementary letter.
+    const cutoff = "\u{10400}";
+    const source = "<Nowhere />";
+    const recovery = "/try-this-component-directory";
+    const page = yield* useReplPage({
+      size: NARROW,
+      includes: [`/${"a".repeat(215)}/${"b".repeat(70)}${cutoff}continued`, recovery],
+    });
+    const scroll = "Wheel here to read the refusal";
+    yield* pasteDraft(page, source);
+    yield* page.key("Tab");
+    yield* page.until("Send focused", (one) => one.shows("> Send"));
+    yield* page.key("Enter");
+    const refusal = yield* page.until("document refused", (one) =>
+      one.shows("Cannot resolve component:"),
+    );
+    expect(refusal.rows[0]).toContain("Ready for Entry 1");
+    expect(refusal.rows[0]).toContain("[ ] Show token usage");
+    expect(refusal.shows(recovery)).toBe(false);
+    expect(refusal.rows[5]).toContain(`${scroll} · 1–4 of `);
+    expect(refusal.rows.at(-2)).toContain("> Send");
+    expect(refusal.rows.at(-1)).toContain("HISTORY");
+
+    yield* page.wheel("down", refusal.locate("Cannot resolve component:"));
+    const tail = yield* page.until("the tail of the diagnostic", (one) => one.shows(recovery));
+    const from = Number(/· (\d+)–/.exec(tail.rows[5])?.[1]);
+    expect(tail.rows[6 - from]?.trimEnd()).toBe(`/${"b".repeat(70)}${cutoff}`);
+    expect(tail.rows.at(-2)).toContain("> Send");
+    expect(tail.rows.at(-1)).toContain("HISTORY");
+    yield* page.wheel("up", tail.locate(scroll));
+    yield* page.until("the start of the refusal again", (one) =>
+      one.shows("Cannot resolve component:"),
+    );
+
+    const resized = yield* page.resize(MEDIUM);
+    expect(resized.shows(recovery)).toBe(true);
+    expect(resized.rows.at(-2)).toContain("> Send");
+    expect(resized.rows.at(-1)).toContain("HISTORY");
+    yield* page.press("Show token usage");
+    yield* page.until("the usage toggle responding", (one) => one.shows("[x] Show token usage"));
+
+    expect((yield* mountedReading(page.repl)).model.entries).toEqual([]);
+    page.repl.terminal.end();
+    yield* awaited("the command ending", () => page.repl.outcome() !== undefined);
+    const outcome = page.repl.outcome();
+    if (outcome === undefined || !outcome.ok) {
+      throw new Error("the REPL did not return its location");
+    }
+    const location = decodeLocation(outcome.value.location);
+    if (!location.ok) {
+      throw location.error;
+    }
+    expect(location.value.draft).toBe(source);
+  });
+
   it("UI1/UI5: the round bar touches History and readiness stays in the header", function* () {
     const model = yield* entriesModel(1);
     const presenter = yield* usePresenter(NARROW);

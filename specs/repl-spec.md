@@ -1850,7 +1850,9 @@ using compact wording at 72×20. Reserve space for the meaningful state and next
 action before fitting the session identifier. Keep the usage control reachable.
 A visible execution action refusal appears within the header, wrapping at the
 measured width as needed. Keep readiness visible during a refusal. The refusal
-gives the reason and any available recovery.
+gives the reason and any available recovery. When the refusal exceeds the
+header's available rows, the header shows which rows are visible and wheel
+scrolling over the refusal reveals the remaining rows without moving focus.
 
 **Readiness is read from the file and from this process together.** The durable
 side cannot answer it alone: a root close is recorded the moment a document

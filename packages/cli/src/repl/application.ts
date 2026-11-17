@@ -1136,6 +1136,7 @@ export interface ReplState {
   readonly recovering?: ReplRecovering;
   /** Why the last action changed nothing, or none. */
   readonly refusal: string | undefined;
+  readonly refusalPosition?: { readonly reason: string; readonly from: number } | undefined;
   /**
    * The pending permission request this screen has selected, or none.
    *
@@ -2274,6 +2275,12 @@ export function reduceRepl(
       const next = wheelDestination(window, action.direction);
       if (next === window.from) {
         return settled(given);
+      }
+      if (action.window === HEADER_REFUSAL_WINDOW && given.refusal !== undefined) {
+        return settled({
+          ...given,
+          refusalPosition: { reason: given.refusal, from: next },
+        });
       }
       if (action.window === "todo") {
         return settled({ ...state, todoOffset: next });
@@ -4059,7 +4066,7 @@ function settled(state: ReplState): ReplTransition {
 }
 
 function refuse(state: ReplState, reason: string): ReplTransition {
-  return { state: Object.freeze({ ...state, refusal: reason }), intent: { kind: "none" } };
+  return settled({ ...state, refusal: reason, refusalPosition: undefined });
 }
 
 /**
@@ -8362,7 +8369,13 @@ function drawerFor(
     input: { window: DRAWER_WINDOW },
     children: viewportRows.map((one) => one.description),
   });
-  const viewportChildren = [viewport, ...fixedRows.map((one) => one.description)];
+  const viewportChildren = [
+    viewport,
+    ...fixedRows.map((one) => one.description),
+    // The header stays visible outside the drawer's rectangle. Its wheel
+    // target belongs to the active modal while that modal owns input.
+    ...(context.headerRefusalWindow !== undefined && !inline ? [refusalViewport()] : []),
+  ];
   const children = overHeld
     ? [
         covered(history),
@@ -10192,8 +10205,19 @@ export const DRAWER_WINDOW = "drawer";
 export const QUEUE_WINDOW = "queue";
 /** The entry reading's window: output and source together, in the transcript. */
 export const READING_WINDOW = "reading";
+
 /** The Bindings pane's window, over the selected scope's values and answers. */
 const BINDINGS_WINDOW = "bindings";
+
+const HEADER_REFUSAL_WINDOW = "header-refusal";
+
+function refusalViewport(): ReplDescription<ReplAction> {
+  return describeNode({
+    key: `viewport:${HEADER_REFUSAL_WINDOW}`,
+    component: VIEWPORT,
+    input: { window: HEADER_REFUSAL_WINDOW },
+  });
+}
 /** The action row's own structural id, which admission measures against. */
 export const ACTION_ROW = "box:footer:actions";
 /** The right pane's tab row, which is also that column's header. */
@@ -10381,6 +10405,7 @@ export interface ReplPresentationContext {
    */
   readonly guidance: readonly string[] | undefined;
   readonly headerRefusal?: readonly string[];
+  readonly headerRefusalWindow?: ReplWindow | undefined;
   readonly drawerHelp?: readonly string[];
   /**
    * The rows this frame is drawing a refusal's own explanation in, or none.
@@ -11166,6 +11191,9 @@ export function presentationFor(
         children: [],
       }),
     );
+  }
+  if (context.headerRefusalWindow !== undefined && !modalOpen(view)) {
+    composed.push(refusalViewport());
   }
   // Placed only where the tree will hold them: a measuring pass mounts nothing.
   const placedDescriptions = context.measuring
@@ -11965,6 +11993,7 @@ export function admissionFor(input: {
   /** The drawer's notices, fitted, which its own window admits rows of. */
   readonly notices?: ReplPreparedNotices | undefined;
   readonly details?: readonly ReplFittedLine[] | undefined;
+  readonly headerRefusalWindow?: ReplWindow | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
   const { view, manifest, widths, reading, preview, queue, notices, details, boundsOf, sessions } =
@@ -11977,6 +12006,12 @@ export function admissionFor(input: {
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
+    if (slot.window === HEADER_REFUSAL_WINDOW) {
+      if (input.headerRefusalWindow !== undefined && capacity > 0) {
+        windows.set(slot.window, input.headerRefusalWindow);
+      }
+      continue;
+    }
     if (slot.window === "todo") {
       const rows = input.todo ?? [];
       let from = Math.max(0, Math.min(view.state.todoOffset ?? 0, rows.length - capacity));
@@ -14843,6 +14878,17 @@ function workspacePresentation(input: {
   const inspected = view.state.route.at !== undefined;
   const usageToggle = byKey("identity:usage");
   const identity = identityRuns(view, size.columns - (usageToggle[0]?.text.length ?? 0));
+  const refusalRows = context.headerRefusal ?? [];
+  const refusalWindow = context.headerRefusalWindow;
+  const refusalId = "box:identity:refusal";
+  if (refusalWindow !== undefined) {
+    viewports.push({
+      id: refusalId,
+      region: "refusal",
+      window: HEADER_REFUSAL_WINDOW,
+      owner: `viewport:${HEADER_REFUSAL_WINDOW}`,
+    });
+  }
   regions.push({ region: "footer", id: "box:footer" });
   return {
     descriptions,
@@ -14855,7 +14901,7 @@ function workspacePresentation(input: {
         children: [
           box({
             id: "box:identity",
-            props: stackProps(1 + (context.headerRefusal?.length ?? 0)),
+            props: stackProps(1 + refusalRows.length),
             children: [
               box({
                 id: "box:identity:line",
@@ -14872,14 +14918,24 @@ function workspacePresentation(input: {
                   ...usageToggle.map((one) => part(one, undefined)),
                 ],
               }),
-              ...(context.headerRefusal ?? []).map((text, at) =>
-                box({
-                  id: `box:identity:refusal:${at}`,
-                  props: bandRowProps(REPL_PALETTE.chromeSurface),
-                  text,
-                  style: styleOf("failed-outcome"),
-                }),
-              ),
+              ...(refusalRows.length === 0
+                ? []
+                : [
+                    box({
+                      id: refusalId,
+                      props: stackProps(refusalRows.length),
+                      children: refusalRows.map((text, at) =>
+                        box({
+                          id: `${refusalId}:${at}`,
+                          props: bandRowProps(REPL_PALETTE.chromeSurface),
+                          text,
+                          style: styleOf(
+                            at === refusalWindow?.count ? "metadata" : "failed-outcome",
+                          ),
+                        }),
+                      ),
+                    }),
+                  ]),
             ],
           }),
           box({ id: "box:body", props: bodyProps(false), children: columns }),
