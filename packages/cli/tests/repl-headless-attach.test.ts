@@ -1,5 +1,6 @@
 import { readTextFile } from "@effectionx/fs";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { createSignal, ensure, race, scoped, sleep, spawn } from "effection";
 import type { Operation, Scope } from "effection";
@@ -20,9 +21,12 @@ import { XmdResponse } from "@executablemd/acp";
 import { childAddressPath } from "../src/headless/host.ts";
 import { pairedLocation, readSidekickRecords } from "../src/repl/sidekick/history.ts";
 
+const OWNER = "packages/cli/tests/repl-headless-attach.test.ts";
+
 type AppliedFrames = WeakMap<Terminal, () => Operation<void>>;
 
 describe("987 — fresh child recovery reference", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps host readiness pending while an applied acknowledgement is held", function* () {
     const held = yield* useHeadlessFixture();
     const gate = held.input.holdNextAcknowledgement();
@@ -368,6 +372,7 @@ function locateInBindings(terminal: Terminal, label: string): { row: number; col
 }
 
 describe("headless renderer lifetime", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("releases every detached renderer scope while the exact child remains live", function* () {
     const live = new Set<Scope>();
     const parents = new WeakMap<Scope, Scope>();
@@ -450,6 +455,7 @@ describe("headless renderer lifetime", () => {
 });
 
 describe("headless live UI", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("C3: Control-C typed while the attached first frame is still being written detaches", function* () {
     const held = yield* useHeadlessFixture();
     const prompts = held.host.fake.prompts.length;
@@ -1183,6 +1189,7 @@ describe("headless live UI", () => {
 });
 
 describe("protected input through capable ACP pipes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("preserves the marker in the embedded callback and returns only a safe child result", function* () {
     let marked = false;
     const held = yield* useHeadlessFixture((input) => {
@@ -1226,6 +1233,7 @@ describe("protected input through capable ACP pipes", () => {
 });
 
 describe("marked ACP absence", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("withdraws a marked question through the current no-form branch without opening a parent form", function* () {
     let callbacks = 0;
     const held = yield* useHeadlessFixture(

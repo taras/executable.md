@@ -18,7 +18,8 @@ import { parseTodo } from "../src/repl/todo/document.ts";
  * told and from nothing else.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Elicitation, collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -66,6 +67,8 @@ import { awaited } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import { entrySettles, intoDraft, pasteDraft } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-layout-admission.test.ts";
 
 /**
  * The two cells in front of a control's label that its focus marker draws in.
@@ -585,6 +588,7 @@ describe("REPL layout: what an action row admits", () => {
 });
 
 describe("REPL layout: what a shrinking reading leaves behind", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** One journal whose whole reading is the long one, and one that is short. */
   function* readings(): Operation<{ long: ReplModel; short: ReplModel }> {
     return {
@@ -1754,6 +1758,7 @@ describe("Owned Transcript control geometry", () => {
 });
 
 describe("accepted rendered scrolling guidance", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [MEDIUM, NARROW]) {
     it(`Content and reading help fit whole at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });

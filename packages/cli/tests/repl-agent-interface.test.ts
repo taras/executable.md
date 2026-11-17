@@ -13,7 +13,8 @@
  * session, a screenshot for a frame, or a bare `<Prompt>` for a conversation.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { race, scoped, sleep, until as untilResolved, useScope, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
@@ -113,6 +114,8 @@ import {
   railMark,
 } from "./support/screen-journeys.ts";
 import { readScreen } from "./support/terminal-screen.ts";
+
+const OWNER = "packages/cli/tests/repl-agent-interface.test.ts";
 
 /** The widest accepted frame, stated here because layout keeps it private. */
 const WIDE = { columns: 160, rows: 36 };
@@ -1996,6 +1999,7 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
 const TURN_FACT_SUFFIXES = [":whose", ":text", ":stop", ":failed"];
 
 describe("U2 — the program performs a permission, end to end", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("U2: choosing through the running program settles the request and closes its drawer", function* () {
@@ -2109,6 +2113,7 @@ describe("U2 — the program performs a permission, end to end", () => {
 });
 
 describe("U4 — the loop wakes for Agent work", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("U4: queued, streaming and a waiting request each repaint on their own", function* () {
@@ -3769,6 +3774,7 @@ function* admittedSources(hostRoot: string): Operation<readonly string[]> {
  * region with every control on the screen.
  */
 describe("U2 — a draft outlives a permission and is still editable", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   for (const size of [{ columns: 160, rows: 36 }, NARROW]) {

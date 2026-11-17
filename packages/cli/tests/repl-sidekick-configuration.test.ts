@@ -19,7 +19,8 @@
  * association rather than a conversation's agent.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, sleep, spawn } from "effection";
 import type { Operation, Result, Task } from "effection";
@@ -155,6 +156,8 @@ import type { FakeAcp } from "./support/fake-acp.ts";
 import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
 import { AGENT, useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-configuration.test.ts";
 
 /** A second agent, named explicitly rather than defaulted to. */
 const OTHER = "other-sidekick";
@@ -905,6 +908,7 @@ function outside(page: ReplPage): string[] {
 }
 
 describe("Tier CFG — Configure in the Sidekick's pane", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What this agent offers, and what each of its models offers for effort. */
   const ADVERTISED = {
     model: {
@@ -1504,6 +1508,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
  * agent's choices goes with the replacement.
  */
 describe("Tier CFG — replacing the Sidekick's agent", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const ADVERTISED = {
     model: {
       selected: "balanced",
@@ -1869,6 +1874,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
  * explicit job does to another.
  */
 describe("Tier CFG — one order for everything this conversation writes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const ADVERTISED = {
     model: {
       selected: "balanced",
@@ -2033,6 +2039,7 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
 });
 
 describe("Tier CFG — Retry for a request whose turn failed", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CFG5: Retry sends the saved request again, not whatever is in the box", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -2220,6 +2227,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
  * exercising every flag and the interactive screen at once is not this row.
  */
 describe("Tier TE — the two configured agents each do their own work", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** One entry asking one Agent, naming no agent: the default is the subject. */
   const ASKING = ['<Session name="planner">', '<Prompt text="ok?" />', "</Session>"].join("\n");
 
@@ -2295,6 +2303,7 @@ describe("Tier TE — the two configured agents each do their own work", () => {
  * field, so these rows drive the width of a notice the way a person does.
  */
 describe("Configure notice fitting", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What the agent in these rows advertises, so the drawer has choices to draw. */
   const ADVERTISED = {
     model: {

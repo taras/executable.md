@@ -33,7 +33,8 @@ import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import type { Operation } from "effection";
 import { expect } from "@executablemd/test-support/expect";
 
@@ -68,6 +69,8 @@ import {
   stopSidekick,
   typed,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-presentation.test.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
@@ -140,6 +143,7 @@ function* focusMessage(page: ReplPage): Operation<void> {
 }
 
 describe("987 — mounted original recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
     it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
       const page = yield* useReplPage({ size: WIDE });
@@ -294,6 +298,7 @@ describe("987 — mounted original recovery", () => {
 });
 
 describe("Sidekick presentation: visible work owns its controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("sends one message through the Sidekick pane and reads the reply", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
@@ -367,6 +372,7 @@ function* exchange(page: ReplPage, text: string, answer: string): Operation<void
 }
 
 describe("Tier CF — complete messages and following the newest reply", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CF1: a message with its own lines keeps every one of them when the next arrives", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const wide = "a-very-long-line-that-cannot-fit-this-pane-and-must-be-cut-across-rows";
@@ -514,6 +520,7 @@ function sendComposed(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M1: a fresh command shows its Sidekick, asks the agent nothing, and focuses Message", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const first = page.screen();
@@ -752,6 +759,7 @@ function entryTrail(reading: ScreenReading): string {
 }
 
 describe("Sidekick texts and reading across every profile", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M7: all three profiles keep both texts, the footer and one body", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "note");
@@ -916,6 +924,7 @@ function* submittedUnderEdit(
 }
 
 describe("Sidekick submission held to the current Draft", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M-P2: a Draft edit during preflight admits no stale entry, and the edit survives", function* () {
     const result = yield* submittedUnderEdit(true);
     expect(result.entries).toEqual([]);
@@ -999,6 +1008,7 @@ function* filledQuestion(): Operation<ReplPage> {
 }
 
 describe("Sidekick question announcement and modal ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("MQ1: the notice arrives with nothing pressed, and only opening shows the form", function* () {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
@@ -1079,6 +1089,7 @@ function* configured(page: ReplPage): Operation<void> {
 }
 
 describe("PV3/PV4: question and Configure editing", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps each value's middle caret across close and a held History drawer", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -1139,6 +1150,7 @@ describe("PV3/PV4: question and Configure editing", () => {
 });
 
 describe("Configure keyboard, retained values and window ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CFG6: local arrows reach Configure choices, and Close or Escape return to its opener", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -1361,6 +1373,7 @@ function* backToCurrent(page: ReplPage, reply = "Newer answer."): Operation<void
 }
 
 describe("Transcript ownership and immutable older chat readings", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS1: both sections hold their own work, settled in the order each finishes", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ held: true, reply: "ENTRY-DONE" });
@@ -1627,6 +1640,7 @@ function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
 }
 
 describe("Sidekick resize ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Q-P1: a form hidden by a resize does not consume Draft typing", function* () {
     const page = yield* questionThroughKeyboard(false);
     const narrow = yield* page.resize(NARROW);
@@ -1720,6 +1734,7 @@ function atSize(page: ReplPage, size: { columns: number; rows: number }): Operat
 }
 
 describe("Sidekick drawers across every supported size", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("MQ4: the form stays inside its own pane at every size, and survives a refusal", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "mine");
@@ -1864,6 +1879,7 @@ function* refusedLocation(host: MountedHost, location: string): Operation<string
 }
 
 describe("Older chats retain their identity across failure and cold opening", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS2: a current failure read beside an older chat leaves its items alone", function* () {
     const page = yield* useReplPage();
     yield* twoChats(page, true);
@@ -2194,6 +2210,7 @@ function* appendBoundary(stopped: boolean): Operation<void> {
 }
 
 describe("Sidekick original provider membership and cancelled append", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS3: Stop before the canonical append leaves the key local and nothing saved", function* () {
     yield* appendBoundary(true);
   });
@@ -2347,6 +2364,7 @@ function* populateChat(page: ReplPage, count: number, prefix = "SAID"): Operatio
 }
 
 describe("Sidekick original multiline composer ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("MC5: the value wraps into rows of its own, and the chat gives them room", function* () {
     const page = yield* useReplPage();
     yield* populateChat(page, 10);
@@ -2574,6 +2592,7 @@ function* historicalSubmit(historical: boolean, failed: boolean): Operation<void
 }
 
 describe("Sidekick original acknowledged history submission identity", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const arm of [
     { name: "opened at the first entry", historical: true },
     { name: "control: opened at the head", historical: false },
@@ -2733,6 +2752,7 @@ function* twoOverflowingChats(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick original independent readings and streaming rows", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CF-P1: scrolling an older chat leaves the current chat's own reading alone", function* () {
     const page = yield* useReplPage();
     yield* twoOverflowingChats(page);
@@ -2849,6 +2869,7 @@ describe("Sidekick original independent readings and streaming rows", () => {
 });
 
 describe("Sidekick original interrupted identities and native input routes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS6: an interrupted first message leaves every later row its own identity", function* () {
     const host = yield* useMountedHost();
     const first = yield* useReplPage({ host });
@@ -3062,6 +3083,7 @@ function* readSilentAndSpoken(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick original reveal and cold decision coverage", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS4: a turn past the chat's window is revealed, and this screen keeps its own", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -3176,6 +3198,7 @@ describe("Sidekick original reveal and cold decision coverage", () => {
 });
 
 describe("Sidekick original populated chat profiles", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS7: three profiles keep a populated older reading, its window and the way home", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -3240,6 +3263,7 @@ describe("Sidekick original populated chat profiles", () => {
 });
 
 describe("Sidekick original independent body controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("BP3: both bodies stay usable through their own controls, and narrow gains no inset", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
@@ -3278,6 +3302,7 @@ describe("Sidekick original independent body controls", () => {
 });
 
 describe("Follow: the running command owns the mounted control", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of PROFILES) {
     it(`Follow: keyboard and pointer at ${size.columns}x${size.rows} retain the live setting`, function* () {
       const page = yield* useReplPage();
@@ -3341,6 +3366,7 @@ describe("Follow: the running command owns the mounted control", () => {
 });
 
 describe("1137 — recovery stays among the fixed conversation controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const LONG = Array.from(
     { length: 60 },
     (_, at) => `LONG${String(at + 1).padStart(2, "0")} retained reply row`,
@@ -3449,6 +3475,7 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
 });
 
 describe("Retained Sidekick token usage", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const USAGE_OFF = "[ ] Show token usage";
   const USAGE_ON = "[x] Show token usage";
 

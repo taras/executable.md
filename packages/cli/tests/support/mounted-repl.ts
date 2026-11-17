@@ -44,6 +44,7 @@ import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { useTempFileCompiler, useNormalizedOutput } from "@executablemd/core";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp } from "./fake-acp.ts";
+import { retainJournalFiles } from "@executablemd/test-support/failure-journal";
 import { useTemporary } from "../fixtures/repl/issue-883/sidekick-harness.ts";
 import { useTerminalScreen } from "./terminal-screen.ts";
 import type { TerminalScreen } from "./terminal-screen.ts";
@@ -763,6 +764,12 @@ export function* useMountedHost(
   // harness without it would run entries that fail for a reason no row is about.
   yield* useTempFileCompiler();
   const dataRoot = options.dataRoot ?? (yield* useTemporary("xmd-repl-mounted-"));
+  // The directory the command itself resolves, so a case that writes a file for
+  // the command to find writes it where the command actually looks.
+  const root = join(dataRoot, ...REPL_DIRECTORY);
+  // Before anything that writes there, so this case's command has unwound when
+  // its histories are read and they are read before the root is removed.
+  yield* retainJournalFiles(root, root);
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
   yield* installReplHost({
@@ -837,9 +844,6 @@ export function* useMountedHost(
       planWriterRoot: yield* useTemporary("xmd-repl-mounted-plan-"),
     },
   );
-  // The directory the command itself resolves, so a case that writes a file for
-  // the command to find writes it where the command actually looks.
-  const root = join(dataRoot, ...REPL_DIRECTORY);
   return {
     root,
     fake,

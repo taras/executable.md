@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   copyFile,
@@ -26,6 +27,8 @@ import { useNodeReplAssetImport } from "../src/node-repl-asset-import.ts";
 import { records, useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { ReplElicitations, ReplQuestion } from "../src/repl/elicitation.ts";
+
+const OWNER = "packages/cli/tests/repl-asset-import.test.ts";
 
 const BINARY = new Uint8Array([0, 255, 128, 195, 40, 13, 10, 65]);
 
@@ -407,6 +410,7 @@ import {
 } from "./support/screen-journeys.ts";
 
 describe("mounted asset import", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A1/A2/A4: the form begins empty, closes unanswered, and approves the actual workspace", function* () {
     const { source, bytes } = yield* fixture(new TextEncoder().encode("mounted ü text"));
     const io = yield* instrument();
@@ -715,6 +719,7 @@ import { API, hostFilesHandler, useHostFiles } from "@executablemd/runtime";
 import { useNormalizedOutput } from "@executablemd/core";
 
 describe("asset import acknowledgement and independent owners", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A8: a failed import outcome append supplies no success or passive retry", function* () {
     const { source } = yield* fixture();
     const held = yield* useHarness();

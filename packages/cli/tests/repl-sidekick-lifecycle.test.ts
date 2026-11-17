@@ -25,7 +25,8 @@ import type { Contributions } from "./fixtures/repl/contributed-plugin.ts";
  * owner, an answer and a withdrawal whether or not anything is drawing it.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import type { SidekickOperation } from "../src/repl/sidekick/model.ts";
 import { ensure, Ok, sleep, spawn, suspend, until, withResolvers } from "effection";
@@ -100,6 +101,8 @@ import {
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-lifecycle.test.ts";
 
 /**
  * Real time for an assertion that something did not happen.
@@ -932,6 +935,7 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
  * said as one, and only as much of one as was actually saved.
  */
 describe("Tier PV — generation that ended without a reply", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** A candidate that says something and then asks for work to be done. */
   const CANDIDATE = [
     "<Output>As far as I got.</Output>\n",
@@ -1204,6 +1208,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 });
 
 describe("Tier R6 — leaving, with Sidekick work in flight", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** An entry that publishes nothing and stays open until it is torn down. */
   const SUSPENDS = ["```js eval", "yield* suspend();", "```", ""].join("\n");
 
@@ -1315,6 +1320,7 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
  * terminal sends are text there, and only a plain Enter sends.
  */
 describe("Control-C and newlines in the message box", () => {
+  beforeEach(journalBeforeEach(OWNER));
   function* composing(text: string): Operation<ReplPage> {
     const page = yield* useReplPage();
     yield* intoComposer(page);
@@ -1514,6 +1520,7 @@ describe("Control-C and newlines in the message box", () => {
  * tree, with only the terminal and the transport replaced.
  */
 describe("Tier MQ — a Sidekick question, filled in and answered on the screen", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** A choice, and a reason long enough that a short one is a real refusal. */
   const REVIEW = {
     type: "object",
@@ -1685,6 +1692,7 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
  * answers, and a Stop that withdraws one without inventing an answer to either.
  */
 describe("Tier MQ — two questions, two answers, and Stop", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** Overlapping field names, so an answer reaching the wrong form would show. */
   const SIDEKICK_ASKS = {
     type: "object",
@@ -1854,6 +1862,7 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
  * leaves a readable account of what it was in the middle of.
  */
 describe("Tier MQ — leaving with questions pending, and the cold reopen after", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const ASKS = {
     type: "object",
     properties: { choice: { type: "string", enum: ["yes", "no"] } },
@@ -1985,6 +1994,7 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
  * written nothing publishes nothing.
  */
 describe("Tier CFG — a preference being written when the command leaves", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const ADVERTISED = {
     model: {
       selected: "balanced",
@@ -2177,6 +2187,7 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 });
 
 describe("Follow: mounted Stop owns continuation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Follow: Sidekick Stop preserves the setting and a late entry result cannot restart the Send", function* () {
     const entered = withResolvers<void>();
     const release = withResolvers<void>();
@@ -2249,6 +2260,7 @@ describe("Follow: mounted Stop owns continuation", () => {
 });
 
 describe("Contributed control acknowledgement and teardown", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R4f: intent acknowledgement and joined cleanup precede outcome and feedback", function* () {
     const counts: Contributions = { initialized: 0, conversations: 0, closed: 0, calls: [] };
     const gate = appendGate();

@@ -12,7 +12,8 @@
  * actually draws; nothing here asks the command where it put something.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
@@ -20,6 +21,8 @@ import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenScope } from "./support/repl-page.ts";
 import { awaited } from "./support/mounted-repl.ts";
 import { intoDraft } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-page.test.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
@@ -68,6 +71,7 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("REPL page — two Sends, told apart by what is drawn beside them", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("resolves each Send within its scope and refuses an ambiguous Send", function* () {
     const page = yield* useReplPage({ size: WIDE });
 
@@ -123,6 +127,7 @@ describe("REPL page — two Sends, told apart by what is drawn beside them", () 
 });
 
 describe("REPL page — resize, a modal, and writes that never land", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps the draft across every size and refuses a pane the size removed", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
@@ -174,6 +179,7 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
 });
 
 describe("REPL page — a column is a terminal cell, not a string offset", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("locates a label after a wide glyph at the cell it is really drawn in", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
@@ -264,6 +270,7 @@ function* asked(page: ReplPage, text: string, shown: string): Operation<void> {
 }
 
 describe("REPL page — reaching a field the claim names, by keyboard", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("puts a person's own entry in the Draft after a Sidekick exchange", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<Output>AUTHORED</Output>\n" });

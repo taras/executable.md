@@ -39,7 +39,8 @@ import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -141,6 +142,8 @@ import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplEntry } from "../src/repl/model.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-recovery.test.ts";
 
 const CHAT = "chat-1";
 const AGENT = "scribe";
@@ -2693,6 +2696,7 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
  * with a list this file chose.
  */
 describe("Tier HI — a reopening reconciles against the acknowledged history", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const FIRST = "First prior.\n";
   const SECOND = "Second prior.\n";
   /** What the next ordinary entry says, distinct from the reserved source. */
@@ -3217,6 +3221,7 @@ describe("Tier IN5 — a saved EntryOutput result keeps its own renderer", () =>
 });
 
 describe("975 — placement survives cold Submit reconciliation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const marked of [true, false]) {
     it(`975: ${marked ? "legacy workspace-marked" : "project-placed"} entry resumes in its owned directory`, function* () {
       const project = yield* useTemporary("xmd-placement-project-");
@@ -3806,6 +3811,7 @@ describe("987 — joined recovery before canonical feedback publication", () => 
 });
 
 describe("987 — actual child reference recording faults", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const cut of ["offered", "acknowledged", "activation", "activation-uncertain"]) {
     it(`sends nothing and retains fatal recording precedence at ${cut}`, function* () {
       const failure = new Error(`Reference recording failure: ${cut}`);
@@ -4061,6 +4067,7 @@ describe("987 — exact missing original and deliberate fallback", () => {
 });
 
 describe("987 — root whole-set reconciliation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const interrupted of [false, true]) {
     it(`reconciles the acknowledged head while inspecting older History${interrupted ? " across the first outcome cut" : ""}`, function* () {
       const host = yield* useMountedHost();
@@ -4919,6 +4926,7 @@ describe("1183 — the exact live feedback request is the only exception", () =>
 });
 
 describe("resume retention and mounted retained recovery corrections", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const savedText = "Continue the exact saved instruction.";
   const oldText = "Original chat remains readable.";
   const entryText = "An established entry remains readable.";
@@ -5202,6 +5210,7 @@ describe("resume retention and mounted retained recovery corrections", () => {
 });
 
 describe("1311 — a completed reply that secret detection withholds", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const refused = 'authorization: "Use a separate approval for this example issue #34"';
 
   function showsWithheldReply(screen: ScreenReading): boolean {

@@ -1,5 +1,6 @@
 import type { ScreenReading } from "./support/repl-page.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import { sleep } from "effection";
@@ -28,6 +29,8 @@ import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage } from "./support/repl-page.ts";
 
+const OWNER = "packages/cli/tests/repl-focus-regions.test.ts";
+
 const WIDE = { columns: 160, rows: 36 };
 const MEDIUM = { columns: 120, rows: 30 };
 const NARROW = { columns: 72, rows: 20 };
@@ -52,6 +55,7 @@ function* draftFocus(page: ReplPage): Operation<void> {
 }
 
 describe("REPL focus regions: the normal screen", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [WIDE, MEDIUM]) {
     it(`R1/R2: fixed region entries deliver Draft and Message input at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });
@@ -133,6 +137,7 @@ describe("REPL focus regions: the normal screen", () => {
 });
 
 describe("REPL focus regions: Unicode caret editing", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV3: Draft and Message edit at independent carets across rows, focus and resize", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
@@ -180,6 +185,7 @@ describe("REPL focus regions: Unicode caret editing", () => {
 });
 
 describe("REPL focus regions: reading and narrow recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV5: the selected reading reaches both boundaries without activating or editing", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
@@ -255,6 +261,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
 });
 
 describe("REPL focus regions: the catalog drawer at the narrow size", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R5: nested arrows reveal hidden entries, fixed Content entry and modal close restore", function* () {
     const page = yield* useReplPage({ size: NARROW, includes: [REFERENCE_DIRECTORY] });
     yield* draftFocus(page);
@@ -620,6 +627,7 @@ describe("REPL focus regions: logical drawer reveal", () => {
 });
 
 describe("REPL focus regions: background input ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV7: a reply and question leave a middle Message caret and Draft untouched", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
@@ -656,6 +664,7 @@ describe("REPL focus regions: background input ownership", () => {
 });
 
 describe("REPL focus regions: Sidekick reading keys", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV5: Home/End and pages preserve an unsent Message while output arrives", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);

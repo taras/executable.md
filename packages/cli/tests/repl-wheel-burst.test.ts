@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep } from "effection";
 import type { Operation } from "effection";
@@ -6,6 +7,8 @@ import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenReading } from "./support/repl-page.ts";
 import { draftHolds, intoComposer, intoDraft, paneLines } from "./support/screen-journeys.ts";
 import { generateTypingHistory } from "./support/typing-history.ts";
+
+const OWNER = "packages/cli/tests/repl-wheel-burst.test.ts";
 
 const SIZE = { columns: 160, rows: 36 };
 
@@ -82,6 +85,7 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("wheel bursts in one input chunk", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Sidekick chat reaches the sequential endpoint and keeps follow", function* () {
     const page = yield* useReplPage({ size: SIZE });
     yield* intoComposer(page);

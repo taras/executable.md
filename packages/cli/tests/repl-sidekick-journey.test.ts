@@ -36,7 +36,8 @@ import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   allSettled,
@@ -119,6 +120,8 @@ import {
   typed,
   unwrapped,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-journey.test.ts";
 
 /**
  * The orientation an older build left on a conversation it completed a turn of.
@@ -1216,6 +1219,7 @@ function* composedChat(repl: MountedRepl): Operation<readonly string[]> {
  * item then becomes the evaluated reply.
  */
 describe("Tier PV — a response in flight, shown as it arrives", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * A reply whose text arrives in pieces, with candidate controls in it.
    *
@@ -1710,6 +1714,7 @@ const GATED_ENTRY_REPLY = [
 ].join("\n");
 
 describe("Tier R5 — a mounted message prepares and submits a real entry", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M3: the message a person sends runs its entry, and is answered about it", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -2052,6 +2057,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
  * both arms identically.
  */
 describe("Tier TE — a published binding becomes real greetings, and then a real table", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What the first arm publishes. */
   const FIRST = ["Ada", "Grace", "Linus"];
   /** The same arm with one name replaced, and nothing else changed. */
@@ -2301,6 +2307,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
  * authors becomes a second real entry while the first stays exactly as it failed.
  */
 describe("Tier TE — a failed entry is corrected as a new entry", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("TE2: the failure goes back to its owner, which submits a corrected entry", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -3410,6 +3417,7 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
 });
 
 describe("975 — the shipped session component journey", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("creates, discovers and invokes a component, then reopens without work", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
@@ -3662,6 +3670,7 @@ describe("975 — entry cwd ends with its actual owner", () => {
 });
 
 describe("975 — configured-first lookup and unchanged permissions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   function submitSource(source: string): string {
     return (
       '<Let as="code" select="code">\n```xmd\n' +
@@ -4001,6 +4010,7 @@ function followSubmission(source: string): string {
 }
 
 describe("Follow: submitted rounds in the running command", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Follow: one mounted Send carries completed, failed and Entry Stop output from exact joined entries", function* () {
     const asking = withResolvers<void>();
     yield* Elicitation.around({
@@ -4569,6 +4579,7 @@ Session body ${version}.`,
 });
 
 describe("993 mounted nested Output journeys", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const ready of [true, false]) {
     it(`W1: an actual Draft entry selects branch ${ready} and only that marker`, function* () {
       const workspace = yield* useTemporary("nested-repl-");
@@ -4764,6 +4775,7 @@ describe("993 mounted nested Output journeys", () => {
 });
 
 describe("Contributed Sidekick controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps contributed entry-only Cwd authored while omitting generated selection and vocabulary", function* () {
     let calls = 0;
     const plugin = Plugin({
@@ -5155,6 +5167,7 @@ describe("protected Sidekick question feedback", () => {
 });
 
 describe("1183 — a follow-up sent during live automatic feedback", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A1/A2: queues visibly behind the held feedback and starts once on the same conversation", function* () {
     const page = yield* useReplPage();
     const FOLLOW_UP = "When that finishes, explain the changes.";
@@ -5222,6 +5235,7 @@ describe("1183 — a follow-up sent during live automatic feedback", () => {
  * entry's Output all keep the punctuation around it.
  */
 describe("1342 — written Markdown in the chat and in entry Output", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const WIDE_SIZE = { columns: 160, rows: 36 };
   const NARROW_SIZE = { columns: 72, rows: 20 };
   const ENTRY_MARKDOWN = [

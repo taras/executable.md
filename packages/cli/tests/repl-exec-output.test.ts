@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exists, writeTextFile } from "@effectionx/fs";
@@ -17,7 +18,10 @@ import type { ReplPage } from "./support/repl-page.ts";
 import { awaitedFact, mountedReading } from "./support/mounted-repl.ts";
 import { intoComposer, pasteDraft, sidekickIdle } from "./support/screen-journeys.ts";
 
+const OWNER = "packages/cli/tests/repl-exec-output.test.ts";
+
 describe("E3 retained command output", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("retains captured control bytes in output, bindings, and command records", function* () {
     const received = "PROBE\x1b[2JTAIL\rEND";
     yield* API.Process.around({
@@ -65,6 +69,7 @@ function* submit(page: ReplPage, source: string, order = 1): Operation<void> {
 }
 
 describe("REPL foreground command presentation E1", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E1: contains both real child streams in the producing entry before exit", function* () {
     const directory = yield* useTempDirectory("repl-output-");
     const release = join(directory, "release");
@@ -128,6 +133,7 @@ describe("REPL foreground command presentation E1", () => {
 });
 
 describe("REPL command routing, containment and history E2–E5", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E2: retains bound, captured, and silent command results", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 52 } });
     yield* submit(

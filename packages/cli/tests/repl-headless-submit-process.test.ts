@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand } from "@executablemd/test-support/launch";
 import { ensure, race, sleep, withResolvers } from "effection";
@@ -13,6 +14,8 @@ import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { platformDataRoot } from "../src/repl-assembly.ts";
 import { ReplEntryHost } from "../src/repl-entry-installation.ts";
 import { SubmitRecord } from "../src/sidekick-acp/protocol.ts";
+
+const OWNER = "packages/cli/tests/repl-headless-submit-process.test.ts";
 
 function within<T>(operation: Operation<T>, evidence: () => unknown): Operation<T> {
   return race([
@@ -135,6 +138,7 @@ const QUESTION =
   '<Elicit as="answer" schema={{type:"object",properties:{decision:{type:"string"}},required:["decision"],additionalProperties:false}}>Continue?</Elicit>';
 
 describe("first SIGINT at the submit host boundary", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("G: joins a blocked stdin read on the first SIGINT while its writer stays open", function* () {
     const home = yield* useTemporary("xmd-submit-process-home-");
     const fixture = yield* useHeadlessFixture(

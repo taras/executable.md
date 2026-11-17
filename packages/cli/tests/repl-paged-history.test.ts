@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { Elicitation, INLINE_SOURCE_PATH } from "@executablemd/core";
@@ -28,6 +29,8 @@ import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { awaited, useMountedHost } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { DRAFT_VALUE, pasteDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-paged-history.test.ts";
 
 function admission(content: string): DurableEvent {
   return {
@@ -77,6 +80,7 @@ function* useWriter(): Operation<void> {
 }
 
 describe("Paged REPL history", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("matches the whole projection at each position and finds older binding publishers", function* () {
     const path = join(yield* useTempDirectory("xmd-pages-"), "entries.jsonl");
     const records: DurableEvent[] = [
