@@ -16,7 +16,8 @@
  */
 
 import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -60,9 +61,8 @@ function fixtureCase(
 ): void {
   it(name, function* () {
     const dir = yield* useFixture();
-    yield* captureTestJournal({ owner: OWNER, name }, join(dir, "doc.md"), (stream) =>
-      body(dir, stream),
-    );
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* body(dir, stream);
   });
 }
 
@@ -242,6 +242,7 @@ function writeDocument(dir: string): string {
 }
 
 describe("Tier FF — Files infrastructure failure", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   // FF1: no provider at all. The check a write performs before its children is

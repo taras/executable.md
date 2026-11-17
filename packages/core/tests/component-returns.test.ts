@@ -1,4 +1,3 @@
-import { journalCases, fileJournalCases } from "../../test-support/journal-cases.ts";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier RV — component and root return values (spec §6.10, §5.4).
@@ -8,7 +7,8 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * roots, and deterministic replay.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -36,11 +36,22 @@ import type { Json } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
 const OWNER = "packages/core/tests/component-returns.test.ts";
-const registerRootCase = journalCases(OWNER);
 function rootCase(name: string, body: (stream: InMemoryStream) => Operation<void>): void {
-  registerRootCase(name, "doc.md", body);
+  it(name, function* () {
+    const stream = yield* useJournalStream("doc.md");
+    yield* body(stream);
+  });
 }
-const fixtureCase = fileJournalCases(OWNER, "returns-test-", "doc.md");
+function fixtureCase(
+  name: string,
+  body: (stream: InMemoryStream, directory: string) => Operation<void>,
+): void {
+  it(name, function* () {
+    const directory = path.join(os.tmpdir(), `returns-test-${randomUUID()}`);
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
+    yield* body(stream, directory);
+  });
+}
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -179,6 +190,7 @@ function* raised(operation: () => Operation<unknown>): Operation<unknown> {
 }
 
 describe("Tier RV — component return values", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   describe("value kinds", () => {
@@ -1640,6 +1652,7 @@ describe("Tier RV — component return values", () => {
 });
 
 describe("993 value invocation privacy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("W5: a value body requesting caller text does not select the outer source", function* () {
     const result = yield* run({
       "doc.md": 'docs<Value as="held"><Output>private</Output></Value>',

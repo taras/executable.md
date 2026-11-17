@@ -31,7 +31,8 @@
  */
 
 import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Ok, ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -61,9 +62,8 @@ function fixtureCase(
 ): void {
   it(name, function* () {
     const fixture = yield* useFixture();
-    yield* captureTestJournal({ owner: OWNER, name }, join(fixture.workspace, "doc.md"), (stream) =>
-      body(fixture, stream),
-    );
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* body(fixture, stream);
   });
 }
 
@@ -236,6 +236,7 @@ function answerImport(
 }
 
 describe("Tier FX — the complete journey, with no repository vocabulary", () => {
+  beforeEach(journalBeforeEach(OWNER));
   fixtureCase(
     "FX1: core and a Files provider enter, write, read and delete; markers never run",
     function* (fixture, stream) {
@@ -325,6 +326,7 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
 });
 
 describe("Tier FX — nothing else may claim the names", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FX2: a registration and a reserved registration are both refused", function* () {
     for (const name of FIXED) {
       const refused = yield* raised(() =>
@@ -440,6 +442,7 @@ describe("Tier FX — nothing else may claim the names", () => {
 });
 
 describe("Tier FX — the final import answer is verified", () => {
+  beforeEach(journalBeforeEach(OWNER));
   fixtureCase(
     "FX3: middleware may observe and delegate every fixed import",
     function* (fixture, stream) {
@@ -749,6 +752,7 @@ describe("Tier FX — the dispatcher authenticates its own invocation", () => {
 });
 
 describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const tag of ["Dir", "InDirectory"]) {
     fixtureCase(
       `FX5: ${tag} restores the enclosing directory in its owner after failure`,

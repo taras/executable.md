@@ -1,5 +1,4 @@
 import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier CIV — the identity a trusted host's component names its work after
@@ -22,7 +21,8 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * running at that moment.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, race, scoped, sleep, spawn, useScope, withResolvers } from "effection";
 import type { Context, Operation } from "effection";
@@ -54,9 +54,11 @@ import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 
 const OWNER = "packages/core/tests/invocation-identity.test.ts";
-const registerRootCase = journalCases(OWNER);
 function rootCase(name: string, body: (stream: InMemoryStream) => Operation<void>): void {
-  registerRootCase(name, "<eval>", body);
+  it(name, function* () {
+    const stream = yield* useJournalStream("<eval>");
+    yield* body(stream);
+  });
 }
 
 /**
@@ -278,6 +280,7 @@ function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }>
 }
 
 describe("Tier CIV — the identity a host's component names its work after", () => {
+  beforeEach(journalBeforeEach(OWNER));
   rootCase("CIV1: two sites are handed two identities", function* (stream) {
     const seen = record();
     yield* run("<Probe />\n\n<Probe />\n", [probe(seen)], nothing, undefined, stream);
@@ -948,6 +951,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
  * reading it costs nothing, and that it cannot be recovered from anywhere else.
  */
 describe("Tier CIV — the import's own terminal is the association", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CIV26: a handler that delegates through a descendant scope keeps the identity", function* () {
     // Ordinary middleware, delegating the same name once — in a scope of its
     // own, which the Api allows and which nothing about an import forbids. The
@@ -1260,6 +1264,7 @@ function* environmentDeclaration(): Operation<string> {
 }
 
 describe("Tier CIV — where the execution's import resolution lives", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CIV30: the environment boundary carries no import terminal", function* () {
     const declared = yield* environmentDeclaration();
     // Read as members rather than as text, so this is about what the interface
@@ -1306,6 +1311,7 @@ describe("Tier CIV — where the execution's import resolution lives", () => {
 });
 
 describe("Tier CIV — two canonical imports live at the same time", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const CONCURRENT = [
     "<All>",
     "<Spawn><Probe /></Spawn>",
@@ -1443,6 +1449,7 @@ describe("Tier CIV — two canonical imports live at the same time", () => {
 });
 
 describe("Tier CIV — the authored form on the invocation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const FORMS: Array<[string, string, boolean]> = [
     ["self-closing", "<Probe />\n", false],
     ["paired", "<Probe>written</Probe>\n", true],
@@ -1695,6 +1702,7 @@ describe("Tier CIV — the authored form on the invocation", () => {
  * and CIV28 below.
  */
 describe("Tier PA10b — concurrent capability-backed identity", () => {
+  beforeEach(journalBeforeEach(OWNER));
   rootCase(
     "PA10b: two concurrent sites each claim their own identity, exactly once",
     function* (stream) {

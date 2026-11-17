@@ -13,7 +13,8 @@
  */
 
 import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
@@ -55,9 +56,8 @@ function fixtureCase(
 ): void {
   it(name, function* () {
     const fixture = yield* useFixture();
-    yield* captureTestJournal({ owner: OWNER, name }, join(fixture.workspace, "doc.md"), (stream) =>
-      body(fixture, stream),
-    );
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* body(fixture, stream);
   });
 }
 
@@ -503,6 +503,7 @@ const BOUNDARIES: Array<{
 ];
 
 describe("Tier FL — File", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   // FL1: the ordinary round trip, in relative paths against the contextual
@@ -1395,6 +1396,7 @@ function* useFileCalls(calls: string[]): Operation<void> {
 }
 
 describe("Tier FL — the authored form decides the effect", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const LYING: Array<[string, readonly boolean[]]> = [

@@ -12,8 +12,8 @@
  * either way.
  */
 
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, Ok, scoped } from "effection";
 import type { Operation } from "effection";
@@ -37,9 +37,11 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ErrorSegment, FunctionComponentDefinition, Json, Segment } from "../src/types.ts";
 
 const OWNER = "packages/core/tests/output-error-mode.test.ts";
-const registerRootCase = journalCases(OWNER);
 function rootCase(name: string, body: (stream: InMemoryStream) => Operation<void>): void {
-  registerRootCase(name, "doc.md", body);
+  it(name, function* () {
+    const stream = yield* useJournalStream("doc.md");
+    yield* body(stream);
+  });
 }
 
 interface Run {
@@ -315,6 +317,7 @@ const PRINTING: FunctionComponentDefinition = {
 };
 
 describe("Tier OM — a failing <Output> keeps what it rendered", () => {
+  beforeEach(journalBeforeEach(OWNER));
   rootCase(
     "OM1: emits the partial selection, fails, and runs no later sibling",
     function* (stream) {
@@ -452,6 +455,7 @@ describe("Tier OM — a failing <Output> keeps what it rendered", () => {
 });
 
 describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("OM5a: prints the error once and lets the region continue", function* () {
     const expanded = yield* expandUnder(
       "output",
@@ -1018,6 +1022,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
 });
 
 describe("Tier OM — the failed document is a determined outcome", () => {
+  beforeEach(journalBeforeEach(OWNER));
   rootCase("OM6: reports the original failure object on a live run", function* (stream) {
     const thrown = new Error("the component's own failure");
     const failing: FunctionComponentDefinition = {
@@ -1175,6 +1180,7 @@ describe("Tier OM — the failed document is a determined outcome", () => {
  * writes into the region and hands its segments back reddens here.
  */
 describe("Tier OM — every visible producer keeps its prefix", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const CASES: { key: string; name: string; failing: string; succeeding: string }[] = [
     {
       key: "a",
@@ -1250,6 +1256,7 @@ describe("Tier OM — every visible producer keeps its prefix", () => {
 });
 
 describe("Tier OM — work the document was not going to render never reaches the output", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const STAGE = [
     "<If condition={true}><Output>",
     "",
@@ -1567,6 +1574,7 @@ describe("Tier OM — the recorded failure is exactly these fields", () => {
  * `<TempDir>`) would do it just by wrapping the invocation.
  */
 describe("Tier OM — a printing boundary does not resume a callee's own region", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const STAGE = [
     "<Output>",
     "",
@@ -1685,6 +1693,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
 });
 
 describe("Tier OM — the partial output reaches the stream, not only the close", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // A consumer reading chunks is the case the preservation exists for.
   rootCase(
     "OM17: streams the failing region's output after an earlier segment streamed",
@@ -1727,6 +1736,7 @@ describe("Tier OM — the partial output reaches the stream, not only the close"
  * nothing again.
  */
 describe("Tier OM — a printed error crosses an invocation as data", () => {
+  beforeEach(journalBeforeEach(OWNER));
   rootCase(
     "OM18: a child's printed error does not fail a parent's documentation",
     function* (stream) {
@@ -1826,6 +1836,7 @@ describe("Tier OM — a printed error crosses an invocation as data", () => {
  * work — the write, the relayed text — does not happen.
  */
 describe("Tier OM — caller content at a plain root leaves the printing component", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** The paths a write was asked for, with the host provider never reached. */
   function runRecordingWrites(
     files: Record<string, string>,
@@ -1936,6 +1947,7 @@ describe("Tier OM — caller content at a plain root leaves the printing compone
  * which regions render; it was never what made a failure count.
  */
 describe("Tier RF — root failure settlement", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const THROWING_STAGE = [

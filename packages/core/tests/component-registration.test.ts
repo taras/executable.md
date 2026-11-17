@@ -9,7 +9,8 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * cases go through `execute()` so what they assert is what a document gets.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
@@ -45,9 +46,8 @@ function fixtureCase(
 ): void {
   it(name, function* () {
     const dir = yield* useFixture();
-    yield* captureTestJournal({ owner: OWNER, name }, join(dir, "doc.md"), (stream) =>
-      body(dir, stream),
-    );
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* body(dir, stream);
   });
 }
 
@@ -530,6 +530,7 @@ describe("Tier CR — installation order never decides", () => {
 });
 
 describe("Tier CR — what a document gets", () => {
+  beforeEach(journalBeforeEach(OWNER));
   fixtureCase(
     "CR22: a repository component replaces one of core's, end to end",
     function* (dir, stream) {
