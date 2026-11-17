@@ -19,14 +19,14 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
+import { ensure, Err, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, exists, readTextFile, rm } from "@effectionx/fs";
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { API, Permissions, useHostFiles } from "@executablemd/runtime";
+import { API, filesFailure, Permissions, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
@@ -477,6 +477,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       return record?.operation === "file-copy" ? [record] : [];
     });
     expect(copies).toHaveLength(1);
+    expect(copies).toHaveLength(1);
     expect(copies[0]?.outcome).toEqual({ ok: true, value: undefined });
     const directory = copies[0]?.request.cwd;
     if (directory === undefined) {
@@ -492,56 +493,94 @@ describe("how a REPL entry gets its repository behavior", () => {
     const sourceCommon = join(fixture.checkout, ".git");
     const destinationCommon = join(destination, ".git");
     const calls: string[] = [];
-    yield* useHostFiles();
+    yield* useHostFiles({
+      observe(event) {
+        if (event.operation === "copy") {
+          calls.push(event.phase);
+        }
+      },
+    });
+    let delegated = 0;
+    yield* API.Files.around(
+      {
+        *copyFile([input], next) {
+          if (input.destination !== "uncovered.md") {
+            return yield* next(input);
+          }
+          delegated++;
+          const copied = yield* next({ ...input, destination: "destination/rewritten.md" });
+          expect(copied.ok).toBe(true);
+          return Err(filesFailure({ operation: "copy", phase: "target", reason: "occupied" }));
+        },
+      },
+      { at: "min" },
+    );
     yield* useCompositionComponents();
     yield* useWorkingDirectory(fixture.root);
     yield* Permissions.around({
       files: ([op], next) => (op === "absolute" ? true : next(op)),
     });
     const mounts = [{ source: fixture.root, target: "/reference" }];
-    const files = yield* useReplFileRecorder(
-      {
-        *selection() {
-          return undefined;
-        },
-        *hold(common) {
-          calls.push(`hold ${common}`);
-        },
-        placements() {
-          return [
-            {
-              checkoutRoot: fixture.checkout,
-              commonDirectory: sourceCommon,
-              *own() {
-                calls.push("source slot");
+    function* runCopy(stream: InMemoryStream) {
+      const files = yield* useReplFileRecorder(
+        {
+          *selection() {
+            return undefined;
+          },
+          *hold(common) {
+            calls.push(`hold ${common}`);
+          },
+          placements() {
+            return [
+              {
+                checkoutRoot: fixture.checkout,
+                commonDirectory: sourceCommon,
+                *own() {
+                  calls.push("source slot");
+                },
               },
-            },
-            {
-              checkoutRoot: destination,
-              commonDirectory: destinationCommon,
-              *own() {
-                calls.push("destination slot");
+              {
+                checkoutRoot: destination,
+                commonDirectory: destinationCommon,
+                *own() {
+                  calls.push("destination slot");
+                },
               },
-            },
-          ];
+            ];
+          },
         },
-      },
-      fixture.root,
-      mounts,
-      fixture.root,
-    );
+        undefined,
+        mounts,
+        fixture.root,
+      );
+      const source = [
+        '<Dir path="/reference">',
+        '<File.Copy source="checkout/seed.md" destination="destination/..notes.md" />',
+        "</Dir>",
+        '<File.Copy source="checkout/seed.md" destination="uncovered.md" />',
+      ].join("\n");
+      return String(
+        yield* collect(
+          yield* executeInstalled({ ...inlineSource(source), stream }, [
+            workspaceMountInstallation(mounts, () => files),
+          ]),
+        ),
+      );
+    }
     const stream = new InMemoryStream();
-    const source = [
-      '<Dir path="/reference">',
-      '<File.Copy source="checkout/seed.md" destination="destination/copied.md" />',
-      "</Dir>",
-    ].join("\n");
-    yield* collect(
-      yield* executeInstalled({ ...inlineSource(source), stream }, [
-        workspaceMountInstallation(mounts, () => files),
-      ]),
-    );
-    expect(calls).toEqual(["source slot", "destination slot", `hold ${destinationCommon}`]);
+    const first = yield* scoped(() => runCopy(stream));
+    expect(calls).toEqual([
+      "source slot",
+      "destination slot",
+      `hold ${destinationCommon}`,
+      "target",
+      "access",
+      "source slot",
+      "destination slot",
+      `hold ${destinationCommon}`,
+      "target",
+      "access",
+    ]);
     const records = recordsOf(yield* stream.readAll(), REPL_REPOSITORY_LOCAL);
     const copy = records.flatMap((event) => {
       const parsed = parseReplLocalRecord(
@@ -549,9 +588,19 @@ describe("how a REPL entry gets its repository behavior", () => {
       );
       return parsed?.operation === "file-copy" ? [parsed] : [];
     });
-    expect(copy).toHaveLength(1);
+    expect(copy).toHaveLength(2);
     expect(copy[0]?.request.cwd).toBe(fixture.root);
-    expect(yield* readTextFile(join(destination, "copied.md"))).toBe("seed\n");
+    expect(copy[1]?.request.path).toBe("uncovered.md");
+    expect(copy[1]?.outcome.ok).toBe(false);
+    expect(first).toContain("already exists");
+    expect(yield* readTextFile(join(destination, "..notes.md"))).toBe("seed\n");
+    expect(yield* readTextFile(join(destination, "rewritten.md"))).toBe("seed\n");
+    const prefix = (yield* stream.readAll()).filter((event) => event.type !== "close");
+    calls.length = 0;
+    const restored = yield* scoped(() => runCopy(new InMemoryStream(prefix)));
+    expect(restored).toBe(first);
+    expect(calls).toEqual([]);
+    expect(delegated).toBe(1);
   });
 
   it("E7: keeps two entries' equal records in their own segments", function* () {

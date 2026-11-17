@@ -2294,17 +2294,28 @@ admitted `<Evaluate>` fragment performs are kept on the same terms, because a
 fragment's operations go to the same document filesystem an authored one does.
 
 A copy uses the physical record even when its working directory came from a
-mount. Its identity binds the received working directory and both ordered
-operands. Acknowledged Unit and ordinary refusals restore before permissions,
-path observations, discovery, placement slots or mutation holds. A changed
-operand at that retained position diverges before live routing, including when
-the new destination lies outside coverage.
+mount. Each entry numbers received copy calls from zero within each durable
+coroutine, counting uncovered, refused and synthetic calls. The copy record
+and name carry this ordinal. Its fingerprint binds the ordinal, the received
+working directory and both ordered operands. Admission requires strictly
+increasing nonnegative safe integer ordinals per coroutine and accepts gaps.
+A copy record requires an ordinal.
 
-For a live copy, the resolved destination parent determines coverage and the
-final entry stays intact for classification. Covered managed operands use
-their placement slots. The destination alone determines the checkout mutation
-hold. Owned-root coverage requires no Git lease. Outside coverage the copy is
-live and unrecorded. If native copy completed before an unacknowledged append,
+After restoring any pending ambient selection, an equal ordinal offers the
+current fingerprint to the durable matcher before live work. A changed operand
+at that occurrence diverges, including when the new destination is uncovered.
+A lower retained ordinal fails before live work. A higher ordinal stays
+pending while the current call takes the live path. Acknowledged Unit and
+ordinary refusals restore before Files composition or target observations.
+
+The host routes each live delegation by its effective resolved operands after
+authorization and containment. The destination's resolved parent and final
+entry determine coverage. Both managed operand slots precede the destination
+checkout's mutation hold. Owned-root coverage requires no Git lease.
+A covered dispatch cannot insert an outcome ahead of retained history.
+The outer recorder publishes the final composed answer after settlement when
+at least one dispatch reached covered storage. Uncovered and purely synthetic
+calls have no copy result. If native copy completed before an unacknowledged append,
 a continuation attempts the operation live. An occupied destination then
 produces an ordinary refusal with its bytes intact.
 
