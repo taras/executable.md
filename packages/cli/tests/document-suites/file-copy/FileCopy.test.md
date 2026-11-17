@@ -17,7 +17,7 @@ yield* (function* () {
 })();
 ```
 
-<File.Copy source="source.bin" destination="destination.bin" />
+<File.Copy from="source.bin" to="destination.bin" />
 
 ```ts eval
 import { readFile, writeFile } from "node:fs/promises";
@@ -42,7 +42,7 @@ const verified = yield* (function* () {
 <Test name="Refuses paired form before expanding its content">
 <TempDir>
 <File path="source.txt">source</File>
-<Execution host="run" source={'<File.Copy source="source.txt" destination="copy.txt">\n\n<File path="sentinel.txt">ran</File>\n\n</File.Copy>\n'} as="child">
+<Execution host="run" source={'<File.Copy from="source.txt" to="copy.txt">\n\n<File path="sentinel.txt">ran</File>\n\n</File.Copy>\n'} as="child">
 <CollectOutput as="output" />
 <AssertStringIncludes actual={output} expected="self-closing" />
 </Execution>

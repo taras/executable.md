@@ -9881,15 +9881,16 @@ semantics belong to the provider: `specs/workflow-workspace-spec.md` §§6.3 and
 ### 6.13.3 Copying a file: `<File.Copy>`
 
 ```mdx
-<File.Copy source="reports/test.log" destination="evidence/test.log" />
+<File.Copy from="reports/test.log" to="evidence/test.log" />
 ```
 
 Core supplies `File.Copy` as an ordinary default. The canonical dispatcher
 requires self-closing form and refuses paired form before expanding its
-content. Both props are required nonempty strings. The component calls
-`API.Files.copyFile({ cwd, source, destination })` once with the contextual
-working directory. Success is Unit and renders nothing. Ordinary filesystem
-refusals use the Files reporting rules in §6.13.
+content. The `from` and `to` props are required nonempty strings.
+The component passes `from` as `source` and `to` as `destination` in one call
+to `API.Files.copyFile` with the contextual working directory. Success is Unit
+and renders nothing. Ordinary filesystem refusals use the Files reporting
+rules in §6.13.
 
 The performing provider authorizes read access to the effective source and
 write access to the effective destination after middleware and before target
