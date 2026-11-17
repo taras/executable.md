@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep } from "effection";
@@ -7,13 +7,13 @@ import { API } from "@executablemd/runtime";
 import { useFailingExec } from "@executablemd/runtime/test";
 import { TestFailureError } from "../src/test-api.ts";
 import { createTestHandlers } from "../src/handlers.ts";
-import { documentCases, failureOf, runDoc } from "./helpers.ts";
-
-const documentCase = documentCases("packages/testing/tests/testing-mode.test.ts");
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
+import { failureOf, runDoc } from "./helpers.ts";
 
 describe("testing mode", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/testing-mode.test.ts"));
   beforeAll(() => useTempFileCompiler());
-  documentCase("skips <Test> entirely during regular execution", function* (runFresh) {
+  it("skips <Test> entirely during regular execution", function* () {
     const execCalls: string[] = [];
     yield* API.Process.around({
       // deno-lint-ignore require-yield
@@ -33,7 +33,7 @@ describe("testing mode", () => {
       "after",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.completion.ok).toBe(true);
     expect(run.output).toContain("before");
     expect(run.output).toContain("after");
@@ -42,49 +42,49 @@ describe("testing mode", () => {
     expect(run.results).toEqual([]);
   });
 
-  documentCase("explicit <Testing> runs its subtree during a regular run", function* (runFresh) {
+  it("explicit <Testing> runs its subtree during a regular run", function* () {
     const doc = '<Testing><Test name="t"><Assert expr={true} /></Test></Testing>\n';
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.completion.ok).toBe(true);
     expect(run.results.map((r) => [r.name, r.status])).toEqual([["t", "pass"]]);
     expect(run.boundaries).toEqual([{ tests: 1, failed: 0 }]);
   });
 
-  documentCase("a failing <Testing> boundary rejects an ordinary run", function* (runFresh) {
+  it("a failing <Testing> boundary rejects an ordinary run", function* () {
     const doc = "<Testing><Test><Assert expr={false} /></Test></Testing>\n";
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(failureOf(run)).toBeInstanceOf(TestFailureError);
     expect(run.output).toContain("Test");
   });
 
-  documentCase("an empty <Testing> boundary rejects an ordinary run", function* (runFresh) {
-    const run = yield* runFresh({ "README.md": "<Testing>no tests here</Testing>\n" });
+  it("an empty <Testing> boundary rejects an ordinary run", function* () {
+    const run = yield* runDoc({ "README.md": "<Testing>no tests here</Testing>\n" });
     expect(failureOf(run)).toBeInstanceOf(TestFailureError);
     expect(run.boundaries).toEqual([{ tests: 0, failed: 0 }]);
   });
 
-  documentCase("root activation runs tests without <Testing>", function* (runFresh) {
+  it("root activation runs tests without <Testing>", function* () {
     const doc = '<Test name="rooted"><Assert expr={true} /></Test>\n';
-    const run = yield* runFresh({ "README.md": doc }, { testing: true });
+    const run = yield* runDoc({ "README.md": doc }, { testing: true });
     expect(run.completion.ok).toBe(true);
     expect(run.results.map((r) => [r.name, r.status])).toEqual([["rooted", "pass"]]);
   });
 
-  documentCase("root activation with zero tests fails", function* (runFresh) {
-    const run = yield* runFresh({ "README.md": "just text\n" }, { testing: true });
+  it("root activation with zero tests fails", function* () {
+    const run = yield* runDoc({ "README.md": "just text\n" }, { testing: true });
     const error = failureOf(run);
     expect(error).toBeInstanceOf(TestFailureError);
     expect(error?.message).toContain("no tests were discovered");
   });
 
-  documentCase("nested <Testing> delegates results outward", function* (runFresh) {
+  it("nested <Testing> delegates results outward", function* () {
     const doc = [
       "<Testing>",
       "<Testing><Test><Assert expr={true} /></Test></Testing>",
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.completion.ok).toBe(true);
     // Inner boundary reports first; the outer boundary sees the delegated
     // result, so neither boundary is empty.
@@ -95,7 +95,7 @@ describe("testing mode", () => {
     expect(run.results).toHaveLength(1);
   });
 
-  documentCase("a failing exec block fails the test; later tests run", function* (runFresh) {
+  it("a failing exec block fails the test; later tests run", function* () {
     yield* useFailingExec(3, "command exploded");
     const doc = [
       "<Testing>",
@@ -108,7 +108,7 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(failureOf(run)).toBeInstanceOf(TestFailureError);
     expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
       ["broken", "fail", "error"],
@@ -116,25 +116,22 @@ describe("testing mode", () => {
     ]);
   });
 
-  documentCase(
-    "an unresolvable component import fails the test; later tests run",
-    function* (runFresh) {
-      const doc = [
-        "<Testing>",
-        '<Test name="missing"><NoSuchComponent /></Test>',
-        '<Test name="fine"><Assert expr={true} /></Test>',
-        "</Testing>",
-        "",
-      ].join("\n");
-      const run = yield* runFresh({ "README.md": doc });
-      expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
-        ["missing", "fail", "error"],
-        ["fine", "pass", undefined],
-      ]);
-    },
-  );
+  it("an unresolvable component import fails the test; later tests run", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="missing"><NoSuchComponent /></Test>',
+      '<Test name="fine"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc });
+    expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
+      ["missing", "fail", "error"],
+      ["fine", "pass", undefined],
+    ]);
+  });
 
-  documentCase("nested <Test> fails the enclosing test; later tests run", function* (runFresh) {
+  it("nested <Test> fails the enclosing test; later tests run", function* () {
     const doc = [
       "<Testing>",
       '<Test name="outer"><Test name="inner"><Assert expr={true} /></Test></Test>',
@@ -142,7 +139,7 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
       ["outer", "fail", "error"],
       ["fine", "pass", undefined],
@@ -150,44 +147,38 @@ describe("testing mode", () => {
     expect(run.results[0]?.error?.message).toContain("Nested <Test>");
   });
 
-  documentCase(
-    "an error raised inside a component-owned <Output> region fails the test",
-    function* (runFresh) {
-      const comp = "<Output>\nregion start\n<NoSuchThing />\n</Output>\n";
-      const doc = [
-        "<Testing>",
-        '<Test name="output-region"><Regioned /></Test>',
-        '<Test name="fine"><Assert expr={true} /></Test>',
-        "</Testing>",
-        "",
-      ].join("\n");
-      const run = yield* runFresh({ "README.md": doc, "components/Regioned.md": comp });
-      expect(run.results.map((r) => [r.name, r.status])).toEqual([
-        ["output-region", "fail"],
-        ["fine", "pass"],
-      ]);
-    },
-  );
+  it("an error raised inside a component-owned <Output> region fails the test", function* () {
+    const comp = "<Output>\nregion start\n<NoSuchThing />\n</Output>\n";
+    const doc = [
+      "<Testing>",
+      '<Test name="output-region"><Regioned /></Test>',
+      '<Test name="fine"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc, "components/Regioned.md": comp });
+    expect(run.results.map((r) => [r.name, r.status])).toEqual([
+      ["output-region", "fail"],
+      ["fine", "pass"],
+    ]);
+  });
 
-  documentCase(
-    "a completed failing test inside a documentation region stays contained",
-    function* (runFresh) {
-      const comp = "<Output>\n<Content />\n</Output>\n";
-      const doc = [
-        "<Testing><Regioned>",
-        '<Test name="contained"><Assert expr={false} /></Test>',
-        "</Regioned></Testing>",
-        "",
-      ].join("\n");
-      const run = yield* runFresh({ "README.md": doc, "components/Regioned.md": comp });
-      // The document expands fully — the failure surfaces as a testing
-      // outcome, not an expansion abort.
-      expect(failureOf(run)).toBeInstanceOf(TestFailureError);
-      expect(run.results.map((r) => [r.name, r.status])).toEqual([["contained", "fail"]]);
-    },
-  );
+  it("a completed failing test inside a documentation region stays contained", function* () {
+    const comp = "<Output>\n<Content />\n</Output>\n";
+    const doc = [
+      "<Testing><Regioned>",
+      '<Test name="contained"><Assert expr={false} /></Test>',
+      "</Regioned></Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc, "components/Regioned.md": comp });
+    // The document expands fully — the failure surfaces as a testing
+    // outcome, not an expansion abort.
+    expect(failureOf(run)).toBeInstanceOf(TestFailureError);
+    expect(run.results.map((r) => [r.name, r.status])).toEqual([["contained", "fail"]]);
+  });
 
-  documentCase("bindings written in one test are invisible to the next", function* (runFresh) {
+  it("bindings written in one test are invisible to the next", function* () {
     const doc = [
       "```js eval",
       "const inherited = 7;",
@@ -207,35 +198,32 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.completion.ok).toBe(true);
     expect(run.results.map((r) => r.status)).toEqual(["pass", "pass"]);
   });
 
-  documentCase(
-    "a <Test> projected through <Content /> sees caller bindings in its eval blocks",
-    function* (runFresh) {
-      const doc = [
-        "```js eval",
-        'const callerValue = "from-caller";',
-        "```",
-        "<Testing><Wrap>",
-        '<Test name="projected">',
-        "```js eval",
-        'const copied = callerValue + "!";',
-        "```",
-        '<AssertEquals actual={copied} expected={"from-caller!"} />',
-        "</Test>",
-        "</Wrap></Testing>",
-        "",
-      ].join("\n");
-      const run = yield* runFresh({ "README.md": doc, "components/Wrap.md": "<Content />\n" });
-      expect(run.completion.ok).toBe(true);
-      expect(run.results.map((r) => [r.name, r.status])).toEqual([["projected", "pass"]]);
-    },
-  );
+  it("a <Test> projected through <Content /> sees caller bindings in its eval blocks", function* () {
+    const doc = [
+      "```js eval",
+      'const callerValue = "from-caller";',
+      "```",
+      "<Testing><Wrap>",
+      '<Test name="projected">',
+      "```js eval",
+      'const copied = callerValue + "!";',
+      "```",
+      '<AssertEquals actual={copied} expected={"from-caller!"} />',
+      "</Test>",
+      "</Wrap></Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc, "components/Wrap.md": "<Content />\n" });
+    expect(run.completion.ok).toBe(true);
+    expect(run.results.map((r) => [r.name, r.status])).toEqual([["projected", "pass"]]);
+  });
 
-  documentCase("captures persist for the immediately following assertion", function* (runFresh) {
+  it("captures persist for the immediately following assertion", function* () {
     const doc = [
       "<Testing><Test>",
       '<Let as="result">Hello World</Let>',
@@ -243,40 +231,37 @@ describe("testing mode", () => {
       "</Test></Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.completion.ok).toBe(true);
     expect(run.results.map((r) => r.status)).toEqual(["pass"]);
   });
 
-  documentCase(
-    "effects spawned in one test are torn down before the next begins",
-    function* (runFresh) {
-      Reflect.deleteProperty(globalThis, "__testingLeaseAlive");
-      const doc = [
-        "<Testing>",
-        '<Test name="spawner">',
-        "```js persist eval",
-        "globalThis.__testingLeaseAlive = true;",
-        "yield* spawn(function* () { try { yield* suspend(); } finally { globalThis.__testingLeaseAlive = false; } });",
-        "```",
-        "<Assert expr={globalThis.__testingLeaseAlive === true} />",
-        "</Test>",
-        '<Test name="observer">',
-        "<Assert expr={globalThis.__testingLeaseAlive === false} />",
-        "</Test>",
-        "</Testing>",
-        "",
-      ].join("\n");
-      const run = yield* runFresh({ "README.md": doc });
-      expect(run.completion.ok).toBe(true);
-      expect(run.results.map((r) => [r.name, r.status])).toEqual([
-        ["spawner", "pass"],
-        ["observer", "pass"],
-      ]);
-    },
-  );
+  it("effects spawned in one test are torn down before the next begins", function* () {
+    Reflect.deleteProperty(globalThis, "__testingLeaseAlive");
+    const doc = [
+      "<Testing>",
+      '<Test name="spawner">',
+      "```js persist eval",
+      "globalThis.__testingLeaseAlive = true;",
+      "yield* spawn(function* () { try { yield* suspend(); } finally { globalThis.__testingLeaseAlive = false; } });",
+      "```",
+      "<Assert expr={globalThis.__testingLeaseAlive === true} />",
+      "</Test>",
+      '<Test name="observer">',
+      "<Assert expr={globalThis.__testingLeaseAlive === false} />",
+      "</Test>",
+      "</Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({ "README.md": doc });
+    expect(run.completion.ok).toBe(true);
+    expect(run.results.map((r) => [r.name, r.status])).toEqual([
+      ["spawner", "pass"],
+      ["observer", "pass"],
+    ]);
+  });
 
-  documentCase("output before a failure is kept, followed by the diagnostic", function* (runFresh) {
+  it("output before a failure is kept, followed by the diagnostic", function* () {
     const doc = [
       "<Testing><Test>",
       "first line",
@@ -285,7 +270,7 @@ describe("testing mode", () => {
       "</Test></Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.output).toContain("first line");
     expect(run.output).toContain("**Assert** failed");
     expect(run.output).not.toContain("never rendered");
@@ -294,7 +279,7 @@ describe("testing mode", () => {
     expect(firstAt).toBeLessThan(diagnosticAt);
   });
 
-  documentCase("a hanging test times out, is torn down, and later tests run", function* (runFresh) {
+  it("a hanging test times out, is torn down, and later tests run", function* () {
     yield* API.Process.around({
       *exec(_args, _next) {
         yield* sleep(10_000);
@@ -312,7 +297,7 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh(
+    const run = yield* runDoc(
       { "README.md": doc },
       { handlers: createTestHandlers({ timeoutMs: 100 }) },
     );
@@ -323,7 +308,7 @@ describe("testing mode", () => {
     ]);
   });
 
-  documentCase("unnamed tests are identified by source location", function* (runFresh) {
+  it("unnamed tests are identified by source location", function* () {
     const doc = [
       "---",
       "title: Located",
@@ -333,7 +318,7 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
     expect(run.results[0]?.location).toBe("README.md:5:1");
     expect(run.output).toContain("test at README.md:5:1");
   });
@@ -345,7 +330,7 @@ describe("testing mode", () => {
    * exactly as it would be anywhere else a document did not authorize one
    * (#441).
    */
-  documentCase("a repository Test of the same name contains nothing", function* (runFresh) {
+  it("a repository Test of the same name contains nothing", function* () {
     yield* useFailingExec(3, "command exploded");
     const doc = [
       "<Testing>",
@@ -358,7 +343,7 @@ describe("testing mode", () => {
       "</Testing>",
       "",
     ].join("\n");
-    const run = yield* runFresh({
+    const run = yield* runDoc({
       "README.md": doc,
       // Chosen ahead of the package's, and a different function object.
       "Test.md": "<Content />\n",

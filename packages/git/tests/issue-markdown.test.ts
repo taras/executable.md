@@ -11,7 +11,7 @@
  * `github-issues.test.ts`, and nothing there duplicates a scenario here.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,13 @@ import type { Operation } from "effection";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import { issueYields, runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/git/tests/issue-markdown.test.ts";
 
 /** The scenarios, in the order a reader meets them. */
 const SCENARIOS = [
@@ -59,54 +65,25 @@ function* stated(observation: ScenarioObservation): Operation<ScenarioObservatio
 }
 
 describe("workflow Issue scenarios", () => {
-  function stagedCase(document: string, attempt: string): void {
-    const name = `${document} states a contract that holds`;
-    const path = pathOf(document);
-    it(name, function* () {
-      const fixture = yield* useScenarioFixture();
-      // The second attempt inherits the same staged history. The asserting
-      // document owns a fresh root and reads the staged evidence through the fixture.
-      yield* fixture.stage(attempt);
-      yield* fixture.stage(attempt);
-      yield* captureTestJournal(
-        {
-          owner: "packages/git/tests/issue-markdown.test.ts",
-          suite: "workflow Issue scenarios",
-          name,
-        },
-        path,
-        function* (stream) {
-          yield* stated(yield* fixture.observe(path, stream));
-        },
-      );
-    });
-  }
-
+  beforeEach(journalBeforeEach(OWNER));
   for (const name of SCENARIOS) {
     const title = `${name} states a contract that holds`;
     const path = pathOf(name);
-    if (name === "IssueRead.test.md" || name === "IssueUpsert.test.md") {
-      it(title, () =>
-        captureTestJournal(
-          {
-            owner: "packages/git/tests/issue-markdown.test.ts",
-            suite: "workflow Issue scenarios",
-            name: title,
-          },
-          path,
-          function* (stream) {
-            yield* stated(yield* runScenario(path, stream));
-          },
-        ),
-      );
-    } else {
-      it(title, function* () {
-        yield* stated(yield* runScenario(path));
-      });
-    }
+    it(title, function* () {
+      yield* stated(yield* runScenario(path, yield* useJournalStream(path)));
+    });
   }
 
-  stagedCase("IssueDurability.test.md", "IssueDurability.attempt.stage.md");
+  it("IssueDurability.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    // Staged from the one checked-in attempt document, twice. The second is a
+    // replay: same run, same document, same request — which is the only way to
+    // put a run in the state this scenario is about.
+    yield* fixture.stage("IssueDurability.attempt.stage.md");
+    yield* fixture.stage("IssueDurability.attempt.stage.md");
+    const path = pathOf("IssueDurability.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
+  });
 
   it("an issue effect retains where its <Issue> was written", function* () {
     const fixture = yield* useScenarioFixture();
@@ -134,7 +111,13 @@ describe("workflow Issue scenarios", () => {
     });
   });
 
-  stagedCase("IssueReadDurability.test.md", "IssueReadDurability.attempt.stage.md");
+  it("IssueReadDurability.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    yield* fixture.stage("IssueReadDurability.attempt.stage.md");
+    yield* fixture.stage("IssueReadDurability.attempt.stage.md");
+    const path = pathOf("IssueReadDurability.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
+  });
 
   // Each hazard is its own run. They cannot share one: a process that ended
   // after its create ended, so a second request in the same execution is a
@@ -146,12 +129,32 @@ describe("workflow Issue scenarios", () => {
     "IssueRecoveryClosed",
     "IssueRecoveryEdited",
   ]) {
-    stagedCase(`${hazard}.test.md`, `${hazard}.attempt.stage.md`);
+    it(`${hazard}.test.md states a contract that holds`, function* () {
+      const fixture = yield* useScenarioFixture();
+      yield* fixture.stage(`${hazard}.attempt.stage.md`);
+      yield* fixture.stage(`${hazard}.attempt.stage.md`);
+      const path = pathOf(`${hazard}.test.md`);
+      yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
+    });
   }
 
-  stagedCase("IssueReadSubstituted.test.md", "IssueReadSubstituted.attempt.stage.md");
+  it("IssueReadSubstituted.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    // Staged twice so the second attempt shows there was nothing to restore.
+    yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
+    yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
+    const path = pathOf("IssueReadSubstituted.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
+  });
 
-  stagedCase("IssueRecovery.test.md", "IssueRecovery.attempt.stage.md");
+  it("IssueRecovery.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    // The interrupted attempt first, then one that inherits what it left.
+    yield* fixture.stage("IssueRecovery.attempt.stage.md");
+    yield* fixture.stage("IssueRecovery.attempt.stage.md");
+    const path = pathOf("IssueRecovery.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
+  });
 });
 
 /**

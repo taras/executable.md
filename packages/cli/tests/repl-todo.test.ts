@@ -1,5 +1,6 @@
-import { describe, it } from "@executablemd/test-support/bdd";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -18,7 +19,7 @@ import type { ComponentInvocationHooks } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 
-const journalCase = journalCases("packages/cli/tests/repl-todo.test.ts");
+const OWNER = "packages/cli/tests/repl-todo.test.ts";
 
 function entry(
   source: string,
@@ -336,6 +337,7 @@ describe("TODO exact source grammar and patches", () => {
 });
 
 describe("TODO typed component and historical result", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("requires as before effects, shares entry state, and replays an edit without repeating it", function* () {
     const root = yield* fixture();
     const todo = yield* useTodo(root);
@@ -367,113 +369,107 @@ describe("TODO typed component and historical result", () => {
     expect(todo.pending).toHaveLength(before);
   });
 
-  journalCase(
-    "returns its own committed items while result delivery is held across a newer mutation",
-    "todo-entry.md",
-    function* (stream) {
-      const root = yield* fixture();
-      const todo = yield* useTodo(root);
-      const delivering = withResolvers<void>();
-      const release = withResolvers<void>();
-      // Held in the host's own invocation observation, which is what records a
-      // contributed control now: the body has committed and produced its value,
-      // and a newer mutation arriving before that value is delivered must not
-      // change the items this invocation answers with.
-      const observing: ComponentInvocationHooks = {
-        *after(_observation, outcome) {
-          if (outcome.ok) {
-            delivering.resolve();
-            yield* release.operation;
-          }
-        },
-      };
-      const running = yield* spawn(() =>
-        entry(
-          '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] earlier\n```\n</Sidekick.Todo>\n<Json value={items} />',
-          stream,
-          observing,
-        ),
-      );
-      yield* delivering.operation;
-      yield* todo.save("- [ ] earlier\n", "- [x] newer\n");
-      release.resolve();
-      const result = yield* running;
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toContain('"text": "earlier"');
-        expect(result.value).not.toContain("newer");
-      }
-      expect((yield* todo.read()).items[0].text).toBe("newer");
-    },
-  );
+  it("returns its own committed items while result delivery is held across a newer mutation", function* () {
+    const stream = yield* useJournalStream("todo-entry.md");
+    const root = yield* fixture();
+    const todo = yield* useTodo(root);
+    const delivering = withResolvers<void>();
+    const release = withResolvers<void>();
+    // Held in the host's own invocation observation, which is what records a
+    // contributed control now: the body has committed and produced its value,
+    // and a newer mutation arriving before that value is delivered must not
+    // change the items this invocation answers with.
+    const observing: ComponentInvocationHooks = {
+      *after(_observation, outcome) {
+        if (outcome.ok) {
+          delivering.resolve();
+          yield* release.operation;
+        }
+      },
+    };
+    const running = yield* spawn(() =>
+      entry(
+        '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] earlier\n```\n</Sidekick.Todo>\n<Json value={items} />',
+        stream,
+        observing,
+      ),
+    );
+    yield* delivering.operation;
+    yield* todo.save("- [ ] earlier\n", "- [x] newer\n");
+    release.resolve();
+    const result = yield* running;
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toContain('"text": "earlier"');
+      expect(result.value).not.toContain("newer");
+    }
+    expect((yield* todo.read()).items[0].text).toBe("newer");
+  });
 
-  journalCase(
-    "admits both forms from one captured definition and refuses writes under read-only admission",
-    "todo-host.md",
-    function* (stream) {
-      const root = yield* fixture();
-      const todo = yield* useTodo(root);
-      const ready = withResolvers<void>();
-      const execution = yield* executeInstalled(
+  it("admits both forms from one captured definition and refuses writes under read-only admission", function* () {
+    const stream = yield* useJournalStream("todo-host.md");
+    const root = yield* fixture();
+    const todo = yield* useTodo(root);
+    const ready = withResolvers<void>();
+    const execution = yield* executeInstalled(
+      {
+        ...retainedSource("todo-host.md", "<TodoHost />"),
+        stream,
+      },
+      [
         {
-          ...retainedSource("todo-host.md", "<TodoHost />"),
-          stream,
-        },
-        [
-          {
-            components: [
-              todoDeclaration(),
-              {
-                name: "TodoHost",
-                origin: "test://todo-host",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                factory: () =>
-                  function* () {
-                    ready.resolve();
-                    yield* suspend();
-                    return "";
-                  },
-              },
-            ],
-            *install() {
-              yield* Component.around({
-                generated: () => ({ "Sidekick.Todo": ["self-closing", "paired"] }),
-              });
+          components: [
+            todoDeclaration(),
+            {
+              name: "TodoHost",
+              origin: "test://todo-host",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              factory: () =>
+                function* () {
+                  ready.resolve();
+                  yield* suspend();
+                  return "";
+                },
             },
+          ],
+          *install() {
+            yield* Component.around({
+              generated: () => ({ "Sidekick.Todo": ["self-closing", "paired"] }),
+            });
           },
-        ],
-      );
-      yield* ready.operation;
-      const write =
-        '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] generated\n```\n</Sidekick.Todo>';
-      const refused = yield* execution.evaluateGeneratedXmdRoot({
-        id: "refused",
-        source: write,
-        allow: ["read"],
-      });
-      expect(refused.ok).toBe(false);
-      expect(todo.pending).toEqual([]);
-      const written = yield* execution.evaluateGeneratedXmdRoot({
-        id: "write",
-        source: write,
-        allow: ["read", "write"],
-      });
-      if (!written.ok) {
-        throw written.error;
-      }
-      expect(written.ok).toBe(true);
-      if (written.ok) {
-        expect(written.value.output).toBe("");
-      }
-      const read = yield* execution.evaluateGeneratedXmdRoot({
-        id: "read",
-        source: '<Sidekick.Todo as="items" />\n<Json value={items} />',
-        allow: ["read"],
-      });
-      expect(read.ok).toBe(true);
-      if (read.ok) {
-        expect(read.value.output).toContain('"text": "generated"');
-      }
-    },
-  );
+        },
+      ],
+    );
+    yield* ready.operation;
+    const write =
+      '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] generated\n```\n</Sidekick.Todo>';
+    const refused = yield* execution.evaluateGeneratedXmdRoot({
+      id: "refused",
+      source: write,
+      allow: ["read"],
+    });
+    expect(refused.ok).toBe(false);
+    expect(todo.pending).toEqual([]);
+    const written = yield* execution.evaluateGeneratedXmdRoot({
+      id: "write",
+      source: write,
+      allow: ["read", "write"],
+    });
+    if (!written.ok) {
+      throw written.error;
+    }
+    expect(written.ok).toBe(true);
+    if (written.ok) {
+      expect(written.value.output).toBe("");
+    }
+    const read = yield* execution.evaluateGeneratedXmdRoot({
+      id: "read",
+      source: '<Sidekick.Todo as="items" />\n<Json value={items} />',
+      allow: ["read"],
+    });
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.value.output).toContain('"text": "generated"');
+    }
+  });
 });

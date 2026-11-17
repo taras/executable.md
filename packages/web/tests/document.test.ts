@@ -1,9 +1,9 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { readTextFile } from "@effectionx/fs";
 import { collect, execute, registerComponents, useTempFileCompiler } from "@executablemd/core";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTesting } from "@executablemd/testing";
 import { fileURLToPath } from "node:url";
 
@@ -24,60 +24,56 @@ const DOCUMENT = fileURLToPath(new URL("../src/WebForm.test.md", import.meta.url
  * is not coming.
  */
 describe("WebForm.test.md", () => {
+  beforeEach(journalBeforeEach("packages/web/tests/document.test.ts"));
   const name = "passes with an installed responder answering its forms";
-  it(name, () =>
-    captureTestJournal(
-      { owner: "packages/web/tests/document.test.ts", name },
-      "WebForm.test.md",
-      function* (stream) {
-        const source = yield* readTextFile(DOCUMENT);
+  it(name, function* () {
+    const source = yield* readTextFile(DOCUMENT);
+    const stream = yield* useJournalStream("WebForm.test.md");
 
-        const outcome = yield* scoped(function* () {
-          yield* useTempFileCompiler();
-          yield* useStubFs({ "WebForm.test.md": source });
+    const outcome = yield* scoped(function* () {
+      yield* useTempFileCompiler();
+      yield* useStubFs({ "WebForm.test.md": source });
 
-          yield* FormAssets.around({
-            // deno-lint-ignore require-yield
-            *assets() {
-              return { clientJs: "/* fixture */", themeCss: "/* fixture */" };
-            },
-          });
-          yield* FormOpener.around({
-            // deno-lint-ignore require-yield
-            *open() {},
-          });
-          yield* FormResponder.around({
-            *respond([url]) {
-              yield* submitForm(url, { decision: "approve", note: "looks right" });
-            },
-          });
+      yield* FormAssets.around({
+        // deno-lint-ignore require-yield
+        *assets() {
+          return { clientJs: "/* fixture */", themeCss: "/* fixture */" };
+        },
+      });
+      yield* FormOpener.around({
+        // deno-lint-ignore require-yield
+        *open() {},
+      });
+      yield* FormResponder.around({
+        *respond([url]) {
+          yield* submitForm(url, { decision: "approve", note: "looks right" });
+        },
+      });
 
-          yield* useTesting();
-          yield* registerComponents([
-            {
-              name: "WebForm",
-              origin: "@executablemd/web",
-              fn: WebForm,
-              props: WEB_FORM_PROPS,
-              returns: WEB_FORM_RETURNS,
-            },
-          ]);
+      yield* useTesting();
+      yield* registerComponents([
+        {
+          name: "WebForm",
+          origin: "@executablemd/web",
+          fn: WebForm,
+          props: WEB_FORM_PROPS,
+          returns: WEB_FORM_RETURNS,
+        },
+      ]);
 
-          const execution = yield* execute({
-            path: "WebForm.test.md",
-            stream,
-          });
+      const execution = yield* execute({
+        path: "WebForm.test.md",
+        stream,
+      });
 
-          try {
-            yield* collect(execution);
-            return { ok: true, message: "" };
-          } catch (error) {
-            return { ok: false, message: error instanceof Error ? error.message : String(error) };
-          }
-        });
+      try {
+        yield* collect(execution);
+        return { ok: true, message: "" };
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      }
+    });
 
-        expect(outcome).toEqual({ ok: true, message: "" });
-      },
-    ),
-  );
+    expect(outcome).toEqual({ ok: true, message: "" });
+  });
 });
