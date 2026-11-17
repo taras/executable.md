@@ -5,7 +5,7 @@
  * clean suspension at teardown — driven through the component surface
  * with real workers.
  */
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { fileJournalCases } from "../../test-support/journal-cases.ts";
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";

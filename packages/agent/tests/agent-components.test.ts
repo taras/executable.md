@@ -7,7 +7,7 @@
  * `installAgentComponents`'s `rootProvider` seam — no real provider,
  * subprocess, or provider selection.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensure, scoped } from "effection";
@@ -28,7 +28,11 @@ import type { AgentProviderFactory } from "../src/provider-api.ts";
 import { installAgentComponents } from "../src/components.ts";
 import { Component } from "../../core/src/component-api.ts";
 import type { Json } from "@executablemd/core";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 interface StubResponse {
   status?: "completed" | "failed" | "cancelled";
@@ -147,7 +151,7 @@ function* installStub(stub: Stub): Operation<void> {
 
 function* runDoc(
   doc: string,
-  stream: InMemoryStream,
+  suppliedStream?: InMemoryStream,
   dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`),
 ): Operation<{ output: string; result: Result<Json> }> {
   yield* ensureDir(dir);
@@ -156,6 +160,7 @@ function* runDoc(
 
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
+    const stream = suppliedStream ?? (yield* useJournalStream(docPath));
     // `<Session>` names durable work after its own invocation, so the host
     // declares it to the execution rather than registering it.
     const execution = yield* executeInstalled({ path: docPath, stream }, [
@@ -189,12 +194,11 @@ function agentCase(
   name: string,
   body: (run: (doc: string) => ReturnType<typeof runDoc>) => Operation<void>,
 ): void {
-  it(name, () =>
-    captureAgentDocument(name, (stream, dir) => body((doc) => runDoc(doc, stream, dir))),
-  );
+  it(name, () => body((doc) => runDoc(doc)));
 }
 
 describe(SUITE, () => {
+  beforeEach(journalBeforeEach("packages/agent/tests/agent-components.test.ts"));
   agentCase(
     "AC1: wrapper <Prompt> always sends rendered children, untrimmed",
     function* (runFresh) {

@@ -21,7 +21,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
 import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import type { DeliverySink } from "../../cli/src/stdout-delivery.ts";
 import { readRecords } from "../../cli/src/repl/journal-records.ts";
 import { useStubFs } from "@executablemd/runtime/test";

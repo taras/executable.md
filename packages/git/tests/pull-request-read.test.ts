@@ -10,9 +10,13 @@
  * contacts a network host, and no case reads a developer's real credential.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   call,
@@ -510,6 +514,7 @@ function retainedItems(events: DurableEvent[]): Json {
 }
 
 describe("Tier PRR — pull-request evidence", () => {
+  beforeEach(journalBeforeEach("packages/git/tests/pull-request-read.test.ts"));
   it("PRR3: every body and every check survives normalization byte for byte", function* () {
     const body = "  Two  spaces, a\ttab, and a trailing newline.\n";
     const host = server({
@@ -1053,7 +1058,8 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(host.requests).toEqual([]);
   });
 
-  journalCase("PRR13: an ordinary run resolves none of the three", "<eval>", function* (stream) {
+  it("PRR13: an ordinary run resolves none of the three", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const failure = yield* raised(
       collect(
         yield* execute({

@@ -75,12 +75,13 @@ function* runDoc(
   yield* ensureDir(dir);
   const launches: NativeLaunchRequest[] = [];
   const sessions: NativeSessionReport[] = [];
+  const documentPath = path.join(dir, "doc.md");
   const stream = options.stream ?? new InMemoryStream();
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     yield* writeTextFile(path.join(dir, "scenario.md"), SCENARIO);
     yield* writeTextFile(path.join(dir, "role.md"), "Follow the approved plan.\n");
-    yield* writeTextFile(path.join(dir, "doc.md"), doc);
+    yield* writeTextFile(documentPath, doc);
 
     // The scope closes before the fixtures are removed, so workers and
     // controllers finish teardown while their scenario files still exist.
@@ -200,20 +201,23 @@ describe(
   () => {
     beforeAll(() => useTempFileCompiler());
 
-    it("TL1: the rendered body installs as the agent's session instruction layer", function* () {
-      const run = yield* runDoc(testDoc(LAUNCH_BODY));
+    journalCase(
+      "TL1: the rendered body installs as the agent's session instruction layer",
+      function* (stream, directory) {
+        const run = yield* runDoc(testDoc(LAUNCH_BODY), { stream }, directory);
 
-      expect(run.result.ok ? "" : run.result.error.message).toBe("");
-      // The launch constructs the session it names, so exactly one of the
-      // agent's sessions carries prepared text and it is the one it prepared.
-      const carrying = run.sessions.filter((report) => report.systemPrompt !== undefined);
-      expect(carrying.length).toBe(1);
-      const instructions = carrying[0]!.systemPrompt ?? "";
-      // The agent received the launch body, and only the launch body.
-      expect(instructions).toContain("You are the repository implementor.");
-      expect(instructions).toContain("Follow the approved plan.");
-      expect(instructions).not.toContain("TestAgent");
-    });
+        expect(run.result.ok ? "" : run.result.error.message).toBe("");
+        // The launch constructs the session it names, so exactly one of the
+        // agent's sessions carries prepared text and it is the one it prepared.
+        const carrying = run.sessions.filter((report) => report.systemPrompt !== undefined);
+        expect(carrying.length).toBe(1);
+        const instructions = carrying[0]!.systemPrompt ?? "";
+        // The agent received the launch body, and only the launch body.
+        expect(instructions).toContain("You are the repository implementor.");
+        expect(instructions).toContain("Follow the approved plan.");
+        expect(instructions).not.toContain("TestAgent");
+      },
+    );
 
     journalCase(
       "TL2: the native UI is started with the identity the agent asserted",
@@ -233,13 +237,16 @@ describe(
       },
     );
 
-    it("TL3: raw prepared instructions never reach argv or environment", function* () {
-      const run = yield* runDoc(testDoc(LAUNCH_BODY));
+    journalCase(
+      "TL3: raw prepared instructions never reach argv or environment",
+      function* (stream, directory) {
+        const run = yield* runDoc(testDoc(LAUNCH_BODY), { stream }, directory);
 
-      const request = run.launches[0]!;
-      expect(request.command.join(" ")).not.toContain("repository implementor");
-      expect(JSON.stringify(request.env ?? {})).not.toContain("repository implementor");
-    });
+        const request = run.launches[0]!;
+        expect(request.command.join(" ")).not.toContain("repository implementor");
+        expect(JSON.stringify(request.env ?? {})).not.toContain("repository implementor");
+      },
+    );
 
     journalCase(
       "TL5: a later prompt reattaches to the session the native UI was given",
