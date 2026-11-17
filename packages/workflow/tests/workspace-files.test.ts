@@ -243,13 +243,13 @@ function refusingWrite(
 ): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
   return (filesystem) => ({
     ...filesystem,
-    *writeFile(path, content, mode) {
+    *writeFile(path, content, mode, exclusive) {
       if (path === target) {
         throwWorkspaceFilesystemFailure(
           Object.assign(new Error("planted"), { name: "WorkspaceFsError", code: "EACCES" }),
         );
       }
-      yield* filesystem.writeFile(path, content, mode);
+      yield* filesystem.writeFile(path, content, mode, exclusive);
     },
   });
 }
@@ -279,9 +279,9 @@ function countingWrites(
 ): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
   return (filesystem) => ({
     ...filesystem,
-    *writeFile(path, content, mode) {
+    *writeFile(path, content, mode, exclusive) {
       written.push(path);
-      yield* filesystem.writeFile(path, content, mode);
+      yield* filesystem.writeFile(path, content, mode, exclusive);
     },
   });
 }
@@ -356,8 +356,8 @@ function suspendingWrite(
 ): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
   return (filesystem) => ({
     ...filesystem,
-    *writeFile(path, content, mode) {
-      yield* filesystem.writeFile(path, content, mode);
+    *writeFile(path, content, mode, exclusive) {
+      yield* filesystem.writeFile(path, content, mode, exclusive);
       if (path === target) {
         reached.resolve();
         yield* suspend();
@@ -1763,17 +1763,17 @@ describe("Tier WF — the run's own directories", () => {
  * to win. What these assert is that current policy decides new work and says
  * nothing about work the journal already holds.
  */
-describe("workflow document filesystem — permission", () => {
-  /** Refuse one class of operation, recording every question asked. */
-  function restricted(asked: string[], refuse: "read" | "write"): Operation<void> {
-    return Permissions.around({
-      files: ([operation], next) => {
-        asked.push(operation);
-        return operation === refuse ? false : next(operation);
-      },
-    });
-  }
+/** Refuse one class of operation, recording every question asked. */
+function restricted(asked: string[], refuse: "read" | "write"): Operation<void> {
+  return Permissions.around({
+    files: ([operation], next) => {
+      asked.push(operation);
+      return operation === refuse ? false : next(operation);
+    },
+  });
+}
 
+describe("workflow document filesystem — permission", () => {
   it("WF27: a denied write is published as an ordinary refusal and keeps the root", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
@@ -1916,5 +1916,192 @@ describe("workflow document filesystem — permission", () => {
       },
       { decorateFilesystem: countingWrites(written) },
     );
+  });
+});
+
+describe("Workspace file copy", () => {
+  const doc = '<File.Copy from="source.bin" to="destination.bin" />';
+  const target = JSON.stringify(["/source.bin", "/destination.bin"]);
+  const bytes = Uint8Array.of(0, 255, 128);
+
+  function* seed(database: WorkflowRunDatabase): Operation<void> {
+    yield* mutateWorkspace(database, function* (workspace) {
+      yield* workspace.filesystem.writeFile("/source.bin", bytes);
+    });
+  }
+
+  function read(database: WorkflowRunDatabase, path: string) {
+    return transactWorkspaceRoots(database, (workspace) => workspace.filesystem.readFile(path));
+  }
+
+  it("publishes exact independent bytes, Unit, and the resulting root", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* seed(database);
+      yield* runDocument(database, doc);
+      expect(yield* read(database, "/destination.bin")).toEqual({ ok: true, value: bytes });
+      expect((yield* recordedFileEffects(database)).map((effect) => effect.result)).toEqual([
+        { status: "ok", value: { kind: "copied" } },
+      ]);
+      expect(committedEffects(path, "copy", target)).toBe(1);
+      expect(committedRoot(path)).toEqual(rootOfLastEvent(path));
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/destination.bin", "changed");
+      });
+      expect(yield* read(database, "/source.bin")).toEqual({ ok: true, value: bytes });
+    });
+  });
+
+  it("publishes ordinary refusals without changing the frontier", function* () {
+    for (const denied of ["read", "write", "occupied"]) {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* seed(database);
+        if (denied === "occupied") {
+          yield* mutateWorkspace(database, function* (workspace) {
+            yield* workspace.filesystem.writeFile("/destination.bin", "keep");
+          });
+        }
+        const before = committedRoot(path);
+        yield* scoped(function* () {
+          if (denied === "read" || denied === "write") {
+            yield* restricted([], denied);
+          }
+          yield* runDocument(database, doc);
+        });
+        const reason = denied === "occupied" ? "occupied" : "permission-denied";
+        expect((yield* recordedFileEffects(database))[0]?.result).toEqual({
+          status: "ok",
+          value: {
+            kind: "refused",
+            phase: denied === "occupied" ? "access" : "resolution",
+            reason,
+          },
+        });
+        expect(committedRoot(path)).toBe(before);
+        if (denied === "occupied") {
+          expect(yield* workspaceText(database, "/destination.bin")).toBe("keep");
+        } else {
+          expect((yield* read(database, "/destination.bin")).ok).toBe(false);
+        }
+      });
+    }
+  });
+
+  it("rolls back an unpublished copy and performs it once on continuation", function* () {
+    const root = yield* useStorageRoot();
+    let fail = true;
+    let copied = 0;
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* seed(database);
+        const before = committedRoot(path);
+        expect(yield* raised(runDocument(database, doc))).toBeInstanceOf(Error);
+        expect(committedRoot(path)).toBe(before);
+        expect((yield* read(database, "/destination.bin")).ok).toBe(false);
+        expect(yield* recordedFileEffects(database)).toEqual([]);
+        expect(copied).toBe(1);
+
+        fail = false;
+        yield* replayDocument(database, doc);
+        expect(copied).toBe(2);
+        expect(committedEffects(path, "copy", target)).toBe(1);
+        expect(yield* read(database, "/destination.bin")).toEqual({ ok: true, value: bytes });
+      },
+      {
+        decorateFilesystem: (filesystem) => ({
+          ...filesystem,
+          *writeFile(path, content, mode, exclusive) {
+            yield* filesystem.writeFile(path, content, mode, exclusive);
+            if (exclusive) {
+              copied += 1;
+              if (fail) {
+                throw new Error("planted failure after the copy");
+              }
+            }
+          },
+        }),
+      },
+    );
+  });
+
+  it("restores an acknowledged copy without live access or a second publication", function* () {
+    const root = yield* useStorageRoot();
+    const writes: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* seed(database);
+        yield* runDocument(database, doc);
+        const frontier = committedRoot(path);
+        dropRootClose(path);
+        const asked: string[] = [];
+        yield* scoped(function* () {
+          yield* restricted(asked, "write");
+          yield* replayDocument(database, doc);
+        });
+        expect(asked).toEqual([]);
+        expect(writes).toEqual(["/source.bin", "/destination.bin"]);
+        expect(committedRoot(path)).toBe(frontier);
+        expect(committedEffects(path, "copy", target)).toBe(1);
+      },
+      { decorateFilesystem: countingWrites(writes) },
+    );
+  });
+
+  it("rejects a changed source or destination before the live copy", function* () {
+    for (const change of [{ source: "changed.bin" }, { destination: "changed.bin" }]) {
+      const root = yield* useStorageRoot();
+      const writes: string[] = [];
+      yield* withStorage(
+        root,
+        function* () {
+          const database = yield* createRun();
+          const path = runPath(root, database.record.runId);
+          yield* seed(database);
+          yield* runDocument(database, doc);
+          const frontier = committedRoot(path);
+          dropRootClose(path);
+          const failure = yield* scoped(function* () {
+            yield* API.Files.around({
+              copyFile: ([input], next) => next({ ...input, ...change }),
+            });
+            return yield* raised(replayDocument(database, doc));
+          });
+          expect(String(failure)).toContain("changed.bin");
+          expect(writes).toEqual(["/source.bin", "/destination.bin"]);
+          expect(committedRoot(path)).toBe(frontier);
+          expect(committedEffects(path, "copy", target)).toBe(1);
+        },
+        { decorateFilesystem: countingWrites(writes) },
+      );
+    }
+  });
+
+  it("refuses a malformed retained copy success", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* seed(database);
+      yield* runDocument(database, doc);
+      dropRootClose(path);
+      plantOutcome(path, "copy", target, { kind: "copied", path: "/destination.bin" });
+      const failure = yield* raised(replayDocument(database, doc));
+      expect(parseFilesFatal(fatalOf(failure))).toEqual({
+        type: FILES_FATAL,
+        kind: "invariant",
+        category: "protocol",
+      });
+    });
   });
 });

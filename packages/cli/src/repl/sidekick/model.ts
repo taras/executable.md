@@ -575,6 +575,7 @@ export interface SidekickRequest {
    * whether this request was the one that ran it.
    */
   readonly turn: number | undefined;
+  readonly resumeRefused?: true;
 }
 
 /**
@@ -622,6 +623,13 @@ export function retryable(
   const request = known.requests.find(
     (one) => one.conversation === conversation && one.kind === "message" && one.message === message,
   );
+  if (request?.resumeRefused === true) {
+    return Err(
+      new SidekickProjectionError(
+        "This conversation could not be resumed and is not offered for Retry.",
+      ),
+    );
+  }
   if (
     known.recoveries.some(
       (one) =>
@@ -706,6 +714,7 @@ export function requestsFromHistory(
     message: number | undefined;
     turn: number | undefined;
     outcomes: number;
+    resumeRefused?: true;
   }[] = [];
   /** The request whose records are still being read, per conversation. */
   const current = new Map<string, (typeof requests)[number]>();
@@ -754,6 +763,18 @@ export function requestsFromHistory(
       // nothing is invented to.
       continue;
     }
+    const outcome = parsed.value.result;
+    if (
+      outcome.status === "ok" &&
+      parsePromptRecord(outcome.value)?.error?.diagnostic?.stage === "held-session-ensure"
+    ) {
+      // Automatic feedback writes its own request in begin, which this attempt
+      // never reached. Only an explicit, still-open message can own it.
+      if (holding.kind !== "message" || holding.outcomes !== 0) {
+        continue;
+      }
+      holding.resumeRefused = true;
+    }
     holding.outcomes += 1;
     if (holding.outcomes > 1) {
       return Err(
@@ -775,6 +796,7 @@ export function requestsFromHistory(
           at: held.at,
           message: held.message,
           turn: held.turn,
+          ...(held.resumeRefused === true ? { resumeRefused: true as const } : {}),
         }),
       ),
     ),
@@ -831,13 +853,22 @@ function established(
  * is chat, and what belongs in chat is a sentence.
  */
 function incompleteFailure(record: PromptRecord): string {
-  if (record.error?.message !== undefined) {
-    return record.error.message;
+  if (record.error !== undefined) {
+    return sidekickFailureText(record.error);
   }
   if (record.stopReason !== undefined) {
     return `the agent stopped early (${record.stopReason}).`;
   }
   return `the agent's turn ${record.status}.`;
+}
+
+export function sidekickFailureText(failure: NonNullable<PromptRecord["error"]>): string {
+  const detail = failure.diagnostic?.acp?.details;
+  return failure.name === "SessionResumeRequiredError" &&
+    detail !== undefined &&
+    detail.trim() !== ""
+    ? `${detail}\n${failure.message}`
+    : failure.message;
 }
 
 /**

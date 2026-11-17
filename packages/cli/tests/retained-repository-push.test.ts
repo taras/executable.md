@@ -173,6 +173,7 @@ function hostFiles(): FilesHandler {
     globFiles: (input) => host.globFiles(input),
     temporaryDirectory: () => host.temporaryDirectory(),
     writeTextFile: (input: FileWriteInput) => host.writeTextFile(input),
+    copyFile: (input) => host.copyFile(input),
     deleteFile: (input) => host.deleteFile(input),
     ensureDirectory: (input) => host.ensureDirectory(input),
   };
@@ -303,6 +304,7 @@ function run(
         globFiles: ([input]) => files.globFiles(input),
         temporaryDirectory: () => files.temporaryDirectory(),
         writeTextFile: ([input]) => files.writeTextFile(input),
+        copyFile: ([input]) => files.copyFile(input),
         deleteFile: ([input]) => files.deleteFile(input),
         ensureDirectory: ([input]) => files.ensureDirectory(input),
       },

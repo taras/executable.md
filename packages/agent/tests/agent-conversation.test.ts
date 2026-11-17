@@ -118,6 +118,7 @@ interface Traffic {
 }
 
 interface StubOptions {
+  readonly refuseSession?: () => Error | undefined;
   readonly freshSession?: boolean;
   /** Throw from the provider's own final `next()`, after its terminal event. */
   readonly failsAfterTerminal?: boolean;
@@ -282,6 +283,10 @@ function stub(traffic: Traffic, options: StubOptions = {}): ExecutionInstallatio
               traffic.activated.push(declared);
               if (!authorized.ok) {
                 throw authorized.error;
+              }
+              const refusal = options.refuseSession?.();
+              if (refusal !== undefined) {
+                throw refusal;
               }
               const session: Session = {
                 sessionKey: options.places?.shift() ?? `stub:${routed.name ?? "default"}`,
@@ -3101,6 +3106,141 @@ describe("used held conversation continuation", () => {
     expect(opened.ok).toBe(true);
     expect(second.prompts).toEqual([]);
     expect(history.snapshot()).toEqual(retained);
+  });
+});
+
+describe("resume retention: held setup and recovery readers", () => {
+  const header = { provider: "acp", operation: "session/prompt", stage: "held-session-ensure" };
+  const diagnostic = { ...header, acp: { code: -32041, details: "synthetic adapter detail" } };
+  const message = "The retained session could not be resumed.";
+  const errorName = "SessionResumeRequiredError";
+
+  it("retains the fixed eager stage after an authenticated screening failure", function* () {
+    const history = new InMemoryStream();
+    const traffic = fresh();
+    let refuse = false;
+    const result = yield* withConversation(
+      history,
+      stub(traffic, {
+        asserts: () => "native-held-conversation",
+        refuseSession() {
+          if (refuse) {
+            const error = new Error(message, { cause: new Error("unselected error envelope") });
+            error.name = errorName;
+            return Object.assign(error, { "executablemd.agent.prompt-diagnostic": diagnostic });
+          }
+        },
+      }),
+      function* (chat) {
+        expect((yield* chat.prompt("establish")).ok).toBe(true);
+        refuse = true;
+        const failed = yield* chat.prompt("eager attempt");
+        if (failed.ok) {
+          throw new Error("The refused session ran");
+        }
+        expect(failed.error.name).toBe(errorName);
+        expect(failed.error.message).toBe(message);
+        expect(failed.error.cause).toBe(undefined);
+        expect(Reflect.get(failed.error, "executablemd.agent.prompt-diagnostic")).toEqual(header);
+        expect(traffic.prompts.map((one) => one.content)).toEqual(["establish"]);
+        refuse = false;
+        expect((yield* chat.prompt("fresh request")).ok).toBe(true);
+      },
+      "chat-1",
+      [
+        {
+          *install() {
+            yield* useSecretScannerFactory(() => ({
+              // deno-lint-ignore require-yield
+              *scan(content) {
+                if (content === JSON.stringify(diagnostic)) {
+                  throw new Error("synthetic diagnostic scan failure");
+                }
+                return [];
+              },
+            }));
+          },
+        },
+      ],
+    );
+    expect(result.ok).toBe(true);
+    const retained = history.snapshot();
+    expect(turnNames(retained)).toEqual(["turn:1", "turn:2", "turn:3"]);
+    const eager = record(retained, "turn:2");
+    expect(eager.error).toEqual({ message, name: errorName, diagnostic: header });
+    expect(eager.sequence).not.toBe(record(retained, "turn:1").sequence);
+    expect(eager.sequence).not.toBe(record(retained, "turn:3").sequence);
+    expect(traffic.facts.at(-1)).toEqual(traffic.facts.at(-2));
+    const idle = fresh();
+    expect((yield* withConversation(history, stub(idle), function* () {})).ok).toBe(true);
+    expect(idle.sessionAgents).toEqual([]);
+    expect(idle.prompts).toEqual([]);
+    expect(history.snapshot()).toEqual(retained);
+
+    const invalid = new InMemoryStream();
+    for (const event of retained) {
+      yield* invalid.append(
+        event.type === "yield" && event.description.name === "turn:2"
+          ? {
+              ...event,
+              result: {
+                status: "ok",
+                value: {
+                  sequence: 1,
+                  agent: AGENT,
+                  sessionKey: "old",
+                  status: "failed",
+                  text: "",
+                  error: { message, name: errorName, diagnostic: header },
+                },
+              },
+            }
+          : event,
+      );
+    }
+    const invalidBefore = invalid.snapshot();
+    const opened = yield* withConversation(invalid, stub(idle), function* () {
+      throw new Error("Unreadable history opened");
+    });
+    expect(!opened.ok && opened.error.message).toContain('retained turn "turn:2" cannot be read');
+    expect(idle.sessionAgents).toEqual([]);
+    expect(invalid.snapshot()).toEqual(invalidBefore);
+  });
+
+  it("refuses unsupported stages, ensure request IDs and inconsistent eager outcomes", function* () {
+    const base = { sequence: 1, agent: AGENT, sessionKey: "", status: "failed", text: "" };
+    const failure = { message, name: errorName, diagnostic };
+    expect(parsePromptRecord({ ...base, error: failure })?.error).toEqual(failure);
+    for (const fields of [
+      { stage: "unsupported" },
+      { stage: "prompt-ensure", requestId: "invented" },
+      { requestId: "invented" },
+      { extra: "unknown" },
+    ]) {
+      expect(
+        parsePromptRecord({
+          ...base,
+          error: { ...failure, diagnostic: { ...diagnostic, ...fields } },
+        }),
+      ).toBe(undefined);
+    }
+    for (const fields of [
+      { sessionKey: "previous" },
+      { status: "cancelled" },
+      { text: "not sent" },
+      { agentSessionId: "previous" },
+      { stopReason: "end_turn" },
+      { withheld: true },
+      { raised: true },
+      { configuration: {} },
+      { permissions: [] },
+      { unexpected: true },
+    ]) {
+      expect(parsePromptRecord({ ...base, ...fields, error: failure })).toBe(undefined);
+    }
+    expect(parsePromptRecord({ ...base, error: { ...failure, cause: "raw cause" } })).toBe(
+      undefined,
+    );
   });
 });
 

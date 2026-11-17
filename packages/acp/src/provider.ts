@@ -114,6 +114,7 @@ import type {
   AcpRuntimeOptions,
   AcpRuntimeTurn,
   AcpRuntimeTurnResult,
+  AcpRuntimeTurnResultError,
   AcpRuntimeUsageBreakdown,
   AcpRuntimeUsageCost,
   AcpSessionRecord,
@@ -125,7 +126,8 @@ import {
   createPermissionBridge,
   strictPermissions,
 } from "./permission-bridge.ts";
-import { consumeTurn } from "./events.ts";
+import { consumeTurn, withPromptDiagnostic } from "./events.ts";
+import type { PromptDiagnosticSource } from "./events.ts";
 import { capturePromptUsage, turnUsage } from "./usage.ts";
 import type { PromptUsageHost, TurnUsage } from "./usage.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
@@ -1932,6 +1934,7 @@ function* useAcpxProviderState(
      * this ensure itself may perform. Never kept on the entry it returns.
      */
     requestedModel?: string;
+    resumeFailureStage?: "held-session-ensure" | "prompt-ensure";
   }
 
   function* ensureFromPrepared(
@@ -2033,7 +2036,13 @@ function* useAcpxProviderState(
       // reported as an ordinary reattachment's is: the adapter's account,
       // with nothing created in its place.
       if (attachment === undefined) {
-        throw sessionResumeFailure(error, prepared.details.sessionKey);
+        throw sessionResumeFailure(
+          error,
+          prepared.details.sessionKey,
+          intent.resumeFailureStage === undefined
+            ? undefined
+            : { stage: intent.resumeFailureStage },
+        );
       }
       // An exact resume that the provider could not perform: it has no such
       // history, or it cannot resume by name at all. Either way the
@@ -3183,6 +3192,7 @@ function* useAcpxProviderState(
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
             ...modelRequest(desired),
+            resumeFailureStage: "prompt-ensure",
             materialization:
               constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
             deferEstablished:
@@ -3316,7 +3326,10 @@ function* useAcpxProviderState(
             try {
               yield* until(turn.promptStarted);
             } catch (error) {
-              throw sessionResumeFailure(error, entry.session.sessionKey);
+              throw sessionResumeFailure(error, entry.session.sessionKey, {
+                stage: "runtime-turn",
+                requestId: turn.requestId,
+              });
             }
           }
 
@@ -4941,6 +4954,9 @@ function* useAcpxProviderState(
                   : { build: construction.build, verifyReopening: construction.verifyReopening }),
                 ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
                 state,
+                ...(selectedAgent === undefined
+                  ? {}
+                  : { resumeFailureStage: "held-session-ensure" }),
                 ...(setup?.requestedModel === undefined
                   ? {}
                   : { requestedModel: setup.requestedModel }),
@@ -5058,7 +5074,11 @@ function nativeIdentityRefusal(error: unknown): AttachmentRefused | undefined {
   }
 }
 
-function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
+function sessionResumeFailure(
+  error: unknown,
+  sessionKey: string,
+  source?: PromptDiagnosticSource,
+): unknown {
   const refusal = nativeIdentityRefusal(error);
   if (refusal) {
     return refusal;
@@ -5068,9 +5088,53 @@ function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
     error !== null &&
     Reflect.get(error, "detailCode") === "SESSION_RESUME_REQUIRED"
   ) {
-    return new SessionResumeRequiredError(sessionKey, { cause: error });
+    const failure = new SessionResumeRequiredError(sessionKey);
+    if (source === undefined) {
+      return failure;
+    }
+    const code = Reflect.get(error, "outputCode");
+    const origin = Reflect.get(error, "origin");
+    const retryable = Reflect.get(error, "retryable");
+    return withPromptDiagnostic(
+      failure,
+      {
+        message: failure.message,
+        code: typeof code === "string" && code.trim().length > 0 ? code : "RUNTIME",
+        detailCode: "SESSION_RESUME_REQUIRED",
+        origin: origin === "cli" || origin === "queue" || origin === "acp" ? origin : "runtime",
+        ...(typeof retryable === "boolean" ? { retryable } : {}),
+        acp: resumeProtocolFacts(error),
+      },
+      source,
+    );
   }
   return error;
+}
+
+function resumeProtocolFacts(error: unknown, depth = 0): AcpRuntimeTurnResultError["acp"] {
+  if (depth > 5 || typeof error !== "object" || error === null || Array.isArray(error)) {
+    return undefined;
+  }
+  const code = Reflect.get(error, "code");
+  const message = Reflect.get(error, "message");
+  if (
+    typeof code === "number" &&
+    Number.isFinite(code) &&
+    typeof message === "string" &&
+    message.length > 0
+  ) {
+    const data = Reflect.get(error, "data");
+    const details =
+      typeof data === "object" && data !== null ? Reflect.get(data, "details") : undefined;
+    return { code, message, ...(typeof details === "string" ? { details } : {}) };
+  }
+  for (const key of ["acp", "error", "cause"]) {
+    const facts = resumeProtocolFacts(Reflect.get(error, key), depth + 1);
+    if (facts !== undefined) {
+      return facts;
+    }
+  }
+  return undefined;
 }
 
 export class SessionResumeRequiredError extends Error {

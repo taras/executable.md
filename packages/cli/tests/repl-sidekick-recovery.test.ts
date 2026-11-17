@@ -1,3 +1,4 @@
+import type { PromptRecord } from "@executablemd/agent/host";
 import { PLACEMENT } from "../src/repl/entry-placement.ts";
 import { useSidekickOwner } from "../src/repl/sidekick/owner.ts";
 import { rootReads } from "../src/repl/sidekick/requests.ts";
@@ -92,6 +93,7 @@ import {
   projectHistory,
   projectSidekick,
   recoveryRequired,
+  retryable,
   REPLY_WITHHELD,
 } from "../src/repl/sidekick/model.ts";
 import { sidekickChatRows } from "../src/repl/program.ts";
@@ -176,7 +178,7 @@ function turn(
     /** The provider conversation this record names, which may be none. */
     sessionKey?: string;
     stopReason?: string;
-    error?: { message: string };
+    error?: PromptRecord["error"];
   } = {},
 ): SidekickRecord {
   const event: DurableEvent = {
@@ -214,6 +216,78 @@ function turn(
     event: serializeDurableEvent(event),
   };
 }
+
+describe("resume retention: exact request ownership", () => {
+  const message: SidekickRecord = {
+    kind: "message",
+    id: "message-1",
+    origin: { kind: "ui" },
+    conversation: CHAT,
+    turn: 1,
+    revision: 1,
+    text: "initial request",
+  };
+  const resumeMessage = "The retained session could not be resumed.";
+  const prefix = [...opened(), message, turn(1, "answer"), reply(1, "answer")];
+
+  function eagerFailure(): SidekickRecord {
+    return turn(2, "", {
+      input: "new request and prior results",
+      status: "failed",
+      sessionKey: "",
+      error: {
+        message: resumeMessage,
+        name: "SessionResumeRequiredError",
+        diagnostic: { provider: "acp", operation: "session/prompt", stage: "held-session-ensure" },
+      },
+    });
+  }
+
+  it("keeps automatic feedback refused before begin as a standalone attempt", function* () {
+    const reading = project([...prefix, eagerFailure()]);
+    expect(reading.requests).toHaveLength(1);
+    expect(reading.requests[0]?.turn).toBe(1);
+    expect(reading.turns.at(-1)).toMatchObject({
+      turn: 2,
+      asked: undefined,
+      sessionKey: undefined,
+    });
+    expect(reading.chat.at(-1)).toMatchObject({
+      kind: "incomplete",
+      turn: 2,
+      failure: resumeMessage,
+    });
+    expect(reading.feedback).toEqual([]);
+    expect(reading.delivered).toEqual([]);
+    expect(reading.unestablished).toEqual([]);
+    expect(projectSidekick([...prefix, turn(2, "second outcome")]).ok).toBe(false);
+  });
+
+  it("associates the eager attempt with its own message carrying feedback and refuses Retry", function* () {
+    const next = { ...message, id: "message-2", turn: 2, text: "new request" };
+    const feedback: SidekickRecord = {
+      kind: "feedback",
+      conversation: CHAT,
+      response: "r1",
+      turn: null,
+      text: "new request and prior results",
+    };
+    const reading = project([...prefix, next, feedback, eagerFailure()]);
+    expect(reading.requests.map((request) => [request.message, request.turn])).toEqual([
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(reading.turns.at(-1)).toMatchObject({ asked: "person", title: "new request" });
+    expect(reading.delivered).toEqual([]);
+    expect(retryable(reading, CHAT, 2).ok).toBe(false);
+    const ordinary = project([
+      ...prefix,
+      next,
+      turn(2, "", { status: "failed", error: { message: "ordinary failure" } }),
+    ]);
+    expect(retryable(ordinary, CHAT, 2)).toEqual(Ok(next.text));
+  });
+});
 
 function reply(order: number, text: string): SidekickRecord {
   return {
@@ -4844,7 +4918,7 @@ describe("1183 — the exact live feedback request is the only exception", () =>
   });
 });
 
-describe("1269 — mounted retained recovery corrections", () => {
+describe("resume retention and mounted retained recovery corrections", () => {
   const savedText = "Continue the exact saved instruction.";
   const oldText = "Original chat remains readable.";
   const entryText = "An established entry remains readable.";
@@ -5008,6 +5082,55 @@ describe("1269 — mounted retained recovery corrections", () => {
     yield* page.until("the refused Message remains", (one) => composerHolds(one, savedText));
     expect(yield* readSidekickRecords(held.chat.location.sidekick)).toEqual(before);
     expect(held.host.fake.prompts).toHaveLength(2);
+  });
+
+  it("keeps Start new chat and no Retry after a classified eager original refusal is saved", function* () {
+    const held = yield* retained();
+    held.host.fake.refuseSessionResume(held.session, "Release the active writer.");
+    const before = yield* readSidekickRecords(held.chat.location.sidekick);
+    yield* scoped(function* () {
+      const page = yield* useReplPage({
+        host: { ...held.host, profile: held.profile },
+        location: held.location,
+      });
+      yield* sendMessage(page, savedText);
+      yield* page.until(
+        "the saved fallback and new chat action",
+        (one) => one.shows("could not be resumed") && one.shows("[Start new chat]"),
+      );
+      expect(page.screen().shows("Release the active writer.")).toBe(true);
+      expect(page.screen().shows("[Retry]")).toBe(false);
+      page.repl.terminal.end();
+      yield* awaited("the REPL joining", () => page.repl.outcome() !== undefined);
+    });
+    const after = yield* readSidekickRecords(held.chat.location.sidekick);
+    const reading = project(after);
+    expect(held.host.fake.prompts).toHaveLength(2);
+    expect(reading.active).toBe(held.conversation);
+    expect(reading.turns.at(-1)).toMatchObject({
+      status: "failed",
+      sessionKey: undefined,
+      asked: "person",
+      title: savedText,
+    });
+    expect(after.slice(before.length).filter((record) => record.kind === "feedback")).toEqual([]);
+    expect(JSON.stringify(after)).not.toContain("unrelated synthetic RPC payload");
+    const attempt = reading.requests.at(-1);
+    expect(attempt?.resumeRefused).toBe(true);
+    if (attempt?.message === undefined) {
+      throw new Error("The eager attempt has no durable message");
+    }
+    expect(retryable(reading, held.conversation, attempt.message).ok).toBe(false);
+    const reopened = yield* useReplPage({
+      host: { ...held.host, profile: held.profile },
+      location: held.location,
+    });
+    yield* reopened.until(
+      "the retained local failure",
+      (one) => one.shows("Release the active writer.") && one.shows("could not be resumed"),
+    );
+    expect(reopened.screen().shows("[Retry]")).toBe(false);
+    expect(yield* readSidekickRecords(held.chat.location.sidekick)).toEqual(after);
   });
 
   for (const mode of ["prepared", "missing load"] as const) {

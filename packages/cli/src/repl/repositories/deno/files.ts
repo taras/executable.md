@@ -49,7 +49,7 @@ import { createMountPolicy } from "../../mount-files.ts";
  */
 
 import type { Operation, Result } from "effection";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import { Err, until } from "effection";
 import { filesFailure, Permissions } from "@executablemd/runtime";
@@ -316,7 +316,51 @@ function* canonical(directory: string): Operation<string> {
  */
 function inside(checkoutRoot: string, target: string): boolean {
   const at = relative(checkoutRoot, target);
-  return at !== "" && !at.startsWith("..") && !isAbsolute(at);
+  return at !== "" && at !== ".." && !at.startsWith(".." + sep) && !isAbsolute(at);
+}
+
+function* copyRoute(
+  recorder: ReplLocalRecorder,
+  source: string,
+  destination: string,
+  roots: readonly string[],
+): Operation<Operation<void> | undefined> {
+  const placements = recorder.placements();
+  const read = covering(placements, source);
+  const write = covering(placements, destination);
+  const checkout = write === undefined ? yield* recorder.selection() : undefined;
+  const hold =
+    write?.commonDirectory ??
+    (checkout !== undefined && inside(checkout.checkoutRoot, destination)
+      ? checkout.commonDirectory
+      : undefined);
+  let owned = false;
+  if (hold === undefined) {
+    for (const directory of roots) {
+      const root = yield* canonical(directory);
+      if (root === destination || inside(root, destination)) {
+        owned = true;
+        break;
+      }
+    }
+  }
+  if (hold === undefined && !owned) {
+    if (read !== undefined) {
+      yield* read.own();
+    }
+    return undefined;
+  }
+  return (function* () {
+    if (read !== undefined && read !== write) {
+      yield* read.own();
+    }
+    if (write !== undefined) {
+      yield* write.own();
+    }
+    if (hold !== undefined) {
+      yield* recorder.hold(hold);
+    }
+  })();
 }
 
 export function* useReplFileRecorder(
@@ -327,8 +371,18 @@ export function* useReplFileRecorder(
   access?: HostFilesAccess,
 ): Operation<MountFileEntry> {
   const policy = yield* createMountPolicy(mounts, directory);
-  const files = yield* useEntryFileRecorder((operation, request, perform, authored) =>
-    routed(recorder, operation, request, perform, workspace, authored, policy, access),
+  const roots = [
+    ...(workspace === undefined ? [] : [workspace]),
+    ...(access === undefined ? [] : [access.project, access.assets, access.components]),
+  ];
+  const files = yield* useEntryFileRecorder(
+    (operation, request, perform, authored) =>
+      routed(recorder, operation, request, perform, workspace, authored, policy, access),
+    {
+      guard: () => policy.guard(),
+      restoreSelection: () => recorder.selection(),
+      route: (source, destination) => copyRoute(recorder, source, destination, roots),
+    },
   );
   return { files, policy };
 }

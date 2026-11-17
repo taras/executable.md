@@ -109,8 +109,9 @@ import type {
   SessionConfiguration,
 } from "./agent-api.ts";
 import { AgentInternal } from "./internal.ts";
-import { runPrompt } from "./function-components.ts";
+import { retainPromptFailure, runPrompt } from "./function-components.ts";
 import type { Carried, DirectPromptTurn } from "./function-components.ts";
+import { readPromptDiagnostic, SESSION_RESUME_REQUIRED_ERROR } from "./errors.ts";
 import {
   AGENT_PROMPT,
   parsePromptRecord,
@@ -1119,6 +1120,7 @@ function conversationTurn(
       // than being journaled as a failed turn — and it is also the agent both
       // of this turn's operations are given.
       const agent = yield* provider.agent(request.agent);
+      let eagerRefusal: Error | undefined;
       yield* scoped(function* (): Operation<void> {
         // The requirement travels inside the issuance, where the provider
         // reaches it only through the setup the coordinator delivers. A
@@ -1134,6 +1136,16 @@ function conversationTurn(
           // ends the one use: what this says is which Session this request's
           // own setup finished with, and only the opener can ask.
           settled = issuance.completed();
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.name === SESSION_RESUME_REQUIRED_ERROR &&
+            readPromptDiagnostic(error)?.stage === "held-session-ensure"
+          ) {
+            eagerRefusal = error;
+            return;
+          }
+          throw error;
         } finally {
           issuance.close();
         }
@@ -1234,6 +1246,24 @@ function conversationTurn(
         const failure = promptFailureFromRecord(record);
         job.answer.resolve(failure === undefined ? Ok(record.text) : Err(failure));
       });
+      if (eagerRefusal !== undefined) {
+        const refusal = eagerRefusal;
+        const sequence = yield* AgentInternal.operations.nextPromptSequence();
+        const record = yield* persistPrompt(
+          { name: turnName(order), input: job.input },
+          function* (): Operation<PromptRecord> {
+            return {
+              sequence,
+              agent,
+              sessionKey: "",
+              status: "failed",
+              text: "",
+              error: yield* retainPromptFailure(refusal),
+            };
+          },
+        );
+        job.answer.resolve(Err(promptFailureFromRecord(record) ?? refusal));
+      }
     } catch (error) {
       // A refusal before the turn started — an unavailable agent, an identity
       // the provider would not reattach, a conversation it put under settings
@@ -1484,17 +1514,22 @@ function* openable(request: AgentConversationRequest): Operation<Result<Conversa
     // record naming none was a turn the provider reported no identity for,
     // which establishes nothing either way.
     const record = parsePromptRecord(event.result.value);
-    if (record !== undefined) {
-      used ||=
-        record.text !== "" ||
-        record.status !== "failed" ||
-        record.stopReason !== undefined ||
-        record.agentSessionId !== undefined;
+    if (record === undefined) {
+      return Err(
+        new AgentConversationError(
+          `this conversation's retained turn "${name}" cannot be read. Reconcile this history before sending another turn.`,
+        ),
+      );
     }
-    if (record?.agentSessionId !== undefined) {
+    used ||=
+      record.text !== "" ||
+      record.status !== "failed" ||
+      record.stopReason !== undefined ||
+      record.agentSessionId !== undefined;
+    if (record.agentSessionId !== undefined) {
       asserted.add(record.agentSessionId);
     }
-    if (record !== undefined && record.sessionKey !== "") {
+    if (record.sessionKey !== "") {
       sessionKey = record.sessionKey;
     }
   }

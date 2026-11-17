@@ -35,7 +35,7 @@ import { Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { Component } from "@executablemd/core";
 import { Agent } from "@executablemd/agent/api";
-import { installAgentComponents } from "@executablemd/agent/host";
+import { installAgentComponents, useAgentPromptPublisher } from "@executablemd/agent/host";
 import type { FunctionComponentDefinition, Json } from "@executablemd/core";
 import type { Session } from "@executablemd/agent/api";
 import { useAgentConversation } from "@executablemd/agent/host";
@@ -1738,7 +1738,7 @@ describe(
 );
 
 describe(
-  "a held Codex conversation across a host CLI upgrade",
+  "resume retention: a held Codex conversation across a host CLI upgrade",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     for (const [mode, failure, errorName] of [
@@ -1746,6 +1746,7 @@ describe(
       ["normal", "reopened a different native conversation", "AttachmentRefused"],
       ["standard", "did not confirm the retained native conversation", "AttachmentRefused"],
       ["missing", "could not be resumed", "SessionResumeRequiredError"],
+      ["distinct-refused", "could not be resumed", "SessionResumeRequiredError"],
     ] as const) {
       it(`requires the new build's live identity (${mode})`, function* () {
         yield* withCertificationFixture(function* (f) {
@@ -1779,9 +1780,29 @@ describe(
           target.observer.observation.path = "/opt/builds/codex-0.167.1";
           target.observer.observation.versionOutput = "codex-cli 0.167.1\n";
           target.observer.observation.digest = "b".repeat(64);
+          const begun: string[] = [];
+          const published: unknown[] = [];
+          const provider = target.installation(mode === "missing" ? command : f.command(mode));
           const resumed = yield* withConversation(
             stream,
-            target.installation(mode === "missing" ? command : f.command(mode)),
+            {
+              ...provider,
+              *install() {
+                if (provider.install !== undefined) {
+                  yield* provider.install();
+                }
+                yield* useAgentPromptPublisher({
+                  *begin(text) {
+                    begun.push(text);
+                    return {};
+                  },
+                  *publish(publication) {
+                    published.push(publication.begun);
+                    yield* publication.append();
+                  },
+                });
+              },
+            },
             (chat) => chat.prompt("recall", { model: "selected", effort: "high" }),
             "codex",
           );
@@ -1822,7 +1843,76 @@ describe(
             expect(methods).not.toContain("session/set_config_option");
             expect(methods).not.toContain("session/prompt");
             expect(yield* until(target.store.load(key))).toEqual(record);
-            expect(stream.snapshot().map(serializeDurableEvent)).toEqual(lines);
+            if (errorName === "SessionResumeRequiredError") {
+              const after = stream.snapshot();
+              expect(after.slice(0, lines.length).map(serializeDurableEvent)).toEqual(lines);
+              expect(after).toHaveLength(lines.length + 1);
+              const saved = turns(after).at(-1);
+              const expectedError = {
+                message: resumed.value.error.message,
+                name: errorName,
+                diagnostic: {
+                  provider: "acp",
+                  operation: "session/prompt",
+                  stage: "held-session-ensure",
+                  code: "RUNTIME",
+                  detailCode: "SESSION_RESUME_REQUIRED",
+                  origin: "acp",
+                  retryable: true,
+                  acp:
+                    mode === "missing"
+                      ? { code: -32603, message: "missing controlled history" }
+                      : {
+                          code: -32041,
+                          message: "Internal error",
+                          details: "Release the active writer before reconnecting.",
+                        },
+                },
+              };
+              expect(saved?.name).toBe("turn:2");
+              expect(saved?.record).toEqual({
+                sequence: expect.any(Number),
+                agent: "codex",
+                sessionKey: "",
+                status: "failed",
+                text: "",
+                error: expectedError,
+              });
+              const event = after.at(-1);
+              expect(event?.type === "yield" && event.description.input).toBe("recall");
+              expect(begun).toEqual([]);
+              expect(published).toEqual([undefined]);
+              expect(resumed.value.error.cause).toBe(undefined);
+              expect(
+                Reflect.get(resumed.value.error, "executablemd.agent.prompt-diagnostic"),
+              ).toEqual(expectedError.diagnostic);
+              if (mode === "distinct-refused") {
+                const attemptedCalls = (yield* f.calls()).length;
+                const later = yield* withConversation(
+                  stream,
+                  target.installation(f.command("distinct-next")),
+                  (chat) => chat.prompt("recover"),
+                  "codex",
+                );
+                expect(answer(later)).toBe("remembered");
+                const sent = (yield* f.calls()).slice(attemptedCalls);
+                expect(sent.filter((call) => call.method === "session/prompt")).toMatchObject([
+                  { sessionId: record.acpSessionId },
+                ]);
+                expect(sent.map((call) => call.method)).not.toContain("session/new");
+                expect(turns(stream.snapshot()).map((turn) => turn.name)).toEqual([
+                  "turn:1",
+                  "turn:2",
+                  "turn:3",
+                ]);
+                expect((yield* until(target.store.load(key)))?.agentSessionId).toBe(
+                  record.agentSessionId,
+                );
+                expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
+              }
+            } else {
+              expect(stream.snapshot().map(serializeDurableEvent)).toEqual(lines);
+            }
           }
         });
       });

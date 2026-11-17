@@ -1,6 +1,6 @@
 import { hostFileAccessReason, filesFailure, fileWriteFailure } from "@executablemd/runtime";
 import type { HostFilesAccess } from "@executablemd/runtime";
-import { Err } from "effection";
+import { Err, lift } from "effection";
 import { admitReplRepositoryHistory } from "./repositories/admission.ts";
 import { cwd } from "@executablemd/runtime";
 import type { Operation, Result } from "effection";
@@ -49,6 +49,10 @@ export function workspaceMountInstallation(
       } else {
         const directory = yield* cwd();
         const policy = yield* createMountPolicy(mounts, directory);
+        const roots = [
+          ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
+          ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
+        ];
         const files = yield* useEntryFileRecorder(
           function* (operation, request, perform, authored): Operation<Result<ReplLocalValue>> {
             yield* policy.guard();
@@ -62,10 +66,6 @@ export function workspaceMountInstallation(
             if (yield* retainedResultAhead(name)) {
               return yield* recordedLocalOperation({ operation, request, perform });
             }
-            const roots = [
-              ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
-              ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
-            ];
             const permitted =
               roots.length === 0 ||
               ((yield* Permissions.operations.files(
@@ -136,6 +136,19 @@ export function workspaceMountInstallation(
               });
             }
             return yield* perform();
+          },
+          {
+            guard: () => policy.guard(),
+            *route(_source, destination) {
+              for (const directory of roots) {
+                const root = (yield* API.Fs.operations.realpath(directory)) ?? resolve(directory);
+                const at = relative(root, destination);
+                if (at !== ".." && !at.startsWith(".." + sep) && !isAbsolute(at)) {
+                  return lift(() => undefined)();
+                }
+              }
+              return undefined;
+            },
           },
         );
         entry = { files, policy };

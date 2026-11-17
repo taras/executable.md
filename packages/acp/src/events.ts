@@ -25,7 +25,11 @@
 import { each, race, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
 import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/agent/api";
-import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
+import type {
+  AcpRuntimeTurn,
+  AcpRuntimeTurnResult,
+  AcpRuntimeTurnResultError,
+} from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./xmd-response.ts";
 import type { Registration } from "./permission-bridge.ts";
@@ -182,29 +186,44 @@ function mapResult(result: AcpRuntimeTurnResult, requestId: string): AgentPrompt
     }
     return terminal;
   }
-  const failure = new Error(result.error.message);
+  return {
+    type: "terminal",
+    status: "failed",
+    error: withPromptDiagnostic(new Error(result.error.message), result.error, {
+      stage: "runtime-turn",
+      requestId,
+    }),
+  };
+}
+
+export type PromptDiagnosticSource =
+  | { stage: "runtime-turn"; requestId: string }
+  | { stage: "held-session-ensure" | "prompt-ensure" };
+
+export function withPromptDiagnostic(
+  failure: Error,
+  facts: AcpRuntimeTurnResultError,
+  source: PromptDiagnosticSource,
+): Error {
   Object.defineProperty(failure, "executablemd.agent.prompt-diagnostic", {
     value: {
       provider: "acp",
       operation: "session/prompt",
-      stage: "runtime-turn",
-      requestId,
-      ...(result.error.code === undefined ? {} : { code: result.error.code }),
-      ...(result.error.detailCode === undefined ? {} : { detailCode: result.error.detailCode }),
-      ...(result.error.retryable === undefined ? {} : { retryable: result.error.retryable }),
-      ...(result.error.origin === undefined ? {} : { origin: result.error.origin }),
-      ...(result.error.acp === undefined
+      ...source,
+      ...(facts.code === undefined ? {} : { code: facts.code }),
+      ...(facts.detailCode === undefined ? {} : { detailCode: facts.detailCode }),
+      ...(facts.retryable === undefined ? {} : { retryable: facts.retryable }),
+      ...(facts.origin === undefined ? {} : { origin: facts.origin }),
+      ...(facts.acp === undefined
         ? {}
         : {
             acp: {
-              code: result.error.acp.code,
-              message: result.error.acp.message,
-              ...(result.error.acp.details === undefined
-                ? {}
-                : { details: result.error.acp.details }),
+              code: facts.acp.code,
+              message: facts.acp.message,
+              ...(facts.acp.details === undefined ? {} : { details: facts.acp.details }),
             },
           }),
     },
   });
-  return { type: "terminal", status: "failed", error: failure };
+  return failure;
 }

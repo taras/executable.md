@@ -75,7 +75,11 @@ function respond(request) {
     if (controlDirectory && request.method === "session/load") {
       fs.access(path.join(controlDirectory, "fail-load"), error => {
         if (error) loaded();
-        else send({jsonrpc: "2.0", id: request.id, error: {code: -32603, message: "Controlled cold load failure"}});
+        else fs.readFile(path.join(controlDirectory, "fail-load"), "utf8", (error, text) => {
+          if (error) throw error;
+          const failure = text === "enabled" ? {code: -32603, message: "Controlled cold load failure"} : JSON.parse(text);
+          send({jsonrpc: "2.0", id: request.id, error: failure});
+        });
       });
     } else loaded();
   } else if (request.method === "session/set_config_option") {

@@ -72,7 +72,11 @@ import type {
 import type { LaunchIdentity } from "./launch-journal.ts";
 import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
-import { readPromptDiagnostic, serializePromptFailure } from "./errors.ts";
+import {
+  readPromptDiagnostic,
+  serializePromptFailure,
+  SESSION_RESUME_REQUIRED_ERROR,
+} from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import {
   auditedPromptStream,
@@ -788,6 +792,10 @@ function* selectPromptDiagnostic(error: Error): Operation<SerializedPromptFailur
   if (selected === undefined) {
     return undefined;
   }
+  const fallback =
+    selected.stage === "held-session-ensure"
+      ? { provider: selected.provider, operation: selected.operation, stage: selected.stage }
+      : undefined;
   try {
     const policy = yield* secretPolicy();
     if (!policy.enabled) {
@@ -818,10 +826,14 @@ function* selectPromptDiagnostic(error: Error): Operation<SerializedPromptFailur
         }
       }
     }
-    return (yield* scanSecrets(JSON.stringify(selected))).length === 0 ? selected : undefined;
+    return (yield* scanSecrets(JSON.stringify(selected))).length === 0 ? selected : fallback;
   } catch {
-    return undefined;
+    return fallback;
   }
+}
+
+export function* retainPromptFailure(error: Error): Operation<SerializedPromptFailure> {
+  return serializePromptFailure(error, yield* selectPromptDiagnostic(error));
 }
 
 /**
@@ -940,10 +952,7 @@ export function* runPrompt(
             result.stopReason = event.stopReason;
           }
           if (event.error) {
-            result.failure = serializePromptFailure(
-              event.error,
-              yield* selectPromptDiagnostic(event.error),
-            );
+            result.failure = yield* retainPromptFailure(event.error);
           }
           const checkpoint = checkpointOf(event);
           if (checkpoint !== undefined) {
@@ -1008,7 +1017,10 @@ export function* runPrompt(
       throw error;
     }
     consumed.status = "failed";
-    consumed.failure = serializePromptFailure(error);
+    consumed.failure =
+      error instanceof Error && error.name === SESSION_RESUME_REQUIRED_ERROR
+        ? yield* retainPromptFailure(error)
+        : serializePromptFailure(error);
   }
 
   const status = consumed.status ?? "failed";

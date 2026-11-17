@@ -1060,6 +1060,20 @@ refuses a selector supported only by an observation the former owner lost.
 
 ## Reading a previous chat
 
+A retained eager resume refusal appears as one incomplete attempt. An
+explicit message already has a durable request, including a message carrying
+recovered feedback, so that request owns the attempt. Automatic feedback
+records its request at canonical begin. A refusal before that boundary has
+no established request and appears beside the preceding attempt on its own.
+It creates no feedback intent or acknowledgement. A second ordinary outcome
+for the same request still refuses the history.
+
+For a classified resume refusal, chat displays the screened ACP details as
+literal text followed by the saved recovery message. A missing or blank detail
+leaves the recovery message alone. The live exchange, including an original
+continuation refusal, uses the same text as the saved attempt. The entry
+Journal returns the canonical saved fields with their original values.
+
 Activating a Sidekick turn opens the chat that contains it and brings that turn
 into view. It sets `view=sidekick`, `right=sidekick` and that chat's own
 identifier, and preserves the conversation filter, the saved surface, the
@@ -2286,13 +2300,38 @@ uncertain append establishes no saved value or Unit.
 
 Start the REPL inside a Git checkout and an entry's file work is retained too,
 under the ordinary physical records. The prospective mapped class above uses its
-closed association record. Four operations are
-kept: a self-closing `<File path="…" as="…" />` text read; a paired
+closed association record. The physical records keep a self-closing `<File path="…" as="…" />` text read; a paired
 `<File path="…">…</File>` write, after its content has expanded; a self-closing
-`<File.Delete path="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
+`<File.Delete path="…" />`; a self-closing `<File.Copy from="…" to="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
 ensures, before its content is entered. The reads, writes and deletions an
 admitted `<Evaluate>` fragment performs are kept on the same terms, because a
 fragment's operations go to the same document filesystem an authored one does.
+
+A copy uses the physical record even when its working directory came from a
+mount. Each entry numbers received copy calls from zero within each durable
+coroutine, counting uncovered, refused and synthetic calls. The copy record
+and name carry this ordinal. Its fingerprint binds the ordinal, the received
+working directory and both ordered operands. Admission requires strictly
+increasing nonnegative safe integer ordinals per coroutine and accepts gaps.
+A copy record requires an ordinal.
+
+After restoring any pending ambient selection, an equal ordinal offers the
+current fingerprint to the durable matcher before live work. A changed operand
+at that occurrence diverges, including when the new destination is uncovered.
+A lower retained ordinal fails before live work. A higher ordinal stays
+pending while the current call takes the live path. Acknowledged Unit and
+ordinary refusals restore before Files composition or target observations.
+
+The host routes each live delegation by its effective resolved operands after
+authorization and containment. The destination's resolved parent and final
+entry determine coverage. Both managed operand slots precede the destination
+checkout's mutation hold. Owned-root coverage requires no Git lease.
+A covered dispatch cannot insert an outcome ahead of retained history.
+The outer recorder publishes the final composed answer after settlement when
+at least one dispatch reached covered storage. Uncovered and purely synthetic
+calls have no copy result. If native copy completed before an unacknowledged append,
+a continuation attempts the operation live. An occupied destination then
+produces an ordinary refusal with its bytes intact.
 
 What that buys is the one thing experimentation needs: leave an entry at a
 question, come back to the printed location, and the work it already did is not
@@ -3132,6 +3171,12 @@ keeps the response owner selected through joined cleanup. Ordinary entries
 attach no host invocation observer.
 
 ## Who owns what
+
+When eager ensure refuses to continue the original conversation, the failed
+result still offers **Start new chat** after the attempt is saved. Retry
+remains unavailable for that request while live and after reopening. A
+subscription failure that reached canonical begin keeps its existing
+recovery behavior. The entry Journal reads the canonical saved failure.
 
 The host acquires one protected-input installation before each producing entry’s providers. It keeps that owner until those providers join, safely seals each independent output channel, and then disposes live input and pending text. Output received after disposal refuses instead of falling back to raw forwarding.
 
