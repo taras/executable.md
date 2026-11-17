@@ -27,6 +27,7 @@
  * `execute()` has none and behaves exactly as it always did.
  */
 
+import { journalCases } from "../../test-support/journal-cases.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, until } from "effection";
@@ -67,6 +68,10 @@ import { createExactSource, isExactSource } from "../src/output/exact-source.ts"
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/component-resolution.ts";
 import type { PropsSchema, Segment } from "../src/types.ts";
+
+const registerJournalCase = journalCases("packages/core/tests/declared-markdown-component.test.ts");
+const journalCase = (name: string, body: (stream: InMemoryStream) => Operation<void>) =>
+  registerJournalCase(name, ROOT_PATH, body);
 
 const ROOT_PATH = "documents/root.md";
 const ORIGIN = "@executablemd/test/Policy.md";
@@ -308,108 +313,145 @@ function* workspace(files: Record<string, string>): Operation<string> {
 }
 
 describe("Tier DM — retained text context", () => {
-  it("DM1b: canonical retention keeps midline interpolation and passive source", function* () {
-    const source = [
-      '<Let as="source" value="CURRENT_1050" />',
-      '<Let as="prefix" value={0} />```xmd',
-      "{source}",
-      "```",
-      "",
-      "~~~xmd",
-      "{source}",
-      "~~~",
-    ].join("\n");
-    const output = yield* run("<Policy />", [declared(source)]);
-    expect(output).toBe("\n```xmd\nCURRENT_1050\n```\n\n~~~xmd\n{source}\n~~~");
-  });
+  journalCase(
+    "DM1b: canonical retention keeps midline interpolation and passive source",
+    function* (stream) {
+      const source = [
+        '<Let as="source" value="CURRENT_1050" />',
+        '<Let as="prefix" value={0} />```xmd',
+        "{source}",
+        "```",
+        "",
+        "~~~xmd",
+        "{source}",
+        "~~~",
+      ].join("\n");
+      const output = yield* run("<Policy />", [declared(source)], undefined, stream);
+      expect(output).toBe("\n```xmd\nCURRENT_1050\n```\n\n~~~xmd\n{source}\n~~~");
+    },
+  );
 });
 
 describe("Tier DM — a declaration is held to its own bytes", () => {
-  it("DM1: a declared name resolves to the declared source with no search path", function* () {
-    expect(yield* run("<Policy />\n")).toContain("The policy ran.");
-  });
+  journalCase(
+    "DM1: a declared name resolves to the declared source with no search path",
+    function* (stream) {
+      expect(yield* run("<Policy />\n", undefined, undefined, stream)).toContain("The policy ran.");
+    },
+  );
 
-  it("DM2: a digest the source does not have refuses before the root is imported", function* () {
+  journalCase(
+    "DM2: a digest the source does not have refuses before the root is imported",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          "<Policy />\n",
+          [declared(POLICY_SOURCE, { digest: sourceDigest("something else") })],
+          undefined,
+          stream,
+        ),
+      );
+
+      expect(message).toContain("states a digest its source does not have");
+    },
+  );
+
+  journalCase("DM3: a props schema the source does not declare refuses", function* (stream) {
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE, { digest: sourceDigest("something else") })]),
-    );
-
-    expect(message).toContain("states a digest its source does not have");
-  });
-
-  it("DM3: a props schema the source does not declare refuses", function* () {
-    const message = yield* refusal(
-      run("<Policy />\n", [
-        declared(POLICY_SOURCE, {
-          props: { type: "object", properties: { who: { type: "string" } }, required: ["who"] },
-        }),
-      ]),
+      run(
+        "<Policy />\n",
+        [
+          declared(POLICY_SOURCE, {
+            props: { type: "object", properties: { who: { type: "string" } }, required: ["who"] },
+          }),
+        ],
+        undefined,
+        stream,
+      ),
     );
 
     expect(message).toContain("states a props schema its source does not declare");
   });
 
-  it("DM3b: a props schema the source does declare is accepted whatever order it wrote it in", function* () {
-    const source = [
-      "---",
-      "props:",
-      "  type: object",
-      "  properties:",
-      "    who: { type: string }",
-      "  required: [who]",
-      "  additionalProperties: false",
-      "---",
-      "",
-      "Hello {props.who}.",
-      "",
-    ].join("\n");
+  journalCase(
+    "DM3b: a props schema the source does declare is accepted whatever order it wrote it in",
+    function* (stream) {
+      const source = [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    who: { type: string }",
+        "  required: [who]",
+        "  additionalProperties: false",
+        "---",
+        "",
+        "Hello {props.who}.",
+        "",
+      ].join("\n");
 
-    const output = yield* run('<Policy who="reader" />\n', [
-      declared(source, {
-        props: {
-          additionalProperties: false,
-          required: ["who"],
-          properties: { who: { type: "string" } },
-          type: "object",
-        },
-      }),
-    ]);
+      const output = yield* run(
+        '<Policy who="reader" />\n',
+        [
+          declared(source, {
+            props: {
+              additionalProperties: false,
+              required: ["who"],
+              properties: { who: { type: "string" } },
+              type: "object",
+            },
+          }),
+        ],
+        undefined,
+        stream,
+      );
 
-    expect(output).toContain("Hello reader.");
-  });
+      expect(output).toContain("Hello reader.");
+    },
+  );
 
-  it("DM4: a return the source does not declare refuses", function* () {
+  journalCase("DM4: a return the source does not declare refuses", function* (stream) {
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE, { returns: { type: "string" } })]),
+      run(
+        "<Policy />\n",
+        [declared(POLICY_SOURCE, { returns: { type: "string" } })],
+        undefined,
+        stream,
+      ),
     );
 
     expect(message).toContain("states a return its source does not declare");
   });
 
-  it("DM5: a name that is not a component name refuses without printing it", function* () {
+  journalCase(
+    "DM5: a name that is not a component name refuses without printing it",
+    function* (stream) {
+      const message = yield* refusal(
+        run("<Policy />\n", [declared(POLICY_SOURCE, { name: "policy" })], undefined, stream),
+      );
+
+      expect(message).toContain("a name that is not a component name");
+      expect(message).not.toContain("policy");
+    },
+  );
+
+  journalCase("DM6: a structural name refuses", function* (stream) {
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE, { name: "policy" })]),
+      run("<Policy />\n", [declared(POLICY_SOURCE, { name: "If" })], undefined, stream),
     );
-
-    expect(message).toContain("a name that is not a component name");
-    expect(message).not.toContain("policy");
-  });
-
-  it("DM6: a structural name refuses", function* () {
-    const message = yield* refusal(run("<Policy />\n", [declared(POLICY_SOURCE, { name: "If" })]));
 
     expect(message).toContain("structural syntax the engine owns");
   });
 
-  it("DM7: one name declared twice refuses", function* () {
+  journalCase("DM7: one name declared twice refuses", function* (stream) {
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE), declared("Another.\n")]),
+      run("<Policy />\n", [declared(POLICY_SOURCE), declared("Another.\n")], undefined, stream),
     );
 
     expect(message).toContain("declared as Markdown twice");
   });
 
-  it("DM8: a name a host reserved refuses, whichever installed it", function* () {
+  journalCase("DM8: a name a host reserved refuses, whichever installed it", function* (stream) {
     const message = yield* refusal(
       run(
         "<Policy />\n",
@@ -432,6 +474,7 @@ describe("Tier DM — a declaration is held to its own bytes", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -440,28 +483,27 @@ describe("Tier DM — a declaration is held to its own bytes", () => {
 });
 
 describe("Tier DM — the name is claimed rather than offered", () => {
-  it("DM9: a repository file of the same name cannot answer for it", function* () {
+  journalCase("DM9: a repository file of the same name cannot answer for it", function* (stream) {
     const root = yield* workspace({ "Policy.md": "The repository file ran.\n" });
 
-    const output = yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], new InMemoryStream(), [
-      root,
-    ]);
+    const output = yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], stream, [root]);
 
     expect(output).toContain("The policy ran.");
     expect(output).not.toContain("The repository file ran.");
   });
 
-  it("DM9b: a repository file the declaration does not claim still answers", function* () {
-    const root = yield* workspace({ "Helper.md": "The repository file ran.\n" });
+  journalCase(
+    "DM9b: a repository file the declaration does not claim still answers",
+    function* (stream) {
+      const root = yield* workspace({ "Helper.md": "The repository file ran.\n" });
 
-    const output = yield* run("<Helper />\n", [declared(POLICY_SOURCE)], [], new InMemoryStream(), [
-      root,
-    ]);
+      const output = yield* run("<Helper />\n", [declared(POLICY_SOURCE)], [], stream, [root]);
 
-    expect(output).toContain("The repository file ran.");
-  });
+      expect(output).toContain("The repository file ran.");
+    },
+  );
 
-  it("DM10: an ordinary registration cannot answer for it", function* () {
+  journalCase("DM10: an ordinary registration cannot answer for it", function* (stream) {
     const output = yield* run(
       "<Policy />\n",
       [declared(POLICY_SOURCE)],
@@ -482,13 +524,14 @@ describe("Tier DM — the name is claimed rather than offered", () => {
           },
         },
       ],
+      stream,
     );
 
     expect(output).toContain("The policy ran.");
     expect(output).not.toContain("the registration ran.");
   });
 
-  it("DM11: a workflow component bundle cannot answer for it", function* () {
+  journalCase("DM11: a workflow component bundle cannot answer for it", function* (stream) {
     const output = yield* run(
       "<Policy />\n",
       [declared(POLICY_SOURCE)],
@@ -506,77 +549,86 @@ describe("Tier DM — the name is claimed rather than offered", () => {
           },
         },
       ],
+      stream,
     );
 
     expect(output).toContain("The policy ran.");
     expect(output).not.toContain("The bundled component ran.");
   });
 
-  it("DM12: middleware that answers an import without delegating is refused", function* () {
-    const message = yield* refusal(
-      run(
-        "<Policy />\n",
-        [declared(POLICY_SOURCE)],
-        [
-          {
-            *install() {
-              yield* Component.around(
-                {
-                  *importComponent([name, position], next) {
-                    if (name !== "Policy") {
-                      return yield* next(name, position);
-                    }
-                    return {
-                      kind: "markdown",
-                      name: "Policy",
-                      path: ORIGIN,
-                      meta: {},
-                      props: NO_PROPS,
-                      bodySegments: [{ type: "text", content: "substituted" }],
-                    };
+  journalCase(
+    "DM12: middleware that answers an import without delegating is refused",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          "<Policy />\n",
+          [declared(POLICY_SOURCE)],
+          [
+            {
+              *install() {
+                yield* Component.around(
+                  {
+                    *importComponent([name, position], next) {
+                      if (name !== "Policy") {
+                        return yield* next(name, position);
+                      }
+                      return {
+                        kind: "markdown",
+                        name: "Policy",
+                        path: ORIGIN,
+                        meta: {},
+                        props: NO_PROPS,
+                        bodySegments: [{ type: "text", content: "substituted" }],
+                      };
+                    },
                   },
-                },
-                { at: "max" },
-              );
+                  { at: "max" },
+                );
+              },
             },
-          },
-        ],
-      ),
-    );
+          ],
+          stream,
+        ),
+      );
 
-    expect(message).toContain("canonical execution did not produce");
-  });
+      expect(message).toContain("canonical execution did not produce");
+    },
+  );
 
-  it("DM13: middleware that changes the answer before it is invoked is refused", function* () {
-    const message = yield* refusal(
-      run(
-        "<Policy />\n",
-        [declared(POLICY_SOURCE)],
-        [
-          {
-            *install() {
-              yield* Component.around(
-                {
-                  *importComponent([name, position], next) {
-                    const answer = yield* next(name, position);
-                    if (name === "Policy") {
-                      Reflect.set(answer, "bodySegments", [
-                        { type: "text", content: "substituted" },
-                      ]);
-                    }
-                    return answer;
+  journalCase(
+    "DM13: middleware that changes the answer before it is invoked is refused",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          "<Policy />\n",
+          [declared(POLICY_SOURCE)],
+          [
+            {
+              *install() {
+                yield* Component.around(
+                  {
+                    *importComponent([name, position], next) {
+                      const answer = yield* next(name, position);
+                      if (name === "Policy") {
+                        Reflect.set(answer, "bodySegments", [
+                          { type: "text", content: "substituted" },
+                        ]);
+                      }
+                      return answer;
+                    },
                   },
-                },
-                { at: "max" },
-              );
+                  { at: "max" },
+                );
+              },
             },
-          },
-        ],
-      ),
-    );
+          ],
+          stream,
+        ),
+      );
 
-    expect(message).toContain("changed the definition canonical execution produced");
-  });
+      expect(message).toContain("changed the definition canonical execution produced");
+    },
+  );
 
   it("DM37: an unrelated name is answered exactly as it is with nothing declared", function* () {
     // The whole point of the case: `Virtual` is a name no declaration mentions,
@@ -647,106 +699,13 @@ describe("Tier DM — the name is claimed rather than offered", () => {
     expect(message).toContain("canonical execution did not produce");
   });
 
-  it("DM14: middleware that observes and delegates sees the declared origin", function* () {
-    const seen: string[] = [];
-    const output = yield* run(
-      "<Policy />\n",
-      [declared(POLICY_SOURCE)],
-      [
-        {
-          *install() {
-            yield* Component.around(
-              {
-                *importComponent([name, position], next) {
-                  const answer = yield* next(name, position);
-                  if (answer.kind === "markdown") {
-                    seen.push(`${name}:${answer.path}`);
-                  }
-                  return answer;
-                },
-              },
-              { at: "max" },
-            );
-          },
-        },
-      ],
-    );
-
-    expect(output).toContain("The policy ran.");
-    expect(seen).toContain(`Policy:${ORIGIN}`);
-  });
-});
-
-describe("Tier DM — the private closure is lexical", () => {
-  it("DM15: the declaration's own body resolves a private name", function* () {
-    const output = yield* run("<Policy />\n", [declared(WITH_PRIVATE, { privates: [secret()] })]);
-
-    expect(output).toContain("policy says the private answer");
-  });
-
-  it("DM15b: a private component names durable work through the claimant it was built with", function* () {
-    const seen: string[] = [];
-    const output = yield* run("<Policy />\n", [
-      declared("<Claiming />\n", { privates: [claiming(seen)] }),
-    ]);
-
-    expect(output).toContain("claimed");
-    expect(seen).toHaveLength(1);
-  });
-
-  it("DM16: the caller's root cannot write a private name", function* () {
-    const message = yield* refusal(
-      run('<Secret as="answer" />\n', [declared(WITH_PRIVATE, { privates: [secret()] })]),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM17: content the caller projects through the declaration cannot write one", function* () {
-    const message = yield* refusal(
-      run('<Policy><Secret as="answer" /></Policy>\n', [
-        declared(["<Content />", ""].join("\n"), { privates: [secret()] }),
-      ]),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM18: a sibling declaration cannot write another declaration's private name", function* () {
-    const message = yield* refusal(
-      run("<Other />\n", [
-        declared(WITH_PRIVATE, { privates: [secret()] }),
-        declared('<Secret as="answer" />\n', {
-          name: "Other",
-          origin: "@executablemd/test/Other.md",
-        }),
-      ]),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM19: a repository component the declaration imports cannot write one", function* () {
-    const root = yield* workspace({ "Helper.md": '<Secret as="answer" />\n' });
-
-    const message = yield* refusal(
-      run(
+  journalCase(
+    "DM14: middleware that observes and delegates sees the declared origin",
+    function* (stream) {
+      const seen: string[] = [];
+      const output = yield* run(
         "<Policy />\n",
-        [declared("<Helper />\n", { privates: [secret()] })],
-        [],
-        new InMemoryStream(),
-        [root],
-      ),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM20: middleware cannot substitute a private declaration it observed", function* () {
-    const message = yield* refusal(
-      run(
-        "<Policy />\n",
-        [declared(WITH_PRIVATE, { privates: [secret()] })],
+        [declared(POLICY_SOURCE)],
         [
           {
             *install() {
@@ -754,10 +713,10 @@ describe("Tier DM — the private closure is lexical", () => {
                 {
                   *importComponent([name, position], next) {
                     const answer = yield* next(name, position);
-                    if (name !== "Secret") {
-                      return answer;
+                    if (answer.kind === "markdown") {
+                      seen.push(`${name}:${answer.path}`);
                     }
-                    return { ...answer };
+                    return answer;
                   },
                 },
                 { at: "max" },
@@ -765,137 +724,281 @@ describe("Tier DM — the private closure is lexical", () => {
             },
           },
         ],
-      ),
-    );
+        stream,
+      );
 
-    // A private import words its own refusal: what it is about is not that
-    // canonical execution produced some other answer, but that this ask
-    // produced this one and no answer from anywhere else authorizes it.
-    expect(message).toContain("did not produce");
-    expect(message).toContain("an answer kept from another import identifies nothing here");
-  });
+      expect(output).toContain("The policy ran.");
+      expect(seen).toContain(`Policy:${ORIGIN}`);
+    },
+  );
+});
 
-  it("DM38: a factory replaced after capture does not become what runs", function* () {
-    // The declaration object is the host's, and an installation runs after the
-    // invocation captured it. Reading the factory then rather than now would
-    // let a hook installed by the same host — or by anything that reached the
-    // object — decide what a private name executes.
-    const original = secret();
-    const replaced: IdentityComponent = {
-      ...original,
-      // deno-lint-ignore require-yield
-      factory: () =>
-        function* Replacement(): Operation<string> {
-          return "the replacement answer";
-        },
-    };
-    const declaration = declared(WITH_PRIVATE, { privates: [original] });
-
+describe("Tier DM — the private closure is lexical", () => {
+  journalCase("DM15: the declaration's own body resolves a private name", function* (stream) {
     const output = yield* run(
       "<Policy />\n",
-      [declaration],
-      [
-        {
-          // deno-lint-ignore require-yield
-          *install() {
-            Reflect.set(original, "factory", replaced.factory);
-          },
-        },
-      ],
+      [declared(WITH_PRIVATE, { privates: [secret()] })],
+      undefined,
+      stream,
     );
 
     expect(output).toContain("policy says the private answer");
-    expect(String(output)).not.toContain("the replacement answer");
   });
 
-  it("DM39: a schema mutated after capture is not the contract an invocation is held to", function* () {
-    // The schema is the one member of a declaration that is a whole object
-    // graph, so holding the caller's object rather than a copy of it would let
-    // a hook loosen the contract after the invocation captured the declaration
-    // and before admission compiled it.
-    const entered: string[] = [];
-    const strict: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
-    const original: IdentityComponent = {
-      name: "Secret",
-      origin: `${ORIGIN}#Secret`,
-      props: strict,
-      returns: { type: "string" },
-      forms: ["self-closing"],
-      // deno-lint-ignore require-yield
-      factory: () =>
-        function* Secret(): Operation<string> {
-          entered.push("body");
-          return "the private answer";
-        },
-    };
-    const source = ['<Secret extra="x" as="answer" />', "", "policy says {answer}", ""].join("\n");
+  journalCase(
+    "DM15b: a private component names durable work through the claimant it was built with",
+    function* (stream) {
+      const seen: string[] = [];
+      const output = yield* run(
+        "<Policy />\n",
+        [declared("<Claiming />\n", { privates: [claiming(seen)] })],
+        undefined,
+        stream,
+      );
 
+      expect(output).toContain("claimed");
+      expect(seen).toHaveLength(1);
+    },
+  );
+
+  journalCase("DM16: the caller's root cannot write a private name", function* (stream) {
     const message = yield* refusal(
       run(
+        '<Secret as="answer" />\n',
+        [declared(WITH_PRIVATE, { privates: [secret()] })],
+        undefined,
+        stream,
+      ),
+    );
+
+    expect(message).toContain("Cannot resolve component: Secret");
+  });
+
+  journalCase(
+    "DM17: content the caller projects through the declaration cannot write one",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          '<Policy><Secret as="answer" /></Policy>\n',
+          [declared(["<Content />", ""].join("\n"), { privates: [secret()] })],
+          undefined,
+          stream,
+        ),
+      );
+
+      expect(message).toContain("Cannot resolve component: Secret");
+    },
+  );
+
+  journalCase(
+    "DM18: a sibling declaration cannot write another declaration's private name",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          "<Other />\n",
+          [
+            declared(WITH_PRIVATE, { privates: [secret()] }),
+            declared('<Secret as="answer" />\n', {
+              name: "Other",
+              origin: "@executablemd/test/Other.md",
+            }),
+          ],
+          undefined,
+          stream,
+        ),
+      );
+
+      expect(message).toContain("Cannot resolve component: Secret");
+    },
+  );
+
+  journalCase(
+    "DM19: a repository component the declaration imports cannot write one",
+    function* (stream) {
+      const root = yield* workspace({ "Helper.md": '<Secret as="answer" />\n' });
+
+      const message = yield* refusal(
+        run("<Policy />\n", [declared("<Helper />\n", { privates: [secret()] })], [], stream, [
+          root,
+        ]),
+      );
+
+      expect(message).toContain("Cannot resolve component: Secret");
+    },
+  );
+
+  journalCase(
+    "DM20: middleware cannot substitute a private declaration it observed",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          "<Policy />\n",
+          [declared(WITH_PRIVATE, { privates: [secret()] })],
+          [
+            {
+              *install() {
+                yield* Component.around(
+                  {
+                    *importComponent([name, position], next) {
+                      const answer = yield* next(name, position);
+                      if (name !== "Secret") {
+                        return answer;
+                      }
+                      return { ...answer };
+                    },
+                  },
+                  { at: "max" },
+                );
+              },
+            },
+          ],
+          stream,
+        ),
+      );
+
+      // A private import words its own refusal: what it is about is not that
+      // canonical execution produced some other answer, but that this ask
+      // produced this one and no answer from anywhere else authorizes it.
+      expect(message).toContain("did not produce");
+      expect(message).toContain("an answer kept from another import identifies nothing here");
+    },
+  );
+
+  journalCase(
+    "DM38: a factory replaced after capture does not become what runs",
+    function* (stream) {
+      // The declaration object is the host's, and an installation runs after the
+      // invocation captured it. Reading the factory then rather than now would
+      // let a hook installed by the same host — or by anything that reached the
+      // object — decide what a private name executes.
+      const original = secret();
+      const replaced: IdentityComponent = {
+        ...original,
+        // deno-lint-ignore require-yield
+        factory: () =>
+          function* Replacement(): Operation<string> {
+            return "the replacement answer";
+          },
+      };
+      const declaration = declared(WITH_PRIVATE, { privates: [original] });
+
+      const output = yield* run(
         "<Policy />\n",
-        [declared(source, { privates: [original] })],
+        [declaration],
         [
           {
             // deno-lint-ignore require-yield
             *install() {
-              Reflect.set(strict, "additionalProperties", true);
+              Reflect.set(original, "factory", replaced.factory);
             },
           },
         ],
-      ),
-    );
+        stream,
+      );
 
-    expect(message).toContain("Secret");
-    // The refusal is the contract's, so the body it guards never ran.
-    expect(entered).toHaveLength(0);
-  });
+      expect(output).toContain("policy says the private answer");
+      expect(String(output)).not.toContain("the replacement answer");
+    },
+  );
 
-  it("DM40: middleware cannot reuse a delegated private answer at another site", function* () {
-    // The hole this closes: a handler delegates a legitimate private import from
-    // inside the declaration, keeps the exact definition canonical execution
-    // produced, and hands it back when the caller's root writes the same name.
-    // Authorizing by name would let the private implementation run for an
-    // element the declaration never authored — which is the whole of what the
-    // closure is for.
-    const entered: string[] = [];
-    const message = yield* refusal(
-      run(
-        ["<Policy />", '<Secret as="stolen" />', ""].join("\n"),
-        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
-        [
-          {
-            *install() {
-              let kept: unknown;
-              yield* Component.around(
-                {
-                  *importComponent([name, position], next) {
-                    if (name !== "Secret") {
-                      return yield* next(name, position);
-                    }
-                    if (kept === undefined) {
-                      // Inside the declaration: an ordinary delegated import,
-                      // and the answer is retained rather than altered.
-                      kept = yield* next(name, position);
+  journalCase(
+    "DM39: a schema mutated after capture is not the contract an invocation is held to",
+    function* (stream) {
+      // The schema is the one member of a declaration that is a whole object
+      // graph, so holding the caller's object rather than a copy of it would let
+      // a hook loosen the contract after the invocation captured the declaration
+      // and before admission compiled it.
+      const entered: string[] = [];
+      const strict: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
+      const original: IdentityComponent = {
+        name: "Secret",
+        origin: `${ORIGIN}#Secret`,
+        props: strict,
+        returns: { type: "string" },
+        forms: ["self-closing"],
+        // deno-lint-ignore require-yield
+        factory: () =>
+          function* Secret(): Operation<string> {
+            entered.push("body");
+            return "the private answer";
+          },
+      };
+      const source = ['<Secret extra="x" as="answer" />', "", "policy says {answer}", ""].join(
+        "\n",
+      );
+
+      const message = yield* refusal(
+        run(
+          "<Policy />\n",
+          [declared(source, { privates: [original] })],
+          [
+            {
+              // deno-lint-ignore require-yield
+              *install() {
+                Reflect.set(strict, "additionalProperties", true);
+              },
+            },
+          ],
+          stream,
+        ),
+      );
+
+      expect(message).toContain("Secret");
+      // The refusal is the contract's, so the body it guards never ran.
+      expect(entered).toHaveLength(0);
+    },
+  );
+
+  journalCase(
+    "DM40: middleware cannot reuse a delegated private answer at another site",
+    function* (stream) {
+      // The hole this closes: a handler delegates a legitimate private import from
+      // inside the declaration, keeps the exact definition canonical execution
+      // produced, and hands it back when the caller's root writes the same name.
+      // Authorizing by name would let the private implementation run for an
+      // element the declaration never authored — which is the whole of what the
+      // closure is for.
+      const entered: string[] = [];
+      const message = yield* refusal(
+        run(
+          ["<Policy />", '<Secret as="stolen" />', ""].join("\n"),
+          [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+          [
+            {
+              *install() {
+                let kept: unknown;
+                yield* Component.around(
+                  {
+                    *importComponent([name, position], next) {
+                      if (name !== "Secret") {
+                        return yield* next(name, position);
+                      }
+                      if (kept === undefined) {
+                        // Inside the declaration: an ordinary delegated import,
+                        // and the answer is retained rather than altered.
+                        kept = yield* next(name, position);
+                        return kept as never;
+                      }
+                      // At the caller's root: answered from what was kept.
                       return kept as never;
-                    }
-                    // At the caller's root: answered from what was kept.
-                    return kept as never;
+                    },
                   },
-                },
-                { at: "max" },
-              );
+                  { at: "max" },
+                );
+              },
             },
-          },
-        ],
-      ),
-    );
+          ],
+          stream,
+        ),
+      );
 
-    expect(message).toContain("Secret");
-    // The declaration's own invocation ran once. The root's did not run at all.
-    expect(entered).toEqual(["policy"]);
-  });
+      expect(message).toContain("Secret");
+      // The declaration's own invocation ran once. The root's did not run at all.
+      expect(entered).toEqual(["policy"]);
+    },
+  );
 
-  it("DM41: a repository component cannot answer for a private name", function* () {
+  journalCase("DM41: a repository component cannot answer for a private name", function* (stream) {
     const root = yield* workspace({ "Secret.md": "the repository file ran.\n" });
     const entered: string[] = [];
 
@@ -904,7 +1007,7 @@ describe("Tier DM — the private closure is lexical", () => {
         ['<Secret as="answer" />', ""].join("\n"),
         [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
         [],
-        new InMemoryStream(),
+        stream,
         [root],
       ),
     );
@@ -942,62 +1045,74 @@ describe("Tier DM — the private closure is lexical", () => {
     );
   });
 
-  it("DM43: a private implementation cannot run under an unrelated open name", function* () {
-    // The name is the wrong thing to check. A handler delegates a legitimate
-    // private import from inside the declaration, keeps the definition, and
-    // hands it back as the answer for `Virtual` — a name nothing declares, which
-    // is exactly the open import DM37 protects. Restricting by name lets the
-    // private implementation run under it.
-    const entered: string[] = [];
-    const message = yield* refusal(
-      run(
-        ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
-        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
-        [aliasing()],
-      ),
-    );
-
-    expect(message).toContain("Virtual");
-    // The declaration's own invocation ran once. The alias ran not at all.
-    expect(entered).toEqual(["policy"]);
-  });
-
-  it("DM44: a copy of the private definition is admitted nowhere either", function* () {
-    // The same reach, through a definition of the handler's own making that
-    // carries the implementation it kept. What is restricted is the
-    // implementation, not the object it arrives in.
-    const entered: string[] = [];
-    const message = yield* refusal(
-      run(
-        ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
-        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
-        [aliasing((kept) => ({ ...kept, name: "Virtual" }))],
-      ),
-    );
-
-    expect(message).toContain("Virtual");
-    expect(entered).toEqual(["policy"]);
-  });
-
-  it("DM45: an answer kept past the declaration's teardown grants none", function* () {
-    // The declaration has finished expanding and its closure is gone. What the
-    // handler is holding is an answer from an invocation that is over, and an
-    // invocation that is over authorizes nothing — under its own name or any
-    // other.
-    const entered: string[] = [];
-    const message = yield* refusal(
-      run(
-        ["<Policy />", "", "the declaration is done", "", '<Virtual as="aliased" />', ""].join(
-          "\n",
+  journalCase(
+    "DM43: a private implementation cannot run under an unrelated open name",
+    function* (stream) {
+      // The name is the wrong thing to check. A handler delegates a legitimate
+      // private import from inside the declaration, keeps the definition, and
+      // hands it back as the answer for `Virtual` — a name nothing declares, which
+      // is exactly the open import DM37 protects. Restricting by name lets the
+      // private implementation run under it.
+      const entered: string[] = [];
+      const message = yield* refusal(
+        run(
+          ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
+          [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+          [aliasing()],
+          stream,
         ),
-        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
-        [aliasing()],
-      ),
-    );
+      );
 
-    expect(message).toContain("Virtual");
-    expect(entered).toEqual(["policy"]);
-  });
+      expect(message).toContain("Virtual");
+      // The declaration's own invocation ran once. The alias ran not at all.
+      expect(entered).toEqual(["policy"]);
+    },
+  );
+
+  journalCase(
+    "DM44: a copy of the private definition is admitted nowhere either",
+    function* (stream) {
+      // The same reach, through a definition of the handler's own making that
+      // carries the implementation it kept. What is restricted is the
+      // implementation, not the object it arrives in.
+      const entered: string[] = [];
+      const message = yield* refusal(
+        run(
+          ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
+          [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+          [aliasing((kept) => ({ ...kept, name: "Virtual" }))],
+          stream,
+        ),
+      );
+
+      expect(message).toContain("Virtual");
+      expect(entered).toEqual(["policy"]);
+    },
+  );
+
+  journalCase(
+    "DM45: an answer kept past the declaration's teardown grants none",
+    function* (stream) {
+      // The declaration has finished expanding and its closure is gone. What the
+      // handler is holding is an answer from an invocation that is over, and an
+      // invocation that is over authorizes nothing — under its own name or any
+      // other.
+      const entered: string[] = [];
+      const message = yield* refusal(
+        run(
+          ["<Policy />", "", "the declaration is done", "", '<Virtual as="aliased" />', ""].join(
+            "\n",
+          ),
+          [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+          [aliasing()],
+          stream,
+        ),
+      );
+
+      expect(message).toContain("Virtual");
+      expect(entered).toEqual(["policy"]);
+    },
+  );
 
   it("DM46: a private implementation cannot be presented in a later execution", function* () {
     // The reach this closes outlives the execution that opened it. A reusable
@@ -1079,44 +1194,53 @@ describe("Tier DM — the private closure is lexical", () => {
     expect(entered).toEqual(["policy"]);
   });
 
-  it("DM21: a private name a registration also claims refuses the declaration", function* () {
+  journalCase(
+    "DM21: a private name a registration also claims refuses the declaration",
+    function* (stream) {
+      const message = yield* refusal(
+        run(
+          "<Policy />\n",
+          [declared(WITH_PRIVATE, { privates: [secret()] })],
+          [
+            {
+              *install() {
+                yield* registerComponents([
+                  {
+                    name: "Secret",
+                    origin: "test://default",
+                    props: NO_PROPS,
+                    // deno-lint-ignore require-yield
+                    *fn() {
+                      return "registered";
+                    },
+                  },
+                ]);
+              },
+            },
+          ],
+          stream,
+        ),
+      );
+
+      expect(message).toContain("both a private declaration and a registration");
+    },
+  );
+
+  journalCase("DM22: one private name declared by two declarations refuses", function* (stream) {
     const message = yield* refusal(
       run(
         "<Policy />\n",
-        [declared(WITH_PRIVATE, { privates: [secret()] })],
         [
-          {
-            *install() {
-              yield* registerComponents([
-                {
-                  name: "Secret",
-                  origin: "test://default",
-                  props: NO_PROPS,
-                  // deno-lint-ignore require-yield
-                  *fn() {
-                    return "registered";
-                  },
-                },
-              ]);
-            },
-          },
+          declared(WITH_PRIVATE, { privates: [secret()] }),
+          declared(WITH_PRIVATE, {
+            name: "Other",
+            origin: "@executablemd/test/Other.md",
+            privates: [secret()],
+          }),
         ],
+        undefined,
+        stream,
       ),
-    );
-
-    expect(message).toContain("both a private declaration and a registration");
-  });
-
-  it("DM22: one private name declared by two declarations refuses", function* () {
-    const message = yield* refusal(
-      run("<Policy />\n", [
-        declared(WITH_PRIVATE, { privates: [secret()] }),
-        declared(WITH_PRIVATE, {
-          name: "Other",
-          origin: "@executablemd/test/Other.md",
-          privates: [secret()],
-        }),
-      ]),
     );
 
     expect(message).toContain("is declared twice");
@@ -1124,8 +1248,7 @@ describe("Tier DM — the private closure is lexical", () => {
 });
 
 describe("Tier DM — selection is journaled and replays", () => {
-  it("DM23: a declared import records its origin, digest and bytes", function* () {
-    const stream = new InMemoryStream();
+  journalCase("DM23: a declared import records its origin, digest and bytes", function* (stream) {
     yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], stream);
 
     const selection = (yield* stream.readAll())
@@ -1181,26 +1304,28 @@ describe("Tier DM — selection is journaled and replays", () => {
     expect(message).toContain("recorded as the declared Markdown");
   });
 
-  it("DM26b: the record carries the exact-source disposition when the host declares one", function* () {
-    const stream = new InMemoryStream();
-    yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], stream);
+  journalCase(
+    "DM26b: the record carries the exact-source disposition when the host declares one",
+    function* (stream) {
+      yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], stream);
 
-    const selection = (yield* stream.readAll())
-      .filter(isImport)
-      .find((event) => event.type === "yield" && event.description.name === "Policy");
+      const selection = (yield* stream.readAll())
+        .filter(isImport)
+        .find((event) => event.type === "yield" && event.description.name === "Policy");
 
-    // Closed: `exact: true` beside the four members an ordinary record has.
-    expect(selection?.type === "yield" && selection.result).toEqual({
-      status: "ok",
-      value: {
-        kind: "declared-markdown",
-        origin: ORIGIN,
-        digest: sourceDigest(POLICY_SOURCE),
-        content: POLICY_SOURCE,
-        exact: true,
-      },
-    });
-  });
+      // Closed: `exact: true` beside the four members an ordinary record has.
+      expect(selection?.type === "yield" && selection.result).toEqual({
+        status: "ok",
+        value: {
+          kind: "declared-markdown",
+          origin: ORIGIN,
+          digest: sourceDigest(POLICY_SOURCE),
+          content: POLICY_SOURCE,
+          exact: true,
+        },
+      });
+    },
+  );
 
   it("DM26c: a continuation that dropped the exact disposition refuses", function* () {
     const first = new InMemoryStream();
@@ -1516,22 +1641,30 @@ function* refusalOfRun(
 }
 
 describe("Tier DM — exact source is a provenance, not a field", () => {
-  it("DM49: a declared component the host called exact emits its bytes unpresented", function* () {
-    // The positive control. Without it the two refusals below would pass for a
-    // build where exact source never worked at all.
-    const output = yield* published("<Policy />\n", [declared(PRESENTABLE, { exact: true })], []);
+  journalCase(
+    "DM49: a declared component the host called exact emits its bytes unpresented",
+    function* (stream) {
+      // The positive control. Without it the two refusals below would pass for a
+      // build where exact source never worked at all.
+      const output = yield* published(
+        "<Policy />\n",
+        [declared(PRESENTABLE, { exact: true })],
+        [],
+        stream,
+      );
 
-    expect(unpresented(output)).toBe(true);
-  });
+      expect(unpresented(output)).toBe(true);
+    },
+  );
 
-  it("DM50: an ordinary declared component is presented as prose", function* () {
-    const output = yield* published("<Policy />\n", [declared(PRESENTABLE)], []);
+  journalCase("DM50: an ordinary declared component is presented as prose", function* (stream) {
+    const output = yield* published("<Policy />\n", [declared(PRESENTABLE)], [], stream);
 
     expect(unpresented(output)).toBe(false);
     expect(output).not.toContain("**these**");
   });
 
-  it("DM51: middleware answering with `exact: true` gets prose", function* () {
+  journalCase("DM51: middleware answering with `exact: true` gets prose", function* (stream) {
     // The definition is the handler's own, written to claim the disposition a
     // trusted declaration states. Nothing admitted it, so nothing about it is
     // exact — the claim is data on an object, and the answer is prose.
@@ -1549,53 +1682,58 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
           bodySegments: [{ type: "text", content: PRESENTABLE }],
         } as unknown as ImportedDefinition),
       ],
+      stream,
     );
 
     expect(unpresented(output)).toBe(false);
     expect(output).not.toContain("**these**");
   });
 
-  it("DM53: a component that reaches for the record by context name gets prose", function* () {
-    // Effection contexts resolve by name, so a name is not a secret: anything
-    // that can run code can build a context with the same one. This is the
-    // attack that closes — a function component nobody trusts asks for the
-    // record, corrupts whatever it finds, and then returns prose that would be
-    // published unpresented if the corruption had worked.
-    let reached = false;
+  journalCase(
+    "DM53: a component that reaches for the record by context name gets prose",
+    function* (stream) {
+      // Effection contexts resolve by name, so a name is not a secret: anything
+      // that can run code can build a context with the same one. This is the
+      // attack that closes — a function component nobody trusts asks for the
+      // record, corrupts whatever it finds, and then returns prose that would be
+      // published unpresented if the corruption had worked.
+      let reached = false;
 
-    const output = yield* published(
-      "<Virtual />\n",
-      [declared(POLICY_SOURCE)],
-      [
-        answeringOpenName({
-          kind: "function",
-          name: "Virtual",
-          path: "Virtual.ts",
-          props: NO_PROPS,
-          *fn() {
-            const stolen = createContext<{ has?: unknown } | undefined>(
-              "xmd.exact-source",
-              undefined,
-            );
-            const record = yield* stolen.get();
-            if (record !== undefined) {
-              reached = true;
-              // Every segment is exact, if anything asks this object.
-              record.has = () => true;
-            }
-            return PRESENTABLE;
-          },
-        } as unknown as ImportedDefinition),
-      ],
-    );
+      const output = yield* published(
+        "<Virtual />\n",
+        [declared(POLICY_SOURCE)],
+        [
+          answeringOpenName({
+            kind: "function",
+            name: "Virtual",
+            path: "Virtual.ts",
+            props: NO_PROPS,
+            *fn() {
+              const stolen = createContext<{ has?: unknown } | undefined>(
+                "xmd.exact-source",
+                undefined,
+              );
+              const record = yield* stolen.get();
+              if (record !== undefined) {
+                reached = true;
+                // Every segment is exact, if anything asks this object.
+                record.has = () => true;
+              }
+              return PRESENTABLE;
+            },
+          } as unknown as ImportedDefinition),
+        ],
+        stream,
+      );
 
-    // The record is not reachable by name at all, which is the property under
-    // test; the assertion below holds either way, because reaching it would
-    // still decide nothing.
-    expect(reached).toBe(false);
-    expect(unpresented(output)).toBe(false);
-    expect(output).not.toContain("**these**");
-  });
+      // The record is not reachable by name at all, which is the property under
+      // test; the assertion below holds either way, because reaching it would
+      // still decide nothing.
+      expect(reached).toBe(false);
+      expect(unpresented(output)).toBe(false);
+      expect(output).not.toContain("**these**");
+    },
+  );
 
   it("DM52: a segment this engine did not mark is prose, whatever it carries", function* () {
     // The other half of the same attack: not the definition claiming the
@@ -1643,7 +1781,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     expect(output).not.toContain("**these**");
   });
 
-  it("DM54: a spawned child's exact source is still source", function* () {
+  journalCase("DM54: a spawned child's exact source is still source", function* (stream) {
     // `<All>` joins its children by value, so what crosses the join says what
     // it is. A child that reduced its region to one string would hand the
     // caller prose, and the approved bytes a `<Spawn>` rendered would be
@@ -1662,6 +1800,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       ].join("\n"),
       [declared(PRESENTABLE, { exact: true })],
       [],
+      stream,
     );
 
     expect(unpresented(inside)).toBe(true);
@@ -1670,7 +1809,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     expect(inside).toContain("ordinary prose");
   });
 
-  it("DM55: a replayed child restores what its bytes were", function* () {
+  journalCase("DM55: a replayed child restores what its bytes were", function* (stream) {
     // The disposition is a fact about what canonical expansion produced, and
     // the segments it marked do not survive the process. A replay therefore
     // reads it from the child's own durable close — and a close that retained
@@ -1687,7 +1826,6 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       "",
     ].join("\n");
     const declarations = [declared(PRESENTABLE, { exact: true })];
-    const stream = new InMemoryStream();
     const live = yield* published(source, declarations, [], stream);
     expect(unpresented(live)).toBe(true);
 
@@ -2139,70 +2277,76 @@ function* refusedBeforeRoot(
 }
 
 describe("Tier ED — one catalog, two arms", () => {
-  it("ED1: both arms coexist in capture order, and Markdown keeps its behavior", function* () {
-    const declarations = [declared(POLICY_SOURCE), deck(), panel()];
+  journalCase(
+    "ED1: both arms coexist in capture order, and Markdown keeps its behavior",
+    function* (stream) {
+      const declarations = [declared(POLICY_SOURCE), deck(), panel()];
 
-    // The Markdown arm, unchanged: it selects, expands and describes itself.
-    expect(String(yield* run("<Policy />\n", [], [declaring(declarations)]))).toContain(
-      "The policy ran.",
-    );
-    const policy = yield* inspectComponent({ name: "Policy", includes: [], declarations });
-    expect(policy.kind).toBe("markdown");
+      // The Markdown arm, unchanged: it selects, expands and describes itself.
+      expect(String(yield* run("<Policy />\n", [], [declaring(declarations)], stream))).toContain(
+        "The policy ran.",
+      );
+      const policy = yield* inspectComponent({ name: "Policy", includes: [], declarations });
+      expect(policy.kind).toBe("markdown");
 
-    // The structural arm, from the same list.
-    const construct = yield* inspectComponent({ name: "Deck", includes: [], declarations });
-    if (construct.kind !== "structural") {
-      throw new Error(`expected structural syntax, got ${construct.kind}`);
-    }
-    expect(construct.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+      // The structural arm, from the same list.
+      const construct = yield* inspectComponent({ name: "Deck", includes: [], declarations });
+      if (construct.kind !== "structural") {
+        throw new Error(`expected structural syntax, got ${construct.kind}`);
+      }
+      expect(construct.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
 
-    // A value that states neither arm is refused as it always was, in the words
-    // the Markdown admission owns.
-    const broken = { ...declared(POLICY_SOURCE) };
-    Reflect.set(broken, "kind", "sparkle");
-    const message = yield* refusedBeforeRoot([declaring([broken, deck(), panel()])]);
-    expect(message).toContain("without stating a known declaration kind");
-  });
+      // A value that states neither arm is refused as it always was, in the words
+      // the Markdown admission owns.
+      const broken = { ...declared(POLICY_SOURCE) };
+      Reflect.set(broken, "kind", "sparkle");
+      const message = yield* refusedBeforeRoot([declaring([broken, deck(), panel()])]);
+      expect(message).toContain("without stating a known declaration kind");
+    },
+  );
 
-  it("ED2: declarations and the handler are captured once, before install()", function* () {
-    const properties: Record<string, Json> = { title: { type: "string" } };
-    const props: PropsSchema = { type: "object", properties, additionalProperties: false };
-    const construct = { ...deck(), description: "As captured.", props };
-    const region = panel();
-    const markdown = declared(POLICY_SOURCE);
-    let reads = 0;
-    const order: string[] = [];
+  journalCase(
+    "ED2: declarations and the handler are captured once, before install()",
+    function* (stream) {
+      const properties: Record<string, Json> = { title: { type: "string" } };
+      const props: PropsSchema = { type: "object", properties, additionalProperties: false };
+      const construct = { ...deck(), description: "As captured.", props };
+      const region = panel();
+      const markdown = declared(POLICY_SOURCE);
+      let reads = 0;
+      const order: string[] = [];
 
-    const installation: ExecutionInstallation = {
-      declarations: [markdown, construct, region],
-      get expand() {
-        reads++;
-        return expanding();
-      },
-      *install() {
-        // Everything a host could still be holding, rewritten after capture.
-        Reflect.set(construct, "description", "Rewritten after capture.");
-        Reflect.set(construct, "name", "Rewritten");
-        Reflect.set(properties, "smuggled", { type: "string" });
-        Reflect.set(region, "parent", "Rewritten");
-        Reflect.set(markdown, "source", "The policy was replaced.\n");
-        order.push(`install after ${reads} handler read`);
-        yield* Component.operations.registry;
-      },
-    };
+      const installation: ExecutionInstallation = {
+        declarations: [markdown, construct, region],
+        get expand() {
+          reads++;
+          return expanding();
+        },
+        *install() {
+          // Everything a host could still be holding, rewritten after capture.
+          Reflect.set(construct, "description", "Rewritten after capture.");
+          Reflect.set(construct, "name", "Rewritten");
+          Reflect.set(properties, "smuggled", { type: "string" });
+          Reflect.set(region, "parent", "Rewritten");
+          Reflect.set(markdown, "source", "The policy was replaced.\n");
+          order.push(`install after ${reads} handler read`);
+          yield* Component.operations.registry;
+        },
+      };
 
-    const output = String(yield* run("<Syntax />\n<Policy />\n", [], [installation]));
+      const output = String(yield* run("<Syntax />\n<Policy />\n", [], [installation], stream));
 
-    expect(reads).toBe(1);
-    expect(order).toEqual(["install after 1 handler read"]);
-    // What the run describes and expands is what it captured.
-    expect(output).toContain("As captured.");
-    expect(output).not.toContain("Rewritten after capture.");
-    expect(output).toContain("### `<Deck>`");
-    expect(output).not.toContain("### `<Rewritten>`");
-    expect(output).not.toContain("smuggled");
-    expect(output).toContain("The policy ran.");
-  });
+      expect(reads).toBe(1);
+      expect(order).toEqual(["install after 1 handler read"]);
+      // What the run describes and expands is what it captured.
+      expect(output).toContain("As captured.");
+      expect(output).not.toContain("Rewritten after capture.");
+      expect(output).toContain("### `<Deck>`");
+      expect(output).not.toContain("### `<Rewritten>`");
+      expect(output).not.toContain("smuggled");
+      expect(output).toContain("The policy ran.");
+    },
+  );
 
   it("ED3: several constructs and interleaved regions pair inside one installation", function* () {
     const declarations = [
@@ -2476,13 +2620,30 @@ describe("Tier ED — the catalog answers for the set", () => {
     }
   });
 
-  it("ED5: a construct claims its name ahead of a bundle member and a default", function* () {
-    const declarations = [deck(), panel()];
+  journalCase(
+    "ED5: a construct claims its name ahead of a bundle member and a default",
+    function* (stream) {
+      const declarations = [deck(), panel()];
 
-    // A registered default under the same name loses to the declaration, and
-    // answers for it when nothing is declared.
-    const registering: ExecutionInstallation = {
-      *install() {
+      // A registered default under the same name loses to the declaration, and
+      // answers for it when nothing is declared.
+      const registering: ExecutionInstallation = {
+        *install() {
+          yield* registerComponents([
+            {
+              name: "Deck",
+              origin: "test://default",
+              props: NO_PROPS,
+              // deno-lint-ignore require-yield
+              *fn() {
+                return "the registered default ran.";
+              },
+            },
+          ]);
+        },
+      };
+
+      const claimed = yield* scoped(function* () {
         yield* registerComponents([
           {
             name: "Deck",
@@ -2494,49 +2655,37 @@ describe("Tier ED — the catalog answers for the set", () => {
             },
           },
         ]);
-      },
-    };
+        return yield* inspectComponent({ name: "Deck", includes: [], declarations });
+      });
+      expect(claimed.kind).toBe("structural");
 
-    const claimed = yield* scoped(function* () {
-      yield* registerComponents([
-        {
-          name: "Deck",
-          origin: "test://default",
-          props: NO_PROPS,
-          // deno-lint-ignore require-yield
-          *fn() {
-            return "the registered default ran.";
+      // The control: the same registration, with nothing declared, is what
+      // answers — so the declaration is what moved the decision.
+      const unclaimed = yield* scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "Deck",
+            origin: "test://default",
+            props: NO_PROPS,
+            // deno-lint-ignore require-yield
+            *fn() {
+              return "the registered default ran.";
+            },
           },
-        },
-      ]);
-      return yield* inspectComponent({ name: "Deck", includes: [], declarations });
-    });
-    expect(claimed.kind).toBe("structural");
+        ]);
+        return yield* inspectComponent({ name: "Deck", includes: [] });
+      });
+      expect(unclaimed.kind).toBe("registered");
 
-    // The control: the same registration, with nothing declared, is what
-    // answers — so the declaration is what moved the decision.
-    const unclaimed = yield* scoped(function* () {
-      yield* registerComponents([
-        {
-          name: "Deck",
-          origin: "test://default",
-          props: NO_PROPS,
-          // deno-lint-ignore require-yield
-          *fn() {
-            return "the registered default ran.";
-          },
-        },
-      ]);
-      return yield* inspectComponent({ name: "Deck", includes: [] });
-    });
-    expect(unclaimed.kind).toBe("registered");
-
-    // And a declared construct is not reached through component import at all,
-    // so the losing default never runs.
-    const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
-    expect(message).toContain("is not written in a form it accepts");
-    expect(message).not.toContain("the registered default ran.");
-  });
+      // And a declared construct is not reached through component import at all,
+      // so the losing default never runs.
+      const message = yield* refusal(
+        run("<Deck />\n", [], [declaring(declarations), registering], stream),
+      );
+      expect(message).toContain("is not written in a form it accepts");
+      expect(message).not.toContain("the registered default ran.");
+    },
+  );
 
   it("ED5: a construct claims its name ahead of a workflow bundle member", function* () {
     const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());

@@ -17,6 +17,8 @@
  * spawn.
  */
 
+import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
@@ -51,6 +53,11 @@ import { RESERVED_STRUCTURAL } from "../src/structural.ts";
 import { validateDocument } from "../src/document-validation.ts";
 import { inlineSource } from "../src/root-source.ts";
 import type { FunctionComponentDefinition, JsonObject } from "../src/types.ts";
+
+const JOURNAL_OWNER = "packages/core/tests/all.test.ts";
+const registerJournalCase = journalCases(JOURNAL_OWNER);
+const journalCase = (name: string, body: (stream: InMemoryStream) => Operation<void>) =>
+  registerJournalCase(name, "test.md", body);
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 const NAMED = {
@@ -400,27 +407,31 @@ const TWO_GATES = [
 describe("Tier ALL — PA1: both children are live, and output follows the source", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL1: releasing the second child first appends it first and renders it second", function* () {
-    const result = yield* run(TWO_GATES, {
-      *drive(shared) {
-        // Both children have to be live at once before either is released:
-        // a sequential expansion can never satisfy this, because the second
-        // child would not start until the first had finished.
-        yield* shared.arrival("one");
-        yield* shared.arrival("two");
-        expect(shared.arrived).toEqual(["one", "two"]);
-        shared.release("two");
-        yield* shared.append("two");
-        shared.release("one");
-      },
-    });
+  journalCase(
+    "ALL1: releasing the second child first appends it first and renders it second",
+    function* (stream) {
+      const result = yield* run(TWO_GATES, {
+        stream: stream,
+        *drive(shared) {
+          // Both children have to be live at once before either is released:
+          // a sequential expansion can never satisfy this, because the second
+          // child would not start until the first had finished.
+          yield* shared.arrival("one");
+          yield* shared.arrival("two");
+          expect(shared.arrived).toEqual(["one", "two"]);
+          shared.release("two");
+          yield* shared.append("two");
+          shared.release("one");
+        },
+      });
 
-    expect(result.ok).toBe(true);
-    // Completion order decided the journal; it did not decide the document.
-    expect(gateOrder(result.events)).toEqual(["two", "one"]);
-    expect(result.output).toContain("[one][two]");
-    expect(result.output).not.toContain("[two][one]");
-  });
+      expect(result.ok).toBe(true);
+      // Completion order decided the journal; it did not decide the document.
+      expect(gateOrder(result.events)).toEqual(["two", "one"]);
+      expect(result.output).toContain("[one][two]");
+      expect(result.output).not.toContain("[two][one]");
+    },
+  );
 
   it("ALL2: no child output is published before the join succeeds", function* () {
     const emitted: string[] = [];
@@ -451,41 +462,45 @@ describe("Tier ALL — PA1: both children are live, and output follows the sourc
 describe("Tier ALL — PA2: durable identity follows the source", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL3: children close on source-ordered coroutines under the one that reached <All>", function* () {
-    const result = yield* run(TWO_GATES, {
-      *drive(shared) {
-        yield* shared.arrival("one");
-        yield* shared.arrival("two");
-        shared.release("two");
-        yield* shared.append("two");
-        shared.release("one");
-      },
-    });
+  journalCase(
+    "ALL3: children close on source-ordered coroutines under the one that reached <All>",
+    function* (stream) {
+      const result = yield* run(TWO_GATES, {
+        stream: stream,
+        *drive(shared) {
+          yield* shared.arrival("one");
+          yield* shared.arrival("two");
+          shared.release("two");
+          yield* shared.append("two");
+          shared.release("one");
+        },
+      });
 
-    expect(result.ok).toBe(true);
-    const coroutines = gateCoroutines(result.events);
-    // Source order, not completion order: "two" finished first and is still
-    // the second child.
-    expect(coroutines.get("one")).toBe("root.0");
-    expect(coroutines.get("two")).toBe("root.1");
-    expect(closes(result.events)).toEqual([
-      { id: "root.1", status: "ok" },
-      { id: "root.0", status: "ok" },
-      { id: "root", status: "ok" },
-    ]);
-    // Each child closes with exactly the markdown it rendered, and with what
-    // that markdown is: a run says whether those bytes are prose or a program's
-    // approved source, because the segments they came from do not leave the
-    // child and a replay has nothing else to read the disposition from.
-    expect(new Map(childCloseValues(result.events))).toEqual(
-      new Map([
-        ["root.1", { runs: [{ text: "[two]", exact: false, selection: [] }] }],
-        ["root.0", { runs: [{ text: "[one]", exact: false, selection: [] }] }],
-      ]),
-    );
-  });
+      expect(result.ok).toBe(true);
+      const coroutines = gateCoroutines(result.events);
+      // Source order, not completion order: "two" finished first and is still
+      // the second child.
+      expect(coroutines.get("one")).toBe("root.0");
+      expect(coroutines.get("two")).toBe("root.1");
+      expect(closes(result.events)).toEqual([
+        { id: "root.1", status: "ok" },
+        { id: "root.0", status: "ok" },
+        { id: "root", status: "ok" },
+      ]);
+      // Each child closes with exactly the markdown it rendered, and with what
+      // that markdown is: a run says whether those bytes are prose or a program's
+      // approved source, because the segments they came from do not leave the
+      // child and a replay has nothing else to read the disposition from.
+      expect(new Map(childCloseValues(result.events))).toEqual(
+        new Map([
+          ["root.1", { runs: [{ text: "[two]", exact: false, selection: [] }] }],
+          ["root.0", { runs: [{ text: "[one]", exact: false, selection: [] }] }],
+        ]),
+      );
+    },
+  );
 
-  it("ALL4: nesting produces hierarchical child identities", function* () {
+  journalCase("ALL4: nesting produces hierarchical child identities", function* (stream) {
     const result = yield* run(
       [
         "<All>",
@@ -499,6 +514,7 @@ describe("Tier ALL — PA2: durable identity follows the source", () => {
         "</All>",
       ].join("\n"),
       {
+        stream: stream,
         *drive(shared) {
           yield* shared.arrival("inner-a");
           yield* shared.arrival("inner-b");
@@ -517,8 +533,7 @@ describe("Tier ALL — PA2: durable identity follows the source", () => {
     expect(coroutines.get("outer")).toBe("root.1");
   });
 
-  it("ALL5: a complete replay runs no spawned work at all", function* () {
-    const stream = new InMemoryStream();
+  journalCase("ALL5: a complete replay runs no spawned work at all", function* (stream) {
     const live = harness();
     const first = yield* run(TWO_GATES, {
       shared: live,
@@ -634,53 +649,73 @@ const GATED_PROBES = [
 describe("Tier ALL — PA2: each concurrent site owns its own identity", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL3b: two concurrent authored sites each name their own identity, in either release order", function* () {
-    // Both children are held at their gates and then inside their own import, so
-    // the two imports are live at the same time. What this row holds is what the
-    // *document* decides under that overlap: which authored site each expansion
-    // identity belongs to, and that each site's component ran once. Where the
-    // canonical selection landed is CIV27's row, over declared components.
-    const first = harness();
-    const forwards = yield* run(GATED_PROBES, {
-      shared: first,
-      // Both gates open first, and then both children suspend inside their own
-      // import until the other one is there too.
-      install: heldImports("Probe", 2, [0, 1]),
-      *drive(shared) {
-        yield* shared.arrival("one");
-        yield* shared.arrival("two");
-        shared.release("one");
-        shared.release("two");
-      },
-    });
-    expect(forwards.ok).toBe(true);
+  {
+    const name =
+      "ALL3b: two concurrent authored sites each name their own identity, in either release order";
+    it(name, () =>
+      captureTestJournal(
+        { owner: JOURNAL_OWNER, name, suite: "first execution" },
+        "test.md",
+        (firstStream) =>
+          captureTestJournal(
+            { owner: JOURNAL_OWNER, name, suite: "second execution" },
+            "test.md",
+            function* (secondStream) {
+              // Both children are held at their gates and then inside their own import, so
+              // the two imports are live at the same time. What this row holds is what the
+              // *document* decides under that overlap: which authored site each expansion
+              // identity belongs to, and that each site's component ran once. Where the
+              // canonical selection landed is CIV27's row, over declared components.
+              const first = harness();
+              const forwards = yield* run(GATED_PROBES, {
+                stream: firstStream,
+                shared: first,
+                // Both gates open first, and then both children suspend inside their own
+                // import until the other one is there too.
+                install: heldImports("Probe", 2, [0, 1]),
+                *drive(shared) {
+                  yield* shared.arrival("one");
+                  yield* shared.arrival("two");
+                  shared.release("one");
+                  shared.release("two");
+                },
+              });
+              expect(forwards.ok).toBe(true);
 
-    const p1 = first.identities.get("p1");
-    const p2 = first.identities.get("p2");
-    expect(typeof p1).toBe("string");
-    expect(typeof p2).toBe("string");
-    expect(p1).not.toBe(p2);
-    // Each site claimed once. A frame that received a second selection would
-    // have settled to nothing and the invocation would name no identity at all.
-    expect(first.ran.filter((one) => one.startsWith("probe:"))).toEqual(["probe:p1", "probe:p2"]);
+              const p1 = first.identities.get("p1");
+              const p2 = first.identities.get("p2");
+              expect(typeof p1).toBe("string");
+              expect(typeof p2).toBe("string");
+              expect(p1).not.toBe(p2);
+              // Each site claimed once. A frame that received a second selection would
+              // have settled to nothing and the invocation would name no identity at all.
+              expect(first.ran.filter((one) => one.startsWith("probe:"))).toEqual([
+                "probe:p1",
+                "probe:p2",
+              ]);
 
-    // The same document, released in the opposite order. Ownership is the
-    // authored element's, so scheduling decides nothing about it.
-    const second = harness();
-    const backwards = yield* run(GATED_PROBES, {
-      shared: second,
-      install: heldImports("Probe", 2, [1, 0]),
-      *drive(shared) {
-        yield* shared.arrival("one");
-        yield* shared.arrival("two");
-        shared.release("two");
-        shared.release("one");
-      },
-    });
-    expect(backwards.ok).toBe(true);
-    expect(second.identities.get("p1")).toBe(p1);
-    expect(second.identities.get("p2")).toBe(p2);
-  });
+              // The same document, released in the opposite order. Ownership is the
+              // authored element's, so scheduling decides nothing about it.
+              const second = harness();
+              const backwards = yield* run(GATED_PROBES, {
+                stream: secondStream,
+                shared: second,
+                install: heldImports("Probe", 2, [1, 0]),
+                *drive(shared) {
+                  yield* shared.arrival("one");
+                  yield* shared.arrival("two");
+                  shared.release("two");
+                  shared.release("one");
+                },
+              });
+              expect(backwards.ok).toBe(true);
+              expect(second.identities.get("p1")).toBe(p1);
+              expect(second.identities.get("p2")).toBe(p2);
+            },
+          ),
+      ),
+    );
+  }
 
   it("ALL3c: one child failing leaves the surviving sibling's own identity intact", function* () {
     // One import is cancelled while the other is still live. There is no frame
@@ -731,57 +766,79 @@ describe("Tier ALL — PA2: each concurrent site owns its own identity", () => {
 describe("Tier ALL — PA3: counters, paths and the parent's own numbering", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL6: children reuse local block ids, and later parent work keeps its own", function* () {
-    const shared = harness();
-    const result = yield* run(COUNTER_DOC, { shared });
+  {
+    const name = "ALL6: children reuse local block ids, and later parent work keeps its own";
+    it(name, () =>
+      captureTestJournal(
+        { owner: JOURNAL_OWNER, name, suite: "first execution" },
+        "test.md",
+        (firstStream) =>
+          captureTestJournal(
+            { owner: JOURNAL_OWNER, name, suite: "second execution" },
+            "test.md",
+            function* (secondStream) {
+              const shared = harness();
+              const result = yield* run(COUNTER_DOC, { stream: firstStream, shared });
 
-    expect(result.ok).toBe(true);
-    const entries = evalEntries(result.events);
-    const onParent = entries.filter((entry) => entry.coroutineId === "root");
-    // The parent's counter never saw the children: the block after `</All>` is
-    // numbered as though no child had run.
-    expect(onParent.map((entry) => entry.name)).toEqual(["eval:eval:root:0", "eval:eval:root:1"]);
+              expect(result.ok).toBe(true);
+              const entries = evalEntries(result.events);
+              const onParent = entries.filter((entry) => entry.coroutineId === "root");
+              // The parent's counter never saw the children: the block after `</All>` is
+              // numbered as though no child had run.
+              expect(onParent.map((entry) => entry.name)).toEqual([
+                "eval:eval:root:0",
+                "eval:eval:root:1",
+              ]);
 
-    const inChildren = entries.filter((entry) => entry.coroutineId !== "root");
-    // `sort()` rather than `toSorted()`: the Node typecheck targets ES2022, where
-    // the latter does not exist, and the array being sorted is the one `map` just
-    // made — so there is nothing of anyone else's to mutate.
-    expect(inChildren.map((entry) => entry.coroutineId).sort()).toEqual(["root.0", "root.1"]);
-    // Both children number their own first block the same way and collide with
-    // nothing, because the child coroutine namespaces it.
-    expect(new Set(inChildren.map((entry) => entry.name))).toEqual(new Set(["eval:eval:root:0"]));
+              const inChildren = entries.filter((entry) => entry.coroutineId !== "root");
+              // `sort()` rather than `toSorted()`: the Node typecheck targets ES2022, where
+              // the latter does not exist, and the array being sorted is the one `map` just
+              // made — so there is nothing of anyone else's to mutate.
+              expect(inChildren.map((entry) => entry.coroutineId).sort()).toEqual([
+                "root.0",
+                "root.1",
+              ]);
+              // Both children number their own first block the same way and collide with
+              // nothing, because the child coroutine namespaces it.
+              expect(new Set(inChildren.map((entry) => entry.name))).toEqual(
+                new Set(["eval:eval:root:0"]),
+              );
 
-    // Two spawns, two stable and distinct expansion identities.
-    const p1 = shared.identities.get("p1");
-    const p2 = shared.identities.get("p2");
-    expect(typeof p1).toBe("string");
-    expect(typeof p2).toBe("string");
-    expect(p1).not.toBe(p2);
+              // Two spawns, two stable and distinct expansion identities.
+              const p1 = shared.identities.get("p1");
+              const p2 = shared.identities.get("p2");
+              expect(typeof p1).toBe("string");
+              expect(typeof p2).toBe("string");
+              expect(p1).not.toBe(p2);
 
-    // A second run of the same document derives all three again.
-    const again = harness();
-    const rerun = yield* run(COUNTER_DOC, { shared: again });
-    expect(rerun.ok).toBe(true);
-    expect(again.identities.get("p1")).toBe(p1);
-    expect(again.identities.get("p2")).toBe(p2);
-    // The same identities on the same coroutines. Compared as a set, because
-    // which child appends first is exactly what scheduling is allowed to
-    // decide — the contract fixes what a block is called and where, never the
-    // order two independent children reach the journal.
-    // `sort()` for the same reason, on the array `map` just made.
-    const identify = (found: EvalEntry[]): string[] =>
-      found.map((entry) => `${entry.coroutineId}/${entry.name}`).sort();
-    expect(identify(evalEntries(rerun.events))).toEqual(identify(entries));
+              // A second run of the same document derives all three again.
+              const again = harness();
+              const rerun = yield* run(COUNTER_DOC, { stream: secondStream, shared: again });
+              expect(rerun.ok).toBe(true);
+              expect(again.identities.get("p1")).toBe(p1);
+              expect(again.identities.get("p2")).toBe(p2);
+              // The same identities on the same coroutines. Compared as a set, because
+              // which child appends first is exactly what scheduling is allowed to
+              // decide — the contract fixes what a block is called and where, never the
+              // order two independent children reach the journal.
+              // `sort()` for the same reason, on the array `map` just made.
+              const identify = (found: EvalEntry[]): string[] =>
+                found.map((entry) => `${entry.coroutineId}/${entry.name}`).sort();
+              expect(identify(evalEntries(rerun.events))).toEqual(identify(entries));
 
-    // And a replay reproduces the rendering without running any of it.
-    const idle = harness();
-    const replayed = yield* run(COUNTER_DOC, {
-      shared: idle,
-      stream: new InMemoryStream(result.events),
-    });
-    expect(replayed.output).toBe(result.output);
-    expect(idle.ran).toEqual([]);
-  });
+              // And a replay reproduces the rendering without running any of it.
+              const idle = harness();
+              const replayed = yield* run(COUNTER_DOC, {
+                shared: idle,
+                stream: new InMemoryStream(result.events),
+              });
+              expect(replayed.output).toBe(result.output);
+              expect(idle.ran).toEqual([]);
+            },
+          ),
+      ),
+    );
+  }
 });
 
 const ISOLATION_DOC = [
@@ -804,21 +861,24 @@ const ISOLATION_DOC = [
 describe("Tier ALL — PA4: a child's bindings and resources are its own", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL7: a binding and a retained resource live on in their child and nowhere else", function* () {
-    const shared = harness();
-    const result = yield* run(ISOLATION_DOC, { shared });
+  journalCase(
+    "ALL7: a binding and a retained resource live on in their child and nowhere else",
+    function* (stream) {
+      const shared = harness();
+      const result = yield* run(ISOLATION_DOC, { stream: stream, shared });
 
-    expect(result.ok).toBe(true);
-    // Later work in the same child reads both.
-    expect(result.output).toContain("spawn1(chosen/held:kept)");
-    // The sibling and the work after `</All>` read neither: the names are not
-    // bound there, so they render as the text that was written.
-    expect(result.output).toContain("spawn2({picked}/{handle})");
-    expect(result.output).toContain("after({picked}/{handle})");
-    // The resource lived while the child did, and was released when it ended.
-    expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
-    expect(shared.observed).toEqual(["after:released"]);
-  });
+      expect(result.ok).toBe(true);
+      // Later work in the same child reads both.
+      expect(result.output).toContain("spawn1(chosen/held:kept)");
+      // The sibling and the work after `</All>` read neither: the names are not
+      // bound there, so they render as the text that was written.
+      expect(result.output).toContain("spawn2({picked}/{handle})");
+      expect(result.output).toContain("after({picked}/{handle})");
+      // The resource lived while the child did, and was released when it ended.
+      expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
+      expect(shared.observed).toEqual(["after:released"]);
+    },
+  );
 });
 
 describe("Tier ALL — PA5: a partial replay restores one child and resumes the other", () => {
@@ -883,86 +943,94 @@ describe("Tier ALL — PA5: a partial replay restores one child and resumes the 
 describe("Tier ALL — PA6: a failure cancels its siblings and publishes nothing", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL9: a held sibling is cancelled and joined, and <All> renders nothing", function* () {
-    const shared = harness();
-    const result = yield* run(
-      [
-        "<All>",
-        '<Spawn><Fail name="bad" /></Spawn>',
-        '<Spawn><Keep name="kept" /><Gate name="held" /></Spawn>',
-        "</All>",
-        "",
-        "tail",
-      ].join("\n"),
-      {
-        shared,
-        *drive(inner) {
-          yield* inner.arrival("bad");
-          yield* inner.arrival("held");
-          // The sibling is still holding at its barrier when the first child
-          // fails, and is never released by this driver.
-          inner.release("bad");
+  journalCase(
+    "ALL9: a held sibling is cancelled and joined, and <All> renders nothing",
+    function* (stream) {
+      const shared = harness();
+      const result = yield* run(
+        [
+          "<All>",
+          '<Spawn><Fail name="bad" /></Spawn>',
+          '<Spawn><Keep name="kept" /><Gate name="held" /></Spawn>',
+          "</All>",
+          "",
+          "tail",
+        ].join("\n"),
+        {
+          stream: stream,
+          shared,
+          *drive(inner) {
+            yield* inner.arrival("bad");
+            yield* inner.arrival("held");
+            // The sibling is still holding at its barrier when the first child
+            // fails, and is never released by this driver.
+            inner.release("bad");
+          },
         },
-      },
-    );
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.failure).toContain("FAILED:bad");
-    // Neither child's private buffer reached the document, and nothing after
-    // `</All>` ran.
-    expect(result.output).not.toContain("[held]");
-    expect(result.output).not.toContain("tail");
-    // The held sibling's scope was torn down as part of the join.
-    expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
-    // The journal holds only what was acknowledged: the failing child closed
-    // with its error, the cancelled one as cancelled, and the held gate never
-    // recorded work it did not do.
-    expect(gateOrder(result.events)).toEqual([]);
-    const closed = new Map(closes(result.events).map((entry) => [entry.id, entry.status]));
-    expect(closed.get("root.0")).toBe("err");
-    expect(closed.get("root.1")).toBe("cancelled");
-  });
+      expect(result.ok).toBe(false);
+      expect(result.failure).toContain("FAILED:bad");
+      // Neither child's private buffer reached the document, and nothing after
+      // `</All>` ran.
+      expect(result.output).not.toContain("[held]");
+      expect(result.output).not.toContain("tail");
+      // The held sibling's scope was torn down as part of the join.
+      expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
+      // The journal holds only what was acknowledged: the failing child closed
+      // with its error, the cancelled one as cancelled, and the held gate never
+      // recorded work it did not do.
+      expect(gateOrder(result.events)).toEqual([]);
+      const closed = new Map(closes(result.events).map((entry) => [entry.id, entry.status]));
+      expect(closed.get("root.0")).toBe("err");
+      expect(closed.get("root.1")).toBe("cancelled");
+    },
+  );
 
-  it("ALL9b: a child that already succeeded publishes nothing when a sibling fails", function* () {
-    const shared = harness();
-    const result = yield* run(
-      [
-        "<All>",
-        '<Spawn><Gate name="done" /></Spawn>',
-        '<Spawn><Keep name="kept" /><Fail name="bad" /></Spawn>',
-        "</All>",
-        "",
-        "tail",
-      ].join("\n"),
-      {
-        shared,
-        *drive(inner) {
-          yield* inner.arrival("done");
-          yield* inner.arrival("bad");
-          // The first child runs to completion, and only then does its sibling
-          // fail: its rendering exists, and the join is what decides whether
-          // the document ever sees it.
-          inner.release("done");
-          yield* inner.append("done");
-          inner.release("bad");
+  journalCase(
+    "ALL9b: a child that already succeeded publishes nothing when a sibling fails",
+    function* (stream) {
+      const shared = harness();
+      const result = yield* run(
+        [
+          "<All>",
+          '<Spawn><Gate name="done" /></Spawn>',
+          '<Spawn><Keep name="kept" /><Fail name="bad" /></Spawn>',
+          "</All>",
+          "",
+          "tail",
+        ].join("\n"),
+        {
+          stream: stream,
+          shared,
+          *drive(inner) {
+            yield* inner.arrival("done");
+            yield* inner.arrival("bad");
+            // The first child runs to completion, and only then does its sibling
+            // fail: its rendering exists, and the join is what decides whether
+            // the document ever sees it.
+            inner.release("done");
+            yield* inner.append("done");
+            inner.release("bad");
+          },
         },
-      },
-    );
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.failure).toContain("FAILED:bad");
-    // The successful child's own markdown was never published: the join failed,
-    // so `<All>` emitted none of it.
-    expect(result.output).not.toContain("[done]");
-    expect(result.output).not.toContain("tail");
-    // Its durable record stands, because the journal only ever held work that
-    // was acknowledged.
-    expect(gateOrder(result.events)).toEqual(["done"]);
-    expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
-    const closed = new Map(closes(result.events).map((entry) => [entry.id, entry.status]));
-    expect(closed.get("root.0")).toBe("ok");
-    expect(closed.get("root.1")).toBe("err");
-  });
+      expect(result.ok).toBe(false);
+      expect(result.failure).toContain("FAILED:bad");
+      // The successful child's own markdown was never published: the join failed,
+      // so `<All>` emitted none of it.
+      expect(result.output).not.toContain("[done]");
+      expect(result.output).not.toContain("tail");
+      // Its durable record stands, because the journal only ever held work that
+      // was acknowledged.
+      expect(gateOrder(result.events)).toEqual(["done"]);
+      expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
+      const closed = new Map(closes(result.events).map((entry) => [entry.id, entry.status]));
+      expect(closed.get("root.0")).toBe("ok");
+      expect(closed.get("root.1")).toBe("err");
+    },
+  );
 
   it("ALL10: cancelling the document leaves no spawned work alive", function* () {
     const shared = harness();
@@ -1076,9 +1144,9 @@ describe("Tier ALL — PA7: malformed structure refuses before any child starts"
   ];
 
   for (const [title, source, expected] of cases) {
-    it(title, function* () {
+    journalCase(title, function* (stream) {
       const shared = harness();
-      const result = yield* run(source, { shared });
+      const result = yield* run(source, { stream: stream, shared });
       expect(result.ok).toBe(false);
       expect(result.failure).toContain(expected);
       // No tripwire in any child ran: the refusal is decided from source
@@ -1114,9 +1182,10 @@ describe("Tier ALL — PA7: malformed structure refuses before any child starts"
     expect(shared.ran).toEqual([]);
   });
 
-  it("ALL20: a repository file cannot supply <All> or <Spawn>", function* () {
+  journalCase("ALL20: a repository file cannot supply <All> or <Spawn>", function* (stream) {
     const shared = harness();
     const result = yield* run("<Spawn>from a file</Spawn>", {
+      stream: stream,
       shared,
       files: { "components/Spawn.md": "a repository spawn\n" },
     });
@@ -1129,7 +1198,7 @@ describe("Tier ALL — PA7: malformed structure refuses before any child starts"
 describe("Tier ALL — PA8: <Return> and <Break> cannot cross a spawn", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL21: a <Break> in a spawn cannot exit a loop outside <All>", function* () {
+  journalCase("ALL21: a <Break> in a spawn cannot exit a loop outside <All>", function* (stream) {
     const shared = harness();
     const result = yield* run(
       [
@@ -1140,28 +1209,32 @@ describe("Tier ALL — PA8: <Return> and <Break> cannot cross a spawn", () => {
         "</All>",
         "</Loop>",
       ].join("\n"),
-      { shared },
+      { stream: stream, shared },
     );
     expect(result.ok).toBe(false);
     expect(result.failure).toContain("<Break> cannot cross <Spawn>");
     expect(shared.ran).toEqual([]);
   });
 
-  it("ALL22: a loop wholly inside a spawn is broken by its own <Break>", function* () {
-    const result = yield* run(
-      [
-        "<All>",
-        "<Spawn><Loop max={3}>a<Break /></Loop></Spawn>",
-        "<Spawn>b</Spawn>",
-        "</All>",
-      ].join("\n"),
-    );
-    expect(result.ok).toBe(true);
-    expect(result.output).toContain("ab");
-    expect(result.output).not.toContain("ERROR");
-  });
+  journalCase(
+    "ALL22: a loop wholly inside a spawn is broken by its own <Break>",
+    function* (stream) {
+      const result = yield* run(
+        [
+          "<All>",
+          "<Spawn><Loop max={3}>a<Break /></Loop></Spawn>",
+          "<Spawn>b</Spawn>",
+          "</All>",
+        ].join("\n"),
+        { stream: stream },
+      );
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain("ab");
+      expect(result.output).not.toContain("ERROR");
+    },
+  );
 
-  it("ALL23: a <Return> in a spawn satisfies no value root", function* () {
+  journalCase("ALL23: a <Return> in a spawn satisfies no value root", function* (stream) {
     const result = yield* run(
       [
         "---",
@@ -1174,6 +1247,7 @@ describe("Tier ALL — PA8: <Return> and <Break> cannot cross a spawn", () => {
         "<Spawn>b</Spawn>",
         "</All>",
       ].join("\n"),
+      { stream: stream },
     );
     expect(result.ok).toBe(false);
     // The body still owes its own `<Return>`: the one inside the spawn neither
@@ -1181,31 +1255,35 @@ describe("Tier ALL — PA8: <Return> and <Break> cannot cross a spawn", () => {
     expect(result.failure).toContain("no <Return>");
   });
 
-  it("ALL24: a value component invoked inside a spawn keeps its own <Return>", function* () {
-    const result = yield* run(
-      [
-        "<All>",
-        '<Spawn><Answerer as="picked" />got {picked}</Spawn>',
-        "<Spawn>b</Spawn>",
-        "</All>",
-      ].join("\n"),
-      {
-        files: {
-          "components/Answerer.md": [
-            "---",
-            "returns:",
-            "  type: string",
-            "---",
-            "",
-            '<Return value={"an answer"} />',
-          ].join("\n"),
+  journalCase(
+    "ALL24: a value component invoked inside a spawn keeps its own <Return>",
+    function* (stream) {
+      const result = yield* run(
+        [
+          "<All>",
+          '<Spawn><Answerer as="picked" />got {picked}</Spawn>',
+          "<Spawn>b</Spawn>",
+          "</All>",
+        ].join("\n"),
+        {
+          stream: stream,
+          files: {
+            "components/Answerer.md": [
+              "---",
+              "returns:",
+              "  type: string",
+              "---",
+              "",
+              '<Return value={"an answer"} />',
+            ].join("\n"),
+          },
         },
-      },
-    );
-    expect(result.ok).toBe(true);
-    expect(result.output).toContain("got an answer");
-    expect(result.output).toContain("b");
-  });
+      );
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain("got an answer");
+      expect(result.output).toContain("b");
+    },
+  );
 
   it("ALL25: non-executing validation reports both boundaries where they were written", function* () {
     const shared = harness();
@@ -1711,323 +1789,349 @@ describe("993 retained source selection", () => {
   }
 
   for (const selected of [true, false]) {
-    it(`W7-R: restores caller-owned reached-empty=${selected} after both child closes without body work`, function* () {
+    journalCase(
+      `W7-R: restores caller-owned reached-empty=${selected} after both child closes without body work`,
+      function* (stream) {
+        const source = "Documentation.<Reply><Output /></Reply>";
+        const calls: string[] = [];
+        const first = yield* run(source, {
+          stream: stream,
+          files: { "components/Reply.md": reply },
+          install: () => ready(() => selected, calls),
+        });
+        expect(first.ok).toBe(true);
+        expect(calls).toEqual([""]);
+        expect(first.output).toBe(selected ? "samesuffix" : "");
+        const saved = childCloseValues(first.events).map(([, value]) => value);
+        expect(saved).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              runs: expect.arrayContaining([
+                expect.objectContaining({ text: "suffix", exact: false }),
+              ]),
+            }),
+            expect.objectContaining({
+              runs: expect.arrayContaining([
+                expect.objectContaining({ text: "same", exact: false }),
+              ]),
+            }),
+          ]),
+        );
+        const serialized = JSON.stringify(saved);
+        const firstChild = childCloseValues(first.events).find(([id]) => id === "root.0")?.[1];
+        if (
+          firstChild === undefined ||
+          firstChild === null ||
+          Array.isArray(firstChild) ||
+          typeof firstChild !== "object" ||
+          !Array.isArray(firstChild.runs)
+        ) {
+          throw new Error("missing current child runs");
+        }
+        expect(
+          firstChild.runs
+            .map((run) =>
+              typeof run === "object" && run !== null && !Array.isArray(run) ? run.text : "",
+            )
+            .join(""),
+        ).toBe("same");
+        expect(
+          firstChild.runs.every(
+            (run) =>
+              typeof run === "object" && run !== null && !Array.isArray(run) && run.exact === false,
+          ),
+        ).toBe(true);
+        expect(serialized.includes('"selection":[')).toBe(true);
+        expect(
+          firstChild.runs.some(
+            (run) =>
+              typeof run === "object" &&
+              run !== null &&
+              !Array.isArray(run) &&
+              Array.isArray(run.selection) &&
+              run.selection.length > 1,
+          ),
+        ).toBe(selected);
+        const prefix = beforeRootClose(first.events, 2);
+        const resumedCalls: string[] = [];
+        const replayed = yield* run(source, {
+          files: { "components/Reply.md": reply },
+          stream: new InMemoryStream(prefix),
+          install: () =>
+            ready(() => {
+              throw new Error("completed child executed");
+            }, resumedCalls),
+        });
+        expect(replayed.ok).toBe(true);
+        expect(replayed.output).toBe(first.output);
+        expect(resumedCalls).toEqual([]);
+        expect(childCloseValues(replayed.events)).toEqual(childCloseValues(first.events));
+      },
+    );
+  }
+
+  journalCase(
+    "W7-R correction: string-projected empty caller selection survives completed Spawn replay",
+    function* (stream) {
       const source = "Documentation.<Reply><Output /></Reply>";
-      const calls: string[] = [];
-      const first = yield* run(source, {
-        files: { "components/Reply.md": reply },
-        install: () => ready(() => selected, calls),
+      const body = [
+        "<Output><All><Spawn>",
+        "```ts eval",
+        "const projected = yield* renderChildren();",
+        "output(projected);",
+        "```",
+        "same</Spawn><Spawn>suffix</Spawn></All></Output>",
+      ].join("\n");
+      let liveEvals = 0;
+      const live = yield* run(source, {
+        stream: stream,
+        files: { "components/Reply.md": body },
+        *install() {
+          yield* Component.around({
+            *applyModifiers([modifiers, context], next) {
+              liveEvals++;
+              return yield* next(modifiers, context);
+            },
+          });
+        },
       });
-      expect(first.ok).toBe(true);
-      expect(calls).toEqual([""]);
-      expect(first.output).toBe(selected ? "samesuffix" : "");
-      const saved = childCloseValues(first.events).map(([, value]) => value);
-      expect(saved).toEqual(
+      expect(live.ok).toBe(true);
+      expect(live.output).toBe("\nsamesuffix");
+      expect(liveEvals).toBe(1);
+      const prefix = beforeRootClose(live.events, 2);
+      expect(closes(prefix)).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            runs: expect.arrayContaining([
-              expect.objectContaining({ text: "suffix", exact: false }),
-            ]),
-          }),
-          expect.objectContaining({
-            runs: expect.arrayContaining([expect.objectContaining({ text: "same", exact: false })]),
-          }),
+          { id: "root.0", status: "ok" },
+          { id: "root.1", status: "ok" },
         ]),
       );
-      const serialized = JSON.stringify(saved);
-      const firstChild = childCloseValues(first.events).find(([id]) => id === "root.0")?.[1];
+      let replayEvals = 0;
+      const replay = yield* run(source, {
+        files: { "components/Reply.md": body },
+        stream: new InMemoryStream(prefix),
+        *install() {
+          yield* Component.around({
+            *applyModifiers() {
+              replayEvals++;
+              throw new Error("completed Spawn eval executed during replay");
+            },
+          });
+        },
+      });
+      expect(replay.ok).toBe(true);
+      expect(replay.output).toBe(live.output);
+      expect(replayEvals).toBe(0);
+      expect(childCloseValues(replay.events)).toEqual(childCloseValues(live.events));
+      const child = childCloseValues(live.events).find(([id]) => id === "root.0")?.[1];
+      const sibling = childCloseValues(live.events).find(([id]) => id === "root.1")?.[1];
       if (
-        firstChild === undefined ||
-        firstChild === null ||
-        Array.isArray(firstChild) ||
-        typeof firstChild !== "object" ||
-        !Array.isArray(firstChild.runs)
+        child === undefined ||
+        child === null ||
+        Array.isArray(child) ||
+        typeof child !== "object" ||
+        !Array.isArray(child.runs) ||
+        sibling === undefined ||
+        sibling === null ||
+        Array.isArray(sibling) ||
+        typeof sibling !== "object" ||
+        !Array.isArray(sibling.runs)
       ) {
-        throw new Error("missing current child runs");
+        throw new Error("missing retained Spawn runs");
       }
+      const runs = child.runs.flatMap((run) =>
+        run !== null && !Array.isArray(run) && typeof run === "object" ? [run] : [],
+      );
+      expect(runs.map((run) => run.text).join("")).toBe("\nsame");
+      expect(runs.every((run) => run.exact === false)).toBe(true);
+      const calleeSources = new Set(
+        sibling.runs.flatMap((run) =>
+          run !== null &&
+          !Array.isArray(run) &&
+          typeof run === "object" &&
+          Array.isArray(run.selection)
+            ? run.selection
+            : [],
+        ),
+      );
       expect(
-        firstChild.runs
-          .map((run) =>
-            typeof run === "object" && run !== null && !Array.isArray(run) ? run.text : "",
-          )
-          .join(""),
-      ).toBe("same");
-      expect(
-        firstChild.runs.every(
+        runs.some(
           (run) =>
-            typeof run === "object" && run !== null && !Array.isArray(run) && run.exact === false,
+            Array.isArray(run.selection) &&
+            run.selection.some((source) => !calleeSources.has(source)),
         ),
       ).toBe(true);
-      expect(serialized.includes('"selection":[')).toBe(true);
-      expect(
-        firstChild.runs.some(
-          (run) =>
-            typeof run === "object" &&
-            run !== null &&
-            !Array.isArray(run) &&
-            Array.isArray(run.selection) &&
-            run.selection.length > 1,
-        ),
-      ).toBe(selected);
-      const prefix = beforeRootClose(first.events, 2);
-      const resumedCalls: string[] = [];
+    },
+  );
+
+  journalCase(
+    "W7-R: repeated executions of one definition retain only A's caller selection",
+    function* (stream) {
+      const source =
+        'Documentation.<Reply name="A"><Output /></Reply><Reply name="B"><Output /></Reply>';
+      const calls: string[] = [];
+      const first = yield* run(source, {
+        stream: stream,
+        files: { "components/Reply.md": reply },
+        install: () => ready((name) => name === "A", calls),
+      });
+      expect(first.ok).toBe(true);
+      expect(calls).toEqual(["A", "B"]);
+      expect(first.output).toBe("Asamesuffix");
+      const prefix = beforeRootClose(first.events, 4);
       const replayed = yield* run(source, {
         files: { "components/Reply.md": reply },
         stream: new InMemoryStream(prefix),
         install: () =>
           ready(() => {
             throw new Error("completed child executed");
-          }, resumedCalls),
+          }, []),
       });
       expect(replayed.ok).toBe(true);
-      expect(replayed.output).toBe(first.output);
-      expect(resumedCalls).toEqual([]);
+      expect(replayed.output).toBe("Asamesuffix");
       expect(childCloseValues(replayed.events)).toEqual(childCloseValues(first.events));
-    });
-  }
+    },
+  );
 
-  it("W7-R correction: string-projected empty caller selection survives completed Spawn replay", function* () {
-    const source = "Documentation.<Reply><Output /></Reply>";
-    const body = [
-      "<Output><All><Spawn>",
-      "```ts eval",
-      "const projected = yield* renderChildren();",
-      "output(projected);",
-      "```",
-      "same</Spawn><Spawn>suffix</Spawn></All></Output>",
-    ].join("\n");
-    let liveEvals = 0;
-    const live = yield* run(source, {
-      files: { "components/Reply.md": body },
-      *install() {
-        yield* Component.around({
-          *applyModifiers([modifiers, context], next) {
-            liveEvals++;
-            return yield* next(modifiers, context);
-          },
-        });
-      },
-    });
-    expect(live.ok).toBe(true);
-    expect(live.output).toBe("\nsamesuffix");
-    expect(liveEvals).toBe(1);
-    const prefix = beforeRootClose(live.events, 2);
-    expect(closes(prefix)).toEqual(
-      expect.arrayContaining([
-        { id: "root.0", status: "ok" },
-        { id: "root.1", status: "ok" },
-      ]),
-    );
-    let replayEvals = 0;
-    const replay = yield* run(source, {
-      files: { "components/Reply.md": body },
-      stream: new InMemoryStream(prefix),
-      *install() {
-        yield* Component.around({
-          *applyModifiers() {
-            replayEvals++;
-            throw new Error("completed Spawn eval executed during replay");
-          },
-        });
-      },
-    });
-    expect(replay.ok).toBe(true);
-    expect(replay.output).toBe(live.output);
-    expect(replayEvals).toBe(0);
-    expect(childCloseValues(replay.events)).toEqual(childCloseValues(live.events));
-    const child = childCloseValues(live.events).find(([id]) => id === "root.0")?.[1];
-    const sibling = childCloseValues(live.events).find(([id]) => id === "root.1")?.[1];
-    if (
-      child === undefined ||
-      child === null ||
-      Array.isArray(child) ||
-      typeof child !== "object" ||
-      !Array.isArray(child.runs) ||
-      sibling === undefined ||
-      sibling === null ||
-      Array.isArray(sibling) ||
-      typeof sibling !== "object" ||
-      !Array.isArray(sibling.runs)
-    ) {
-      throw new Error("missing retained Spawn runs");
-    }
-    const runs = child.runs.flatMap((run) =>
-      run !== null && !Array.isArray(run) && typeof run === "object" ? [run] : [],
-    );
-    expect(runs.map((run) => run.text).join("")).toBe("\nsame");
-    expect(runs.every((run) => run.exact === false)).toBe(true);
-    const calleeSources = new Set(
-      sibling.runs.flatMap((run) =>
-        run !== null &&
-        !Array.isArray(run) &&
-        typeof run === "object" &&
-        Array.isArray(run.selection)
-          ? run.selection
-          : [],
-      ),
-    );
-    expect(
-      runs.some(
-        (run) =>
-          Array.isArray(run.selection) &&
-          run.selection.some((source) => !calleeSources.has(source)),
-      ),
-    ).toBe(true);
-  });
+  journalCase(
+    "W7: nested declarations stay private until the ordered all-success join",
+    function* (stream) {
+      const first = harness();
+      const emitted: string[] = [];
+      yield* DocumentOutput.around({
+        *output([text], next) {
+          emitted.push(text);
+          return yield* next(text);
+        },
+      });
+      const source =
+        '<All><Spawn>docs<If condition={true}><Output><Gate name="one" /></Output></If></Spawn><Spawn>docs<If condition={true}><Output><Gate name="two" /></Output></If></Spawn></All>';
+      const result = yield* run(source, {
+        stream: stream,
+        shared: first,
+        *drive(shared) {
+          yield* shared.arrival("one");
+          yield* shared.arrival("two");
+          shared.release("two");
+          yield* shared.append("two");
+          expect(emitted).toEqual([]);
+          shared.release("one");
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(result.output).toBe("[one][two]");
+      expect(gateOrder(result.events)).toEqual(["two", "one"]);
+      const prefix = beforeRootClose(result.events, 2);
+      const replayed = yield* run(source, {
+        stream: new InMemoryStream(prefix),
+        shared: harness(),
+      });
+      expect(replayed.output).toBe(result.output);
+    },
+  );
 
-  it("W7-R: repeated executions of one definition retain only A's caller selection", function* () {
-    const source =
-      'Documentation.<Reply name="A"><Output /></Reply><Reply name="B"><Output /></Reply>';
-    const calls: string[] = [];
-    const first = yield* run(source, {
-      files: { "components/Reply.md": reply },
-      install: () => ready((name) => name === "A", calls),
-    });
-    expect(first.ok).toBe(true);
-    expect(calls).toEqual(["A", "B"]);
-    expect(first.output).toBe("Asamesuffix");
-    const prefix = beforeRootClose(first.events, 4);
-    const replayed = yield* run(source, {
-      files: { "components/Reply.md": reply },
-      stream: new InMemoryStream(prefix),
-      install: () =>
-        ready(() => {
-          throw new Error("completed child executed");
-        }, []),
-    });
-    expect(replayed.ok).toBe(true);
-    expect(replayed.output).toBe("Asamesuffix");
-    expect(childCloseValues(replayed.events)).toEqual(childCloseValues(first.events));
-  });
-
-  it("W7: nested declarations stay private until the ordered all-success join", function* () {
-    const first = harness();
-    const emitted: string[] = [];
-    yield* DocumentOutput.around({
-      *output([text], next) {
-        emitted.push(text);
-        return yield* next(text);
-      },
-    });
-    const source =
-      '<All><Spawn>docs<If condition={true}><Output><Gate name="one" /></Output></If></Spawn><Spawn>docs<If condition={true}><Output><Gate name="two" /></Output></If></Spawn></All>';
-    const result = yield* run(source, {
-      shared: first,
-      *drive(shared) {
-        yield* shared.arrival("one");
-        yield* shared.arrival("two");
-        shared.release("two");
-        yield* shared.append("two");
-        expect(emitted).toEqual([]);
-        shared.release("one");
-      },
-    });
-    expect(result.ok).toBe(true);
-    expect(result.output).toBe("[one][two]");
-    expect(gateOrder(result.events)).toEqual(["two", "one"]);
-    const prefix = beforeRootClose(result.events, 2);
-    const replayed = yield* run(source, { stream: new InMemoryStream(prefix), shared: harness() });
-    expect(replayed.output).toBe(result.output);
-  });
-
-  it("K1: an obsolete consumed child payload refuses without replaying work or publishing buffers", function* () {
-    const source =
-      '<All><Spawn><Ready name="one" as="held" />same</Spawn><Spawn>suffix</Spawn></All><Probe name="later" />';
-    const first = yield* run(source, { install: () => ready(() => true, []) });
-    expect(first.ok).toBe(true);
-    const lastChild = first.events.reduce(
-      (last, event, index) =>
-        event.type === "close" && event.coroutineId !== "root" ? index : last,
-      -1,
-    );
-    const seed = first.events.slice(0, lastChild + 1);
-    const original = JSON.stringify(seed);
-    const corrupt: DurableEvent[] = seed.map((event) =>
-      event.type === "close" && event.coroutineId === "root.0"
-        ? { ...event, result: { status: "ok", value: [{ text: "same", exact: false }] } }
-        : event,
-    );
-    const shared = harness();
-    const replayed = yield* run(source, {
-      shared,
-      stream: new InMemoryStream(corrupt),
-      install: () =>
-        ready(() => {
-          throw new Error("completed child executed");
-        }, []),
-    });
-    expect(replayed.ok).toBe(false);
-    expect(replayed.failure).toContain("retained close cannot be read");
-    expect(replayed.output).toBe("");
-    expect(shared.ran).toEqual([]);
-    expect(JSON.stringify(seed)).toBe(original);
-    expect(replayed.events).toEqual(corrupt);
-  });
+  journalCase(
+    "K1: an obsolete consumed child payload refuses without replaying work or publishing buffers",
+    function* (stream) {
+      const source =
+        '<All><Spawn><Ready name="one" as="held" />same</Spawn><Spawn>suffix</Spawn></All><Probe name="later" />';
+      const first = yield* run(source, { stream: stream, install: () => ready(() => true, []) });
+      expect(first.ok).toBe(true);
+      const lastChild = first.events.reduce(
+        (last, event, index) =>
+          event.type === "close" && event.coroutineId !== "root" ? index : last,
+        -1,
+      );
+      const seed = first.events.slice(0, lastChild + 1);
+      const original = JSON.stringify(seed);
+      const corrupt: DurableEvent[] = seed.map((event) =>
+        event.type === "close" && event.coroutineId === "root.0"
+          ? { ...event, result: { status: "ok", value: [{ text: "same", exact: false }] } }
+          : event,
+      );
+      const shared = harness();
+      const replayed = yield* run(source, {
+        shared,
+        stream: new InMemoryStream(corrupt),
+        install: () =>
+          ready(() => {
+            throw new Error("completed child executed");
+          }, []),
+      });
+      expect(replayed.ok).toBe(false);
+      expect(replayed.failure).toContain("retained close cannot be read");
+      expect(replayed.output).toBe("");
+      expect(shared.ran).toEqual([]);
+      expect(JSON.stringify(seed)).toBe(original);
+      expect(replayed.events).toEqual(corrupt);
+    },
+  );
 });
 
 describe("993 nested Spawn joined cleanup", () => {
   for (const cancel of [false, true]) {
-    it(`W7: ${cancel ? "parent cancellation" : "child failure"} waits for held sibling cleanup without publication`, function* () {
-      const shared = harness();
-      const cleanup = signal();
-      const releaseCleanup = signal();
-      const stream = new InMemoryStream();
-      let settled = false;
-      const install = function* () {
-        yield* registerComponents([
-          {
-            name: "Held",
-            origin: "993",
-            props: NO_PROPS,
-            *fn() {
-              yield* retain(() =>
-                resource(function* (provide) {
-                  yield* ensure(function* () {
-                    cleanup.publish();
-                    yield* awaiting("cleanup release", releaseCleanup.published);
-                  });
-                  yield* provide(undefined);
-                }),
-              );
-              shared.announce("held");
-              yield* suspend();
-              return "unreachable";
+    journalCase(
+      `W7: ${cancel ? "parent cancellation" : "child failure"} waits for held sibling cleanup without publication`,
+      function* (stream) {
+        const shared = harness();
+        const cleanup = signal();
+        const releaseCleanup = signal();
+        let settled = false;
+        const install = function* () {
+          yield* registerComponents([
+            {
+              name: "Held",
+              origin: "993",
+              props: NO_PROPS,
+              *fn() {
+                yield* retain(() =>
+                  resource(function* (provide) {
+                    yield* ensure(function* () {
+                      cleanup.publish();
+                      yield* awaiting("cleanup release", releaseCleanup.published);
+                    });
+                    yield* provide(undefined);
+                  }),
+                );
+                shared.announce("held");
+                yield* suspend();
+                return "unreachable";
+              },
             },
-          },
-        ]);
-      };
-      const source =
-        '<All><Spawn><Output>private-one<Fail name="bad" /></Output></Spawn><Spawn><Output>private-two<Held /></Output></Spawn></All><Probe name="later" />';
-      const task = yield* spawn(function* () {
-        const result = yield* run(source, { shared, stream, install });
-        settled = true;
-        return result;
-      });
-      yield* shared.arrival("bad");
-      yield* shared.arrival("held");
-      const stopping = cancel ? yield* spawn(() => task.halt()) : undefined;
-      if (!cancel) {
-        shared.release("bad");
-      }
-      yield* awaiting("sibling cleanup", cleanup.published);
-      expect(settled).toBe(false);
-      expect(
-        stream.snapshot().some((event) => event.type === "close" && event.coroutineId === "root"),
-      ).toBe(false);
-      expect(shared.ran).not.toContain("probe:later");
-      releaseCleanup.publish();
-      if (stopping !== undefined) {
-        yield* stopping;
+          ]);
+        };
+        const source =
+          '<All><Spawn><Output>private-one<Fail name="bad" /></Output></Spawn><Spawn><Output>private-two<Held /></Output></Spawn></All><Probe name="later" />';
+        const task = yield* spawn(function* () {
+          const result = yield* run(source, { shared, stream, install });
+          settled = true;
+          return result;
+        });
+        yield* shared.arrival("bad");
+        yield* shared.arrival("held");
+        const stopping = cancel ? yield* spawn(() => task.halt()) : undefined;
+        if (!cancel) {
+          shared.release("bad");
+        }
+        yield* awaiting("sibling cleanup", cleanup.published);
+        expect(settled).toBe(false);
         expect(
-          closes(stream.snapshot()).filter((entry) => entry.id.startsWith("root.")),
-        ).toHaveLength(0);
-      } else {
-        const result = yield* task;
-        expect(result.ok).toBe(false);
-        expect(result.output).toBe("");
-        expect(result.failure).toContain("FAILED:bad");
-      }
-    });
+          stream.snapshot().some((event) => event.type === "close" && event.coroutineId === "root"),
+        ).toBe(false);
+        expect(shared.ran).not.toContain("probe:later");
+        releaseCleanup.publish();
+        if (stopping !== undefined) {
+          yield* stopping;
+          expect(
+            closes(stream.snapshot()).filter((entry) => entry.id.startsWith("root.")),
+          ).toHaveLength(0);
+        } else {
+          const result = yield* task;
+          expect(result.ok).toBe(false);
+          expect(result.output).toBe("");
+          expect(result.failure).toContain("FAILED:bad");
+        }
+      },
+    );
   }
 });
 

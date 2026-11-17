@@ -16,6 +16,8 @@
  * than about the wording of a refusal.
  */
 
+import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -43,6 +45,11 @@ import { retainedSource } from "../src/root-source.ts";
 import { answerProvider, implementation, offering } from "./support/answer-provider.ts";
 import type { Implementation } from "./support/answer-provider.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
+
+const JOURNAL_OWNER = "packages/core/tests/evaluate-provider-lifetime.test.ts";
+const registerJournalCase = journalCases(JOURNAL_OWNER);
+const journalCase = (name: string, body: (stream: InMemoryStream) => Operation<void>) =>
+  registerJournalCase(name, ROOT_PATH, body);
 
 const ROOT_PATH = "evaluate.md";
 const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
@@ -122,86 +129,95 @@ function importedRoot(events: readonly DurableEvent[]): boolean {
 }
 
 describe("Tier FE15 — a provider's answer belongs to the execution that captured it", () => {
-  it("FE15: cancelling a suspended resolution waits for cleanup and revokes the request", function* () {
-    const A = implementation("Open", "A ran");
-    const stream = new InMemoryStream();
-    const cleanup: string[] = [];
-    const reached = withResolvers<void>();
-    const retained: ComponentAnswerRequest[] = [];
+  journalCase(
+    "FE15: cancelling a suspended resolution waits for cleanup and revokes the request",
+    function* (stream) {
+      const A = implementation("Open", "A ran");
+      const cleanup: string[] = [];
+      const reached = withResolvers<void>();
+      const retained: ComponentAnswerRequest[] = [];
 
-    yield* scoped(function* () {
-      const running = yield* spawn(() =>
-        run(
-          OPEN,
-          [
-            {
-              install: admits,
-              componentAnswers: [
-                {
-                  origin: "test://provider",
-                  *install(registrar: ComponentAnswerRegistrar): Operation<void> {
-                    yield* registrar.around(function* (request, next) {
-                      if (request.name !== "Open") {
-                        return yield* next();
-                      }
-                      retained.push(request);
-                      // Registered before the barrier, so cancellation cannot
-                      // arrive between entering the handler and owning the
-                      // cleanup.
-                      yield* ensure(function* () {
-                        cleanup.push("resolution cleanup");
+      yield* scoped(function* () {
+        const running = yield* spawn(() =>
+          run(
+            OPEN,
+            [
+              {
+                install: admits,
+                componentAnswers: [
+                  {
+                    origin: "test://provider",
+                    *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+                      yield* registrar.around(function* (request, next) {
+                        if (request.name !== "Open") {
+                          return yield* next();
+                        }
+                        retained.push(request);
+                        // Registered before the barrier, so cancellation cannot
+                        // arrive between entering the handler and owning the
+                        // cleanup.
+                        yield* ensure(function* () {
+                          cleanup.push("resolution cleanup");
+                        });
+                        reached.resolve();
+                        yield* suspend();
+                        return request.answer(A.definition);
                       });
-                      reached.resolve();
-                      yield* suspend();
-                      return request.answer(A.definition);
-                    });
+                    },
                   },
-                },
-              ],
-            },
-          ],
-          stream,
-        ),
+                ],
+              },
+            ],
+            stream,
+          ),
+        );
+        // The resolution has actually entered, so this cancels work in flight
+        // rather than work that never started.
+        yield* reached.operation;
+        yield* running.halt();
+      });
+
+      // Halt waited for the resolution's own cleanup before returning.
+      expect(cleanup).toEqual(["resolution cleanup"]);
+      // And the capture never completed, so nothing downstream of it happened:
+      // no profile was sealed, the root was never imported, no admission was
+      // decided, and the answer's body never ran.
+      const events = yield* stream.readAll();
+      expect(importedRoot(events)).toBe(false);
+      expect(admissions(events)).toHaveLength(0);
+      expect(A.invoked).toEqual([]);
+      // Cancellation is a teardown like any other: the request this handler was
+      // handed belongs to an execution that is over.
+      expect(refusalFrom(retained[0])).toContain("has ended");
+    },
+  );
+
+  journalCase(
+    "FE15: a request retained past a successful execution states nothing afterwards",
+    function* (stream) {
+      const A = implementation("Open", "A ran");
+      const retained: ComponentAnswerRequest[] = [];
+
+      // The provider keeps the request its handler received.
+      const output = yield* run(
+        OPEN,
+        [
+          {
+            install: admits,
+            componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
+          },
+        ],
+        stream,
       );
-      // The resolution has actually entered, so this cancels work in flight
-      // rather than work that never started.
-      yield* reached.operation;
-      yield* running.halt();
-    });
+      expect(String(output)).toContain("A ran");
 
-    // Halt waited for the resolution's own cleanup before returning.
-    expect(cleanup).toEqual(["resolution cleanup"]);
-    // And the capture never completed, so nothing downstream of it happened:
-    // no profile was sealed, the root was never imported, no admission was
-    // decided, and the answer's body never ran.
-    const events = yield* stream.readAll();
-    expect(importedRoot(events)).toBe(false);
-    expect(admissions(events)).toHaveLength(0);
-    expect(A.invoked).toEqual([]);
-    // Cancellation is a teardown like any other: the request this handler was
-    // handed belongs to an execution that is over.
-    expect(refusalFrom(retained[0])).toContain("has ended");
-  });
+      // The execution has ended. The request is the object the provider kept,
+      // and it refuses rather than recording into a run that is over.
+      expect(refusalFrom(retained[0])).toContain("has ended");
+    },
+  );
 
-  it("FE15: a request retained past a successful execution states nothing afterwards", function* () {
-    const A = implementation("Open", "A ran");
-    const retained: ComponentAnswerRequest[] = [];
-
-    // The provider keeps the request its handler received.
-    const output = yield* run(OPEN, [
-      {
-        install: admits,
-        componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
-      },
-    ]);
-    expect(String(output)).toContain("A ran");
-
-    // The execution has ended. The request is the object the provider kept,
-    // and it refuses rather than recording into a run that is over.
-    expect(refusalFrom(retained[0])).toContain("has ended");
-  });
-
-  it("FE15: a failed execution revokes the request it minted", function* () {
+  journalCase("FE15: a failed execution revokes the request it minted", function* (stream) {
     const A = implementation("Open", "A ran");
     const retained: ComponentAnswerRequest[] = [];
 
@@ -209,12 +225,16 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     // admitted, so the run fails after capture succeeded — and teardown is
     // registered before the first installation, so it runs anyway.
     const failed = yield* refusal(
-      run(`<Evaluate text={'<Elsewhere />\\n'} />\n`, [
-        {
-          install: admits,
-          componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
-        },
-      ]),
+      run(
+        `<Evaluate text={'<Elsewhere />\\n'} />\n`,
+        [
+          {
+            install: admits,
+            componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
+          },
+        ],
+        stream,
+      ),
     );
 
     expect(failed).toContain("did not admit");
@@ -222,204 +242,219 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(refusalFrom(retained[0])).toContain("has ended");
   });
 
-  it("FE15: a losing handler's request states nothing into the execution still running", function* () {
-    const A = implementation("Open", "A ran");
-    const B = implementation("Open", "B ran");
-    const late: ComponentAnswerRequest[] = [];
-    const attempted: string[] = [];
+  journalCase(
+    "FE15: a losing handler's request states nothing into the execution still running",
+    function* (stream) {
+      const A = implementation("Open", "A ran");
+      const B = implementation("Open", "B ran");
+      const late: ComponentAnswerRequest[] = [];
+      const attempted: string[] = [];
 
-    // Two providers under one name. The first is installed outermost, is
-    // genuinely asked, keeps the request it was handed and delegates without
-    // publishing — which is what losing looks like. The second answers, and
-    // the capture seals what it published.
-    //
-    // `<Meddle />` runs from the document, *after* the capture and while this
-    // execution is still live — the window a post-run row cannot reach. So what
-    // it proves is not that a revoked handle is inert; it is that a live losing
-    // one changes nothing either.
-    const output = yield* scoped(function* () {
-      yield* registerComponents([
-        {
-          name: "Meddle",
-          origin: "test://meddler",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          // deno-lint-ignore require-yield
-          *fn(): Operation<string> {
-            const held = late[0];
-            if (held === undefined) {
-              throw new Error("the losing provider was never asked");
-            }
-            // The resolution of `Open` settled during capture, before the root
-            // import, and this handler returned before that. The execution is
-            // still very much alive — so what refuses is the invocation, not
-            // the teardown.
-            attempted.push(refused(() => held.answer(A.definition)));
-            // The same for the winner's own implementation: there is no live
-            // request to retag it through either.
-            attempted.push(refused(() => held.answer(B.definition)));
-            return "meddled";
+      // Two providers under one name. The first is installed outermost, is
+      // genuinely asked, keeps the request it was handed and delegates without
+      // publishing — which is what losing looks like. The second answers, and
+      // the capture seals what it published.
+      //
+      // `<Meddle />` runs from the document, *after* the capture and while this
+      // execution is still live — the window a post-run row cannot reach. So what
+      // it proves is not that a revoked handle is inert; it is that a live losing
+      // one changes nothing either.
+      const output = yield* scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "Meddle",
+            origin: "test://meddler",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              const held = late[0];
+              if (held === undefined) {
+                throw new Error("the losing provider was never asked");
+              }
+              // The resolution of `Open` settled during capture, before the root
+              // import, and this handler returned before that. The execution is
+              // still very much alive — so what refuses is the invocation, not
+              // the teardown.
+              attempted.push(refused(() => held.answer(A.definition)));
+              // The same for the winner's own implementation: there is no live
+              // request to retag it through either.
+              attempted.push(refused(() => held.answer(B.definition)));
+              return "meddled";
+            },
           },
-        },
-      ]);
-      return yield* run(
-        `<Meddle />\n\n<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+        ]);
+        return yield* run(
+          `<Meddle />\n\n<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+          [
+            {
+              install: admits,
+              componentAnswers: [
+                {
+                  origin: "test://losing",
+                  *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+                    yield* registrar.around(function* (request, next) {
+                      if (request.name === "Open") {
+                        late.push(request);
+                      }
+                      return yield* next();
+                    });
+                  },
+                },
+                answerProvider("Open", B.definition),
+              ],
+            },
+          ],
+          stream,
+        );
+      });
+
+      // The meddling really happened, while the run was live, and neither attempt
+      // was admitted.
+      expect(attempted).toEqual(["this resolution has settled", "this resolution has settled"]);
+      // And the fragment ran what the capture sealed.
+      expect(String(output)).toContain("B ran");
+      expect(B.invoked).toEqual(["B ran"]);
+      expect(A.invoked).toEqual([]);
+    },
+  );
+
+  journalCase(
+    "FE15: a losing handler cannot publish once it has returned, mid-resolution",
+    function* (stream) {
+      const A = implementation("Open", "A ran");
+      const B = implementation("Open", "B ran");
+      const inner: ComponentAnswerRequest[] = [];
+      const attempted: string[] = [];
+      const delegated: unknown[] = [];
+      let outerSettled = false;
+      let innerSettled = false;
+
+      // The frozen mid-resolution race. The inner provider is asked, keeps its
+      // request and returns without publishing; the outer provider is *still
+      // running* the same resolution, and invokes the inner one's request from
+      // inside its own handler. The window is open, the name is right, the
+      // execution is live — and the invocation that would have been speaking is
+      // over.
+      const output = yield* run(
+        OPEN,
         [
           {
             install: admits,
             componentAnswers: [
               {
-                origin: "test://losing",
+                // The origin the profile admits: this is the provider whose answer
+                // has to be the one the capture reconciles.
+                origin: "test://provider",
                 *install(registrar: ComponentAnswerRegistrar): Operation<void> {
                   yield* registrar.around(function* (request, next) {
-                    if (request.name === "Open") {
-                      late.push(request);
+                    // Settles at the capture, like any provider: a fragment's own
+                    // import is canonical execution's to answer.
+                    if (request.name !== "Open" || outerSettled) {
+                      return yield* next();
                     }
-                    return yield* next();
+                    outerSettled = true;
+                    // Delegating first is what an outer replacement does, and it is
+                    // what closes the inner handler.
+                    delegated.push(yield* next());
+                    const held = inner[0];
+                    if (held === undefined) {
+                      throw new Error("the inner provider was never asked");
+                    }
+                    attempted.push(refused(() => held.answer(A.definition)));
+                    // And the outer handler's own request is still live, so it may
+                    // publish its replacement before returning.
+                    return request.answer(B.definition);
                   });
                 },
               },
-              answerProvider("Open", B.definition),
+              {
+                origin: "test://inner",
+                *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+                  yield* registrar.around(function* (request, next) {
+                    if (request.name !== "Open" || innerSettled) {
+                      return yield* next();
+                    }
+                    innerSettled = true;
+                    // Answers, keeps its request, and publishes nothing — so it loses
+                    // the decision the outer handler goes on to make.
+                    inner.push(request);
+                    return A.definition;
+                  });
+                },
+              },
             ],
           },
         ],
+        stream,
       );
-    });
 
-    // The meddling really happened, while the run was live, and neither attempt
-    // was admitted.
-    expect(attempted).toEqual(["this resolution has settled", "this resolution has settled"]);
-    // And the fragment ran what the capture sealed.
-    expect(String(output)).toContain("B ran");
-    expect(B.invoked).toEqual(["B ran"]);
-    expect(A.invoked).toEqual([]);
-  });
+      expect(delegated).toHaveLength(1);
+      expect(attempted).toEqual(["this resolution has settled"]);
+      // The outer replacement is what ran, which is the positive half:
+      // publishing after delegating has to keep working.
+      expect(String(output)).toContain("B ran");
+      expect(B.invoked).toEqual(["B ran"]);
+      expect(A.invoked).toEqual([]);
+    },
+  );
 
-  it("FE15: a losing handler cannot publish once it has returned, mid-resolution", function* () {
-    const A = implementation("Open", "A ran");
-    const B = implementation("Open", "B ran");
-    const inner: ComponentAnswerRequest[] = [];
-    const attempted: string[] = [];
-    const delegated: unknown[] = [];
-    let outerSettled = false;
-    let innerSettled = false;
+  journalCase(
+    "FE15: a request from one settled resolution cannot restate that name",
+    function* (stream) {
+      const A = implementation("Open", "A ran");
+      const B = implementation("Other", "B ran");
+      const late = implementation("Open", "late ran");
+      const stale: ComponentAnswerRequest[] = [];
+      const attempted: string[] = [];
+      const carried: unknown[] = [];
 
-    // The frozen mid-resolution race. The inner provider is asked, keeps its
-    // request and returns without publishing; the outer provider is *still
-    // running* the same resolution, and invokes the inner one's request from
-    // inside its own handler. The window is open, the name is right, the
-    // execution is live — and the invocation that would have been speaking is
-    // over.
-    const output = yield* run(OPEN, [
-      {
-        install: admits,
-        componentAnswers: [
+      // Two provider-backed names, so the capture opens two resolutions in order.
+      // The stale request is the one that *answered* the first, used from inside
+      // the second resolution's live handler.
+      const output = yield* run(
+        `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+        [
           {
-            // The origin the profile admits: this is the provider whose answer
-            // has to be the one the capture reconciles.
-            origin: "test://provider",
-            *install(registrar: ComponentAnswerRegistrar): Operation<void> {
-              yield* registrar.around(function* (request, next) {
-                // Settles at the capture, like any provider: a fragment's own
-                // import is canonical execution's to answer.
-                if (request.name !== "Open" || outerSettled) {
-                  return yield* next();
-                }
-                outerSettled = true;
-                // Delegating first is what an outer replacement does, and it is
-                // what closes the inner handler.
-                delegated.push(yield* next());
-                const held = inner[0];
-                if (held === undefined) {
-                  throw new Error("the inner provider was never asked");
-                }
-                attempted.push(refused(() => held.answer(A.definition)));
-                // And the outer handler's own request is still live, so it may
-                // publish its replacement before returning.
-                return request.answer(B.definition);
-              });
+            *install(): Operation<void> {
+              yield* useSelection({ Open: ["self-closing"], Other: ["self-closing"] });
             },
-          },
-          {
-            origin: "test://inner",
-            *install(registrar: ComponentAnswerRegistrar): Operation<void> {
-              yield* registrar.around(function* (request, next) {
-                if (request.name !== "Open" || innerSettled) {
-                  return yield* next();
-                }
-                innerSettled = true;
-                // Answers, keeps its request, and publishes nothing — so it loses
-                // the decision the outer handler goes on to make.
-                inner.push(request);
-                return A.definition;
-              });
-            },
+            componentAnswers: [
+              answerProvider("Open", A.definition, { retain: stale }),
+              answerProvider("Other", B.definition, {
+                whileResolving: () => {
+                  const held = stale[0];
+                  if (held === undefined) {
+                    throw new Error("the first provider was never asked");
+                  }
+                  // The request is fixed to the name it was asked, so it cannot
+                  // even address the name being decided — and its own invocation
+                  // is over.
+                  expect(held.name).toBe("Open");
+                  attempted.push(refused(() => held.answer(late.definition)));
+                  carried.push(A.definition);
+                },
+              }),
+            ],
           },
         ],
-      },
-    ]);
+        stream,
+      );
 
-    expect(delegated).toHaveLength(1);
-    expect(attempted).toEqual(["this resolution has settled"]);
-    // The outer replacement is what ran, which is the positive half:
-    // publishing after delegating has to keep working.
-    expect(String(output)).toContain("B ran");
-    expect(B.invoked).toEqual(["B ran"]);
-    expect(A.invoked).toEqual([]);
-  });
+      expect(attempted).toEqual(["this resolution has settled"]);
+      expect(carried).toEqual([A.definition]);
+      // Both names ran what their own resolution sealed — which is also the
+      // positive control that the second provider's own publication, made in the same
+      // window as the refusal, was admitted.
+      expect(String(output)).toContain("A ran");
+      expect(String(output)).toContain("B ran");
+      expect(A.invoked).toEqual(["A ran"]);
+      expect(B.invoked).toEqual(["B ran"]);
+      // The substitution reached no fragment.
+      expect(late.invoked).toEqual([]);
+    },
+  );
 
-  it("FE15: a request from one settled resolution cannot restate that name", function* () {
-    const A = implementation("Open", "A ran");
-    const B = implementation("Other", "B ran");
-    const late = implementation("Open", "late ran");
-    const stale: ComponentAnswerRequest[] = [];
-    const attempted: string[] = [];
-    const carried: unknown[] = [];
-
-    // Two provider-backed names, so the capture opens two resolutions in order.
-    // The stale request is the one that *answered* the first, used from inside
-    // the second resolution's live handler.
-    const output = yield* run(
-      `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-      [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Open: ["self-closing"], Other: ["self-closing"] });
-          },
-          componentAnswers: [
-            answerProvider("Open", A.definition, { retain: stale }),
-            answerProvider("Other", B.definition, {
-              whileResolving: () => {
-                const held = stale[0];
-                if (held === undefined) {
-                  throw new Error("the first provider was never asked");
-                }
-                // The request is fixed to the name it was asked, so it cannot
-                // even address the name being decided — and its own invocation
-                // is over.
-                expect(held.name).toBe("Open");
-                attempted.push(refused(() => held.answer(late.definition)));
-                carried.push(A.definition);
-              },
-            }),
-          ],
-        },
-      ],
-    );
-
-    expect(attempted).toEqual(["this resolution has settled"]);
-    expect(carried).toEqual([A.definition]);
-    // Both names ran what their own resolution sealed — which is also the
-    // positive control that the second provider's own publication, made in the same
-    // window as the refusal, was admitted.
-    expect(String(output)).toContain("A ran");
-    expect(String(output)).toContain("B ran");
-    expect(A.invoked).toEqual(["A ran"]);
-    expect(B.invoked).toEqual(["B ran"]);
-    // The substitution reached no fragment.
-    expect(late.invoked).toEqual([]);
-  });
-
-  it("FE15: one provider installation answers two admitted names", function* () {
+  journalCase("FE15: one provider installation answers two admitted names", function* (stream) {
     const A = implementation("Open", "A ran");
     const B = implementation("Other", "B ran");
     const answered: string[] = [];
@@ -459,6 +494,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
           ],
         },
       ],
+      stream,
     );
 
     // One installation, one registered handler, two distinct requests — each
@@ -474,53 +510,73 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(B.invoked).toEqual(["B ran"]);
   });
 
-  it("FE15: two executions live at once each run the answer it captured", function* () {
-    const B = implementation("Open", "B ran");
-    const entered = withResolvers<void>();
-    const release = withResolvers<void>();
-    const first: string[] = [];
+  {
+    const name = "FE15: two executions live at once each run the answer it captured";
+    it(name, () =>
+      captureTestJournal(
+        { owner: JOURNAL_OWNER, name, suite: "first execution" },
+        ROOT_PATH,
+        (firstStream) =>
+          captureTestJournal(
+            { owner: JOURNAL_OWNER, name, suite: "second execution" },
+            ROOT_PATH,
+            function* (secondStream) {
+              const B = implementation("Open", "B ran");
+              const entered = withResolvers<void>();
+              const release = withResolvers<void>();
+              const first: string[] = [];
 
-    // The first execution's admitted body stops inside itself, so the second
-    // one below overlaps it rather than following it. Two live executions, two
-    // owners, two sealed profiles.
-    const held = {
-      kind: "function" as const,
-      name: "Open",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      forms: ["self-closing" as const],
-      generated: offering("Open", "read"),
-      *fn(): Operation<Json> {
-        first.push("A ran");
-        entered.resolve();
-        yield* release.operation;
-        return "A ran";
-      },
-    };
+              // The first execution's admitted body stops inside itself, so the second
+              // one below overlaps it rather than following it. Two live executions, two
+              // owners, two sealed profiles.
+              const held = {
+                kind: "function" as const,
+                name: "Open",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                forms: ["self-closing" as const],
+                generated: offering("Open", "read"),
+                *fn(): Operation<Json> {
+                  first.push("A ran");
+                  entered.resolve();
+                  yield* release.operation;
+                  return "A ran";
+                },
+              };
 
-    yield* scoped(function* () {
-      const running = yield* spawn(() =>
-        run(OPEN, [{ install: admits, componentAnswers: [answerProvider("Open", held)] }]),
-      );
-      yield* entered.operation;
+              yield* scoped(function* () {
+                const running = yield* spawn(() =>
+                  run(
+                    OPEN,
+                    [{ install: admits, componentAnswers: [answerProvider("Open", held)] }],
+                    firstStream,
+                  ),
+                );
+                yield* entered.operation;
 
-      // Started and finished while the first is suspended inside its fragment.
-      const second = yield* run(OPEN, [
-        { install: admits, componentAnswers: [answerProvider("Open", B.definition)] },
-      ]);
-      expect(String(second)).toContain("B ran");
-      // The overlapping run did not reach into the first: its answer ran once,
-      // and the first is still holding its own.
-      expect(B.invoked).toEqual(["B ran"]);
-      expect(first).toEqual(["A ran"]);
+                // Started and finished while the first is suspended inside its fragment.
+                const second = yield* run(
+                  OPEN,
+                  [{ install: admits, componentAnswers: [answerProvider("Open", B.definition)] }],
+                  secondStream,
+                );
+                expect(String(second)).toContain("B ran");
+                // The overlapping run did not reach into the first: its answer ran once,
+                // and the first is still holding its own.
+                expect(B.invoked).toEqual(["B ran"]);
+                expect(first).toEqual(["A ran"]);
 
-      release.resolve();
-      expect(String(yield* running)).toContain("A ran");
-    });
+                release.resolve();
+                expect(String(yield* running)).toContain("A ran");
+              });
 
-    // Each finished with what it captured, and neither ran the other's.
-    expect(first).toEqual(["A ran"]);
-    expect(B.invoked).toEqual(["B ran"]);
-  });
+              // Each finished with what it captured, and neither ran the other's.
+              expect(first).toEqual(["A ran"]);
+              expect(B.invoked).toEqual(["B ran"]);
+            },
+          ),
+      ),
+    );
+  }
 
   it("FE15: a captured provider body cannot run after the execution ends", function* () {
     const A = implementation("Open", "A ran");
@@ -563,64 +619,86 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(A.invoked).toEqual(["A ran"]);
   });
 
-  it("FE15: a later execution without the provider sees nothing the first left", function* () {
-    const A = implementation("Open", "A ran");
-    const first = yield* run(OPEN, [
-      { install: admits, componentAnswers: [answerProvider("Open", A.definition)] },
-    ]);
-    expect(String(first)).toContain("A ran");
+  {
+    const name = "FE15: a later execution without the provider sees nothing the first left";
+    it(name, () =>
+      captureTestJournal(
+        { owner: JOURNAL_OWNER, name, suite: "first execution" },
+        ROOT_PATH,
+        (firstStream) =>
+          captureTestJournal(
+            { owner: JOURNAL_OWNER, name, suite: "second execution" },
+            ROOT_PATH,
+            function* (secondStream) {
+              const A = implementation("Open", "A ran");
+              const first = yield* run(
+                OPEN,
+                [{ install: admits, componentAnswers: [answerProvider("Open", A.definition)] }],
+                firstStream,
+              );
+              expect(String(first)).toContain("A ran");
 
-    // The same document and the same selection, with no provider installed. The
-    // first run's answer is not somewhere the second can find it: a publication leaves
-    // no registry, no context and no module-level table behind it, so the name
-    // resolves to nothing at all rather than to what the first run admitted.
-    const failed = yield* refusal(run(OPEN, [{ install: admits }]));
-    expect(failed).toContain("Cannot resolve component: Open");
-    expect(A.invoked).toEqual(["A ran"]);
-  });
-
-  it("FE15: cancelling an admitted body waits for its cleanup and records no result", function* () {
-    const stream = new InMemoryStream();
-    const cleanup: string[] = [];
-    const reached = withResolvers<void>();
-    const invoked: string[] = [];
-
-    const slow = {
-      kind: "function" as const,
-      name: "Open",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      forms: ["self-closing" as const],
-      generated: offering("Open", "read"),
-      *fn(): Operation<Json> {
-        yield* ensure(function* () {
-          cleanup.push("body cleanup");
-        });
-        invoked.push("entered");
-        reached.resolve();
-        yield* suspend();
-        return "A ran";
-      },
-    };
-
-    yield* scoped(function* () {
-      const running = yield* spawn(() =>
-        run(OPEN, [{ install: admits, componentAnswers: [answerProvider("Open", slow)] }], stream),
-      );
-      yield* reached.operation;
-      yield* running.halt();
-    });
-
-    // Halt waited for the admitted body's own cleanup.
-    expect(invoked).toEqual(["entered"]);
-    expect(cleanup).toEqual(["body cleanup"]);
-
-    const events = yield* stream.readAll();
-    // The admission committed — it is the decision, and it precedes what it
-    // authorized. What did not happen is a terminal: a run that recorded one
-    // here would resume believing the fragment finished.
-    expect(admissions(events)).toHaveLength(1);
-    expect(events.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
-      false,
+              // The same document and the same selection, with no provider installed. The
+              // first run's answer is not somewhere the second can find it: a publication leaves
+              // no registry, no context and no module-level table behind it, so the name
+              // resolves to nothing at all rather than to what the first run admitted.
+              const failed = yield* refusal(run(OPEN, [{ install: admits }], secondStream));
+              expect(failed).toContain("Cannot resolve component: Open");
+              expect(A.invoked).toEqual(["A ran"]);
+            },
+          ),
+      ),
     );
-  });
+  }
+
+  journalCase(
+    "FE15: cancelling an admitted body waits for its cleanup and records no result",
+    function* (stream) {
+      const cleanup: string[] = [];
+      const reached = withResolvers<void>();
+      const invoked: string[] = [];
+
+      const slow = {
+        kind: "function" as const,
+        name: "Open",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        forms: ["self-closing" as const],
+        generated: offering("Open", "read"),
+        *fn(): Operation<Json> {
+          yield* ensure(function* () {
+            cleanup.push("body cleanup");
+          });
+          invoked.push("entered");
+          reached.resolve();
+          yield* suspend();
+          return "A ran";
+        },
+      };
+
+      yield* scoped(function* () {
+        const running = yield* spawn(() =>
+          run(
+            OPEN,
+            [{ install: admits, componentAnswers: [answerProvider("Open", slow)] }],
+            stream,
+          ),
+        );
+        yield* reached.operation;
+        yield* running.halt();
+      });
+
+      // Halt waited for the admitted body's own cleanup.
+      expect(invoked).toEqual(["entered"]);
+      expect(cleanup).toEqual(["body cleanup"]);
+
+      const events = yield* stream.readAll();
+      // The admission committed — it is the decision, and it precedes what it
+      // authorized. What did not happen is a terminal: a run that recorded one
+      // here would resume believing the fragment finished.
+      expect(admissions(events)).toHaveLength(1);
+      expect(events.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
+        false,
+      );
+    },
+  );
 });
