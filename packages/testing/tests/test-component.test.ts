@@ -6,7 +6,7 @@
  * being made.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -18,12 +18,14 @@ import { Component, registerComponents, useTempFileCompiler } from "@executablem
 import type { ErrorSegment } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
 import { absorbTestFailure, Staging } from "../src/test-component.ts";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, runDoc, withFreshDocument } from "./helpers.ts";
 
 const OWNER = "packages/testing/tests/test-component.test.ts";
-const documentCase = documentCases(OWNER);
+const documentCase = documentCases();
 
 describe("<Test> as a function component", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** An eval block whose retained work fails while the test is dismantled. */
