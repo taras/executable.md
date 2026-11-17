@@ -75,7 +75,7 @@ import type {
 import { readConfiguration, serializeConfiguration } from "./configuration-record.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
-import { AgentPromptError, parsePromptFailure } from "./errors.ts";
+import { AgentPromptError, parsePromptFailure, SESSION_RESUME_REQUIRED_ERROR } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
 import { HostObservationFailure } from "./publication.ts";
@@ -708,7 +708,11 @@ export function promptFailureFromRecord(record: PromptRecord): AgentPromptError 
   if (record.error?.diagnostic !== undefined) {
     options.diagnostic = record.error.diagnostic;
   }
-  return new AgentPromptError(message, options);
+  const failure = new AgentPromptError(message, options);
+  if (record.error?.name === SESSION_RESUME_REQUIRED_ERROR && record.error.cause === undefined) {
+    failure.name = SESSION_RESUME_REQUIRED_ERROR;
+  }
+  return failure;
 }
 
 function serializePromptRecord(record: PromptRecord): Json {
@@ -928,6 +932,23 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
   if (error !== undefined) {
     const parsed = parsePromptFailure(error);
     if (!parsed) {
+      return undefined;
+    }
+    if (
+      parsed.diagnostic?.stage === "held-session-ensure" &&
+      (status !== "failed" ||
+        sessionKey !== "" ||
+        text !== "" ||
+        Object.keys(value).some(
+          (key) =>
+            key !== "sequence" &&
+            key !== "agent" &&
+            key !== "sessionKey" &&
+            key !== "status" &&
+            key !== "text" &&
+            key !== "error",
+        ))
+    ) {
       return undefined;
     }
     record.error = parsed;

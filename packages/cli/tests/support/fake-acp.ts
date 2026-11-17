@@ -299,6 +299,7 @@ export interface FakeAcp {
    */
   unavailable(agent: string, reason: Error): void;
   missingSession(sessionKey: string): void;
+  refuseSessionResume(sessionKey: string, details?: string): void;
   /**
    * Report this native conversation identity instead of a derived one.
    *
@@ -445,6 +446,7 @@ export function createFakeAcp(): FakeAcp {
   /** Agents whose session this runtime refuses to establish, by reason. */
   const refusals = new Map<string, Error>();
   const missingSessions = new Set<string>();
+  const refusedResumes = new Map<string, Error>();
   let advertised: ScriptedConfiguration | undefined;
   /** The native identity every session of this runtime reports, when scripted. */
   let asserted: string | undefined;
@@ -619,6 +621,18 @@ export function createFakeAcp(): FakeAcp {
     missingSession(sessionKey) {
       missingSessions.add(sessionKey);
     },
+    refuseSessionResume(sessionKey, details) {
+      const rpc = Object.assign(new Error("Internal error"), {
+        code: -32041,
+        data: { details, unrelated: "unrelated synthetic RPC payload" },
+      });
+      refusedResumes.set(
+        sessionKey,
+        Object.assign(new Error("Raw load failure", { cause: rpc }), {
+          detailCode: "SESSION_RESUME_REQUIRED",
+        }),
+      );
+    },
     identity(value) {
       asserted = value;
     },
@@ -749,6 +763,11 @@ export function createFakeAcp(): FakeAcp {
         },
         ensureSession(input) {
           ensured.push(input);
+          const resumeRefusal = refusedResumes.get(input.sessionKey);
+          if (resumeRefusal !== undefined) {
+            refusedResumes.delete(input.sessionKey);
+            return Promise.reject(resumeRefusal);
+          }
           if (missingSessions.has(input.sessionKey)) {
             return Promise.reject(new Error("The exact retained backend session is missing."));
           }

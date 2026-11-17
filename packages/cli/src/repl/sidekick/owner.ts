@@ -2865,7 +2865,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           sending.kind === "message" &&
           sending.options.recovery?.decision.action === "continue-original" &&
           !live.begun &&
-          attempted === undefined
+          (attempted === undefined || attempted.resumeRefused)
         ) {
           return Err(
             new SidekickContinuationUnavailable(replied.error.message, { cause: replied.error }),
@@ -3245,6 +3245,7 @@ function* turnForRequest(
       readonly status: string;
       readonly text: string;
       readonly withheld: boolean;
+      readonly resumeRefused: boolean;
     }
   | undefined
 > {
@@ -3285,6 +3286,7 @@ function* turnForRequest(
         status: saved.status,
         text: saved.text,
         withheld: saved.withheld === true,
+        resumeRefused: held.resumeRefused === true,
       };
     }
   }

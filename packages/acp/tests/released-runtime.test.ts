@@ -30,7 +30,11 @@ import { retainedSession } from "../src/session-store.ts";
 import { createAcpxProvider } from "../src/provider.ts";
 import { useNormalizedOutput } from "@executablemd/core";
 import { Agent, configurationOf } from "@executablemd/agent/api";
-import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
+import {
+  agentIdentityComponents,
+  installAgentComponents,
+  parsePromptRecord,
+} from "@executablemd/agent/host";
 import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -43,7 +47,7 @@ import {
   l as runPromptTurn,
 } from "../vendor/acpx/generated/queue-owner-runtime-ucHvXJ33.js";
 
-import { STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
+import { AGENT_SOURCE, STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
 
 function* runtimeWorld() {
   const current = yield* world();
@@ -1143,15 +1147,24 @@ describe("released response recovery", () => {
 });
 
 describe(
-  "standard retained-session refusal",
+  "1388 — resume retention: standard retained-session refusal",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    for (const failure of ["fail-load", "no-load", "unused-no-load"]) {
-      it(`${failure} preserves conversation facts without replacement`, function* () {
+    for (const [failure, stage, detail] of [
+      ["fail-load", "runtime-turn", "Release the active writer before reconnecting."],
+      ["fail-load", "runtime-turn", undefined],
+      ["fail-load", "runtime-turn", ""],
+      ["fail-load", "runtime-turn", ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("")],
+      ["fail-load", "prompt-ensure", "Release the active writer before reconnecting."],
+      ["no-load", "runtime-turn", undefined],
+      ["unused-no-load", "runtime-turn", undefined],
+    ] as const) {
+      const ensureRefusal = stage === "prompt-ensure";
+      it(`${failure} at ${stage} preserves conversation facts without replacement (detail length ${detail?.length ?? "absent"})`, function* () {
         const current = yield* world(true);
         yield* writeTextFile(
           current.agent,
-          STANDARD_AGENT_SOURCE.replace(
+          (ensureRefusal ? AGENT_SOURCE : STANDARD_AGENT_SOURCE).replace(
             'if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});',
             "",
           ),
@@ -1181,7 +1194,17 @@ describe(
         }
         const baseline = yield* readTextFile(join(current.dir, "methods.jsonl"));
         const flag = join(current.dir, failure === "unused-no-load" ? "no-load" : failure);
-        yield* writeTextFile(flag, "enabled");
+        const unrelated = "unrelated-adapter-envelope";
+        yield* writeTextFile(
+          flag,
+          failure === "fail-load"
+            ? JSON.stringify({
+                code: -32041,
+                message: "Internal error",
+                data: { details: detail, unrelated },
+              })
+            : "enabled",
+        );
         const run = function* (text: string) {
           return yield* scoped(function* () {
             yield* installAgentComponents({
@@ -1191,6 +1214,23 @@ describe(
                 factory: createAcpxProvider({
                   sessionStore: current.store,
                   agentRegistry: current.registry,
+                  ...(ensureRefusal
+                    ? {
+                        createRuntime(options: AcpRuntimeOptions) {
+                          const runtime = createAcpRuntime(options);
+                          const ensureSession = runtime.ensureSession.bind(runtime);
+                          return Object.assign(runtime, {
+                            ensureSession(input: AcpRuntimeEnsureInput) {
+                              return ensureSession({
+                                ...input,
+                                resumeSessionId: before.acpSessionId,
+                                expectedAgentSessionId: before.agentSessionId,
+                              });
+                            },
+                          });
+                        },
+                      }
+                    : {}),
                   advertiseNativeLaunch: [],
                   advertiseClientNativeAttachment: [],
                   *agentCwd() {
@@ -1228,7 +1268,9 @@ describe(
             const doc = join(current.dir, "refusal.md");
             yield* writeTextFile(
               doc,
-              `<Agent name="scribe"><Session name="review"><Prompt text="${text}" /></Session></Agent>`,
+              ensureRefusal
+                ? `<Agent name="scribe"><Prompt session="review" text="${text}" /></Agent>`
+                : `<Agent name="scribe"><Session name="review"><Prompt text="${text}" /></Session></Agent>`,
             );
             yield* useNormalizedOutput();
             const journal = new InMemoryStream();
@@ -1256,6 +1298,54 @@ describe(
             },
           },
         });
+        if (recorded?.type !== "yield" || recorded.result.status !== "ok") {
+          throw new Error("No canonical refusal");
+        }
+        const saved = parsePromptRecord(recorded.result.value)?.error;
+        if (saved === undefined) {
+          throw new Error("No saved failure");
+        }
+        const sensitive = detail?.startsWith("ghp_") === true;
+        expect(saved).toEqual({
+          message: expect.stringContaining("Name a different <Session>"),
+          name: "SessionResumeRequiredError",
+          diagnostic: {
+            provider: "acp",
+            operation: "session/prompt",
+            stage,
+            ...(ensureRefusal ? {} : { requestId: expect.stringMatching(/^[0-9a-f-]+$/) }),
+            code: "RUNTIME",
+            detailCode: "SESSION_RESUME_REQUIRED",
+            origin: "acp",
+            retryable: true,
+            ...(failure !== "fail-load"
+              ? {}
+              : {
+                  acp: {
+                    code: -32041,
+                    message: "Internal error",
+                    ...(sensitive || detail === undefined ? {} : { details: detail }),
+                  },
+                }),
+          },
+        });
+        expect(JSON.stringify(refused.history)).not.toContain(unrelated);
+        if (sensitive) {
+          expect(JSON.stringify(refused.history)).not.toContain(detail);
+        }
+        if (refused.result.ok) {
+          throw new Error("The refused Prompt completed");
+        }
+        const publicError =
+          refused.result.error instanceof AggregateError
+            ? refused.result.error.errors[0]
+            : refused.result.error;
+        expect(publicError?.name).toBe("SessionResumeRequiredError");
+        expect(publicError?.message).toBe(saved.message);
+        expect(publicError?.cause).toBe(undefined);
+        expect(Reflect.get(publicError!, "executablemd.agent.prompt-diagnostic")).toEqual(
+          saved.diagnostic,
+        );
         const delta = (yield* readTextFile(join(current.dir, "methods.jsonl"))).slice(
           baseline.length,
         );
@@ -1281,13 +1371,17 @@ describe(
           expect(after[field]).toEqual(before[field]);
         }
         expect(after.sessionMaterialization).toBe(undefined);
-        expect(after.agentSessionId).toBe(undefined);
+        expect(after.agentSessionId).toBe(before.agentSessionId);
         expect(after.messages.slice(0, before.messages.length)).toEqual(before.messages);
-        expect(after.messages.slice(before.messages.length)).toEqual([
-          expect.objectContaining({
-            User: expect.objectContaining({ content: [{ Text: "must not send" }] }),
-          }),
-        ]);
+        expect(after.messages.slice(before.messages.length)).toEqual(
+          ensureRefusal
+            ? []
+            : [
+                expect.objectContaining({
+                  User: expect.objectContaining({ content: [{ Text: "must not send" }] }),
+                }),
+              ],
+        );
         yield* rm(flag);
         const recoveredBaseline = yield* readTextFile(join(current.dir, "methods.jsonl"));
         expect((yield* run("only the new prompt")).result.ok).toBe(true);
