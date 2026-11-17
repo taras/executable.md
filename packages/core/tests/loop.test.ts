@@ -883,11 +883,12 @@ describe("Tier LOOP — document execution", () => {
  * final iteration, and an empty body from an immediate `<Break>`.
  */
 describe("Tier LOOP — execution records", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/loop.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   function runDoc(doc: string, files: Record<string, string> = {}) {
     return scoped(function* () {
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream("test.md");
       yield* useHostFiles();
       yield* useStubFs({ "test.md": doc, ...files });
       yield* useEchoExec();
