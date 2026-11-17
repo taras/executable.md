@@ -132,6 +132,10 @@ export function recordedFiles(
       entries.set(input.path, input.content);
       return Ok(fileWriteSuccess("host-committed"));
     },
+    *copyFile() {
+      performed.push("copy");
+      throw new Error("Unexpected copy");
+    },
     *deleteFile(input: FilePathInput): Operation<Result<void>> {
       if (!(yield* Permissions.operations.files("write"))) {
         return Err(
@@ -199,6 +203,9 @@ export function* useRecordedFiles(files: RecordedFiles): Operation<void> {
       },
       *writeTextFile([input]) {
         return yield* files.writeTextFile(input);
+      },
+      *copyFile([input]) {
+        return yield* files.copyFile(input);
       },
       *deleteFile([input]) {
         return yield* files.deleteFile(input);

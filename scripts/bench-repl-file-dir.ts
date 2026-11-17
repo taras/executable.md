@@ -171,6 +171,7 @@ function counters(): Counters {
 function countingFiles(counted: Counters): FilesHandler {
   const host = hostFilesHandler();
   return {
+    copyFile: (input) => host.copyFile(input),
     *checkFilePath(input: FilePathInput) {
       counted.checks += 1;
       return yield* host.checkFilePath(input);
@@ -380,6 +381,7 @@ function measure(
         globFiles: ([input]) => files.globFiles(input),
         temporaryDirectory: () => files.temporaryDirectory(),
         writeTextFile: ([input]) => files.writeTextFile(input),
+        copyFile: ([input]) => files.copyFile(input),
         deleteFile: ([input]) => files.deleteFile(input),
         ensureDirectory: ([input]) => files.ensureDirectory(input),
       },

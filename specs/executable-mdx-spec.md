@@ -3617,9 +3617,11 @@ yield* registrar.around(function* (request, next) {
 
 A registration may also carry `description`, `as` and `context` — the same three
 descriptive fields Markdown frontmatter carries, with the same meaning and the
-same absence of behavior. Every component a first-party package registers
-declares a description, and decides explicitly whether `as` and `context` apply
-to it rather than leaving an omitted field to mean either.
+same absence of behavior. A first-party component supplies its description in
+the registration or in its section of the package's `components.md` (§5.3.1).
+The compact catalog includes descriptions from registrations. Named help also
+includes the matching Markdown sections. First-party registrations specify
+whether `as` and `context` apply.
 
 **A return binds by reference.** `as` binds the value the component returned —
 the object itself, not a rendering of it — so a component can hand its caller
@@ -9878,6 +9880,40 @@ semantics belong to the provider: `specs/workflow-workspace-spec.md` §§6.3 and
 
 ---
 
+### 6.13.3 Copying a file: `<File.Copy>`
+
+```mdx
+<File.Copy from="reports/test.log" to="evidence/test.log" />
+```
+
+Core supplies `File.Copy` as an ordinary default. The canonical dispatcher
+requires self-closing form and refuses paired form before expanding its
+content. The `from` and `to` props are required nonempty strings.
+The component passes `from` as `source` and `to` as `destination` in one call
+to `API.Files.copyFile` with the contextual working directory. Success is Unit
+and renders nothing. Ordinary filesystem refusals use the Files reporting
+rules in §6.13.
+
+The performing provider authorizes read access to the effective source and
+write access to the effective destination after middleware and before target
+I/O. Each path is relative and subject to the provider's lexical and resolved
+containment. The source must be a regular file. The destination requires an
+existing directory and a vacant final entry. A dangling final link counts as
+occupied. A successful copy preserves every source byte in an independent file.
+A refusal for occupancy preserves the existing entry.
+
+Ordinary runs and host-backed Markdown tests use native exclusive copy under
+the stable pathname namespace contract. The host checks the final entry
+without following it and joins a started copy during cancellation.
+An ordinary run starts fresh. Low-level partial host replay that reaches copy
+performs it live. Completed-root replay returns the saved outcome without
+expansion. [Workflow Workspace](workflow-workspace-spec.md#101-workspace-local-effects)
+restores a published effect. [Retained REPL](repl-spec.md#the-files-an-entry-wrote-in-the-checkout-you-are-standing-in)
+restores an acknowledged result within covered storage.
+
+Named `xmd syntax File.Copy` shows the invocation and required props.
+Generated XMD requires a separate trusted offer for the name and form.
+
 ### 6.14 Finding files: `<Glob>`
 
 A document decides what to work on by looking at what is there. `<Glob>` is
@@ -13531,7 +13567,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
 | SY7/SY7c/SY18 | Owned names keep their origin | A flat dotted candidate, an unreachable subtree and a link behind a prefix leave `<File.Delete>` reported with canonical core's own origin rather than a registration's |
 | SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
-| SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
+| SY28 | First-party documentation | Every complete built-in in the core and Agent profile has a registration description or a nonempty package documentation section |
 | SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
 
 ### Tier DV — Document validation
@@ -13745,7 +13781,7 @@ would bind differently — belongs to `EP`, where profile capture is tested.
 | # | Test | Verify |
 |---|------|--------|
 | SX1–SX3 | The run profile | Core, Agent, testing and web defaults and `<Session>` are described from the declarations the runtime installers register, with no execution claimant minted |
-| SX2 | Documentation completeness | Every complete built-in in the profile states a description, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
+| SX2 | Documentation completeness | Every complete built-in has a registration description or a nonempty package documentation section, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied symbols with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no symbols |

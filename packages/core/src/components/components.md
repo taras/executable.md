@@ -2,9 +2,8 @@ Long-form documentation for the components canonical core owns.
 
 Each level-two heading below is the exact name of one component. The compact
 list of symbols — `xmd syntax`, or a bare `<Syntax />` — names every component
-with its forms, props and one-line description. This file holds the part that
-does not belong in a list: when to reach for a component, what it does at run
-time, and what it will refuse.
+with its forms, props and any description from its registration. Named help
+adds the usage from this file.
 
 Every component this package supplies has a section here. A build in which one
 does not refuses rather than serving a reference with a silent hole in it: a
@@ -22,10 +21,8 @@ is written.
 ```
 
 The bare form lists the symbols available here: every name a document may write
-at that site, with its forms, props and description. It is the same text
-`xmd syntax` prints, built by the same code, so an operator reading a terminal
-and an agent reading a document are never told different things about one
-profile.
+at that site, with its forms, props and any registered description. It prints
+the same text as `xmd syntax` for that profile.
 
 ```mdx
 <Syntax names={["Elicit", "File"]} />
@@ -176,6 +173,14 @@ read rather than re-reading a file that has since changed.
 
 A read of a path that does not exist fails. The write form creates the file and
 the directories above it as needed.
+
+## File.Copy
+
+Copy a file into an existing directory.
+
+```mdx
+<File.Copy from="reports/test.log" to="evidence/test.log" />
+```
 
 ## File.Delete
 

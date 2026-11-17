@@ -36,7 +36,12 @@ export interface DenoWorkspaceFilesystem {
   lstat(path: string): Operation<DenoWorkspaceStat>;
   readlink(path: string): Operation<string>;
   readdir(path: string): Operation<DenoWorkspaceEntry[]>;
-  writeFile(path: string, content: string | Uint8Array, mode?: number): Operation<void>;
+  writeFile(
+    path: string,
+    content: string | Uint8Array,
+    mode?: number,
+    exclusive?: boolean,
+  ): Operation<void>;
   mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Operation<void>;
   remove(path: string, options?: { recursive?: boolean; force?: boolean }): Operation<void>;
   rename(from: string, to: string): Operation<void>;
@@ -120,14 +125,14 @@ export function createDenoWorkspaceFilesystem(
       }));
     },
 
-    *writeFile(path, content, mode): Operation<void> {
+    *writeFile(path, content, mode, exclusive): Operation<void> {
       const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
       execute(() =>
         // The write belongs to the caller's savepoint on the same synchronous
         // SQLite connection; suspending inside it would let another operation
         // commit between the rows this single write is meant to place together.
         // oxlint-disable-next-line local/no-sync-filesystem
-        writeFileSync(dofs, path, bytes, mode === undefined ? {} : { mode }, filesystem.now),
+        writeFileSync(dofs, path, bytes, { mode, exclusive }, filesystem.now),
       );
     },
 

@@ -1317,6 +1317,48 @@ describe("Tier WGAC — the standard write table", () => {
     });
   });
 
+  it("WGAC15: an unoffered File.Copy stops an earlier admitted deletion", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "obsolete.md", "sentinel");
+      const reached: string[] = [];
+      const attempt = yield* scoped(function* () {
+        yield* API.Files.around({
+          *deleteFile([input], next) {
+            reached.push("delete");
+            return yield* next(input);
+          },
+          *copyFile([input], next) {
+            reached.push("copy");
+            return yield* next(input);
+          },
+        });
+        return yield* runDocument(
+          database,
+          evaluates(
+            '<File.Delete path="obsolete.md" />\n\n<File.Copy from="obsolete.md" to="copy.md" />',
+            ["write"],
+          ),
+        );
+      });
+      expect(reported(attempt)).toBe(
+        "a generated fragment names a component this host did not admit.",
+      );
+      expect(reached).toEqual([]);
+      expect(
+        attempt.events.filter(
+          (event) =>
+            event.type === "yield" &&
+            event.description.type === "workspace_file" &&
+            /^(delete|copy):/.test(event.description.name),
+        ),
+      ).toEqual([]);
+      expect(yield* stored(database, "/obsolete.md")).toBe("sentinel");
+      expect(yield* stored(database, "/copy.md")).toBe(undefined);
+    });
+  });
+
   it("WGAC10: a self-closing File is not admitted by the write table", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {

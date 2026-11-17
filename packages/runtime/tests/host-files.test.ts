@@ -33,7 +33,16 @@ import {
 } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { renameSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -1405,6 +1414,26 @@ describe("host Files — permission", () => {
     });
   }
 
+  it("copy authorizes both paths before target I/O", function* () {
+    const fixture = yield* useFixture();
+    yield* useHostFiles();
+    yield* writeTextFile(join(fixture.workspace, "source"), "fixture");
+    const touched: string[] = [];
+    yield* census(touched);
+    const request = { cwd: fixture.workspace, source: "source", destination: "destination" };
+    for (const denied of ["read", "write"]) {
+      yield* scoped(function* () {
+        yield* Permissions.around({
+          files: ([operation], next) => (operation === denied ? false : next(operation)),
+        });
+        const result = yield* Files.operations.copyFile(request);
+        expect(parseFilesFailure(failed(result))?.reason).toBe("permission-denied");
+      });
+    }
+    expect(touched).toEqual([]);
+    expect(yield* exists(join(fixture.workspace, request.destination))).toBe(false);
+  });
+
   it("HF absolute: default and explicit denial reach no target; opt-in intersects read/write", function* () {
     const fixture = yield* useFixture();
     const files = handler();
@@ -1745,5 +1774,121 @@ describe("1113: outward session roots", () => {
     expect(failure).toContain("outside their session subtree");
     expect(yield* readTextFile(join(fixture.outside, "canary"))).toBe("outside");
     expect(yield* entries(fixture.outside)).toEqual(["canary"]);
+  });
+});
+
+describe("host Files copy", () => {
+  it("preserves occupied entries and refuses missing or escaped paths", function* () {
+    const { workspace, outside } = yield* useFixture();
+    yield* useHostFiles();
+    const binary = new Uint8Array(8 * 1024 * 1024 + 1);
+    binary[binary.length - 1] = 0xff;
+    yield* until(writeFile(join(workspace, "source"), binary));
+    yield* writeTextFile(join(workspace, "occupied"), "keep");
+    yield* writeTextFile(join(outside, "outside.txt"), "keep outside");
+    yield* linkDirectory(outside, join(workspace, "escape"));
+    yield* until(symlink(join(workspace, "missing"), join(workspace, "dangling"), "file"));
+    const copy = (source: string, destination: string) =>
+      Files.operations.copyFile({ cwd: workspace, source, destination });
+
+    for (const [from, to, reason] of [
+      ["source", "occupied", "occupied"],
+      ["source", "dangling", "occupied"],
+      ["source", "absent/target", "missing"],
+      ["source", "escape/target", "resolved-escape"],
+      ["escape/outside.txt", "target", "resolved-escape"],
+    ]) {
+      expect(parseFilesFailure(failed(yield* copy(from, to)))?.reason).toBe(reason);
+    }
+    expect(yield* readTextFile(join(workspace, "occupied"))).toBe("keep");
+    expect((yield* until(lstat(join(workspace, "dangling")))).isSymbolicLink()).toBe(true);
+    for (const absent of [
+      join(workspace, "missing"),
+      join(workspace, "absent"),
+      join(workspace, "target"),
+      join(outside, "target"),
+    ]) {
+      expect(yield* exists(absent)).toBe(false);
+    }
+
+    expect(yield* copy("source", "copy")).toEqual({ ok: true, value: undefined });
+    expect((yield* until(readFile(join(workspace, "copy")))).equals(binary)).toBe(true);
+    expect((yield* until(readFile(join(workspace, "source")))).equals(binary)).toBe(true);
+  });
+
+  it("joins a started native copy during halt without returning a Files result", function* () {
+    const { workspace } = yield* useFixture();
+    yield* writeTextFile(join(workspace, "source"), "fixture");
+    const started = withResolvers<void>();
+    let finish = () => {};
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    yield* useHostFiles({
+      nativeCopy() {
+        started.resolve(undefined);
+        return pending;
+      },
+    });
+    let result: Result<void> | undefined;
+    const task = yield* spawn(function* () {
+      result = yield* Files.operations.copyFile({
+        cwd: workspace,
+        source: "source",
+        destination: "destination",
+      });
+    });
+    yield* started.operation;
+    const halted = task.halt();
+    try {
+      const early = yield* race([
+        (function* () {
+          yield* halted;
+          return true;
+        })(),
+        (function* () {
+          yield* sleep(0);
+          return false;
+        })(),
+      ]);
+      expect(early).toBe(false);
+    } finally {
+      finish();
+    }
+    yield* halted;
+    expect(result).toBe(undefined);
+  });
+
+  it("applies captured roots to both effective copy operands", function* () {
+    const { root, workspace, outside } = yield* useFixture();
+    const access = yield* captureHostFilesAccess({
+      project: workspace,
+      private: join(workspace, "session"),
+      assets: join(workspace, "session", "assets"),
+      components: join(workspace, "session", "components"),
+    });
+    yield* until(mkdir(access.assets, { recursive: true }));
+    yield* writeTextFile(join(access.assets, "source"), "asset");
+    yield* writeTextFile(join(outside, "source"), "outside");
+    const touched: HostFilesEvent[] = [];
+    yield* useHostFiles({ access, observe: (event) => touched.push(event) });
+    const request = {
+      cwd: root,
+      source: "workspace/session/assets/source",
+      destination: "workspace/copy",
+    };
+    for (const change of [
+      { source: "outside/source" },
+      { destination: "workspace/session/assets/copy" },
+    ]) {
+      yield* scoped(function* () {
+        yield* API.Files.around({ copyFile: ([input], next) => next({ ...input, ...change }) });
+        const result = yield* Files.operations.copyFile(request);
+        expect(parseFilesFailure(failed(result))?.reason).toBe("resolved-escape");
+      });
+    }
+    expect(touched).toEqual([]);
+    expect(yield* exists(join(workspace, "copy"))).toBe(false);
+    expect(yield* exists(join(access.assets, "copy"))).toBe(false);
   });
 });
