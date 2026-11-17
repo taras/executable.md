@@ -5,7 +5,13 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { registerComponents } from "../src/components/registration.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Subscription } from "effection";
@@ -2168,11 +2174,15 @@ describe("993 nested selection and private renderings", () => {
   }
 });
 
+const OWNER = "packages/core/tests/expand.test.ts";
+
 describe("993 exported projection helpers with production eval", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const helper of ["renderChildren", "useContent", "render"]) {
     for (const terminal of helper === "renderChildren" ? ["eval", "persist eval"] : ["eval"]) {
       for (const sameBlock of [true, false]) {
         it(`${helper} (${terminal}): ${sameBlock ? "same-block control" : "exported helper called in a later block"}`, function* () {
+          const stream = yield* useJournalStream("root.md");
           yield* useTempFileCompiler();
           yield* useNormalizedOutput();
           const call = helper === "render" ? 'render("sel")' : `${helper}()`;
@@ -2197,7 +2207,6 @@ describe("993 exported projection helpers with production eval", () => {
                 : "Documentation.<Render>documentation<Output>sel</Output></Render>",
             "components/Render.md": body,
           });
-          const stream = new InMemoryStream();
           const output = asText(yield* collect(yield* execute({ path: "root.md", stream })));
           expect(output.trim()).toBe(helper === "render" ? "" : "[sel]");
           const evals = stream
@@ -2312,40 +2321,45 @@ ${pwd}
     }
   });
 
-  it("C52: each projection captures its own sibling Dir placement", function* () {
+  const placement = "C52: each projection captures its own sibling Dir placement";
+  it(placement, function* () {
     const root = yield* until(realpath(yield* useTempDirectory("content-dirs-")));
-    yield* ensureDir(join(root, "components"));
-    yield* writeTextFile(
-      join(root, "components", "Twice.md"),
-      '<Dir path="first"><Content /></Dir>\n<Dir path="second"><Content /></Dir>',
-    );
-    const observed: string[] = [];
-    yield* API.Env.around(
-      {
-        *cwd() {
-          return root;
-        },
+    yield* captureTestJournal(
+      { owner: OWNER, name: placement },
+      join(root, "doc.md"),
+      function* (stream) {
+        yield* ensureDir(join(root, "components"));
+        yield* writeTextFile(
+          join(root, "components", "Twice.md"),
+          '<Dir path="first"><Content /></Dir>\n<Dir path="second"><Content /></Dir>',
+        );
+        const observed: string[] = [];
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return root;
+            },
+          },
+          { at: "min" },
+        );
+        yield* useHostFiles();
+        yield* registerComponents([
+          {
+            name: "Here",
+            origin: "test://content-dirs",
+            props: { type: "object", properties: {} },
+            *fn() {
+              observed.push(yield* cwd());
+              return "";
+            },
+          },
+        ]);
+        const path = join(root, "doc.md");
+        yield* writeTextFile(path, "<Twice><Here /></Twice>\n<Here />");
+        yield* collect(yield* execute({ path, includes: [join(root, "components")], stream }));
+        expect(observed).toEqual([join(root, "first"), join(root, "second"), root]);
+        expect(yield* cwd()).toBe(root);
       },
-      { at: "min" },
     );
-    yield* useHostFiles();
-    yield* registerComponents([
-      {
-        name: "Here",
-        origin: "test://content-dirs",
-        props: { type: "object", properties: {} },
-        *fn() {
-          observed.push(yield* cwd());
-          return "";
-        },
-      },
-    ]);
-    const path = join(root, "doc.md");
-    yield* writeTextFile(path, "<Twice><Here /></Twice>\n<Here />");
-    yield* collect(
-      yield* execute({ path, includes: [join(root, "components")], stream: new InMemoryStream() }),
-    );
-    expect(observed).toEqual([join(root, "first"), join(root, "second"), root]);
-    expect(yield* cwd()).toBe(root);
   });
 });

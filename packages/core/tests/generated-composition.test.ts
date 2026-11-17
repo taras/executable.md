@@ -17,9 +17,15 @@
  * would have let the read before it through.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -34,6 +40,8 @@ import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider } from "./support/answer-provider.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
+
+const OWNER = "packages/core/tests/generated-composition.test.ts";
 
 const ROOT_PATH = "workflows/agent.md";
 const NOTE = "the retained note\n";
@@ -80,7 +88,7 @@ function both(files: RecordedFiles): ExecutionInstallation {
 function run(
   source: string,
   installations: readonly ExecutionInstallation[],
-  stream: InMemoryStream = new InMemoryStream(),
+  stream: InMemoryStream,
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
@@ -105,11 +113,14 @@ function evaluating(fragment: string, allow?: readonly string[]): string {
 }
 
 describe("Tier FE31 — a fragment binds locally and renders what it chose", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE31: bound File output is suppressed and reaches the caller only through Json", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       evaluating(`<File path="notes.md" as="note" />\n\n<Json value={{ note }} />\n`),
       [reading(files)],
+      stream,
     );
 
     const rendered = String(output);
@@ -121,11 +132,12 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
   });
 
   it("FE31: the same read without `as` renders itself and builds no object", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The negative control for the row above. An implementation that collected
     // results implicitly would produce the same object either way, so this is
     // what says the binding — and only the binding — suppressed the output.
     const files = recordedFiles({ "notes.md": NOTE });
-    const output = yield* run(evaluating(`<File path="notes.md" />\n`), [reading(files)]);
+    const output = yield* run(evaluating(`<File path="notes.md" />\n`), [reading(files)], stream);
 
     const rendered = String(output);
     expect(files.performed).toEqual(["read notes.md"]);
@@ -135,6 +147,7 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
   });
 
   it("FE31: nested literals, arrays and shorthand compose without executing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "other.md": OTHER });
     const output = yield* run(
       evaluating(
@@ -143,6 +156,7 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
           `<Json value={{ one, both: [one, two], nested: { two, kept: [1, true, null, "x"] } }} />\n`,
       ),
       [reading(files)],
+      stream,
     );
 
     expect(JSON.parse(String(output).trim())).toEqual({
@@ -153,10 +167,12 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
   });
 
   it("FE31: `__proto__` stays an ordinary data key and changes no prototype", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       evaluating(`<File path="notes.md" as="note" />\n\n<Json value={{ __proto__: note }} />\n`),
       [reading(files)],
+      stream,
     );
 
     // Rendered as a member, which is what proves it was defined rather than
@@ -213,46 +229,59 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
 
   for (const [what, element] of EXECUTABLE) {
     it(`FE31: ${what} refuses before the read written ahead of it`, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
       const files = recordedFiles({ "notes.md": NOTE });
       // The read is written *first*, so a refusal that happened at `<Json>`
       // rather than in whole-fragment preflight would leave it in the recorder.
       yield* refusal(
-        run(evaluating(`<File path="notes.md" as="note" />\n\n${element}\n`), [reading(files)]),
+        run(
+          evaluating(`<File path="notes.md" as="note" />\n\n${element}\n`),
+          [reading(files)],
+          stream,
+        ),
       );
       expect([what, files.performed]).toEqual([what, []]);
     });
   }
 
   it("FE31: a directly scanned finite number is the positive control for the non-finite rows", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // `-1` is a JSON number rather than an operator, and the scanner resolves it
     // to an inert `-1` before an expression exists. Without this row, the
     // non-finite rows above could be refusing because a scanned numeric literal
     // never reaches `<Json>` at all.
     const files = recordedFiles({ "notes.md": NOTE });
-    const output = yield* run(evaluating(`<File path="notes.md" />\n\n<Json value={-1} />\n`), [
-      reading(files),
-    ]);
+    const output = yield* run(
+      evaluating(`<File path="notes.md" />\n\n<Json value={-1} />\n`),
+      [reading(files)],
+      stream,
+    );
 
     expect(files.performed).toEqual(["read notes.md"]);
     expect(String(output)).toContain("-1");
   });
 
   it("FE31: a scanned finite number composes inside an array and an object", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
-    const output = yield* run(evaluating(`<Json value={{ kept: [-1, 0, 1.5], number: -2 }} />\n`), [
-      reading(files),
-    ]);
+    const output = yield* run(
+      evaluating(`<Json value={{ kept: [-1, 0, 1.5], number: -2 }} />\n`),
+      [reading(files)],
+      stream,
+    );
 
     expect(JSON.parse(String(output).trim())).toEqual({ kept: [-1, 0, 1.5], number: -2 });
   });
 
   it("FE31: an admitted read is the positive control for those refusals", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // Every row above shares this fragment's first element. Without this, each
     // of them could be refusing because the fragment never ran at all.
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       evaluating(`<File path="notes.md" as="note" />\n\n<Json value={note} />\n`),
       [reading(files)],
+      stream,
     );
 
     expect(files.performed).toEqual(["read notes.md"]);
@@ -260,16 +289,20 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
   });
 
   it("FE31: a binding is unavailable before the element that produces it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     yield* refusal(
-      run(evaluating(`<Json value={note} />\n\n<File path="notes.md" as="note" />\n`), [
-        reading(files),
-      ]),
+      run(
+        evaluating(`<Json value={note} />\n\n<File path="notes.md" as="note" />\n`),
+        [reading(files)],
+        stream,
+      ),
     );
     expect(files.performed).toEqual([]);
   });
 
   it("FE31: a binding made inside content does not leak to a later sibling", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The paired write's children bind in their own scope, exactly as ordinary
     // expansion's environments do. A preflight that pooled every `as` it met
     // would admit this and fail only after the write had already run.
@@ -282,6 +315,7 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
           ["read", "write"],
         ),
         [both(files)],
+        stream,
       ),
     );
     expect(files.performed).toEqual([]);
@@ -289,6 +323,7 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
 });
 
 describe("Tier FE31 — Json is composition, not an effect", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const SELECTIONS: Array<
     [string, readonly string[], (files: RecordedFiles) => ExecutionInstallation]
   > = [
@@ -299,10 +334,12 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
 
   for (const [what, allow, profile] of SELECTIONS) {
     it(`FE31: exact core Json is available under a ${what} selection`, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
       const files = recordedFiles({ "notes.md": NOTE });
       const output = yield* run(
         evaluating(`<Json value={{ kept: [1, "two", true] }} />\n`, allow),
         [profile(files)],
+        stream,
       );
 
       expect(JSON.parse(String(output).trim())).toEqual({ kept: [1, "two", true] });
@@ -312,6 +349,7 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
   }
 
   it("FE31: Json grants no read permission under a write-only selection", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The negative control for the availability rows: having Json does not make
     // an unselected class reachable, and the refusal costs the write beside it.
     const files = recordedFiles({ "notes.md": NOTE });
@@ -323,12 +361,14 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
           ["write"],
         ),
         [writing(files)],
+        stream,
       ),
     );
     expect(files.performed).toEqual([]);
   });
 
   it("FE31: Json grants no write permission under a read-only selection", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     yield* refusal(
       run(
@@ -336,24 +376,30 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
           "read",
         ]),
         [reading(files)],
+        stream,
       ),
     );
     expect(files.performed).toEqual([]);
   });
 
   it("FE31: a host cannot give an effect to a composition name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // Closed-world conflict detection, at capture rather than at evaluation:
     // the host never gets to shadow core's own pure component.
     const files = recordedFiles();
     const message = yield* refusal(
-      run(evaluating(`<Json value={1} />\n`), [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Json: ["self-closing"] });
-            yield* useRecordedFiles(files);
+      run(
+        evaluating(`<Json value={1} />\n`),
+        [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Json: ["self-closing"] });
+              yield* useRecordedFiles(files);
+            },
           },
-        },
-      ]),
+        ],
+        stream,
+      ),
     );
     expect(message).toContain("Json");
   });
@@ -415,11 +461,13 @@ function marking(log: string[]): Operation<void> {
 }
 
 describe("Tier FE33 — the projection settles before its parent continues", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE33: projected teardown completes before later parent work begins", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const log: string[] = [];
     yield* scoped(function* () {
       yield* marking(log);
-      yield* run(evaluating(`<Held />\n`) + `\n<Mark />\n`, [holding(unwinding(log))]);
+      yield* run(evaluating(`<Held />\n`) + `\n<Mark />\n`, [holding(unwinding(log))], stream);
     });
 
     // The whole claim is this order. An implementation that let the projection's
@@ -431,20 +479,22 @@ describe("Tier FE33 — the projection settles before its parent continues", () 
   });
 
   it("FE33: the parent marker alone is the negative control for that order", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // Without this, the row above could pass because the fragment never ran.
     const log: string[] = [];
     yield* scoped(function* () {
       yield* marking(log);
-      yield* run(`<Mark />\n`, []);
+      yield* run(`<Mark />\n`, [], stream);
     });
     expect(log).toEqual(["parent after"]);
   });
 });
 
 describe("Tier FE33 — occurrences do not share generated history", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE33: two occurrences each perform their own read", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "one.md": "first\n", "two.md": "second\n" });
-    const stream = new InMemoryStream();
     const output = yield* run(
       evaluating(`<File path="one.md" />\n`) + "\n" + evaluating(`<File path="two.md" />\n`),
       [reading(files)],
@@ -466,29 +516,45 @@ describe("Tier FE33 — occurrences do not share generated history", () => {
 });
 
 describe("Try generated admission", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const branch of ["Catch", "Finally"]) {
     it(`preflights forbidden writes in untaken ${branch} before an allowed read`, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
       const files = recordedFiles({ "note.md": "saved" });
       const text = `<Try><File path="note.md" /><${branch}><File path="wrong.md">write</File></${branch}></Try>`;
-      const refused = yield* refusal(run(evaluating(text), [reading(files)]));
+      const refused = yield* refusal(run(evaluating(text), [reading(files)], stream));
       expect(refused).toContain("self-closing");
       expect(files.performed).toEqual([]);
     });
   }
-  it("admits literal recovery without exporting Catch locals or admitting property access and calls", function* () {
-    const files = recordedFiles();
-    const capturedRead = '<File path="missing.md" as="missing" />';
-    const text = `<Try>${capturedRead}<Catch as="error"><Let as="local" value="inside" />literal fallback</Catch><Finally>finished</Finally></Try>`;
-    const result = yield* run(evaluating(text), [reading(files)]);
-    expect(String(result)).toContain("literal fallback");
-    for (const expression of ["local", "error.message", "error.toString()"]) {
-      const candidate =
-        expression === "local"
-          ? text + `<Let as="escaped" value={local} />`
-          : `<Try>${capturedRead}<Catch as="error"><Let as="value" value={${expression}} /></Catch></Try>`;
-      const fresh = recordedFiles();
-      yield* refusal(run(evaluating(candidate), [reading(fresh)]));
-      expect(fresh.performed).toEqual([]);
-    }
+  const literalRecovery =
+    "admits literal recovery without exporting Catch locals or admitting property access and calls";
+  it(literalRecovery, function* () {
+    yield* captureTestJournal(
+      { owner: OWNER, name: literalRecovery },
+      ROOT_PATH,
+      function* (stream) {
+        const files = recordedFiles();
+        const capturedRead = '<File path="missing.md" as="missing" />';
+        const text = `<Try>${capturedRead}<Catch as="error"><Let as="local" value="inside" />literal fallback</Catch><Finally>finished</Finally></Try>`;
+        const result = yield* run(evaluating(text), [reading(files)], stream);
+        expect(String(result)).toContain("literal fallback");
+        for (const expression of ["local", "error.message", "error.toString()"]) {
+          const candidate =
+            expression === "local"
+              ? text + `<Let as="escaped" value={local} />`
+              : `<Try>${capturedRead}<Catch as="error"><Let as="value" value={${expression}} /></Catch></Try>`;
+          yield* captureTestJournal(
+            { owner: OWNER, name: literalRecovery },
+            ROOT_PATH,
+            function* (refusalStream) {
+              const fresh = recordedFiles();
+              yield* refusal(run(evaluating(candidate), [reading(fresh)], refusalStream));
+              expect(fresh.performed).toEqual([]);
+            },
+          );
+        }
+      },
+    );
   });
 });

@@ -12,7 +12,13 @@
  * cancelled read is not reported until its sibling's cleanup has finished.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ensure, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
@@ -25,7 +31,7 @@ import { writeTextFile } from "@effectionx/fs";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { API, Permissions, useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { useCompositionComponents } from "@executablemd/git";
 import { useRunComposition } from "@executablemd/git/deno";
@@ -33,6 +39,8 @@ import { GitQuery } from "@executablemd/git/api";
 import type { GitChangesInvocation, GitChangesResult } from "@executablemd/git/api";
 import { git } from "../../git/tests/support/git-remotes.ts";
 import { actionProbe, capturingProbe } from "../../git/tests/support/observations.ts";
+
+const OWNER = "packages/cli/tests/ticket-checkout-deno.test.ts";
 
 const COMPONENTS = fileURLToPath(
   new URL("../../../examples/adversarial-implementation/components", import.meta.url),
@@ -71,7 +79,12 @@ interface RunOptions {
   readonly around?: () => Operation<void>;
 }
 
-function runChecked(source: string, checkout: Checkout, options: RunOptions = {}): Operation<Json> {
+function runChecked(
+  stream: InMemoryStream,
+  source: string,
+  checkout: Checkout,
+  options: RunOptions = {},
+): Operation<Json> {
   return scoped(function* () {
     yield* API.Env.around(
       {
@@ -106,7 +119,7 @@ function runChecked(source: string, checkout: Checkout, options: RunOptions = {}
     return yield* collect(
       yield* execute({
         ...inlineSource(source),
-        stream: new InMemoryStream(),
+        stream,
         includes: [COMPONENTS],
       }),
     );
@@ -118,9 +131,14 @@ function checkoutOf(repository: string, as = "checkout"): string {
 }
 
 /** Run `<Ticket.Checkout>` once against this checkout and answer its bound value. */
-function* readCheckout(checkout: Checkout, options: RunOptions = {}): Operation<Json> {
+function* readCheckout(
+  stream: InMemoryStream,
+  checkout: Checkout,
+  options: RunOptions = {},
+): Operation<Json> {
   const seen: Json[] = [];
   yield* runChecked(
+    stream,
     [checkoutOf(checkout.root), "", "<Captured value={checkout} />", ""].join("\n"),
     checkout,
     {
@@ -150,11 +168,13 @@ function requested(invocation: GitChangesInvocation): string {
 }
 
 describe("Ticket.Checkout — staged and unstaged reads", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("starts both reads before either answers", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const checkout = yield* useCheckout("xmd-checkout-barrier");
     const entered: string[] = [];
     const both = withResolvers<void>();
-    const value = yield* readCheckout(checkout, {
+    const value = yield* readCheckout(stream, checkout, {
       *around() {
         yield* GitQuery.around({
           *changes(args, next): Operation<GitChangesResult> {
@@ -182,13 +202,17 @@ describe("Ticket.Checkout — staged and unstaged reads", () => {
     expect(value).toEqual(expected(checkout.run("rev-parse", "HEAD"), [], []));
   });
 
-  it("answers exact HEAD and tracked changes, fresh each time, leaving the index alone", function* () {
+  const statesCase =
+    "answers exact HEAD and tracked changes, fresh each time, leaving the index alone";
+  it(statesCase, function* () {
     const checkout = yield* useCheckout("xmd-checkout-states");
     const observe = function* (staged: Json[], unstaged: Json[]): Operation<void> {
-      const index = yield* checkout.index();
-      const value = yield* readCheckout(checkout);
-      expect(value).toEqual(expected(checkout.run("rev-parse", "HEAD"), staged, unstaged));
-      expect(yield* checkout.index()).toBe(index);
+      yield* captureTestJournal({ owner: OWNER, name: statesCase }, "<eval>", function* (stream) {
+        const index = yield* checkout.index();
+        const value = yield* readCheckout(stream, checkout);
+        expect(value).toEqual(expected(checkout.run("rev-parse", "HEAD"), staged, unstaged));
+        expect(yield* checkout.index()).toBe(index);
+      });
     };
 
     yield* observe([], []);
@@ -221,10 +245,12 @@ describe("Ticket.Checkout — staged and unstaged reads", () => {
   });
 
   it("reads again after HEAD and the working tree move within one execution", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const checkout = yield* useCheckout("xmd-checkout-fresh");
     const before = checkout.run("rev-parse", "HEAD");
     const seen: Json[] = [];
     yield* runChecked(
+      stream,
       [
         checkoutOf(checkout.root, "first"),
         "",
@@ -258,11 +284,12 @@ describe("Ticket.Checkout — staged and unstaged reads", () => {
   });
 
   it("refuses a checkout the ambient repository does not select", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const checkout = yield* useCheckout("xmd-checkout-ambient");
     const foreign = yield* useCheckout("xmd-checkout-foreign");
     let refusal: unknown;
     try {
-      yield* runChecked(checkoutOf(foreign.root), checkout);
+      yield* runChecked(stream, checkoutOf(foreign.root), checkout);
     } catch (error) {
       refusal = error;
     }
@@ -276,14 +303,16 @@ describe("Ticket.Checkout — staged and unstaged reads", () => {
 });
 
 describe("Ticket.Checkout — one owner for both reads", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("reports a failed read only after its sibling's cleanup has finished", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const checkout = yield* useCheckout("xmd-checkout-failure");
     const held = withResolvers<void>();
     const gate = withResolvers<void>();
     const order: string[] = [];
     const task = yield* spawn(function* () {
       try {
-        yield* readCheckout(checkout, {
+        yield* readCheckout(stream, checkout, {
           *around() {
             yield* GitQuery.around({
               *changes(args, _next): Operation<GitChangesResult> {
@@ -319,13 +348,14 @@ describe("Ticket.Checkout — one owner for both reads", () => {
   });
 
   it("does not finish halting until every held read has cleaned up", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const checkout = yield* useCheckout("xmd-checkout-cancel");
     const entered: string[] = [];
     const both = withResolvers<void>();
     const gate = withResolvers<void>();
     const order: string[] = [];
     const task = yield* spawn(function* () {
-      yield* readCheckout(checkout, {
+      yield* readCheckout(stream, checkout, {
         *around() {
           yield* GitQuery.around({
             *changes(args, _next): Operation<GitChangesResult> {

@@ -3,7 +3,8 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, suspend, until as untilResolved, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { useTempFileCompiler } from "@executablemd/core";
+import { INLINE_SOURCE_PATH, useTempFileCompiler } from "@executablemd/core";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -609,48 +610,55 @@ describe("A2–A5 — the selected REPL component environment", () => {
     expect(reached).toEqual([]);
   });
 
-  it("A3: preflight and execution select the same collision in either directory order", function* () {
+  const collision =
+    "A3: preflight and execution select the same collision in either directory order";
+  it(collision, function* () {
     const fixture = yield* includeWorkspace();
     for (const which of ["First", "Second"] satisfies readonly ("First" | "Second")[]) {
-      yield* scoped(function* () {
-        const relativeFirst = relative(yield* cwd(), fixture.first);
-        const includes =
-          which === "First" ? [relativeFirst, fixture.second] : [fixture.second, relativeFirst];
-        const fake = createFakeAcp();
-        const profile = yield* selectedProfile(includes, fixture.root, fake);
-        const stream = new InMemoryStream();
-        const options = {
-          execution: { id: `include-${which}`, stream },
-          includes: profile.includes,
-          installations: profile.installations,
-          generated: profile.generated,
-        };
-        const wrong = which === "First" ? "Second" : "First";
-        const refused = yield* submitReplEntry({
-          ...options,
-          source: `<Greeting from${wrong}="ok" />`,
-        });
-        expect(refused.ok).toBe(false);
-        expect(yield* stream.readAll()).toEqual([]);
-        const accepted = yield* submitReplEntry({
-          ...options,
-          source: `<Greeting from${which}="ok" />`,
-        });
-        if (!accepted.ok) {
-          throw accepted.error;
-        }
-        const session = accepted.value;
-        const result = yield* session.join();
-        expect(result.ok).toBe(true);
-        expect(session.model.terminal?.output).toContain(`${which} greeting rendered.`);
-        const selectedPath = join(
-          which === "First" ? fixture.first : fixture.second,
-          "Greeting.md",
-        );
-        expect(JSON.stringify(yield* stream.readAll())).toContain(selectedPath);
-        expect(yield* profile.vocabulary.documentation(["Greeting"])).toContain(selectedPath);
-        expect(fake.prompts).toEqual([]);
-      });
+      yield* captureReplEntry(
+        { owner: "packages/cli/tests/repl-agent-journey.test.ts", name: collision },
+        `include-${which}`,
+        INLINE_SOURCE_PATH,
+        function* (execution) {
+          const relativeFirst = relative(yield* cwd(), fixture.first);
+          const includes =
+            which === "First" ? [relativeFirst, fixture.second] : [fixture.second, relativeFirst];
+          const fake = createFakeAcp();
+          const profile = yield* selectedProfile(includes, fixture.root, fake);
+          const stream = execution.stream;
+          const options = {
+            execution,
+            includes: profile.includes,
+            installations: profile.installations,
+            generated: profile.generated,
+          };
+          const wrong = which === "First" ? "Second" : "First";
+          const refused = yield* submitReplEntry({
+            ...options,
+            source: `<Greeting from${wrong}="ok" />`,
+          });
+          expect(refused.ok).toBe(false);
+          expect(yield* stream.readAll()).toEqual([]);
+          const accepted = yield* submitReplEntry({
+            ...options,
+            source: `<Greeting from${which}="ok" />`,
+          });
+          if (!accepted.ok) {
+            throw accepted.error;
+          }
+          const session = accepted.value;
+          const result = yield* session.join();
+          expect(result.ok).toBe(true);
+          expect(session.model.terminal?.output).toContain(`${which} greeting rendered.`);
+          const selectedPath = join(
+            which === "First" ? fixture.first : fixture.second,
+            "Greeting.md",
+          );
+          expect(JSON.stringify(yield* stream.readAll())).toContain(selectedPath);
+          expect(yield* profile.vocabulary.documentation(["Greeting"])).toContain(selectedPath);
+          expect(fake.prompts).toEqual([]);
+        },
+      );
     }
   });
 

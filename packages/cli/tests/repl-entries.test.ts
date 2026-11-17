@@ -21,6 +21,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import {
   collect,
   Execution,
@@ -114,6 +115,8 @@ import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
 
 /** One entry that publishes two root values and renders one of them. */
+const OWNER = "packages/cli/tests/repl-entries.test.ts";
+
 const FIRST = [
   "```js eval",
   'const token = "alpha";',
@@ -1252,43 +1255,57 @@ function* countPerformed(): Operation<Performed> {
 describe("REPL entries: one session, one entry task, in turn", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("EL1: the first entry starts exactly one task", function* () {
-    const holder = replExecution();
-    yield* scoped(function* () {
-      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
-      yield* session.join();
+  const firstTask = "EL1: the first entry starts exactly one task";
+  it(firstTask, () =>
+    captureReplEntry(
+      { owner: OWNER, name: firstTask },
+      "entries",
+      INLINE_SOURCE_PATH,
+      function* (holder) {
+        yield* scoped(function* () {
+          const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+          yield* session.join();
 
-      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
-      expect(session.model.settled).toBe(true);
-      expect(session.live).toBe(false);
-    });
-    expect(started(yield* holder.stream.readAll())).toBe(1);
-  });
+          expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+          expect(session.model.settled).toBe(true);
+          expect(session.live).toBe(false);
+        });
+        expect(started(yield* holder.stream.readAll())).toBe(1);
+      },
+    ),
+  );
 
-  it("EL1: a submission while an entry is running refuses and starts nothing", function* () {
-    const holder = replExecution();
-    yield* scoped(function* () {
-      const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
-      const question = yield* asking(session);
-      const held = yield* holder.stream.readAll();
+  const busySubmission = "EL1: a submission while an entry is running refuses and starts nothing";
+  it(busySubmission, () =>
+    captureReplEntry(
+      { owner: OWNER, name: busySubmission },
+      "entries",
+      INLINE_SOURCE_PATH,
+      function* (holder) {
+        yield* scoped(function* () {
+          const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
+          const question = yield* asking(session);
+          const held = yield* holder.stream.readAll();
 
-      const error = refusedSubmission(yield* session.submit(PLAIN));
-      // Named for the entry in the way, rather than for which of the two
-      // conditions fired: what this row claims is that a submission arriving
-      // while an entry runs refuses and starts nothing.
-      expect(error.name).toBe("ReplLifecycleError");
-      expect(error.message).toContain("entry-1");
-      // Nothing started: the file has not moved, no second root was admitted, and
-      // the question this entry is waiting on is the one it was waiting on.
-      expect(yield* holder.stream.readAll()).toEqual(held);
-      expect(started(held)).toBe(1);
-      expect(session.overlay.question).toBe(question);
+          const error = refusedSubmission(yield* session.submit(PLAIN));
+          // Named for the entry in the way, rather than for which of the two
+          // conditions fired: what this row claims is that a submission arriving
+          // while an entry runs refuses and starts nothing.
+          expect(error.name).toBe("ReplLifecycleError");
+          expect(error.message).toContain("entry-1");
+          // Nothing started: the file has not moved, no second root was admitted, and
+          // the question this entry is waiting on is the one it was waiting on.
+          expect(yield* holder.stream.readAll()).toEqual(held);
+          expect(started(held)).toBe(1);
+          expect(session.overlay.question).toBe(question);
 
-      question.submit({ decision: "go" });
-      yield* session.join();
-    });
-    expect(started(yield* holder.stream.readAll())).toBe(1);
-  });
+          question.submit({ decision: "go" });
+          yield* session.join();
+        });
+        expect(started(yield* holder.stream.readAll())).toBe(1);
+      },
+    ),
+  );
 
   it("EL1: terminal and unjoined still refuses; the join lets the next one start", function* () {
     const holder = replExecution();
@@ -1487,50 +1504,57 @@ describe("REPL entries: one session, one entry task, in turn", () => {
     });
   });
 
-  it("EL1: teardown racing a submission starts no task and joins the one running", function* () {
-    const holder = replExecution();
-    const entered = gate();
-    const release = gate();
-    // A child of this row's own scope, so the session it holds runs under the
-    // same compiler and host the rest of the suite does. Teardown is then this
-    // row's to begin, which is the whole point.
-    const [scope, dispose] = createScope(yield* useScope());
-    const held = withResolvers<ReplSession>();
-    try {
-      scope.run(function* () {
-        const session = opened(
-          yield* submitReplEntry({
-            execution: holder,
-            source: ASKS,
-            installations: [holdingTeardown(entered, release)],
-          }),
-        );
-        held.resolve(session);
-        yield* suspend();
-      });
-      const session = yield* held.operation;
-      yield* asking(session);
-      const before = yield* holder.stream.readAll();
+  const teardownRace = "EL1: teardown racing a submission starts no task and joins the one running";
+  it(teardownRace, () =>
+    captureReplEntry(
+      { owner: OWNER, name: teardownRace },
+      "entries",
+      INLINE_SOURCE_PATH,
+      function* (holder) {
+        const entered = gate();
+        const release = gate();
+        // A child of this row's own scope, so the session it holds runs under the
+        // same compiler and host the rest of the suite does. Teardown is then this
+        // row's to begin, which is the whole point.
+        const [scope, dispose] = createScope(yield* useScope());
+        const held = withResolvers<ReplSession>();
+        try {
+          scope.run(function* () {
+            const session = opened(
+              yield* submitReplEntry({
+                execution: holder,
+                source: ASKS,
+                installations: [holdingTeardown(entered, release)],
+              }),
+            );
+            held.resolve(session);
+            yield* suspend();
+          });
+          const session = yield* held.operation;
+          yield* asking(session);
+          const before = yield* holder.stream.readAll();
 
-      const tearing = dispose();
-      // Teardown has reached the running entry's own finalizers, which is as far
-      // in as anything gets before the task is joined.
-      yield* awaiting("this session reaching its teardown", entered.opened);
+          const tearing = dispose();
+          // Teardown has reached the running entry's own finalizers, which is as far
+          // in as anything gets before the task is joined.
+          yield* awaiting("this session reaching its teardown", entered.opened);
 
-      const error = refusedSubmission(yield* session.submit(PLAIN));
-      expect(error.name).toBe("ReplLifecycleError");
-      expect(yield* holder.stream.readAll()).toEqual(before);
+          const error = refusedSubmission(yield* session.submit(PLAIN));
+          expect(error.name).toBe("ReplLifecycleError");
+          expect(yield* holder.stream.readAll()).toEqual(before);
 
-      release.open();
-      // And the active task is joined, rather than abandoned: observing the
-      // teardown is what says so.
-      yield* until(tearing);
-      expect(started(yield* holder.stream.readAll())).toBe(1);
-      expect(holder.stream.onAppend).toBe(null);
-    } finally {
-      release.open();
-    }
-  });
+          release.open();
+          // And the active task is joined, rather than abandoned: observing the
+          // teardown is what says so.
+          yield* until(tearing);
+          expect(started(yield* holder.stream.readAll())).toBe(1);
+          expect(holder.stream.onAppend).toBe(null);
+        } finally {
+          release.open();
+        }
+      },
+    ),
+  );
 
   it("EL1: an append the journal refuses opens no successor and mounts no task", function* () {
     const stream = new InMemoryStream();

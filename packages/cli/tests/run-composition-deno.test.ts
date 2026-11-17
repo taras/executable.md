@@ -14,7 +14,9 @@ import { Permissions } from "@executablemd/runtime";
  * `run-composition-nested.test.ts`.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { type Operation, scoped, until } from "effection";
 import { realpath } from "node:fs/promises";
@@ -89,6 +91,8 @@ function* useAmbient(
   return { checkout, root: join(managed, "repositories"), home };
 }
 
+const OWNER = "packages/cli/tests/run-composition-deno.test.ts";
+
 /**
  * Run one document under the ordinary provider, on a stream a caller chose.
  *
@@ -103,6 +107,7 @@ function runOrdinary(
     root: string;
     cwd: string;
     journal?: string;
+    stream?: InMemoryStream;
     /** Installed after the components, where a provider's own middleware goes. */
     agent?: () => Operation<void>;
   },
@@ -134,13 +139,17 @@ function runOrdinary(
     // `--journal` is exactly this: the file-backed stream instead of the
     // in-memory one, created by the command before the run begins.
     const stream =
-      options.journal === undefined ? new InMemoryStream() : new FileStream(options.journal);
+      options.journal === undefined
+        ? (options.stream ?? new InMemoryStream())
+        : new FileStream(options.journal);
     return yield* collect(yield* execute({ ...inlineSource(source), stream }));
   });
 }
 
 describe("ORC7 — a Session launched in a managed Worktree", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("hands the launch that worktree's own root and a session key of its own", function* () {
+    const stream = yield* useJournalStream("<eval>");
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
       { at: "min" },
@@ -242,7 +251,7 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
         "",
         "{w}",
       ].join("\n"),
-      { root: ambient.root, cwd: ambient.checkout, agent: capture },
+      { root: ambient.root, cwd: ambient.checkout, agent: capture, stream },
     );
     const worktree = String(bound).trim().split("\n").at(-1) ?? "";
     expect(yield* exists(worktree)).toBe(true);
@@ -275,7 +284,9 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
 });
 
 describe("ORC18 — the journal is diagnostic", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("performs the same live work with and without a trace, once each", function* () {
+    const stream = yield* useJournalStream("<eval>");
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
       { at: "min" },
@@ -293,7 +304,7 @@ describe("ORC18 — the journal is diagnostic", () => {
       "</Dir>",
     ].join("\n");
 
-    yield* runOrdinary(document, { root: first.root, cwd: first.checkout });
+    yield* runOrdinary(document, { root: first.root, cwd: first.checkout, stream });
     yield* runOrdinary(document, {
       root: second.root,
       cwd: second.checkout,

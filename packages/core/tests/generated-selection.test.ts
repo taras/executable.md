@@ -19,7 +19,13 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * capture must leave no partial allowance anywhere in the execution.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { createApi } from "@effectionx/context-api";
 import { ensure, resource, scoped, until, useScope } from "effection";
@@ -45,6 +51,8 @@ import { answerProvider, implementation } from "./support/answer-provider.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import type { ComponentDefinition, FunctionComponentDefinition } from "../src/types.ts";
 
+const OWNER = "packages/core/tests/generated-selection.test.ts";
+
 const ROOT_PATH = "selection.md";
 const NOTE = "the retained note\n";
 
@@ -62,20 +70,21 @@ interface Attempt {
  * installation, because that is what a host composes: there is no installation
  * member for it, and core reads the final answer of the chain once.
  */
+type SelectionRunOptions = {
+  offered?: unknown;
+  installations?: readonly ExecutionInstallation[];
+  files?: RecordedFiles;
+  around?: () => Operation<void>;
+  /** What the *host* supplies, before any policy has seen the request. */
+  includes?: readonly string[];
+};
+
 function run(
   source: string,
-  options: {
-    offered?: unknown;
-    installations?: readonly ExecutionInstallation[];
-    files?: RecordedFiles;
-    events?: DurableEvent[];
-    around?: () => Operation<void>;
-    /** What the *host* supplies, before any policy has seen the request. */
-    includes?: readonly string[];
-  } = {},
+  options: SelectionRunOptions = {},
+  stream = new InMemoryStream(),
 ): Operation<Attempt> {
   return scoped(function* () {
-    const stream = new InMemoryStream(options.events ?? []);
     yield* useComponentModuleLoader();
     if (options.files !== undefined) {
       yield* useRecordedFiles(options.files);
@@ -220,13 +229,15 @@ function rootImports(events: readonly DurableEvent[]): DurableEvent[] {
 }
 
 describe("Tier GS — the property and its default", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("U5-1: the default is absent, and a document that writes no `<Evaluate>` runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const read = yield* scoped(function* () {
       return yield* Component.operations.generated;
     });
     expect(read).toBe(undefined);
 
-    const attempt = yield* run("The document wrote no fragment.\n");
+    const attempt = yield* run("The document wrote no fragment.\n", {}, stream);
     expect(attempt.failure).toBe(undefined);
     expect(attempt.output).toContain("The document wrote no fragment.");
     expect(admissions(attempt.events)).toHaveLength(0);
@@ -244,11 +255,16 @@ describe("Tier GS — the property and its default", () => {
   });
 
   it("U5-1: an absent selection refuses a paired `<Evaluate>` before its producer runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const produced: string[] = [];
 
-    const attempt = yield* run(producing(`<File path="notes.md" />\n`), {
-      around: () => useProducer(produced),
-    });
+    const attempt = yield* run(
+      producing(`<File path="notes.md" />\n`),
+      {
+        around: () => useProducer(produced),
+      },
+      stream,
+    );
 
     expect(attempt.failure).toContain("no generated components here");
     // The producer renders the program, so a refusal that happened after it
@@ -259,6 +275,7 @@ describe("Tier GS — the property and its default", () => {
 });
 
 describe("Tier GS — a selection core cannot capture refuses setup", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** Every malformed selection a host can offer, and the word it refuses with. */
   const MALFORMED: readonly (readonly [string, unknown, string])[] = [
     ["an empty selection", {}, "selected no component"],
@@ -314,23 +331,28 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
   }
 
   it("U5-1: a valid selection is the control every refusal above is measured against", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const policy: string[] = [];
     const produced: string[] = [];
 
-    const attempt = yield* run(producing(`<File path="notes.md" />\n`), {
-      offered: { File: ["self-closing"] },
-      files,
-      *around(): Operation<void> {
-        yield* useProducer(produced);
-        yield* Execution.around({
-          *execute([request], next) {
-            policy.push("execute");
-            yield* next(request);
-          },
-        });
+    const attempt = yield* run(
+      producing(`<File path="notes.md" />\n`),
+      {
+        offered: { File: ["self-closing"] },
+        files,
+        *around(): Operation<void> {
+          yield* useProducer(produced);
+          yield* Execution.around({
+            *execute([request], next) {
+              policy.push("execute");
+              yield* next(request);
+            },
+          });
+        },
       },
-    });
+      stream,
+    );
 
     expect(attempt.failure).toBe(undefined);
     expect(attempt.output).toContain("the retained note");
@@ -342,15 +364,20 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
   });
 
   it("U5-1: a mixed valid and invalid selection installs no partial allowance", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
 
     // One name this host could legitimately offer, and one it could not. The
     // batch is validated whole, so the valid member is not installed on its
     // own: nothing is filtered, repaired, or kept.
-    const attempt = yield* run(evaluating(`<File path="notes.md" />\n`), {
-      offered: { File: ["self-closing"], "not a name": ["self-closing"] },
-      files,
-    });
+    const attempt = yield* run(
+      evaluating(`<File path="notes.md" />\n`),
+      {
+        offered: { File: ["self-closing"], "not a name": ["self-closing"] },
+        files,
+      },
+      stream,
+    );
 
     expect(attempt.failure).toContain("component name");
     expect(files.performed).toEqual([]);
@@ -359,104 +386,128 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
 });
 
 describe("Tier GS — the selection is read once, before public policy", () => {
-  it("U5-2: init and the installation callbacks settle the selection before it is read", function* () {
-    const order: string[] = [];
-    const files = recordedFiles({ "notes.md": NOTE });
+  beforeEach(journalBeforeEach(OWNER));
+  const selectionInit =
+    "U5-2: init and the installation callbacks settle the selection before it is read";
+  it(selectionInit, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: selectionInit }, ROOT_PATH, function* (stream) {
+      const order: string[] = [];
+      const files = recordedFiles({ "notes.md": NOTE });
 
-    const attempt = yield* run(evaluating(`<File path="notes.md" />\n`), {
-      installations: [
+      const attempt = yield* run(
+        evaluating(`<File path="notes.md" />\n`),
         {
-          *install(): Operation<void> {
-            order.push("install");
-            // Offered here, and observed where core reads it: the handler
-            // records the read so the row can state *when* it happened rather
-            // than only what it answered.
-            yield* Component.around({
-              generated: (_args, next) => {
-                order.push("read");
-                return next();
+          installations: [
+            {
+              *install(): Operation<void> {
+                order.push("install");
+                // Offered here, and observed where core reads it: the handler
+                // records the read so the row can state *when* it happened rather
+                // than only what it answered.
+                yield* Component.around({
+                  generated: (_args, next) => {
+                    order.push("read");
+                    return next();
+                  },
+                });
+                yield* useSelection({ File: ["self-closing"] });
+              },
+            },
+          ],
+          files,
+          *around(): Operation<void> {
+            yield* Execution.around({
+              *init(_args, next) {
+                order.push("init");
+                yield* next();
+              },
+              *execute([request], next) {
+                order.push("policy");
+                // The selection is already captured. A policy that offers a broader
+                // one changes nothing: it is composing into a chain core has
+                // already read its one answer from.
+                yield* Component.around({
+                  generated: () => ({ File: ["self-closing", "paired"], Glob: ["self-closing"] }),
+                });
+                yield* next(request);
               },
             });
-            yield* useSelection({ File: ["self-closing"] });
           },
         },
-      ],
-      files,
-      *around(): Operation<void> {
-        yield* Execution.around({
-          *init(_args, next) {
-            order.push("init");
-            yield* next();
-          },
-          *execute([request], next) {
-            order.push("policy");
-            // The selection is already captured. A policy that offers a broader
-            // one changes nothing: it is composing into a chain core has
-            // already read its one answer from.
-            yield* Component.around({
-              generated: () => ({ File: ["self-closing", "paired"], Glob: ["self-closing"] }),
-            });
-            yield* next(request);
-          },
-        });
-      },
-    });
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    // The order is the contract: initialization and the captured installation
-    // callbacks assemble the host, then core reads the selection once, and only
-    // then does public execution policy run. A read that happened after the
-    // policy would be reading a chain the policy had already composed into.
-    expect(order).toEqual(["init", "install", "read", "policy"]);
-    // The fragment reached the read it was offered.
-    expect(files.performed).toEqual(["read notes.md"]);
-    // And not the vocabulary the policy tried to add: a widened selection after
-    // capture is a selection nothing reads.
-    const widened = yield* run(evaluating(`<Glob include={["*.md"]} as="paths" />\n`), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ File: ["self-closing"] });
-          },
+      expect(attempt.failure).toBe(undefined);
+      // The order is the contract: initialization and the captured installation
+      // callbacks assemble the host, then core reads the selection once, and only
+      // then does public execution policy run. A read that happened after the
+      // policy would be reading a chain the policy had already composed into.
+      expect(order).toEqual(["init", "install", "read", "policy"]);
+      // The fragment reached the read it was offered.
+      expect(files.performed).toEqual(["read notes.md"]);
+      // And not the vocabulary the policy tried to add: a widened selection after
+      // capture is a selection nothing reads.
+      yield* captureTestJournal(
+        { owner: OWNER, name: selectionInit },
+        ROOT_PATH,
+        function* (secondStream) {
+          const widened = yield* run(
+            evaluating(`<Glob include={["*.md"]} as="paths" />\n`),
+            {
+              installations: [
+                {
+                  *install(): Operation<void> {
+                    yield* useSelection({ File: ["self-closing"] });
+                  },
+                },
+              ],
+              *around(): Operation<void> {
+                yield* Execution.around({
+                  *execute([request], next) {
+                    yield* Component.around({ generated: () => ({ Glob: ["self-closing"] }) });
+                    yield* next(request);
+                  },
+                });
+              },
+            },
+            secondStream,
+          );
+          expect(widened.failure).toContain("did not admit");
         },
-      ],
-      *around(): Operation<void> {
-        yield* Execution.around({
-          *execute([request], next) {
-            yield* Component.around({ generated: () => ({ Glob: ["self-closing"] }) });
-            yield* next(request);
-          },
-        });
-      },
+      );
     });
-    expect(widened.failure).toContain("did not admit");
   });
 
   it("U5-2: one property read and one import per selected name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const reads: string[] = [];
     const lookups: string[] = [];
     const files = recordedFiles({ "notes.md": NOTE });
 
-    const attempt = yield* run(evaluating(`<File path="notes.md" />\n<File path="notes.md" />\n`), {
-      files,
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* Component.around({
-              generated: (_args, next) => {
-                reads.push("generated");
-                return next();
-              },
-              *importComponent([name, position], next) {
-                lookups.push(name);
-                return yield* next(name, position);
-              },
-            });
-            yield* useSelection({ File: ["self-closing", "paired"] });
+    const attempt = yield* run(
+      evaluating(`<File path="notes.md" />\n<File path="notes.md" />\n`),
+      {
+        files,
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* Component.around({
+                generated: (_args, next) => {
+                  reads.push("generated");
+                  return next();
+                },
+                *importComponent([name, position], next) {
+                  lookups.push(name);
+                  return yield* next(name, position);
+                },
+              });
+              yield* useSelection({ File: ["self-closing", "paired"] });
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toBe(undefined);
     // One read of the property for the whole execution.
@@ -475,93 +526,120 @@ describe("Tier GS — the selection is read once, before public policy", () => {
     expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
   });
 
-  it("U5-2: a policy's search-path replacement reaches authored imports, not the capture", function* () {
-    // The one search path a document here can import a component from, and the
-    // host supplies none of it: everything authored resolves through whatever
-    // the accepted request names.
-    const dir = yield* useComponentDirectory();
-    const files = recordedFiles({ "notes.md": NOTE });
+  const authoredLookup =
+    "U5-2: a policy's search-path replacement reaches authored imports, not the capture";
+  it(authoredLookup, function* () {
+    yield* captureTestJournal(
+      { owner: OWNER, name: authoredLookup },
+      ROOT_PATH,
+      function* (stream) {
+        // The one search path a document here can import a component from, and the
+        // host supplies none of it: everything authored resolves through whatever
+        // the accepted request names.
+        const dir = yield* useComponentDirectory();
+        const files = recordedFiles({ "notes.md": NOTE });
 
-    const attempt = yield* run(`<Replaced />\n\n${evaluating(`<File path="notes.md" />\n`)}`, {
-      files,
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ File: ["self-closing"] });
+        const attempt = yield* run(
+          `<Replaced />\n\n${evaluating(`<File path="notes.md" />\n`)}`,
+          {
+            files,
+            installations: [
+              {
+                *install(): Operation<void> {
+                  yield* useSelection({ File: ["self-closing"] });
+                },
+              },
+            ],
+            *around(): Operation<void> {
+              yield* Execution.around({
+                *execute([request], next) {
+                  // A supported policy change, made before delegating. The options
+                  // the terminal accepts are the ones the document is executed
+                  // under, so this is where its authored imports resolve from.
+                  yield* next(request.withOptions({ ...request.options, includes: [dir] }));
+                },
+              });
+            },
           },
-        },
-      ],
-      *around(): Operation<void> {
-        yield* Execution.around({
-          *execute([request], next) {
-            // A supported policy change, made before delegating. The options
-            // the terminal accepts are the ones the document is executed
-            // under, so this is where its authored imports resolve from.
-            yield* next(request.withOptions({ ...request.options, includes: [dir] }));
+          stream,
+        );
+
+        expect(attempt.failure).toBe(undefined);
+        // The authored import resolved through the replaced path. Without the
+        // accepted options reaching ordinary resolution there is nowhere for
+        // `<Replaced />` to come from.
+        expect(attempt.output).toContain("REPLACED-COMPONENT");
+        // And the capture is untouched by it: the fragment wrote the one spelling
+        // the host selected, resolved before the policy ran.
+        expect(files.performed).toEqual(["read notes.md"]);
+
+        // The other half: a path a policy added is not a vocabulary a fragment
+        // gained. `<Replaced />` is importable by the *document* and admitted for
+        // nothing.
+        yield* captureTestJournal(
+          { owner: OWNER, name: authoredLookup },
+          ROOT_PATH,
+          function* (secondStream) {
+            const widened = yield* run(
+              evaluating(`<Replaced />\n`),
+              {
+                installations: [
+                  {
+                    *install(): Operation<void> {
+                      yield* useSelection({ File: ["self-closing"] });
+                    },
+                  },
+                ],
+                *around(): Operation<void> {
+                  yield* Execution.around({
+                    *execute([request], next) {
+                      yield* next(request.withOptions({ ...request.options, includes: [dir] }));
+                    },
+                  });
+                },
+              },
+              secondStream,
+            );
+            expect(widened.failure).toContain("did not admit");
           },
-        });
+        );
       },
-    });
-
-    expect(attempt.failure).toBe(undefined);
-    // The authored import resolved through the replaced path. Without the
-    // accepted options reaching ordinary resolution there is nowhere for
-    // `<Replaced />` to come from.
-    expect(attempt.output).toContain("REPLACED-COMPONENT");
-    // And the capture is untouched by it: the fragment wrote the one spelling
-    // the host selected, resolved before the policy ran.
-    expect(files.performed).toEqual(["read notes.md"]);
-
-    // The other half: a path a policy added is not a vocabulary a fragment
-    // gained. `<Replaced />` is importable by the *document* and admitted for
-    // nothing.
-    const widened = yield* run(evaluating(`<Replaced />\n`), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ File: ["self-closing"] });
-          },
-        },
-      ],
-      *around(): Operation<void> {
-        yield* Execution.around({
-          *execute([request], next) {
-            yield* next(request.withOptions({ ...request.options, includes: [dir] }));
-          },
-        });
-      },
-    });
-    expect(widened.failure).toContain("did not admit");
+    );
   });
 
   it("U5-2: a later ordinary authored registration still behaves contextually", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const told: string[] = [];
 
     // The selection is captured; an ordinary registration a document policy
     // makes afterwards is an ordinary registration, visible to the authored
     // document exactly as it always was.
-    const attempt = yield* run("<Later />\n", {
-      offered: { File: ["self-closing"] },
-      *around(): Operation<void> {
-        yield* Execution.around({
-          *execute([request], next) {
-            yield* registerComponents([
-              {
-                name: "Later",
-                origin: "test://later",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                // deno-lint-ignore require-yield
-                *fn(): Operation<string> {
-                  told.push("later ran");
-                  return "the later registration ran";
+    const attempt = yield* run(
+      "<Later />\n",
+      {
+        offered: { File: ["self-closing"] },
+        *around(): Operation<void> {
+          yield* Execution.around({
+            *execute([request], next) {
+              yield* registerComponents([
+                {
+                  name: "Later",
+                  origin: "test://later",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    told.push("later ran");
+                    return "the later registration ran";
+                  },
                 },
-              },
-            ]);
-            yield* next(request);
-          },
-        });
+              ]);
+              yield* next(request);
+            },
+          });
+        },
       },
-    });
+      stream,
+    );
 
     expect(attempt.failure).toBe(undefined);
     expect(told).toEqual(["later ran"]);
@@ -570,21 +648,27 @@ describe("Tier GS — the selection is read once, before public policy", () => {
 });
 
 describe("Tier GS — what a selected name resolves to", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("U5-3: a registered function and a published provider answer both run", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const ran: string[] = [];
     const A = implementation("Open", "the provider's answer ran");
 
-    const attempt = yield* run(evaluating("<Local />\n<Open />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Local: ["self-closing"], Open: ["self-closing"] });
-            yield* registerComponents([localComponent(ran)]);
+    const attempt = yield* run(
+      evaluating("<Local />\n<Open />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Local: ["self-closing"], Open: ["self-closing"] });
+              yield* registerComponents([localComponent(ran)]);
+            },
+            componentAnswers: [answerProvider("Open", A.definition)],
           },
-          componentAnswers: [answerProvider("Open", A.definition)],
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toBe(undefined);
     expect(ran).toEqual(["local ran"]);
@@ -592,45 +676,68 @@ describe("Tier GS — what a selected name resolves to", () => {
     expect(attempt.output).toContain("the provider's answer ran");
   });
 
-  it("U5-3: a repository component is offered for what it declares, and no more", function* () {
-    const dir = yield* useRepositoryComponents();
+  const repositoryComponent =
+    "U5-3: a repository component is offered for what it declares, and no more";
+  it(repositoryComponent, function* () {
+    yield* captureTestJournal(
+      { owner: OWNER, name: repositoryComponent },
+      ROOT_PATH,
+      function* (stream) {
+        const dir = yield* useRepositoryComponents();
 
-    // A file on the search path is a declaration like any other: what its
-    // self-closing form is offered for is on it, so a host that selects the
-    // name is offered exactly that and the fragment runs that body.
-    const offered = yield* run(evaluating(`<Offered />\n`), {
-      includes: [dir],
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Offered: ["self-closing"] });
+        // A file on the search path is a declaration like any other: what its
+        // self-closing form is offered for is on it, so a host that selects the
+        // name is offered exactly that and the fragment runs that body.
+        const offered = yield* run(
+          evaluating(`<Offered />\n`),
+          {
+            includes: [dir],
+            installations: [
+              {
+                *install(): Operation<void> {
+                  yield* useSelection({ Offered: ["self-closing"] });
+                },
+              },
+            ],
           },
-        },
-      ],
-    });
+          stream,
+        );
 
-    expect(offered.failure).toBe(undefined);
-    expect(offered.output).toContain("THE REPOSITORY COPY RAN");
+        expect(offered.failure).toBe(undefined);
+        expect(offered.output).toContain("THE REPOSITORY COPY RAN");
 
-    // The same shape, stating nothing: a component that declares no generated
-    // use is one no selection admits, and the host's statement cannot supply
-    // what the owner withheld.
-    const silent = yield* run(evaluating(`<Silent />\n`), {
-      includes: [dir],
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Silent: ["self-closing"] });
+        // The same shape, stating nothing: a component that declares no generated
+        // use is one no selection admits, and the host's statement cannot supply
+        // what the owner withheld.
+        yield* captureTestJournal(
+          { owner: OWNER, name: repositoryComponent },
+          ROOT_PATH,
+          function* (secondStream) {
+            const silent = yield* run(
+              evaluating(`<Silent />\n`),
+              {
+                includes: [dir],
+                installations: [
+                  {
+                    *install(): Operation<void> {
+                      yield* useSelection({ Silent: ["self-closing"] });
+                    },
+                  },
+                ],
+              },
+              secondStream,
+            );
+
+            expect(silent.failure).toContain("offers no generated use");
+            expect(silent.output).toBe(undefined);
           },
-        },
-      ],
-    });
-
-    expect(silent.failure).toContain("offers no generated use");
-    expect(silent.output).toBe(undefined);
+        );
+      },
+    );
   });
 
   it("U5-3: an unpublished replacement refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const ran: string[] = [];
     const replacement: FunctionComponentDefinition = {
       kind: "function",
@@ -653,51 +760,60 @@ describe("Tier GS — what a selected name resolves to", () => {
     // Ordinary import middleware answering with its own definition, publishing
     // nothing. It is a valid ordinary answer and it is not an implementation
     // this execution may retain for a selected name.
-    const attempt = yield* run(evaluating("<Local />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Local: ["self-closing"] });
-            yield* registerComponents([localComponent(ran)]);
-            yield* Component.around({
-              *importComponent([name, position], next) {
-                return name === "Local" ? replacement : yield* next(name, position);
-              },
-            });
+    const attempt = yield* run(
+      evaluating("<Local />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Local: ["self-closing"] });
+              yield* registerComponents([localComponent(ran)]);
+              yield* Component.around({
+                *importComponent([name, position], next) {
+                  return name === "Local" ? replacement : yield* next(name, position);
+                },
+              });
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toContain("neither canonical resolution's own answer");
     expect(ran).toEqual([]);
   });
 
   it("U5-3: a replacement offering no generated use of the selected spelling refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const ran: string[] = [];
 
-    const attempt = yield* run(evaluating("<Open />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Open: ["self-closing"] });
+    const attempt = yield* run(
+      evaluating("<Open />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Open: ["self-closing"] });
+            },
+            componentAnswers: [
+              answerProvider("Open", {
+                kind: "function",
+                name: "Open",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                forms: ["self-closing"],
+                // deno-lint-ignore require-yield
+                *fn(): Operation<string> {
+                  ran.push("unoffered ran");
+                  return "the unoffered answer ran";
+                },
+              }),
+            ],
           },
-          componentAnswers: [
-            answerProvider("Open", {
-              kind: "function",
-              name: "Open",
-              props: { type: "object", properties: {}, additionalProperties: false },
-              forms: ["self-closing"],
-              // deno-lint-ignore require-yield
-              *fn(): Operation<string> {
-                ran.push("unoffered ran");
-                return "the unoffered answer ran";
-              },
-            }),
-          ],
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toContain("offers no generated use of it");
     expect(ran).toEqual([]);
@@ -844,21 +960,26 @@ describe("Tier GS — what a selected name resolves to", () => {
   });
 
   it("U5-3: the retained admission holds the identity the owner declared", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const ran: string[] = [];
 
     // The positive control for the two refusals above: an ordinary declaration
     // is retained with the URL its own metadata states, and that is the row the
     // admission records.
-    const attempt = yield* run(evaluating("<Local />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Local: ["self-closing"] });
-            yield* registerComponents([localComponent(ran)]);
+    const attempt = yield* run(
+      evaluating("<Local />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Local: ["self-closing"] });
+              yield* registerComponents([localComponent(ran)]);
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toBe(undefined);
     expect(ran).toEqual(["local ran"]);

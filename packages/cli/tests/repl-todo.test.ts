@@ -1,4 +1,6 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -16,6 +18,8 @@ import { executeInstalled } from "@executablemd/core/host";
 import type { ComponentInvocationHooks } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
+
+const OWNER = "packages/cli/tests/repl-todo.test.ts";
 
 function entry(
   source: string,
@@ -333,6 +337,7 @@ describe("TODO exact source grammar and patches", () => {
 });
 
 describe("TODO typed component and historical result", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("requires as before effects, shares entry state, and replays an edit without repeating it", function* () {
     const root = yield* fixture();
     const todo = yield* useTodo(root);
@@ -365,6 +370,7 @@ describe("TODO typed component and historical result", () => {
   });
 
   it("returns its own committed items while result delivery is held across a newer mutation", function* () {
+    const stream = yield* useJournalStream("todo-entry.md");
     const root = yield* fixture();
     const todo = yield* useTodo(root);
     const delivering = withResolvers<void>();
@@ -384,7 +390,7 @@ describe("TODO typed component and historical result", () => {
     const running = yield* spawn(() =>
       entry(
         '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] earlier\n```\n</Sidekick.Todo>\n<Json value={items} />',
-        new InMemoryStream(),
+        stream,
         observing,
       ),
     );
@@ -401,13 +407,14 @@ describe("TODO typed component and historical result", () => {
   });
 
   it("admits both forms from one captured definition and refuses writes under read-only admission", function* () {
+    const stream = yield* useJournalStream("todo-host.md");
     const root = yield* fixture();
     const todo = yield* useTodo(root);
     const ready = withResolvers<void>();
     const execution = yield* executeInstalled(
       {
         ...retainedSource("todo-host.md", "<TodoHost />"),
-        stream: new InMemoryStream(),
+        stream,
       },
       [
         {

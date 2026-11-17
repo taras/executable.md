@@ -1,5 +1,6 @@
 import { Permissions } from "@executablemd/runtime";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { admitDocumentHostPath, authoredOperation } from "../src/filesystem-placement.ts";
 import { R1_WIN32 } from "../../test-support/mount-fixture.ts";
@@ -32,11 +33,14 @@ import { Component } from "../src/component-api.ts";
 import { executeInstalled } from "../host.ts";
 import { workspaceMountInstallation } from "../../cli/src/repl/workspace-mount-installation.ts";
 import { mountPolicy } from "../../cli/src/repl/mount-files.ts";
-import { InMemoryStream } from "@executablemd/durable-streams";
+
+const OWNER = "packages/core/tests/filesystem-placement.test.ts";
 import { ordinaryGeneratedSelection } from "../../cli/src/evaluation-profile.ts";
 
 describe("mapped canonical component expansion", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("delivers actual cwd to all existing consumers and follows the authored parent", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: unknown[] = [];
     yield* API.Env.around(
       {
@@ -98,10 +102,9 @@ describe("mapped canonical component expansion", () => {
       '<File path="outer.md" />',
     ].join("\n");
     yield* collect(
-      yield* executeInstalled(
-        { ...inlineSource(source), includes: [], stream: new InMemoryStream() },
-        [workspaceMountInstallation([{ source: "/work/manuals/docs", target: "/reference" }])],
-      ),
+      yield* executeInstalled({ ...inlineSource(source), includes: [], stream: stream }, [
+        workspaceMountInstallation([{ source: "/work/manuals/docs", target: "/reference" }]),
+      ]),
     );
     expect(seen).toContainEqual(["ensure", { cwd: "/work/manuals/docs", path: "/" }]);
     expect(seen).toContainEqual(["read", { cwd: "/", path: "next.md" }]);
@@ -121,6 +124,7 @@ describe("mapped canonical component expansion", () => {
     expect(yield* cwd()).toBe("/host");
   });
   it("rejects R1-WIN32 before any ensure or child and preserves the ordinary '..' case", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const f = R1_WIN32;
     const policy = mountPolicy([{ source: f.source, target: f.target }], "C:\\host", "win32");
     const entered = policy.prepareDirectory(
@@ -169,7 +173,7 @@ describe("mapped canonical component expansion", () => {
           {
             ...inlineSource(`<Dir path=${JSON.stringify(f.operand)}><File path="never" /></Dir>`),
             includes: [],
-            stream: new InMemoryStream(),
+            stream: stream,
           },
           [installation],
         ),
@@ -181,6 +185,7 @@ describe("mapped canonical component expansion", () => {
     expect(calls).toBe(0);
   });
   it("carries the private frame through generated File forms", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: string[] = [];
     yield* API.Env.around(
       {
@@ -209,10 +214,10 @@ describe("mapped canonical component expansion", () => {
     };
     const source = '<Dir path="/reference"><Evaluate text={\'<File path="one.md" />\'} /></Dir>';
     const output = yield* collect(
-      yield* executeInstalled(
-        { ...inlineSource(source), includes: [], stream: new InMemoryStream() },
-        [install, workspaceMountInstallation([{ source: "/external", target: "/reference" }])],
-      ),
+      yield* executeInstalled({ ...inlineSource(source), includes: [], stream: stream }, [
+        install,
+        workspaceMountInstallation([{ source: "/external", target: "/reference" }]),
+      ]),
     );
     expect(output).toContain("generated");
     expect(seen).toEqual(["/external"]);
@@ -220,7 +225,9 @@ describe("mapped canonical component expansion", () => {
 });
 
 describe("mapped scope exits", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("restores both enclosing levels after a nested child failure", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: string[] = [];
     let fail = true;
     yield* API.Env.around(
@@ -260,7 +267,7 @@ describe("mapped scope exits", () => {
             '<Dir path="/reference"><PrintErrors><Dir path=".."><File path="bad" /></Dir></PrintErrors><File path="within" /></Dir><File path="after" />',
           ),
           includes: [],
-          stream: new InMemoryStream(),
+          stream: stream,
         },
         [workspaceMountInstallation([{ source: "/external", target: "/reference" }])],
       ),
@@ -270,6 +277,7 @@ describe("mapped scope exits", () => {
     expect(yield* cwd()).toBe("/host");
   });
   it("joins cancelled child work and restores the caller's cwd", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const entered = withResolvers<void>();
     let released = false;
     yield* API.Env.around(
@@ -309,7 +317,7 @@ describe("mapped scope exits", () => {
         {
           ...inlineSource('<Dir path="/reference"><File path="pending" /></Dir>'),
           includes: [],
-          stream: new InMemoryStream(),
+          stream: stream,
         },
         [workspaceMountInstallation([{ source: "/external", target: "/reference" }])],
       );
@@ -327,8 +335,10 @@ import { registerComponents } from "../src/components/registration.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 
 describe("993 nested canonical directory projection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const reusable of [false, true]) {
     it(`W2: selects REPORT inside the canonical frame and reads ROOT after its Dir closes (${reusable})`, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* Permissions.around(
         { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
         { at: "min" },
@@ -345,7 +355,11 @@ describe("993 nested canonical directory projection", () => {
         {
           origin: "993",
           name: "Observe",
-          props: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          props: {
+            type: "object",
+            properties: { value: { type: "string" } },
+            required: ["value"],
+          },
           *fn(props) {
             observed.push(props.value);
             return "";
@@ -362,7 +376,7 @@ describe("993 nested canonical directory projection", () => {
             {
               ...inlineSource(reusable ? "<Report />" : source),
               includes: [`${directory}/components`],
-              stream: new InMemoryStream(),
+              stream: stream,
             },
             [workspaceMountInstallation([{ source: directory, target: "/document" }])],
           ),

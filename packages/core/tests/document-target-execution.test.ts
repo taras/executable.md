@@ -12,7 +12,13 @@
  * not a position that merely looks unchanged.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -55,6 +61,8 @@ import type { Json } from "../src/types.ts";
 import { asText } from "./helpers.ts";
 
 /** What every `<Probe>` in a run reported, in the order it expanded. */
+const OWNER = "packages/core/tests/document-target-execution.test.ts";
+
 interface Probes {
   names: string[];
   ids: string[];
@@ -166,13 +174,11 @@ const SECTIONS = [
 ].join("\n");
 
 describe("Tier TX — targeted execution", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("TX1: only the preamble, the ancestors, and the subtree expand", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
-    const text = yield* run(
-      inlineSource(SECTIONS, { target: "Alpha/Inner" }),
-      new InMemoryStream(),
-      seen,
-    );
+    const text = yield* run(inlineSource(SECTIONS, { target: "Alpha/Inner" }), stream, seen);
 
     expect(seen.names).toEqual(["pre", "title", "alpha", "inner"]);
     expect(text).toContain("# Title");
@@ -182,6 +188,7 @@ describe("Tier TX — targeted execution", () => {
   });
 
   it("TX2: a skipped sibling's components and code blocks never run", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
     yield* scoped(function* () {
       yield* API.Process.around({
@@ -189,27 +196,37 @@ describe("Tier TX — targeted execution", () => {
           throw new Error(`a skipped code block ran: ${JSON.stringify(options.command)}`);
         },
       });
-      yield* run(inlineSource(SECTIONS, { target: "Alpha" }), new InMemoryStream(), seen);
+      yield* run(inlineSource(SECTIONS, { target: "Alpha" }), stream, seen);
     });
     expect(seen.names).toEqual(["pre", "title", "alpha", "inner"]);
   });
 
   it("TX3: selecting a non-leaf expands every descendant", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
-    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), new InMemoryStream(), seen);
+    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), stream, seen);
     expect(seen.names).toContain("inner");
   });
 
-  it("TX4: a retained element keeps the expansion ID it has in a full run", function* () {
-    const whole: Probes = { names: [], ids: [] };
-    const targeted: Probes = { names: [], ids: [] };
-    yield* run(inlineSource(SECTIONS), new InMemoryStream(), whole);
-    yield* run(inlineSource(SECTIONS, { target: "Beta" }), new InMemoryStream(), targeted);
+  const tx4Name = "TX4: a retained element keeps the expansion ID it has in a full run";
+  it(tx4Name, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: tx4Name }, "<eval>", function* (firstStream) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: tx4Name },
+        "<eval>",
+        function* (secondStream) {
+          const whole: Probes = { names: [], ids: [] };
+          const targeted: Probes = { names: [], ids: [] };
+          yield* run(inlineSource(SECTIONS), firstStream, whole);
+          yield* run(inlineSource(SECTIONS, { target: "Beta" }), secondStream, targeted);
 
-    const idOf = (probes: Probes, name: string) => probes.ids[probes.names.indexOf(name)];
-    expect(targeted.names).toEqual(["pre", "title", "beta"]);
-    expect(idOf(targeted, "beta")).toBe(idOf(whole, "beta"));
-    expect(idOf(targeted, "pre")).toBe(idOf(whole, "pre"));
+          const idOf = (probes: Probes, name: string) => probes.ids[probes.names.indexOf(name)];
+          expect(targeted.names).toEqual(["pre", "title", "beta"]);
+          expect(idOf(targeted, "beta")).toBe(idOf(whole, "beta"));
+          expect(idOf(targeted, "pre")).toBe(idOf(whole, "pre"));
+        },
+      );
+    });
   });
 
   /**
@@ -218,33 +235,54 @@ describe("Tier TX — targeted execution", () => {
    * full run — and seeding identity with the target string would break all
    * three at once.
    */
-  it("TX5: two different targets agree on a shared retained element", function* () {
-    const alpha: Probes = { names: [], ids: [] };
-    const beta: Probes = { names: [], ids: [] };
-    yield* run(inlineSource(SECTIONS, { target: "Alpha" }), new InMemoryStream(), alpha);
-    yield* run(inlineSource(SECTIONS, { target: "Beta" }), new InMemoryStream(), beta);
-    expect(beta.ids[beta.names.indexOf("title")]).toBe(alpha.ids[alpha.names.indexOf("title")]);
+  const tx5Name = "TX5: two different targets agree on a shared retained element";
+  it(tx5Name, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: tx5Name }, "<eval>", function* (firstStream) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: tx5Name },
+        "<eval>",
+        function* (secondStream) {
+          const alpha: Probes = { names: [], ids: [] };
+          const beta: Probes = { names: [], ids: [] };
+          yield* run(inlineSource(SECTIONS, { target: "Alpha" }), firstStream, alpha);
+          yield* run(inlineSource(SECTIONS, { target: "Beta" }), secondStream, beta);
+          expect(beta.ids[beta.names.indexOf("title")]).toBe(
+            alpha.ids[alpha.names.indexOf("title")],
+          );
+        },
+      );
+    });
   });
 
-  it("TX6: a file root and an inline root behave identically", function* () {
-    const workspace = yield* useWorkspace({ "doc.md": SECTIONS });
-    const fromFile: Probes = { names: [], ids: [] };
-    const fromText: Probes = { names: [], ids: [] };
-    const fileText = yield* run(
-      fileSource(formatDocumentReference(join(workspace, "doc.md"), "Beta")),
-      new InMemoryStream(),
-      fromFile,
-    );
-    const inlineText = yield* run(
-      inlineSource(SECTIONS, { target: "Beta" }),
-      new InMemoryStream(),
-      fromText,
-    );
-    expect(fromFile.names).toEqual(fromText.names);
-    expect(fileText).toBe(inlineText);
+  const tx6Name = "TX6: a file root and an inline root behave identically";
+  it(tx6Name, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: tx6Name }, "<eval>", function* (secondStream) {
+      const workspace = yield* useWorkspace({ "doc.md": SECTIONS });
+      yield* captureTestJournal(
+        { owner: OWNER, name: tx6Name },
+        formatDocumentReference(join(workspace, "doc.md"), "Beta"),
+        function* (firstStream) {
+          const fromFile: Probes = { names: [], ids: [] };
+          const fromText: Probes = { names: [], ids: [] };
+          const fileText = yield* run(
+            fileSource(formatDocumentReference(join(workspace, "doc.md"), "Beta")),
+            firstStream,
+            fromFile,
+          );
+          const inlineText = yield* run(
+            inlineSource(SECTIONS, { target: "Beta" }),
+            secondStream,
+            fromText,
+          );
+          expect(fromFile.names).toEqual(fromText.names);
+          expect(fileText).toBe(inlineText);
+        },
+      );
+    });
   });
 
   it("TX7: root props and frontmatter apply to the projected body", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const body = [
       "---",
       "title: Doc",
@@ -267,7 +305,7 @@ describe("Tier TX — targeted execution", () => {
     const text = yield* scoped(function* () {
       const execution = yield* execute({
         ...inlineSource(body, { target: "Greeting" }),
-        stream: new InMemoryStream(),
+        stream,
         props: { who: "world" },
       });
       return asText(yield* collect(execution));
@@ -278,6 +316,7 @@ describe("Tier TX — targeted execution", () => {
   });
 
   it("TX8: a value root returns from the projected body", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const body = [
       "---",
       "returns:",
@@ -297,13 +336,14 @@ describe("Tier TX — targeted execution", () => {
     const value = yield* collect(
       yield* execute({
         ...inlineSource(body, { target: "Kept" }),
-        stream: new InMemoryStream(),
+        stream,
       }),
     );
     expect(value).toEqual({ picked: "kept" });
   });
 
   it("TX9: `<Output>` in the projected body selects what is emitted", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const body = [
       "# Title",
       "",
@@ -322,7 +362,7 @@ describe("Tier TX — targeted execution", () => {
       yield* collect(
         yield* execute({
           ...inlineSource(body, { target: "Kept" }),
-          stream: new InMemoryStream(),
+          stream,
         }),
       ),
     );
@@ -334,6 +374,7 @@ describe("Tier TX — targeted execution", () => {
    * caller did not select is not a violation of what runs.
    */
   it("TX10: an invalid structure in a skipped sibling is irrelevant", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const body = [
       "# Title",
       "",
@@ -347,13 +388,14 @@ describe("Tier TX — targeted execution", () => {
       "",
     ].join("\n");
     const seen: Probes = { names: [], ids: [] };
-    const text = yield* run(inlineSource(body, { target: "Kept" }), new InMemoryStream(), seen);
+    const text = yield* run(inlineSource(body, { target: "Kept" }), stream, seen);
     expect(seen.names).toEqual(["kept"]);
     expect(text).toContain("kept body");
     expect(text).not.toContain("<Return> requires");
   });
 
   it("TX11: an invalid structure in the retained range fails before any effect", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const body = [
       "# Title",
       "",
@@ -365,11 +407,7 @@ describe("Tier TX — targeted execution", () => {
       "",
     ].join("\n");
     const seen: Probes = { names: [], ids: [] };
-    const error = yield* failure(
-      inlineSource(body, { target: "Kept" }),
-      new InMemoryStream(),
-      seen,
-    );
+    const error = yield* failure(inlineSource(body, { target: "Kept" }), stream, seen);
     expect(seen.names).toEqual([]);
     expect(error instanceof Error ? error.message : String(error)).toContain("<Return> requires");
   });
@@ -382,7 +420,7 @@ describe("Tier TX — targeted execution", () => {
    * inspection is where a host resolves a selector before running anything.
    */
   it("TX12: a target that resolves to nothing runs no authored effect", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
     const error = yield* failure(inlineSource(SECTIONS, { target: "Missing" }), stream, seen);
     expect(isDocumentTargetError(error)).toBe(true);
@@ -399,7 +437,7 @@ describe("Tier TX — targeted execution", () => {
   });
 
   it("TX13: an ambiguous target runs no authored effect", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
     const error = yield* failure(inlineSource(SECTIONS, { target: "**" }), stream, seen);
     expect(asDocumentTargetError(error)?.data.kind).toBe("multiple-matches");
@@ -419,8 +457,9 @@ describe("Tier TX — targeted execution", () => {
 });
 
 describe("Tier TX — targeted replay", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("TX15: the journal records the exact target, never the glob", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
     yield* run(inlineSource(SECTIONS, { target: "**/I*" }), stream, seen);
 
@@ -432,7 +471,7 @@ describe("Tier TX — targeted replay", () => {
   });
 
   it("TX16: an untargeted run records no target member at all", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     yield* run(inlineSource(SECTIONS), stream, { names: [], ids: [] });
     const recorded = rootImports(stream)[0];
     expect(recorded?.result.status).toBe("ok");
@@ -1153,6 +1192,7 @@ describe("Tier TX — one read across check and replay", () => {
  * its own invocation proves the section did not execute.
  */
 describe("Tier TX — preamble boundary", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const OPENS_DEEP = [
     "## Before",
     "",
@@ -1169,20 +1209,18 @@ describe("Tier TX — preamble boundary", () => {
   ].join("\n");
 
   it("TX44: selecting the later section never executes the earlier one", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
-    const text = yield* run(
-      inlineSource(OPENS_DEEP, { target: "After" }),
-      new InMemoryStream(),
-      seen,
-    );
+    const text = yield* run(inlineSource(OPENS_DEEP, { target: "After" }), stream, seen);
     expect(seen.names).toEqual(["title", "after"]);
     expect(text).not.toContain("## Before");
     expect(text).not.toContain("before body");
   });
 
   it("TX45: the earlier section still runs when it is the target", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen: Probes = { names: [], ids: [] };
-    yield* run(inlineSource(OPENS_DEEP, { target: "Before" }), new InMemoryStream(), seen);
+    yield* run(inlineSource(OPENS_DEEP, { target: "Before" }), stream, seen);
     expect(seen.names).toEqual(["before"]);
   });
 });
@@ -1572,6 +1610,7 @@ describe("Tier TX — detached values stay mutable", () => {
  * same whether a host inspects, runs, or resumes.
  */
 describe("Tier TX — target resolution precedes schema compilation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const BROKEN_SCHEMA = [
     "---",
     "props:",
@@ -1637,13 +1676,14 @@ describe("Tier TX — target resolution precedes schema compilation", () => {
   });
 
   it("TX67: the control — a resolvable target and a valid schema run", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const info = yield* inspectDocument(inlineSource(GOOD_SCHEMA, { target: "Kept" }));
     expect(info.target).toBe("Kept");
     const text = asText(
       yield* collect(
         yield* execute({
           ...inlineSource(GOOD_SCHEMA, { target: "Kept" }),
-          stream: new InMemoryStream(),
+          stream,
         }),
       ),
     );
@@ -2079,6 +2119,7 @@ describe("Tier TX — guards observe a copy, not the retained history", () => {
  * is being measured is what reaches live coordination after every wrapper.
  */
 describe("Tier TX — journal provenance across the admission gate", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What a live durable operation's coordinator was handed. */
   interface Coordinated {
     witnesses: (JournalProvenance | undefined)[];
@@ -2151,7 +2192,7 @@ describe("Tier TX — journal provenance across the admission gate", () => {
   }
 
   it("TX78: an untargeted run delivers the selected journal's exact witness", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const witness = establishJournalProvenance(stream);
     const seen = yield* observing(stream, inlineSource(LIVE));
     expect(seen.witnesses.length).toBeGreaterThan(0);
@@ -2161,7 +2202,7 @@ describe("Tier TX — journal provenance across the admission gate", () => {
   });
 
   it("TX79: a targeted run delivers the same exact witness", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const witness = establishJournalProvenance(stream);
     const seen = yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }));
     expect(seen.witnesses.length).toBeGreaterThan(0);
@@ -2183,7 +2224,7 @@ describe("Tier TX — journal provenance across the admission gate", () => {
   });
 
   it("TX81: an unproven journal stays unproven through both wrappers", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const seen = yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }));
     expect(seen.witnesses.length).toBeGreaterThan(0);
     for (const observed of seen.witnesses) {
