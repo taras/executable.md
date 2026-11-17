@@ -29,6 +29,7 @@
       "@executablemd/test-agent": ["./packages/test-agent/mod.ts"],
       "@executablemd/test-support/bdd": ["./packages/test-support/bdd.ts"],
       "@executablemd/test-support/expect": ["./packages/test-support/expect.ts"],
+      "@executablemd/test-support/failure-journal": ["./packages/test-support/failure-journal.ts"],
       "@executablemd/test-support/journal": ["./packages/test-support/journal.ts"],
       "@executablemd/test-support/launch": ["./packages/test-support/launch.ts"],
       "@executablemd/test-support/temp": ["./packages/test-support/temp.ts"],

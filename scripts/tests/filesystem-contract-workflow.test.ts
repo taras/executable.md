@@ -121,7 +121,7 @@ describe("the filesystem contract matrix", () => {
   it("runs the contract under Deno, Node, Bun, and a compiled binary", function* () {
     const commands = (yield* job()).commands.join("\n");
 
-    expect(commands).toContain(`deno test --allow-all --frozen ${SUITE}`);
+    expect(commands).toContain(`deno test --reporter=dot --allow-all --frozen ${SUITE}`);
     expect(commands).toContain(`tsx --tsconfig tsconfig.node.json --test ${SUITE}`);
     expect(commands).toContain(`bun test --timeout=300000 ${SUITE}`);
     expect(commands).toContain(`deno compile`);

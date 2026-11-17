@@ -69,7 +69,7 @@ function* workspace(files: Record<string, string>): Operation<URL> {
 }
 
 function passing(marker: string): string {
-  return `Deno.test("${marker}", () => {\n  console.log("${marker}_RAN");\n});\n`;
+  return `Deno.test("${marker}", () => {\n  Deno.writeTextFileSync("${marker}.marker", "");\n  console.log("${marker}_RAN");\n});\n`;
 }
 
 /** Multiline on both channels, so truncation or a summary would be visible. */
@@ -111,7 +111,7 @@ function* waitFor(file: URL): Operation<boolean> {
 }
 
 describe("a shard running real children", () => {
-  it("runs the files after a failing one and keeps its complete output", function* () {
+  it("runs later files and keeps the failure diagnostic with Deno's dot reporter", function* () {
     const root = yield* workspace({
       "a.test.ts": passing("A"),
       "b.test.ts": FAILING,
@@ -127,19 +127,13 @@ describe("a shard running real children", () => {
     expect(outcome.failure?.status).toBeGreaterThan(0);
 
     const displayed = `${seen.stdout}\n${seen.stderr}`;
-    // The file after the failure ran, which is the whole point of continuing.
-    expect(displayed).toContain("A_RAN");
-    expect(displayed).toContain("C_RAN");
-    // And the failure's own text survived, every line of it, on both channels.
-    for (const line of [
-      "B_STDOUT_ONE",
-      "B_STDOUT_TWO",
-      "B_STDERR_ONE",
-      "B_STDERR_TWO",
-      "B_FAILED_DELIBERATELY",
-    ]) {
-      expect(displayed).toContain(line);
-    }
+    expect(yield* exists(new URL("A.marker", root))).toBe(true);
+    expect(yield* exists(new URL("C.marker", root))).toBe(true);
+    expect(displayed).toContain("B_FAILED_DELIBERATELY");
+    expect(displayed).not.toContain("A_RAN");
+    expect(displayed).not.toContain("C_RAN");
+    expect(displayed).not.toContain("B_STDOUT_ONE");
+    expect(displayed).not.toContain("B_STDERR_ONE");
   });
 
   it("succeeds and stays quiet about failures when every file passes", function* () {
@@ -167,7 +161,7 @@ describe("a shard running real children", () => {
 
     const marker = new URL("slow.marker", root);
     if (!(yield* waitFor(marker))) {
-      const launch = oneFileCommand("deno", "tests/a-slow.test.ts");
+      const launch = oneFileCommand("deno", "tests/a-slow.test.ts", root, { compactReport: true });
       throw new Error(
         `child did not write expected startup marker ${fileURLToPath(marker)}\ncommand: ${launch.command} ${launch.arguments.join(" ")}\noutcome: ${JSON.stringify(outcome)}\nstdout:\n${seen.stdout}\nstderr:\n${seen.stderr}`,
       );
@@ -257,7 +251,7 @@ function* collected(directory: URL): Operation<string[]> {
 }
 
 describe("a shard running real Markdown suites", () => {
-  it("shows a suite's named start live, saves its journal, runs the files after it and keeps its failure first", function* () {
+  it("shows the active suite live, saves its journal and keeps its failure first", function* () {
     const { root, journals } = yield* suites({
       "Held.test.md": HELD_FAILURE,
       "Later.test.md": MD_LATER,
@@ -272,7 +266,7 @@ describe("a shard running real Markdown suites", () => {
       outcome = yield* runShardFiles("deno", assigned, root);
     });
 
-    const start = `[xmd test] start test "fails deliberately" at ${held}`;
+    const start = `Running ${held}\n`;
     let visible = false;
     for (let attempt = 0; attempt < 300 && !visible; attempt += 1) {
       visible = seen.stderr.includes(start);
@@ -289,6 +283,8 @@ describe("a shard running real Markdown suites", () => {
     expect(outcome?.failure).toEqual({ file: held, status: 1 });
     expect(yield* exists(new URL("later.marker", root))).toBe(true);
     expect(seen.stderr).toContain("MD_FAILED_DELIBERATELY");
+    expect(seen.stderr).toContain("0 passed | 1 failed");
+    expect(seen.stderr).not.toContain('[xmd test] start test "fails deliberately"');
     expect(`${seen.stdout}\n${seen.stderr}`).toContain("B_FAILED_DELIBERATELY");
 
     const saved = yield* collected(journals);

@@ -17,7 +17,7 @@
 
 import { resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 
 import { executeInstalled } from "../../host.ts";
@@ -25,7 +25,7 @@ import type { ExecutionInstallation, HostExecution } from "../../host.ts";
 import { retainedSource } from "../../src/root-source.ts";
 import type { Json } from "../../src/types.ts";
 import { it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../../test-support/failure-journal.ts";
+import { captureTestJournal, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false } as const;
 
@@ -124,8 +124,8 @@ export function useHeldHost(request: HeldHostRequest = {}): Operation<HeldHost> 
         },
       ],
     };
-    const stream = request.stream ?? new InMemoryStream();
     const document = request.root ?? { path: HELD_ROOT_PATH, source: HELD_ROOT_SOURCE };
+    const stream = request.stream ?? (yield* useJournalStream(document.path));
     const execution = yield* executeInstalled(
       { ...retainedSource(document.path, document.source), stream },
       [...(request.installations ?? []), installation],

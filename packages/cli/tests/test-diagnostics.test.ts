@@ -550,3 +550,66 @@ describe("xmd test live progress", () => {
     expect(run.stderr()).toBe(delivered);
   });
 });
+
+describe("xmd test reporters", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("reports failures and totals across documents without printing passing tests", function* () {
+    const directory = yield* useProject({
+      "a.test.md": doc(
+        "Routine suite output",
+        '<Test name="passing witness">',
+        "  <AssertEquals actual={1} expected={1} />",
+        "</Test>",
+        '<Test name="failing witness">',
+        "  <AssertEquals actual={1} expected={2} />",
+        "</Test>",
+      ),
+      "b.test.md": doc(
+        '<Test name="later witness">',
+        "  <AssertEquals actual={2} expected={2} />",
+        "</Test>",
+      ),
+    });
+    const artifacts = join(directory, "artifacts");
+
+    const result = yield* runTest(directory, [".", "--reporter=failures"], artifacts);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('fail test "failing witness" at a.test.md:5:1 (assertion)');
+    expect(result.stderr).toContain("a.test.md: tests failed:");
+    expect(result.stderr).not.toContain("passing witness");
+    expect(result.stderr).not.toContain("later witness");
+    expect(progress(result.stderr).at(-1)).toMatch(
+      /^2 passed \| 1 failed \(\d+ms\) · 1 of 2 documents failed$/,
+    );
+    expect(fileNames(yield* journals(artifacts))).toEqual(["root-1.jsonl"]);
+  });
+
+  it("reports a passing single document and rejects unsupported reporters", function* () {
+    const directory = yield* useProject({
+      "suite.test.md": doc(
+        '<Test name="passing suite">',
+        "  <AssertEquals actual={1} expected={1} />",
+        "</Test>",
+      ),
+    });
+    const artifacts = join(directory, "artifacts");
+
+    const result = yield* runTest(
+      directory,
+      ["--reporter", "failures", "suite.test.md"],
+      artifacts,
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(progress(result.stderr)).toEqual([
+      expect.stringMatching(/^1 passed \| 0 failed \(\d+ms\)$/),
+    ]);
+    expect(yield* exists(artifacts)).toBe(false);
+
+    const invalid = yield* runTest(directory, ["suite.test.md", "--reporter=unknown"], artifacts);
+    expect(invalid.code).toBe(1);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toContain("--reporter");
+    expect(progress(invalid.stderr)).toEqual([]);
+  });
+});
