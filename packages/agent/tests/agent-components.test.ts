@@ -195,46 +195,34 @@ function captureAgentDocument(
   );
 }
 
-function agentCase(
-  name: string,
-  body: (run: (doc: string) => ReturnType<typeof runDoc>) => Operation<void>,
-): void {
-  it(name, () => body((doc) => runDoc(doc)));
-}
-
 describe(SUITE, () => {
   beforeEach(journalBeforeEach(OWNER));
-  agentCase(
-    "AC1: wrapper <Prompt> always sends rendered children, untrimmed",
-    function* (runFresh) {
-      const stub = createStubProvider();
-      yield* installStub(stub);
-      const { output, result } = yield* runFresh(
-        '<Prompt text="fallback">\nSay hello\n</Prompt>\n',
-      );
-      expect(result.ok).toBe(true);
-      expect(stub.promptCalls.length).toBe(1);
-      const sent = stub.promptCalls[0]!.content;
-      expect(sent).toContain("Say hello");
-      expect(sent).not.toBe("fallback");
-      expect(sent).not.toBe(sent.trim());
-      expect(output).toContain("[stub-agent:stub:default:");
-    },
-  );
-
-  agentCase("AC2: empty wrapper children win over the text prop", function* (runFresh) {
+  it("AC1: wrapper <Prompt> always sends rendered children, untrimmed", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
-    const { result } = yield* runFresh('<Prompt text="fallback"></Prompt>\n');
+    const { output, result } = yield* runDoc('<Prompt text="fallback">\nSay hello\n</Prompt>\n');
+    expect(result.ok).toBe(true);
+    expect(stub.promptCalls.length).toBe(1);
+    const sent = stub.promptCalls[0]!.content;
+    expect(sent).toContain("Say hello");
+    expect(sent).not.toBe("fallback");
+    expect(sent).not.toBe(sent.trim());
+    expect(output).toContain("[stub-agent:stub:default:");
+  });
+
+  it("AC2: empty wrapper children win over the text prop", function* () {
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    const { result } = yield* runDoc('<Prompt text="fallback"></Prompt>\n');
     expect(result.ok).toBe(true);
     expect(stub.promptCalls.length).toBe(1);
     expect(stub.promptCalls[0]!.content).toBe("");
   });
 
-  agentCase("AC3: self-closing <Prompt> falls back to the text prop", function* (runFresh) {
+  it("AC3: self-closing <Prompt> falls back to the text prop", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
-    const { output, result } = yield* runFresh('<Prompt text="hello" />\n');
+    const { output, result } = yield* runDoc('<Prompt text="hello" />\n');
     expect(result.ok).toBe(true);
     expect(stub.promptCalls[0]!.content).toBe("hello");
     expect(output).toContain("[stub-agent:stub:default:hello]");
@@ -244,10 +232,10 @@ describe(SUITE, () => {
   // function component: it names the component and lists the offending prop,
   // where the claimed handler built the same account behind a `<Prompt> `
   // prefix of its own.
-  agentCase("AC19: the removed prompt prop is rejected as an unknown prop", function* (runFresh) {
+  it("AC19: the removed prompt prop is rejected as an unknown prop", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
-    const { result } = yield* runFresh('<Prompt prompt="hello" />\n');
+    const { result } = yield* runDoc('<Prompt prompt="hello" />\n');
     expect(result.ok).toBe(false);
     expect(stub.promptCalls.length).toBe(0);
     const reported = result.ok ? "" : result.error.message;
@@ -255,28 +243,23 @@ describe(SUITE, () => {
     expect(reported).toContain("prompt");
   });
 
-  agentCase(
-    "AC20: a component's own validation printed error is observed once",
-    function* (runFresh) {
-      const observed: string[] = [];
-      const stub = createStubProvider();
-      yield* installStub(stub);
-      yield* Component.around({
-        *raise([error], next) {
-          observed.push(error.message);
-          return yield* next(error);
-        },
-      });
-      // Written in a region that prints, because what this pins is that the
-      // diagnostic is observed once and rendered once — which needs it rendered.
-      const { output } = yield* runFresh(
-        '<PrintErrors>\n<Prompt prompt="hello" />\n</PrintErrors>\n',
-      );
-      expect(observed).toHaveLength(1);
-      expect(observed[0]).toContain("Prop validation failed for <Prompt />");
-      expect(output.match(/<Prompt \/>/g)).toHaveLength(1);
-    },
-  );
+  it("AC20: a component's own validation printed error is observed once", function* () {
+    const observed: string[] = [];
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    yield* Component.around({
+      *raise([error], next) {
+        observed.push(error.message);
+        return yield* next(error);
+      },
+    });
+    // Written in a region that prints, because what this pins is that the
+    // diagnostic is observed once and rendered once — which needs it rendered.
+    const { output } = yield* runDoc('<PrintErrors>\n<Prompt prompt="hello" />\n</PrintErrors>\n');
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toContain("Prop validation failed for <Prompt />");
+    expect(output.match(/<Prompt \/>/g)).toHaveLength(1);
+  });
 
   // The composition the whole component exists for, black box: a value bound by
   // `<Let>`, rendered by `<Json>`, consumed and retained by `<Prompt>`. Import
@@ -315,10 +298,10 @@ describe(SUITE, () => {
     );
   }
 
-  agentCase("AC4: as binding captures the response instead of emitting it", function* (runFresh) {
+  it("AC4: as binding captures the response instead of emitting it", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
-    const { output, result } = yield* runFresh(
+    const { output, result } = yield* runDoc(
       '<Prompt text="hi" as="answer" />\n\nCaptured: {answer}\n',
     );
     expect(result.ok).toBe(true);
@@ -326,110 +309,101 @@ describe(SUITE, () => {
     expect(output.indexOf("[stub-agent")).toBe(output.lastIndexOf("[stub-agent"));
   });
 
-  agentCase(
-    "AC5: agent and session scopes compose; per-prompt props override",
-    function* (runFresh) {
-      const stub = createStubProvider();
-      yield* installStub(stub);
-      const doc = [
-        '<Agent name="agent-two">',
-        '  <Session name="review">',
-        '    <Prompt text="one" />',
-        "  </Session>",
-        "</Agent>",
-        "",
-        '<Prompt text="two" agent="agent-three" session="named" timeout="500ms" />',
-        "",
-      ].join("\n");
-      const { result } = yield* runFresh(doc);
-      expect(result.ok).toBe(true);
-      expect(stub.promptCalls.length).toBe(2);
-      expect(stub.promptCalls[0]).toMatchObject({
-        content: "one",
-        agent: "agent-two",
-        sessionKey: "stub:review",
-      });
-      expect(stub.promptCalls[1]).toMatchObject({
-        content: "two",
-        agent: "agent-three",
-        sessionKey: "stub:named",
-        timeout: 500,
-      });
-    },
-  );
+  it("AC5: agent and session scopes compose; per-prompt props override", function* () {
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    const doc = [
+      '<Agent name="agent-two">',
+      '  <Session name="review">',
+      '    <Prompt text="one" />',
+      "  </Session>",
+      "</Agent>",
+      "",
+      '<Prompt text="two" agent="agent-three" session="named" timeout="500ms" />',
+      "",
+    ].join("\n");
+    const { result } = yield* runDoc(doc);
+    expect(result.ok).toBe(true);
+    expect(stub.promptCalls.length).toBe(2);
+    expect(stub.promptCalls[0]).toMatchObject({
+      content: "one",
+      agent: "agent-two",
+      sessionKey: "stub:review",
+    });
+    expect(stub.promptCalls[1]).toMatchObject({
+      content: "two",
+      agent: "agent-three",
+      sessionKey: "stub:named",
+      timeout: 500,
+    });
+  });
 
-  agentCase(
-    "AC6: self-closing <Agent> and <Session> validate without output",
-    function* (runFresh) {
-      const stub = createStubProvider();
-      yield* installStub(stub);
-      const { output, result } = yield* runFresh(
-        '<Agent name="probe-me" />\n<Session name="warm" />\nplain text\n',
-      );
-      expect(result.ok).toBe(true);
-      expect(stub.agentProbes).toContain("probe-me");
-      expect(stub.promptCalls.length).toBe(0);
-      expect(output).toContain("plain text");
-      expect(output).not.toContain("probe-me");
-    },
-  );
+  it("AC6: self-closing <Agent> and <Session> validate without output", function* () {
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    const { output, result } = yield* runDoc(
+      '<Agent name="probe-me" />\n<Session name="warm" />\nplain text\n',
+    );
+    expect(result.ok).toBe(true);
+    expect(stub.agentProbes).toContain("probe-me");
+    expect(stub.promptCalls.length).toBe(0);
+    expect(output).toContain("plain text");
+    expect(output).not.toContain("probe-me");
+  });
 
-  agentCase(
-    "AC7: failed prompts render partial text, later content runs, completion aggregates in order",
-    function* (runFresh) {
-      const stub = createStubProvider((content) => {
-        if (content.includes("first-fail")) {
-          return {
-            status: "failed",
-            stopReason: "max_tokens",
-            deltas: ["partial-one "],
-          };
-        }
-        if (content.includes("second-fail")) {
-          return { status: "failed", stopReason: "refusal", deltas: [] };
-        }
-        return {};
-      });
-      yield* installStub(stub);
-      const doc = [
-        '<Prompt text="first-fail" />',
-        "",
-        '<Prompt text="ok" />',
-        "",
-        '<Prompt text="second-fail" />',
-        "",
-        "after all prompts",
-        "",
-      ].join("\n");
-      const { output, result } = yield* runFresh(doc);
-      expect(output).toContain("partial-one");
-      expect(output).toContain("after all prompts");
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toBeInstanceOf(AggregateError);
-        if (result.error instanceof AggregateError) {
-          expect(result.error.message).toBe("2 agent prompt(s) failed");
-          const [first, second] = result.error.errors;
-          expect(first).toBeInstanceOf(AgentPromptError);
-          expect(second).toBeInstanceOf(AgentPromptError);
-          if (first instanceof AgentPromptError && second instanceof AgentPromptError) {
-            expect(first.stopReason).toBe("max_tokens");
-            expect(first.agent).toBe("stub-agent");
-            expect(first.sessionKey).toBe("stub:default");
-            expect(second.stopReason).toBe("refusal");
-          }
+  it("AC7: failed prompts render partial text, later content runs, completion aggregates in order", function* () {
+    const stub = createStubProvider((content) => {
+      if (content.includes("first-fail")) {
+        return {
+          status: "failed",
+          stopReason: "max_tokens",
+          deltas: ["partial-one "],
+        };
+      }
+      if (content.includes("second-fail")) {
+        return { status: "failed", stopReason: "refusal", deltas: [] };
+      }
+      return {};
+    });
+    yield* installStub(stub);
+    const doc = [
+      '<Prompt text="first-fail" />',
+      "",
+      '<Prompt text="ok" />',
+      "",
+      '<Prompt text="second-fail" />',
+      "",
+      "after all prompts",
+      "",
+    ].join("\n");
+    const { output, result } = yield* runDoc(doc);
+    expect(output).toContain("partial-one");
+    expect(output).toContain("after all prompts");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(AggregateError);
+      if (result.error instanceof AggregateError) {
+        expect(result.error.message).toBe("2 agent prompt(s) failed");
+        const [first, second] = result.error.errors;
+        expect(first).toBeInstanceOf(AgentPromptError);
+        expect(second).toBeInstanceOf(AgentPromptError);
+        if (first instanceof AgentPromptError && second instanceof AgentPromptError) {
+          expect(first.stopReason).toBe("max_tokens");
+          expect(first.agent).toBe("stub-agent");
+          expect(first.sessionKey).toBe("stub:default");
+          expect(second.stopReason).toBe("refusal");
         }
       }
-    },
-  );
+    }
+  });
 
-  agentCase("AC8: throwOnError aborts the document immediately", function* (runFresh) {
+  it("AC8: throwOnError aborts the document immediately", function* () {
     const stub = createStubProvider(() => ({
       status: "failed",
       stopReason: "refusal",
     }));
     yield* installStub(stub);
-    const { output, result } = yield* runFresh(
+    const { output, result } = yield* runDoc(
       '<Prompt text="boom" throwOnError />\n\nnever reached\n',
     );
     expect(result.ok).toBe(false);

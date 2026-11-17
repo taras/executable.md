@@ -16,7 +16,6 @@ import {
   journalBeforeEach,
   useJournalStream,
 } from "@executablemd/test-support/failure-journal";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import {
   call,
@@ -75,7 +74,6 @@ import type {
 } from "../src/deno/composition/github.ts";
 
 const OWNER = "packages/git/tests/pull-request-read.test.ts";
-const journalCase = journalCases(OWNER);
 
 const ENDPOINT = "https://api.github.test";
 
@@ -1799,10 +1797,9 @@ describe("Tier PRR — pull-request evidence", () => {
    * rather than merely started. The gate supplies both: the halt does not
    * settle while cleanup is held, and no read reaches the journal at all.
    */
-  journalCase(
-    "PRR26a: a cancelled read joins its held cleanup and publishes nothing",
-    "<eval>",
-    function* (stream) {
+  const cancelledRead = "PRR26a: a cancelled read joins its held cleanup and publishes nothing";
+  it(cancelledRead, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: cancelledRead }, "<eval>", function* (stream) {
       const entered = withResolvers<void>();
       const order: string[] = [];
       const access: GitHubAccess = {
@@ -1846,8 +1843,8 @@ describe("Tier PRR — pull-request evidence", () => {
       expect(order).toEqual(["open", "closing", "closed"]);
       // Cancellation stays cancellation: no success, and no failed read either.
       expect(readYields(stream.snapshot())).toEqual([]);
-    },
-  );
+    });
+  });
 
   it("PRR32: a received envelope carrying one member more retains the failure", function* () {
     const host = server({

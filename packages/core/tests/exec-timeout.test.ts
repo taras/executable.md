@@ -9,7 +9,8 @@
  * these cases are what stop the local contract from being reimplemented as a
  * scan of the info string somewhere else in the chain.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -20,7 +21,6 @@ import type { ConfigApi } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { captureTestJournal } from "@executablemd/test-support/failure-journal";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ModifierFactory } from "../src/modifiers.ts";
@@ -84,21 +84,19 @@ function observer(seen: Record<string, number | undefined>, key: string): Modifi
 const block = (info: string, command = "work") => `\`\`\`${info}\n${command}\n\`\`\`\n`;
 
 const OWNER = "packages/core/tests/exec-timeout.test.ts";
-const timeoutCase = journalCases(OWNER);
 
 describe("Tier XE — exec block timeouts", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
-  timeoutCase(
-    "XE1: a block nobody bounded runs with no timeout at all",
-    "test.md",
-    function* (stream) {
-      const { timeouts } = yield* run(stream, block("bash exec"));
-      expect(timeouts).toEqual([undefined]);
-    },
-  );
+  it("XE1: a block nobody bounded runs with no timeout at all", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const { timeouts } = yield* run(stream, block("bash exec"));
+    expect(timeouts).toEqual([undefined]);
+  });
 
-  timeoutCase("XE2: the run's exec default bounds every block", "test.md", function* (stream) {
+  it("XE2: the run's exec default bounds every block", function* () {
+    const stream = yield* useJournalStream("test.md");
     const { timeouts } = yield* run(
       stream,
       `${block("bash exec")}\n${block("bash exec", "again")}`,
@@ -109,48 +107,40 @@ describe("Tier XE — exec block timeouts", () => {
     expect(timeouts).toEqual([5_000, 5_000]);
   });
 
-  timeoutCase(
-    "XE3: a declared duration overrides the default for that block alone",
-    "test.md",
-    function* (stream) {
-      const { timeouts } = yield* run(
-        stream,
-        `${block("bash timeout=250ms exec")}\n${block("bash exec", "again")}`,
-        { config: { timeoutExec: 5_000 } },
-      );
-      expect(timeouts).toEqual([250, 5_000]);
-    },
-  );
+  it("XE3: a declared duration overrides the default for that block alone", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const { timeouts } = yield* run(
+      stream,
+      `${block("bash timeout=250ms exec")}\n${block("bash exec", "again")}`,
+      { config: { timeoutExec: 5_000 } },
+    );
+    expect(timeouts).toEqual([250, 5_000]);
+  });
 
-  timeoutCase("XE4: a bare timeout takes the run's exec default", "test.md", function* (stream) {
+  it("XE4: a bare timeout takes the run's exec default", function* () {
+    const stream = yield* useJournalStream("test.md");
     const { timeouts } = yield* run(stream, block("bash timeout exec"), {
       config: { timeoutExec: 5_000 },
     });
     expect(timeouts).toEqual([5_000]);
   });
 
-  timeoutCase(
-    "XE5: a bare timeout with no configured default refuses before the process starts",
-    "test.md",
-    function* (stream) {
-      const { output, timeouts } = yield* run(stream, block("bash timeout exec"));
-      expect(timeouts).toEqual([]);
-      expect(output).toContain("names no duration");
-      expect(output).toContain("--timeout-exec");
-    },
-  );
+  it("XE5: a bare timeout with no configured default refuses before the process starts", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const { output, timeouts } = yield* run(stream, block("bash timeout exec"));
+    expect(timeouts).toEqual([]);
+    expect(output).toContain("names no duration");
+    expect(output).toContain("--timeout-exec");
+  });
 
-  timeoutCase(
-    "XE6: `timeout=` is an empty duration, not a bare timeout",
-    "test.md",
-    function* (stream) {
-      const { output, timeouts } = yield* run(stream, block("bash timeout= exec"), {
-        config: { timeoutExec: 5_000 },
-      });
-      expect(timeouts).toEqual([]);
-      expect(output).toContain("must be a duration");
-    },
-  );
+  it("XE6: `timeout=` is an empty duration, not a bare timeout", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const { output, timeouts } = yield* run(stream, block("bash timeout= exec"), {
+      config: { timeoutExec: 5_000 },
+    });
+    expect(timeouts).toEqual([]);
+    expect(output).toContain("must be a duration");
+  });
 
   const malformed = "XE7: a malformed duration refuses before the process starts";
   it(malformed, function* () {
@@ -165,75 +155,60 @@ describe("Tier XE — exec block timeouts", () => {
     }
   });
 
-  timeoutCase(
-    "XE8: a timeout after the terminal is unreachable, so it is never applied",
-    "test.md",
-    function* (stream) {
-      // `exec` is terminal and never calls next(), so this modifier's factory is
-      // built but its middleware never runs — a malformed duration behind it
-      // cannot fail a run it was never part of.
-      const { output, timeouts } = yield* run(stream, block("bash exec timeout=nonsense"), {
-        config: { timeoutExec: 5_000 },
-      });
-      expect(timeouts).toEqual([5_000]);
-      expect(output).not.toContain("must be a duration");
-    },
-  );
+  it("XE8: a timeout after the terminal is unreachable, so it is never applied", function* () {
+    const stream = yield* useJournalStream("test.md");
+    // `exec` is terminal and never calls next(), so this modifier's factory is
+    // built but its middleware never runs — a malformed duration behind it
+    // cannot fail a run it was never part of.
+    const { output, timeouts } = yield* run(stream, block("bash exec timeout=nonsense"), {
+      config: { timeoutExec: 5_000 },
+    });
+    expect(timeouts).toEqual([5_000]);
+    expect(output).not.toContain("must be a duration");
+  });
 
-  timeoutCase(
-    "XE9: nested timeouts follow wrapper order — the innermost reaches the terminal",
-    "test.md",
-    function* (stream) {
-      const { timeouts } = yield* run(stream, block("bash timeout=5s timeout=250ms exec"), {
-        config: { timeoutExec: 9_000 },
-      });
-      expect(timeouts).toEqual([250]);
-    },
-  );
+  it("XE9: nested timeouts follow wrapper order — the innermost reaches the terminal", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const { timeouts } = yield* run(stream, block("bash timeout=5s timeout=250ms exec"), {
+      config: { timeoutExec: 9_000 },
+    });
+    expect(timeouts).toEqual([250]);
+  });
 
-  timeoutCase(
-    "XE10: middleware outside the timeout sees the run's default, inside sees the block's",
-    "test.md",
-    function* (stream) {
-      const seen: Record<string, number | undefined> = {};
-      const { timeouts } = yield* run(stream, block("bash outer timeout=250ms inner exec"), {
-        config: { timeoutExec: 5_000 },
-        modifiers: { outer: observer(seen, "outer"), inner: observer(seen, "inner") },
-      });
-      expect(seen).toEqual({ outer: 5_000, inner: 250 });
-      expect(timeouts).toEqual([250]);
-    },
-  );
+  it("XE10: middleware outside the timeout sees the run's default, inside sees the block's", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const seen: Record<string, number | undefined> = {};
+    const { timeouts } = yield* run(stream, block("bash outer timeout=250ms inner exec"), {
+      config: { timeoutExec: 5_000 },
+      modifiers: { outer: observer(seen, "outer"), inner: observer(seen, "inner") },
+    });
+    expect(seen).toEqual({ outer: 5_000, inner: 250 });
+    expect(timeouts).toEqual([250]);
+  });
 
-  timeoutCase(
-    "XE11: replacing the timeout factory leaves no built-in behavior behind",
-    "test.md",
-    function* (stream) {
-      const seen: Record<string, number | undefined> = {};
-      const { timeouts } = yield* run(stream, block("bash timeout=250ms exec"), {
-        config: { timeoutExec: 5_000 },
-        modifiers: { timeout: observer(seen, "replacement") },
-      });
-      // The replacement delegates and declares nothing, so the block is bounded
-      // by the run's default. A hidden override elsewhere would show up as 250.
-      expect(seen).toEqual({ replacement: 5_000 });
-      expect(timeouts).toEqual([5_000]);
-    },
-  );
+  it("XE11: replacing the timeout factory leaves no built-in behavior behind", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const seen: Record<string, number | undefined> = {};
+    const { timeouts } = yield* run(stream, block("bash timeout=250ms exec"), {
+      config: { timeoutExec: 5_000 },
+      modifiers: { timeout: observer(seen, "replacement") },
+    });
+    // The replacement delegates and declares nothing, so the block is bounded
+    // by the run's default. A hidden override elsewhere would show up as 250.
+    expect(seen).toEqual({ replacement: 5_000 });
+    expect(timeouts).toEqual([5_000]);
+  });
 
-  timeoutCase(
-    "XE12: a block's declaration does not leak to the block after it",
-    "test.md",
-    function* (stream) {
-      const { timeouts } = yield* run(
-        stream,
-        `${block("bash timeout=250ms exec")}\n${block("bash timeout=1s exec", "again")}\n${block(
-          "bash exec",
-          "third",
-        )}`,
-        { config: { timeoutExec: 5_000 } },
-      );
-      expect(timeouts).toEqual([250, 1_000, 5_000]);
-    },
-  );
+  it("XE12: a block's declaration does not leak to the block after it", function* () {
+    const stream = yield* useJournalStream("test.md");
+    const { timeouts } = yield* run(
+      stream,
+      `${block("bash timeout=250ms exec")}\n${block("bash timeout=1s exec", "again")}\n${block(
+        "bash exec",
+        "third",
+      )}`,
+      { config: { timeoutExec: 5_000 } },
+    );
+    expect(timeouts).toEqual([250, 1_000, 5_000]);
+  });
 });
