@@ -7,7 +7,8 @@
  * descendants, and what working directory those descendants observe.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { exists } from "@effectionx/fs";
@@ -31,7 +32,6 @@ import { useCompositionComponents } from "../src/composition/installation.ts";
 import { RepositoryCompositionProviderError } from "../src/composition/errors.ts";
 import { DirInvocationError } from "../../core/src/components/Dir.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";
 import { withWorkflowWorkspace } from "../../workflow/src/deno/workspace/host.ts";
 import { gitWorkspaceAttachment } from "../src/deno/attachment.ts";
@@ -60,7 +60,7 @@ function isWorktreeRefusal(value: unknown): value is WorktreeCompositionError {
   return value instanceof WorktreeCompositionError;
 }
 
-const journalCase = journalCases("packages/git/tests/repository-components.test.ts");
+const OWNER = "packages/git/tests/repository-components.test.ts";
 
 describe("workflow Repository composition", () => {
   it("binds a self-closing Repository's Workspace-relative checkout path", function* () {
@@ -303,6 +303,7 @@ describe("workflow Git locator admission", () => {
  * not in force.
  */
 describe("workflow composition failure policy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const LATER = "later sibling marker";
 
   /** The one printed error a region produced, so "exactly once" is checkable. */
@@ -463,7 +464,8 @@ describe("workflow composition failure policy", () => {
    * existed. The plain form is what discriminates: no region is present, so
    * nothing may print, and what escapes must still be the original failure.
    */
-  journalCase("does not turn a missing provider into a refusal", "<eval>", function* (stream) {
+  it("does not turn a missing provider into a refusal", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
@@ -772,88 +774,87 @@ function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
  * and this could pass while the operation quietly answered instead of refusing.
  */
 describe("Dir without a Files provider", () => {
-  journalCase(
-    "stops at ensureDirectory, and no directory, content or sibling follows",
-    "<eval>",
-    function* (stream) {
-      const calls: string[] = [];
-      // Sentinel components rather than rendered text. What escapes a failed
-      // execution is an error, and searching an error's string for a marker
-      // cannot tell "the content never expanded" from "the content expanded and
-      // its text is simply not in this message". A component that ran leaves a
-      // record here whether or not anything was rendered or collected.
-      const expanded: string[] = [];
-      const marker = (name: string): ComponentRegistration => ({
-        name,
-        origin: "test://marker",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        // deno-lint-ignore require-yield
-        *fn(): Operation<string> {
-          expanded.push(name);
-          return name;
-        },
-      });
+  beforeEach(journalBeforeEach(OWNER));
 
-      const failure = yield* raised(
-        scoped(function* () {
-          yield* useCompositionComponents();
-          yield* registerComponents([marker("Inside"), marker("After")]);
-          // Middleware that records and delegates. Delegation is what keeps this
-          // fail-closed: the absent-provider terminal is still what answers, so
-          // recording the call cannot be what makes the document stop.
-          yield* API.Files.around({
-            *checkFilePath([input], next) {
-              calls.push("check-file-path");
-              return yield* next(input);
-            },
-            *readTextFile([input], next) {
-              calls.push("read");
-              return yield* next(input);
-            },
-            *writeTextFile([input], next) {
-              calls.push("write");
-              return yield* next(input);
-            },
-            *deleteFile([input], next) {
-              calls.push("delete");
-              return yield* next(input);
-            },
-            *ensureDirectory([input], next) {
-              calls.push("ensure-directory");
-              return yield* next(input);
-            },
-            *globFiles([input], next) {
-              calls.push("glob");
-              return yield* next(input);
-            },
-            *temporaryDirectory([], next) {
-              calls.push("temporary-directory");
-              return yield* next();
-            },
-          });
-          return yield* collect(
-            yield* execute({
-              ...inlineSource('<Dir path="made/here">\n\n<Inside />\n\n</Dir>\n\n<After />\n'),
-              stream,
-            }),
-          );
-        }),
-      );
+  it("stops at ensureDirectory, and no directory, content or sibling follows", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const calls: string[] = [];
+    // Sentinel components rather than rendered text. What escapes a failed
+    // execution is an error, and searching an error's string for a marker
+    // cannot tell "the content never expanded" from "the content expanded and
+    // its text is simply not in this message". A component that ran leaves a
+    // record here whether or not anything was rendered or collected.
+    const expanded: string[] = [];
+    const marker = (name: string): ComponentRegistration => ({
+      name,
+      origin: "test://marker",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        expanded.push(name);
+        return name;
+      },
+    });
 
-      // The first Files call the component makes, and the only one it reaches.
-      expect(calls[0]).toBe("ensure-directory");
-      expect(calls).toEqual(["ensure-directory"]);
-      // Absence is not a refusal the document can print: what escapes is the
-      // provider-unavailable failure itself.
-      expect(parseFilesFatal(fatalCause(failure))?.kind).toBe("provider-unavailable");
-      // Neither the content inside the region nor the sibling after it ran. This
-      // is the assertion the failure's message could not make.
-      expect(expanded).toEqual([]);
-      // And nothing was made. The path is relative, so a provider that had
-      // answered would have created it beneath the process directory.
-      expect(yield* exists(join(process.cwd(), "made"))).toBe(false);
-    },
-  );
+    const failure = yield* raised(
+      scoped(function* () {
+        yield* useCompositionComponents();
+        yield* registerComponents([marker("Inside"), marker("After")]);
+        // Middleware that records and delegates. Delegation is what keeps this
+        // fail-closed: the absent-provider terminal is still what answers, so
+        // recording the call cannot be what makes the document stop.
+        yield* API.Files.around({
+          *checkFilePath([input], next) {
+            calls.push("check-file-path");
+            return yield* next(input);
+          },
+          *readTextFile([input], next) {
+            calls.push("read");
+            return yield* next(input);
+          },
+          *writeTextFile([input], next) {
+            calls.push("write");
+            return yield* next(input);
+          },
+          *deleteFile([input], next) {
+            calls.push("delete");
+            return yield* next(input);
+          },
+          *ensureDirectory([input], next) {
+            calls.push("ensure-directory");
+            return yield* next(input);
+          },
+          *globFiles([input], next) {
+            calls.push("glob");
+            return yield* next(input);
+          },
+          *temporaryDirectory([], next) {
+            calls.push("temporary-directory");
+            return yield* next();
+          },
+        });
+        return yield* collect(
+          yield* execute({
+            ...inlineSource('<Dir path="made/here">\n\n<Inside />\n\n</Dir>\n\n<After />\n'),
+            stream,
+          }),
+        );
+      }),
+    );
+
+    // The first Files call the component makes, and the only one it reaches.
+    expect(calls[0]).toBe("ensure-directory");
+    expect(calls).toEqual(["ensure-directory"]);
+    // Absence is not a refusal the document can print: what escapes is the
+    // provider-unavailable failure itself.
+    expect(parseFilesFatal(fatalCause(failure))?.kind).toBe("provider-unavailable");
+    // Neither the content inside the region nor the sibling after it ran. This
+    // is the assertion the failure's message could not make.
+    expect(expanded).toEqual([]);
+    // And nothing was made. The path is relative, so a provider that had
+    // answered would have created it beneath the process directory.
+    expect(yield* exists(join(process.cwd(), "made"))).toBe(false);
+  });
 });
 
 describe("workflow Git declarations belong to the Plugin", () => {

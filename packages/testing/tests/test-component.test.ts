@@ -19,10 +19,9 @@ import type { ErrorSegment } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
 import { absorbTestFailure, Staging } from "../src/test-component.ts";
 import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
-import { documentCases, runDoc, withFreshDocument } from "./helpers.ts";
+import { runDoc, withFreshDocument } from "./helpers.ts";
 
 const OWNER = "packages/testing/tests/test-component.test.ts";
-const documentCase = documentCases();
 
 describe("<Test> as a function component", () => {
   beforeEach(journalBeforeEach(OWNER));
@@ -34,59 +33,56 @@ describe("<Test> as a function component", () => {
     'yield* spawn(function* () { try { yield* suspend(); } finally { throw new Error("cleanup exploded"); } });',
     "```",
   ].join("\n");
-  documentCase(
-    "keeps Try release safety local to the canonical failed Test report",
-    function* (runFresh) {
-      let released = 0;
-      let replacement = 0;
-      let finalized = 0;
-      yield* registerComponents([
-        {
-          name: "BrokenTestRelease",
-          origin: "test-interaction",
-          props: { type: "object" },
-          *fn() {
-            yield* ensure(() => {
-              released++;
-              throw new Error("test release failed");
-            });
-            return "body";
-          },
+  it("keeps Try release safety local to the canonical failed Test report", function* () {
+    let released = 0;
+    let replacement = 0;
+    let finalized = 0;
+    yield* registerComponents([
+      {
+        name: "BrokenTestRelease",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          yield* ensure(() => {
+            released++;
+            throw new Error("test release failed");
+          });
+          return "body";
         },
-        {
-          name: "TestReplacement",
-          origin: "test-interaction",
-          props: { type: "object" },
-          *fn() {
-            replacement++;
-            return "WRONG";
-          },
+      },
+      {
+        name: "TestReplacement",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          replacement++;
+          return "WRONG";
         },
-        {
-          name: "TestFinally",
-          origin: "test-interaction",
-          props: { type: "object" },
-          *fn() {
-            finalized++;
-            return "WRONG";
-          },
+      },
+      {
+        name: "TestFinally",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          finalized++;
+          return "WRONG";
         },
-      ]);
-      const run = yield* runFresh({
-        "README.md":
-          '<Testing><Test name="broken"><Try><BrokenTestRelease /><Catch><TestReplacement /></Catch><Finally><TestFinally /></Finally></Try></Test><Test name="fine"><Assert expr={true} /></Test></Testing>',
-      });
-      expect(released).toBe(1);
-      expect(replacement).toBe(0);
-      expect(finalized).toBe(0);
-      expect(run.results.map((result) => [result.name, result.status])).toEqual([
-        ["broken", "fail"],
-        ["fine", "pass"],
-      ]);
-      expect(run.completion.ok).toBe(false);
-      expect(run.output).not.toContain("WRONG");
-    },
-  );
+      },
+    ]);
+    const run = yield* runDoc({
+      "README.md":
+        '<Testing><Test name="broken"><Try><BrokenTestRelease /><Catch><TestReplacement /></Catch><Finally><TestFinally /></Finally></Try></Test><Test name="fine"><Assert expr={true} /></Test></Testing>',
+    });
+    expect(released).toBe(1);
+    expect(replacement).toBe(0);
+    expect(finalized).toBe(0);
+    expect(run.results.map((result) => [result.name, result.status])).toEqual([
+      ["broken", "fail"],
+      ["fine", "pass"],
+    ]);
+    expect(run.completion.ok).toBe(false);
+    expect(run.output).not.toContain("WRONG");
+  });
 
   it("keeps actual Files infrastructure failure globally terminal inside canonical Test", function* () {
     let fatal: unknown;
@@ -148,7 +144,7 @@ describe("<Test> as a function component", () => {
   // diagnostic before the test claims it. That must not cost the property the
   // interception exists for: a raise the test does NOT claim still fails it,
   // even when other middleware observed the segment first.
-  documentCase("fails the test on a raise an outer observer already saw", function* (runFresh) {
+  it("fails the test on a raise an outer observer already saw", function* () {
     const observed: ErrorSegment[] = [];
     const doc = [
       "<Testing>",
@@ -178,7 +174,7 @@ describe("<Test> as a function component", () => {
           return yield* next(segment);
         },
       });
-      return yield* runFresh({ "README.md": doc, "Strict.md": strict });
+      return yield* runDoc({ "README.md": doc, "Strict.md": strict });
     });
 
     // The observer saw it, and the test still failed because of it.
@@ -190,7 +186,7 @@ describe("<Test> as a function component", () => {
   // Content a component projects is the CALLER's markdown, so `{meta.x}` in it
   // resolves against the expansion that wrote it, which projection has to be
   // handed.
-  documentCase("resolves the document's frontmatter inside a test body", function* (runFresh) {
+  it("resolves the document's frontmatter inside a test body", function* () {
     const doc = [
       "---",
       "title: Executable MDX",
@@ -205,7 +201,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
     expect(run.results[0]?.status).toBe("pass");
     expect(run.completion.ok).toBe(true);
@@ -215,33 +211,30 @@ describe("<Test> as a function component", () => {
   // own eval scope, so its cleanup failing IS the test's invocation teardown.
   // That arrives at the session boundary after <Test> has returned, and has to
   // land on that test's staged result.
-  documentCase(
-    "records a teardown failure as that test's outcome, and fails only it",
-    function* (runFresh) {
-      const doc = [
-        "<Testing>",
-        '<Test name="tears">',
-        FAILING_CLEANUP,
-        "<Assert expr={true} />",
-        "</Test>",
-        '<Test name="fine"><Assert expr={true} /></Test>',
-        "</Testing>",
-        "",
-      ].join("\n");
+  it("records a teardown failure as that test's outcome, and fails only it", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="tears">',
+      FAILING_CLEANUP,
+      "<Assert expr={true} />",
+      "</Test>",
+      '<Test name="fine"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
 
-      const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
-      expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
-        ["tears", "fail", "teardown"],
-        ["fine", "pass", undefined],
-      ]);
-      expect(run.results[0]?.error?.message).toContain("cleanup exploded");
-    },
-  );
+    expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
+      ["tears", "fail", "teardown"],
+      ["fine", "pass", undefined],
+    ]);
+    expect(run.results[0]?.error?.message).toContain("cleanup exploded");
+  });
 
   // The body's account is the more useful one, so a test that already failed
   // keeps its own classification when teardown fails too.
-  documentCase("keeps the body's classification when teardown also fails", function* (runFresh) {
+  it("keeps the body's classification when teardown also fails", function* () {
     const doc = [
       "<Testing>",
       '<Test name="both">',
@@ -252,7 +245,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
     expect(run.results[0]?.status).toBe("fail");
     expect(run.results[0]?.error?.kind).toBe("assertion");
@@ -260,38 +253,33 @@ describe("<Test> as a function component", () => {
 
   // A component failing beside a test is not the test's outcome: the session
   // layer delegates anything that is not a <Test> invocation.
-  documentCase(
-    "does not turn a neighbouring component's failure into a test result",
-    function* (runFresh) {
-      const doc = ["<Testing>", '<Test name="only"><Wilting /></Test>', "</Testing>", ""].join(
-        "\n",
-      );
+  it("does not turn a neighbouring component's failure into a test result", function* () {
+    const doc = ["<Testing>", '<Test name="only"><Wilting /></Test>', "</Testing>", ""].join("\n");
 
-      const run = yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Wilting",
-            origin: "test",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn() {
-              yield* ensure(function* () {
-                throw new Error("component cleanup exploded");
-              });
-              return "";
-            },
+    const run = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Wilting",
+          origin: "test",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            yield* ensure(function* () {
+              throw new Error("component cleanup exploded");
+            });
+            return "";
           },
-        ]);
-        return yield* runFresh({ "README.md": doc });
-      });
+        },
+      ]);
+      return yield* runDoc({ "README.md": doc });
+    });
 
-      // One result, for the test that contained it — classified as an ordinary
-      // error, because the component's teardown is the component's, not the
-      // test's.
-      expect(run.results).toHaveLength(1);
-      expect(run.results[0]?.name).toBe("only");
-      expect(run.results[0]?.error?.kind).toBe("error");
-    },
-  );
+    // One result, for the test that contained it — classified as an ordinary
+    // error, because the component's teardown is the component's, not the
+    // test's.
+    expect(run.results).toHaveLength(1);
+    expect(run.results[0]?.name).toBe("only");
+    expect(run.results[0]?.error?.kind).toBe("error");
+  });
 
   /** Every journalled entry of `type`, by the name it recorded, in order. */
   function* entriesOf(stream: InMemoryStream, type: string): Operation<string[]> {
@@ -381,7 +369,7 @@ describe("<Test> as a function component", () => {
 
   // A timed-out body was halted mid-flight, so there is no partial output to
   // keep — the report is the diagnostic alone (§5.3).
-  documentCase("renders only the diagnostic when a test times out", function* (runFresh) {
+  it("renders only the diagnostic when a test times out", function* () {
     const doc = [
       "<Testing>",
       '<Test name="hangs">',
@@ -395,7 +383,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh(
+    const run = yield* runDoc(
       { "README.md": doc },
       { handlers: createTestHandlers({ timeoutMs: 60 }) },
     );
@@ -407,7 +395,7 @@ describe("<Test> as a function component", () => {
 
   // `timeout=` is the test's own bound: a body the installed default would cut
   // short finishes inside the duration the element declares (§5.3).
-  documentCase("lets a declared timeout outlive a shorter installed default", function* (runFresh) {
+  it("lets a declared timeout outlive a shorter installed default", function* () {
     const doc = [
       "<Testing>",
       '<Test name="patient" timeout="5s">',
@@ -420,7 +408,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh(
+    const run = yield* runDoc(
       { "README.md": doc },
       { handlers: createTestHandlers({ timeoutMs: 60 }) },
     );
@@ -430,7 +418,7 @@ describe("<Test> as a function component", () => {
 
   // The declared bound also cuts, and the diagnostic names the duration the
   // element declared rather than the default it replaced.
-  documentCase("times out at a declared timeout below the default", function* (runFresh) {
+  it("times out at a declared timeout below the default", function* () {
     const doc = [
       "<Testing>",
       '<Test name="hasty" timeout="60ms">',
@@ -442,7 +430,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
     expect(run.results[0]?.error?.kind).toBe("timeout");
     expect(run.results[0]?.error?.message).toContain("0.06 seconds");
@@ -450,7 +438,7 @@ describe("<Test> as a function component", () => {
 
   // A malformed duration is refused where it was written, and where it was
   // written is one test — the ones after it still run.
-  documentCase("fails only the declaring test on a malformed timeout", function* (runFresh) {
+  it("fails only the declaring test on a malformed timeout", function* () {
     const doc = [
       "<Testing>",
       '<Test name="broken" timeout="soon">inside</Test>',
@@ -459,7 +447,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
     expect(run.results).toHaveLength(2);
     expect(run.results[0]?.status).toBe("fail");
@@ -469,7 +457,7 @@ describe("<Test> as a function component", () => {
 
   // A teardown-failed test had already returned, so the engine replaces its
   // output with the boundary's diagnostic — no body text survives (§5.4).
-  documentCase("renders only the boundary diagnostic when teardown fails", function* (runFresh) {
+  it("renders only the boundary diagnostic when teardown fails", function* () {
     const doc = [
       "<Testing>",
       '<Test name="tears">',
@@ -481,7 +469,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
     expect(run.results[0]?.error?.kind).toBe("teardown");
     expect(run.output).not.toContain("BODY TEXT");
@@ -493,13 +481,13 @@ describe("<Test> as a function component", () => {
   // element that renders nothing — so the comparison is against the element
   // removed, not against the lines it sat between removed too (§5.2).
   const skippedCase = "renders nothing of itself when skipped";
-  documentCase(skippedCase, function* (runFresh) {
+  it(skippedCase, function* () {
     const withTest = ["before", "", '<Test name="skipped">inside</Test>', "", "after", ""].join(
       "\n",
     );
     const withoutTest = ["before", "", "", "", "after", ""].join("\n");
 
-    const skipped = yield* runFresh({ "README.md": withTest }, { testing: false });
+    const skipped = yield* runDoc({ "README.md": withTest }, { testing: false });
     yield* withFreshDocument(OWNER, skippedCase, function* (runPlain) {
       const plain = yield* runPlain({ "README.md": withoutTest }, { testing: false });
       expect(skipped.output).not.toContain("inside");
@@ -509,7 +497,7 @@ describe("<Test> as a function component", () => {
 
   // A nested <Test> is invalid, and what that means is the ENCLOSING test's
   // recorded outcome — not the shape of anything it returned.
-  documentCase("fails the enclosing test on nesting, recorded as an error", function* (runFresh) {
+  it("fails the enclosing test on nesting, recorded as an error", function* () {
     const doc = [
       "<Testing>",
       '<Test name="outer"><Test name="inner"><Assert expr={true} /></Test></Test>',
@@ -517,7 +505,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const run = yield* runFresh({ "README.md": doc });
+    const run = yield* runDoc({ "README.md": doc });
 
     expect(run.results.map((r) => [r.name, r.status, r.error?.kind])).toEqual([
       ["outer", "fail", "error"],

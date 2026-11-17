@@ -15,7 +15,7 @@ import { execute, Execution, registerComponents } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { Test, TestFailureError, testing } from "../src/test-api.ts";
 import { useTesting } from "../src/use-testing.ts";
-import { documentCases, failureOf, runDoc, withFreshDocument } from "./helpers.ts";
+import { failureOf, runDoc, withFreshDocument } from "./helpers.ts";
 import {
   captureTestJournal,
   journalBeforeEach,
@@ -23,7 +23,6 @@ import {
 } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/testing/tests/use-testing.test.ts";
-const documentCase = documentCases();
 
 function* drain(
   subscription: Subscription<string, string>,
@@ -182,29 +181,23 @@ describe("useTesting composition", () => {
     expect(error?.message).toContain("one session per execution scope");
   });
 
-  const middlewareCase = "removes all session middleware with its scope";
-  documentCase(middlewareCase, function* (runFresh) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: middlewareCase },
-      "README.md",
-      function* (stream) {
-        yield* scoped(function* () {
-          yield* useStubFs({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
-          yield* useTesting();
-          const execution = yield* execute({ path: "README.md", stream });
-          const result = yield* execution;
-          expect(result.ok).toBe(true);
-        });
+  it("removes all session middleware with its scope", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* scoped(function* () {
+      yield* useStubFs({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
+      yield* useTesting();
+      const execution = yield* execute({ path: "README.md", stream });
+      const result = yield* execution;
+      expect(result.ok).toBe(true);
+    });
 
-        // Outside the session scope: activation, collectors, and policy are gone.
-        expect(yield* testing).toBe(false);
-        expect(yield* Test.operations.results()).toEqual([]);
-        const second = yield* runFresh({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
-        expect(second.completion.ok).toBe(true);
-        expect(second.output).not.toContain("Assert");
-        expect(second.results).toEqual([]);
-      },
-    );
+    // Outside the session scope: activation, collectors, and policy are gone.
+    expect(yield* testing).toBe(false);
+    expect(yield* Test.operations.results()).toEqual([]);
+    const second = yield* runDoc({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
+    expect(second.completion.ok).toBe(true);
+    expect(second.output).not.toContain("Assert");
+    expect(second.results).toEqual([]);
   });
 
   // The supported multi-document shape: fixtures and providers live in an
