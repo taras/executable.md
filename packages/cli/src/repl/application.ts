@@ -81,7 +81,6 @@ import {
   workspaceBodyRows,
   TAB_GAP,
   workspaceBlockProps,
-  bandBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
   workspaceConversationWidth,
@@ -5664,6 +5663,9 @@ function primaryAction(view: ReplView, narrow: boolean): string {
   if (focused === "footer:exit" || focused === "footer:top:exit") {
     return "Enter exits";
   }
+  if (focused === "drawer:configure:agent" || focused === "drawer:configure:apply") {
+    return "Enter applies";
+  }
   if (focused === "drawer:close") {
     return "Enter closes";
   }
@@ -5750,56 +5752,21 @@ function requiredLength(parts: readonly GuidancePart[]): number {
     .join(GUIDANCE_SEPARATOR).length;
 }
 
-/**
- * What the guidance says, whole, before any width has cut it into rows.
- *
- * Every part it has to say, in the one order it says them: the state, then what
- * focus actually does, then the way out, then movement. Nothing is dropped and
- * nothing is shortened to fit a row, because the block is as many rows as its
- * words need — a direction a reader cannot see is a direction they do not have,
- * and the Transcript sharing its column is not a reason to stop giving it.
- *
- * The vocabulary is the profile's: the long phrases where there is a Transcript
- * column, and the short ones a narrow frame already says. There is no third.
- */
-/**
- * Whether this frame says its refusal in the footer's own band.
- *
- * The staged composition keeps every footer control on one compact History row,
- * which leaves a reason a handful of cells and an ellipsis — and a refusal
- * truncated before its meaning is a keystroke that appeared to do nothing. The
- * band above it is the full width of the frame and already pays a sentence out
- * over as many rows as its words need, so that is where the reason goes.
- *
- * The standing hint waits while it does. A hint describes what a person could
- * do; a refusal answers what they just did, and only one of those is news.
- */
-function refusalInBand(view: ReplView): boolean {
-  return shownRefusal(view) !== undefined && staged(view) !== undefined;
+export function executionRefusal(view: ReplView): string | undefined {
+  const refusal = shownRefusal(view);
+  return refusal === undefined ? undefined : `! ${refusal.replaceAll("\n", " ")}`;
 }
 
-/**
- * What the footer's own sentence says on this frame: the refusal, or the hint.
- *
- * One function for both, asked by the pass that fits the words and by the pass
- * that describes the rows — a second answer is how a band comes to be measured
- * for one sentence and drawn with another.
- */
-export function footerSentence(view: ReplView): string {
-  if (refusalInBand(view)) {
-    return `! ${(shownRefusal(view) ?? "").split("\n").join(" ")}`;
-  }
-  if (profileFor(view.size) === "narrow" && presentedInspection(view) !== undefined) {
-    return "Esc closes · Tab moves · PageUp/PageDown in Content";
-  }
-  if (staged(view) !== undefined && !modalOpen(view)) {
-    const readiness = readinessOf(view);
-    const narrow = profileFor(view.size) === "narrow";
-    const state = statePhrase(readiness, narrow);
-    const advice = stateAdvice(readiness, narrow, !narrow);
-    return advice === undefined ? state : `${state}${GUIDANCE_SEPARATOR}${advice}`;
-  }
-  return guidanceSentence(view);
+export function drawerGuidance(view: ReplView): string {
+  return [
+    primaryAction(view, profileFor(view.size) === "narrow"),
+    "Esc closes",
+    "Tab regions Alt↑↓",
+    (focusClaim(view) ?? view.focused)?.endsWith(":anchor")
+      ? "Up/Down reads one row; PageUp/PageDown reads a page; Home/End reaches the bounds."
+      : "In Content: PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
+    "Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.",
+  ].join(GUIDANCE_SEPARATOR);
 }
 
 export function guidanceSentence(view: ReplView): string {
@@ -6756,20 +6723,14 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // sentence is as long as the state it describes, and the medium profile's
   // transcript column is narrower than the longest of them — a row wider than
   // its column is one the column beside it loses space to.
-  if (surface !== undefined) {
+  if (surface !== undefined && workspace === undefined) {
     // One inert block, in the rows this frame fitted its words into. Without a
     // fitted list — the pass still asking how wide the surface is — it is the
     // one row that pass describes, so its own geometry question stays askable.
-    const said = context.guidance ?? [footerSentence(view)];
-    // A refusal in this band reads as the refusal it is, not as a hint.
-    const refusing = refusalInBand(view);
+    const said = context.guidance ?? [guidanceSentence(view)];
     for (const [at, own] of said.entries()) {
       items.push(
-        line(
-          at === 0 ? "guidance" : `guidance:row:${at}`,
-          own,
-          refusing ? styleOf("failed-outcome", { inspected }) : styleOf("status", { inspected }),
-        ),
+        line(at === 0 ? "guidance" : `guidance:row:${at}`, own, styleOf("status", { inspected })),
       );
     }
   }
@@ -6777,7 +6738,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
   // refusal nobody can read is a keystroke that appeared to do nothing.
   const refusal = shownRefusal(view);
-  if (refusal !== undefined && !refusalInBand(view) && offering("footer:refused")) {
+  if (refusal !== undefined && workspace === undefined && offering("footer:refused")) {
     // One line: the footer is seven rows and the controls live in them, so a
     // refusal that wrapped would push the draft off the screen it is about.
     //
@@ -8186,10 +8147,10 @@ function inspectionRect(size: ReplTerminalSize): ReplBounds {
   const x = workspaceTranscriptWidth(size);
   const width = workspaceWorkWidth(size);
   if (x !== undefined && width !== undefined) {
-    return { x, y: 1, width, height: size.rows - 3 };
+    return { x, y: 1, width, height: size.rows - 2 };
   }
   const height = Math.floor(size.rows * 0.6);
-  return { x: 0, y: size.rows - height - 2, width: size.columns, height };
+  return { x: 0, y: size.rows - height - 1, width: size.columns, height };
 }
 
 /**
@@ -8210,31 +8171,9 @@ export function modalOpen(view: ReplView): boolean {
   );
 }
 
-/**
- * The rectangle whichever drawer is presented occupies.
- *
- * One calculation for both, read back by measurement, admission, description,
- * drawing and hit testing: the entry's covers the body, and the Sidekick's
- * covers the pane that owns its question.
- *
- * A route drawer's is the envelope the preparation settled once it had measured
- * the guidance this layer must stay clear of. Taken from the frame's own context
- * rather than recomputed here, so there is one answer to where it is: a second
- * calculation is how a drawer's cells and its targets come to disagree. Before
- * that block has been fitted there is nothing to clear, and the rectangle the
- * size states is what those passes measure.
- *
- * Staged drawers also clear the extra fitted footer rows. Pane-local drawers
- * keep their own origin; route drawers keep their existing inset.
- */
+/** The active drawer's rectangle, shared by placement and hit testing. */
 function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
-  // Which body this layer covers: the staged composition keeps three rows
-  // around its body where the ordinary one keeps seven, so a rectangle derived
-  // from the other budget would hang off the bottom of this screen.
   const workspace = staged(view) !== undefined;
-  // The catalog floats over the body, exactly where a route drawer does: it is
-  // a reading of the whole execution rather than of one pane, so a pane-local
-  // rectangle would put the list of every entry inside the Sidekick's column.
   const rect =
     view.selection.drawers.length > 0 || presentedCatalog(view)
       ? (context.drawer ?? drawerRect(view.size, workspace))
@@ -8246,10 +8185,8 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   if (rect === undefined || !workspace) {
     return rect;
   }
-  return Object.freeze({
-    ...rect,
-    height: Math.max(0, rect.height - Math.max(0, (context.guidance?.length ?? 1) - 1)),
-  });
+  const top = Math.max(rect.y, 1 + (context.headerRefusal?.length ?? 0));
+  return { ...rect, y: top, height: Math.max(0, rect.y + rect.height - top) };
 }
 
 /**
@@ -10338,8 +10275,6 @@ export interface ReplMeasuredWidths {
    * control. Zero where the frame draws no queue.
    */
   readonly queue?: number;
-  /** The row the guidance is drawn in, where a frame draws it apart from the work. */
-  readonly guidance?: number;
 }
 
 /**
@@ -10445,6 +10380,8 @@ export interface ReplPresentationContext {
    * row, which is the geometry question it is asking.
    */
   readonly guidance: readonly string[] | undefined;
+  readonly headerRefusal?: readonly string[];
+  readonly drawerHelp?: readonly string[];
   /**
    * The rows this frame is drawing a refusal's own explanation in, or none.
    *
@@ -13536,9 +13473,6 @@ function nextRound(view: ReplView): number {
 /** The text column of the staged queue's first message, which its width is read from. */
 export const QUEUE_TEXT = "box:queue:text:0";
 
-/** The staged guidance row's inside, which the guidance is fitted to. */
-export const GUIDANCE_ROW = "box:guidance:body";
-
 /** The measured editor body below the Round heading. */
 export const ROUND_EDITOR_BODY = "box:round-editor:body";
 
@@ -13774,17 +13708,29 @@ export function historyMapWidth(
  * Read from the route, so it names nothing this reading does not hold.
  */
 function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
+  const readiness = readinessOf(view);
+  const narrow = profileFor(view.size) === "narrow";
+  const state = statePhrase(readiness, narrow);
+  const advice =
+    readiness.kind === "history"
+      ? "Send unavailable · use Live"
+      : stateAdvice(readiness, narrow, !narrow || view.state.route.surface === "sessions")?.replace(
+          "Enter unavailable",
+          "Send unavailable",
+        );
+  const status = ` ${state}${advice === undefined ? "" : GUIDANCE_SEPARATOR + advice}`;
   const title = " XMD REPL";
-  const label = profileFor(view.size) === "narrow" ? " session " : "  session ";
-  const id = fitLine(
-    [{ text: view.state.route.execution, elide: true }],
-    width - title.length - label.length,
-  );
-  return tokenRuns([
-    { text: title, token: "output" },
-    { text: label, token: "field-label" },
-    { text: id, token: "source" },
-  ]);
+  const label = narrow ? " session " : "  session ";
+  const room = width - status.length - title.length - label.length;
+  const runs: ReplTokenRun[] = [{ text: title, token: "output" }];
+  if (room > 0) {
+    runs.push(
+      { text: label, token: "field-label" },
+      { text: fitLine([{ text: view.state.route.execution, elide: true }], room), token: "source" },
+    );
+  }
+  runs.push({ text: status, token: "field-label" });
+  return tokenRuns(runs);
 }
 
 /**
@@ -14194,7 +14140,7 @@ export function workspaceHeaderLines(
  * The staged workspace composition's boxes, from the same classified rows.
  *
  * One identity row, the body, and below it one compact History row carrying the
- * contextual actions and a measured guidance block. The wide and medium profiles give
+ * contextual actions. The wide and medium profiles give
  * the body three columns — the Transcript of agent work, the selected work with
  * its Draft, and Bindings/Sidekick with the tray above its composer. The narrow
  * profile routes one outlet instead, under the two surface controls, exactly as
@@ -14452,9 +14398,16 @@ function workspacePresentation(input: {
         ? [
             ...draft.map((one) => rowBox(one, region, room)),
             box({
+              id: "box:round-editor:help",
+              region,
+              props: partsRowProps(1, 0, room),
+              text: " Enter adds a line · Tab to Send",
+              style: styleOf("metadata"),
+            }),
+            box({
               id: ROUND_EDITOR_BODY,
               region,
-              props: paneContentProps(),
+              props: { ...paneContentProps(), bg: terminalColour(REPL_PALETTE.draftSurface) },
               children: startingWith("draft:value:").map((one) => rowBox(one, region, room)),
             }),
           ]
@@ -14813,7 +14766,7 @@ function workspacePresentation(input: {
     const retry = parts(["notice:retry"], "inspection");
     const width = sidekickNoticeWidth(size) - 4;
     const headRows = headerRows("conversation", "inspection", header).length;
-    const top = 1 + (outlet ? 1 : 0) + headRows;
+    const top = 1 + (context.headerRefusal?.length ?? 0) + (outlet ? 1 : 0) + headRows;
     columns.push(
       box({
         id: "box:sidekick:notice",
@@ -14858,6 +14811,15 @@ function workspacePresentation(input: {
         props: drawerLayerProps(rect, context.capture),
         children: [
           rowBox(title, "drawer", context.widths?.drawer),
+          ...(context.drawerHelp ?? []).map((text, at) =>
+            box({
+              id: `box:drawer:help:${at}`,
+              region: "drawer",
+              props: partsRowProps(1, 0, context.widths?.drawer),
+              text,
+              style: styleOf("metadata"),
+            }),
+          ),
           box({
             id,
             region: "drawer",
@@ -14893,42 +14855,39 @@ function workspacePresentation(input: {
         children: [
           box({
             id: "box:identity",
-            props: bandRowProps(REPL_PALETTE.chromeSurface),
+            props: stackProps(1 + (context.headerRefusal?.length ?? 0)),
             children: [
               box({
-                id: "box:identity:text",
-                props: fittedPartProps(),
-                text: runText(identity),
-                runs: identity,
-                style: styleOf("metadata"),
+                id: "box:identity:line",
+                props: bandRowProps(REPL_PALETTE.chromeSurface),
+                children: [
+                  box({
+                    id: "box:identity:text",
+                    props: statedPartProps(runText(identity).length),
+                    text: runText(identity),
+                    runs: identity,
+                    style: styleOf("metadata"),
+                  }),
+                  box({ id: "box:identity:space", props: SPACER_PROPS }),
+                  ...usageToggle.map((one) => part(one, undefined)),
+                ],
               }),
-              box({ id: "box:identity:space", props: SPACER_PROPS }),
-              ...usageToggle.map((one) => part(one, undefined)),
+              ...(context.headerRefusal ?? []).map((text, at) =>
+                box({
+                  id: `box:identity:refusal:${at}`,
+                  props: bandRowProps(REPL_PALETTE.chromeSurface),
+                  text,
+                  style: styleOf("failed-outcome"),
+                }),
+              ),
             ],
           }),
           box({ id: "box:body", props: bodyProps(false), children: columns }),
           box({
             id: "box:footer",
             region: "footer",
-            // State the fitted row count: intrinsic stack sizing can place this
-            // footer on fractional cells, invalidating every input rectangle.
-            props: stackProps(1 + (context.guidance?.length ?? 1)),
+            props: stackProps(1),
             children: [
-              box({
-                id: "box:guidance",
-                region: "footer",
-                props: bandBlockProps(REPL_PALETTE.chromeSurface, WORKSPACE_LIST_GUTTER),
-                children: [
-                  box({
-                    id: GUIDANCE_ROW,
-                    region: "footer",
-                    props: GROWING_STACK_PROPS,
-                    children: of("located").map((one) =>
-                      rowBox(one, "footer", context.widths?.guidance),
-                    ),
-                  }),
-                ],
-              }),
               box({
                 id: "box:history",
                 region: "footer",

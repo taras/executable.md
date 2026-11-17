@@ -102,7 +102,7 @@ describe("REPL page — Send and its visible scope", () => {
     yield* intoDraft(page);
     yield* typed(page, "Send appears in this draft");
     const ambiguous = yield* refusal(page.press("Send"));
-    expect(ambiguous).toContain("is shown 2 times in the whole screen");
+    expect(ambiguous).toContain("is shown 3 times in the whole screen");
 
     expect(page.screen().found("Send", ROUND_BAR)).toBe(1);
     yield* page.press("Send", ROUND_BAR);
@@ -123,7 +123,8 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     // Narrow routes one surface: no tab row, no composer, one Send.
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("keep this draft")).toBe(true);
-    expect(narrow.occurrences("Send")).toBe(1);
+    expect(narrow.found("Send", ROUND_BAR)).toBe(1);
+    expect(narrow.locate("HISTORY").row).toBe(narrow.locate("Send", ROUND_BAR).row + 1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(narrow.shows(COMPOSER)).toBe(false);
     // The scope that named the Sidekick's Send is refused here, saying which

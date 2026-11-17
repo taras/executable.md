@@ -1127,9 +1127,9 @@ export function workspaceQueueRows(size: ReplTerminalSize): number {
  * below — three, where the ordinary composition's footer is seven. Stated here
  * so the drawer rectangles and the body are measured against the same budget.
  */
-export const WORKSPACE_CHROME_ROWS = 3;
+export const WORKSPACE_CHROME_ROWS = 2;
 
-/** How many rows the staged body has: everything those three rows leave. */
+/** How many rows the staged body has between identity and History. */
 export function workspaceBodyRows(size: ReplTerminalSize): number {
   return Math.max(0, size.rows - WORKSPACE_CHROME_ROWS);
 }

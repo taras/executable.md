@@ -865,13 +865,11 @@ function groundsOf(observed: Observed, grid: TerminalGrid): (number | undefined)
     expect([id, grid.at(at.x, at.y)]).toEqual([id, " "]);
     return grid.styleAt(at.x, at.y).background;
   };
-  const box = regionOf(observed, "box:draft");
   return [
     ground("box:sidebar:body:gutter"),
     ground("box:transcript:body:gutter"),
     ground("box:inspection:body:gutter"),
     grid.styleAt(0, regionOf(observed, "box:sidebar:header").y).background,
-    grid.styleAt(box.x + box.width - 2, box.y + 2).background,
   ];
 }
 
@@ -881,7 +879,6 @@ function chromeOf(observed: Observed): Record<string, ReplBounds> {
     identity: regionOf(observed, "box:identity"),
     body: regionOf(observed, "box:body"),
     history: regionOf(observed, "box:history"),
-    guidance: regionOf(observed, "box:guidance"),
   };
 }
 
@@ -896,8 +893,7 @@ function expectChrome(presenter: Presenter, observed: Observed, size: ReplTermin
     where,
     chrome: {
       identity: { x: 0, y: 0, width: size.columns, height: 1 },
-      body: { x: 0, y: 1, width: size.columns, height: size.rows - 3 },
-      guidance: { x: 0, y: size.rows - 2, width: size.columns, height: 1 },
+      body: { x: 0, y: 1, width: size.columns, height: size.rows - 2 },
       history: { x: 0, y: size.rows - 1, width: size.columns, height: 1 },
     },
   });
@@ -923,12 +919,12 @@ function expectChrome(presenter: Presenter, observed: Observed, size: ReplTermin
     where,
     identity: shown("box:identity").includes("XMD REPL"),
     history: shown("box:history").includes("HISTORY"),
-    guidance: grid.textIn(regionOf(observed, "box:guidance")).join("").trim().length > 0,
+    status: /Entry \d+ running/.test(shown("box:identity")),
     controls: [
       within(placed(observed, "footer:history"), regionOf(observed, "box:history")),
       within(placed(observed, "footer:exit"), regionOf(observed, "box:history")),
     ],
-  }).toEqual({ where, identity: true, history: true, guidance: true, controls: [true, true] });
+  }).toEqual({ where, identity: true, history: true, status: true, controls: [true, true] });
 }
 
 /** Whether every placed control is whole, inside the screen and clear of the others. */
@@ -970,11 +966,11 @@ function columnsOf(observed: Observed): Record<string, ReplBounds> {
   };
 }
 
-/** The Draft keeps four rows at the foot of its column, above readiness. */
-function expectDraft(observed: Observed, column: ReplBounds): void {
-  const box = regionOf(observed, "box:draft");
-  expect([box.height, box.y + box.height]).toEqual([4, regionOf(observed, "box:guidance").y]);
-  expect([box.x >= column.x, box.x + box.width <= column.x + column.width]).toEqual([true, true]);
+function expectRoundBar(observed: Observed, column: ReplBounds): void {
+  const bar = regionOf(observed, "box:round-bar");
+  expect(bar.y + bar.height).toBe(regionOf(observed, "box:history").y);
+  expect(within(placed(observed, "draft:new"), bar)).toBe(true);
+  expect(within(bar, column)).toBe(true);
 }
 
 /**
@@ -983,10 +979,9 @@ function expectDraft(observed: Observed, column: ReplBounds): void {
  *
  * One mounted workspace per size: the Transcript, the selected work and the
  * Bindings/Sidekick pane at the two wide sizes, one routed surface at the
- * narrow one, each under the identity row and above the compact History row
- * and the one row of guidance. The numbers are the specification's — the
+ * narrow one, each under the identity row and above the compact History row. The numbers are the specification's — the
  * first composition at 160x36 gives the columns 36, 54 and 70 cells, dividers
- * included, a body of 33 rows and a four-row Draft; 120x30 follows it and 72x20
+ * included, a body of 34 rows and a final round bar; 120x30 follows it and 72x20
  * routes one surface. A region comes from the frame the command presented, and
  * a cell comes from the terminal that frame was written to; no row is compared
  * with a stored picture.
@@ -994,17 +989,17 @@ function expectDraft(observed: Observed, column: ReplBounds): void {
 describe("REPL appearance - the shipping profiles' geometry", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("160x36: columns of 36, 54 and 70, a body of 33 rows and a four-row Draft", function* () {
+  it("160x36: columns of 36, 54 and 70, a body of 34 rows and a final round bar", function* () {
     const model = yield* runningReading();
     const presenter = yield* usePresenter(WIDE);
     const observed = yield* presenter.commit(stagedView(model, WIDE));
     expectChrome(presenter, observed, WIDE);
     expect(columnsOf(observed)).toEqual({
-      sidebar: { x: 0, y: 1, width: 36, height: 33 },
-      transcript: { x: 36, y: 1, width: 54, height: 33 },
-      inspection: { x: 90, y: 1, width: 70, height: 33 },
+      sidebar: { x: 0, y: 1, width: 36, height: 34 },
+      transcript: { x: 36, y: 1, width: 54, height: 34 },
+      inspection: { x: 90, y: 1, width: 70, height: 34 },
     });
-    expectDraft(observed, regionOf(observed, "box:transcript"));
+    expectRoundBar(observed, regionOf(observed, "box:transcript"));
     expect(placement(observed, WIDE)).toEqual({
       count: true,
       whole: true,
@@ -1019,11 +1014,11 @@ describe("REPL appearance - the shipping profiles' geometry", () => {
     const observed = yield* presenter.commit(stagedView(model, MEDIUM));
     expectChrome(presenter, observed, MEDIUM);
     expect(columnsOf(observed)).toEqual({
-      sidebar: { x: 0, y: 1, width: 24, height: 27 },
-      transcript: { x: 24, y: 1, width: 40, height: 27 },
-      inspection: { x: 64, y: 1, width: 56, height: 27 },
+      sidebar: { x: 0, y: 1, width: 24, height: 28 },
+      transcript: { x: 24, y: 1, width: 40, height: 28 },
+      inspection: { x: 64, y: 1, width: 56, height: 28 },
     });
-    expectDraft(observed, regionOf(observed, "box:transcript"));
+    expectRoundBar(observed, regionOf(observed, "box:transcript"));
     expect(placement(observed, MEDIUM)).toEqual({
       count: true,
       whole: true,
@@ -1037,7 +1032,7 @@ describe("REPL appearance - the shipping profiles' geometry", () => {
     const presenter = yield* usePresenter(SMALL);
     const observed = yield* presenter.commit(stagedView(model, SMALL));
     expectChrome(presenter, observed, SMALL);
-    expect(regionOf(observed, "box:content")).toEqual({ x: 0, y: 1, width: 72, height: 17 });
+    expect(regionOf(observed, "box:content")).toEqual({ x: 0, y: 1, width: 72, height: 18 });
     expect([observed.regionOf("box:sidebar"), observed.regionOf("box:inspection")]).toEqual([
       undefined,
       undefined,
@@ -1046,7 +1041,7 @@ describe("REPL appearance - the shipping profiles' geometry", () => {
       observed.keys.includes("sessions:heading"),
       observed.keys.includes("entries:heading"),
     ]).toEqual([true, true]);
-    expectDraft(observed, regionOf(observed, "box:content"));
+    expectRoundBar(observed, regionOf(observed, "box:content"));
     expect(placement(observed, SMALL)).toEqual({
       count: true,
       whole: true,
@@ -1086,27 +1081,37 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
     expect(inkOf(grid, placed(catalog, "entry:entry-1")).foreground).toBe(SEMANTIC.tick);
     expect(inkOf(grid, placed(catalog, "entry:entry-3")).foreground).toBe(REPL_PALETTE.waiting);
     expect(inkOf(grid, placed(catalog, "entry:entry-3")).foreground).not.toBe(SEMANTIC.tick);
-    const viewOf = (focused?: string): ReplView =>
-      withWorkspace(reading(state, model, live, WIDE, focused), {
-        ...workspaceOf(model),
-        todo: { document: parseTodo("") },
-      });
-    yield* presenter.commit(viewOf());
+    const viewOf = (editing = false): ReplView =>
+      withWorkspace(
+        reading(
+          editing
+            ? { ...state, draftOpen: true, restore: { kind: "reveal", key: "footer:input" } }
+            : state,
+          model,
+          live,
+          WIDE,
+        ),
+        {
+          ...workspaceOf(model),
+          todo: { document: parseTodo("") },
+        },
+      );
+    const work = yield* presenter.commit(viewOf());
+    expect(inkIn(work, grid, "box:transcript:header", "● ACTIVE").foreground).toBe(
+      LIFECYCLE.active.colour,
+    );
+    const grounds = groundsOf(work, grid);
+    const observed = yield* presenter.commit(viewOf(true));
     expect(focusKeyOf(presenter)).toBe("footer:input");
-    const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
     const foreground = (at: { x: number; y: number }): number | undefined =>
       grid.styleAt(at.x, at.y).foreground;
 
-    // The Draft is read as source: delimiters, a tag's name, an attribute's name,
-    // the braces around a reference and what it names are each their own.
-    expect(inkIn(observed, grid, "box:transcript:header", "● ACTIVE").foreground).toBe(
-      LIFECYCLE.active.colour,
-    );
-    const tag = cellOf(observed, grid, "box:draft", "<PriceSummary items={cart.items}");
+    // The editor preserves syntax colours over the Draft surface.
+    const tag = cellOf(observed, grid, "box:round-editor:body", "<PriceSummary items={cart.items}");
     expect([0, 1, 14, 20, 21].map((offset) => foreground({ x: tag.x + offset, y: tag.y }))).toEqual(
       [SYNTAX.del, SYNTAX.tag, SYNTAX.attr, SYNTAX.brace, SYNTAX.ref],
     );
-    const quoted = cellOf(observed, grid, "box:draft", '"USD"');
+    const quoted = cellOf(observed, grid, "box:round-editor:body", '"USD"');
     expect([0, 1, 4].map((offset) => foreground({ x: quoted.x + offset, y: quoted.y }))).toEqual([
       SYNTAX.str,
       SYNTAX.str,
@@ -1115,7 +1120,7 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
 
     // Both fields a keystroke reaches are the archive's input surface, in every
     // cell of every row they hold, blank ones included.
-    const box = regionOf(observed, "box:draft");
+    const box = regionOf(observed, "box:round-editor:body");
     const composer = regionOf(observed, "box:tray");
     const surfaces = [
       ...[1, 2, 3].map((row) => grid.styleAt(box.x + box.width - 2, box.y + row)),
@@ -1125,7 +1130,7 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
 
     // And the three columns, a header row and the Draft are each their own
     // ground.
-    expect(new Set(groundsOf(observed, grid)).size).toBe(5);
+    expect(new Set([...grounds, surfaces[0]]).size).toBe(5);
   });
 });
 
@@ -5125,7 +5130,7 @@ function* walkChat(page: ReplPage, inks: Map<string, CellStyle>): Operation<Chat
   for (const direction of directions) {
     for (let press = 0; press < 24; press += 1) {
       const before = page.screen();
-      const scope = before.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined;
+      const scope = before.shows(SIDEKICK) ? { rightOf: SIDEKICK } : undefined;
       const caption = before.rows
         .flatMap((row) =>
           [...row.matchAll(/\[[USR]\] /g)].map((match) => row.slice(match.index).trimEnd()),
@@ -5236,24 +5241,32 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       entry.key,
       nested.key,
     );
-    const viewOf = (focused?: string): ReplView =>
-      withWorkspace(reading(state, model, live, WIDE, focused), {
-        ...workspaceOf(model),
-        todo: { document: parseTodo("") },
-      });
-    yield* presenter.commit(viewOf());
-    expect(focusKeyOf(presenter)).toBe("footer:input");
-    const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
+    const viewOf = (editing = false): ReplView =>
+      withWorkspace(
+        reading(
+          editing
+            ? { ...state, draftOpen: true, restore: { kind: "reveal", key: "footer:input" } }
+            : state,
+          model,
+          live,
+          WIDE,
+        ),
+        {
+          ...workspaceOf(model),
+          todo: { document: parseTodo("") },
+        },
+      );
+    const observed = yield* presenter.commit(viewOf());
     const { grid } = presenter;
 
     // C1: the rows above, inside and below the body, and the three columns.
     expectChrome(presenter, observed, WIDE);
     expect(columnsOf(observed)).toEqual({
-      sidebar: { x: 0, y: 1, width: 36, height: 33 },
-      transcript: { x: 36, y: 1, width: 54, height: 33 },
-      inspection: { x: 90, y: 1, width: 70, height: 33 },
+      sidebar: { x: 0, y: 1, width: 36, height: 34 },
+      transcript: { x: 36, y: 1, width: 54, height: 34 },
+      inspection: { x: 90, y: 1, width: 70, height: 34 },
     });
-    expectDraft(observed, regionOf(observed, "box:transcript"));
+    expectRoundBar(observed, regionOf(observed, "box:transcript"));
 
     // C1: a real nested scope is selected, and the breadcrumb beside Entries
     // says the ancestry it resolved to. The scope is read from the history the
@@ -5295,14 +5308,8 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     }
     expect(observed.regionOf("box:band:0")).toBe(undefined);
 
-    // The Draft's own Stop shares its heading row, at the right of the field.
-    const draftBox = regionOf(observed, "box:draft");
-    const input = placed(observed, "footer:input");
-    const draftStop = placed(observed, "draft:stop");
-    expect(input.y).toBe(draftBox.y);
-    expect(draftStop.y).toBe(draftBox.y);
-    expect(draftStop.x).toBeGreaterThan(input.x);
-    expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draftBox.x + draftBox.width);
+    const bar = regionOf(observed, "box:round-bar");
+    expect(within(placed(observed, "draft:stop"), bar)).toBe(true);
 
     const sidekickTab = placed(observed, "tab:sidekick");
     const todo = placed(observed, "todo:header");
@@ -5350,12 +5357,15 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     // Surfaces: the three columns, a header row and the Draft are each their own
     // ground, and every value row of the Draft is the Draft's, blank ones too.
     const grounds = groundsOf(observed, grid);
-    expect(new Set(grounds).size).toBe(5);
+    const editing = yield* presenter.commit(viewOf(true));
+    const draftBox = regionOf(editing, "box:round-editor:body");
+    const input = placed(editing, "footer:input");
+    const background = grid.styleAt(draftBox.x + draftBox.width - 2, draftBox.y + 1).background;
+    expect(new Set([...grounds, background]).size).toBe(5);
     for (const row of [1, 2, 3]) {
-      expect([
-        row,
-        grid.styleAt(draftBox.x + draftBox.width - 2, draftBox.y + row).background,
-      ]).toEqual([row, grounds[4]]);
+      expect(grid.styleAt(draftBox.x + draftBox.width - 2, draftBox.y + row).background).toBe(
+        background,
+      );
     }
 
     // C2: the Draft is the control the frame holds focus on, and the cue is
@@ -5367,9 +5377,9 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     expect(grid.styleAt(input.x + input.width - 1, input.y).background).toBe(
       REPL_PALETTE.focusSurface,
     );
-    const message = placed(observed, "sidekick:message");
+    const message = placed(editing, "sidekick:message");
     expect(grid.styleAt(message.x, message.y).attrs.includes(BOLD)).toBe(false);
-    const value = cellOf(observed, grid, "box:draft", "<PriceSummary");
+    const value = cellOf(editing, grid, "box:round-editor:body", "<PriceSummary");
     expect(grid.styleAt(value.x, value.y).foreground).not.toBe(
       grid.styleAt(value.x + 1, value.y).foreground,
     );
@@ -5382,9 +5392,6 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     const repliedInk = chatInk("[S] one done");
     expect(askedInk).not.toBe(repliedInk);
     expect(inkIn(observed, grid, "box:tray", "Also say").foreground).not.toBe(askedInk);
-    expect(inkIn(observed, grid, "box:transcript:header", "● ACTIVE").foreground).not.toBe(
-      inkIn(observed, grid, "box:transcript:header", "› Entry").foreground,
-    );
   });
 
   /**
@@ -5400,7 +5407,8 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
   it("A6: Entries opens a catalog over the reading, and only a row in it navigates", function* () {
     const page = yield* reachWorkspace(WIDE);
     yield* typedInto(page);
-    const holding = (): Record<string, unknown> => {
+    const holding = function* (): Operation<Record<string, unknown>> {
+      yield* intoDraft(page);
       const reading = page.screen();
       return {
         draft: DRAFT_LINES.map((line) => reading.found(line, DRAFT_VALUE)),
@@ -5418,6 +5426,14 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       };
     };
     const began = yield* standing();
+    const openSelectedCatalog = function* () {
+      if (page.screen().shows(DRAFT)) {
+        yield* page.key("Ctrl+G");
+        yield* page.type("3");
+        yield* page.until("selected work restored", (one) => !one.shows(DRAFT));
+      }
+      yield* openCatalog(page);
+    };
 
     for (const size of [WIDE, MEDIUM, SMALL]) {
       const where = `${size.columns}x${size.rows}`;
@@ -5428,14 +5444,14 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
         expect([where, drawerOpen(resized)]).toEqual([where, true]);
         yield* closeDrawer(page);
       }
-      const kept = holding();
+      const kept = yield* holding();
 
       // Closed, there is no catalog on the screen.
       expect([where, drawerOpen(page.screen())]).toEqual([where, false]);
       expect([where, page.screen().shows("entry-1")]).toEqual([where, false]);
 
       // The control a person presses asks for the catalog.
-      yield* openCatalog(page);
+      yield* openSelectedCatalog();
 
       // Every entry this history holds, in admission order, with its own nested
       // scope, and each of them drawn in the catalog's own rows rather than
@@ -5464,27 +5480,27 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
       expect([where, trailOf(page.screen()).includes("Entry 2")]).toEqual([where, true]);
       expect([where, trailOf(page.screen()).includes("Checklist")]).toEqual([where, true]);
-      expect([where, holding()]).toEqual([where, kept]);
+      expect([where, yield* holding()]).toEqual([where, kept]);
 
       // An older entry, by its own name, from the same open catalog.
-      yield* openCatalog(page);
+      yield* openSelectedCatalog();
       yield* page.press("entry-1");
       yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
       expect([where, trailOf(page.screen()).includes("Entry 1")]).toEqual([where, true]);
       expect([where, trailOf(page.screen()).includes("Checklist")]).toEqual([where, false]);
       // Nothing a person was holding moved, by either route: both texts, the
       // conversation filter and the history position stand.
-      expect([where, holding()]).toEqual([where, kept]);
+      expect([where, yield* holding()]).toEqual([where, kept]);
 
       // And closing chooses nothing. The scope being read is the one that was
       // being read before the catalog opened.
-      yield* openCatalog(page);
+      yield* openSelectedCatalog();
       yield* closeDrawer(page);
       expect([where, trailOf(page.screen()).includes("Entry 1")]).toEqual([where, true]);
-      expect([where, holding()]).toEqual([where, kept]);
+      expect([where, yield* holding()]).toEqual([where, kept]);
 
       if (size !== SMALL) {
-        yield* openCatalog(page);
+        yield* openSelectedCatalog();
       }
     }
     // Opening is navigation and nothing else: no provider work, no append, no
@@ -5494,8 +5510,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
 
   it("A5: one Transcript list, with the conversations as its filter", function* () {
     const page = yield* reachOutcomes(WIDE);
-    yield* intoComposer(page);
-    yield* typed(page, CHECKPOINT_MESSAGE);
+    yield* typedInto(page);
     const typedNow = (): Record<string, unknown> => {
       const reading = page.screen();
       return {
@@ -5752,9 +5767,9 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     // takes the remainder because it is the column whose room is spent on a
     // reserved rail and badge column before a reader sees any source.
     expect(columnsOf(observed)).toEqual({
-      sidebar: { x: 0, y: 1, width: 24, height: 27 },
-      transcript: { x: 24, y: 1, width: 40, height: 27 },
-      inspection: { x: 64, y: 1, width: 56, height: 27 },
+      sidebar: { x: 0, y: 1, width: 24, height: 28 },
+      transcript: { x: 24, y: 1, width: 40, height: 28 },
+      inspection: { x: 64, y: 1, width: 56, height: 28 },
     });
 
     // What that buys is source room, measured through the reading's own
@@ -5782,8 +5797,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
       });
     }
 
-    // The Draft keeps its four rows at the foot of that column.
-    expectDraft(observed, regionOf(observed, "box:transcript"));
+    expectRoundBar(observed, regionOf(observed, "box:transcript"));
   });
 
   it("A2: the selected work's source wraps at word boundaries and stays exact", function* () {
@@ -5913,7 +5927,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     yield* page.until("the Entries catalog", drawerOpen);
     yield* closeDrawer(page);
     const entries = page.screen();
-    expect(entries.shows("DRAFT")).toBe(true);
+    expect(entries.shows("· draft")).toBe(true);
     expect(entries.found("Stop", { onRow: "+ New Round" })).toBe(1);
     for (const control of ["Sessions", "Entries"]) {
       expect({ control, shown: entries.shows(control) }).toEqual({ control, shown: true });
@@ -6100,25 +6114,25 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
 describe("REPL presentation: the screen says what is placed", () => {
   it("keeps the shell and its readable surfaces at the supported sizes", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     const wide = page.screen();
     expect(wide.shows("XMD REPL")).toBe(true);
     expect(wide.shows("TRANSCRIPT")).toBe(true);
     expect(wide.shows(BINDINGS)).toBe(true);
     expect(wide.shows(SIDEKICK)).toBe(true);
     expect(wide.shows("HISTORY")).toBe(true);
-    expect(wide.occurrences("[send]")).toBe(2);
+    expect(wide.occurrences("[send]")).toBe(1);
+    expect(wide.found("Send", { onRow: "✎ draft" })).toBe(1);
 
     const medium = yield* page.resize(MEDIUM);
     expect(medium.shows("XMD REPL")).toBe(true);
     expect(medium.shows("HISTORY")).toBe(true);
-    expect(medium.shows("> DRAFT")).toBe(true);
+    expect(medium.shows("> Round 1 · draft")).toBe(true);
 
     const narrow = yield* page.resize(SMALL);
     expect(narrow.shows("XMD REPL")).toBe(true);
     expect(narrow.shows("HISTORY")).toBe(true);
-    expect(narrow.occurrences("[send]")).toBe(1);
+    expect(narrow.found("Send", { onRow: "✎ draft" })).toBe(1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(narrow.shows(COMPOSER)).toBe(false);
 
@@ -6129,8 +6143,7 @@ describe("REPL presentation: the screen says what is placed", () => {
 
   it("keeps source text in the field that draws it", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     const source = "<Checkout />";
     yield* draftText(page, source);
     const reading = page.screen();
@@ -6141,8 +6154,7 @@ describe("REPL presentation: the screen says what is placed", () => {
 
   it("keeps a modal readable and leaves the Draft unchanged behind it", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     yield* draftText(page, "keep this draft");
     yield* openHistory(page);
     expect(page.screen().shows("History")).toBe(true);
@@ -6155,6 +6167,7 @@ describe("REPL presentation: the screen says what is placed", () => {
 
   it("keeps the Sidekick scope distinct from the Draft Send", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
     yield* intoComposer(page);
     const reading = page.screen();
     expect(reading.found("[send]", SIDEKICK_PANE)).toBe(1);
@@ -6166,7 +6179,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     const model = yield* emptyModel();
     const presenter = yield* usePresenter(WIDE);
     const view = viewFor(
-      initialState("reference"),
+      { ...initialState("reference"), draftOpen: true },
       model,
       NOTHING_LIVE,
       WIDE,
@@ -6177,7 +6190,7 @@ describe("REPL presentation: the screen says what is placed", () => {
       throw view.error;
     }
     const observed = yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
-    const draft = observed.boundsOf("footer:input");
+    const draft = observed.regionOf("box:round-editor:body");
     const history = observed.regionOf("box:history");
     if (draft === undefined || history === undefined) {
       throw new Error("the empty frame did not publish its Draft and History surfaces");

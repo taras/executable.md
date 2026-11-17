@@ -1614,12 +1614,12 @@ describe("REPL original first-use paths and question ownership", () => {
       function* () {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
-        expect(page.screen().rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+        expect(page.screen().rows[0]).toContain("Ready for Entry 1");
         expect(page.screen().rows.at(-1)).toContain("HISTORY");
         yield* runSource(page, SHORT_QUESTION);
         yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
         if (size.columns === 72) {
-          expect(page.screen().rows.at(-2)?.trim()).toBe("Entry 1 question · activate answer");
+          expect(page.screen().rows[0]).toContain("Entry 1 question · activate answer");
         }
         yield* sessions(page);
         expect(page.screen().shows("[submit]")).toBe(false);
@@ -1637,9 +1637,7 @@ describe("REPL original first-use paths and question ownership", () => {
           (one) => one.shows("[submit]") && one.shows("Enter answers"),
         );
         yield* page.type("go");
-        yield* page.until("the go answer held by its editable value", (one) =>
-          one.shows("*decision: go"),
-        );
+        yield* page.until("the go answer held by its editable value", (one) => one.shows("= go"));
         yield* page.press("[submit]");
         yield* entrySettles(page, 1, "ok");
         expect(page.screen().shows("[close]")).toBe(false);
@@ -1656,9 +1654,9 @@ describe("REPL original first-use paths and question ownership", () => {
         expect(directions(page.screen())).toContain("Esc closes");
         yield* closeDrawer(page);
         yield* page.until("the frozen Draft guidance", (one) =>
-          one.shows("History · Enter unavailable"),
+          one.shows("History · Send unavailable"),
         );
-        expect(page.screen().shows("activate live")).toBe(true);
+        expect(page.screen().shows("use Live")).toBe(true);
         expect(page.screen().shows("entry two")).toBe(true);
         expect(page.screen().shows("Enter submits")).toBe(false);
         yield* page.press("[live]");
@@ -1736,9 +1734,7 @@ describe("REPL original first-use paths and question ownership", () => {
           (one) => one.shows("[submit]") && one.shows("Enter answers"),
         );
         yield* page.type("go");
-        yield* page.until("the modal field taking the keystrokes", (one) =>
-          one.shows("*decision: go"),
-        );
+        yield* page.until("the modal field taking the keystrokes", (one) => one.shows("= go"));
         yield* closeDrawer(page);
         yield* intoDraft(page);
         expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
@@ -2269,7 +2265,7 @@ describe("REPL original visible guidance and controlled typing", () => {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
-        expect(page.screen().rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+        expect(page.screen().rows[0]).toContain("Ready for Entry 1");
         expect(page.screen().rows.at(-1)).toContain("HISTORY");
         expect(page.screen().shows("Esc closes")).toBe(false);
         yield* focusRegion(page, "8");
@@ -2338,7 +2334,14 @@ describe("REPL original visible guidance and controlled typing", () => {
     );
     const text = "second entry, typed while the first is running";
     yield* runSource(page, text);
-    yield* page.until("the temporary lifecycle refusal", (one) => one.shows("has not finished"));
+    const refused = yield* page.until("the temporary lifecycle refusal", (one) =>
+      one.shows("has not finished"),
+    );
+    expect(refused.rows[0]).toContain("Entry 1 running");
+    expect(refused.locate("has not finished").row).toBeLessThan(
+      refused.locate("Round 2 · draft").row,
+    );
+    expect(refused.locate("HISTORY").row).toBe(refused.locate("✎ draft").row + 1);
     expect(page.screen().found(text, DRAFT_VALUE)).toBe(1);
     expect((yield* retainedModel(page)).entries).toHaveLength(1);
     const fed = page.repl.terminal.fed;
@@ -2484,7 +2487,8 @@ function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen
     (one) => one.shows("Recorded answer") && one.shows("Enter does nothing"),
   );
   const first = drawerLines(page.screen());
-  const seen = [...first];
+  const compact = (rows: string[]) => rows.join(" ").replace(/\s+/g, " ");
+  const seen = [compact(first)];
   const expected = [
     ...JSON.stringify(RETAINED_SCHEMA, undefined, 2).split("\n"),
     ...JSON.stringify(RETAINED_ANSWER, undefined, 2).split("\n"),
@@ -2495,9 +2499,9 @@ function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen
     press += 1
   ) {
     const one = page.screen();
-    yield* page.key("PageDown");
+    yield* page.key("ArrowDown");
     yield* page.until("the recorded drawer's next rows", (next) => next.index > one.index);
-    seen.push(...drawerLines(page.screen()));
+    seen.push(compact(drawerLines(page.screen())));
   }
   for (const line of expected) {
     expect(seen.some((row) => row.includes(line))).toBe(true);

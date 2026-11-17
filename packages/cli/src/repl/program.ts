@@ -91,7 +91,9 @@ import {
   previewedMessage,
   retainedDetailsOf,
   MESSAGE_VALUE_ROWS,
-  footerSentence,
+  drawerGuidance,
+  executionRefusal,
+  guidanceSentence,
   readinessOf,
   readingOf,
   SIDEBAR_BODY,
@@ -109,7 +111,6 @@ import {
   historySplitOf,
   wideHistoryWidths,
   queueTextWidth,
-  GUIDANCE_ROW,
   QUEUE_TEXT,
   queueLinesOf,
   queueStatusLinesOf,
@@ -5719,6 +5720,41 @@ export function* prepareFrame(
     return first;
   }
   const widths = widthsOf(probe.manifest, first.value);
+  const workspace = stagedWorkspace(view) !== undefined;
+  const reasonInHeader = workspace ? executionRefusal(view) : undefined;
+  const header =
+    reasonInHeader === undefined || widths.surfaceBody < 1
+      ? Ok([])
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "header-refusal", text: reasonInHeader }],
+          view.size.columns,
+          guidanceStore,
+        );
+  if (!header.ok) {
+    return header;
+  }
+  const headerLimit = Math.max(1, Math.floor(view.size.rows / 4));
+  const headerRefusal = header.value.slice(0, headerLimit).map((row) => row.text);
+  if (header.value.length > headerLimit) {
+    const last = headerRefusal[headerRefusal.length - 1];
+    headerRefusal[headerRefusal.length - 1] = `${last.slice(0, -1)}…`;
+  }
+  const drawerRoom = widths.drawer ?? 0;
+  const help =
+    !workspace || !modalOpen(view) || drawerRoom < 1
+      ? Ok([])
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "drawer-help", text: drawerGuidance(view) }],
+          drawerRoom,
+        );
+  if (!help.ok) {
+    return help;
+  }
+  const drawerHelp = help.value.map((row) => row.text);
 
   // The staged queue, fitted to the text column its first message measured.
   // Before every pass below, because each message is as many rows as its text
@@ -5822,6 +5858,8 @@ export function* prepareFrame(
   let historyWideMap: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
+    headerRefusal,
+    drawerHelp,
     todo: todoRows.value,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
     queueStatus: queueStatus.value,
@@ -5848,14 +5886,14 @@ export function* prepareFrame(
   // The directions, fitted to the surface they are drawn on. Before the frame
   // below, because they are fixed content: the room the composer may grow into
   // is what is left once they have taken theirs.
-  const guidanceRoom = widths.guidance ?? widths.surfaceBody;
+  const guidanceRoom = widths.surfaceBody;
   const guidance =
-    widths.surfaceBody < 1 || guidanceRoom < 1
+    workspace || guidanceRoom < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
-          [{ key: "guidance", text: footerSentence(view) }],
+          [{ key: "guidance", text: guidanceSentence(view) }],
           guidanceRoom,
           guidanceStore,
         );
@@ -5870,7 +5908,7 @@ export function* prepareFrame(
   // never share a frame — a refusal is the whole of what its screen says — so
   // one store holds whichever of them this frame is giving.
   const refused =
-    view.refusal === undefined || widths.surfaceBody < 1
+    workspace || view.refusal === undefined || widths.surfaceBody < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
@@ -5945,7 +5983,6 @@ export function* prepareFrame(
   // that counts them has to be a pass that knows where it starts. Bounded, not
   // a loop — a floating layer takes no row out of any column's flow, so the
   // guidance it was moved clear of cannot move because it moved.
-  const workspace = stagedWorkspace(view) !== undefined;
   const envelope = routeDrawerRect(
     view.size,
     guidanceBottomOf(probed.manifest, fitted.value),
@@ -6268,6 +6305,8 @@ export function* prepareFrame(
     sessionMaterialize: sessions.materialize,
     message: shown,
     guidance: guidanceRows,
+    headerRefusal,
+    drawerHelp,
     refusal: refusalRows,
     rail: rail.value,
     drawer: envelope,
@@ -6443,18 +6482,7 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
     body: bodyOf(SIDEKICK_BODY, "inspection", "content"),
     drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
     queue: widthOf(measured, manifest.contents.find((content) => content.id === QUEUE_TEXT)?.id),
-    guidance: guidanceWidthOf(manifest, measured),
   };
-}
-
-/**
- * The guidance row's own width, where a frame draws the guidance below the body.
- *
- * None otherwise, so the guidance is fitted to the selected work it is part of.
- */
-function guidanceWidthOf(manifest: ReplLayoutManifest, measured: ReplMeasured): number | undefined {
-  const drawn = flatten(manifest.root).some((box) => box.id === GUIDANCE_ROW);
-  return drawn ? widthOf(measured, GUIDANCE_ROW) : undefined;
 }
 
 function widthOf(measured: ReplMeasured, id: string | undefined): number {

@@ -162,7 +162,7 @@ export function* pasteDraft(
   if (witness !== "") {
     yield* page.until(
       `the Draft holding ${JSON.stringify(witness)}`,
-      (one) => one.found(witness, DRAFT_VALUE) > 0,
+      (one) => one.shows(DRAFT) && one.found(witness, DRAFT_VALUE) > 0,
     );
   }
 }

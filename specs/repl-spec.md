@@ -493,10 +493,10 @@ what you typed stays exactly as you typed it, character for character. When that
 entry has both settled and finished coming down, the same draft becomes the next
 entry — and only then does it leave the input and the location.
 
-When the entry asks a question, the footer says so on one row and nothing else
-happens: no drawer opens itself, nothing takes focus, the route does not move and
-the Sessions filter does not change. Activate that row — with Enter or a pointer —
-and the question's drawer opens: the whole message, and then
+When the entry asks a question, the identity header says an entry is waiting for
+an answer and the existing Answer action in History remains available. Focus,
+the route and the Sessions filter stay where they were. Activate Answer with
+Enter or a pointer and the question's drawer opens: the whole message, and then
 every field the schema declares, with its title, its description, whether it
 is required, and exactly the values it will accept. All of that is one ordered
 whole, and it is that whole — not the message alone — that scrolls when it is
@@ -1317,14 +1317,13 @@ existing destinations when visible. No background update can issue a late
 restoration. The rows below the body stay where they are — `[history]` and `[exit]` stay
 reachable from inside an open drawer, where they belong to that drawer.
 
-A route drawer begins below the whole contextual guidance block, so the screen
-goes on saying how to close the drawer in front of it. The block is as many rows
-as its words need at that width, and all of them stay visible: the drawer starts
-at the later of its own old top and the row below the last of them. Its columns
-and its bottom edge are unchanged, so the rows it moves down are spent out of
-its own window rather than taken from the footer — a shorter window, still whole
-by scrolling. The narrow outlet keeps its existing drawer, and the Sidekick's
-pane-local question and Configure rectangles are its pane's own and unaffected.
+The drawer is measured within the space between the identity header and History,
+in the rectangle its owner already uses. Its fixed title and actions carry its
+guidance. Above Content, show what Enter does for the focused control, Esc to
+close, Tab to move, and PageUp/PageDown to read more. Keep reading and editing
+directions appropriate to the focused control. Fit this guidance to the measured
+drawer width in as many rows as it takes. Its rows reduce the scrolling Content
+window, and the fixed controls stay reachable.
 
 The right pane's two tabs are its heading: `Bindings` and `Sidekick` side by
 side on one row, in that order, each name said once and neither repeated by a
@@ -1352,13 +1351,10 @@ following, and a previous chat stays where it was put while the current one
 works. None of this is in the location: a copied location restores the chat
 somebody selected and promises no scroll position.
 
-Above the reading, one block says what the execution is doing, what the focused
-control does, the way back to the draft and how to move. It takes as many rows
-as its words need and says all of them: a direction you cannot see is a
-direction you do not have, so nothing is shortened or dropped to keep it on one
-row. The narrow profile uses compact state and action labels; longer reading
-directions wrap at the measured width. A refusal's explanation is paid out over
-rows the same way, at whole words.
+Outside drawers, the identity header explains readiness and the next available
+action. The Round editor uses its own heading for editing guidance, including
+Enter for a newline and Tab for Send. Other focus destinations remain available
+through the existing Tab traversal and Ctrl+G hints.
 
 The Round editor holds this execution's next document. Its Send runs that
 document. Enter in `Message Sidekick` asks the Sidekick. Typing and Backspace reach whichever holds focus and leave the other
@@ -1637,9 +1633,9 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | an identity row; Transcript (36 columns), selected work or its Round editor (54 columns at this width), and Sidekick (70 columns); the drawer layer; a readiness row; then compact History |
+| `160x36` and larger | an identity row; Transcript (36 columns), selected work or its Round editor (54 columns at this width), and Sidekick (70 columns); the drawer layer; the round bar at the base of selected work, followed immediately by compact History on the last row |
 | `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
-| `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. Drawer guidance and the readiness row remain available |
+| `72x20` and larger | One full-width routed surface below Sessions, Entries and Sidekick. History is the final row. The Entries round bar and Sidekick's compact selected-entry row, when present, are directly above History. The identity header shows execution status across all three outlets. |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
@@ -1842,21 +1838,19 @@ decides which rows and which controls exist. So what you can see, focus and clic
 are the same set, at every size, and a row the frame has no room for is never
 described as though it had somewhere to be.
 
-A refusal of one action — a submission the entry ahead of it has not made room
-for, a navigation that selects nothing, a pause this process cannot perform —
-appears beside the control that was refused, shortened with an ellipsis when the
-row is too narrow for all of it. It does not replace the screen.
-
-History is the last row. The contextual readiness row above it reports the
-current execution state and any action needed to continue. A refusal of an
-action takes that row while it applies. A presented drawer uses the row for its
-own guidance, including how to leave it and how to reach or scroll its fields.
+Execution action refusals use the identity header. Field refusals stay with their
+fields and Sidekick notices stay in the Sidekick pane. History is the last row
+and follows the round bar directly whenever the bar is visible. History keeps
+its existing map, head or frozen-position label, and admitted actions.
 
 ## What the screen says the execution is doing
 
-The readiness row leads with the execution state, then gives any action needed
-to proceed. It fits the available width and keeps the state readable at every
-supported size.
+The identity header shows execution readiness and any action needed to proceed,
+using compact wording at 72×20. Reserve space for the meaningful state and next
+action before fitting the session identifier. Keep the usage control reachable.
+A visible execution action refusal appears within the header, wrapping at the
+measured width as needed. Keep readiness visible during a refusal. The refusal
+gives the reason and any available recovery.
 
 **Readiness is read from the file and from this process together.** The durable
 side cannot answer it alone: a root close is recorded the moment a document
@@ -1864,7 +1858,7 @@ settles, while the task that produced it is still coming down, and a submission
 taken in that window has nowhere to go. So there is a state between "settled" and
 "ready" — the close is retained, the entry's task has not been joined, and no
 successor may start yet. It resolves without anybody typing: when the teardown
-finishes, the row says the next entry may start.
+finishes, the header says the next entry may start.
 
 The states a person can tell apart: no entry yet; an entry running; an entry
 waiting for an answer; an entry waiting for a permission; an entry whose close is
@@ -1878,7 +1872,7 @@ starts nothing and appends nothing. When the entry it named finishes, that refus
 goes rather than contradicting the sentence above it. A document that cannot be
 admitted and an answer a schema rejected are refusals of the thing itself: they
 stay until the thing changes, and the schema's complaint stays under the field it
-is about rather than in the row that says what the execution is doing.
+is about rather than with execution readiness.
 
 The session marks readiness refusals when raising them with a namespaced,
 nonenumerable own property carrying its normalized sentence. Across loaded
@@ -3256,8 +3250,8 @@ normalized event is an explicit failure.
 Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
-keystroke never edits a field nobody is looking at, and the row above the surface
-says how to get back to the draft while that is the case. The decoder names
+keystroke never edits a field nobody is looking at. Ctrl+G, then 4 reaches the
+editor or New Round when the Draft destination is offered. The decoder names
 navigation keys, including Alt+Up/Down and the Control-G focus prefix. Unassigned
 Control or Alt chords are discarded as a unit. Control-J,
 Enter carrying only Shift, and Enter carrying both Control and Alt — how
