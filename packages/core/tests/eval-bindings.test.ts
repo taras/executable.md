@@ -4,7 +4,7 @@
  * Tests cross-block binding sharing, shadowing, empty blocks,
  * undeclared references, and syntax errors.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -17,7 +17,11 @@ import { asText, completion, failureMessage } from "./helpers.ts";
 import type { Json } from "../src/types.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
 const OWNER = "packages/core/tests/eval-bindings.test.ts";
@@ -205,92 +209,87 @@ function* inheriting(
 }
 
 describe("Tier T5 — initial root bindings a trusted host supplies", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
-  journalCase(
-    "EB1: copies a nested record before installations run, and document code reads it",
-    "<eval>",
-    function* (stream) {
-      // The caller's own graph, which the second installation rewrites while the
-      // run is in flight.
-      const held = { plan: { title: "Ship the REPL", steps: 2 }, flags: ["draft", "ready"] };
-      const ran: string[] = [];
-      const rewrite = (): void => {
-        held.plan.title = "Replaced";
-        held.plan.steps = 99;
-        held.flags[1] = "replaced";
-      };
+  it("EB1: copies a nested record before installations run, and document code reads it", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    // The caller's own graph, which the second installation rewrites while the
+    // run is in flight.
+    const held = { plan: { title: "Ship the REPL", steps: 2 }, flags: ["draft", "ready"] };
+    const ran: string[] = [];
+    const rewrite = (): void => {
+      held.plan.title = "Replaced";
+      held.plan.steps = 99;
+      held.flags[1] = "replaced";
+    };
 
-      const { output } = yield* inheriting(
-        stream,
-        [
-          "```js eval",
-          "const read = `${plan.title}/${plan.steps}/${flags[1]}`;",
-          "```",
-          "",
-          "Read: {read}",
-          "",
-        ].join("\n"),
-        held,
-        [
-          // The same sentinel the refusal rows below rely on. It records here, in
-          // an execution that proceeds, which is what makes an empty `ran` there a
-          // fact about the refusal rather than about the helper.
-          watching(ran),
-          {
-            *prepare() {
-              rewrite();
-            },
-            *install() {
-              rewrite();
-            },
+    const { output } = yield* inheriting(
+      stream,
+      [
+        "```js eval",
+        "const read = `${plan.title}/${plan.steps}/${flags[1]}`;",
+        "```",
+        "",
+        "Read: {read}",
+        "",
+      ].join("\n"),
+      held,
+      [
+        // The same sentinel the refusal rows below rely on. It records here, in
+        // an execution that proceeds, which is what makes an empty `ran` there a
+        // fact about the refusal rather than about the helper.
+        watching(ran),
+        {
+          *prepare() {
+            rewrite();
           },
-        ],
-      );
+          *install() {
+            rewrite();
+          },
+        },
+      ],
+    );
 
-      expect(ran).toEqual(["install", "prepare"]);
-      // The values the invocation captured, not the ones the caller holds now.
-      expect(output).toContain("Read: Ship the REPL/2/ready");
-      // And the caller's graph was never frozen on its behalf: it is still the
-      // mutable object it was lent as.
-      expect(Object.isFrozen(held.plan)).toBe(false);
-      expect(held.plan.title).toBe("Replaced");
-    },
-  );
+    expect(ran).toEqual(["install", "prepare"]);
+    // The values the invocation captured, not the ones the caller holds now.
+    expect(output).toContain("Read: Ship the REPL/2/ready");
+    // And the caller's graph was never frozen on its behalf: it is still the
+    // mutable object it was lent as.
+    expect(Object.isFrozen(held.plan)).toBe(false);
+    expect(held.plan.title).toBe("Replaced");
+  });
 
-  journalCase(
-    "EB1: the execution may mutate its own copy, and the caller's graph never moves",
-    "<eval>",
-    function* (stream) {
-      // A durable eval value is ordinary mutable data: an entry that inherits a
-      // list and appends to it is doing what any block does to any binding. What
-      // isolation has to mean is that the *caller's* graph is unreachable from
-      // here, not that the document is handed something it cannot work with.
-      const held = { items: ["first"], counts: { runs: 1 } };
+  it("EB1: the execution may mutate its own copy, and the caller's graph never moves", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    // A durable eval value is ordinary mutable data: an entry that inherits a
+    // list and appends to it is doing what any block does to any binding. What
+    // isolation has to mean is that the *caller's* graph is unreachable from
+    // here, not that the document is handed something it cannot work with.
+    const held = { items: ["first"], counts: { runs: 1 } };
 
-      const { output } = yield* inheriting(
-        stream,
-        [
-          "```js eval",
-          'items.push("second");',
-          "counts.runs += 1;",
-          'const read = `${items.join("/")}/${counts.runs}`;',
-          "```",
-          "",
-          "Read: {read}",
-          "",
-        ].join("\n"),
-        held,
-      );
+    const { output } = yield* inheriting(
+      stream,
+      [
+        "```js eval",
+        'items.push("second");',
+        "counts.runs += 1;",
+        'const read = `${items.join("/")}/${counts.runs}`;',
+        "```",
+        "",
+        "Read: {read}",
+        "",
+      ].join("\n"),
+      held,
+    );
 
-      expect(output).toContain("Read: first/second/2");
-      // The caller's own graph is exactly as it was lent: neither frozen on its
-      // behalf, nor reachable from what the document just edited.
-      expect(held.items).toEqual(["first"]);
-      expect(held.counts).toEqual({ runs: 1 });
-      expect(Object.isFrozen(held.items)).toBe(false);
-    },
-  );
+    expect(output).toContain("Read: first/second/2");
+    // The caller's own graph is exactly as it was lent: neither frozen on its
+    // behalf, nor reachable from what the document just edited.
+    expect(held.items).toEqual(["first"]);
+    expect(held.counts).toEqual({ runs: 1 });
+    expect(Object.isFrozen(held.items)).toBe(false);
+  });
 
   it("EB1: refuses `props` as an initial binding rather than silently dropping it", function* () {
     // The props namespace belongs to the execution that validated it, so an
@@ -349,26 +348,23 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     }
   });
 
-  journalCase(
-    "EB1: an authored export replaces an initial value through the ordinary rules",
-    "<eval>",
-    function* (stream) {
-      const { output } = yield* inheriting(
-        stream,
-        [
-          "```js eval",
-          "const inherited = 'authored';",
-          "```",
-          "",
-          "Value: {inherited} Other: {kept}",
-          "",
-        ].join("\n"),
-        { inherited: "retained", kept: "retained" },
-      );
+  it("EB1: an authored export replaces an initial value through the ordinary rules", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const { output } = yield* inheriting(
+      stream,
+      [
+        "```js eval",
+        "const inherited = 'authored';",
+        "```",
+        "",
+        "Value: {inherited} Other: {kept}",
+        "",
+      ].join("\n"),
+      { inherited: "retained", kept: "retained" },
+    );
 
-      expect(output).toContain("Value: authored Other: retained");
-    },
-  );
+    expect(output).toContain("Value: authored Other: retained");
+  });
 
   it("EB1: refuses input that is not JSON before any installation or document work", function* () {
     const cycle: { self?: unknown } = {};
@@ -407,40 +403,36 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     }
   });
 
-  journalCase(
-    "EB1: a retained `__proto__` binding is installed as an ordinary name",
-    "<eval>",
-    function* (stream) {
-      // Its own enumerable member, which is what `JSON.parse` produces and
-      // therefore what a journal read back from a file can hold. Nothing here sets
-      // a prototype: an object literal would have, which is why this is defined.
-      const record: Record<string, Json> = {};
-      Object.defineProperty(record, "__proto__", {
-        value: "retained",
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-      expect(Object.keys(record)).toEqual(["__proto__"]);
-      expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+  it("EB1: a retained `__proto__` binding is installed as an ordinary name", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    // Its own enumerable member, which is what `JSON.parse` produces and
+    // therefore what a journal read back from a file can hold. Nothing here sets
+    // a prototype: an object literal would have, which is why this is defined.
+    const record: Record<string, Json> = {};
+    Object.defineProperty(record, "__proto__", {
+      value: "retained",
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    expect(Object.keys(record)).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
 
-      const { output } = yield* inheriting(
-        stream,
-        ["```js eval", "const copied = `${__proto__}`;", "```", "", "Read: {copied}", ""].join(
-          "\n",
-        ),
-        record,
-      );
+    const { output } = yield* inheriting(
+      stream,
+      ["```js eval", "const copied = `${__proto__}`;", "```", "", "Read: {copied}", ""].join("\n"),
+      record,
+    );
 
-      // The document read the name, rather than reading whatever the engine's
-      // prototype setter left behind — which under some runtimes is nothing at all.
-      expect(output).toContain("Read: retained");
-    },
-  );
+    // The document read the name, rather than reading whatever the engine's
+    // prototype setter left behind — which under some runtimes is nothing at all.
+    expect(output).toContain("Read: retained");
+  });
 
   {
     const name = "EB1: ordinary execute() inherits nothing, so the same document fails";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         const source = "```js eval\nconst read = inherited;\n```\n";
 

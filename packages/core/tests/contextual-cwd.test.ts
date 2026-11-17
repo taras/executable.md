@@ -14,8 +14,7 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * will rest on.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -32,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 /**
  * The boundary under test: a component that installs a directory as the
@@ -139,11 +139,8 @@ function cwdCase(
 ): void {
   it(name, function* () {
     const fixture = yield* useFixture();
-    yield* captureTestJournal(
-      { owner: "packages/core/tests/contextual-cwd.test.ts", name },
-      join(fixture.root, "doc.md"),
-      (stream) => body(fixture, stream),
-    );
+    const stream = yield* useJournalStream(join(fixture.root, "doc.md"));
+    yield* body(fixture, stream);
   });
 }
 
@@ -151,6 +148,7 @@ const PWD = "```sh exec\npwd\n```";
 
 describe("Tier CW — Contextual working directory", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach("packages/core/tests/contextual-cwd.test.ts"));
 
   // CW1: the contract a component rebinding `Env.cwd` depends on.
   cwdCase(
