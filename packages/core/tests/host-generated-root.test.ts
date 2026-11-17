@@ -31,7 +31,7 @@ import { Component } from "../mod.ts";
  * work it started has finished unwinding.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, spawn, suspend, useScope, withResolvers } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
@@ -56,7 +56,11 @@ import { join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { cliRuntime, runShell, shellQuote } from "@executablemd/test-support/launch";
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 import { contributeDocumentation, Documentation } from "../src/documentation-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -682,6 +686,7 @@ function markerPackage(
 const MARKER_PROSE = "## Marker\n\nTHE MARKER CHAPTER.\n";
 
 describe("Tier E3 — the documentation this execution captured", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/host-generated-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("E3a: a named lookup renders a package chapter the root does not admit", function* () {
@@ -732,55 +737,53 @@ describe("Tier E3 — the documentation this execution captured", () => {
     expect(counted.reads).toBe(1);
   });
 
-  heldHostCase(
-    "E3b: late Documentation middleware in the document's own scope changes nothing",
-    function* (stream) {
-      const counted = { reads: 0 };
-      const invoked: string[] = [];
-      const answer: { lookup?: Result<GeneratedXmdRootResult> } = {};
+  it("E3b: late Documentation middleware in the document's own scope changes nothing", function* () {
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
+    const counted = { reads: 0 };
+    const invoked: string[] = [];
+    const answer: { lookup?: Result<GeneratedXmdRootResult> } = {};
 
-      // Installed in an `Execution.document` wrapper: after canonical capture and
-      // before the document workflow, which is the scope the evaluation runner is
-      // attached inside. A recollection there *would* encounter this, so the row
-      // distinguishes a captured reference from one rebuilt at evaluation time.
-      // Middleware installed only in a sibling caller scope could not.
-      yield* Execution.around({
-        *document([claimed], next) {
-          yield* Documentation.around({
-            *contributions([read], nextChapter) {
-              const held = yield* nextChapter(read);
-              return held.map((one) =>
-                one.source.owner === "@executablemd/test"
-                  ? {
-                      ...one,
-                      source: { ...one.source, text: "## Marker\n\nSUBSTITUTED LATE.\n" },
-                    }
-                  : one,
-              );
-            },
-          });
-          yield* next(claimed);
-        },
-      });
+    // Installed in an `Execution.document` wrapper: after canonical capture and
+    // before the document workflow, which is the scope the evaluation runner is
+    // attached inside. A recollection there *would* encounter this, so the row
+    // distinguishes a captured reference from one rebuilt at evaluation time.
+    // Middleware installed only in a sibling caller scope could not.
+    yield* Execution.around({
+      *document([claimed], next) {
+        yield* Documentation.around({
+          *contributions([read], nextChapter) {
+            const held = yield* nextChapter(read);
+            return held.map((one) =>
+              one.source.owner === "@executablemd/test"
+                ? {
+                    ...one,
+                    source: { ...one.source, text: "## Marker\n\nSUBSTITUTED LATE.\n" },
+                  }
+                : one,
+            );
+          },
+        });
+        yield* next(claimed);
+      },
+    });
 
-      const run = yield* withHeldHost(
-        { stream, installations: [markerPackage(MARKER_PROSE, counted), selecting([probe()])] },
-        function* (open) {
-          answer.lookup = yield* open.execution.evaluateGeneratedXmdRoot(
-            request('<Output>\n<Syntax names={["Marker"]} />\n</Output>\n', invoked),
-          );
-        },
-      );
+    const run = yield* withHeldHost(
+      { stream, installations: [markerPackage(MARKER_PROSE, counted), selecting([probe()])] },
+      function* (open) {
+        answer.lookup = yield* open.execution.evaluateGeneratedXmdRoot(
+          request('<Output>\n<Syntax names={["Marker"]} />\n</Output>\n', invoked),
+        );
+      },
+    );
 
-      expect(run.completion.ok).toBe(true);
-      const described = rendered(answer.lookup ?? { ok: false, error: new Error("none") }).output;
-      expect(described).toContain("THE MARKER CHAPTER.");
-      expect(described).not.toContain("SUBSTITUTED LATE.");
-      // No new collection happened, which is the mechanism rather than the
-      // symptom: the count is the same before and after the evaluation.
-      expect(counted.reads).toBe(1);
-    },
-  );
+    expect(run.completion.ok).toBe(true);
+    const described = rendered(answer.lookup ?? { ok: false, error: new Error("none") }).output;
+    expect(described).toContain("THE MARKER CHAPTER.");
+    expect(described).not.toContain("SUBSTITUTED LATE.");
+    // No new collection happened, which is the mechanism rather than the
+    // symptom: the count is the same before and after the evaluation.
+    expect(counted.reads).toBe(1);
+  });
 
   it("E3c: two live executions each keep the capture they made", function* () {
     const mine = { reads: 0 };
@@ -1794,6 +1797,7 @@ describe("Tier E8 — the captured selection holds canonical Syntax once", () =>
 });
 
 describe("Tier E9 — an availability refusal is the call's answer", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/host-generated-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -1880,31 +1884,29 @@ describe("Tier E9 — an availability refusal is the call's answer", () => {
    * evaluator lives in, so the four decided members and the class name the
    * request uses are checked at the published boundary.
    */
-  heldHostCase(
-    "E9d: the public request is the four-member shape, typed through core/host",
-    function* (stream) {
-      const invoked: string[] = [];
-      const classes: readonly GeneratedEffectClass[] = ["read"];
-      const asked: GeneratedXmdRequest = {
-        id: "turn-1",
-        source: "<Output>\n<Probe />\n</Output>\n",
-        allow: classes,
-        position: { line: 1, column: 1, offset: 0 },
-      };
-      const answer: { value?: Result<GeneratedXmdRootResult> } = {};
-      const run = yield* withHeldHost(
-        { stream, installations: [selecting([probe(invoked)])] },
-        function* (open) {
-          answer.value = yield* open.execution.evaluateGeneratedXmdRoot(asked);
-        },
-      );
+  it("E9d: the public request is the four-member shape, typed through core/host", function* () {
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
+    const invoked: string[] = [];
+    const classes: readonly GeneratedEffectClass[] = ["read"];
+    const asked: GeneratedXmdRequest = {
+      id: "turn-1",
+      source: "<Output>\n<Probe />\n</Output>\n",
+      allow: classes,
+      position: { line: 1, column: 1, offset: 0 },
+    };
+    const answer: { value?: Result<GeneratedXmdRootResult> } = {};
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe(invoked)])] },
+      function* (open) {
+        answer.value = yield* open.execution.evaluateGeneratedXmdRoot(asked);
+      },
+    );
 
-      expect(run.completion.ok).toBe(true);
-      expect(rendered(answer.value ?? { ok: false, error: new Error("none") }).output).toContain(
-        "probed",
-      );
-    },
-  );
+    expect(run.completion.ok).toBe(true);
+    expect(rendered(answer.value ?? { ok: false, error: new Error("none") }).output).toContain(
+      "probed",
+    );
+  });
 });
 
 describe("R6 — generated ordinary identity remains execution-owned", () => {

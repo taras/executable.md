@@ -1,4 +1,4 @@
-import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { when } from "@effectionx/converge";
@@ -23,7 +23,7 @@ import {
 } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/testing/tests/use-testing.test.ts";
-const documentCase = documentCases(OWNER);
+const documentCase = documentCases();
 
 function* drain(
   subscription: Subscription<string, string>,

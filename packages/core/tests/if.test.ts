@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
@@ -21,9 +21,10 @@ import { Sample } from "../src/sample-api.ts";
 import { readTextFile } from "@effectionx/fs";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-
-const journalCase = journalCases("packages/core/tests/if.test.ts");
+import {
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 interface IfRun {
   segments: Segment[];
@@ -443,10 +444,11 @@ describe("Tier IF — printed errors carry source positions", () => {
 });
 
 describe("Tier IF — document execution", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/if.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("IF39: only the selected branch reaches the journal", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -481,47 +483,41 @@ describe("Tier IF — document execution", () => {
     expect(evaluated).not.toContain("UNSELECTED_RAN");
   });
 
-  journalCase(
-    "IF40: an effect in the unselected branch never happens",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "test.md": [
-          "<If condition={false}>",
-          "```js eval",
-          "throw new Error('UNSELECTED_EFFECT');",
-          "```",
-          "<Else>selected</Else>",
-          "</If>",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("IF40: an effect in the unselected branch never happens", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "test.md": [
+        "<If condition={false}>",
+        "```js eval",
+        "throw new Error('UNSELECTED_EFFECT');",
+        "```",
+        "<Else>selected</Else>",
+        "</If>",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("selected");
-      expect(output).not.toContain("UNSELECTED_EFFECT");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("selected");
+    expect(output).not.toContain("UNSELECTED_EFFECT");
+    expect(output).not.toContain("ERROR");
+  });
 
-  journalCase(
-    "IF41: a component in the unselected branch is never imported",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/Boom.md": "```js eval\noutput('BOOM_RAN');\n```\n",
-        "test.md": "<If condition={false}><Boom /><Else>alt</Else></If>",
-      });
-      yield* useEchoExec();
+  it("IF41: a component in the unselected branch is never imported", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/Boom.md": "```js eval\noutput('BOOM_RAN');\n```\n",
+      "test.md": "<If condition={false}><Boom /><Else>alt</Else></If>",
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("alt");
-      expect(output).not.toContain("BOOM_RAN");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("alt");
+    expect(output).not.toContain("BOOM_RAN");
+    expect(output).not.toContain("ERROR");
+  });
 
   it("IF42: <If> selects the same branch from a restored binding on partial replay", function* () {
     const REPLAY_DOC = [
@@ -570,30 +566,27 @@ describe("Tier IF — document execution", () => {
     expect(evaluated).not.toContain("CLEAN_RAN");
   });
 
-  journalCase(
-    "IF43: an <If> projected through <Content /> resolves the caller's binding",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/Wrap.md": "<Content />",
-        "test.md": [
-          "```js eval",
-          "const ready = false;",
-          "```",
-          "<Wrap>",
-          "<If condition={ready}>READY<Else>WAITING</Else></If>",
-          "</Wrap>",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("IF43: an <If> projected through <Content /> resolves the caller's binding", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/Wrap.md": "<Content />",
+      "test.md": [
+        "```js eval",
+        "const ready = false;",
+        "```",
+        "<Wrap>",
+        "<If condition={ready}>READY<Else>WAITING</Else></If>",
+        "</Wrap>",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("WAITING");
-      expect(output).not.toContain("READY");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("WAITING");
+    expect(output).not.toContain("READY");
+    expect(output).not.toContain("ERROR");
+  });
 });
 
 /**
@@ -603,6 +596,7 @@ describe("Tier IF — document execution", () => {
  * with a selected control that proves the counter would have moved.
  */
 describe("Tier IF — the unselected branch reaches no external mechanism", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/if.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   const PROBE_DOC = (condition: boolean) =>
@@ -643,7 +637,7 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
     return scoped(function* () {
       const reads: string[] = [];
       const commands: string[] = [];
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream("test.md");
       const files: Record<string, string> = {
         "components/Probe.md": "PROBE_BODY",
         "test.md": PROBE_DOC(condition),
