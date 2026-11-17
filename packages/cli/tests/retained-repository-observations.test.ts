@@ -27,7 +27,7 @@
  * therefore resolved nothing and selected nothing.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, race, sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -53,9 +53,9 @@ import type {
 } from "../src/repl/repositories/observation-records.ts";
 import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.ts";
 import { Elicitation } from "@executablemd/core";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useObservationFixture, writeFixtureFile } from "../../git/tests/support/observations.ts";
 import {
-  captureObservationEntry,
   entryCounters,
   methodsCalled,
   readKinds,
@@ -255,70 +255,62 @@ function checkoutOf(fixture: { root: string }, common: string): ReplObservationC
 }
 
 describe("ROB1 — a completed read answers from its record", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/retained-repository-observations.test.ts"));
   {
     const name = "restores all four pages with no git, through a link pointing elsewhere";
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
-        place,
-        function* (stream) {
-          const first = entryCounters();
-          const source = [
-            '<Git.Files limit={1000} as="files" />',
-            "",
-            '<Git.Changes compare="unstaged" as="changes" />',
-            "",
-            '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
-            "",
-            `<Git.File commit="${fixture.c1}" path="src/a.ts" as="source" />`,
-            "",
-            "<Json value={files} />",
-            "",
-            "<Json value={changes} />",
-            "",
-            "<Json value={diff} />",
-            "",
-            "<Json value={source} />",
-            "",
-          ].join("\n");
-          yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 5;\n");
-          const live = yield* runEntry(place, source, stream, first);
-          expect(live.refusal).toBe(undefined);
-          const recorded = observations(live.events);
-          expect(recorded.map((entry) => entry.record.operation)).toEqual([
-            "files",
-            "changes",
-            "diff",
-            "file",
-          ]);
-          // Everything the first entry read is now wrong: the files are gone, the
-          // checkout is gone, and the directory the entry was opened through points
-          // somewhere else.
-          yield* rm(fixture.root, { recursive: true, force: true });
-          yield* repoint(place, place.root);
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const first = entryCounters();
+      const source = [
+        '<Git.Files limit={1000} as="files" />',
+        "",
+        '<Git.Changes compare="unstaged" as="changes" />',
+        "",
+        '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
+        "",
+        `<Git.File commit="${fixture.c1}" path="src/a.ts" as="source" />`,
+        "",
+        "<Json value={files} />",
+        "",
+        "<Json value={changes} />",
+        "",
+        "<Json value={diff} />",
+        "",
+        "<Json value={source} />",
+        "",
+      ].join("\n");
+      yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 5;\n");
+      const live = yield* runEntry(place, source, stream, first);
+      expect(live.refusal).toBe(undefined);
+      const recorded = observations(live.events);
+      expect(recorded.map((entry) => entry.record.operation)).toEqual([
+        "files",
+        "changes",
+        "diff",
+        "file",
+      ]);
+      // Everything the first entry read is now wrong: the files are gone, the
+      // checkout is gone, and the directory the entry was opened through points
+      // somewhere else.
+      yield* rm(fixture.root, { recursive: true, force: true });
+      yield* repoint(place, place.root);
 
-          const second = entryCounters();
-          const again = yield* runEntry(
-            place,
-            source,
-            new InMemoryStream([...live.events]),
-            second,
-          );
-          expect(again.refusal).toBe(undefined);
-          expect(again.output).toBe(live.output);
-          // The handle was never asked for anything: no discovery, no read, and so
-          // no scratch directory and no session underneath either.
-          expect(methodsCalled(second)).toEqual([]);
-          expect(readKinds(second)).toEqual([]);
-        },
-      );
+      const second = entryCounters();
+      const again = yield* runEntry(place, source, new InMemoryStream([...live.events]), second);
+      expect(again.refusal).toBe(undefined);
+      expect(again.output).toBe(live.output);
+      // The handle was never asked for anything: no discovery, no read, and so
+      // no scratch directory and no session underneath either.
+      expect(methodsCalled(second)).toEqual([]);
+      expect(readKinds(second)).toEqual([]);
     });
   }
 });
 
 describe("ROB2 — the record is closed, and named by the request it carries", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/retained-repository-observations.test.ts"));
   it("round-trips all four pages and one refusal", function* () {
     const fixture = yield* useObservationFixture();
     const common = commonDirectoryOf({ root: fixture.root, home: fixture.home, run: fixture.run });
@@ -412,117 +404,101 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
-        place,
-        function* (stream) {
-          const live = yield* runEntry(
-            place,
-            '<Git.Files as="files" />\n',
-            stream,
-            entryCounters(),
-          );
-          expect(live.refusal).toBe(undefined);
-          const recorded = observations(live.events);
-          expect(recorded).toHaveLength(1);
-          const name = recorded[0]?.name ?? "";
-          const sound = soundPayload(live.events);
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const live = yield* runEntry(place, '<Git.Files as="files" />\n', stream, entryCounters());
+      expect(live.refusal).toBe(undefined);
+      const recorded = observations(live.events);
+      expect(recorded).toHaveLength(1);
+      const name = recorded[0]?.name ?? "";
+      const sound = soundPayload(live.events);
 
-          // The control: this history is admitted as it stands, so every refusal
-          // below is about the one thing it changed.
-          yield* admitReplRepositoryHistory(live.events);
+      // The control: this history is admitted as it stands, so every refusal
+      // below is about the one thing it changed.
+      yield* admitReplRepositoryHistory(live.events);
 
-          const broken: [string, string, Json][] = [
-            [
-              "a stated version this host does not implement",
-              name,
-              { ...objectOf(sound), version: 2 },
-            ],
-            [
-              "a fingerprint that is not the request's digest",
-              name,
-              { ...objectOf(sound), fingerprint: "0".repeat(64) },
-            ],
-            ["a name its own request does not produce", `${name} `, sound],
-            [
-              "a page holding more records than the limit asked for",
-              name,
-              {
-                ...objectOf(sound),
-                outcome: {
-                  ok: true,
-                  value: { paths: Array.from({ length: 101 }, (_, i) => `p${i}`), next: null },
-                },
-              },
-            ],
-            [
-              "an operation the request's query is not",
-              name,
-              { ...objectOf(sound), operation: "diff" },
-            ],
-            [
-              "a checkout route this version did not write",
-              name,
-              { ...objectOf(sound), checkout: { root: fixture.root } },
-            ],
-            // Fully shaped, and wrong. Every required member is present, the request,
-            // the fingerprint and the journaled name are untouched, and only the root
-            // names a checkout no placement in this history selected.
-            [
-              "a complete checkout no placement in this history selected",
-              name,
-              {
-                ...objectOf(sound),
-                checkout: {
-                  ...objectOf(soundCheckout(sound)),
-                  root: "/unregistered/other-checkout",
-                },
-              },
-            ],
-            [
-              "a complete checkout under another repository's name",
-              name,
-              {
-                ...objectOf(sound),
-                checkout: { ...objectOf(soundCheckout(sound)), repositoryName: "elsewhere" },
-              },
-            ],
-            [
-              "a complete checkout claiming to be a worktree",
-              name,
-              {
-                ...objectOf(sound),
-                checkout: { ...objectOf(soundCheckout(sound)), worktreeName: "side" },
-              },
-            ],
-            [
-              "a complete checkout under another Git directory",
-              name,
-              {
-                ...objectOf(sound),
-                checkout: {
-                  ...objectOf(soundCheckout(sound)),
-                  commonDirectory: "/unregistered/other-checkout/.git",
-                },
-              },
-            ],
-          ];
+      const broken: [string, string, Json][] = [
+        ["a stated version this host does not implement", name, { ...objectOf(sound), version: 2 }],
+        [
+          "a fingerprint that is not the request's digest",
+          name,
+          { ...objectOf(sound), fingerprint: "0".repeat(64) },
+        ],
+        ["a name its own request does not produce", `${name} `, sound],
+        [
+          "a page holding more records than the limit asked for",
+          name,
+          {
+            ...objectOf(sound),
+            outcome: {
+              ok: true,
+              value: { paths: Array.from({ length: 101 }, (_, i) => `p${i}`), next: null },
+            },
+          },
+        ],
+        [
+          "an operation the request's query is not",
+          name,
+          { ...objectOf(sound), operation: "diff" },
+        ],
+        [
+          "a checkout route this version did not write",
+          name,
+          { ...objectOf(sound), checkout: { root: fixture.root } },
+        ],
+        // Fully shaped, and wrong. Every required member is present, the request,
+        // the fingerprint and the journaled name are untouched, and only the root
+        // names a checkout no placement in this history selected.
+        [
+          "a complete checkout no placement in this history selected",
+          name,
+          {
+            ...objectOf(sound),
+            checkout: {
+              ...objectOf(soundCheckout(sound)),
+              root: "/unregistered/other-checkout",
+            },
+          },
+        ],
+        [
+          "a complete checkout under another repository's name",
+          name,
+          {
+            ...objectOf(sound),
+            checkout: { ...objectOf(soundCheckout(sound)), repositoryName: "elsewhere" },
+          },
+        ],
+        [
+          "a complete checkout claiming to be a worktree",
+          name,
+          {
+            ...objectOf(sound),
+            checkout: { ...objectOf(soundCheckout(sound)), worktreeName: "side" },
+          },
+        ],
+        [
+          "a complete checkout under another Git directory",
+          name,
+          {
+            ...objectOf(sound),
+            checkout: {
+              ...objectOf(soundCheckout(sound)),
+              commonDirectory: "/unregistered/other-checkout/.git",
+            },
+          },
+        ],
+      ];
 
-          for (const [named, recordName, payload] of broken) {
-            let refusal: unknown;
-            try {
-              yield* admitReplRepositoryHistory(
-                replacingObservation(live.events, recordName, payload),
-              );
-            } catch (error) {
-              refusal = error;
-            }
-            expect(`${named}: ${refusal === undefined ? "admitted" : "refused"}`).toBe(
-              `${named}: refused`,
-            );
-          }
-        },
-      );
+      for (const [named, recordName, payload] of broken) {
+        let refusal: unknown;
+        try {
+          yield* admitReplRepositoryHistory(replacingObservation(live.events, recordName, payload));
+        } catch (error) {
+          refusal = error;
+        }
+        expect(`${named}: ${refusal === undefined ? "admitted" : "refused"}`).toBe(
+          `${named}: refused`,
+        );
+      }
     });
   }
 
@@ -531,58 +507,53 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
+
+      // A settled entry, and the same entry left at a question: the route has to
+      // be refused before either is reused, and a completed terminal is reused
+      // without the body that checks the live registry ever being entered.
+      const settled = yield* runEntry(place, source, stream, entryCounters());
+      expect(settled.refusal).toBe(undefined);
+      const unfinished = yield* leftEntry(
         place,
-        function* (stream) {
-          const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
-
-          // A settled entry, and the same entry left at a question: the route has to
-          // be refused before either is reused, and a completed terminal is reused
-          // without the body that checks the live registry ever being entered.
-          const settled = yield* runEntry(place, source, stream, entryCounters());
-          expect(settled.refusal).toBe(undefined);
-          const unfinished = yield* leftEntry(
-            place,
-            [source, '<Elicit schema={{ type: "object" }} as="answer">Carry on?</Elicit>', ""].join(
-              "\n",
-            ),
-            entryCounters(),
-          );
-
-          for (const [named, history] of [
-            ["a completed history", settled.events],
-            ["an unfinished history", unfinished],
-          ] as const) {
-            const elsewhere = replacingObservation(history, observations(history)[0]?.name ?? "", {
-              ...objectOf(soundPayload(history)),
-              checkout: {
-                ...objectOf(soundCheckout(soundPayload(history))),
-                root: "/unregistered/other-checkout",
-              },
-            });
-            const counted = entryCounters();
-            const replayed = yield* runEntry(
-              place,
-              source,
-              new InMemoryStream([...elsewhere]),
-              counted,
-            );
-            // Refused through the production trusted admission, so no page is bound
-            // and the original output is not reproduced.
-            expect(`${named}: ${replayed.refusal === undefined ? "reused" : "refused"}`).toBe(
-              `${named}: refused`,
-            );
-            expect(`${named}: ${replayed.refusal ?? ""}`).toContain(
-              "names a checkout no placement in this history selected",
-            );
-            expect(replayed.output).not.toContain("src/a.ts");
-            // And decided from the history alone: nothing opened a checkout, resolved
-            // a path or ran `git` to find out.
-            expect(`${named}: ${methodsCalled(counted).join(",")}`).toBe(`${named}: `);
-          }
-        },
+        [source, '<Elicit schema={{ type: "object" }} as="answer">Carry on?</Elicit>', ""].join(
+          "\n",
+        ),
+        entryCounters(),
       );
+
+      for (const [named, history] of [
+        ["a completed history", settled.events],
+        ["an unfinished history", unfinished],
+      ] as const) {
+        const elsewhere = replacingObservation(history, observations(history)[0]?.name ?? "", {
+          ...objectOf(soundPayload(history)),
+          checkout: {
+            ...objectOf(soundCheckout(soundPayload(history))),
+            root: "/unregistered/other-checkout",
+          },
+        });
+        const counted = entryCounters();
+        const replayed = yield* runEntry(
+          place,
+          source,
+          new InMemoryStream([...elsewhere]),
+          counted,
+        );
+        // Refused through the production trusted admission, so no page is bound
+        // and the original output is not reproduced.
+        expect(`${named}: ${replayed.refusal === undefined ? "reused" : "refused"}`).toBe(
+          `${named}: refused`,
+        );
+        expect(`${named}: ${replayed.refusal ?? ""}`).toContain(
+          "names a checkout no placement in this history selected",
+        );
+        expect(replayed.output).not.toContain("src/a.ts");
+        // And decided from the history alone: nothing opened a checkout, resolved
+        // a path or ran `git` to find out.
+        expect(`${named}: ${methodsCalled(counted).join(",")}`).toBe(`${named}: `);
+      }
     });
   }
 
@@ -591,31 +562,21 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
-        place,
-        function* (stream) {
-          const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
-          const live = yield* runEntry(place, source, stream, entryCounters());
-          expect(live.refusal).toBe(undefined);
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
+      const live = yield* runEntry(place, source, stream, entryCounters());
+      expect(live.refusal).toBe(undefined);
 
-          // The control the route check must not break: a cold reuse whose checkout
-          // is gone. The route is authorized by the history's own placement, and
-          // nothing consults a filesystem to decide it.
-          yield* rm(fixture.root, { recursive: true, force: true });
-          yield* repoint(place, place.root);
-          const counted = entryCounters();
-          const again = yield* runEntry(
-            place,
-            source,
-            new InMemoryStream([...live.events]),
-            counted,
-          );
-          expect(again.refusal).toBe(undefined);
-          expect(again.output).toBe(live.output);
-          expect(methodsCalled(counted)).toEqual([]);
-        },
-      );
+      // The control the route check must not break: a cold reuse whose checkout
+      // is gone. The route is authorized by the history's own placement, and
+      // nothing consults a filesystem to decide it.
+      yield* rm(fixture.root, { recursive: true, force: true });
+      yield* repoint(place, place.root);
+      const counted = entryCounters();
+      const again = yield* runEntry(place, source, new InMemoryStream([...live.events]), counted);
+      expect(again.refusal).toBe(undefined);
+      expect(again.output).toBe(live.output);
+      expect(methodsCalled(counted)).toEqual([]);
     });
   }
 
@@ -648,6 +609,7 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
 });
 
 describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/retained-repository-observations.test.ts"));
   const replacement = "creates no record when a replacement answers above the provider";
   it(replacement, function* () {
     const fixture = yield* useObservationFixture();
@@ -655,45 +617,40 @@ describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
     const counted = entryCounters();
     const answered: string[] = [];
 
-    yield* captureObservationEntry(
-      { owner: "packages/cli/tests/retained-repository-observations.test.ts", name: replacement },
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
+    const run = yield* runEntry(
       place,
-      function* (stream) {
-        const run = yield* runEntry(
-          place,
-          ['<Git.Diff compare="unstaged" as="diff" />', "", "<Json value={diff} />", ""].join("\n"),
-          stream,
-          counted,
-          {
-            *between(): Operation<void> {
-              yield* GitQuery.around({
-                // deno-lint-ignore require-yield
-                *diff([invocation]: [GitDiffInvocation]): Operation<GitDiffResult> {
-                  answered.push(invocation.request.kind);
-                  return {
-                    comparison: { compare: "unstaged" },
-                    text: "answered above",
-                    offset: 0,
-                    length: 14,
-                    next: null,
-                  };
-                },
-              });
+      ['<Git.Diff compare="unstaged" as="diff" />', "", "<Json value={diff} />", ""].join("\n"),
+      stream,
+      counted,
+      {
+        *between(): Operation<void> {
+          yield* GitQuery.around({
+            // deno-lint-ignore require-yield
+            *diff([invocation]: [GitDiffInvocation]): Operation<GitDiffResult> {
+              answered.push(invocation.request.kind);
+              return {
+                comparison: { compare: "unstaged" },
+                text: "answered above",
+                offset: 0,
+                length: 14,
+                next: null,
+              };
             },
-          },
-        );
-
-        expect(run.refusal).toBe(undefined);
-        expect(answered).toEqual(["diff"]);
-        expect(run.output).toContain("answered above");
-        // Answered entirely above the provider, so no provider was reached: no
-        // native read, no scratch directory and no observation record.
-        expect(observations(run.events)).toEqual([]);
-        // Ambient discovery still happened — the component asks which repository is
-        // in scope before it asks anything of it — but not one native *read* ran.
-        expect(readKinds(counted)).toEqual([]);
+          });
+        },
       },
     );
+
+    expect(run.refusal).toBe(undefined);
+    expect(answered).toEqual(["diff"]);
+    expect(run.output).toContain("answered above");
+    // Answered entirely above the provider, so no provider was reached: no
+    // native read, no scratch directory and no observation record.
+    expect(observations(run.events)).toEqual([]);
+    // Ambient discovery still happened — the component asks which repository is
+    // in scope before it asks anything of it — but not one native *read* ran.
+    expect(readKinds(counted)).toEqual([]);
   });
 
   const delegation = "records the request a delegating replacement actually passed down";
@@ -702,79 +659,65 @@ describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
     const place = yield* useEntryPlace(fixture);
     const counted = entryCounters();
 
-    yield* captureObservationEntry(
-      { owner: "packages/cli/tests/retained-repository-observations.test.ts", name: delegation },
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
+    const run = yield* runEntry(
       place,
-      function* (stream) {
-        const run = yield* runEntry(
-          place,
-          ['<Git.Diff compare="unstaged" as="diff" />', ""].join("\n"),
-          stream,
-          counted,
-          {
-            *between(): Operation<void> {
-              yield* GitQuery.around({
-                diff: ([invocation]: [GitDiffInvocation], next): Operation<GitDiffResult> =>
-                  next({ ...invocation, request: { ...invocation.request, limit: 7 } }),
-              });
-            },
-          },
-        );
-
-        expect(run.refusal).toBe(undefined);
-        const recorded = observations(run.events);
-        expect(recorded).toHaveLength(1);
-        // The request the provider received, not the one the document wrote.
-        expect(recorded[0]?.record.request.query).toEqual({
-          kind: "diff",
-          comparison: { compare: "unstaged" },
-          paths: null,
-          offset: 0,
-          limit: 7,
-          cursor: null,
-        });
+      ['<Git.Diff compare="unstaged" as="diff" />', ""].join("\n"),
+      stream,
+      counted,
+      {
+        *between(): Operation<void> {
+          yield* GitQuery.around({
+            diff: ([invocation]: [GitDiffInvocation], next): Operation<GitDiffResult> =>
+              next({ ...invocation, request: { ...invocation.request, limit: 7 } }),
+          });
+        },
       },
     );
+
+    expect(run.refusal).toBe(undefined);
+    const recorded = observations(run.events);
+    expect(recorded).toHaveLength(1);
+    // The request the provider received, not the one the document wrote.
+    expect(recorded[0]?.record.request.query).toEqual({
+      kind: "diff",
+      comparison: { compare: "unstaged" },
+      paths: null,
+      offset: 0,
+      limit: 7,
+      cursor: null,
+    });
   });
 });
 
 describe("ROB4 — a saved refusal replays, and a new read sees today", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/retained-repository-observations.test.ts"));
   {
     const name = "retains an ordinary bad-revision refusal and raises it again with no git";
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
-        place,
-        function* (stream) {
-          const first = entryCounters();
-          const source = [
-            "<PrintErrors>",
-            '<Git.File commit="no-such-revision" path="src/a.ts" as="source" />',
-            "Source: {source}",
-            "</PrintErrors>",
-            "",
-          ].join("\n");
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const first = entryCounters();
+      const source = [
+        "<PrintErrors>",
+        '<Git.File commit="no-such-revision" path="src/a.ts" as="source" />',
+        "Source: {source}",
+        "</PrintErrors>",
+        "",
+      ].join("\n");
 
-          const live = yield* runEntry(place, source, stream, first, {});
-          expect(live.refusal).toBe(undefined);
-          expect(live.output).toContain("names no commit in the selected repository");
-          const recorded = observations(live.events);
-          expect(recorded).toHaveLength(1);
-          expect(recorded[0]?.record.outcome.ok).toBe(false);
+      const live = yield* runEntry(place, source, stream, first, {});
+      expect(live.refusal).toBe(undefined);
+      expect(live.output).toContain("names no commit in the selected repository");
+      const recorded = observations(live.events);
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.record.outcome.ok).toBe(false);
 
-          const replayed = entryCounters();
-          const again = yield* runEntry(
-            place,
-            source,
-            new InMemoryStream([...live.events]),
-            replayed,
-          );
-          expect(again.output).toBe(live.output);
-          expect(methodsCalled(replayed)).toEqual([]);
-        },
-      );
+      const replayed = entryCounters();
+      const again = yield* runEntry(place, source, new InMemoryStream([...live.events]), replayed);
+      expect(again.output).toBe(live.output);
+      expect(methodsCalled(replayed)).toEqual([]);
     });
   }
 
@@ -880,60 +823,54 @@ function countingVerifier(count: { starts: number }): CommitVerifier {
 }
 
 describe("ROB6 — a commit read's page and verification receipt are history", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/retained-repository-observations.test.ts"));
   {
     const name = "replays a verified read with no Git and no verifier after everything moved";
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const head = fixture.run("rev-parse", "HEAD");
+      const source = [
+        '<Git.Commit ref="HEAD" verify={true} yq="." as="commit" />',
+        "",
+        "<Json value={commit} />",
+        "",
+      ].join("\n");
+      const first = entryCounters();
+      const verified = { starts: 0 };
+      const live = yield* runEntry(place, source, stream, first, {
+        verifier: countingVerifier(verified),
+      });
+      expect(live.refusal).toBe(undefined);
+      expect(verified.starts).toBe(1);
+      expect(live.output).toContain(head);
+      expect(live.output).toContain("git_verify_commit_result");
+      expect(observations(live.events).map((entry) => entry.record.operation)).toEqual(["commit"]);
+
+      // HEAD moves, the trust configuration names a verifier that is not there,
+      // and then the checkout is deleted and the entry's directory points away.
+      fixture.run("commit", "--allow-empty", "-m", "moved");
+      fixture.run("config", "gpg.ssh.program", "./missing-verifier");
+      yield* rm(fixture.root, { recursive: true, force: true });
+      yield* repoint(place, place.root);
+
+      const second = entryCounters();
+      const again = { starts: 0 };
+      const replayed = yield* runEntry(
         place,
-        function* (stream) {
-          const head = fixture.run("rev-parse", "HEAD");
-          const source = [
-            '<Git.Commit ref="HEAD" verify={true} yq="." as="commit" />',
-            "",
-            "<Json value={commit} />",
-            "",
-          ].join("\n");
-          const first = entryCounters();
-          const verified = { starts: 0 };
-          const live = yield* runEntry(place, source, stream, first, {
-            verifier: countingVerifier(verified),
-          });
-          expect(live.refusal).toBe(undefined);
-          expect(verified.starts).toBe(1);
-          expect(live.output).toContain(head);
-          expect(live.output).toContain("git_verify_commit_result");
-          expect(observations(live.events).map((entry) => entry.record.operation)).toEqual([
-            "commit",
-          ]);
-
-          // HEAD moves, the trust configuration names a verifier that is not there,
-          // and then the checkout is deleted and the entry's directory points away.
-          fixture.run("commit", "--allow-empty", "-m", "moved");
-          fixture.run("config", "gpg.ssh.program", "./missing-verifier");
-          yield* rm(fixture.root, { recursive: true, force: true });
-          yield* repoint(place, place.root);
-
-          const second = entryCounters();
-          const again = { starts: 0 };
-          const replayed = yield* runEntry(
-            place,
-            source,
-            new InMemoryStream([...live.events]),
-            second,
-            {
-              verifier: countingVerifier(again),
-            },
-          );
-          expect(replayed.refusal).toBe(undefined);
-          expect(replayed.output).toBe(live.output);
-          expect(methodsCalled(second)).toEqual([]);
-          expect(readKinds(second)).toEqual([]);
-          expect(again.starts).toBe(0);
+        source,
+        new InMemoryStream([...live.events]),
+        second,
+        {
+          verifier: countingVerifier(again),
         },
       );
+      expect(replayed.refusal).toBe(undefined);
+      expect(replayed.output).toBe(live.output);
+      expect(methodsCalled(second)).toEqual([]);
+      expect(readKinds(second)).toEqual([]);
+      expect(again.starts).toBe(0);
     });
   }
 
@@ -942,52 +879,47 @@ describe("ROB6 — a commit read's page and verification receipt are history", (
     it(name, function* () {
       const fixture = yield* useObservationFixture();
       const place = yield* useEntryPlace(fixture);
-      yield* captureObservationEntry(
-        { owner: "packages/cli/tests/retained-repository-observations.test.ts", name },
-        place,
-        function* (stream) {
-          const reached = withResolvers<void>();
-          const release = withResolvers<void>();
-          let finished = false;
-          const held: CommitVerifier = function* (request) {
-            try {
-              reached.resolve();
-              yield* release.operation;
-              return yield* denoCommitVerifier()(request);
-            } finally {
-              finished = true;
-            }
-          };
-          try {
-            const task = yield* spawn(() =>
-              runEntry(
-                place,
-                [
-                  '<Git.Commit ref="HEAD" verify={true} yq=".sha" as="commit" />',
-                  '<File path="after-read.md">{commit.value}</File>',
-                ].join("\n"),
-                stream,
-                entryCounters(),
-                { verifier: held },
-              ),
-            );
-            yield* race([
-              reached.operation,
-              (function* (): Operation<never> {
-                yield* sleep(30_000);
-                throw new Error("the read never reached its verifier");
-              })(),
-            ]);
-            yield* task.halt();
-            // The verifier's own teardown finished before the halt returned.
-            expect(finished).toBe(true);
-          } finally {
-            release.resolve();
-          }
-          expect(observations(yield* stream.readAll())).toEqual([]);
-          expect(yield* exists(join(fixture.root, "after-read.md"))).toBe(false);
-        },
-      );
+      const stream = yield* useJournalStream(join(place.root, "entry.md"));
+      const reached = withResolvers<void>();
+      const release = withResolvers<void>();
+      let finished = false;
+      const held: CommitVerifier = function* (request) {
+        try {
+          reached.resolve();
+          yield* release.operation;
+          return yield* denoCommitVerifier()(request);
+        } finally {
+          finished = true;
+        }
+      };
+      try {
+        const task = yield* spawn(() =>
+          runEntry(
+            place,
+            [
+              '<Git.Commit ref="HEAD" verify={true} yq=".sha" as="commit" />',
+              '<File path="after-read.md">{commit.value}</File>',
+            ].join("\n"),
+            stream,
+            entryCounters(),
+            { verifier: held },
+          ),
+        );
+        yield* race([
+          reached.operation,
+          (function* (): Operation<never> {
+            yield* sleep(30_000);
+            throw new Error("the read never reached its verifier");
+          })(),
+        ]);
+        yield* task.halt();
+        // The verifier's own teardown finished before the halt returned.
+        expect(finished).toBe(true);
+      } finally {
+        release.resolve();
+      }
+      expect(observations(yield* stream.readAll())).toEqual([]);
+      expect(yield* exists(join(fixture.root, "after-read.md"))).toBe(false);
     });
   }
 
