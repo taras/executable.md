@@ -89,14 +89,19 @@ function copyRecorder(routing: CopyRouting) {
       result = yield* scoped(() =>
         withHostCopyRoute(
           function* (source, destination) {
-            yield* copyReplayContext();
-            const hold = yield* routing.route(source, destination);
-            if (hold !== undefined) {
-              yield* checkCopyPublication();
-              yield* hold;
-              covered = true;
+            try {
+              yield* copyReplayContext();
+              const hold = yield* routing.route(source, destination);
+              if (hold !== undefined) {
+                yield* checkCopyPublication();
+                yield* hold;
+                covered = true;
+              }
+              yield* copyReplayContext();
+            } catch (error) {
+              // A delegating layer may recover before the composed call settles.
+              throw yield* failCopy(error);
             }
-            yield* copyReplayContext();
           },
           (function* () {
             return yield* unitOutcome(perform(), { operation: "copy", phase: "access" });

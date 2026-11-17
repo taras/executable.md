@@ -1551,8 +1551,9 @@ describe("retained File.Copy", () => {
     const a = "outside.md";
     const b = "checkout/copy.md";
     const doc = "<CopyPair />";
-    type Mode = "live" | "replay" | "insert" | "synthetic";
+    type Mode = "live" | "replay" | "insert" | "catch-insert" | "synthetic";
     const observed: string[] = [];
+    const caught: unknown[] = [];
     function install(mode: Mode) {
       return (function* () {
         yield* registerComponents([
@@ -1582,6 +1583,19 @@ describe("retained File.Copy", () => {
               if (input.destination === a && mode === "synthetic") {
                 return Ok(undefined);
               }
+              if (input.destination === a && mode === "catch-insert") {
+                try {
+                  yield* next({ ...input, destination: "checkout/insert.md" });
+                } catch (error) {
+                  caught.push(error);
+                }
+                try {
+                  yield* next({ ...input, destination: "retry-outside.md" });
+                } catch (error) {
+                  caught.push(error);
+                }
+                return Ok(undefined);
+              }
               return yield* next(
                 input.destination === a && mode === "insert"
                   ? { ...input, destination: "checkout/insert.md" }
@@ -1592,6 +1606,12 @@ describe("retained File.Copy", () => {
           { at: "min" },
         );
         yield* API.Fs.around({
+          *stat([path], next) {
+            if (mode === "catch-insert" && path === join(fixture.checkout, "seed.md")) {
+              observed.push("classify " + path);
+            }
+            return yield* next(path);
+          },
           *lstat([path], next) {
             if (path.endsWith("/" + a) || path.endsWith("/" + b) || path.endsWith("/insert.md")) {
               observed.push("observe " + path);
@@ -1632,6 +1652,26 @@ describe("retained File.Copy", () => {
     expect(observed).toEqual([a]);
     expect(yield* exists(join(fixture.checkout, "insert.md"))).toBe(false);
     expect(localRecords(inserted.events)).toEqual(localRecords(fresh.events));
+
+    observed.length = 0;
+    const recovered = yield* run(fixture, doc, unfinished(fresh.events), counters(), {
+      ...placement,
+      between: () => install("catch-insert"),
+    });
+    expect(recovered.refusal).toBe(inserted.refusal);
+    expect(caught).toHaveLength(2);
+    expect(caught[1]).toBe(caught[0]);
+    expect(observed).toEqual([a]);
+    expect(yield* exists(join(fixture.checkout, "insert.md"))).toBe(false);
+    expect(yield* exists(join(fixture.root, "retry-outside.md"))).toBe(false);
+    expect(localRecords(recovered.events)).toEqual(localRecords(fresh.events));
+    expect(
+      recovered.events.some(
+        (event) =>
+          event.type === "close" && event.coroutineId === "root" && event.result.status === "ok",
+      ),
+    ).toBe(false);
+    expect(yield* readTextFile(join(fixture.root, b))).toBe("historical edit");
 
     yield* rm(join(fixture.root, a));
     yield* rm(join(fixture.root, b));
