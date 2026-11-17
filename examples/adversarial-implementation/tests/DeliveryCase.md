@@ -92,7 +92,7 @@ git symbolic-ref --short HEAD
  {change:{stable:false},status:"source_changed"},
  {change:{revision:"0".repeat(40)},status:"source_changed"},
  {change:{branch:"another-branch"},status:"source_changed"},
- {change:{draft:true},status:"publication_pending"},
+ {change:{draft:true},status:"review_pending"},
  {change:{state:"closed",merged:true,mergeRevision:"1".repeat(40)},status:"delivered"}
 ]} let="change">
 <File path="remote.json"><Json value={{...remote,...change.change}} /></File>
@@ -108,6 +108,28 @@ git symbolic-ref --short HEAD
 <Ticket.Capture as="contradictory"><Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="unexpectedReceipt" /></Ticket.Capture>
 <AssertEquals actual={contradictory.status} expected="failed" />
 <If condition={!contradictory.failure.includes("receipt differs")}><Fail message={"contradictory reconciliation returned: " + JSON.stringify(contradictory)} /></If>
+<Dir path={delivery.directory + "/review-" + revision}>
+<File path="receipt.json">{originalReceipt}</File>
+<File.Delete path="source-before.json" />
+<File.Delete path="source-after.json" />
+</Dir>
+<Let as="older" value={"2".repeat(40)} />
+<Dir path={delivery.directory + "/review-" + older}><File path="assignment.json"><Json value={{revision:older}} /></File></Dir>
+<Delivery.Status delivery={delivery} number={7} as="ambiguous" />
+<AssertEquals actual={ambiguous.nextAction} expected="select_original_review" />
+<Dir path={fixture.repository}>
+<File path="remote.json"><Json value={{...remote,draft:true}} /></File>
+```bash exec as="adoptedEntry"
+{input.runner} {entryArguments} --props-action submit --props-revision {revision}
+```
+</Dir>
+<If condition={adoptedEntry.exitCode !== 0}><Fail message={adoptedEntry.stderr + adoptedEntry.stdout} /></If>
+<Parse schema={{type:"object"}} as="adopted">{adoptedEntry.stdout}</Parse>
+<AssertEquals actual={[adopted.pin.revision,adopted.status,adopted.review.result.verdict]} expected={[revision,"ready_pending","pass"]} />
+<Delivery.Status delivery={delivery} number={7} revision={older} as="originalStatus" />
+<AssertEquals actual={[originalStatus.revision,originalStatus.pin.revision,originalStatus.nextAction]} expected={[older,revision,"reconcile_original_review"]} />
+<Ticket.Text path={delivery.directory + "/called.json"} as="callsAfterAdoption" />
+<AssertEquals actual={callsAfterAdoption} expected={calledBefore} />
 <Dir path={fixture.repository}>
 <File path="legacy.fixture">A changed source after review.</File>
 ```bash exec as="changedSource"

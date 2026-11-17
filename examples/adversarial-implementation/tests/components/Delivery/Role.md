@@ -3,10 +3,15 @@ props: {type: object, properties: {delivery: {type: object}, revision: {type: st
 ---
 <Let as="work" value={props.delivery.work} />
 <Let as="primary" value={props.position === 0} />
-<Let as="behavior" value={primary ? ({unavailable:"unavailable",configuration:"refused","turn-failed":"turn-failed",exhausted:"turn-failed",partial:"partial","unjoined-primary":"unjoined",outside:"outside",failed:"unjoined"}[work] ?? "reply") : work === "exhausted" ? "refused" : "reply"} />
+<Let as="behavior" value={primary ? ({unavailable:"unavailable",configuration:"refused","turn-failed":"turn-failed","fallback-roundtrip":"turn-failed",exhausted:"turn-failed",partial:"partial","unjoined-primary":"unjoined",outside:"outside",failed:"unjoined"}[work] ?? "reply") : work === "exhausted" ? "refused" : "reply"} />
 <Let as="selected" value={{state:"selected",choices:props.choices,model:props.choices[0],advertised:[...props.choices],failure:null}} />
-<Let as="verdict" value={work === "blocked" ? "blocked" : work === "repair" ? "changes_required" : "pass"} />
-<Let as="review" value={{revision:work === "wrong-head" ? "0".repeat(40) : props.revision,verdict,summary:"Reviewed the assigned behavior.",acceptance:work === "missing-clause" ? [] : props.delivery.policy.acceptance.map(clause => clause.id),findings:["repair","false-pass"].includes(work) ? [{blocking:true,description:"A blocking regression remains."}] : []}} />
+<Let as="repairRequested" value={false} />
+<If condition={work === "delivery-journey"}>
+<Dir path={props.delivery.directory}><Glob include={["changes-" + props.revision]} as="requests" /></Dir>
+<Let as="repairRequested" value={requests.length !== 0} />
+</If>
+<Let as="verdict" value={work === "blocked" ? "blocked" : (work === "repair" || repairRequested) ? "changes_required" : "pass"} />
+<Let as="review" value={{revision:work === "wrong-head" ? "0".repeat(40) : props.revision,verdict,summary:"Reviewed the assigned behavior.",acceptance:work === "missing-clause" ? [] : props.delivery.policy.acceptance.map(clause => clause.id),findings:(repairRequested || ["repair","false-pass"].includes(work)) ? [{blocking:true,description:"A blocking regression remains."}] : []}} />
 <Let as="reply" value={primary && work === "malformed" ? "This is not a review." : JSON.stringify(review)} />
 <Let as="base" value={{schema:"delivery-review-outcome.v1",reviewer:props.reviewer,catalog:selected,turn:null}} />
 <If condition={work === "completion-repeat"}>
@@ -23,6 +28,17 @@ props: {type: object, properties: {delivery: {type: object}, revision: {type: st
 <Parse schema={{type:"array"}} as="prior">{calledText}</Parse>
 </If>
 <Dir path={props.delivery.directory}><File path="called.json"><Json value={[...prior,call]} /></File></Dir>
+<If condition={work === "delivery-journey" || work === "fallback-roundtrip"}>
+<Let as="gate" value={"'" + props.delivery.directory.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="joinedGate"
+for attempt in $(seq 1 400); do
+  if ! test -e {gate}/hold || test -e {gate}/release; then exit 0; fi
+  sleep 0.05
+done
+exit 1
+```
+<If condition={joinedGate.exitCode !== 0}><Fail message="The fixture reviewer hold was not released." /></If>
+</If>
 <If condition={behavior === "unjoined"}><Fail message="The original provider operation failed." /></If>
 <Dir path={props.attempt}><File path="outcome.json"><Json value={outcome} /></File></Dir>
 <If condition={behavior === "outside"}><Fail message="Workflow session identity changed. Reconcile the original conversation before prompting; its identity receipt is unchanged." /></If>

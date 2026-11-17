@@ -21,6 +21,12 @@ Status: {status.status}
 
 Revision: {reportRevision}
 
+<If condition={status.local != null}>
+Local head: {status.local.head}
+
+Pull request head: {status.remote.observedRevision ?? status.remote.revision}
+</If>
+
 Next action: {status.nextAction}
 
 <Each in={status.required} let="gate">
@@ -29,6 +35,10 @@ Next action: {status.nextAction}
 
 <If condition={status.review != null}>
 Independent review: {status.review.result.verdict}
+
+<If condition={status.reviewPublication?.state === "verified"}>
+Published review comment {status.reviewPublication.url}
+</If>
 
 {status.review.result.summary}
 

@@ -10,6 +10,7 @@ ssh-keygen -q -t ed25519 -N '' -f signer
 printf 'workflow-test ' > allowed-signers
 cat signer.pub >> allowed-signers
 git -C repository init -q
+printf '%s\n' /bin/gh /remote.json /remote-next.json /ready-count.txt /interrupt-input.json /interrupt.out /interrupt.err /status.out /status.err /closeout.out /closeout.err /reconcile.out /reconcile.err /review.out /review.err >> repository/.git/info/exclude
 git -C repository config user.name Workflow
 git -C repository config user.email workflow@example.invalid
 git -C repository config commit.gpgsign true

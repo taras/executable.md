@@ -26,11 +26,23 @@ completion turn can supply the review.
 <Parse schema={{type:"object"}} as="assignment">{assignmentText}</Parse>
 <If condition={JSON.stringify(assignment) !== JSON.stringify(assigned)}><Fail message="The original review assignment or response schema differs from the recorded delivery requirement. Preserve the original rejection; schema changes require an explicit applicable amendment decision outside this action. This reconciliation action starts no provider prompt." /></If>
 <If condition={read.state.effective === null}><Fail message={"The selected review attempt has no joined review reply: " + read.state.attempts[read.state.candidate.position].reason + " This reconciliation action starts no provider prompt."} /></If>
+<Dir path={attempt}><Glob include={["raw.txt","receipt.json"]} as="derived" /></Dir>
+<Dir path={attempt}><Glob include={["source-before.json","source-after.json"]} as="sourceFiles" /></Dir>
+<If condition={sourceFiles.length !== 0}>
+<If condition={sourceFiles.length !== 2}><Fail message="The review has incomplete source observations. Preserve the original attempt." /></If>
+<Ticket.Text path={attempt + "/source-before.json"} as="beforeText" />
+<Ticket.Text path={attempt + "/source-after.json"} as="afterText" />
+<Let as="sourceSchema" value={{type:"object",properties:{head:{const:props.revision},clean:{const:true},branch:{type:["string","null"]},headHistory:{type:["string","null"],pattern:"^[0-9a-f]{40}$"}},required:["head","clean","branch"]}} />
+<SafeParse schema={sourceSchema} as="before">{beforeText}</SafeParse>
+<SafeParse schema={sourceSchema} as="after">{afterText}</SafeParse>
+<If condition={!before.ok || !after.ok || before.value.branch !== after.value.branch || before.value.headHistory !== after.value.headHistory}><Fail message="Source changed during review. Preserve the joined reply on its original SHA for reconciliation." /></If>
+<Let as="historicalReceipt" value={before.value.headHistory === undefined && derived.includes("receipt.json")} />
+<If condition={before.value.headHistory == null && !historicalReceipt}><Fail message="The review has no usable HEAD history observation. Preserve the original attempt for reconciliation." /></If>
+</If>
 <Ticket.Text path={attempt + "/execution.json"} as="executionText" />
 <Parse schema={{type:"object",properties:{status:{const:"completed"},failure:{type:"null"}},required:["status","failure"],additionalProperties:false}} as="execution">{executionText}</Parse>
 <Ticket.Text path={attempt + "/outcome.json"} as="outcomeText" />
 <Parse schema={{type:"object",properties:{turn:{type:"object",properties:{state:{const:"reply"},reply:{type:"string"}},required:["state","reply"],additionalProperties:false}},required:["turn"]}} as="returned">{outcomeText}</Parse>
-<Dir path={attempt}><Glob include={["raw.txt","receipt.json"]} as="derived" /></Dir>
 <If condition={!derived.includes("raw.txt")}>
 <If condition={!props.publish}><Fail message="The joined review has no saved raw reply. Use the explicit reconcile action; do not repeat the review." /></If>
 <Dir path={attempt}><File path="raw.txt">{returned.turn.reply}</File></Dir>
@@ -50,8 +62,10 @@ completion turn can supply the review.
 </Else>
 </If>
 <If condition={props.publish}>
+<If condition={sourceFiles.length === 0 && !derived.includes("receipt.json")}>
 <Ticket.Checkout repository={props.delivery.repository} as="checkout" />
 <If condition={checkout.head !== props.revision || !checkout.clean}><Fail message="Source changed since the review. Preserve its result; the current source needs its own evidence." /></If>
+</If>
 <If condition={!derived.includes("receipt.json")}><Dir path={attempt}><File path="receipt.json"><Json value={receipt} /></File></Dir></If>
 </If>
-<Return value={receipt} />
+<Return value={{...receipt,model:read.state.attempts[read.state.candidate.position].model}} />

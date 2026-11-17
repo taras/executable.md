@@ -35,25 +35,26 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </TempDir>
 </Test>
 
-<Test name="the public delivery action admits one Astra ACP turn during an overlapping review" timeout="120s">
+<Test name="explicit delivery pins review through overlap, source movement, repair and readiness" timeout="270s">
+<Each in={["repair","remote","local"]} let="mode">
 <TempDir>
 <Fixture.Repository as="fixture" />
-<Dir path={fixture.repository}>
-```bash exec as="identity"
-git rev-parse HEAD
-git symbolic-ref --short HEAD
-```
-<Let as="revision" value={identity.stdout.trim().split("\n")[0]} />
-<Let as="branch" value={identity.stdout.trim().split("\n")[1]} />
-<Let as="policy" value={{repository:"taras/executable.md",reviewer:{provider:"claude",model:"fable",effort:null,session:"independent"},acceptance:[{id:"behavior",source:"accepted.md",requirement:"Preserve the accepted behavior."}]}} />
-<Delivery.Prepare task={{work:"ACP overlap",repository:fixture.repository,directory:fixture.directory,inputs:["accepted.md"],sessions:{planner:"planner",implementor:"implementor",architect:"architect"},delivery:policy}} inputs={[{path:"accepted.md",content:"Preserve the accepted behavior."}]} as="delivery" />
-<Dir path={delivery.directory}>
-<File path="requirements.json"><Json value={delivery} /></File>
-<File path="feedback.json"><Json value={{status:"feedback_ready",revision}} /></File>
-</Dir>
-<File path="remote.json"><Json value={{revision,branch,base:"main",draft:false,state:"open",merged:false,mergeRevision:null,stable:true,ciGreen:true,ci:{status:"completed",conclusion:"success"},main:{revision,run:{status:"completed",conclusion:"success"}},mainRepair:false}} /></File>
-<Fixture.ReviewOverlap command={runner} directory={delivery.directory} revision={revision} />
-</Dir>
+<Fixture.DeliveryJourney fixture={fixture} root={root} command={runner} mode={mode} />
+</TempDir>
+</Each>
+</Test>
+
+<Test name="round-trip checkout movement holds a joined review on its submitted SHA" timeout="90s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.DeliveryJourney fixture={fixture} root={root} command={runner} mode="roundtrip" />
+</TempDir>
+</Test>
+
+<Test name="round-trip checkout movement holds a failed Fable review before replacement" timeout="90s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.DeliveryJourney fixture={fixture} root={root} command={runner} mode="fallback-roundtrip" />
 </TempDir>
 </Test>
 
