@@ -9,8 +9,9 @@
  * child — so the ordering, the retained records and the refusals are the
  * production ones, with only the provider's own product replaced.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { ensure, scoped, spawn, until, withResolvers } from "effection";
@@ -51,6 +52,7 @@ import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/run
 import type { Json } from "../../core/src/types.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const OWNER = "packages/agent/tests/agent-session-launch.test.ts";
 
 /** A synthetic GitHub token, format-realistic and assembled here. */
 const CANARY = ["ghp", "_", ALPHABET.slice(0, 36)].join("");
@@ -367,7 +369,6 @@ interface Run {
 function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
   const stub = options.stub ?? createLaunchStub();
   const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], notices: [], order: [] };
-  const stream = options.stream ?? new InMemoryStream();
   const owned = options.dir === undefined;
   const dir = options.dir ?? path.join(os.tmpdir(), `xmd-sl-${randomUUID()}`);
   yield* ensureDir(dir);
@@ -382,6 +383,7 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
     }
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
+    const stream = options.stream ?? (yield* useJournalStream(docPath));
     // The document's own directory is the contextual cwd, so an authored
     // relative path resolves the way it would for someone running xmd there.
     yield* API.Env.around({
@@ -562,6 +564,7 @@ function retainedPhases(events: DurableEvent[]): string[] {
 const LAUNCH = "<Session.Launch>\nYou are the implementor.\n</Session.Launch>\n";
 
 describe("Tier SL — native session launch", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SL1: without a provider the launch fails, and nothing is reserved or spawned", function* () {
     const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], notices: [], order: [] };
     const dir = path.join(os.tmpdir(), `xmd-sl-${randomUUID()}`);
@@ -576,7 +579,7 @@ describe("Tier SL — native session launch", () => {
       // Registered, but with no root provider: `prompt()` and `launch()` alike
       // fall through to the base handlers.
       yield* installAgentComponents();
-      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+      const execution = yield* execute({ path: docPath, stream: yield* useJournalStream(docPath) });
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {
@@ -620,7 +623,7 @@ describe("Tier SL — native session launch", () => {
           options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
         },
       });
-      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+      const execution = yield* execute({ path: docPath, stream: yield* useJournalStream(docPath) });
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {
@@ -937,6 +940,7 @@ describe("Tier SL — native session launch", () => {
  * managed to return.
  */
 describe("Tier FS — the final public launch surface", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FS1: middleware that returns a completion without delegating settles nothing", function* () {
     // The original exploit, on the surface that replaced it. The handler sees
     // the request, does not pass it on, and answers with a complete-looking
@@ -1448,6 +1452,7 @@ const OWED: MaterializationPlan = {
 };
 
 describe("Tier MR — retaining and replaying the materialization turn", () => {
+  beforeEach(journalBeforeEach(OWNER));
   function owing(overrides: Partial<LaunchStub> = {}): LaunchStub {
     return createLaunchStub({ materialization: OWED, ...overrides });
   }
@@ -1763,6 +1768,7 @@ const CONFIGURED_LAUNCH = [
 ].join("\n");
 
 describe("Tier SC — configured native launch", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SC1: the routed use and the retained preparation carry the same two values", function* () {
     const run = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true });
 
@@ -1834,6 +1840,7 @@ describe("Tier SC — configured native launch", () => {
  * that route rather than the element the launch was written inside.
  */
 describe("Tier SC — the final routed Session decides a launch", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SC20: narrowing the request to the raw session runs unconfigured", function* () {
     const run = yield* runDoc(CONFIGURED_LAUNCH, {
       declareSession: true,
@@ -1990,6 +1997,7 @@ describe("Tier SJ — configuration in a retained preparation", () => {
  * these rows own is the durable sequence around it.
  */
 describe("Tier SR — configured launch replay", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SR1: a provider that cannot configure the conversation stops at the preparation", function* () {
     const run = yield* runDoc(CONFIGURED_LAUNCH, {
       declareSession: true,
