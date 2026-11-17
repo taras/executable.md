@@ -563,6 +563,24 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(unknown.stdout).toBe("");
   });
 
+  it("SX16: named File.Copy describes the two paths and replay", function* () {
+    const named = yield* runCli(["syntax", "File.Copy"], { cwd: "." }).expect();
+    for (const text of [
+      "**Forms:** `<File.Copy />`",
+      "| `source` | `string` | yes |",
+      "| `destination` | `string` | yes |",
+      "An occupied destination is preserved.",
+      "Ordinary hosts and Markdown tests copy live",
+      "partial host replay",
+      "Workflow Workspace replay restores a published",
+      "Retained REPL replay restores an acknowledged",
+      "Unrecorded copies run live.",
+    ]) {
+      expect(named.stdout).toContain(text);
+    }
+    expect(named.stdout).not.toContain("</File.Copy>");
+  });
+
   it("SX16: engine and selected installed structural names match canonical component references", function* () {
     const plugin = new URL("./fixtures/plugins/structural-reference.mjs", import.meta.url).pathname;
     for (const name of ["If", "All", "Banner", "BannerLine"]) {

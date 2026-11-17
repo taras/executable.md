@@ -1,6 +1,9 @@
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import {
+  API,
+  Permissions,
+  hostFileAccessReason,
   FilesInvariantError,
   filesFailure,
   fileWriteFailure,
@@ -9,6 +12,7 @@ import {
   parseFileWriteSuccess,
 } from "@executablemd/runtime";
 import type {
+  HostFilesAccess,
   FilesHandler,
   FilesOperation,
   FilesPhase,
@@ -16,6 +20,7 @@ import type {
   FileWriteSuccess,
 } from "@executablemd/runtime";
 import { registerFileRecorder, assembleFileCall } from "@executablemd/runtime/files-host";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Around } from "@effectionx/context-api";
 import type { AuthoredFileOperation } from "@executablemd/core/host";
 import type {
@@ -71,6 +76,14 @@ function recordingBody(route: FileRecordingRoute) {
           const result = yield* route("file-write", { ...input }, () => writeOutcome(next(input)));
           return result.ok ? Ok(expectWritten(result.value)) : result;
         },
+        *copyFile([input], next) {
+          const result = yield* route(
+            "file-copy",
+            { cwd: input.cwd, source: input.source, path: input.destination },
+            () => unitOutcome(next(input), { operation: "copy", phase: "access" }),
+          );
+          return result.ok ? Ok(undefined) : result;
+        },
         *deleteFile([input], next) {
           const result = yield* route("file-delete", { ...input }, () =>
             unitOutcome(next(input), { operation: "delete", phase: "access" }),
@@ -93,6 +106,58 @@ export function* useEntryFileRecorder(route: FileRecordingRoute): Operation<Entr
       body.ensure(input, () => ensure(input), authored),
   });
 }
+export function* liveCopyTargets(
+  request: ReplLocalRequest,
+  access: HostFilesAccess | undefined,
+): Operation<Result<{ source: string; destination: string }>> {
+  const { cwd, source, path } = request;
+  if (source === undefined) {
+    throw new FilesInvariantError("protocol");
+  }
+  for (const operand of [source, path]) {
+    const suffix = relative(cwd, resolve(cwd, operand));
+    const reason =
+      operand === ""
+        ? "empty-path"
+        : isAbsolute(operand)
+          ? "absolute-path"
+          : suffix === ".." || suffix.startsWith(".." + sep) || isAbsolute(suffix)
+            ? "lexical-escape"
+            : undefined;
+    if (reason !== undefined) {
+      return Err(filesFailure({ operation: "copy", phase: "lexical", reason }));
+    }
+  }
+  if (
+    !(yield* Permissions.operations.files("read")) ||
+    !(yield* Permissions.operations.files("write"))
+  ) {
+    return Err(
+      filesFailure({ operation: "copy", phase: "resolution", reason: "permission-denied" }),
+    );
+  }
+  const reason =
+    (yield* hostFileAccessReason(access, "read", { cwd, path: source })) ??
+    (yield* hostFileAccessReason(access, "delete", { cwd, path }));
+  if (reason !== undefined) {
+    return Err(filesFailure({ operation: "copy", phase: "resolution", reason }));
+  }
+
+  const from = resolve(cwd, source);
+  const to = resolve(cwd, path);
+  const parent = dirname(to);
+  // The final destination entry can itself be a link. Its parent owns the copy.
+  try {
+    return Ok({
+      source: (yield* API.Fs.operations.realpath(from)) ?? from,
+      destination: resolve((yield* API.Fs.operations.realpath(parent)) ?? parent, basename(to)),
+    });
+  } catch {
+    // The performing provider reports resolution failures in the Files vocabulary.
+    return Ok({ source: from, destination: to });
+  }
+}
+
 function* writeOutcome(call: Operation<Result<unknown>>): Operation<Result<ReplLocalValue>> {
   const produced: unknown = yield* call;
   const settled = settlement(produced);

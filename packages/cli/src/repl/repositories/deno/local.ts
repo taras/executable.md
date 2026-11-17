@@ -136,8 +136,21 @@ export function retainedSelectionAhead(): Operation<boolean> {
 }
 
 /** Whether this operation's own saved result stands at the cursor. */
-export function retainedResultAhead(name: string): Operation<boolean> {
-  return retainedRecordAhead(REPL_REPOSITORY_LOCAL, name);
+export function* retainedResultAhead(
+  name: string,
+  operation?: ReplLocalOperation,
+): Operation<boolean> {
+  if (operation !== "file-copy") {
+    return yield* retainedRecordAhead(REPL_REPOSITORY_LOCAL, name);
+  }
+  const context = yield* DurableContext.expect();
+  const description = context.replayIndex.peekYield(context.coroutineId)?.description;
+  const prefix = replLocalRecordName({ operation, fingerprint: "" }).slice(0, -2);
+  return (
+    description?.type === REPL_REPOSITORY_LOCAL &&
+    typeof description.name === "string" &&
+    description.name.startsWith(prefix)
+  );
 }
 
 /**

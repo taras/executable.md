@@ -32,6 +32,7 @@ import {
   parseFileWritePhase,
 } from "@executablemd/runtime";
 import type {
+  FileCopyInput,
   FilePathInput,
   FilesPhase,
   FilesReason,
@@ -121,6 +122,7 @@ function lexicalReason(error: Error): FilesReason {
 type FileEffectOutcome<Phase extends string> =
   | { readonly kind: "content"; readonly content: string }
   | { readonly kind: "written" }
+  | { readonly kind: "copied" }
   | { readonly kind: "deleted" }
   | { readonly kind: "ensured" }
   | { readonly kind: "paths"; readonly paths: string[] }
@@ -145,6 +147,7 @@ function refused<Phase extends string>(
 const OUTCOME_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ["content", ["kind", "content"]],
   ["written", ["kind"]],
+  ["copied", ["kind"]],
   ["deleted", ["kind"]],
   ["ensured", ["kind"]],
   ["paths", ["kind", "paths"]],
@@ -205,6 +208,9 @@ function parseOutcome<Phase extends string>(
   }
   if (kind === "written") {
     return { kind: "written" };
+  }
+  if (kind === "copied") {
+    return { kind: "copied" };
   }
   if (kind === "deleted") {
     return { kind: "deleted" };
@@ -451,6 +457,37 @@ function* writeOutcome(
   return { kind: "written" };
 }
 
+function* copyOutcome(
+  filesystem: DenoWorkspaceFilesystem,
+  source: string,
+  destination: string,
+): Operation<FileEffectOutcome<FilesPhase>> {
+  if (
+    !(yield* Permissions.operations.files("read")) ||
+    !(yield* Permissions.operations.files("write"))
+  ) {
+    return refused("resolution", "permission-denied");
+  }
+  const info = yield* statPath(filesystem, source);
+  if (!info.ok) {
+    return refused("resolution", refusalReason(info.error));
+  }
+  if (info.value.kind !== "file") {
+    return refused("target", "directory");
+  }
+  try {
+    const bytes = yield* filesystem.readFile(source);
+    // The exclusive writer resolves the parent and classifies the final entry
+    // by dirent before writing, with the same parent inode for both.
+    yield* savepoint(filesystem.writeFile(destination, bytes, undefined, true));
+    return { kind: "copied" };
+  } catch (error) {
+    const reason =
+      journalableWorkspaceCode(error) === "EEXIST" ? "occupied" : refusalReason(asRefusal(error));
+    return refused("access", reason);
+  }
+}
+
 /**
  * Remove one file, or find that there is nothing to remove.
  *
@@ -633,6 +670,7 @@ export interface WorkflowFilesHandler {
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
   readTextFile(input: FilePathInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
+  copyFile(input: FileCopyInput): Operation<Result<void>>;
   deleteFile(input: FilePathInput): Operation<Result<void>>;
   ensureDirectory(input: FilePathInput): Operation<Result<void>>;
   globFiles(input: GlobInput): Operation<Result<string[]>>;
@@ -704,6 +742,40 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
         throw new FilesInvariantError("protocol");
       }
       return Ok(fileWriteSuccess("transaction-staged"));
+    },
+
+    *copyFile(input: FileCopyInput): Operation<Result<void>> {
+      const source = resolveLogicalPath(input.cwd, input.source);
+      const destination = resolveLogicalPath(input.cwd, input.destination);
+      const invalid = !source.ok ? source : !destination.ok ? destination : undefined;
+      if (!source.ok || !destination.ok) {
+        return Err(
+          filesFailure({
+            operation: "copy",
+            phase: "lexical",
+            reason: invalid === undefined ? "operation-failed" : lexicalReason(invalid.error),
+          }),
+        );
+      }
+      const outcome = yield* performed(
+        database,
+        yield* describeFileEffect("copy", JSON.stringify([source.value, destination.value]), {
+          cwd: input.cwd,
+          source: input.source,
+          destination: input.destination,
+        }),
+        parseFilesPhase,
+        (filesystem) => copyOutcome(filesystem, source.value, destination.value),
+      );
+      if (outcome.kind === "refused") {
+        return Err(
+          filesFailure({ operation: "copy", phase: outcome.phase, reason: outcome.reason }),
+        );
+      }
+      if (outcome.kind !== "copied") {
+        throw new FilesInvariantError("protocol");
+      }
+      return Ok(undefined);
     },
 
     *deleteFile(input: FilePathInput): Operation<Result<void>> {
@@ -823,6 +895,9 @@ export function useWorkflowFiles(database: WorkflowRunDatabase): Operation<void>
       },
       *writeTextFile([input]) {
         return yield* handler.writeTextFile(input);
+      },
+      *copyFile([input]) {
+        return yield* handler.copyFile(input);
       },
       *deleteFile([input]) {
         return yield* handler.deleteFile(input);

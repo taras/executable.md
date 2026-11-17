@@ -2369,6 +2369,10 @@ current sandbox.
 
 ### 8.4 Generated XMD
 
+Authored `File.Copy` is available in Core. The standard generated selection
+does not offer it. Preflight refuses its use in that selection before any
+earlier admitted operation performs an effect.
+
 A Prompt may return an XMD fragment rather than an ad hoc file-operation schema.
 The fragment is untrusted input: it carries data, never authorization. Only the
 trusted workflow host offers the vocabulary, and it does so through the ordinary
@@ -3077,6 +3081,20 @@ without attempting creation again. Once committed, creation is not owned by the
 cwd scope: later content failure or cancellation restores the enclosing cwd but
 does not remove the directory. `<Dir>` neither reads nor changes the Repository
 selection in scope.
+
+**Document copy** uses one `workspace_file` effect whose name binds the
+expansion, the copy operation, and the ordered pair of resolved logical paths.
+The live performer checks source read and destination write permission before
+filesystem lookup. It reads the regular source as bytes and uses the logical
+filesystem's exclusive writer to require an existing parent and a vacant
+final entry. The writer uses the same parent inode for classification and
+insertion and creates an independent file.
+
+A completed copy retains exactly `{ kind: "copied" }`. An ordinary refusal
+retains `{ kind: "refused", phase, reason }`. Mutation, resulting root and
+filtered result use the transaction described above. Replay restores a
+published outcome before current permission or filesystem access. A copy
+without a published outcome runs against the retained frontier.
 
 **Document deletion** is one of them. `<File.Delete>` (executable-mdx-spec
 §6.13.1) removes one file from the run's Workspace, resolving its path inside

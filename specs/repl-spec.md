@@ -2286,13 +2286,27 @@ uncertain append establishes no saved value or Unit.
 
 Start the REPL inside a Git checkout and an entry's file work is retained too,
 under the ordinary physical records. The prospective mapped class above uses its
-closed association record. Four operations are
-kept: a self-closing `<File path="…" as="…" />` text read; a paired
+closed association record. The physical records keep a self-closing `<File path="…" as="…" />` text read; a paired
 `<File path="…">…</File>` write, after its content has expanded; a self-closing
-`<File.Delete path="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
+`<File.Delete path="…" />`; a self-closing `<File.Copy source="…" destination="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
 ensures, before its content is entered. The reads, writes and deletions an
 admitted `<Evaluate>` fragment performs are kept on the same terms, because a
 fragment's operations go to the same document filesystem an authored one does.
+
+A copy uses the physical record even when its working directory came from a
+mount. Its identity binds the received working directory and both ordered
+operands. Acknowledged Unit and ordinary refusals restore before permissions,
+path observations, discovery, placement slots or mutation holds. A changed
+operand at that retained position diverges before live routing, including when
+the new destination lies outside coverage.
+
+For a live copy, the resolved destination parent determines coverage and the
+final entry stays intact for classification. Covered managed operands use
+their placement slots. The destination alone determines the checkout mutation
+hold. Owned-root coverage requires no Git lease. Outside coverage the copy is
+live and unrecorded. If native copy completed before an unacknowledged append,
+a continuation attempts the operation live. An occupied destination then
+produces an ordinary refusal with its bytes intact.
 
 What that buys is the one thing experimentation needs: leave an entry at a
 question, come back to the printed location, and the work it already did is not

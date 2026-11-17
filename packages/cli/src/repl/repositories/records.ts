@@ -75,11 +75,17 @@ export const REPL_REPOSITORY_SELECTION = "repl_repository_selection";
 export const RECORD_PREFIX = "executablemd.git.repl-repository";
 
 /** Which local operation a record describes. */
-export type ReplLocalOperation = "file-read" | "file-write" | "file-delete" | "dir-ensure";
+export type ReplLocalOperation =
+  | "file-read"
+  | "file-write"
+  | "file-copy"
+  | "file-delete"
+  | "dir-ensure";
 
 const LOCAL_OPERATIONS: readonly ReplLocalOperation[] = [
   "file-read",
   "file-write",
+  "file-copy",
   "file-delete",
   "dir-ensure",
 ];
@@ -100,6 +106,7 @@ export interface ReplLocalRequest {
   readonly path: string;
   /** The exact expanded content a write asked for; absent for the other three. */
   readonly content?: string;
+  readonly source?: string;
 }
 
 /** The routing facts the entry's ambient discovery found, or their absence. */
@@ -247,7 +254,12 @@ export function parseReplLocalRecord(value: unknown): ReplLocalRecord | undefine
     refusal === undefined
       ? parseSuccess(read["success"], operation)
       : parseRefusal(read["refusal"]);
-  if (outcome === undefined) {
+  if (
+    outcome === undefined ||
+    (operation === "file-copy" &&
+      !outcome.ok &&
+      parseFilesFailure(outcome.error)?.operation !== "copy")
+  ) {
     return undefined;
   }
   return Object.freeze({
@@ -314,6 +326,18 @@ function parseReplLocalRequest(
   value: unknown,
   operation: ReplLocalOperation,
 ): ReplLocalRequest | undefined {
+  if (operation === "file-copy") {
+    const read = members(value, ["cwd", "source", "destination"]);
+    if (read === undefined) {
+      return undefined;
+    }
+    const cwd = string(read.cwd);
+    const source = anyString(read.source);
+    const path = anyString(read.destination);
+    return cwd === undefined || source === undefined || path === undefined
+      ? undefined
+      : Object.freeze({ cwd, source, path });
+  }
   const read =
     operation === "file-write"
       ? members(value, ["cwd", "path", "content"])
@@ -406,6 +430,9 @@ function carried(data: unknown): Error {
 }
 
 function requestJson(request: ReplLocalRequest): Json {
+  if (request.source !== undefined) {
+    return { cwd: request.cwd, source: request.source, destination: request.path };
+  }
   return request.content === undefined
     ? { cwd: request.cwd, path: request.path }
     : { cwd: request.cwd, path: request.path, content: request.content };

@@ -1,7 +1,7 @@
 import { hostFileAccessReason, fileWriteFailure } from "@executablemd/runtime";
 import type { HostFilesAccess } from "@executablemd/runtime";
 import type { AwaitedMountPolicy } from "../../mount-files.ts";
-import { useEntryFileRecorder } from "../../file-recorder.ts";
+import { liveCopyTargets, useEntryFileRecorder } from "../../file-recorder.ts";
 import type { MountFileEntry } from "../../workspace-mount-installation.ts";
 import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
 import type { AuthoredFileOperation } from "@executablemd/core/host";
@@ -143,8 +143,13 @@ function* routed(
       return yield* replay;
     }
   }
-  if (yield* retainedResultAhead(name)) {
+  if (yield* retainedResultAhead(name, operation)) {
     return yield* recordedLocalOperation({ operation, request, perform });
+  }
+
+  const copy = operation === "file-copy" ? yield* liveCopyTargets(request, access) : undefined;
+  if (copy !== undefined && !copy.ok) {
+    return copy;
   }
 
   if (
@@ -162,17 +167,20 @@ function* routed(
     );
   }
 
-  const reason = yield* hostFileAccessReason(
-    access,
-    operation === "file-read"
-      ? "read"
-      : operation === "file-write"
-        ? "write"
-        : operation === "file-delete"
-          ? "delete"
-          : "ensure-directory",
-    request,
-  );
+  const reason =
+    copy === undefined
+      ? yield* hostFileAccessReason(
+          access,
+          operation === "file-read"
+            ? "read"
+            : operation === "file-write"
+              ? "write"
+              : operation === "file-delete"
+                ? "delete"
+                : "ensure-directory",
+          request,
+        )
+      : undefined;
   if (reason !== undefined) {
     return Err(
       operation === "file-write"
@@ -194,8 +202,15 @@ function* routed(
     authored === undefined || mounts === undefined
       ? recordedLocalOperation({ operation, request, perform })
       : mounts.record(authored, request, perform, coverage);
-  const target = yield* targetOf(request);
-  const managed = covering(recorder.placements(), target);
+  const target = copy?.value.destination ?? (yield* targetOf(request));
+  const placements = recorder.placements();
+  const managed = covering(placements, target);
+  if (copy !== undefined) {
+    const source = covering(placements, copy.value.source);
+    if (source !== undefined && source !== managed) {
+      yield* source.own();
+    }
+  }
   if (managed !== undefined) {
     // Placement ownership first, and for a read as much as for a write: what it
     // answers is that one entry at a time owns this managed checkout, which an

@@ -32,6 +32,7 @@ import Cwd, { props as cwdProps, generated as cwdGenerated } from "./Cwd.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import { form as failForm, props as failProps } from "./Fail.ts";
 import Fetch, { generated as fetchGenerated, props as fetchProps } from "./Fetch.ts";
+import { form as fileCopyForm, props as fileCopyProps } from "./FileCopy.ts";
 import Glob, {
   generated as globGenerated,
   props as globProps,
@@ -232,6 +233,17 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       generated: fetchGenerated,
     },
   ),
+  core("File.Copy", fileCopyForm, parseJsonObject(fileCopyProps), {
+    description:
+      'Copy a regular file byte for byte. `<File.Copy source="report.bin" destination="evidence/report.bin" />` ' +
+      "requires an existing destination directory. " +
+      "Both paths are relative to the working directory. An occupied destination is preserved. " +
+      "Ordinary hosts and Markdown tests copy live, as does partial host replay that reaches the copy. " +
+      "Workflow Workspace replay restores a published copy result. Retained REPL replay restores " +
+      "an acknowledged copy in covered storage. Unrecorded copies run live.",
+    as: null,
+    context: null,
+  }),
   core(
     "Glob",
     Glob,

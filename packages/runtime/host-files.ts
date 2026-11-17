@@ -92,7 +92,7 @@ import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { realpath, rmdir } from "node:fs/promises";
+import { constants, copyFile as nativeCopyFile, realpath, rmdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
@@ -100,6 +100,7 @@ import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
 import { Permissions } from "./permissions.ts";
 import type {
+  FileCopyInput,
   FilePathInput,
   FilesHandler,
   FilesOperation,
@@ -121,7 +122,7 @@ import type {
  * observable rather than merely stated.
  */
 export interface HostFilesEvent {
-  readonly operation: "read" | "write" | "delete" | "ensure-directory" | "glob";
+  readonly operation: "copy" | "read" | "write" | "delete" | "ensure-directory" | "glob";
   readonly phase: "target" | "access" | "parents" | "temporary" | "commit" | "cleanup" | "read-dir";
 }
 
@@ -130,6 +131,8 @@ export type HostFilesObserver = (event: HostFilesEvent) => void;
 
 export interface HostFilesOptions {
   readonly observe?: HostFilesObserver;
+  /** Test boundary for the native copy and its settlement. */
+  readonly nativeCopy?: typeof nativeCopyFile;
   readonly access?: HostFilesAccess;
   /**
    * The directory temporary directories are minted under, defaulting to the
@@ -199,7 +202,7 @@ export function* hostFileAccessReason(
   }
   const resolved =
     operation === "delete"
-      ? yield* removalDestination(input)
+      ? yield* entryDestination(input)
       : operation === "ensure-directory"
         ? yield* directoryDestination(input)
         : yield* destination(input);
@@ -352,12 +355,10 @@ function* destination(input: FilePathInput): Operation<Destination> {
 }
 
 /**
- * The path a removal would act on, with the final segment left alone.
+ * The path whose final directory entry a removal or copy addresses.
  *
- * Deletion is the one operation whose target must *not* be resolved. A final
- * symbolic link is the entry the document named, and following it would remove
- * something the document never mentioned — possibly outside the working
- * directory entirely. So only the parent prefix is resolved, and the authored
+ * A final symbolic link is the entry the document named. Only the parent
+ * prefix is resolved, and the authored
  * last segment is put back onto it unresolved. Resolving the parent is what
  * still catches a directory link leading out; leaving the last segment is what
  * keeps a link a link.
@@ -368,7 +369,7 @@ function* destination(input: FilePathInput): Operation<Destination> {
  * an escape. It is classified directly instead, and target classification then
  * refuses it for what it is.
  */
-function* removalDestination(input: FilePathInput): Operation<Destination> {
+function* entryDestination(input: FilePathInput): Operation<Destination> {
   try {
     const base = (yield* API.Fs.operations.realpath(input.cwd)) ?? input.cwd;
     const named = resolve(input.cwd, input.path);
@@ -627,6 +628,83 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     return Ok(fileWriteSuccess("host-committed"));
   }
 
+  function* copyFile(input: FileCopyInput): Operation<Result<void>> {
+    const source = { cwd: input.cwd, path: input.source };
+    const target = { cwd: input.cwd, path: input.destination };
+    const lexical = inadmissible(source) ?? inadmissible(target);
+    if (lexical !== undefined) {
+      return nonWriteFailure("copy", "lexical", lexical);
+    }
+    if (
+      !(yield* Permissions.operations.files("read")) ||
+      !(yield* Permissions.operations.files("write"))
+    ) {
+      return nonWriteFailure("copy", "resolution", "permission-denied");
+    }
+
+    const from = yield* destination(source);
+    if ("reason" in from) {
+      return nonWriteFailure("copy", "resolution", from.reason);
+    }
+    const to = yield* entryDestination(target);
+    if ("reason" in to) {
+      return nonWriteFailure("copy", "resolution", to.reason);
+    }
+    if (
+      options.access !== undefined &&
+      (!permits(options.access, from.path, false) || !permits(options.access, to.path, true))
+    ) {
+      return nonWriteFailure("copy", "resolution", "resolved-escape");
+    }
+
+    notify(observe, { operation: "copy", phase: "target" });
+    try {
+      const info = yield* API.Fs.operations.stat(from.path);
+      if (!info.exists) {
+        return nonWriteFailure("copy", "target", "missing");
+      }
+      if (!info.isFile) {
+        return nonWriteFailure("copy", "target", info.isDirectory ? "directory" : "special-file");
+      }
+      const parent = yield* API.Fs.operations.stat(dirname(to.path));
+      if (!parent.exists || !parent.isDirectory) {
+        return nonWriteFailure("copy", "target", parent.exists ? "not-directory" : "missing");
+      }
+      // Some runtimes follow a dangling final link even with COPYFILE_EXCL.
+      if ((yield* API.Fs.operations.lstat(to.path)).exists) {
+        return nonWriteFailure("copy", "target", "occupied");
+      }
+    } catch (error) {
+      return nonWriteFailure("copy", "target", reasonOf(error));
+    }
+
+    notify(observe, { operation: "copy", phase: "access" });
+    try {
+      yield* scoped(function* () {
+        let pending: Promise<void> | undefined;
+        yield* ensure(function* () {
+          if (pending !== undefined) {
+            yield* until(pending);
+          }
+        });
+        const operation = options.nativeCopy ?? nativeCopyFile;
+        const copy = operation(from.path, to.path, constants.COPYFILE_EXCL);
+        pending = copy.then(
+          () => undefined,
+          () => undefined,
+        );
+        yield* until(copy);
+      });
+      return Ok(undefined);
+    } catch (error) {
+      return nonWriteFailure(
+        "copy",
+        "access",
+        errorCode(error) === "EEXIST" ? "occupied" : reasonOf(error),
+      );
+    }
+  }
+
   /**
    * Remove one regular file or one final symbolic link.
    *
@@ -653,7 +731,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("delete", "resolution", "permission-denied");
     }
 
-    const target = yield* removalDestination(input);
+    const target = yield* entryDestination(input);
     if ("reason" in target) {
       return nonWriteFailure("delete", "resolution", target.reason);
     }
@@ -901,6 +979,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     checkFilePath,
     readTextFile,
     writeTextFile,
+    copyFile,
     deleteFile,
     ensureDirectory,
     globFiles,
@@ -982,6 +1061,9 @@ export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
       },
       *writeTextFile([input]) {
         return yield* handler.writeTextFile(input);
+      },
+      *copyFile([input]) {
+        return yield* handler.copyFile(input);
       },
       *deleteFile([input]) {
         return yield* handler.deleteFile(input);

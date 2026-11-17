@@ -96,6 +96,7 @@ export type FilesReason =
   | "absolute-path"
   | "lexical-escape"
   | "resolved-escape"
+  | "occupied"
   | "missing"
   | "directory"
   | "special-file"
@@ -118,6 +119,7 @@ const REASONS: readonly FilesReason[] = [
   "absolute-path",
   "lexical-escape",
   "resolved-escape",
+  "occupied",
   "missing",
   "directory",
   "special-file",
@@ -140,6 +142,7 @@ const REASONS: readonly FilesReason[] = [
 export type FilesOperation =
   | "check-file-path"
   | "read"
+  | "copy"
   | "delete"
   | "ensure-directory"
   | "glob"
@@ -148,6 +151,7 @@ export type FilesOperation =
 const OPERATIONS: readonly FilesOperation[] = [
   "check-file-path",
   "read",
+  "copy",
   "delete",
   "ensure-directory",
   "glob",
@@ -243,6 +247,12 @@ export interface FilePathInput {
   readonly path: string;
 }
 
+export interface FileCopyInput {
+  readonly cwd: string;
+  readonly source: string;
+  readonly destination: string;
+}
+
 export interface FileWriteInput extends FilePathInput {
   readonly content: string;
 }
@@ -261,6 +271,8 @@ export interface FilesHandler {
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
   readTextFile(input: FilePathInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
+  /** Copy a regular file to a vacant destination with an existing parent. */
+  copyFile(input: FileCopyInput): Operation<Result<void>>;
   /**
    * Remove one entry this path names, and answer with nothing.
    *
@@ -868,6 +880,10 @@ const composedFiles: FilesApi = createFilesApi({
   },
   // deno-lint-ignore require-yield
   *writeTextFile(_input: FileWriteInput): Operation<Result<FileWriteSuccess>> {
+    throw new FilesProviderUnavailableError();
+  },
+  // deno-lint-ignore require-yield
+  *copyFile(_input: FileCopyInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();
   },
   // deno-lint-ignore require-yield

@@ -7,7 +7,7 @@ import type { Operation, Result } from "effection";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { WorkspaceMountTable } from "../workspace-mounts.ts";
-import { useEntryFileRecorder } from "./file-recorder.ts";
+import { liveCopyTargets, useEntryFileRecorder } from "./file-recorder.ts";
 import type { EntryFileCalls } from "./file-recorder.ts";
 import { createMountPolicy } from "./mount-files.ts";
 import type { AwaitedMountPolicy } from "./mount-files.ts";
@@ -59,13 +59,18 @@ export function workspaceMountInstallation(
               }
             }
             const name = yield* localRecordName({ operation, request });
-            if (yield* retainedResultAhead(name)) {
+            if (yield* retainedResultAhead(name, operation)) {
               return yield* recordedLocalOperation({ operation, request, perform });
             }
             const roots = [
               ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
               ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
             ];
+            const copy =
+              operation === "file-copy" ? yield* liveCopyTargets(request, limits) : undefined;
+            if (copy !== undefined && !copy.ok) {
+              return copy;
+            }
             const permitted =
               roots.length === 0 ||
               ((yield* Permissions.operations.files(
@@ -74,19 +79,22 @@ export function workspaceMountInstallation(
                 (operation !== "dir-ensure" ||
                   !isAbsolute(request.path) ||
                   (yield* Permissions.operations.files("absolute"))));
-            const reason = permitted
-              ? yield* hostFileAccessReason(
-                  limits,
-                  operation === "file-read"
-                    ? "read"
-                    : operation === "file-write"
-                      ? "write"
-                      : operation === "file-delete"
-                        ? "delete"
-                        : "ensure-directory",
-                  request,
-                )
-              : "permission-denied";
+            const reason =
+              copy !== undefined
+                ? undefined
+                : permitted
+                  ? yield* hostFileAccessReason(
+                      limits,
+                      operation === "file-read"
+                        ? "read"
+                        : operation === "file-write"
+                          ? "write"
+                          : operation === "file-delete"
+                            ? "delete"
+                            : "ensure-directory",
+                      request,
+                    )
+                  : "permission-denied";
             if (reason !== undefined) {
               return Err(
                 operation === "file-write"
@@ -105,13 +113,15 @@ export function workspaceMountInstallation(
             }
             if (roots.length > 0) {
               const directory = (yield* API.Fs.operations.realpath(request.cwd)) ?? request.cwd;
-              const target = isAbsolute(request.path)
-                ? resolve(
-                    (yield* API.Fs.operations.realpath(dirname(request.path))) ??
-                      dirname(request.path),
-                    basename(request.path),
-                  )
-                : resolve(directory, request.path);
+              const target =
+                copy?.value.destination ??
+                (isAbsolute(request.path)
+                  ? resolve(
+                      (yield* API.Fs.operations.realpath(dirname(request.path))) ??
+                        dirname(request.path),
+                      basename(request.path),
+                    )
+                  : resolve(directory, request.path));
               for (const directory of roots) {
                 const root = (yield* API.Fs.operations.realpath(directory)) ?? resolve(directory);
                 const suffix = relative(root, target);

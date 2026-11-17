@@ -9878,6 +9878,39 @@ semantics belong to the provider: `specs/workflow-workspace-spec.md` §§6.3 and
 
 ---
 
+### 6.13.3 Copying a file: `<File.Copy>`
+
+```mdx
+<File.Copy source="reports/test.log" destination="evidence/test.log" />
+```
+
+Core supplies `File.Copy` as an ordinary default. The canonical dispatcher
+requires self-closing form and refuses paired form before expanding its
+content. Both props are required nonempty strings. The component calls
+`API.Files.copyFile({ cwd, source, destination })` once with the contextual
+working directory. Success is Unit and renders nothing. Ordinary filesystem
+refusals use the Files reporting rules in §6.13.
+
+The performing provider authorizes read access to the effective source and
+write access to the effective destination after middleware and before target
+I/O. Each path is relative and subject to the provider's lexical and resolved
+containment. The source must be a regular file. The destination requires an
+existing directory and a vacant final entry. A dangling final link counts as
+occupied. A successful copy preserves every source byte in an independent file.
+A refusal for occupancy preserves the existing entry.
+
+Ordinary runs and host-backed Markdown tests use native exclusive copy under
+the stable pathname namespace contract. The host checks the final entry
+without following it and joins a started copy during cancellation.
+An ordinary run starts fresh. Low-level partial host replay that reaches copy
+performs it live. Completed-root replay returns the saved outcome without
+expansion. [Workflow Workspace](workflow-workspace-spec.md#101-workspace-local-effects)
+restores a published effect. [Retained REPL](repl-spec.md#the-files-an-entry-wrote-in-the-checkout-you-are-standing-in)
+restores an acknowledged result within covered storage.
+
+Named `xmd syntax File.Copy` describes the props, form, and provider behavior.
+Generated XMD requires a separate trusted offer for the name and form.
+
 ### 6.14 Finding files: `<Glob>`
 
 A document decides what to work on by looking at what is there. `<Glob>` is
