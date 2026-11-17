@@ -5,6 +5,7 @@
  * clean suspension at teardown — driven through the component surface
  * with real workers.
  */
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
@@ -22,7 +23,6 @@ import type { AnswerConfiguration } from "@executablemd/core/host";
 import { executeInstalled } from "@executablemd/core/host";
 import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import {
   installTestingComponents,
   testHarnessInstallation,
@@ -57,6 +57,16 @@ interface RunOptions {
 }
 
 const OWNER = "packages/test-agent/tests/components.test.ts";
+
+function captureDocument(
+  name: string,
+  body: (stream: InMemoryStream, directory: string) => Operation<void>,
+): Operation<void> {
+  const directory = path.join(os.tmpdir(), `xmd-tv-${randomUUID()}`);
+  return captureTestJournal({ owner: OWNER, name }, path.join(directory, "doc.md"), (stream) =>
+    body(stream, directory),
+  );
+}
 
 function* captureFileCase(
   name: string,
@@ -160,7 +170,9 @@ const TWO_STAGES =
 
 describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResources: false }, () => {
   beforeAll(() => useTempFileCompiler());
-  it("rejects malformed catalogs equivalently in wrapper and nested declarations before provisioning", function* () {
+  const malformedCatalogs =
+    "rejects malformed catalogs equivalently in wrapper and nested declarations before provisioning";
+  it(malformedCatalogs, function* () {
     const invalid = [
       { selected: "A", options: [] },
       { selected: "A", options: [{ id: "A" }, { id: "A" }] },
@@ -175,20 +187,32 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
     ];
     for (const models of invalid) {
       const declaration = `<TestAgent.Scenario session="review" src="./hi.md" models={${JSON.stringify(models)}} />`;
-      const wrapper = yield* runDoc({
-        "hi.md": HI,
-        "doc.md": `<TestAgent>\n${declaration}\n<Test name="unused">never reached</Test>\n</TestAgent>\n`,
+      yield* captureDocument(malformedCatalogs, function* (stream, directory) {
+        const wrapper = yield* runDoc(
+          {
+            "hi.md": HI,
+            "doc.md": `<TestAgent>\n${declaration}\n<Test name="unused">never reached</Test>\n</TestAgent>\n`,
+          },
+          undefined,
+          stream,
+          directory,
+        );
+        expect(wrapper.result.ok).toBe(false);
       });
-      expect(wrapper.result.ok).toBe(false);
-      const nested = yield* runDoc(
-        {
-          "hi.md": HI,
-          "doc.md": `<Test name="invalid nested">\n<Execution host="run" source="child">\n<TestAgent>\n${declaration}\n</TestAgent>\n</Execution>\n</Test>\n`,
-        },
-        { child: true },
-      );
-      expect(nested.results.map((result) => result.status)).toEqual(["fail"]);
-      expect(nested.output).not.toContain("invalid catalog reached child provisioning");
+
+      yield* captureDocument(malformedCatalogs, function* (stream, directory) {
+        const nested = yield* runDoc(
+          {
+            "hi.md": HI,
+            "doc.md": `<Test name="invalid nested">\n<Execution host="run" source="child">\n<TestAgent>\n${declaration}\n</TestAgent>\n</Execution>\n</Test>\n`,
+          },
+          { child: true },
+          stream,
+          directory,
+        );
+        expect(nested.results.map((result) => result.status)).toEqual(["fail"]);
+        expect(nested.output).not.toContain("invalid catalog reached child provisioning");
+      });
     }
   });
 
@@ -337,115 +361,161 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
     );
   });
 
-  it("TV4: non-whitespace pre-matcher output and eval imports are configuration failures", function* () {
-    const preMatcher = yield* runDoc({
-      "agents/bad.md": 'leading text\n\n<WhenPrompt template="hi" />\nok\n',
-      "doc.md": [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agents/bad.md" />',
-        '  <Test name="pre-matcher output">',
-        '    <Prompt text="hi" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n"),
+  const configurationFailures =
+    "TV4: non-whitespace pre-matcher output and eval imports are configuration failures";
+  it(configurationFailures, function* () {
+    yield* captureDocument(configurationFailures, function* (stream, directory) {
+      const preMatcher = yield* runDoc(
+        {
+          "agents/bad.md": 'leading text\n\n<WhenPrompt template="hi" />\nok\n',
+          "doc.md": [
+            "<TestAgent>",
+            '  <TestAgent.Scenario src="./agents/bad.md" />',
+            '  <Test name="pre-matcher output">',
+            '    <Prompt text="hi" />',
+            "  </Test>",
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+        },
+        undefined,
+        stream,
+        directory,
+      );
+      expect(preMatcher.results.map((entry) => entry.status)).toEqual(["fail"]);
     });
-    expect(preMatcher.results.map((entry) => entry.status)).toEqual(["fail"]);
 
-    const dynamicImport = yield* runDoc({
-      "agents/dyn.md": [
-        '<WhenPrompt template="hi" />',
-        "",
-        "```js eval",
-        'const mod = yield* until(import("node:fs"));',
-        "return String(typeof mod);",
-        "```",
-        "",
-      ].join("\n"),
-      "doc.md": [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agents/dyn.md" />',
-        '  <Test name="dynamic import rejected">',
-        '    <Prompt text="hi" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n"),
+    yield* captureDocument(configurationFailures, function* (stream, directory) {
+      const dynamicImport = yield* runDoc(
+        {
+          "agents/dyn.md": [
+            '<WhenPrompt template="hi" />',
+            "",
+            "```js eval",
+            'const mod = yield* until(import("node:fs"));',
+            "return String(typeof mod);",
+            "```",
+            "",
+          ].join("\n"),
+          "doc.md": [
+            "<TestAgent>",
+            '  <TestAgent.Scenario src="./agents/dyn.md" />',
+            '  <Test name="dynamic import rejected">',
+            '    <Prompt text="hi" />',
+            "  </Test>",
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+        },
+        undefined,
+        stream,
+        directory,
+      );
+      expect(dynamicImport.results.map((entry) => entry.status)).toEqual(["fail"]);
     });
-    expect(dynamicImport.results.map((entry) => entry.status)).toEqual(["fail"]);
 
-    const staticImport = yield* runDoc({
-      "agents/static.md": [
-        '<WhenPrompt template="hi" />',
-        "",
-        "```js eval",
-        'import { readFileSync } from "node:fs";',
-        "return String(typeof readFileSync);",
-        "```",
-        "",
-      ].join("\n"),
-      "doc.md": [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agents/static.md" />',
-        '  <Test name="static import rejected">',
-        '    <Prompt text="hi" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n"),
+    yield* captureDocument(configurationFailures, function* (stream, directory) {
+      const staticImport = yield* runDoc(
+        {
+          "agents/static.md": [
+            '<WhenPrompt template="hi" />',
+            "",
+            "```js eval",
+            'import { readFileSync } from "node:fs";',
+            "return String(typeof readFileSync);",
+            "```",
+            "",
+          ].join("\n"),
+          "doc.md": [
+            "<TestAgent>",
+            '  <TestAgent.Scenario src="./agents/static.md" />',
+            '  <Test name="static import rejected">',
+            '    <Prompt text="hi" />',
+            "  </Test>",
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+        },
+        undefined,
+        stream,
+        directory,
+      );
+      expect(staticImport.results.map((entry) => entry.status)).toEqual(["fail"]);
     });
-    expect(staticImport.results.map((entry) => entry.status)).toEqual(["fail"]);
 
-    const whitespaceOnly = yield* runDoc({
-      "agents/ws.md": "\n   \n\t\n" + HI,
-      "doc.md": [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agents/ws.md" />',
-        '  <Test name="whitespace preamble is allowed">',
-        '    <Prompt text="hi" as="reply" />',
-        '    <AssertStringIncludes actual={reply} expected="hello there" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n"),
+    yield* captureDocument(configurationFailures, function* (stream, directory) {
+      const whitespaceOnly = yield* runDoc(
+        {
+          "agents/ws.md": "\n   \n\t\n" + HI,
+          "doc.md": [
+            "<TestAgent>",
+            '  <TestAgent.Scenario src="./agents/ws.md" />',
+            '  <Test name="whitespace preamble is allowed">',
+            '    <Prompt text="hi" as="reply" />',
+            '    <AssertStringIncludes actual={reply} expected="hello there" />',
+            "  </Test>",
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+        },
+        undefined,
+        stream,
+        directory,
+      );
+      expect(whitespaceOnly.results.map((entry) => entry.status)).toEqual(["pass"]);
     });
-    expect(whitespaceOnly.results.map((entry) => entry.status)).toEqual(["pass"]);
   });
 
-  it("TV5: Markdown wins over TypeScript; missing .ts falls back; existing .ts is unsupported", function* () {
-    const precedence = yield* runDoc({
-      "agents/components/Greeting.md": "markdown wins\n",
-      "agents/components/Greeting.ts": 'export default function* () { return "ts"; }\n',
-      "agents/components/Nested/index.md": "index fallback\n",
-      "agents/both.md": '<WhenPrompt template="hi" />\n\n<Greeting />\n<Nested />\n',
-      "doc.md": [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agents/both.md" />',
-        '  <Test name="precedence and fallback">',
-        '    <Prompt text="hi" as="reply" />',
-        '    <AssertStringIncludes actual={reply} expected="markdown wins" />',
-        '    <AssertStringIncludes actual={reply} expected="index fallback" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n"),
+  const fileResolution =
+    "TV5: Markdown wins over TypeScript; missing .ts falls back; existing .ts is unsupported";
+  it(fileResolution, function* () {
+    yield* captureDocument(fileResolution, function* (stream, directory) {
+      const precedence = yield* runDoc(
+        {
+          "agents/components/Greeting.md": "markdown wins\n",
+          "agents/components/Greeting.ts": 'export default function* () { return "ts"; }\n',
+          "agents/components/Nested/index.md": "index fallback\n",
+          "agents/both.md": '<WhenPrompt template="hi" />\n\n<Greeting />\n<Nested />\n',
+          "doc.md": [
+            "<TestAgent>",
+            '  <TestAgent.Scenario src="./agents/both.md" />',
+            '  <Test name="precedence and fallback">',
+            '    <Prompt text="hi" as="reply" />',
+            '    <AssertStringIncludes actual={reply} expected="markdown wins" />',
+            '    <AssertStringIncludes actual={reply} expected="index fallback" />',
+            "  </Test>",
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+        },
+        undefined,
+        stream,
+        directory,
+      );
+      expect(precedence.results.map((entry) => entry.status)).toEqual(["pass"]);
     });
-    expect(precedence.results.map((entry) => entry.status)).toEqual(["pass"]);
 
-    const typescript = yield* runDoc({
-      "agents/components/Helper.ts": 'export default function* () { return "nope"; }\n',
-      "agents/ts-behavior.md": '<WhenPrompt template="hi" />\n\n<Helper />\n',
-      "doc.md": [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agents/ts-behavior.md" />',
-        '  <Test name="typescript dependency">',
-        '    <Prompt text="hi" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n"),
+    yield* captureDocument(fileResolution, function* (stream, directory) {
+      const typescript = yield* runDoc(
+        {
+          "agents/components/Helper.ts": 'export default function* () { return "nope"; }\n',
+          "agents/ts-behavior.md": '<WhenPrompt template="hi" />\n\n<Helper />\n',
+          "doc.md": [
+            "<TestAgent>",
+            '  <TestAgent.Scenario src="./agents/ts-behavior.md" />',
+            '  <Test name="typescript dependency">',
+            '    <Prompt text="hi" />',
+            "  </Test>",
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+        },
+        undefined,
+        stream,
+        directory,
+      );
+      expect(typescript.results.map((entry) => entry.status)).toEqual(["fail"]);
     });
-    expect(typescript.results.map((entry) => entry.status)).toEqual(["fail"]);
   });
 
   it("TV6: default and named mappings resolve; the agent prop registers additional agents", function* () {
@@ -763,7 +833,8 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
   // A registration is a default, so a repository component of either name wins.
   // Each fixture declares a props schema: a markdown component without one
   // accepts no props and is rejected before it can answer.
-  it("TV15: a repository component overrides either registered name", function* () {
+  const repositoryOverride = "TV15: a repository component overrides either registered name";
+  it(repositoryOverride, function* () {
     const withProps = (body: string) =>
       [
         "---",
@@ -779,31 +850,39 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
         "",
       ].join("\n");
 
-    const agentRun = yield* runDoc(
-      {
-        "doc.md": "<TestAgent>\nbody\n</TestAgent>\n",
-        "components/TestAgent.md": withProps("LOCAL TEST AGENT"),
-      },
-      { includes: ["components", "."] },
-    );
-    expect(agentRun.output).toContain("LOCAL TEST AGENT");
+    yield* captureDocument(repositoryOverride, function* (stream, directory) {
+      const agentRun = yield* runDoc(
+        {
+          "doc.md": "<TestAgent>\nbody\n</TestAgent>\n",
+          "components/TestAgent.md": withProps("LOCAL TEST AGENT"),
+        },
+        { includes: ["components", "."] },
+        stream,
+        directory,
+      );
+      expect(agentRun.output).toContain("LOCAL TEST AGENT");
+    });
 
     // The dotted name addresses a subdirectory, so the override lives at
     // components/TestAgent/Scenario.md.
-    const scenarioRun = yield* runDoc(
-      {
-        "agents/hi.md": HI,
-        "doc.md": [
-          "<TestAgent>",
-          '<TestAgent.Scenario src="./agents/hi.md" />',
-          "</TestAgent>",
-          "",
-        ].join("\n"),
-        "components/TestAgent/Scenario.md": withProps("LOCAL SCENARIO"),
-      },
-      { includes: ["components", "."] },
-    );
-    expect(scenarioRun.output).toContain("LOCAL SCENARIO");
+    yield* captureDocument(repositoryOverride, function* (stream, directory) {
+      const scenarioRun = yield* runDoc(
+        {
+          "agents/hi.md": HI,
+          "doc.md": [
+            "<TestAgent>",
+            '<TestAgent.Scenario src="./agents/hi.md" />',
+            "</TestAgent>",
+            "",
+          ].join("\n"),
+          "components/TestAgent/Scenario.md": withProps("LOCAL SCENARIO"),
+        },
+        { includes: ["components", "."] },
+        stream,
+        directory,
+      );
+      expect(scenarioRun.output).toContain("LOCAL SCENARIO");
+    });
   });
 });
 

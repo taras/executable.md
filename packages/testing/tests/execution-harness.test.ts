@@ -8,7 +8,7 @@
  * about production assembly, which is the CLI's contract and is held there.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { all, createContext, scoped, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -20,7 +20,11 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import type { DeliverySink } from "../../cli/src/stdout-delivery.ts";
 import { readRecords } from "../../cli/src/repl/journal-records.ts";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -87,7 +91,7 @@ function* runHarness(
     // The harness is a delivery the host attaches, so these tests are
     // the host: without this, `<Execution>` is recognized and refused.
     const execution = yield* executeInstalled(
-      { path: "README.md", stream: options.stream ?? new InMemoryStream() },
+      { path: "README.md", stream: options.stream ?? (yield* useJournalStream("README.md")) },
       [testHarnessInstallation(stub.provider)],
     );
     const chunks: string[] = [];
@@ -163,6 +167,7 @@ const CHILD_WITH_PROPS = doc(
 );
 
 describe(RUN_SUITE, () => {
+  beforeEach(journalBeforeEach(OWNER));
   const referenced = "runs a referenced document as a root, with root props and text return";
   it(referenced, function* () {
     yield* captureHarness(
@@ -388,6 +393,7 @@ describe(RUN_SUITE, () => {
 });
 
 describe("child failure", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const FAILING = {
     "README.md": "",
     "boom.md": doc("```sh exec", "exit 3", "```"),
@@ -439,6 +445,7 @@ describe("child failure", () => {
 });
 
 describe("display and collection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("displays each chunk before the child has settled", function* () {
     const displayed = withResolvers<void>();
     const run = yield* runHarness(
@@ -523,6 +530,7 @@ describe("display and collection", () => {
 });
 
 describe("journal policy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const CHILD = { "child.md": doc("child body") };
 
   it("allocates no journal for a transient run", function* () {
@@ -596,6 +604,7 @@ describe("journal policy", () => {
 });
 
 describe("what may run a child", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("refuses <Execution> outside a canonical <Test>", function* () {
     const run = yield* runHarness({
       "README.md": doc("<Testing>", '<Execution host="run" target="child.md" />', "</Testing>"),
@@ -753,6 +762,7 @@ describe("what may run a child", () => {
 });
 
 describe("the harness path", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const DOC = {
     "README.md": doc(
       '<Test name="no-harness">',
@@ -778,7 +788,7 @@ describe("the harness path", () => {
       const tests = yield* useTesting();
       const stub = stubExecutionHost({ files });
       const execution = yield* executeInstalled(
-        { path: "README.md", stream: new InMemoryStream() },
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
         installations(stub.provider),
       );
       yield* forEach(function* () {}, execution.output);
@@ -805,7 +815,7 @@ describe("the harness path", () => {
       yield* useStubFs(DOC);
       const tests = yield* useTesting();
       const execution = yield* executeInstalled(
-        { path: "README.md", stream: new InMemoryStream() },
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
         [testHarnessInstallation()],
       );
       yield* forEach(function* () {}, execution.output);
@@ -1021,6 +1031,7 @@ describe("the harness path", () => {
  * `execution-host-stub.ts` stands in for the CLI.
  */
 describe("child configuration declarations", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const AGENT_PROPS: PropsSchema = {
     type: "object",
     properties: { agent: { type: "string" } },
@@ -1150,7 +1161,7 @@ describe("child configuration declarations", () => {
       const tests = yield* useTesting();
       const stub = stubExecutionHost({ files });
       const execution = yield* executeInstalled(
-        { path: "README.md", stream: new InMemoryStream() },
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
         [testHarnessInstallation(stub.provider, options.declarations ?? [stubDeclaration()])],
       );
       const output = yield* forEach(function* () {}, execution.output);
@@ -1536,7 +1547,7 @@ describe("child configuration declarations", () => {
         onTeardown: () => order.push("the child's teardown"),
       });
       const execution = yield* executeInstalled(
-        { path: "README.md", stream: new InMemoryStream() },
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
         [testHarnessInstallation(stub.provider, [stubDeclaration()])],
       );
       const output = yield* forEach(function* () {}, execution.output);

@@ -375,7 +375,7 @@ interface RunOptions {
 function* runDoc(
   doc: string,
   options: RunOptions = {},
-  sharedJournal = false,
+  sharedJournal = true,
 ): Operation<{ output: string; result: Result<Json>; trace: Trace; events: DurableEvent[] }> {
   const trace: Trace = options.trace ?? { prompts: [], agentLookups: [], timeouts: [] };
   const dir = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
@@ -932,11 +932,12 @@ function promptRecords(events: DurableEvent[]): {
 }
 
 describe("Tier AF — Session configuration", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("AF26: the exact configuration reaches the provider, and not through the route", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc(
+    const { result } = yield* run(
       ['<Session name="review" model="gpt-5.4" effort="high" />', ""].join("\n"),
       { trace },
     );
@@ -953,7 +954,7 @@ describe("Tier AF — Session configuration", () => {
 
   it("AF27: an unconfigured Session asks the provider nothing at all", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc('<Session name="review" />\n', { trace });
+    const { result } = yield* run('<Session name="review" />\n', { trace });
 
     expect(result.ok).toBe(true);
     // Nothing was asked: an element that configured nothing has nothing to ask
@@ -966,7 +967,7 @@ describe("Tier AF — Session configuration", () => {
 
   it("AF28: a prompt retains the one configuration its Session runs under", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       [
         '<Session name="review" model="gpt-5.4" effort="high">',
         '<Prompt text="hi" />',
@@ -988,7 +989,7 @@ describe("Tier AF — Session configuration", () => {
   });
 
   it("AF29: a setting nobody authored is retained as nothing at all", function* () {
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
       ),
@@ -1001,7 +1002,7 @@ describe("Tier AF — Session configuration", () => {
 
   it("AF30: a prompt under no configured Session retains neither member", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', { trace });
+    const { result, events } = yield* run('<Prompt text="hi" />\n', { trace });
 
     expect(result.ok).toBe(true);
     const [prompt] = promptRecords(events);
@@ -1010,7 +1011,7 @@ describe("Tier AF — Session configuration", () => {
 
   it("AF31: an inner Session does not inherit the outer element's request", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       [
         '<Session name="outer" model="gpt-5.4" effort="high">',
         '<Session name="inner">',
@@ -1035,7 +1036,7 @@ describe("Tier AF — Session configuration", () => {
   });
 
   it("AF35: a prompt refused before its turn started records no configuration", function* () {
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
       ),
@@ -1051,7 +1052,7 @@ describe("Tier AF — Session configuration", () => {
   });
 
   it("AF36: a prompt that failed after starting retains what it ran under", function* () {
-    const { events } = yield* runDoc(
+    const { events } = yield* run(
       [
         '<Session name="review" model="gpt-5.4" effort="high">',
         '<Prompt text="hi" />',
@@ -1160,9 +1161,10 @@ function recordedFailure(record: Record<string, Json> | undefined): string {
  * either.
  */
 describe("Tier AF — the final routed Session decides", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("AF37: routing the raw session a use names runs unconfigured", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
       ),
@@ -1190,7 +1192,7 @@ describe("Tier AF — the final routed Session decides", () => {
 
   it("AF38: routing no session at all is an ordinary unconfigured route", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       ['<Session name="review" effort="high">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
       ),
@@ -1218,7 +1220,7 @@ describe("Tier AF — the final routed Session decides", () => {
     // what the record says — is the first's settings, because that is the
     // conversation it actually ran in.
     let first: string | Session | undefined;
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       [
         '<Session name="review" model="gpt-5.4">',
         '<Prompt text="first" />',
@@ -1253,7 +1255,7 @@ describe("Tier AF — the final routed Session decides", () => {
 
   it("AF40: a value that claims to be configured and was issued by nobody refuses", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
       ),
@@ -1284,7 +1286,7 @@ describe("Tier AF — the final routed Session decides", () => {
   it("AF41: reading the use and delegating it is what a handler is for", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const seen: string[] = [];
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       [
         '<Session name="review" model="gpt-5.4" effort="high">',
         '<Prompt text="hi" />',
@@ -1314,7 +1316,7 @@ describe("Tier AF — the final routed Session decides", () => {
   it("AF42: one configured Session hands the same use to every nested prompt", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const routed: (string | Session | undefined)[] = [];
-    const { result } = yield* runDoc(
+    const { result } = yield* run(
       [
         '<Session name="review" model="gpt-5.4">',
         '<Prompt text="first" />',
@@ -1347,7 +1349,7 @@ describe("Tier AF — the final routed Session decides", () => {
   it("AF43: a programmatic prompt beneath the element runs in its conversation", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const seen: boolean[] = [];
-    const { result } = yield* runDoc(
+    const { result } = yield* run(
       ['<Session name="review" model="gpt-5.4">', "<Probe />", "</Session>", ""].join("\n"),
       {
         trace,
@@ -1372,7 +1374,7 @@ describe("Tier AF — the final routed Session decides", () => {
 
   it("AF44: a programmatic prompt a handler reroutes follows that route", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result } = yield* runDoc(
+    const { result } = yield* run(
       ['<Session name="review" model="gpt-5.4">', "<Probe />", "</Session>", ""].join("\n"),
       {
         trace,
@@ -1395,7 +1397,7 @@ describe("Tier AF — the final routed Session decides", () => {
 
   it("AF45: a Session a handler answers with never went through a setup", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { result, events } = yield* runDoc(
+    const { result, events } = yield* run(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
       ),
@@ -1463,6 +1465,7 @@ function mentions(value: unknown, canary: string): boolean {
 }
 
 describe("Tier AF — the permission audit one turn retains", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("A1: a turn that was asked nothing retains no audit at all", function* () {
@@ -1793,6 +1796,7 @@ describe("Tier AF — the permission audit one turn retains", () => {
 });
 
 describe("AFP — a publisher that never appends retains nothing", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("AFP0: the same harness with a publisher that appends succeeds and records", function* () {
@@ -1980,6 +1984,7 @@ function diagnosticRecord(events: DurableEvent[]) {
 }
 
 describe("1039 saved Prompt diagnostics", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const raised of [false, true]) {
     it(`A1/A3: selected facts survive publication and ${raised ? "thrown" : "aggregate"} reconstruction`, function* () {
       const diagnostic = { ...DIAGNOSTIC, acp: { ...DIAGNOSTIC.acp, details: "" } };
@@ -2136,6 +2141,7 @@ describe("1039 saved Prompt diagnostics", () => {
 });
 
 describe("Try Prompt normalization", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("withholds a failed-turn record when the subscribed stream fails release", function* () {
     const result = yield* runDoc('<Prompt text="once" throwOnError={true} />', {
       handler: () => diagnosticPrompt(new Error("ordinary"), new Error("release failed")),
