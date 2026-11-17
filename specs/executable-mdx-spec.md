@@ -9908,7 +9908,7 @@ expansion. [Workflow Workspace](workflow-workspace-spec.md#101-workspace-local-e
 restores a published effect. [Retained REPL](repl-spec.md#the-files-an-entry-wrote-in-the-checkout-you-are-standing-in)
 restores an acknowledged result within covered storage.
 
-Named `xmd syntax File.Copy` describes the props, form, and provider behavior.
+Named `xmd syntax File.Copy` shows the invocation and required props.
 Generated XMD requires a separate trusted offer for the name and form.
 
 ### 6.14 Finding files: `<Glob>`

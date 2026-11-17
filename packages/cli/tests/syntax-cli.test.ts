@@ -563,22 +563,21 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(unknown.stdout).toBe("");
   });
 
-  it("SX16: named File.Copy describes the two paths and replay", function* () {
+  it("SX16: named File.Copy shows concise usage and two required paths", function* () {
     const named = yield* runCli(["syntax", "File.Copy"], { cwd: "." }).expect();
     for (const text of [
       "**Forms:** `<File.Copy />`",
       "| `source` | `string` | yes |",
       "| `destination` | `string` | yes |",
-      "An occupied destination is preserved.",
-      "Ordinary hosts and Markdown tests copy live",
-      "partial host replay",
-      "Workflow Workspace replay restores a published",
-      "Retained REPL replay restores an acknowledged",
-      "Unrecorded copies run live.",
+      "Copy a file into an existing directory.",
+      '<File.Copy source="report.bin" destination="evidence/report.bin" />',
     ]) {
       expect(named.stdout).toContain(text);
     }
-    expect(named.stdout).not.toContain("</File.Copy>");
+    expect(named.stdout.match(/Copy a file into an existing directory\./g)).toHaveLength(1);
+    expect(named.stdout).not.toMatch(
+      /replay|working directory|occupied destination|<\/File.Copy>/i,
+    );
   });
 
   it("SX16: engine and selected installed structural names match canonical component references", function* () {

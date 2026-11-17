@@ -235,12 +235,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   ),
   core("File.Copy", fileCopyForm, parseJsonObject(fileCopyProps), {
     description:
-      'Copy a regular file byte for byte. `<File.Copy source="report.bin" destination="evidence/report.bin" />` ' +
-      "requires an existing destination directory. " +
-      "Both paths are relative to the working directory. An occupied destination is preserved. " +
-      "Ordinary hosts and Markdown tests copy live, as does partial host replay that reaches the copy. " +
-      "Workflow Workspace replay restores a published copy result. Retained REPL replay restores " +
-      "an acknowledged copy in covered storage. Unrecorded copies run live.",
+      'Copy a file into an existing directory. `<File.Copy source="report.bin" destination="evidence/report.bin" />`',
     as: null,
     context: null,
   }),
