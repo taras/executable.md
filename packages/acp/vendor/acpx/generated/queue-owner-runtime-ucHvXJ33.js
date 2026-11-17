@@ -3275,11 +3275,11 @@ var AcpClient = class {
 	supportsClaudeConfiguration() {
 		return this.initResult?.agentCapabilities?._meta?.["executablemd.claude-configuration/v1"] === true;
 	}
-	async observeClaudeConfiguration(sessionId, requestedModel, authority) {
+	async observeClaudeConfiguration(sessionId, requestedModel, authority, inspectEffort) {
 		if (!this.supportsClaudeConfiguration()) return;
 		const connection = this.getConnection();
 		return await this.runConnectionRequest(() => connection.agent.request("_executablemd/session_configuration", {
-			sessionId, requestedModel
+			sessionId, requestedModel, inspectEffort
 		}), authority);
 	}
 	async setSessionConfigOption(sessionId, configId, value, models, authority, restoreContextWindow) {

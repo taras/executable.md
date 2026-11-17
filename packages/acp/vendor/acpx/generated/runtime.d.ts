@@ -414,6 +414,7 @@ interface AcpRuntime {
     // XMD Claude configuration: read the actual backend for an in-place transaction.
     verifyConfiguration?: boolean;
     requestedModel?: string;
+    inspectEffort?: boolean;
     signal?: AbortSignal;
   }): Promise<AcpRuntimeStatus>;
   /** Authority gates dispatch; an issued control still settles its response and saved state. */
@@ -790,6 +791,7 @@ export declare class SharedAcpRuntime {
     // XMD Claude configuration: read the actual backend for an in-place transaction.
     verifyConfiguration?: boolean;
     requestedModel?: string;
+    inspectEffort?: boolean;
   }): Promise<AcpRuntimeStatus>;
   getCapabilities(input?: {
     handle?: AcpRuntimeHandle;
@@ -897,6 +899,7 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
     // XMD Claude configuration: read the actual backend for an in-place transaction.
     verifyConfiguration?: boolean;
     requestedModel?: string;
+    inspectEffort?: boolean;
     signal?: AbortSignal;
   }): Promise<AcpRuntimeStatus>;
   setMode(input: AcpControlAuthority & {

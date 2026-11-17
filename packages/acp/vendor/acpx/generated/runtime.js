@@ -49,6 +49,11 @@ function resolveSupportedConfigOptionId(record, configId) {
 	const supportedText = supported.length > 0 ? supported.join(", ") : "none";
 	throw new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", `ACP session ${record.acpxRecordId} does not advertise config option '${configId}'. Supported config options: ${supportedText}.`);
 }
+// XMD Claude configuration: the connected adapter validates live effort support.
+function resolveControlConfigOptionId(record, key, restoreContextWindow) {
+	if (restoreContextWindow !== void 0 || key === "effort" && record.agentCapabilities?._meta?.["executablemd.claude-configuration/v1"] === true) return key;
+	return resolveSupportedConfigOptionId(record, key);
+}
 // src/runtime/public/shared.ts
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2205,7 +2210,7 @@ var AcpRuntimeManager = class {
 		yield legacyTerminalEventFromTurnResult(await turn.result);
 	}
 	// XMD Claude configuration: configuration transactions read the connected backend.
-	getStatus(handle, sessionMode, verifyConfiguration, requestedModel) {
+	getStatus(handle, sessionMode, verifyConfiguration, requestedModel, inspectEffort) {
 		this.assertOpen();
 		if (!verifyConfiguration) return this.trackTask(this.readStatus(handle));
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
@@ -2215,7 +2220,9 @@ var AcpRuntimeManager = class {
 			// XMD Claude configuration: a cold read uses the normal control attachment owner.
 			return await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connectedRecord }) => {
 				const status = runtimeStatusFromRecord(connectedRecord);
-				status.details.claudeConfiguration = await withTimeout(client.observeClaudeConfiguration(sessionId, requestedModel), this.options.timeoutMs);
+				const observed = await withTimeout(client.observeClaudeConfiguration(sessionId, requestedModel, void 0, inspectEffort), this.options.timeoutMs);
+				status.details.claudeConfiguration = observed;
+				if (observed?.configOptions !== void 0) status.details.configOptions = observed.configOptions;
 				return status;
 			}, void 0, void 0, requestedModel);
 		});
@@ -2281,7 +2288,8 @@ var AcpRuntimeManager = class {
 			return response;
 		}
 		return await this.withRuntimeControlSession(record, sessionMode, async ({ client, sessionId, record: connectedRecord }) => {
-			const configId = restoreContextWindow === void 0 ? resolveSupportedConfigOptionId(connectedRecord, key) : key;
+			// XMD Claude configuration: effort support can be established on this client.
+			const configId = resolveControlConfigOptionId(connectedRecord, key, restoreContextWindow);
 			const models = advertisedModelState(connectedRecord.acpx);
 			const { modelConfigId, resolvedValue } = resolveRequestedConfigOption({
 				configId,
@@ -2295,7 +2303,7 @@ var AcpRuntimeManager = class {
 			return response;
 		}, { replacingConfigOption: {
 			key,
-			resolve: (connectedRecord) => restoreContextWindow === void 0 ? resolveSupportedConfigOptionId(connectedRecord, key) : key
+			resolve: (connectedRecord) => resolveControlConfigOptionId(connectedRecord, key, restoreContextWindow)
 		// XMD requested model: this control may construct the attaching client.
 		} }, authority, requestedModel);
 	}
@@ -3015,7 +3023,7 @@ var AcpxRuntime = class {
 	// XMD Claude configuration: direct in-process verification; shared status remains passive.
 	async getStatus(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
-		return await (await this.getManager()).getStatus(handle, state.mode, input.verifyConfiguration, input.requestedModel);
+		return await (await this.getManager()).getStatus(handle, state.mode, input.verifyConfiguration, input.requestedModel, input.inspectEffort);
 	}
 	async setMode(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);

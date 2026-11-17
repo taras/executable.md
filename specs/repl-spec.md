@@ -3623,8 +3623,10 @@ For an established Claude conversation, Apply records which settings the person
 selected in this drawer. Prefilled values still supply the Asked reading. A
 model choice counts even when it repeats the saved selection. It supersedes a
 pending effort choice from the previous model. An effort-only Apply leaves the
-pending model choice in place. A fresh conversation uses its full saved
-configuration.
+pending model choice in place. A conversation without retained provider
+placement uses its full saved configuration. A retained Prompt placement is
+enough to use outstanding choices alone, including when the provider retained
+the native identity before the host could acknowledge it.
 
 The held Claude turn receives only the outstanding choices for its conversation.
 Its Prompt outcome and the Sidekick record positions of the choices it received

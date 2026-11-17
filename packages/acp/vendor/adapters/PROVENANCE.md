@@ -273,8 +273,11 @@ The original catalog remains available for deliberate selection. The adapter
 reads live effort without applying a settings-derived default on resume.
 `_executablemd/session_configuration` reads the model and context from the
 connected Query and uses the offered model's SDK-provided identity when verifying
-an explicit alias. A context variant requires matching native context evidence
-before the user prompt. The first prompt cannot establish that evidence for a
+an explicit alias. A requested effort change uses the SDK effort choices for
+the observed model, including a verified alias. The connected Query attests
+the current effort before the setter can run. A context variant requires
+matching native context evidence before the user prompt. The first prompt
+cannot establish that evidence for a
 fresh variant selection, so the check refuses. Recipe inputs and the built
 output record the maintained patch independently of the unchanged source, SDK
 and compiler pins.

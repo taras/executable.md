@@ -95,13 +95,14 @@ const NAMED: Readonly<Record<string, string>> = Object.freeze({
 });
 import {
   PAIRED_DIRECTORY,
+  parseSidekickRecord,
   readSidekickRecords,
   serializeSidekickRecord,
   SIDEKICK_FILE,
 } from "../src/repl/sidekick/history.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { until } from "effection";
 
@@ -1883,6 +1884,116 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     },
     effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
   } as const;
+
+  it("Claude recovers a provider-owned identity without reapplying the legacy preference", function* () {
+    const sessionKey = "sidekick-pending-host-ack";
+    const native = "native-claude";
+    const model = "claude-fable-5-2";
+    const refused = "the host could not retain this Claude session";
+    const assertions: string[] = [];
+    const host = yield* useMountedHost({
+      sidekickAgent: "claude",
+      usageAcp: {
+        agentRegistry: makeRegistry({ claude: "claude-cmd" }),
+        advertiseNativeLaunch: [],
+        advertiseClientNativeAttachment: [],
+        nativeAdapters: {
+          claude: {
+            launcher: "claude",
+            identity: "provider-returned",
+            acceptance: "first-turn-acceptance",
+            resume: () => [],
+          },
+        },
+        sessions: {
+          *requestSession() {
+            return { sessionKey, cwd: yield* API.Env.operations.cwd(), state: "new" };
+          },
+          // deno-lint-ignore require-yield
+          *recordSessionIdentity(_, identity) {
+            assertions.push(identity.agentSessionId ?? "");
+            if (assertions.length === 1) throw new Error(refused);
+          },
+        },
+      },
+    });
+    const page = yield* useReplPage({ host });
+    const { fake } = page.repl;
+    fake.identity(native);
+    fake.configuration(OFFERED);
+    fake.script({ reply: "<Output>Unacknowledged.</Output>" });
+    yield* sendMessage(page, "first");
+    yield* page.until(
+      "the host refused the promoted identity",
+      (one) => one.shows(refused) && one.shows("[Resume queue]"),
+    );
+    const retained = yield* settledReading(page.repl);
+    const message = retained.chat.find((record) => record.kind === "message");
+    if (message?.kind !== "message") throw new Error("The first message was not retained.");
+    const first = retained.chat.filter((record) => record.kind === "event");
+    expect(first.map((record) => JSON.parse(record.event).result?.value)).toContainEqual(
+      expect.objectContaining({ sessionKey, status: "failed" }),
+    );
+    expect(first.some((record) => record.event.includes('"agentSessionId"'))).toBe(false);
+    expect(assertions).toEqual([native]);
+    page.repl.terminal.end();
+    yield* awaited("the first REPL to join", () => page.repl.outcome() !== undefined);
+    const closed = page.repl.outcome();
+    if (!closed?.ok) throw new Error("The first REPL did not close cleanly.");
+
+    const storage = join(host.root, PAIRED_DIRECTORY, retained.execution, SIDEKICK_FILE);
+    const legacy = serializeSidekickRecord({
+      kind: "preferences",
+      conversation: message.conversation,
+      model: "fast",
+      effort: null,
+    });
+    // Reconstruct the pre-choice-record history format for this older chat.
+    const lines = (yield* until(readFile(storage, "utf8"))).split("\n").map((line) => {
+      const record = parseSidekickRecord(line);
+      if (
+        record?.kind !== "event" ||
+        JSON.parse(record.event).description?.type !== "agent_prompt"
+      ) {
+        return line;
+      }
+      return serializeSidekickRecord({ ...record, selectedAt: undefined }).trimEnd();
+    });
+    const offset = lines.findIndex((line) => {
+      const record = parseSidekickRecord(line);
+      return record?.kind === "message" && record.id === message.id;
+    });
+    if (offset < 0) throw new Error("The retained chat lost its first message.");
+    lines.splice(offset, 0, legacy.trimEnd());
+    yield* until(writeFile(storage, lines.join("\n")));
+    const prior = projectSidekick(yield* readSidekickRecords(storage));
+    if (!prior.ok) throw prior.error;
+    expect(prior.value.conversations.at(-1)?.claudeConfiguration?.pending).toEqual({});
+
+    const next = yield* useReplPage({ host, location: closed.value.location });
+    if (next.screen().shows("[Resume queue]")) yield* next.press("[Resume queue]");
+    const writes = applied(fake).length;
+    fake.script({
+      reply: "<Output>Same native Claude history.</Output>",
+      observedConfiguration: { model },
+    });
+    yield* conversed(next, "continue", "Same native Claude history.");
+    expect(fake.turns.at(-1)?.requestedModel).toBeUndefined();
+    expect(fake.turns.at(-1)?.handle.agentSessionId).toBe(native);
+    expect(fake.ensured.at(-1)).toMatchObject({
+      sessionKey,
+      resumeSessionId: `acp:${sessionKey}`,
+    });
+    expect(applied(fake).slice(writes)).toEqual([]);
+    expect(assertions.every((identity) => identity === native)).toBe(true);
+    expect(assertions.length).toBeGreaterThan(1);
+    yield* openConfigure(next);
+    yield* next.until(
+      "the saved Asked model and the exact Verified model",
+      (one) =>
+        drawerShows(one, "Requested: model=fast") && drawerShows(one, `Verified: model=${model}`),
+    );
+  });
 
   it("a verified Claude turn consumes its own Apply and keeps a later same-model Apply", function* () {
     const host = yield* useMountedHost({

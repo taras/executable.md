@@ -298,7 +298,7 @@ function answerStateful(message) {
     return true;
   }
   if (request.subtype === "get_settings") {
-    succeed({ effective: { effortLevel: state.effort } });
+    succeed(state.hideEffort ? {} : { effective: { effortLevel: state.effort } });
     return true;
   }
   if (request.subtype === "get_context_usage") {

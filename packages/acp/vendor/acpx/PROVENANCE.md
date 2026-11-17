@@ -259,4 +259,6 @@ and effort control keys. In-process transactions can read that connection's
 model, context window and attested effort. Immediately before prompt dispatch,
 ACPX verifies requested configuration against the attachment about to receive
 the prompt. The prompt-written signal carries that attachment's observation.
+For an effort request, the transaction reads live effort choices and the
+connected adapter validates that control again on dispatch.
 Exact model restoration supplies the transaction's prior context window.

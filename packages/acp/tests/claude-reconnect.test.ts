@@ -414,6 +414,8 @@ describe(
           resolvedModel: "claude-fable-5-1",
           displayName: "Fable",
           description: "",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "high"],
         },
       ]);
       yield* scoped(function* () {
@@ -428,6 +430,38 @@ describe(
           "claude-fable-5-1",
           "claude-fable-5-1",
         ]);
+        const before = (yield* logged(world)).length;
+        const handle = yield* until(runtime.ensureSession(input(world)));
+        yield* ensure(() => until(runtime.close({ handle, reason: "alias effort" })));
+        const choices = yield* until(
+          runtime.getStatus({ handle, verifyConfiguration: true, inspectEffort: true }),
+        );
+        expect(choices.details?.claudeConfiguration).toMatchObject({
+          model: "claude-fable-5-1",
+          configOptions: expect.arrayContaining([
+            expect.objectContaining({
+              id: "effort",
+              options: expect.arrayContaining([expect.objectContaining({ value: "low" })]),
+            }),
+          ]),
+        });
+        yield* until(runtime.setConfigOption({ handle, key: "effort", value: "low" }));
+        const turn = runtime.startTurn({
+          handle,
+          text: "same alias with low effort",
+          mode: "prompt",
+          requestId: "alias-effort",
+          requestedEffort: "low",
+        });
+        expect((yield* until(turn.result)).status).toBe("completed");
+        const changes = (yield* logged(world)).slice(before);
+        expect(
+          changes.filter((event) => event.control === "effort").map((event) => event.effort),
+        ).toEqual(["low"]);
+        expect(observed(changes)).toEqual({
+          modelWrites: [],
+          prompts: [{ session: handle.agentSessionId, model: "claude-fable-5-1", effort: "low" }],
+        });
       });
 
       const unreadable = yield* useWorld();
@@ -769,6 +803,23 @@ describe(
           }
         }
 
+        const persisted = join(world.state, `${encodeURIComponent(session)}.json`);
+        yield* writeTextFile(
+          persisted,
+          JSON.stringify({ model: ANOTHER, effort: "high", hideEffort: true }),
+        );
+        const beforeUnattested = (yield* logged(world)).length;
+        expect(yield* refused({ effort: "low" })).toContain("cannot verify the prior effort");
+        const unattested = (yield* logged(world)).slice(beforeUnattested);
+        expect(unattested.filter((event) => event.control === "effort")).toEqual([]);
+        expect(observed(unattested)).toEqual({ modelWrites: [], prompts: [] });
+        const afterRefusal = yield* configuredPrompt(undefined, "continue without an effort write");
+        expect(sessionOf(afterRefusal)?.agentSessionId).toBe(nativeId);
+        expect(observed((yield* logged(world)).slice(beforeUnattested)).prompts).toEqual([
+          { session, model: ANOTHER, effort: "high" },
+        ]);
+        yield* writeTextFile(persisted, JSON.stringify({ model: ANOTHER, effort: "high" }));
+
         const variant = { model: "sonnet[1m]", effort: "high" };
         const variantStart = (yield* logged(world)).length;
         yield* configuredPrompt(variant, "verified variant");
@@ -777,7 +828,6 @@ describe(
           prompts: [{ session, model: ANOTHER, effort: "high" }],
         });
 
-        const persisted = join(world.state, `${encodeURIComponent(session)}.json`);
         for (const rejectRestoration of [false, true]) {
           yield* writeTextFile(
             persisted,

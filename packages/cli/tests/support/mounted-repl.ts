@@ -736,6 +736,8 @@ export function* useMountedHost(
       | "agentRegistry"
       | "advertiseNativeLaunch"
       | "advertiseClientNativeAttachment"
+      | "nativeAdapters"
+      | "sessions"
     >;
     readonly agentCwd?: AcpxProviderDependencies["agentCwd"];
   } = {},

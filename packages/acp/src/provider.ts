@@ -2893,7 +2893,11 @@ function* useAcpxProviderState(
           readStatus.call(runtime, {
             handle: entry.handle,
             ...(agentName === "claude" && configuration !== undefined
-              ? { verifyConfiguration: true, ...modelRequest(configuration) }
+              ? {
+                  verifyConfiguration: true,
+                  ...modelRequest(configuration),
+                  ...(configuration.effort === undefined ? {} : { inspectEffort: true }),
+                }
               : {}),
           }),
         ),

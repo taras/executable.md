@@ -1064,7 +1064,7 @@ export function projectHistory(
        * prefer over it.
        */
       verified: Map<number, SessionConfiguration>;
-      nativeSession: boolean;
+      continued: boolean;
       selected: Partial<Record<"model" | "effort", number>>;
       lastOutcome: number;
     }
@@ -1197,7 +1197,7 @@ export function projectHistory(
             completed: new Map<number, string>(),
             at: new Map<number, number>(),
             verified: new Map<number, SessionConfiguration>(),
-            nativeSession: false,
+            continued: false,
             selected: {},
             lastOutcome: -1,
           });
@@ -1363,8 +1363,10 @@ export function projectHistory(
             }
           }
         }
-        if (prompt.agentSessionId) {
-          held.nativeSession = true;
+        // The provider may have retained its native identity before the host
+        // acknowledged it. The placement lets the next use find that record.
+        if (prompt.agentSessionId || prompt.sessionKey !== "") {
+          held.continued = true;
         }
         // This turn as a unit of work, whatever became of it. A failed or
         // cancelled turn is still a turn somebody did, and its own record is
@@ -1693,7 +1695,7 @@ export function projectHistory(
             ...(held.agent === "claude"
               ? {
                   claudeConfiguration: Object.freeze({
-                    continued: held.nativeSession,
+                    continued: held.continued,
                     pending: Object.freeze(pending),
                     settings: Object.freeze(selected),
                   }),

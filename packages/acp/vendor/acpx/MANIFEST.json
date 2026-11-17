@@ -32,7 +32,7 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "b03b942c72599cbd89a16a20cbfc788cba14697e8d10b8df5b3c1bada73fd79b"
+      "sha256": "af34f38d9efc7db560c793637f5a2e19360e08a75318984d57e7832d23e2c0d2"
     },
     {
       "path": "generated/agent-registry-CxpAF3nI.js",
@@ -57,17 +57,17 @@
     {
       "path": "generated/queue-owner-runtime-ucHvXJ33.js",
       "kind": "generated",
-      "sha256": "b292da8819a6626e48811cf4c1e40cb8a21fd3e2b338554d455a6e422abffd40"
+      "sha256": "6d54f8c5c19a166b2295bf680ffe2e69158096c85d974d967b453164748c13c3"
     },
     {
       "path": "generated/runtime.d.ts",
       "kind": "generated",
-      "sha256": "cffa2dbbcf17ad4dd419c5c5c83c365ec973f82b82ec3989ae5e352d05e102b5"
+      "sha256": "4009a64570169728896d78e82b2ae41affeed23f60f7abefe095d7b50e889bf3"
     },
     {
       "path": "generated/runtime.js",
       "kind": "generated",
-      "sha256": "ca4cb5b2f8dffab373c597d17897a8a57e2c383d1f4c5cb2982e5a76cf1e0f9b"
+      "sha256": "5a4a3e67862999ff65d02c10de77cf5cb5d3029168a7119bf6931e8f0aba77a2"
     },
     {
       "path": "generated/session-options-D9KL7-d8.d.ts",

@@ -517,7 +517,11 @@ controls. Explicit intent is supplied by the final authentic use.
 
 A deliberate choice still names an offered row. The prepared adapter compares
 the chosen model or its SDK-reported resolved identity against the native
-observation. A context variant also requires evidence for that variant from
+observation. An effort change on a resumed model uses the effort choices
+the SDK associates with that native identity, including a verified offered
+alias for it. This lookup preserves the observed model ID and does not
+require a model write. A resumed session must report its prior effort before
+an effort setter can run. A context variant requires matching evidence from
 the active Query. A fresh variant without live pre-prompt evidence refuses.
 The check runs on the attachment that forwards the prompt. If configuration
 may have been applied before a failure, restoration verifies the exact prior

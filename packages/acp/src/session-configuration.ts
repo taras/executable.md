@@ -466,6 +466,13 @@ export function* applySessionConfiguration(
         (refreshed.native ? refreshed.native.effort : refreshed.effort.set.selected) !==
         request.effort
       ) {
+        if (refreshed.native !== undefined && priorEffort === undefined) {
+          throw configurationFailure(
+            `Claude cannot verify the prior effort for session "${target.sessionKey}"`,
+            "configuration-mismatch",
+            "effort",
+          );
+        }
         touched = true;
         yield* target.write(refreshed.effort.optionId, request.effort);
       }

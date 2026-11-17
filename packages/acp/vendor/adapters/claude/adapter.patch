@@ -1,5 +1,5 @@
 diff --git a/src/acp-agent.ts b/src/acp-agent.ts
-index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77f321ea12 100644
+index e32f603e7cb85544a9ebf108489fcf98932d14a2..eb8647a97c3ac3a0fbe5cc535ef437e4df16082d 100644
 --- a/src/acp-agent.ts
 +++ b/src/acp-agent.ts
 @@ -81,7 +81,7 @@ import {
@@ -332,11 +332,11 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
    }
  
    async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
-@@ -5004,6 +5179,40 @@ export class ClaudeAcpAgent {
+@@ -5004,6 +5179,47 @@ export class ClaudeAcpAgent {
      return this.sessionModes.setSessionMode(params);
    }
  
-+  async observeSessionConfiguration({ sessionId, requestedModel }: ConfigurationCheck) {
++  async observeSessionConfiguration({ sessionId, requestedModel, inspectEffort }: ConfigurationCheck) {
 +    const session = this.sessions[sessionId];
 +    if (!session || session.queryClosed) {
 +      throw RequestError.resourceNotFound(sessionId);
@@ -367,13 +367,20 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +          (model === offered.resolvedModel || (variant &&
 +            stripContextHints(model) === stripContextHints(offered.resolvedModel))))) &&
 +      (!variant || contextWindow === Number(variant.slice(0, -1)) * 1_000_000));
++    if (inspectEffort || requestedModel !== undefined) {
++      const option = effortConfigOption(
++        observedEffortModel(session.modelInfos, model, contextWindow), effort,
++      );
++      session.configOptions = session.configOptions.filter((entry) => entry.id !== EFFORT_CONFIG_ID);
++      if (option !== undefined) session.configOptions.push(option);
++    }
 +    return { model, contextWindow, effort, matches, configOptions: session.configOptions };
 +  }
 +
    async setSessionConfigOption(
      params: SetSessionConfigOptionRequest,
    ): Promise<SetSessionConfigOptionResponse> {
-@@ -5019,6 +5228,12 @@ export class ClaudeAcpAgent {
+@@ -5019,6 +5235,20 @@ export class ClaudeAcpAgent {
        throw RequestError.internalError(undefined, SESSION_ENDED_MESSAGE);
      }
  
@@ -383,10 +390,18 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +      await session.query.applyFlagSettings({ effortLevel: toSdkEffortLevel(params.value) });
 +      return { configOptions: session.configOptions };
 +    }
++    if (params.configId === EFFORT_CONFIG_ID && session.observing) {
++      const observation = await this.observeSessionConfiguration({
++        sessionId: params.sessionId, inspectEffort: true,
++      });
++      if (observation.effort === undefined) {
++        throw RequestError.invalidParams({ message: "Claude could not report its prior effort" });
++      }
++    }
      const option = session.configOptions.find((o) => o.id === params.configId);
      if (!option) {
        throw new Error(`Unknown config option: ${params.configId}`);
-@@ -5036,6 +5251,15 @@ export class ClaudeAcpAgent {
+@@ -5036,6 +5266,15 @@ export class ClaudeAcpAgent {
        throw new Error(`Invalid value for config option ${params.configId}: ${params.value}`);
      }
  
@@ -402,7 +417,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
      const allValues =
        "options" in option && Array.isArray(option.options)
          ? option.options.flatMap((o) => ("options" in o ? o.options : [o]))
-@@ -5809,7 +6033,7 @@ export class ClaudeAcpAgent {
+@@ -5809,7 +6048,7 @@ export class ClaudeAcpAgent {
        const newEffortOpt = session.configOptions.find((o) => o.id === EFFORT_CONFIG_ID);
        const newEffort =
          typeof newEffortOpt?.currentValue === "string" ? newEffortOpt.currentValue : undefined;
@@ -411,7 +426,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
          await session.query.applyFlagSettings({
            effortLevel: toSdkEffortLevel(newEffort),
          });
-@@ -5997,10 +6221,14 @@ export class ClaudeAcpAgent {
+@@ -5997,10 +6236,14 @@ export class ClaudeAcpAgent {
      if (existingSession) {
        const fingerprint = computeSessionFingerprint(params);
        if (fingerprint === existingSession.sessionFingerprint) {
@@ -426,7 +441,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
          };
        }
  
-@@ -6026,6 +6254,7 @@ export class ClaudeAcpAgent {
+@@ -6026,6 +6269,7 @@ export class ClaudeAcpAgent {
        sessionId: response.sessionId,
        modes: response.modes,
        configOptions: response.configOptions,
@@ -434,7 +449,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
      };
    }
  
-@@ -6058,572 +6287,730 @@ export class ClaudeAcpAgent {
+@@ -6058,572 +6302,730 @@ export class ClaudeAcpAgent {
      }
    }
  
@@ -567,12 +582,13 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +        sessionId = randomUUID();
        }
 -    }
--
+ 
 -    const permissionMode = resolvePermissionMode(
 -      settingsManager.getSettings().permissions?.defaultMode,
 -      this.logger,
 -    );
 -    const initialPermissionMode = creationOpts.permissionMode ?? permissionMode;
++      input = new Pushable<SDKUserMessage>();
  
 -    // Extract options from _meta if provided
 -    const sessionMeta = params._meta as NewSessionMeta | undefined;
@@ -580,10 +596,6 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 -    const forwardSubagentText =
 -      supportsSubagentTranscript(this.clientCapabilities) ||
 -      userProvidedOptions?.forwardSubagentText === true;
-+      input = new Pushable<SDKUserMessage>();
- 
--    // Configure thinking behavior from environment variable
--    const thinking = resolveThinkingConfig(process.env.MAX_THINKING_TOKENS, this.logger);
 +      settingsManager = new SettingsManager(params.cwd, {
 +        logger: this.logger,
 +      });
@@ -592,8 +604,8 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +        throw new Error("Claude adapter closed during session setup");
 +      }
  
--    // Parse model configuration from environment (e.g. Bedrock model overrides)
--    const modelConfig = parseModelConfig(process.env.CLAUDE_MODEL_CONFIG);
+-    // Configure thinking behavior from environment variable
+-    const thinking = resolveThinkingConfig(process.env.MAX_THINKING_TOKENS, this.logger);
 +      const mcpServers: Record<string, McpServerConfig> = {};
 +      if (Array.isArray(params.mcpServers)) {
 +        for (const server of params.mcpServers) {
@@ -620,13 +632,8 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +        }
 +      }
  
--    // Elicitation modes the connected client advertised. We only forward
--    // elicitations (and only re-enable AskUserQuestion) for modes the client
--    // can actually render.
--    const elicitationSupport: ElicitationSupport = {
--      form: !!this.clientCapabilities?.elicitation?.form,
--      url: !!this.clientCapabilities?.elicitation?.url,
--    };
+-    // Parse model configuration from environment (e.g. Bedrock model overrides)
+-    const modelConfig = parseModelConfig(process.env.CLAUDE_MODEL_CONFIG);
 +      let systemPrompt: Options["systemPrompt"] = { type: "preset", preset: "claude_code" };
 +      if (params._meta?.systemPrompt) {
 +        const customPrompt = params._meta.systemPrompt;
@@ -646,6 +653,41 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +          } as Options["systemPrompt"];
 +        }
 +      }
+ 
+-    // Elicitation modes the connected client advertised. We only forward
+-    // elicitations (and only re-enable AskUserQuestion) for modes the client
+-    // can actually render.
+-    const elicitationSupport: ElicitationSupport = {
+-      form: !!this.clientCapabilities?.elicitation?.form,
+-      url: !!this.clientCapabilities?.elicitation?.url,
+-    };
++      const permissionMode = resolvePermissionMode(
++        settingsManager.getSettings().permissions?.defaultMode,
++        this.logger,
++      );
++      const initialPermissionMode = creationOpts.permissionMode ?? permissionMode;
++
++      // Extract options from _meta if provided
++      const sessionMeta = params._meta as NewSessionMeta | undefined;
++      const observing = creationOpts.resume !== undefined && !creationOpts.forkSession;
++      const userProvidedOptions = sessionMeta?.claudeCode?.options;
++      const forwardSubagentText =
++        supportsSubagentTranscript(this.clientCapabilities) ||
++        userProvidedOptions?.forwardSubagentText === true;
++
++      // Configure thinking behavior from environment variable
++      const thinking = resolveThinkingConfig(process.env.MAX_THINKING_TOKENS, this.logger);
++
++      // Parse model configuration from environment (e.g. Bedrock model overrides)
++      const modelConfig = parseModelConfig(process.env.CLAUDE_MODEL_CONFIG);
++
++      // Elicitation modes the connected client advertised. We only forward
++      // elicitations (and only re-enable AskUserQuestion) for modes the client
++      // can actually render.
++      const elicitationSupport: ElicitationSupport = {
++        form: !!this.clientCapabilities?.elicitation?.form,
++        url: !!this.clientCapabilities?.elicitation?.url,
++      };
  
 -    // AskUserQuestion surfaces as a `permission_ask_user_question` dialog that
 -    // we render as a form elicitation. Without form-elicitation support there
@@ -675,34 +717,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 -      ...(userProvidedOptions?.additionalDirectories ?? []),
 -      ...acpAdditionalDirectories,
 -    ];
-+      const permissionMode = resolvePermissionMode(
-+        settingsManager.getSettings().permissions?.defaultMode,
-+        this.logger,
-+      );
-+      const initialPermissionMode = creationOpts.permissionMode ?? permissionMode;
-+
-+      // Extract options from _meta if provided
-+      const sessionMeta = params._meta as NewSessionMeta | undefined;
-+      const observing = creationOpts.resume !== undefined && !creationOpts.forkSession;
-+      const userProvidedOptions = sessionMeta?.claudeCode?.options;
-+      const forwardSubagentText =
-+        supportsSubagentTranscript(this.clientCapabilities) ||
-+        userProvidedOptions?.forwardSubagentText === true;
-+
-+      // Configure thinking behavior from environment variable
-+      const thinking = resolveThinkingConfig(process.env.MAX_THINKING_TOKENS, this.logger);
-+
-+      // Parse model configuration from environment (e.g. Bedrock model overrides)
-+      const modelConfig = parseModelConfig(process.env.CLAUDE_MODEL_CONFIG);
-+
-+      // Elicitation modes the connected client advertised. We only forward
-+      // elicitations (and only re-enable AskUserQuestion) for modes the client
-+      // can actually render.
-+      const elicitationSupport: ElicitationSupport = {
-+        form: !!this.clientCapabilities?.elicitation?.form,
-+        url: !!this.clientCapabilities?.elicitation?.url,
-+      };
- 
+-
 -    const fileChangeAuditSupport = supportsAgentFileChangeReport(this.clientCapabilities)
 -      ? createFileChangeAuditSupport({
 -          cwd: params.cwd,
@@ -1694,7 +1709,107 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
    }
  
    /**
-@@ -7574,6 +7961,58 @@ async function readResumedLiveModel(
+@@ -7143,6 +7545,55 @@ export type FastModeOptionState = {
+   disabledReason?: FastModeDisabledReason;
+ };
+ 
++function observedEffortModel(
++  models: ModelInfo[], live: string, window: number | null,
++): ModelInfo | undefined {
++  const supportsContext = (model: ModelInfo) => {
++    const hint = contextHintOf(model.value) ?? contextHintOf(model.resolvedModel ?? "");
++    return !hint || window === Number(hint.slice(0, -1)) * 1_000_000;
++  };
++  return models.find((row) => row.value === live && supportsContext(row)) ??
++    models.find((row) => row.value !== "default" &&
++      row.resolvedModel === live && supportsContext(row)) ??
++    models.find((row) => row.value === "default" &&
++      row.resolvedModel === live && supportsContext(row));
++}
++
++function effortConfigOption(
++  currentModelInfo: ModelInfo | undefined,
++  currentEffortLevel: string | undefined,
++): SessionConfigOption | undefined {
++  const supportedLevels = currentModelInfo?.supportsEffort
++    ? (currentModelInfo.supportedEffortLevels ?? [])
++    : [];
++
++  if (supportedLevels.length === 0) return undefined;
++  const effortOptions = [
++    { value: "default", name: "Default" },
++    ...supportedLevels.map((level) => ({
++      value: level,
++      name: level
++        .split(/[_-]/)
++        .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
++        .join(" "),
++    })),
++  ];
++
++  const includes = (l: string) => l === "default" || (supportedLevels as string[]).includes(l);
++  const validEffort =
++    currentEffortLevel && includes(currentEffortLevel) ? currentEffortLevel : "default";
++
++  return {
++    id: EFFORT_CONFIG_ID,
++    name: "Effort",
++    description: "Available effort levels for this model",
++    category: "thought_level",
++    type: "select",
++    currentValue: validEffort,
++    options: effortOptions,
++  };
++}
++
+ export function buildConfigOptions(
+   modes: SessionModeState,
+   models: SessionModelState,
+@@ -7181,38 +7632,11 @@ export function buildConfigOptions(
+     },
+   ];
+ 
+-  // Add effort level option based on the currently selected model
+-  const currentModelInfo = modelInfos.find((m) => m.value === models.currentModelId);
+-  const supportedLevels = currentModelInfo?.supportsEffort
+-    ? (currentModelInfo.supportedEffortLevels ?? [])
+-    : [];
+-
+-  if (supportedLevels.length > 0) {
+-    const effortOptions = [
+-      { value: "default", name: "Default" },
+-      ...supportedLevels.map((level) => ({
+-        value: level,
+-        name: level
+-          .split(/[_-]/)
+-          .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+-          .join(" "),
+-      })),
+-    ];
+-
+-    const includes = (l: string) => l === "default" || (supportedLevels as string[]).includes(l);
+-    const validEffort =
+-      currentEffortLevel && includes(currentEffortLevel) ? currentEffortLevel : "default";
+-
+-    options.push({
+-      id: EFFORT_CONFIG_ID,
+-      name: "Effort",
+-      description: "Available effort levels for this model",
+-      category: "thought_level",
+-      type: "select",
+-      currentValue: validEffort,
+-      options: effortOptions,
+-    });
+-  }
++  const effort = effortConfigOption(
++    modelInfos.find((model) => model.value === models.currentModelId),
++    currentEffortLevel,
++  );
++  if (effort !== undefined) options.push(effort);
+ 
+   // Surface the Fast mode toggle only when the current model supports it. The
+   // option renders as a native boolean toggle for Clients that opted in, and a
+@@ -7574,6 +7998,58 @@ async function readResumedLiveModel(
    }
  }
  
@@ -1753,13 +1868,14 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
  async function getAvailableModels(
    query: Query,
    models: ModelInfo[],
-@@ -8664,6 +9103,23 @@ export async function runPromptWithCancellation(
+@@ -8664,6 +9140,28 @@ export async function runPromptWithCancellation(
    }
  }
  
 +interface ConfigurationCheck {
 +  sessionId: string;
 +  requestedModel?: string;
++  inspectEffort?: boolean;
 +}
 +
 +function parseConfigurationCheck(input: unknown): ConfigurationCheck {
@@ -1771,13 +1887,17 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..6a788f1db9a5e61a000a1ff49a60bd77
 +  if (requestedModel !== undefined && typeof requestedModel !== "string") {
 +    throw RequestError.invalidParams();
 +  }
-+  return { sessionId: input.sessionId, requestedModel };
++  const inspectEffort = "inspectEffort" in input ? input.inspectEffort : undefined;
++  if (inspectEffort !== undefined && typeof inspectEffort !== "boolean") {
++    throw RequestError.invalidParams();
++  }
++  return { sessionId: input.sessionId, requestedModel, inspectEffort };
 +}
 +
  export function runAcp(logger?: Logger) {
    const input = nodeToWebWritable(process.stdout);
    const output = nodeToWebReadable(process.stdin);
-@@ -8688,6 +9144,8 @@ export function runAcp(logger?: Logger) {
+@@ -8688,6 +9186,8 @@ export function runAcp(logger?: Logger) {
      .onRequest(methods.agent.session.resume, (ctx) => agent.resumeSession(ctx.params))
      .onRequest(methods.agent.session.close, (ctx) => agent.closeSession(ctx.params))
      .onRequest(methods.agent.session.setMode, (ctx) => agent.setSessionMode(ctx.params))
