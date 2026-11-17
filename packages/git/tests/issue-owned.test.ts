@@ -1,4 +1,5 @@
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 /**
  * The durable envelope an owned Issue operation runs inside, and the
  * compatibility it owes the profile that used to be the only one.
@@ -21,7 +22,6 @@ import { captureTestJournal } from "@executablemd/test-support/failure-journal";
  *   execution still refuses.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { resource, scoped } from "effection";
 import type { Operation } from "effection";
@@ -372,56 +372,45 @@ function workflowProfile(runId: string): readonly ExecutionInstallation[] {
   ];
 }
 
-function liveIssueCase(
-  name: string,
-  check: (fixture: Fixture, path: string, stream: InMemoryStream) => Operation<void>,
-): void {
-  it(name, function* () {
-    const fixture = yield* useFixture();
-    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
-    yield* captureTestJournal(
-      { owner: "packages/git/tests/issue-owned.test.ts", name },
-      path,
-      (stream) => check(fixture, path, stream),
-    );
-  });
-}
+const OWNER = "packages/git/tests/issue-owned.test.ts";
 
 describe("the durable envelope an owned Issue operation runs inside", () => {
-  liveIssueCase(
-    "E1: retains the answer one live read composed, and names it after the request",
-    function* (fixture, path, stream): Operation<void> {
-      const ran = yield* run(
-        fixture,
-        '<OwnedRead url="https://github.com/octo/project/issues/7" />',
-        stream,
-        {
-          read: function* (): Operation<unknown> {
-            // A valid normalized result, answered without any transport: this is
-            // what a live middleware answer is, and the envelope records it.
-            return { ...DETAILS, tags: [...DETAILS.tags] };
-          },
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("E1: retains the answer one live read composed, and names it after the request", function* (): Operation<void> {
+    const fixture = yield* useFixture();
+    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
+    const ran = yield* run(
+      fixture,
+      '<OwnedRead url="https://github.com/octo/project/issues/7" />',
+      stream,
+      {
+        read: function* (): Operation<unknown> {
+          // A valid normalized result, answered without any transport: this is
+          // what a live middleware answer is, and the envelope records it.
+          return { ...DETAILS, tags: [...DETAILS.tags] };
         },
-        { path },
-      );
+      },
+      { path },
+    );
 
-      expect(ran.refusal).toBe(undefined);
-      expect(ran.seen.live).toEqual(["read"]);
-      expect(ran.seen.transport).toEqual([]);
-      expect(ran.seen.answers).toEqual([{ ...DETAILS, tags: [...DETAILS.tags] }]);
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.seen.live).toEqual(["read"]);
+    expect(ran.seen.transport).toEqual([]);
+    expect(ran.seen.answers).toEqual([{ ...DETAILS, tags: [...DETAILS.tags] }]);
 
-      const records = issueRecords(ran.events);
-      expect(records.length).toBe(1);
-      expect(requestOf(records[0])).toEqual({
-        operation: "read",
-        identity: { runId: "owner-1", expansionId: "site-1" },
-        url: ISSUE_URL,
-        provider: null,
-      });
-      expect(valueOf(records[0])).toEqual({ ...DETAILS, tags: [...DETAILS.tags] });
-      expect(nameOf(records[0])).toBe(yield* digestOf(requestOf(records[0])));
-    },
-  );
+    const records = issueRecords(ran.events);
+    expect(records.length).toBe(1);
+    expect(requestOf(records[0])).toEqual({
+      operation: "read",
+      identity: { runId: "owner-1", expansionId: "site-1" },
+      url: ISSUE_URL,
+      provider: null,
+    });
+    expect(valueOf(records[0])).toEqual({ ...DETAILS, tags: [...DETAILS.tags] });
+    expect(nameOf(records[0])).toBe(yield* digestOf(requestOf(records[0])));
+  });
 
   it("E1: replays a completed read without invoking the live operation at all", function* (): Operation<void> {
     const fixture = yield* useFixture();
@@ -512,100 +501,98 @@ describe("the durable envelope an owned Issue operation runs inside", () => {
     expect(issueRecords(again.events).length).toBe(1);
   });
 
-  liveIssueCase(
-    "E1: a child's record lands before its parent's, and each call retains one",
-    function* (fixture, path, stream): Operation<void> {
-      const ran = yield* run(
-        fixture,
-        [
-          "<OwnedParent>",
-          '<OwnedRead url="https://github.com/octo/project/issues/7" site="child" />',
-          "</OwnedParent>",
-          '<OwnedUpsert title="Filed" site="parent" />',
-        ].join("\n"),
-        stream,
-        {
-          read: function* (): Operation<unknown> {
-            return { ...DETAILS, tags: [...DETAILS.tags] };
-          },
-          upsert: function* (): Operation<unknown> {
-            return { url: `${TRACKER}/issues/12` };
+  it("E1: a child's record lands before its parent's, and each call retains one", function* (): Operation<void> {
+    const fixture = yield* useFixture();
+    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
+    const ran = yield* run(
+      fixture,
+      [
+        "<OwnedParent>",
+        '<OwnedRead url="https://github.com/octo/project/issues/7" site="child" />',
+        "</OwnedParent>",
+        '<OwnedUpsert title="Filed" site="parent" />',
+      ].join("\n"),
+      stream,
+      {
+        read: function* (): Operation<unknown> {
+          return { ...DETAILS, tags: [...DETAILS.tags] };
+        },
+        upsert: function* (): Operation<unknown> {
+          return { url: `${TRACKER}/issues/12` };
+        },
+      },
+      { path },
+    );
+
+    expect(ran.refusal).toBe(undefined);
+    const records = issueRecords(ran.events);
+    // One envelope per Issue operation, in the order the document reached them:
+    // the content's read finished at its own position before the upsert that
+    // follows it was offered.
+    expect(records.length).toBe(2);
+    expect(requestOf(records[0])).toMatchObject({ operation: "read" });
+    expect(requestOf(records[1])).toMatchObject({ operation: "upsert" });
+  });
+
+  it("E7: writes a workflow run's record exactly as it has always written it", function* (): Operation<void> {
+    const fixture = yield* useFixture();
+    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
+    const ran = yield* run(
+      fixture,
+      WORKFLOW_ENTRY,
+      stream,
+      {},
+      {
+        path,
+        retained: true,
+        installations: workflowProfile(RUN.runId),
+        transport: {
+          // deno-lint-ignore require-yield
+          *upsert(): Operation<IssueReference> {
+            return { url: `${TRACKER}/issues/21` };
           },
         },
-        { path },
-      );
+      },
+    );
 
-      expect(ran.refusal).toBe(undefined);
-      const records = issueRecords(ran.events);
-      // One envelope per Issue operation, in the order the document reached them:
-      // the content's read finished at its own position before the upsert that
-      // follows it was offered.
-      expect(records.length).toBe(2);
-      expect(requestOf(records[0])).toMatchObject({ operation: "read" });
-      expect(requestOf(records[1])).toMatchObject({ operation: "upsert" });
-    },
-  );
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.seen.transport).toEqual([`upsert ${TRACKER}`]);
 
-  liveIssueCase(
-    "E7: writes a workflow run's record exactly as it has always written it",
-    function* (fixture, path, stream): Operation<void> {
-      const ran = yield* run(
-        fixture,
-        WORKFLOW_ENTRY,
-        stream,
-        {},
-        {
-          path,
-          retained: true,
-          installations: workflowProfile(RUN.runId),
-          transport: {
-            // deno-lint-ignore require-yield
-            *upsert(): Operation<IssueReference> {
-              return { url: `${TRACKER}/issues/21` };
-            },
-          },
-        },
-      );
-
-      expect(ran.refusal).toBe(undefined);
-      expect(ran.seen.transport).toEqual([`upsert ${TRACKER}`]);
-
-      const record = issueRecords(ran.events)[0];
-      const asked = requestOf(record);
-      // The expansion id is the engine's, so it is read back rather than
-      // predicted. Everything around it is the encoding this row is about.
-      const site = String(
-        Reflect.get(Object(Reflect.get(Object(asked), "identity")), "expansionId"),
-      );
-      expect(asked).toEqual({
-        operation: "upsert",
-        identity: { runId: RUN.runId, expansionId: site },
-        target: TRACKER,
-        provider: null,
-        issue: {
-          title: "Filed",
-          description: "a described issue",
-          tags: [],
-          assignee: null,
-        },
-      });
-      expect(valueOf(record)).toEqual({ url: `${TRACKER}/issues/21` });
-      expect(nameOf(record)).toBe(yield* digestOf(asked));
-      // And the key the provider was handed is the canonical encoding of this
-      // run's own identity and target, computed here rather than by the code
-      // that produced it.
-      expect(ran.seen.keys).toEqual([
-        JSON.stringify(
-          sorted({
-            operation: "upsert",
-            canonicalTargetUrl: TRACKER,
-            runId: RUN.runId,
-            expansionId: site,
-          }),
-        ),
-      ]);
-    },
-  );
+    const record = issueRecords(ran.events)[0];
+    const asked = requestOf(record);
+    // The expansion id is the engine's, so it is read back rather than
+    // predicted. Everything around it is the encoding this row is about.
+    const site = String(Reflect.get(Object(Reflect.get(Object(asked), "identity")), "expansionId"));
+    expect(asked).toEqual({
+      operation: "upsert",
+      identity: { runId: RUN.runId, expansionId: site },
+      target: TRACKER,
+      provider: null,
+      issue: {
+        title: "Filed",
+        description: "a described issue",
+        tags: [],
+        assignee: null,
+      },
+    });
+    expect(valueOf(record)).toEqual({ url: `${TRACKER}/issues/21` });
+    expect(nameOf(record)).toBe(yield* digestOf(asked));
+    // And the key the provider was handed is the canonical encoding of this
+    // run's own identity and target, computed here rather than by the code
+    // that produced it.
+    expect(ran.seen.keys).toEqual([
+      JSON.stringify(
+        sorted({
+          operation: "upsert",
+          canonicalTargetUrl: TRACKER,
+          runId: RUN.runId,
+          expansionId: site,
+        }),
+      ),
+    ]);
+  });
 
   it("E7: replays the run's own record without reaching a provider", function* (): Operation<void> {
     const fixture = yield* useFixture();

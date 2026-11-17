@@ -36,11 +36,9 @@ import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
 import { WORKFLOW_RUN } from "../src/journal.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import { retainedRunMismatch } from "../mod.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/workflow/tests/workflow-run.test.ts";
-const journalCase = journalCases(OWNER);
 
 const BUNDLE = "9fceb02d0ae598e95dc970b74767f19372d61af89fceb02d0ae598e95dc970b74";
 const OTHER_BUNDLE = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -126,215 +124,233 @@ function recordedRun(stream: InMemoryStream): Json | undefined {
 }
 
 describe("Tier WR — workflow runs", () => {
-  journalCase(
-    "WR1: is unreadable before the execution, readable inside it, unreadable after",
-    "<eval>",
-    function* (stream) {
-      const seen: WorkflowRun[] = [];
-      const before: string[] = [];
-      const after: string[] = [];
-
-      yield* scoped(function* () {
-        yield* useProbe(seen);
-        const workflow = runInstallation();
-
-        // Installing the middleware creates no workflow run.
-        try {
-          yield* getWorkflowRun();
-        } catch (error) {
-          before.push(error instanceof Error ? error.message : String(error));
-        }
-
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
-        );
-
-        // ...and the run does not outlive the execution that owns it, even though
-        // the scope that installed the middleware is still alive.
-        try {
-          yield* getWorkflowRun();
-        } catch (error) {
-          after.push(error instanceof Error ? error.message : String(error));
-        }
-      });
-
-      expect(seen).toHaveLength(1);
-      expect(seen[0]).toEqual({ runId: expect.any(String), bundleHash: BUNDLE });
-      expect(before[0]).toContain("run installation");
-      expect(after[0]).toContain("run installation");
-    },
-  );
-
-  journalCase(
-    "WR2: every read inside one execution answers with the same frozen value",
-    "<eval>",
-    function* (stream) {
-      const seen: WorkflowRun[] = [];
-
-      yield* scoped(function* () {
-        yield* useProbe(seen);
-        const workflow = runInstallation();
-        yield* collect(
-          yield* executeInstalled(
-            {
-              ...inlineSource("<Probe />\n\n<Probe />\n"),
-              stream,
-            },
-            [workflow],
-          ),
-        );
-      });
-
-      expect(seen).toHaveLength(2);
-      expect(seen[0]).toBe(seen[1]);
-      expect(Object.isFrozen(seen[0])).toBe(true);
-    },
-  );
-
-  const concurrentRuns = "WR3: concurrent executions each read their own run";
-  journalCase(concurrentRuns, "<eval>", function* (streamA) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: concurrentRuns },
+  it("WR1: is unreadable before the execution, readable inside it, unreadable after", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "WR1: is unreadable before the execution, readable inside it, unreadable after",
+      },
       "<eval>",
-      function* (streamB) {
-        const first: WorkflowRun[] = [];
-        const second: WorkflowRun[] = [];
-
-        function run(
-          stream: InMemoryStream,
-          into: WorkflowRun[],
-          bundleHash: string,
-          runId: string,
-        ): Operation<void> {
-          return scoped(function* () {
-            yield* useProbe(into);
-            const workflow = runInstallation(bundleHash, { runId });
-            yield* collect(
-              yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
-            );
-          });
-        }
+      function* (stream) {
+        const seen: WorkflowRun[] = [];
+        const before: string[] = [];
+        const after: string[] = [];
 
         yield* scoped(function* () {
-          const a = yield* spawn(() => run(streamA, first, BUNDLE, "first-run"));
-          const b = yield* spawn(() => run(streamB, second, OTHER_BUNDLE, "second-run"));
-          yield* a;
-          yield* b;
+          yield* useProbe(seen);
+          const workflow = runInstallation();
+
+          // Installing the middleware creates no workflow run.
+          try {
+            yield* getWorkflowRun();
+          } catch (error) {
+            before.push(error instanceof Error ? error.message : String(error));
+          }
+
+          yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
+          );
+
+          // ...and the run does not outlive the execution that owns it, even though
+          // the scope that installed the middleware is still alive.
+          try {
+            yield* getWorkflowRun();
+          } catch (error) {
+            after.push(error instanceof Error ? error.message : String(error));
+          }
         });
 
-        expect(first[0]?.bundleHash).toBe(BUNDLE);
-        expect(second[0]?.bundleHash).toBe(OTHER_BUNDLE);
-        expect(first[0]?.runId).not.toBe(second[0]?.runId);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toEqual({ runId: expect.any(String), bundleHash: BUNDLE });
+        expect(before[0]).toContain("run installation");
+        expect(after[0]).toContain("run installation");
       },
-    );
-  });
+    ));
 
-  const sharedInstallation =
-    "WR20: one installation value reused by two executions gives each its own run";
-  journalCase(sharedInstallation, "<eval>", function* (streamA) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: sharedInstallation },
+  it("WR2: every read inside one execution answers with the same frozen value", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "WR2: every read inside one execution answers with the same frozen value",
+      },
       "<eval>",
-      function* (streamB) {
-        // A host may hold one installation value and run more than one document
-        // with it. Each of those is a separate execution, and the run one of them
-        // records is not the other's — including while both are live.
-        const shared = runInstallation();
-        const prepared = withResolvers<void>();
-        const release = withResolvers<void>();
-        const seenA: WorkflowRun[] = [];
-        const seenB: WorkflowRun[] = [];
-
-        const first = yield* spawn(() =>
-          scoped(function* () {
-            yield* registerComponents([
-              {
-                name: "Hold",
-                origin: "tier-wr",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                *fn() {
-                  // Prepared, and holding here while the sibling runs end to end.
-                  prepared.resolve();
-                  yield* release.operation;
-                  seenA.push(yield* getWorkflowRun());
-                  seenA.push(yield* getWorkflowRun());
-                  return "";
-                },
-              },
-            ]);
-            return yield* collect(
-              yield* executeInstalled({ ...inlineSource("<Hold />\n"), stream: streamA }, [shared]),
-            );
-          }),
-        );
-
-        yield* prepared.operation;
+      function* (stream) {
+        const seen: WorkflowRun[] = [];
 
         yield* scoped(function* () {
-          yield* useProbe(seenB);
+          yield* useProbe(seen);
+          const workflow = runInstallation();
           yield* collect(
-            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: streamB }, [shared]),
+            yield* executeInstalled(
+              {
+                ...inlineSource("<Probe />\n\n<Probe />\n"),
+                stream,
+              },
+              [workflow],
+            ),
           );
         });
 
-        release.resolve();
-        yield* first;
+        expect(seen).toHaveLength(2);
+        expect(seen[0]).toBe(seen[1]);
+        expect(Object.isFrozen(seen[0])).toBe(true);
+      },
+    ));
 
-        const recordedA = recordedRun(streamA);
-        const recordedB = recordedRun(streamB);
-        expect(recordedA).toBeDefined();
-        expect(recordedB).toBeDefined();
-        const idA =
-          recordedA !== null && typeof recordedA === "object" && "runId" in recordedA
-            ? recordedA.runId
-            : undefined;
-        const idB =
-          recordedB !== null && typeof recordedB === "object" && "runId" in recordedB
-            ? recordedB.runId
-            : undefined;
-        // Two executions, two runs.
-        expect(idA).toBeDefined();
-        expect(idB).toBeDefined();
-        expect(idA).not.toEqual(idB);
+  const concurrentRuns = "WR3: concurrent executions each read their own run";
+  it(concurrentRuns, () =>
+    captureTestJournal({ owner: OWNER, name: concurrentRuns }, "<eval>", function* (streamA) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: concurrentRuns },
+        "<eval>",
+        function* (streamB) {
+          const first: WorkflowRun[] = [];
+          const second: WorkflowRun[] = [];
 
-        // Each document read the run its own journal records — the sibling's
-        // preparation and completion changed neither.
-        expect(seenA[0]?.runId).toEqual(idA);
-        expect(seenB[0]?.runId).toEqual(idB);
-        // And every read inside one execution is the same frozen object.
-        expect(seenA[0]).toBe(seenA[1]);
+          function run(
+            stream: InMemoryStream,
+            into: WorkflowRun[],
+            bundleHash: string,
+            runId: string,
+          ): Operation<void> {
+            return scoped(function* () {
+              yield* useProbe(into);
+              const workflow = runInstallation(bundleHash, { runId });
+              yield* collect(
+                yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
+              );
+            });
+          }
 
-        // Nothing leaked into a later ordinary execution.
-        yield* captureTestJournal(
-          { owner: OWNER, name: sharedInstallation },
-          "<eval>",
-          function* (ordinary) {
-            let leaked: unknown;
-            yield* scoped(function* () {
-              yield* useForbiddenGit();
+          yield* scoped(function* () {
+            const a = yield* spawn(() => run(streamA, first, BUNDLE, "first-run"));
+            const b = yield* spawn(() => run(streamB, second, OTHER_BUNDLE, "second-run"));
+            yield* a;
+            yield* b;
+          });
+
+          expect(first[0]?.bundleHash).toBe(BUNDLE);
+          expect(second[0]?.bundleHash).toBe(OTHER_BUNDLE);
+          expect(first[0]?.runId).not.toBe(second[0]?.runId);
+        },
+      );
+    }),
+  );
+
+  const sharedInstallation =
+    "WR20: one installation value reused by two executions gives each its own run";
+  it(sharedInstallation, () =>
+    captureTestJournal({ owner: OWNER, name: sharedInstallation }, "<eval>", function* (streamA) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: sharedInstallation },
+        "<eval>",
+        function* (streamB) {
+          // A host may hold one installation value and run more than one document
+          // with it. Each of those is a separate execution, and the run one of them
+          // records is not the other's — including while both are live.
+          const shared = runInstallation();
+          const prepared = withResolvers<void>();
+          const release = withResolvers<void>();
+          const seenA: WorkflowRun[] = [];
+          const seenB: WorkflowRun[] = [];
+
+          const first = yield* spawn(() =>
+            scoped(function* () {
               yield* registerComponents([
                 {
-                  name: "Probe",
+                  name: "Hold",
                   origin: "tier-wr",
                   props: { type: "object", properties: {}, additionalProperties: false },
                   *fn() {
-                    try {
-                      leaked = yield* getWorkflowRun();
-                    } catch {
-                      leaked = "refused";
-                    }
+                    // Prepared, and holding here while the sibling runs end to end.
+                    prepared.resolve();
+                    yield* release.operation;
+                    seenA.push(yield* getWorkflowRun());
+                    seenA.push(yield* getWorkflowRun());
                     return "";
                   },
                 },
               ]);
-              yield* collect(yield* execute({ ...inlineSource("<Probe />\n"), stream: ordinary }));
-            });
-            expect(leaked).toEqual("refused");
-          },
-        );
-      },
-    );
-  });
+              return yield* collect(
+                yield* executeInstalled({ ...inlineSource("<Hold />\n"), stream: streamA }, [
+                  shared,
+                ]),
+              );
+            }),
+          );
+
+          yield* prepared.operation;
+
+          yield* scoped(function* () {
+            yield* useProbe(seenB);
+            yield* collect(
+              yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: streamB }, [
+                shared,
+              ]),
+            );
+          });
+
+          release.resolve();
+          yield* first;
+
+          const recordedA = recordedRun(streamA);
+          const recordedB = recordedRun(streamB);
+          expect(recordedA).toBeDefined();
+          expect(recordedB).toBeDefined();
+          const idA =
+            recordedA !== null && typeof recordedA === "object" && "runId" in recordedA
+              ? recordedA.runId
+              : undefined;
+          const idB =
+            recordedB !== null && typeof recordedB === "object" && "runId" in recordedB
+              ? recordedB.runId
+              : undefined;
+          // Two executions, two runs.
+          expect(idA).toBeDefined();
+          expect(idB).toBeDefined();
+          expect(idA).not.toEqual(idB);
+
+          // Each document read the run its own journal records — the sibling's
+          // preparation and completion changed neither.
+          expect(seenA[0]?.runId).toEqual(idA);
+          expect(seenB[0]?.runId).toEqual(idB);
+          // And every read inside one execution is the same frozen object.
+          expect(seenA[0]).toBe(seenA[1]);
+
+          // Nothing leaked into a later ordinary execution.
+          yield* captureTestJournal(
+            { owner: OWNER, name: sharedInstallation },
+            "<eval>",
+            function* (ordinary) {
+              let leaked: unknown;
+              yield* scoped(function* () {
+                yield* useForbiddenGit();
+                yield* registerComponents([
+                  {
+                    name: "Probe",
+                    origin: "tier-wr",
+                    props: { type: "object", properties: {}, additionalProperties: false },
+                    *fn() {
+                      try {
+                        leaked = yield* getWorkflowRun();
+                      } catch {
+                        leaked = "refused";
+                      }
+                      return "";
+                    },
+                  },
+                ]);
+                yield* collect(
+                  yield* execute({ ...inlineSource("<Probe />\n"), stream: ordinary }),
+                );
+              });
+              expect(leaked).toEqual("refused");
+            },
+          );
+        },
+      );
+    }),
+  );
 
   it("WR4: a completed journal restores the run without consulting Git", function* () {
     const stream = new InMemoryStream();
@@ -473,86 +489,92 @@ describe("Tier WR — workflow runs", () => {
     expect(replay.snapshot().length).toEqual(recorded.length);
   });
 
-  journalCase(
-    "WR8: a run survives a document that fails after it was recorded",
-    "<eval>",
-    function* (stream) {
-      const result = yield* scoped(function* () {
-        const workflow = runInstallation();
-        return yield* yield* executeInstalled(
-          {
-            // A value root that produces no <Return> fails after expansion begins.
-            ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
-            stream,
-          },
-          [workflow],
-        );
-      });
+  it("WR8: a run survives a document that fails after it was recorded", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WR8: a run survives a document that fails after it was recorded" },
+      "<eval>",
+      function* (stream) {
+        const result = yield* scoped(function* () {
+          const workflow = runInstallation();
+          return yield* yield* executeInstalled(
+            {
+              // A value root that produces no <Return> fails after expansion begins.
+              ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
+              stream,
+            },
+            [workflow],
+          );
+        });
 
-      expect(result.ok).toBe(false);
-      expect(recordedRun(stream)).toEqual({
-        runId: expect.any(String),
-        bundleHash: BUNDLE,
-      });
-    },
-  );
+        expect(result.ok).toBe(false);
+        expect(recordedRun(stream)).toEqual({
+          runId: expect.any(String),
+          bundleHash: BUNDLE,
+        });
+      },
+    ));
 
   // Ordinary execution stays Git-independent: with no workflow middleware
   // installed, nothing reaches the process boundary looking for `git`.
-  journalCase(
-    "WR9: an execution without a workflow installation never invokes Git",
-    "<eval>",
-    function* (stream) {
-      const commands: string[][] = [];
+  it("WR9: an execution without a workflow installation never invokes Git", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WR9: an execution without a workflow installation never invokes Git" },
+      "<eval>",
+      function* (stream) {
+        const commands: string[][] = [];
 
-      const output = yield* scoped(function* () {
-        yield* API.Process.around(
-          {
-            // deno-lint-ignore require-yield
-            *exec([options]) {
-              commands.push(options.command);
-              throw new Error(`the run executed ${options.command[0]}`);
+        const output = yield* scoped(function* () {
+          yield* API.Process.around(
+            {
+              // deno-lint-ignore require-yield
+              *exec([options]) {
+                commands.push(options.command);
+                throw new Error(`the run executed ${options.command[0]}`);
+              },
             },
-          },
-          { at: "min" },
-        );
-        return yield* collect(yield* execute({ ...inlineSource("# Hello\n"), stream }));
-      });
+            { at: "min" },
+          );
+          return yield* collect(yield* execute({ ...inlineSource("# Hello\n"), stream }));
+        });
 
-      expect(String(output)).toContain("Hello");
-      expect(commands).toHaveLength(0);
-    },
-  );
+        expect(String(output)).toContain("Hello");
+        expect(commands).toHaveLength(0);
+      },
+    ));
 
-  journalCase(
-    "WR10: getWorkflowRun() throws inside an execution that installed no workflow",
-    "<eval>",
-    function* (stream) {
-      const failures: string[] = [];
+  it("WR10: getWorkflowRun() throws inside an execution that installed no workflow", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "WR10: getWorkflowRun() throws inside an execution that installed no workflow",
+      },
+      "<eval>",
+      function* (stream) {
+        const failures: string[] = [];
 
-      yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Probe",
-            origin: "tier-wr",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn() {
-              try {
-                yield* getWorkflowRun();
-              } catch (error) {
-                failures.push(error instanceof Error ? error.message : String(error));
-              }
-              return "";
+        yield* scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Probe",
+              origin: "tier-wr",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              *fn() {
+                try {
+                  yield* getWorkflowRun();
+                } catch (error) {
+                  failures.push(error instanceof Error ? error.message : String(error));
+                }
+                return "";
+              },
             },
-          },
-        ]);
-        yield* collect(yield* execute({ ...inlineSource("<Probe />\n"), stream }));
-      });
+          ]);
+          yield* collect(yield* execute({ ...inlineSource("<Probe />\n"), stream }));
+        });
 
-      expect(failures).toHaveLength(1);
-      expect(failures[0]).toContain("run installation");
-    },
-  );
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toContain("run installation");
+      },
+    ));
 
   it("WR11: a journal holding something else under the workflow name is refused", function* () {
     const stream = new InMemoryStream();
@@ -649,138 +671,142 @@ describe("Tier WR — workflow runs", () => {
   // The expansion identifier is derived from the document alone. A workflow run
   // pairs with it for workflow-wide identity; it never enters the derivation.
   const expansionIdentity = "WR15: expansion identifiers do not move with the workflow run";
-  journalCase(expansionIdentity, "<eval>", function* (ordinary) {
-    yield* captureTestJournal(
-      { owner: OWNER, name: expansionIdentity },
-      "<eval>",
-      function* (first) {
-        function* ids(stream: InMemoryStream, bundleHash?: string): Operation<string[]> {
-          const seen: string[] = [];
-          yield* scoped(function* () {
-            yield* registerComponents([
-              {
-                name: "Probe",
-                origin: "tier-wr",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                *fn() {
-                  seen.push((yield* getExpansion()).id);
-                  return "";
+  it(expansionIdentity, () =>
+    captureTestJournal({ owner: OWNER, name: expansionIdentity }, "<eval>", function* (ordinary) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: expansionIdentity },
+        "<eval>",
+        function* (first) {
+          function* ids(stream: InMemoryStream, bundleHash?: string): Operation<string[]> {
+            const seen: string[] = [];
+            yield* scoped(function* () {
+              yield* registerComponents([
+                {
+                  name: "Probe",
+                  origin: "tier-wr",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  *fn() {
+                    seen.push((yield* getExpansion()).id);
+                    return "";
+                  },
                 },
+              ]);
+              const workflow = bundleHash === undefined ? undefined : runInstallation(bundleHash);
+              yield* collect(
+                yield* executeInstalled(
+                  { ...inlineSource("<Probe />\n"), stream },
+                  workflow === undefined ? [] : [workflow],
+                ),
+              );
+            });
+            return seen;
+          }
+
+          const withoutWorkflow = yield* ids(ordinary);
+          const firstRun = yield* ids(first, BUNDLE);
+          yield* captureTestJournal(
+            { owner: OWNER, name: expansionIdentity },
+            "<eval>",
+            function* (second) {
+              const secondRun = yield* ids(second, OTHER_BUNDLE);
+
+              expect(withoutWorkflow).toHaveLength(1);
+              expect(firstRun).toEqual(withoutWorkflow);
+              expect(secondRun).toEqual(withoutWorkflow);
+            },
+          );
+        },
+      );
+    }),
+  );
+
+  it("WR16: cancelling a document execution does not erase a recorded run", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WR16: cancelling a document execution does not erase a recorded run" },
+      "<eval>",
+      function* (stream) {
+        // The component says when it has observed the recorded run, so the
+        // cancellation lands after that point by construction rather than by
+        // winning a race against a timer.
+        const observed = withResolvers<void>();
+
+        yield* scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Probe",
+              origin: "tier-wr",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              *fn() {
+                yield* getWorkflowRun();
+                observed.resolve();
+                // Held open, so the execution is still running when it is cancelled.
+                yield* suspend();
+                return "";
               },
-            ]);
-            const workflow = bundleHash === undefined ? undefined : runInstallation(bundleHash);
+            },
+          ]);
+          const workflow = runInstallation();
+
+          const execution = yield* spawn(function* () {
             yield* collect(
-              yield* executeInstalled(
-                { ...inlineSource("<Probe />\n"), stream },
-                workflow === undefined ? [] : [workflow],
-              ),
+              yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
             );
           });
-          return seen;
-        }
+          yield* observed.operation;
+          yield* execution.halt();
+        });
 
-        const withoutWorkflow = yield* ids(ordinary);
-        const firstRun = yield* ids(first, BUNDLE);
-        yield* captureTestJournal(
-          { owner: OWNER, name: expansionIdentity },
-          "<eval>",
-          function* (second) {
-            const secondRun = yield* ids(second, OTHER_BUNDLE);
-
-            expect(withoutWorkflow).toHaveLength(1);
-            expect(firstRun).toEqual(withoutWorkflow);
-            expect(secondRun).toEqual(withoutWorkflow);
-          },
-        );
+        expect(recordedRun(stream)).toEqual({
+          runId: expect.any(String),
+          bundleHash: BUNDLE,
+        });
       },
-    );
-  });
+    ));
 
-  journalCase(
-    "WR16: cancelling a document execution does not erase a recorded run",
-    "<eval>",
-    function* (stream) {
-      // The component says when it has observed the recorded run, so the
-      // cancellation lands after that point by construction rather than by
-      // winning a race against a timer.
-      const observed = withResolvers<void>();
+  // `run.ts` makes the same loaded-copy claim core does: a second copy of this
+  // package reads the run through its own descriptor of the same context name.
+  it("WR17: a descriptor of the same name built elsewhere reads the run", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WR17: a descriptor of the same name built elsewhere reads the run" },
+      "<eval>",
+      function* (stream) {
+        // The binding is the execution's own slot, and what it holds is the exact
+        // frozen run. Retained-history admission and durable preparation both
+        // decide the run from outside the scope that reads it, so a context set
+        // from either would end with the operation that set it; the slot is what
+        // gives them somewhere to put it that the document can still see.
+        let own: WorkflowRun | undefined;
+        let observed: unknown;
+        const elsewhere = createContext<unknown>("executablemd.workflow.run", undefined);
 
-      yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Probe",
-            origin: "tier-wr",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn() {
-              yield* getWorkflowRun();
-              observed.resolve();
-              // Held open, so the execution is still running when it is cancelled.
-              yield* suspend();
-              return "";
+        yield* scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Probe",
+              origin: "tier-wr",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              *fn() {
+                own = yield* getWorkflowRun();
+                observed = yield* elsewhere.get();
+                return "";
+              },
             },
-          },
-        ]);
-        const workflow = runInstallation();
-
-        const execution = yield* spawn(function* () {
+          ]);
+          const workflow = runInstallation();
           yield* collect(
             yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
           );
         });
-        yield* observed.operation;
-        yield* execution.halt();
-      });
 
-      expect(recordedRun(stream)).toEqual({
-        runId: expect.any(String),
-        bundleHash: BUNDLE,
-      });
-    },
-  );
-
-  // `run.ts` makes the same loaded-copy claim core does: a second copy of this
-  // package reads the run through its own descriptor of the same context name.
-  journalCase(
-    "WR17: a descriptor of the same name built elsewhere reads the run",
-    "<eval>",
-    function* (stream) {
-      // The binding is the execution's own slot, and what it holds is the exact
-      // frozen run. Retained-history admission and durable preparation both
-      // decide the run from outside the scope that reads it, so a context set
-      // from either would end with the operation that set it; the slot is what
-      // gives them somewhere to put it that the document can still see.
-      let own: WorkflowRun | undefined;
-      let observed: unknown;
-      const elsewhere = createContext<unknown>("executablemd.workflow.run", undefined);
-
-      yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Probe",
-            origin: "tier-wr",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn() {
-              own = yield* getWorkflowRun();
-              observed = yield* elsewhere.get();
-              return "";
-            },
-          },
-        ]);
-        const workflow = runInstallation();
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
-        );
-      });
-
-      expect(own).toBeDefined();
-      expect(observed).toBeDefined();
-      const carried =
-        observed !== null && typeof observed === "object" && "run" in observed
-          ? observed.run
-          : undefined;
-      expect(carried).toBe(own);
-    },
-  );
+        expect(own).toBeDefined();
+        expect(observed).toBeDefined();
+        const carried =
+          observed !== null && typeof observed === "object" && "run" in observed
+            ? observed.run
+            : undefined;
+        expect(carried).toBe(own);
+      },
+    ));
 
   /**
    * A descriptor of the Api's name whose `document` may return anything.
@@ -807,149 +833,170 @@ describe("Tier WR — workflow runs", () => {
    * what happens instead.
    */
 
-  journalCase(
-    "WM1: a non-delegating document handler cannot fabricate a successful run",
-    "<eval>",
-    function* (stream) {
-      const seen: WorkflowRun[] = [];
+  it("WM1: a non-delegating document handler cannot fabricate a successful run", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "WM1: a non-delegating document handler cannot fabricate a successful run",
+      },
+      "<eval>",
+      function* (stream) {
+        const seen: WorkflowRun[] = [];
 
-      const result = yield* scoped(function* () {
-        yield* useProbe(seen);
-        yield* loose().around({
-          // deno-lint-ignore require-yield
-          *document() {
-            return { status: "ok", output: "FABRICATED", value: "FABRICATED" };
-          },
-        });
-        return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
-          runInstallation(),
-        ]);
-      });
-
-      // The handler decided nothing. Core refused it.
-      expect(result.ok).toBe(false);
-      expect(seen).toEqual([]);
-      // The run was prepared before that handler ever ran, so the journal holds
-      // the canonical record — and then the failed terminal, never a success
-      // carrying "FABRICATED".
-      expect(recordedRun(stream)).toBeDefined();
-      expect(JSON.stringify(stream.snapshot())).not.toContain("FABRICATED");
-      const closes = stream.snapshot().filter((event) => event.type === "close");
-      expect(closes.length).toEqual(1);
-    },
-  );
-
-  journalCase(
-    "WM2: a substitute result after delegating replaces nothing",
-    "<eval>",
-    function* (stream) {
-      const seen: WorkflowRun[] = [];
-
-      const output = yield* scoped(function* () {
-        yield* useProbe(seen);
-        yield* loose().around({
-          *document([request], next) {
-            yield* next(request);
-            return { status: "ok", output: "SUBSTITUTE", value: "SUBSTITUTE" };
-          },
-        });
-        return yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [runInstallation()]),
-        );
-      });
-
-      expect(String(output)).not.toContain("SUBSTITUTE");
-      expect(seen.length).toEqual(1);
-      expect(recordedRun(stream)).toBeDefined();
-    },
-  );
-
-  journalCase(
-    "WM3: the run is prepared before any document policy observes it",
-    "<eval>",
-    function* (stream) {
-      const order: string[] = [];
-
-      yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Probe",
-            origin: "tier-wr",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn() {
-              order.push(`expanded:${(yield* getWorkflowRun()).bundleHash === BUNDLE}`);
-              return "";
+        const result = yield* scoped(function* () {
+          yield* useProbe(seen);
+          yield* loose().around({
+            // deno-lint-ignore require-yield
+            *document() {
+              return { status: "ok", output: "FABRICATED", value: "FABRICATED" };
             },
-          },
-        ]);
-        yield* Execution.around({
-          *document([request], next) {
-            // The record is already in the journal by the time policy runs.
-            order.push(`policy:${workflowEvents(stream).length}`);
-            yield* next(request);
-          },
+          });
+          return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+            runInstallation(),
+          ]);
         });
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [runInstallation()]),
-        );
-      });
 
-      expect(order).toEqual(["policy:1", "expanded:true"]);
-    },
-  );
+        // The handler decided nothing. Core refused it.
+        expect(result.ok).toBe(false);
+        expect(seen).toEqual([]);
+        // The run was prepared before that handler ever ran, so the journal holds
+        // the canonical record — and then the failed terminal, never a success
+        // carrying "FABRICATED".
+        expect(recordedRun(stream)).toBeDefined();
+        expect(JSON.stringify(stream.snapshot())).not.toContain("FABRICATED");
+        const closes = stream.snapshot().filter((event) => event.type === "close");
+        expect(closes.length).toEqual(1);
+      },
+    ));
 
-  journalCase(
-    "WM4: an installation another loaded copy built composes when the host passes it",
-    "<eval>",
-    function* (stream) {
-      const seen: WorkflowRun[] = [];
+  it("WM2: a substitute result after delegating replaces nothing", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WM2: a substitute result after delegating replaces nothing" },
+      "<eval>",
+      function* (stream) {
+        const seen: WorkflowRun[] = [];
 
-      // Built through this package's own constructor, then relayed to canonical
-      // core as an opaque record of closures — which is exactly how a separately
-      // loaded copy reaches core: it hands over functions, and nobody agrees on
-      // a name or a type.
-      const built = runInstallation();
-      const relayed: ExecutionInstallation = {
-        admissions: built.admissions,
-        prepare: built.prepare,
-        install: built.install,
-      };
+        const output = yield* scoped(function* () {
+          yield* useProbe(seen);
+          yield* loose().around({
+            *document([request], next) {
+              yield* next(request);
+              return { status: "ok", output: "SUBSTITUTE", value: "SUBSTITUTE" };
+            },
+          });
+          return yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+              runInstallation(),
+            ]),
+          );
+        });
 
-      yield* scoped(function* () {
-        yield* useProbe(seen);
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [relayed]),
-        );
-      });
+        expect(String(output)).not.toContain("SUBSTITUTE");
+        expect(seen.length).toEqual(1);
+        expect(recordedRun(stream)).toBeDefined();
+      },
+    ));
 
-      expect(seen.length).toEqual(1);
-      expect(recordedRun(stream)).toBeDefined();
-    },
-  );
+  it("WM3: the run is prepared before any document policy observes it", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WM3: the run is prepared before any document policy observes it" },
+      "<eval>",
+      function* (stream) {
+        const order: string[] = [];
 
-  journalCase("WM5: valid public observation still composes", "<eval>", function* (stream) {
-    const observed: string[] = [];
-    const seen: WorkflowRun[] = [];
+        yield* scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Probe",
+              origin: "tier-wr",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              *fn() {
+                order.push(`expanded:${(yield* getWorkflowRun()).bundleHash === BUNDLE}`);
+                return "";
+              },
+            },
+          ]);
+          yield* Execution.around({
+            *document([request], next) {
+              // The record is already in the journal by the time policy runs.
+              order.push(`policy:${workflowEvents(stream).length}`);
+              yield* next(request);
+            },
+          });
+          yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+              runInstallation(),
+            ]),
+          );
+        });
 
-    const output = yield* scoped(function* () {
-      yield* useProbe(seen);
-      yield* Execution.around({
-        *document([request], next) {
-          observed.push("before");
-          yield* next(request);
-          observed.push("after");
-        },
-      });
-      return yield* collect(
-        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [runInstallation()]),
-      );
-    });
+        expect(order).toEqual(["policy:1", "expanded:true"]);
+      },
+    ));
 
-    expect(observed).toEqual(["before", "after"]);
-    expect(seen.length).toEqual(1);
-    expect(String(output).trim()).toEqual("");
-    expect(recordedRun(stream)).toBeDefined();
-  });
+  it("WM4: an installation another loaded copy built composes when the host passes it", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "WM4: an installation another loaded copy built composes when the host passes it",
+      },
+      "<eval>",
+      function* (stream) {
+        const seen: WorkflowRun[] = [];
+
+        // Built through this package's own constructor, then relayed to canonical
+        // core as an opaque record of closures — which is exactly how a separately
+        // loaded copy reaches core: it hands over functions, and nobody agrees on
+        // a name or a type.
+        const built = runInstallation();
+        const relayed: ExecutionInstallation = {
+          admissions: built.admissions,
+          prepare: built.prepare,
+          install: built.install,
+        };
+
+        yield* scoped(function* () {
+          yield* useProbe(seen);
+          yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [relayed]),
+          );
+        });
+
+        expect(seen.length).toEqual(1);
+        expect(recordedRun(stream)).toBeDefined();
+      },
+    ));
+
+  it("WM5: valid public observation still composes", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "WM5: valid public observation still composes" },
+      "<eval>",
+      function* (stream) {
+        const observed: string[] = [];
+        const seen: WorkflowRun[] = [];
+
+        const output = yield* scoped(function* () {
+          yield* useProbe(seen);
+          yield* Execution.around({
+            *document([request], next) {
+              observed.push("before");
+              yield* next(request);
+              observed.push("after");
+            },
+          });
+          return yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+              runInstallation(),
+            ]),
+          );
+        });
+
+        expect(observed).toEqual(["before", "after"]);
+        expect(seen.length).toEqual(1);
+        expect(String(output).trim()).toEqual("");
+        expect(recordedRun(stream)).toBeDefined();
+      },
+    ));
 
   /**
    * What a host outside this package supplies, and what it does not.
@@ -961,48 +1008,52 @@ describe("Tier WR — workflow runs", () => {
    * published — so this preparation reaches no Git at all, and the journal is
    * still held to it before the document is imported.
    */
-  journalCase(
-    "WR21: a host preparation allocates the run, and this package records it",
-    "<eval>",
-    function* (stream) {
-      const seen: WorkflowRun[] = [];
-      const allocations: string[] = [];
+  it("WR21: a host preparation allocates the run, and this package records it", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "WR21: a host preparation allocates the run, and this package records it",
+      },
+      "<eval>",
+      function* (stream) {
+        const seen: WorkflowRun[] = [];
+        const allocations: string[] = [];
 
-      yield* scoped(function* () {
-        // Nothing about this preparation resolves a revision, and Git fails the
-        // test if the constructor reaches it on its own account.
-        yield* useForbiddenGit();
-        yield* useProbe(seen);
-        yield* collect(
-          yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
-            createWorkflowRunInstallation({
-              description: { type: WORKFLOW_RUN, name: WORKFLOW_RUN, bundleHash: BUNDLE },
-              required: false,
-              // deno-lint-ignore require-yield
-              *allocate(): Operation<WorkflowRun> {
-                allocations.push("allocated");
-                return { runId: "host-allocated", bundleHash: BUNDLE };
-              },
-              agree: (recorded) => recorded,
-            }),
-          ]),
-        );
-      });
+        yield* scoped(function* () {
+          // Nothing about this preparation resolves a revision, and Git fails the
+          // test if the constructor reaches it on its own account.
+          yield* useForbiddenGit();
+          yield* useProbe(seen);
+          yield* collect(
+            yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+              createWorkflowRunInstallation({
+                description: { type: WORKFLOW_RUN, name: WORKFLOW_RUN, bundleHash: BUNDLE },
+                required: false,
+                // deno-lint-ignore require-yield
+                *allocate(): Operation<WorkflowRun> {
+                  allocations.push("allocated");
+                  return { runId: "host-allocated", bundleHash: BUNDLE };
+                },
+                agree: (recorded) => recorded,
+              }),
+            ]),
+          );
+        });
 
-      expect(allocations).toEqual(["allocated"]);
-      expect(seen).toHaveLength(1);
-      expect(seen[0]).toEqual({
-        runId: "host-allocated",
-        bundleHash: BUNDLE,
-      });
-      // Recorded under this package's canonical identity, from the host's own
-      // description — which is what makes it the record a later run is held to.
-      expect(recordedRun(stream)).toEqual({
-        runId: "host-allocated",
-        bundleHash: BUNDLE,
-      });
-    },
-  );
+        expect(allocations).toEqual(["allocated"]);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toEqual({
+          runId: "host-allocated",
+          bundleHash: BUNDLE,
+        });
+        // Recorded under this package's canonical identity, from the host's own
+        // description — which is what makes it the record a later run is held to.
+        expect(recordedRun(stream)).toEqual({
+          runId: "host-allocated",
+          bundleHash: BUNDLE,
+        });
+      },
+    ));
 
   it("WR22: a host preparation's agreement decides a retained history", function* () {
     const stream = new InMemoryStream();
