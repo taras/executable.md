@@ -9,9 +9,9 @@
  * repository can answer.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import { describe, it, beforeEach } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import type { Json } from "@executablemd/durable-streams";
 import type { InMemoryStream } from "@executablemd/durable-streams";
@@ -205,7 +205,6 @@ function propertiesOf(schema: Json): Record<string, Json> {
 
 /** The four reads, with the smallest invocation each one accepts. */
 const JOURNAL_OWNER = "packages/git/tests/git-observations.test.ts";
-const journalCase = journalCases(JOURNAL_OWNER);
 
 const FOUR_ELEMENTS: readonly { readonly name: string; readonly source: string }[] = [
   { name: "Git.Files", source: '<Git.Files as="bound" />' },
@@ -729,9 +728,11 @@ describe("GO4 — the patch a comparison produces", () => {
 });
 
 describe("GO5 — pages are bounded, complete, and about one observation", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "defaults to 100 records, follows every page once, and honors a larger limit";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream3) {
           const root = yield* useManagedRoot();
@@ -827,7 +828,8 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
 
   {
     const name = "windows a patch at the default, above 65536, and reassembles the whole text";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         const root = yield* useManagedRoot();
         const fixture = yield* useGeneratedFixture(1002);
@@ -1147,9 +1149,11 @@ describe("GO6 — a changed observation cannot be paged over", () => {
 });
 
 describe("GO7 — a file is read as one commit holds it", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "windows the committed text, stays on its commit, and reassembles it";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         const root = yield* useManagedRoot();
         const fixture = yield* useFileFixture();
@@ -1488,9 +1492,11 @@ describe("GO8 — a read runs no repository-defined program and changes nothing"
 });
 
 describe("GO9 — which checkout answers, and what cannot choose one", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "distinguishes two sibling checkouts of one repository by their content";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         const root = yield* useManagedRoot();
         const fixture = yield* useObservationFixture();
@@ -1745,6 +1751,7 @@ describe("GO11 — the authored contract, before a provider is reached", () => {
 });
 
 describe("GO12 — availability is the installed provider's, with no fallback", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "refuses all four on a host that installs nothing for them";
     it(name, function* () {
@@ -1778,65 +1785,62 @@ describe("GO12 — availability is the installed provider's, with no fallback", 
     });
   }
 
-  journalCase(
-    "answers through the same Api when a host supplies the four methods",
-    "<eval>",
-    function* (stream) {
-      const asked: string[] = [];
-      const seen: Json[] = [];
+  it("answers through the same Api when a host supplies the four methods", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const asked: string[] = [];
+    const seen: Json[] = [];
 
-      yield* runNeutralDocument(
-        [
-          '<Git.Files prefix="a/" as="files" />',
-          "",
-          "<Captured value={files} />",
-          "",
-          '<Git.Changes compare="staged" as="changes" />',
-          "",
-          "<Captured value={changes} />",
-          "",
-          '<Git.Diff compare="staged" as="diff" />',
-          "",
-          "<Captured value={diff} />",
-          "",
-          '<Git.File commit="HEAD~1" path="a/b.ts" as="source" />',
-          "",
-          "<Captured value={source} />",
-          "",
-        ].join("\n"),
-        { repository: true, reads: asked, components: [capturingProbe(seen)] },
-        stream,
-      );
+    yield* runNeutralDocument(
+      [
+        '<Git.Files prefix="a/" as="files" />',
+        "",
+        "<Captured value={files} />",
+        "",
+        '<Git.Changes compare="staged" as="changes" />',
+        "",
+        "<Captured value={changes} />",
+        "",
+        '<Git.Diff compare="staged" as="diff" />',
+        "",
+        "<Captured value={diff} />",
+        "",
+        '<Git.File commit="HEAD~1" path="a/b.ts" as="source" />',
+        "",
+        "<Captured value={source} />",
+        "",
+      ].join("\n"),
+      { repository: true, reads: asked, components: [capturingProbe(seen)] },
+      stream,
+    );
 
-      // The request each component composed, in the order they ran.
-      expect(asked).toEqual([
-        'files {"cursor":null,"kind":"files","limit":100,"prefix":"a/"}',
-        'changes {"comparison":{"compare":"staged"},"cursor":null,"kind":"changes","limit":100,"paths":null}',
-        'diff {"comparison":{"compare":"staged"},"cursor":null,"kind":"diff","limit":4096,"offset":0,"paths":null}',
-        'file {"commit":"HEAD~1","kind":"file","limit":4096,"offset":0,"path":"a/b.ts"}',
-      ]);
-      // And the typed JSON each one bound.
-      expect(seen[0]).toEqual({ paths: ["a/b.ts"], next: null });
-      expect(seen[1]).toEqual({
-        comparison: { compare: "staged", base: null },
-        changes: [],
-        next: null,
-      });
-      expect(seen[2]).toEqual({
-        comparison: { compare: "staged", base: null },
-        text: "",
-        offset: 0,
-        length: 0,
-        next: null,
-      });
-      expect(seen[3]).toEqual({
-        commit: "0".repeat(40),
-        path: "a/b.ts",
-        text: "supplied",
-        offset: 0,
-        length: 8,
-        next: null,
-      });
-    },
-  );
+    // The request each component composed, in the order they ran.
+    expect(asked).toEqual([
+      'files {"cursor":null,"kind":"files","limit":100,"prefix":"a/"}',
+      'changes {"comparison":{"compare":"staged"},"cursor":null,"kind":"changes","limit":100,"paths":null}',
+      'diff {"comparison":{"compare":"staged"},"cursor":null,"kind":"diff","limit":4096,"offset":0,"paths":null}',
+      'file {"commit":"HEAD~1","kind":"file","limit":4096,"offset":0,"path":"a/b.ts"}',
+    ]);
+    // And the typed JSON each one bound.
+    expect(seen[0]).toEqual({ paths: ["a/b.ts"], next: null });
+    expect(seen[1]).toEqual({
+      comparison: { compare: "staged", base: null },
+      changes: [],
+      next: null,
+    });
+    expect(seen[2]).toEqual({
+      comparison: { compare: "staged", base: null },
+      text: "",
+      offset: 0,
+      length: 0,
+      next: null,
+    });
+    expect(seen[3]).toEqual({
+      commit: "0".repeat(40),
+      path: "a/b.ts",
+      text: "supplied",
+      offset: 0,
+      length: 8,
+      next: null,
+    });
+  });
 });

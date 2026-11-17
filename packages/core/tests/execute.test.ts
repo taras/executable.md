@@ -1,4 +1,3 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
 /**
  * Integration tests for execute (Tiers B, D, E from spec §11).
  *
@@ -9,7 +8,7 @@ import { captureTestJournal } from "../../test-support/failure-journal.ts";
  *   Golden run — InMemoryStream() (empty) + useStubFs(files) → assert output + journal
  *   Replay    — reuse same InMemoryStream (has events) + useNoIO() → zero I/O
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
@@ -27,10 +26,9 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/execute.test.ts";
-const journalCase = journalCases(OWNER);
 
 /**
  * A stand-in child that behaves like one: it writes its output to the display
@@ -118,41 +116,39 @@ function* useFailingStdoutExec(): Operation<void> {
 }
 
 describe("Tier B — durable import", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // B1: durableImportComponent golden run — journal shape
-  journalCase(
-    "B1: import golden run — journal has import_component with path and content",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({ "README.md": "Hello world\n" });
-      yield* useStubExec();
+  it("B1: import golden run — journal has import_component with path and content", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": "Hello world\n" });
+    yield* useStubExec();
 
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      );
+    yield* collect(
+      yield* execute({
+        path: "README.md",
+        stream,
+      }),
+    );
 
-      const events = stream.snapshot();
-      const imports = events.flatMap((e) =>
-        e.type === "yield" && e.description.type === "import_component" ? [e] : [],
-      );
+    const events = stream.snapshot();
+    const imports = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "import_component" ? [e] : [],
+    );
 
-      expect(imports.length).toBe(1);
+    expect(imports.length).toBe(1);
 
-      const rootImport = imports[0]!;
-      expect(rootImport).toMatchObject({
-        type: "yield",
-        description: { name: "__root__" },
-        result: { status: "ok", value: { path: "README.md" } },
-      });
+    const rootImport = imports[0]!;
+    expect(rootImport).toMatchObject({
+      type: "yield",
+      description: { name: "__root__" },
+      result: { status: "ok", value: { path: "README.md" } },
+    });
 
-      const result = rootImport.result;
-      expect(result.status).toBe("ok");
-      const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
-      expect(value.content).toContain("Hello world");
-    },
-  );
+    const result = rootImport.result;
+    expect(result.status).toBe("ok");
+    const value = (result as { status: "ok"; value: Record<string, unknown> }).value;
+    expect(value.content).toContain("Hello world");
+  });
 
   // B2: durableImportComponent replay — stored result returned, no I/O
   it("B2: import replay — stored result returned, no file read", function* () {
@@ -214,25 +210,23 @@ describe("Tier B — durable import", () => {
   });
 
   // B9: import missing component — uncaught at the root, so it fails the run
-  journalCase(
-    "B9: import missing component — the run fails and reports it",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({ "README.md": "<Missing />\n" });
-      yield* useStubExec();
+  it("B9: import missing component — the run fails and reports it", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({ "README.md": "<Missing />\n" });
+    yield* useStubExec();
 
-      const message = yield* failure(function* () {
-        return yield* collect(yield* execute({ path: "README.md", stream }));
-      });
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-      expect(
-        message.includes("Cannot resolve component") || message.includes("Failed to import"),
-      ).toBeTruthy();
-    },
-  );
+    expect(
+      message.includes("Cannot resolve component") || message.includes("Failed to import"),
+    ).toBeTruthy();
+  });
 
   // B12: root document as component — __root__ import, same journal shape
-  journalCase("B12: root document imported as __root__", "doc.md", function* (stream) {
+  it("B12: root document imported as __root__", function* () {
+    const stream = new InMemoryStream();
     yield* useStubFs({ "doc.md": "Root content\n" });
     yield* useStubExec();
 
@@ -257,45 +251,43 @@ describe("Tier B — durable import", () => {
   });
 
   // B13: dotted name resolution — Ns.Sub → components/Ns/Sub.md
-  journalCase(
-    "B13: dotted component name resolves to nested path",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": "<Ui.Button />\n",
-        "components/Ui/Button.md": "Click me\n",
-      });
-      yield* useStubExec();
+  it("B13: dotted component name resolves to nested path", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "<Ui.Button />\n",
+      "components/Ui/Button.md": "Click me\n",
+    });
+    yield* useStubExec();
 
-      const result = asText(
-        yield* collect(
-          yield* execute({
-            path: "README.md",
-            stream,
-          }),
-        ),
-      );
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
 
-      expect(result).toContain("Click me");
+    expect(result).toContain("Click me");
 
-      const events = stream.snapshot();
-      const [compImport] = events.flatMap((e) =>
-        e.type === "yield" &&
-        e.description.type === "import_component" &&
-        e.description.name === "Ui.Button"
-          ? [e]
-          : [],
-      );
-      expect(compImport).toBeTruthy();
-      expect(compImport!.result).toMatchObject({
-        status: "ok",
-        value: { path: "components/Ui/Button.md" },
-      });
-    },
-  );
+    const events = stream.snapshot();
+    const [compImport] = events.flatMap((e) =>
+      e.type === "yield" &&
+      e.description.type === "import_component" &&
+      e.description.name === "Ui.Button"
+        ? [e]
+        : [],
+    );
+    expect(compImport).toBeTruthy();
+    expect(compImport!.result).toMatchObject({
+      status: "ok",
+      value: { path: "components/Ui/Button.md" },
+    });
+  });
 
   // B15: default resolver middleware — resolves via stat in search path order
-  journalCase("B15: resolver searches component dirs in order", "README.md", function* (stream) {
+  it("B15: resolver searches component dirs in order", function* () {
+    const stream = yield* useJournalStream("README.md");
     // Component exists in root dir (second search path), not components/
 
     yield* useStubFs({
@@ -318,35 +310,33 @@ describe("Tier B — durable import", () => {
 });
 
 describe("Tier D — code execution and modifiers", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // D1: bash exec golden run
-  journalCase(
-    "D1: bash exec golden run — stdout displayed, exec in journal",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["```bash exec", "echo hello", "```"].join("\n"),
-      });
-      yield* useStubExec();
+  it("D1: bash exec golden run — stdout displayed, exec in journal", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["```bash exec", "echo hello", "```"].join("\n"),
+    });
+    yield* useStubExec();
 
-      const run = yield* displayed(function* () {
-        return asText(yield* collect(yield* execute({ path: "README.md", stream })));
-      });
-      const result = run.value;
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
+    const result = run.value;
 
-      // A foreground block's output reached the reader as it ran, and the
-      // document does not say it again (#441).
-      expect(run.stdout).toContain("hello");
-      expect(result).not.toContain("hello");
+    // A foreground block's output reached the reader as it ran, and the
+    // document does not say it again (#441).
+    expect(run.stdout).toContain("hello");
+    expect(result).not.toContain("hello");
 
-      const events = stream.snapshot();
-      const [execEvent] = events.flatMap((e) =>
-        e.type === "yield" && e.description.type === "exec" ? [e] : [],
-      );
-      expect(execEvent).toBeTruthy();
-      expect(Array.isArray(execEvent!.description.command)).toBeTruthy();
-      expect(execEvent!.result.status).toBe("ok");
-    },
-  );
+    const events = stream.snapshot();
+    const [execEvent] = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execEvent).toBeTruthy();
+    expect(Array.isArray(execEvent!.description.command)).toBeTruthy();
+    expect(execEvent!.result.status).toBe("ok");
+  });
 
   // D2: exec replay — command not re-executed
   it("D2: exec replay — stored stdout used, no re-execution", function* () {
@@ -383,7 +373,8 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   // D3: a nonzero exit is a checked failure, with or without <Output> (#441)
-  journalCase("D3: non-zero exit code → the run fails", "README.md", function* (stream) {
+  it("D3: non-zero exit code → the run fails", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({ "README.md": ["```bash exec", "failing-command", "```"].join("\n") });
     yield* useFailingExec(1, "command not found");
 
@@ -397,30 +388,28 @@ describe("Tier D — code execution and modifiers", () => {
   // D3b: the same rule for a command that printed before it failed (#307), run
   // as a real subprocess so the exit code travels the whole way through
   // `execFactory` rather than a stub's return value.
-  journalCase(
-    "D3b: non-zero exit with stdout → output, then the printed error",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["```bash exec", "echo partial; exit 1", "```"].join("\n"),
-      });
+  it("D3b: non-zero exit with stdout → output, then the printed error", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      "README.md": ["```bash exec", "echo partial; exit 1", "```"].join("\n"),
+    });
 
-      const run = yield* displayed(function* () {
-        return yield* failure(function* () {
-          return yield* collect(yield* execute({ path: "README.md", stream }));
-        });
+    const run = yield* displayed(function* () {
+      return yield* failure(function* () {
+        return yield* collect(yield* execute({ path: "README.md", stream }));
       });
+    });
 
-      // What the command printed before it failed reached the reader; the run
-      // then fails rather than rendering the diagnostic and carrying on (#441).
-      expect(run.stdout).toContain("partial");
-      expect(run.value).toContain("Command failed (exit 1)");
-    },
-  );
+    // What the command printed before it failed reached the reader; the run
+    // then fails rather than rendering the diagnostic and carrying on (#441).
+    expect(run.stdout).toContain("partial");
+    expect(run.value).toContain("Command failed (exit 1)");
+  });
 
   // D4: multi-line command — full script passed to -c
-  journalCase("D4: multi-line command — full script in journal", "README.md", function* (stream) {
+  it("D4: multi-line command — full script in journal", function* () {
     const multiLineScript = "echo line1\necho line2";
+    const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": ["```bash exec", multiLineScript, "```"].join("\n"),
     });
@@ -446,11 +435,12 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   // D5: python exec — python -c invocation
-  journalCase("D5: python exec — python -c in command array", "README.md", function* (stream) {
+  it("D5: python exec — python -c in command array", function* () {
     const files: Record<string, string> = {
       "README.md": ["```python exec", "print('hello')", "```"].join("\n"),
     };
 
+    const stream = new InMemoryStream();
     yield* useStubFs(files);
     // Custom exec middleware that handles python -c
     yield* API.Process.around({
@@ -482,33 +472,30 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   // D6: bash silent exec — chain: silent wraps exec, exec journals, silent returns empty
-  journalCase(
-    "D6: bash silent exec — exec journals, output suppressed",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
-      });
-      yield* useStubExec();
+  it("D6: bash silent exec — exec journals, output suppressed", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
+    });
+    yield* useStubExec();
 
-      const result = asText(
-        yield* collect(
-          yield* execute({
-            path: "README.md",
-            stream,
-          }),
-        ),
-      );
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
 
-      // Output should be empty (silent suppresses)
-      expect(result).not.toContain("secret");
+    // Output should be empty (silent suppresses)
+    expect(result).not.toContain("secret");
 
-      // Journal should still have exec event
-      const events = stream.snapshot();
-      const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
-      expect(execs.length).toBe(1);
-    },
-  );
+    // Journal should still have exec event
+    const events = stream.snapshot();
+    const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
+    expect(execs.length).toBe(1);
+  });
 
   // D7: silent exec replay — still produces empty output from stored result
   it("D7: silent exec replay — still empty output", function* () {
@@ -545,62 +532,56 @@ describe("Tier D — code execution and modifiers", () => {
   // D6b/D7b: `silent` suppresses output; it does not convert failure into
   // success (#307). The command's exit code and stderr are the chain's, so a
   // silenced failure is still a failure — with nothing of what it printed.
-  journalCase(
-    "D6b: failing silent exec — output suppressed, failure still reported",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
+  it("D6b: failing silent exec — output suppressed, failure still reported", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
+    });
+    yield* useFailingStdoutExec();
+
+    const run = yield* displayed(function* () {
+      return yield* failure(function* () {
+        return yield* collect(yield* execute({ path: "README.md", stream }));
       });
-      yield* useFailingStdoutExec();
+    });
 
-      const run = yield* displayed(function* () {
-        return yield* failure(function* () {
-          return yield* collect(yield* execute({ path: "README.md", stream }));
-        });
-      });
+    // Silence hides both channels; it does not excuse the exit code.
+    expect(run.stdout).toBe("");
+    expect(run.value).toContain("Command failed (exit 3): why");
+  });
 
-      // Silence hides both channels; it does not excuse the exit code.
-      expect(run.stdout).toBe("");
-      expect(run.value).toContain("Command failed (exit 3): why");
-    },
-  );
+  it("D6c: a failing silent exec in documentation aborts before the next block", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": [
+        "```bash silent exec",
+        "echo secret",
+        "```",
+        "",
+        "```bash exec",
+        "echo later",
+        "```",
+        "",
+        "<Output>ok</Output>",
+      ].join("\n"),
+    });
+    yield* useFailingStdoutExec();
 
-  journalCase(
-    "D6c: a failing silent exec in documentation aborts before the next block",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": [
-          "```bash silent exec",
-          "echo secret",
-          "```",
-          "",
-          "```bash exec",
-          "echo later",
-          "```",
-          "",
-          "<Output>ok</Output>",
-        ].join("\n"),
-      });
-      yield* useFailingStdoutExec();
+    const execution = yield* execute({ path: "README.md", stream });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+    const result = yield* execution;
 
-      const execution = yield* execute({ path: "README.md", stream });
-      const chunks: string[] = [];
-      yield* forEach(function* (chunk: string) {
-        chunks.push(chunk);
-      }, execution.output);
-      const result = yield* execution;
-
-      expect(result.ok).toBe(false);
-      expect(chunks.join("")).not.toContain("ok");
-      // The later block never ran — only the silenced one reached the journal.
-      const execs = stream
-        .snapshot()
-        .filter((e) => e.type === "yield" && e.description["type"] === "exec");
-      expect(execs.length).toBe(1);
-    },
-  );
+    expect(result.ok).toBe(false);
+    expect(chunks.join("")).not.toContain("ok");
+    // The later block never ran — only the silenced one reached the journal.
+    const execs = stream
+      .snapshot()
+      .filter((e) => e.type === "yield" && e.description["type"] === "exec");
+    expect(execs.length).toBe(1);
+  });
 
   it("D7b: replay preserves a silent failure rather than replaying success", function* () {
     const stream = new InMemoryStream();
@@ -622,94 +603,86 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   // D15: unknown modifier in chain → error, uncaught, so the run fails
-  journalCase(
-    "D15: unknown modifier → the run fails and reports it",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["```bash frobnicate exec", "echo test", "```"].join("\n"),
-      });
-      yield* useStubExec();
+  it("D15: unknown modifier → the run fails and reports it", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      "README.md": ["```bash frobnicate exec", "echo test", "```"].join("\n"),
+    });
+    yield* useStubExec();
 
-      const message = yield* failure(function* () {
-        return yield* collect(yield* execute({ path: "README.md", stream }));
-      });
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-      expect(message.includes("Unknown modifier") || message.includes("frobnicate")).toBeTruthy();
-    },
-  );
+    expect(message.includes("Unknown modifier") || message.includes("frobnicate")).toBeTruthy();
+  });
 
   // D16: no terminal modifier → error
-  journalCase(
-    "D16: no terminal modifier — code block without exec/eval is passive text",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["```bash", "echo test", "```"].join("\n"),
-      });
-      yield* useStubExec();
+  it("D16: no terminal modifier — code block without exec/eval is passive text", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      "README.md": ["```bash", "echo test", "```"].join("\n"),
+    });
+    yield* useStubExec();
 
-      const result = asText(
-        yield* collect(
-          yield* execute({
-            path: "README.md",
-            stream,
-          }),
-        ),
-      );
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
 
-      // Without exec/eval, code block is passive text — preserved as-is
-      expect(result).toContain("```bash");
-      expect(result).toContain("echo test");
-    },
-  );
+    // Without exec/eval, code block is passive text — preserved as-is
+    expect(result).toContain("```bash");
+    expect(result).toContain("echo test");
+  });
 
   // D17: custom modifier registration
-  journalCase(
-    "D17: custom modifier registration — handler runs in chain",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        // A forwarded block renders nothing, so the text a modifier transforms
-        // comes from the region that asked for it (#441).
-        "README.md": [
-          '<Let as="shouted">',
-          "```bash uppercase exec",
-          "echo hello",
-          "```",
-          "</Let>",
-          "",
-          "{shouted}",
-        ].join("\n"),
-      });
-      yield* useStubExec();
+  it("D17: custom modifier registration — handler runs in chain", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      // A forwarded block renders nothing, so the text a modifier transforms
+      // comes from the region that asked for it (#441).
+      "README.md": [
+        '<Let as="shouted">',
+        "```bash uppercase exec",
+        "echo hello",
+        "```",
+        "</Let>",
+        "",
+        "{shouted}",
+      ].join("\n"),
+    });
+    yield* useStubExec();
 
-      const result = asText(
-        yield* collect(
-          yield* execute({
-            path: "README.md",
-            stream,
-            modifiers: {
-              uppercase: (_params) => (_args, next) =>
-                (function* () {
-                  const inner = yield* next();
-                  return {
-                    output: inner.output.toUpperCase(),
-                    exitCode: inner.exitCode,
-                    stderr: inner.stderr,
-                  };
-                })(),
-            },
-          }),
-        ),
-      );
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+          modifiers: {
+            uppercase: (_params) => (_args, next) =>
+              (function* () {
+                const inner = yield* next();
+                return {
+                  output: inner.output.toUpperCase(),
+                  exitCode: inner.exitCode,
+                  stderr: inner.stderr,
+                };
+              })(),
+          },
+        }),
+      ),
+    );
 
-      expect(result).toContain("HELLO");
-    },
-  );
+    expect(result).toContain("HELLO");
+  });
 
   // D19: modifier parsing — timeout=30s
-  journalCase("D19: modifier with params parsed correctly", "README.md", function* (stream) {
+  it("D19: modifier with params parsed correctly", function* () {
+    const stream = yield* useJournalStream("README.md");
     // We test that the modifier receives its params
     let receivedParams: string | undefined;
 
@@ -736,72 +709,70 @@ describe("Tier D — code execution and modifiers", () => {
 });
 
 describe("execute", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // E1: Full document golden run
-  journalCase(
-    "E1: full document golden run — root + component + exec",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": [
-          "---",
-          "title: My Project",
-          "---",
-          "",
-          "# {meta.title}",
-          "",
-          '<Greeting name="world" />',
-          "",
-          "```bash exec",
-          "ls ./src",
-          "```",
-        ].join("\n"),
-        "components/Greeting.md": [
-          "---",
-          "emoji: hi",
-          "",
-          "props:",
-          "  type: object",
-          "  properties:",
-          "    name:",
-          "      type: string",
-          "  required: [name]",
-          "  additionalProperties: false",
-          "---",
-          "",
-          "{meta.emoji} Hello, {props.name}!",
-        ].join("\n"),
-      });
-      yield* useStubExec();
+  it("E1: full document golden run — root + component + exec", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": [
+        "---",
+        "title: My Project",
+        "---",
+        "",
+        "# {meta.title}",
+        "",
+        '<Greeting name="world" />',
+        "",
+        "```bash exec",
+        "ls ./src",
+        "```",
+      ].join("\n"),
+      "components/Greeting.md": [
+        "---",
+        "emoji: hi",
+        "",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    name:",
+        "      type: string",
+        "  required: [name]",
+        "  additionalProperties: false",
+        "---",
+        "",
+        "{meta.emoji} Hello, {props.name}!",
+      ].join("\n"),
+    });
+    yield* useStubExec();
 
-      const run = yield* displayed(function* () {
-        return asText(yield* collect(yield* execute({ path: "README.md", stream })));
-      });
-      const result = run.value;
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
+    const result = run.value;
 
-      expect(result).toContain("# My Project");
-      expect(result).toContain("hi Hello, world!");
-      // The listing was displayed as it arrived, not rendered into the document.
-      expect(run.stdout).toContain("main.ts");
-      expect(run.stdout).toContain("utils.ts");
+    expect(result).toContain("# My Project");
+    expect(result).toContain("hi Hello, world!");
+    // The listing was displayed as it arrived, not rendered into the document.
+    expect(run.stdout).toContain("main.ts");
+    expect(run.stdout).toContain("utils.ts");
 
-      const events = stream.snapshot();
-      expect(events.length).toBeGreaterThan(0);
+    const events = stream.snapshot();
+    expect(events.length).toBeGreaterThan(0);
 
-      // Should have import_component events for root and Greeting
-      const imports = events.filter(
-        (e) => e.type === "yield" && e.description["type"] === "import_component",
-      );
-      expect(imports.length).toBe(2);
+    // Should have import_component events for root and Greeting
+    const imports = events.filter(
+      (e) => e.type === "yield" && e.description["type"] === "import_component",
+    );
+    expect(imports.length).toBe(2);
 
-      // Should have exec event
-      const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
-      expect(execs.length).toBe(1);
+    // Should have exec event
+    const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
+    expect(execs.length).toBe(1);
 
-      // Should have close event
-      const closes = events.filter((e) => e.type === "close");
-      expect(closes.length).toBe(1);
-    },
-  );
+    // Should have close event
+    const closes = events.filter((e) => e.type === "close");
+    expect(closes.length).toBe(1);
+  });
 
   // E2: Full replay — zero file reads, zero exec calls
   it("E2: full replay — same output, no I/O", function* () {
@@ -833,7 +804,8 @@ describe("execute", () => {
   });
 
   // E6: Props flow through expansion
-  journalCase("E6: validated props flow through expansion", "README.md", function* (stream) {
+  it("E6: validated props flow through expansion", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": '<Greeting name="Alice" />\n',
       "components/Greeting.md": [
@@ -865,7 +837,8 @@ describe("execute", () => {
   });
 
   // E7: Undeclared prop in full document — uncaught, so the run fails
-  journalCase("E7: undeclared prop fails the run and reports it", "README.md", function* (stream) {
+  it("E7: undeclared prop fails the run and reports it", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": '<Badge size="lg" />\n',
       "components/Badge.md": ["---", "color: blue", "---", "", "badge"].join("\n"),
@@ -880,40 +853,38 @@ describe("execute", () => {
   });
 
   // E8: Silent exec in full document
-  journalCase(
-    "E8: silent exec — command runs, result journaled, output omitted",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": ["before", "", "```bash silent exec", "echo hidden", "```", "", "after"].join(
-          "\n",
-        ),
-      });
-      yield* useStubExec();
+  it("E8: silent exec — command runs, result journaled, output omitted", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": ["before", "", "```bash silent exec", "echo hidden", "```", "", "after"].join(
+        "\n",
+      ),
+    });
+    yield* useStubExec();
 
-      const result = asText(
-        yield* collect(
-          yield* execute({
-            path: "README.md",
-            stream,
-          }),
-        ),
-      );
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
 
-      // Output should NOT contain the exec result
-      expect(result).not.toContain("hidden");
-      expect(result).toContain("before");
-      expect(result).toContain("after");
+    // Output should NOT contain the exec result
+    expect(result).not.toContain("hidden");
+    expect(result).toContain("before");
+    expect(result).toContain("after");
 
-      // But the journal should have the exec event
-      const events = stream.snapshot();
-      const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
-      expect(execs.length).toBe(1);
-    },
-  );
+    // But the journal should have the exec event
+    const events = stream.snapshot();
+    const execs = events.filter((e) => e.type === "yield" && e.description["type"] === "exec");
+    expect(execs.length).toBe(1);
+  });
 
   // Simple text document — no components, no exec
-  journalCase("simple text document — passthrough", "README.md", function* (stream) {
+  it("simple text document — passthrough", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({ "README.md": "# Hello World\n\nThis is a test.\n" });
     yield* useStubExec();
 
@@ -930,7 +901,8 @@ describe("execute", () => {
   });
 
   // Default props applied
-  journalCase("default props applied when not provided", "README.md", function* (stream) {
+  it("default props applied when not provided", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": "<Greeting />\n",
       "components/Greeting.md": [
@@ -1071,39 +1043,36 @@ describe("execute", () => {
   });
 
   // E10: unclosed bold across component boundary — healed
-  journalCase(
-    "E10: unclosed bold across component boundary — healed in first segment",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": "This is **bold\n<Greeting />\nmore text\n",
-        "components/Greeting.md": "greeting\n",
-      });
-      yield* useStubExec();
+  it("E10: unclosed bold across component boundary — healed in first segment", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      "README.md": "This is **bold\n<Greeting />\nmore text\n",
+      "components/Greeting.md": "greeting\n",
+    });
+    yield* useStubExec();
 
-      const result = asText(
-        yield* collect(
-          yield* execute({
-            path: "README.md",
-            stream,
-          }),
-        ),
-      );
+    const result = asText(
+      yield* collect(
+        yield* execute({
+          path: "README.md",
+          stream,
+        }),
+      ),
+    );
 
-      // The **bold should be healed (closed) before component expansion.
-      // remend appends closing ** after the text segment (including trailing \n).
-      // Result: "This is **bold\n**" + "greeting\n" + "\nmore text\n"
-      expect(result).toContain("greeting");
-      expect(result).toContain("more text");
+    // The **bold should be healed (closed) before component expansion.
+    // remend appends closing ** after the text segment (including trailing \n).
+    // Result: "This is **bold\n**" + "greeting\n" + "\nmore text\n"
+    expect(result).toContain("greeting");
+    expect(result).toContain("more text");
 
-      // The first text segment should be healed — it should contain both
-      // opening ** and closing ** (remend closes the unclosed bold).
-      // The closing ** appears after the newline: "**bold\n**"
-      const beforeComponent = result.split("greeting")[0]!;
-      const openCount = (beforeComponent.match(/\*\*/g) || []).length;
-      expect(openCount).toBe(2);
-    },
-  );
+    // The first text segment should be healed — it should contain both
+    // opening ** and closing ** (remend closes the unclosed bold).
+    // The closing ** appears after the newline: "**bold\n**"
+    const beforeComponent = result.split("greeting")[0]!;
+    const openCount = (beforeComponent.match(/\*\*/g) || []).length;
+    expect(openCount).toBe(2);
+  });
 
   // E2 complex: full replay with component + exec — zero I/O
   it("E2 complex: full replay with component + exec — zero I/O on second run", function* () {
@@ -1168,7 +1137,8 @@ describe("execute", () => {
   });
 
   // Multiple components — verify all are imported and expanded
-  journalCase("multiple components — all imported and expanded", "README.md", function* (stream) {
+  it("multiple components — all imported and expanded", function* () {
+    const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": "<Header />\n<Footer />\n",
       "components/Header.md": "HEADER\n",
@@ -1197,7 +1167,8 @@ describe("execute", () => {
   });
 
   // Transitive components — A references B
-  journalCase("transitive components — A → B, both imported", "README.md", function* (stream) {
+  it("transitive components — A → B, both imported", function* () {
+    const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": "<Wrapper />\n",
       "components/Wrapper.md": "before\n<Inner />\nafter\n",
@@ -1227,7 +1198,8 @@ describe("execute", () => {
   });
 
   // Content slot with exec
-  journalCase("Content slot + exec — both work together", "README.md", function* (stream) {
+  it("Content slot + exec — both work together", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": ["<Wrapper>", "```bash exec", "echo inside", "```", "</Wrapper>"].join("\n"),
       "components/Wrapper.md": "BEFORE\n<Content />\nAFTER\n",
@@ -1248,144 +1220,128 @@ describe("execute", () => {
 });
 
 describe("Component Api dispatch — journal shape", () => {
-  journalCase(
-    "import, exec, and eval journal entries keep their identities",
-    "README.md",
-    function* (stream) {
-      // The eval block is here for its journal entry, so it has to compile.
-      yield* useTempFileCompiler();
-      yield* useStubFs({
-        "README.md": "<Note />\n\n```bash exec\necho hi\n```\n\n```js eval\nconst x = 1;\n```\n",
-        "components/Note.md": "note!\n",
-      });
-      yield* useStubExec();
+  it("import, exec, and eval journal entries keep their identities", function* () {
+    const stream = new InMemoryStream();
+    // The eval block is here for its journal entry, so it has to compile.
+    yield* useTempFileCompiler();
+    yield* useStubFs({
+      "README.md": "<Note />\n\n```bash exec\necho hi\n```\n\n```js eval\nconst x = 1;\n```\n",
+      "components/Note.md": "note!\n",
+    });
+    yield* useStubExec();
 
-      const output = yield* collect(yield* execute({ path: "README.md", stream }));
-      expect(output).toContain("note!");
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
+    expect(output).toContain("note!");
 
-      const events = stream.snapshot();
-      const imports = events.flatMap((e) =>
-        e.type === "yield" && e.description.type === "import_component" ? [e.description.name] : [],
-      );
-      expect(imports).toContain("__root__");
-      expect(imports).toContain("Note");
+    const events = stream.snapshot();
+    const imports = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "import_component" ? [e.description.name] : [],
+    );
+    expect(imports).toContain("__root__");
+    expect(imports).toContain("Note");
 
-      const execs = events.flatMap((e) =>
-        e.type === "yield" && e.description.type === "exec" ? [e] : [],
-      );
-      expect(execs.length).toBe(1);
+    const execs = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execs.length).toBe(1);
 
-      const evals = events.flatMap((e) =>
-        e.type === "yield" && e.description.type === "eval" ? [e.description.name] : [],
-      );
-      expect(evals.length).toBe(1);
-      expect(String(evals[0])).toMatch(/^eval:eval:root:\d+$/);
-    },
-  );
+    const evals = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "eval" ? [e.description.name] : [],
+    );
+    expect(evals.length).toBe(1);
+    expect(String(evals[0])).toMatch(/^eval:eval:root:\d+$/);
+  });
 });
 
 describe("component-declared output — document workflow", () => {
-  journalCase(
-    "applies <Output> to an imported component invoked from a streaming root",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": "Intro paragraph.\n\n<Warn />\n",
-        "components/Warn.md": "Docs line.\n\n<Output>\nWARNING_SHOWN\n</Output>\n",
-      });
-      yield* useStubExec();
-      const output = yield* collect(yield* execute({ path: "README.md", stream }));
-      expect(output).toContain("Intro paragraph.");
-      expect(output).toContain("WARNING_SHOWN");
-      expect(output).not.toContain("Docs line");
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
+  it("applies <Output> to an imported component invoked from a streaming root", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      "README.md": "Intro paragraph.\n\n<Warn />\n",
+      "components/Warn.md": "Docs line.\n\n<Output>\nWARNING_SHOWN\n</Output>\n",
+    });
+    yield* useStubExec();
+    const output = yield* collect(yield* execute({ path: "README.md", stream }));
+    expect(output).toContain("Intro paragraph.");
+    expect(output).toContain("WARNING_SHOWN");
+    expect(output).not.toContain("Docs line");
+  });
 
-  journalCase("applies <Output> to a root document the same way", "README.md", function* (stream) {
+  it("applies <Output> to a root document the same way", function* () {
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
     const output = yield* collect(yield* execute({ path: "README.md", stream }));
     expect(output).toContain("ROOT_SHOWN");
     expect(output).not.toContain("Root docs");
   });
 
-  journalCase(
-    "buffers a root with <Output> into a single emission after success",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
+  it("buffers a root with <Output> into a single emission after success", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({ "README.md": "Root docs.\n\n<Output>\nROOT_SHOWN\n</Output>\n" });
 
-      const execution = yield* execute({ path: "README.md", stream });
-      const chunks: string[] = [];
-      const full = yield* forEach(function* (chunk: string) {
-        chunks.push(chunk);
-      }, execution.output);
+    const execution = yield* execute({ path: "README.md", stream });
+    const chunks: string[] = [];
+    const full = yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
 
-      expect(full).toContain("ROOT_SHOWN");
-      expect(chunks).toHaveLength(1);
-    },
-  );
+    expect(full).toContain("ROOT_SHOWN");
+    expect(chunks).toHaveLength(1);
+  });
 
-  journalCase(
-    "emits what a buffered root selected before its documentation failed",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md": "<Output>\nSELECTED\n</Output>\n\n```bash exec\nfailing-command\n```\n",
-      });
-      yield* useFailingExec(1, "command not found");
+  it("emits what a buffered root selected before its documentation failed", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      "README.md": "<Output>\nSELECTED\n</Output>\n\n```bash exec\nfailing-command\n```\n",
+    });
+    yield* useFailingExec(1, "command not found");
 
-      const execution = yield* execute({ path: "README.md", stream });
-      const chunks: string[] = [];
-      yield* forEach(function* (chunk: string) {
-        chunks.push(chunk);
-      }, execution.output);
+    const execution = yield* execute({ path: "README.md", stream });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
 
-      const result = yield* execution;
-      expect(result.ok).toBe(false);
-      // The region completed before the documentation ran, so its text is part
-      // of what this run rendered — and a run that fails still hands over what it
-      // rendered (§6.9 Partial output).
-      expect(chunks.join("")).toContain("SELECTED");
-    },
-  );
+    const result = yield* execution;
+    expect(result.ok).toBe(false);
+    // The region completed before the documentation ran, so its text is part
+    // of what this run rendered — and a run that fails still hands over what it
+    // rendered (§6.9 Partial output).
+    expect(chunks.join("")).toContain("SELECTED");
+  });
 
-  journalCase(
-    "keeps per-segment streaming for roots without <Output>",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        // Two rendering segments around a foreground block, whose own output
-        // goes to the reader rather than into the document (#441).
-        "README.md": "one\n\n```bash exec\necho between\n```\n\ntwo\n",
-      });
-      yield* useStubExec();
+  it("keeps per-segment streaming for roots without <Output>", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({
+      // Two rendering segments around a foreground block, whose own output
+      // goes to the reader rather than into the document (#441).
+      "README.md": "one\n\n```bash exec\necho between\n```\n\ntwo\n",
+    });
+    yield* useStubExec();
 
-      const execution = yield* execute({ path: "README.md", stream });
-      const chunks: string[] = [];
-      yield* forEach(function* (chunk: string) {
-        chunks.push(chunk);
-      }, execution.output);
+    const execution = yield* execute({ path: "README.md", stream });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
 
-      expect(chunks.length).toBeGreaterThanOrEqual(2);
-    },
-  );
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+  });
 
-  journalCase(
-    "emits no output event for an empty buffered root <Output>",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({ "README.md": "Root docs.\n\n<Output />\n" });
+  it("emits no output event for an empty buffered root <Output>", function* () {
+    const stream = yield* useJournalStream("README.md");
+    yield* useStubFs({ "README.md": "Root docs.\n\n<Output />\n" });
 
-      const execution = yield* execute({ path: "README.md", stream });
-      const chunks: string[] = [];
-      const full = yield* forEach(function* (chunk: string) {
-        chunks.push(chunk);
-      }, execution.output);
+    const execution = yield* execute({ path: "README.md", stream });
+    const chunks: string[] = [];
+    const full = yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
 
-      expect(chunks).toHaveLength(0);
-      expect(full).toBe("");
-    },
-  );
+    expect(chunks).toHaveLength(0);
+    expect(full).toBe("");
+  });
 
   it("replays a buffered root <Output> to the same result", function* () {
     const stream = new InMemoryStream();
@@ -1398,154 +1354,133 @@ describe("component-declared output — document workflow", () => {
     expect(second).toContain("ROOT_SHOWN");
   });
 
-  journalCase(
-    "diagnoses an invalid root <Output> and runs no body side effects",
-    "README.md",
-    function* (stream) {
-      yield* useStubFs({
-        "README.md":
-          "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output invalid>x</Output>\n</Wrapper>\n",
-      });
-      yield* useFailingExec(1, "should not run");
+  it("diagnoses an invalid root <Output> and runs no body side effects", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output invalid>x</Output>\n</Wrapper>\n",
+    });
+    yield* useFailingExec(1, "should not run");
 
-      // The preflight aggregate is raised like any other undecided error, so an
-      // invalid root reports it and settles failed.
-      const message = yield* failure(function* () {
-        return yield* collect(yield* execute({ path: "README.md", stream }));
-      });
+    // The preflight aggregate is raised like any other undecided error, so an
+    // invalid root reports it and settles failed.
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-      expect(message).toContain("no props");
+    expect(message).toContain("no props");
 
-      const events = stream.snapshot();
-      const execEvents = events.flatMap((e) =>
-        e.type === "yield" && e.description.type === "exec" ? [e] : [],
-      );
-      expect(execEvents).toHaveLength(0);
-    },
-  );
+    const events = stream.snapshot();
+    const execEvents = events.flatMap((e) =>
+      e.type === "yield" && e.description.type === "exec" ? [e] : [],
+    );
+    expect(execEvents).toHaveLength(0);
+  });
 });
 
 describe("993 nested document execution", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const ready of [true, false]) {
     for (const reusable of [false, true]) {
-      journalCase(
-        `W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`,
-        "doc.md",
-        function* (stream) {
-          const directory = yield* useTempDirectory("nested-output-");
-          yield* useHostFiles();
-          yield* useNormalizedOutput();
-          yield* API.Env.around(
-            {
-              *cwd() {
-                return directory;
-              },
+      it(`W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`, function* () {
+        const directory = yield* useTempDirectory("nested-output-");
+        yield* useHostFiles();
+        yield* useNormalizedOutput();
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return directory;
             },
-            { at: "min" },
-          );
-          const source = `<Let as="ready" value={${ready}} />docs<If condition={ready}><File path="complete">done</File><Output>Review complete.</Output><Else><File path="pending">waiting</File><Output>Review pending.</Output></Else></If>`;
-          yield* useStubFs({
-            "doc.md": reusable ? "<Reply />" : source,
-            ...(reusable ? { "components/Reply.md": source } : {}),
-          });
-          const writes: string[] = [];
-          yield* API.Files.around({
-            *writeTextFile([input], next) {
-              writes.push(input.path);
-              return yield* next(input);
-            },
-          });
-          const text = yield* collect(yield* execute({ path: "doc.md", stream }));
-          expect(text).toBe(ready ? "Review complete." : "Review pending.");
-          expect(writes).toEqual([ready ? "complete" : "pending"]);
-          expect(yield* exists(`${directory}/complete`)).toBe(ready);
-          expect(yield* exists(`${directory}/pending`)).toBe(!ready);
-        },
-      );
+          },
+          { at: "min" },
+        );
+        const source = `<Let as="ready" value={${ready}} />docs<If condition={ready}><File path="complete">done</File><Output>Review complete.</Output><Else><File path="pending">waiting</File><Output>Review pending.</Output></Else></If>`;
+        yield* useStubFs({
+          "doc.md": reusable ? "<Reply />" : source,
+          ...(reusable ? { "components/Reply.md": source } : {}),
+        });
+        const writes: string[] = [];
+        yield* API.Files.around({
+          *writeTextFile([input], next) {
+            writes.push(input.path);
+            return yield* next(input);
+          },
+        });
+        const text = yield* collect(
+          yield* execute({ path: "doc.md", stream: yield* useJournalStream("doc.md") }),
+        );
+        expect(text).toBe(ready ? "Review complete." : "Review pending.");
+        expect(writes).toEqual([ready ? "complete" : "pending"]);
+        expect(yield* exists(`${directory}/complete`)).toBe(ready);
+        expect(yield* exists(`${directory}/pending`)).toBe(!ready);
+      });
     }
   }
 
   for (const reusable of [false, true]) {
-    const directoryCase = `W2: the direct Dir content route retains scoped files and restores cwd (${reusable})`;
-    it(directoryCase, function* () {
+    it(`W2: the direct Dir content route retains scoped files and restores cwd (${reusable})`, function* () {
       const directory = yield* useTempDirectory("nested-dir-");
-      yield* captureTestJournal(
-        { owner: OWNER, name: directoryCase },
-        `${directory}/doc.md`,
-        function* (stream) {
-          yield* ensureDir(`${directory}/reports`);
-          yield* writeTextFile(`${directory}/result.txt`, "ROOT");
-          yield* writeTextFile(`${directory}/reports/result.txt`, "REPORT");
-          yield* useHostFiles();
-          yield* useNormalizedOutput();
-          yield* API.Env.around(
-            {
-              *cwd() {
-                return directory;
-              },
-            },
-            { at: "min" },
-          );
-          const observed: unknown[] = [];
-          yield* registerComponents([
-            { origin: "993", name: "DirectDir", props: dirProps, fn: (props) => dirBody(props) },
-            {
-              origin: "993",
-              name: "Observe",
-              props: {
-                type: "object",
-                properties: { value: { type: "string" } },
-                required: ["value"],
-              },
-              *fn(props) {
-                observed.push(props.value);
-                return "";
-              },
-            },
-          ]);
-          const source =
-            'docs<DirectDir path="reports"><File path="result.txt" as="report" /><Output>{report}</Output></DirectDir><File path="result.txt" as="root" /><Observe value={root} />';
-          yield* ensureDir(`${directory}/components`);
-          yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
-          yield* writeTextFile(`${directory}/components/Report.md`, source);
-          expect(
-            yield* collect(
-              yield* execute({
-                path: `${directory}/doc.md`,
-                includes: [`${directory}/components`],
-                stream,
-              }),
-            ),
-          ).toBe("REPORT");
-          expect(observed).toEqual(["ROOT"]);
-          expect(yield* readTextFile(`${directory}/result.txt`)).toBe("ROOT");
+      yield* ensureDir(`${directory}/reports`);
+      yield* writeTextFile(`${directory}/result.txt`, "ROOT");
+      yield* writeTextFile(`${directory}/reports/result.txt`, "REPORT");
+      yield* useHostFiles();
+      yield* useNormalizedOutput();
+      yield* API.Env.around(
+        {
+          *cwd() {
+            return directory;
+          },
         },
+        { at: "min" },
       );
+      const observed: unknown[] = [];
+      yield* registerComponents([
+        { origin: "993", name: "DirectDir", props: dirProps, fn: (props) => dirBody(props) },
+        {
+          origin: "993",
+          name: "Observe",
+          props: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          *fn(props) {
+            observed.push(props.value);
+            return "";
+          },
+        },
+      ]);
+      const source =
+        'docs<DirectDir path="reports"><File path="result.txt" as="report" /><Output>{report}</Output></DirectDir><File path="result.txt" as="root" /><Observe value={root} />';
+      yield* ensureDir(`${directory}/components`);
+      yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
+      yield* writeTextFile(`${directory}/components/Report.md`, source);
+      const stream = yield* useJournalStream(`${directory}/doc.md`);
+      expect(
+        yield* collect(
+          yield* execute({
+            path: `${directory}/doc.md`,
+            includes: [`${directory}/components`],
+            stream,
+          }),
+        ),
+      ).toBe("REPORT");
+      expect(observed).toEqual(["ROOT"]);
+      expect(yield* readTextFile(`${directory}/result.txt`)).toBe("ROOT");
     });
   }
 
-  const selectionCase =
-    "W3/W8: empty selection emits nothing and partial replay rebuilds ordered selection around completed effects";
-  it(selectionCase, function* () {
+  it("W3/W8: empty selection emits nothing and partial replay rebuilds ordered selection around completed effects", function* () {
     yield* useNormalizedOutput();
     for (const body of [
       "docs<If condition={false}><Output>hidden</Output></If>",
       'docs<Each in={[]} let="n"><Output>hidden</Output></Each>',
     ]) {
-      yield* captureTestJournal(
-        { owner: OWNER, name: selectionCase },
-        "doc.md",
-        function* (stream) {
-          yield* useStubFs({ "doc.md": body });
-          const execution = yield* execute({ path: "doc.md", stream });
-          const chunks: string[] = [];
-          yield* forEach(function* (chunk) {
-            chunks.push(chunk);
-          }, execution.output);
-          expect((yield* execution).ok).toBe(true);
-          expect(chunks).toEqual([]);
-        },
-      );
+      yield* scoped(function* () {
+        yield* useStubFs({ "doc.md": body });
+        const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
+        const chunks: string[] = [];
+        yield* forEach(function* (chunk) {
+          chunks.push(chunk);
+        }, execution.output);
+        expect((yield* execution).ok).toBe(true);
+        expect(chunks).toEqual([]);
+      });
     }
     const source =
       "<If condition={true}><Output>A</Output></If>\n```bash exec silent\nfirst\n```\n<Output>B</Output>\n```bash exec silent\nsecond\n```\n<Output>C</Output>";

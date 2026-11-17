@@ -37,7 +37,7 @@ import { WORKFLOW_RUN } from "../src/journal.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import { retainedRunMismatch } from "../mod.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/workflow/tests/workflow-run.test.ts";
 const journalCase = journalCases(OWNER);

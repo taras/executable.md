@@ -8,12 +8,11 @@
 import { scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "@executablemd/core";
 import { it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTesting } from "../src/use-testing.ts";
 import { installHandlers, installTestingComponents } from "../src/components.ts";
 import { activateTesting } from "../src/activation.ts";
@@ -48,9 +47,9 @@ type RunFreshDoc = (
   options?: Omit<RunDocOptions, "stream" | "path">,
 ) => Operation<DocRun>;
 
-export function documentCases(owner: string) {
+export function documentCases() {
   return (name: string, body: (run: RunFreshDoc) => Operation<void>): void => {
-    it(name, () => withFreshDocument(owner, name, body));
+    it(name, () => body((files, options) => runDoc(files, options)));
   };
 }
 
@@ -97,9 +96,10 @@ export function* runDoc(
 
     // Plain `execute()`: containment is core's, so a host attaches nothing to
     // get it (#441).
+    const path = options.path ?? "README.md";
     const execution = yield* execute({
-      path: options.path ?? "README.md",
-      stream: options.stream ?? new InMemoryStream(),
+      path,
+      stream: options.stream ?? (yield* useJournalStream(path)),
     });
 
     const chunks: string[] = [];
