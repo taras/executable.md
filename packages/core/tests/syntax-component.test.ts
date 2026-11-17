@@ -34,8 +34,8 @@
  * the symbols is not permission to run it.
  */
 
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -78,10 +78,6 @@ import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/component-resolution.ts";
 import type { ComponentOrigin, FunctionComponent, SyntaxSymbols } from "../mod.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
-
-const registerJournalCase = journalCases("packages/core/tests/syntax-component.test.ts");
-const journalCase = (name: string, body: (stream: InMemoryStream) => Operation<void>) =>
-  registerJournalCase(name, ROOT_PATH, body);
 
 /**
  * An origin a *component* symbol entry can carry.
@@ -365,6 +361,7 @@ function useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Operation<
 }
 
 describe("Tier SYN — what one occurrence answers", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
   it("SYN1: the bare form renders the symbols once, and `as` binds the same text", function* () {
     const { installation } = stating(symbolsOf("Marker"));
     const bare = yield* run("<Syntax />\n", [installation]);
@@ -383,18 +380,16 @@ describe("Tier SYN — what one occurrence answers", () => {
     expect(String(captured).split("### `<Marker>`").length - 1).toBe(1);
   });
 
-  journalCase(
-    "SYN2: it renders exactly what the shared Markdown renderer produces",
-    function* (stream) {
-      const symbols = symbolsOf("Marker", "Other");
-      const { installation } = stating(symbols);
-      const bare = yield* run('<Syntax as="symbols" />{symbols}', [installation], stream);
-      // The same function `xmd syntax` renders with, not a second one that agrees
-      // today: an invocation and the command cannot describe one profile in two
-      // sets of words.
-      expect(String(bare)).toBe(renderSyntaxMarkdown(symbols));
-    },
-  );
+  it("SYN2: it renders exactly what the shared Markdown renderer produces", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const symbols = symbolsOf("Marker", "Other");
+    const { installation } = stating(symbols);
+    const bare = yield* run('<Syntax as="symbols" />{symbols}', [installation], stream);
+    // The same function `xmd syntax` renders with, not a second one that agrees
+    // today: an invocation and the command cannot describe one profile in two
+    // sets of words.
+    expect(String(bare)).toBe(renderSyntaxMarkdown(symbols));
+  });
 
   it("SYN3: a paired spelling and an authored prop refuse before any reference", function* () {
     const paired = stating(symbolsOf("Marker"));
@@ -432,6 +427,7 @@ describe("Tier SYN — what one occurrence answers", () => {
 });
 
 describe("Tier SYN — the named form", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
   it("SYN29: renders the selected entries' metadata and documentation, and captures it", function* () {
     const named = String(yield* run('<Syntax names={["File", "Elicit"]} />\n'));
 
@@ -499,57 +495,55 @@ describe("Tier SYN — the named form", () => {
     expect(unknown).not.toContain("###");
   });
 
-  journalCase(
-    "SYN30: installed structural references retain props and parent constraints without expansion",
-    function* (stream) {
-      let expansions = 0;
-      const declarations = [
-        Structural({
-          name: "Banner",
-          origin: "test://banner",
-          forms: ["paired"],
-          props: {
-            type: "object",
-            properties: { title: { type: "string" } },
-            required: ["title"],
-            additionalProperties: false,
-          },
-          syntax: ['<Banner title="heading"><BannerLine>…</BannerLine></Banner>'],
-          description: "Frame lines under a heading.",
-          context: "Direct BannerLine regions.",
-          parent: null,
-        }),
-        Structural({
-          name: "BannerLine",
-          origin: "test://banner",
-          forms: ["paired"],
-          props: { type: "object", properties: {}, additionalProperties: false },
-          syntax: ["<BannerLine>…</BannerLine>"],
-          description: "One line of a banner.",
-          context: "The line's content.",
-          parent: "Banner",
-        }),
-      ];
-      const installation: ExecutionInstallation = {
-        declarations,
-        *expand() {
-          expansions += 1;
+  it("SYN30: installed structural references retain props and parent constraints without expansion", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    let expansions = 0;
+    const declarations = [
+      Structural({
+        name: "Banner",
+        origin: "test://banner",
+        forms: ["paired"],
+        props: {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          additionalProperties: false,
         },
-      };
-      const text = String(
-        yield* run('<Syntax names={["BannerLine", "Banner"]} />', [installation], stream),
-      );
-      expect(text).toContain('"required": [\n    "title"');
-      expect(text).toContain("written directly inside `<Banner>`, and nowhere else");
-      expect(text).toContain("**Forms:** `<BannerLine>…</BannerLine>`");
-      expect(text).toContain("**Body context:** The line's content.");
-      expect(text).not.toContain("**Returns:**");
-      expect(text).not.toContain("**`as`:**");
-      expect(text).not.toContain("No long-form documentation");
-      expect(text.indexOf("### `<Banner>`")).toBeLessThan(text.indexOf("### `<BannerLine>`"));
-      expect(expansions).toBe(0);
-    },
-  );
+        syntax: ['<Banner title="heading"><BannerLine>…</BannerLine></Banner>'],
+        description: "Frame lines under a heading.",
+        context: "Direct BannerLine regions.",
+        parent: null,
+      }),
+      Structural({
+        name: "BannerLine",
+        origin: "test://banner",
+        forms: ["paired"],
+        props: { type: "object", properties: {}, additionalProperties: false },
+        syntax: ["<BannerLine>…</BannerLine>"],
+        description: "One line of a banner.",
+        context: "The line's content.",
+        parent: "Banner",
+      }),
+    ];
+    const installation: ExecutionInstallation = {
+      declarations,
+      *expand() {
+        expansions += 1;
+      },
+    };
+    const text = String(
+      yield* run('<Syntax names={["BannerLine", "Banner"]} />', [installation], stream),
+    );
+    expect(text).toContain('"required": [\n    "title"');
+    expect(text).toContain("written directly inside `<Banner>`, and nowhere else");
+    expect(text).toContain("**Forms:** `<BannerLine>…</BannerLine>`");
+    expect(text).toContain("**Body context:** The line's content.");
+    expect(text).not.toContain("**Returns:**");
+    expect(text).not.toContain("**`as`:**");
+    expect(text).not.toContain("No long-form documentation");
+    expect(text.indexOf("### `<Banner>`")).toBeLessThan(text.indexOf("### `<BannerLine>`"));
+    expect(expansions).toBe(0);
+  });
 
   it("SYN40: documentation survives planted filesystem middleware", function* () {
     const asked: string[] = [];
@@ -751,7 +745,8 @@ describe("Tier SYN — the named form", () => {
     expect(both).not.toContain("No long-form documentation is available");
   });
 
-  journalCase("SYN25k: middleware a running document installs reaches nothing", function* (stream) {
+  it("SYN25k: middleware a running document installs reaches nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The ordering half of the contract. Collection happens after the trusted
     // host's bootstrap and *before* the root import, so a component that
     // composes around the Api while the document is running composes into a
@@ -910,39 +905,37 @@ describe("Tier SYN — the named form", () => {
     }
   });
 
-  journalCase(
-    "SYN25l.3: a distinct owner and a disjoint set are not conflicts",
-    function* (stream) {
-      // Documentation joins by component name *and* origin, so two packages may
-      // each document a component spelled `Marker`: neither answers for the
-      // other's, and there is no question for anyone to arbitrate. One owner
-      // accounting for disjoint sets from two files is the same story.
-      //
-      // These are the controls that keep SYN25l.2 from passing for the wrong
-      // reason — a rule that refused any repeated *name* would fail here.
-      const { installation: marker } = stating(symbolsOf("Marker"));
-      const rendered = String(
-        yield* scoped(function* () {
-          yield* useMarkerDocumentation();
-          yield* useMarkerDocumentation({
-            owner: "@executablemd/other",
-            asset: "packages/other/src/components.md",
-            text: "## Marker\n\nSOMEBODY ELSE'S MARKER.\n",
-          });
-          yield* useMarkerDocumentation({
-            asset: "packages/test/src/more.md",
-            text: "## Separate\n\nA DISJOINT SET.\n",
-            supplies: ["Separate"],
-          });
-          return yield* run('<Syntax names={["Marker"]} />\n', [marker], stream);
-        }),
-      );
-      // The execution ran, and the entry took its own owner's prose — not the
-      // other package's, which documents a different component of the same name.
-      expect(rendered).toContain("MARKER PROSE.");
-      expect(rendered).not.toContain("SOMEBODY ELSE'S MARKER");
-    },
-  );
+  it("SYN25l.3: a distinct owner and a disjoint set are not conflicts", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // Documentation joins by component name *and* origin, so two packages may
+    // each document a component spelled `Marker`: neither answers for the
+    // other's, and there is no question for anyone to arbitrate. One owner
+    // accounting for disjoint sets from two files is the same story.
+    //
+    // These are the controls that keep SYN25l.2 from passing for the wrong
+    // reason — a rule that refused any repeated *name* would fail here.
+    const { installation: marker } = stating(symbolsOf("Marker"));
+    const rendered = String(
+      yield* scoped(function* () {
+        yield* useMarkerDocumentation();
+        yield* useMarkerDocumentation({
+          owner: "@executablemd/other",
+          asset: "packages/other/src/components.md",
+          text: "## Marker\n\nSOMEBODY ELSE'S MARKER.\n",
+        });
+        yield* useMarkerDocumentation({
+          asset: "packages/test/src/more.md",
+          text: "## Separate\n\nA DISJOINT SET.\n",
+          supplies: ["Separate"],
+        });
+        return yield* run('<Syntax names={["Marker"]} />\n', [marker], stream);
+      }),
+    );
+    // The execution ran, and the entry took its own owner's prose — not the
+    // other package's, which documents a different component of the same name.
+    expect(rendered).toContain("MARKER PROSE.");
+    expect(rendered).not.toContain("SOMEBODY ELSE'S MARKER");
+  });
 
   it("SYN25l.4: overlapping executions each keep their own contributions", function* () {
     // Collection is execution-scoped, so a conflict in one assembly is not a
@@ -1047,40 +1040,38 @@ describe("Tier SYN — the named form", () => {
     }
   });
 
-  journalCase(
-    "SYN25l.5: layered trusted bootstraps keep their registrations and documentation",
-    function* (stream) {
-      // The shape a nested run and an `<Evaluate>` host both take: an outer
-      // trusted layer enters a package's bootstrap, an inner one enters the same
-      // package again, and the inner scope descends from the outer. Both halves
-      // have to survive — the registrations *and* the documentation — because
-      // losing either is how the two-list design failed in the first place.
-      const outerThenInner = yield* scoped(function* () {
+  it("SYN25l.5: layered trusted bootstraps keep their registrations and documentation", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // The shape a nested run and an `<Evaluate>` host both take: an outer
+    // trusted layer enters a package's bootstrap, an inner one enters the same
+    // package again, and the inner scope descends from the outer. Both halves
+    // have to survive — the registrations *and* the documentation — because
+    // losing either is how the two-list design failed in the first place.
+    const outerThenInner = yield* scoped(function* () {
+      yield* useMarkerDocumentation();
+      yield* registerComponents([layeredComponent("outer")]);
+      return yield* scoped(function* () {
+        // The inner layer enters the same package bootstrap, and adds a
+        // registration of its own.
         yield* useMarkerDocumentation();
-        yield* registerComponents([layeredComponent("outer")]);
-        return yield* scoped(function* () {
-          // The inner layer enters the same package bootstrap, and adds a
-          // registration of its own.
-          yield* useMarkerDocumentation();
-          yield* registerComponents([layeredComponent("inner")]);
-          return yield* run(
-            '<Outer />\n\n<Inner />\n\n<Syntax names={["Marker"]} />\n',
-            [stating(symbolsOf("Marker")).installation],
-            stream,
-          );
-        });
+        yield* registerComponents([layeredComponent("inner")]);
+        return yield* run(
+          '<Outer />\n\n<Inner />\n\n<Syntax names={["Marker"]} />\n',
+          [stating(symbolsOf("Marker")).installation],
+          stream,
+        );
       });
+    });
 
-      const rendered = String(outerThenInner);
-      // Both registrations resolve: entering the bootstrap twice took nothing
-      // away from the enclosing layer.
-      expect(rendered).toContain("outer component ran");
-      expect(rendered).toContain("inner component ran");
-      // And the documentation is there exactly once, from one coalesced value.
-      expect(rendered).toContain("MARKER PROSE.");
-      expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
-    },
-  );
+    const rendered = String(outerThenInner);
+    // Both registrations resolve: entering the bootstrap twice took nothing
+    // away from the enclosing layer.
+    expect(rendered).toContain("outer component ran");
+    expect(rendered).toContain("inner component ran");
+    // And the documentation is there exactly once, from one coalesced value.
+    expect(rendered).toContain("MARKER PROSE.");
+    expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
+  });
 
   /**
    * FE30 — one package bootstrap entered through an inherited layer and a
@@ -1122,99 +1113,98 @@ describe("Tier SYN — the named form", () => {
     };
   }
 
-  journalCase(
-    "FE30: an inherited and a local provider bootstrap keep every half",
-    function* (stream) {
-      const probed: string[] = [];
-      const answer = implementation("Open", "the layered answer ran");
-      const inheritedLookups: string[] = [];
-      const localLookups: string[] = [];
-      const observed: unknown[] = [];
-      const retained: ComponentAnswerRequest[] = [];
+  it("FE30: an inherited and a local provider bootstrap keep every half", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const probed: string[] = [];
+    const answer = implementation("Open", "the layered answer ran");
+    const inheritedLookups: string[] = [];
+    const localLookups: string[] = [];
+    const observed: unknown[] = [];
+    const retained: ComponentAnswerRequest[] = [];
 
-      // The inherited layer's entry into the bootstrap: documentation, a
-      // registration, and the package's provider — which observes and delegates,
-      // because the local entry below is the one that states the identity.
-      const inherited: ExecutionInstallation = {
-        componentAnswers: [
-          answerProvider("Open", answer.definition, {
-            origin: "test://layer",
-            lookups: inheritedLookups,
-            observesOnly: true,
-            delegated: observed,
-          }),
-        ],
-      };
-
-      const rendered = String(
-        yield* scoped(function* () {
-          yield* useMarkerDocumentation();
-          yield* registerComponents([layeredComponent("outer")]);
-          return yield* scoped(function* () {
-            // The inner layer enters the same package bootstrap again, and adds
-            // its own registration and its own entry into the same provider.
-            yield* useMarkerDocumentation();
-            yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
-            const local: ExecutionInstallation = {
-              *install(): Operation<void> {
-                yield* useSelection(layeredEntry());
-              },
-              componentAnswers: [
-                answerProvider("Open", answer.definition, {
-                  origin: "test://layer",
-                  lookups: localLookups,
-                  retain: retained,
-                }),
-              ],
-            };
-            return yield* run(
-              '<Outer />\n\n<Inner />\n\n<Probe />\n\n<Syntax names={["Marker"]} />\n\n' +
-                `<Evaluate text={'<Open />\\n'} allow={["read"]} as="answer" />\n\n` +
-                "<Json value={answer} />\n",
-              [stating(symbolsOf("Marker")).installation, inherited, local],
-              stream,
-            );
-          });
+    // The inherited layer's entry into the bootstrap: documentation, a
+    // registration, and the package's provider — which observes and delegates,
+    // because the local entry below is the one that states the identity.
+    const inherited: ExecutionInstallation = {
+      componentAnswers: [
+        answerProvider("Open", answer.definition, {
+          origin: "test://layer",
+          lookups: inheritedLookups,
+          observesOnly: true,
+          delegated: observed,
         }),
-      );
+      ],
+    };
 
-      // The bootstrap survived being entered twice. Both registrations resolve,
-      // the ordinary `<Probe />` runs, and the named documentation is there once
-      // — SYN25l.5's evidence, unchanged.
-      expect(rendered).toContain("outer component ran");
-      expect(rendered).toContain("inner component ran");
-      expect(rendered).toContain(PROBE_LABEL);
-      expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
-      expect(probed).toEqual(["probed"]);
+    const rendered = String(
+      yield* scoped(function* () {
+        yield* useMarkerDocumentation();
+        yield* registerComponents([layeredComponent("outer")]);
+        return yield* scoped(function* () {
+          // The inner layer enters the same package bootstrap again, and adds
+          // its own registration and its own entry into the same provider.
+          yield* useMarkerDocumentation();
+          yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
+          const local: ExecutionInstallation = {
+            *install(): Operation<void> {
+              yield* useSelection(layeredEntry());
+            },
+            componentAnswers: [
+              answerProvider("Open", answer.definition, {
+                origin: "test://layer",
+                lookups: localLookups,
+                retain: retained,
+              }),
+            ],
+          };
+          return yield* run(
+            '<Outer />\n\n<Inner />\n\n<Probe />\n\n<Syntax names={["Marker"]} />\n\n' +
+              `<Evaluate text={'<Open />\\n'} allow={["read"]} as="answer" />\n\n` +
+              "<Json value={answer} />\n",
+            [stating(symbolsOf("Marker")).installation, inherited, local],
+            stream,
+          );
+        });
+      }),
+    );
 
-      // And the provider half survived too. Both layers were in the chain — the
-      // inherited one observed the lookup and passed the answer through — and the
-      // locally claimed identity is what the capture admitted and the fragment
-      // ran.
-      expect(inheritedLookups).toEqual(["Open"]);
-      expect(localLookups).toEqual(["Open"]);
-      expect(observed[0]).toBe(answer.definition);
-      expect(rendered).toContain("the layered answer ran");
-      expect(answer.invoked).toEqual(["the layered answer ran"]);
+    // The bootstrap survived being entered twice. Both registrations resolve,
+    // the ordinary `<Probe />` runs, and the named documentation is there once
+    // — SYN25l.5's evidence, unchanged.
+    expect(rendered).toContain("outer component ran");
+    expect(rendered).toContain("inner component ran");
+    expect(rendered).toContain(PROBE_LABEL);
+    expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
+    expect(probed).toEqual(["probed"]);
 
-      // Teardown is the execution's, not the layer's: the request the local
-      // bootstrap's handler was given states nothing once the child run is over,
-      // and the enclosing layers are still standing.
-      const held = retained[0];
-      if (held === undefined) {
-        throw new Error("the local provider was never asked");
-      }
-      let refused: unknown;
-      try {
-        held.answer(implementation("Open", "late").definition);
-      } catch (error) {
-        refused = error;
-      }
-      expect(String(refused)).toContain("has ended");
-    },
-  );
+    // And the provider half survived too. Both layers were in the chain — the
+    // inherited one observed the lookup and passed the answer through — and the
+    // locally claimed identity is what the capture admitted and the fragment
+    // ran.
+    expect(inheritedLookups).toEqual(["Open"]);
+    expect(localLookups).toEqual(["Open"]);
+    expect(observed[0]).toBe(answer.definition);
+    expect(rendered).toContain("the layered answer ran");
+    expect(answer.invoked).toEqual(["the layered answer ran"]);
 
-  journalCase("FE30: the bootstrap's own names are still not admitted ones", function* (stream) {
+    // Teardown is the execution's, not the layer's: the request the local
+    // bootstrap's handler was given states nothing once the child run is over,
+    // and the enclosing layers are still standing.
+    const held = retained[0];
+    if (held === undefined) {
+      throw new Error("the local provider was never asked");
+    }
+    let refused: unknown;
+    try {
+      held.answer(implementation("Open", "late").definition);
+    } catch (error) {
+      refused = error;
+    }
+    expect(String(refused)).toContain("has ended");
+  });
+
+  it("FE30: the bootstrap's own names are still not admitted ones", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The negative half. `<Probe />` is registered by the inner layer and its
     // package is documented, and the provider's answer is admitted — and none
     // of the first two is permission. The profile admits exactly `<Open />`, and
@@ -1256,7 +1246,8 @@ describe("Tier SYN — the named form", () => {
     expect(answer.invoked).toEqual([]);
   });
 
-  journalCase("FE30: a provider answer offering no admitted spelling refuses", function* (stream) {
+  it("FE30: a provider answer offering no admitted spelling refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The other refusal the provider half adds. The layering is honest and the
     // bootstrap's documentation and registrations are intact; what the local
     // provider answers with is a definition whose own declaration offers no
@@ -1538,26 +1529,23 @@ describe("Tier SYN — the named form", () => {
 });
 
 describe("Tier SYN — the name canonical core owns", () => {
-  journalCase(
-    "SYN5: a repository Syntax.md, Syntax.ts and directory candidate never win",
-    function* (stream) {
-      yield* useWorkingDirectory(function* (dir) {
-        yield* writeTextFile(join(dir, "Syntax.md"), "repository symbols\n");
-        yield* writeTextFile(join(dir, "Nearby.md"), "a nearby repository component\n");
-        const { installation } = stating(symbolsOf("Marker"));
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
+  it("SYN5: a repository Syntax.md, Syntax.ts and directory candidate never win", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    yield* useWorkingDirectory(function* (dir) {
+      yield* writeTextFile(join(dir, "Syntax.md"), "repository symbols\n");
+      yield* writeTextFile(join(dir, "Nearby.md"), "a nearby repository component\n");
+      const { installation } = stating(symbolsOf("Marker"));
 
-        const output = String(
-          yield* run("<Syntax />\n<Nearby />\n", [installation], stream, [dir]),
-        );
-        // The protected component answered, and the repository file did not.
-        expect(output).toContain("### `<Marker>`");
-        expect(output).not.toContain("repository symbols");
-        // The positive control: repository discovery is active in this very run,
-        // so the absence above is protection rather than a search that never ran.
-        expect(output).toContain("a nearby repository component");
-      });
-    },
-  );
+      const output = String(yield* run("<Syntax />\n<Nearby />\n", [installation], stream, [dir]));
+      // The protected component answered, and the repository file did not.
+      expect(output).toContain("### `<Marker>`");
+      expect(output).not.toContain("repository symbols");
+      // The positive control: repository discovery is active in this very run,
+      // so the absence above is protection rather than a search that never ran.
+      expect(output).toContain("a nearby repository component");
+    });
+  });
 
   it("SYN6: selection reports the protected tier ahead of every other", function* () {
     yield* useWorkingDirectory(function* (dir) {
@@ -1708,6 +1696,7 @@ describe("Tier SYN — the name canonical core owns", () => {
 });
 
 describe("Tier SYN — what the chain may and may not do", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
   /** A handler that answers `Syntax` with whatever `answer` produces. */
   function answering(
     answer: (real: ImportedDefinition) => ImportedDefinition,
@@ -1729,7 +1718,8 @@ describe("Tier SYN — what the chain may and may not do", () => {
     };
   }
 
-  journalCase("SYN11: ordinary delegation reaches canonical Syntax", function* (stream) {
+  it("SYN11: ordinary delegation reaches canonical Syntax", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const seen: string[] = [];
     const watching: ExecutionInstallation = {
       *install() {
@@ -1788,43 +1778,41 @@ describe("Tier SYN — what the chain may and may not do", () => {
     }
   });
 
-  journalCase(
-    "SYN12b: a refused change does not become the next import's baseline",
-    function* (stream) {
-      const replacement: FunctionComponent = function* () {
-        return "replaced symbols";
-      };
-      const { installation, calls } = stating(symbolsOf("Marker"));
-      let attempts = 0;
+  it("SYN12b: a refused change does not become the next import's baseline", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const replacement: FunctionComponent = function* () {
+      return "replaced symbols";
+    };
+    const { installation, calls } = stating(symbolsOf("Marker"));
+    let attempts = 0;
 
-      // `<PrintErrors>` is what makes the second occurrence reachable: the first
-      // refusal is handled rather than ending the run, which is the only state in
-      // which a poisoned baseline could be used. Without it the run stops at the
-      // first refusal and a second import never happens — so the case would pass
-      // whatever the baseline did.
-      const output = yield* run(
-        "<PrintErrors>\n\n<Syntax />\n\n<Syntax />\n\n</PrintErrors>\n",
-        [
-          installation,
-          answering((real) => {
-            attempts += 1;
-            Reflect.set(Object(real), "fn", replacement);
-            return real;
-          }),
-        ],
-        stream,
-      );
+    // `<PrintErrors>` is what makes the second occurrence reachable: the first
+    // refusal is handled rather than ending the run, which is the only state in
+    // which a poisoned baseline could be used. Without it the run stops at the
+    // first refusal and a second import never happens — so the case would pass
+    // whatever the baseline did.
+    const output = yield* run(
+      "<PrintErrors>\n\n<Syntax />\n\n<Syntax />\n\n</PrintErrors>\n",
+      [
+        installation,
+        answering((real) => {
+          attempts += 1;
+          Reflect.set(Object(real), "fn", replacement);
+          return real;
+        }),
+      ],
+      stream,
+    );
 
-      // Both occurrences attempted it, and neither ran the replacement: canonical
-      // verification keeps the copy taken when the definition was *first* issued,
-      // so the change is compared against what core decided rather than against
-      // the changed object.
-      expect(attempts).toBeGreaterThan(1);
-      expect(String(output)).not.toContain("replaced symbols");
-      expect(calls.count).toBe(0);
-      expect(String(output)).toContain("canonical core owns");
-    },
-  );
+    // Both occurrences attempted it, and neither ran the replacement: canonical
+    // verification keeps the copy taken when the definition was *first* issued,
+    // so the change is compared against what core decided rather than against
+    // the changed object.
+    expect(attempts).toBeGreaterThan(1);
+    expect(String(output)).not.toContain("replaced symbols");
+    expect(calls.count).toBe(0);
+    expect(String(output)).toContain("canonical core owns");
+  });
 
   it("SYN13: a handler that redirects the name, or delegates twice, answers nothing", function* () {
     const redirecting: ExecutionInstallation = {
@@ -1869,7 +1857,8 @@ describe("Tier SYN — what the chain may and may not do", () => {
     ).toBeTruthy();
   });
 
-  journalCase("SYN14: a deliberate middleware refusal stays a refusal", function* (stream) {
+  it("SYN14: a deliberate middleware refusal stays a refusal", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const refusing: ExecutionInstallation = {
       *install() {
         yield* Component.around(
@@ -1892,47 +1881,44 @@ describe("Tier SYN — what the chain may and may not do", () => {
     expect(calls.count).toBe(0);
   });
 
-  journalCase(
-    "SYN15: a document-authored context and a look-alike reference change nothing",
-    function* (stream) {
-      // Nothing a document writes reaches the reference: it is not addressed by
-      // name. The strongest thing an authored document can do is register and
-      // bind, and the symbols are unchanged by both.
-      const { installation } = stating(symbolsOf("Marker"));
-      const source = [
-        '<Let as="symbols" value="planted symbols" />',
-        '<Syntax as="read" />',
-        "{read}",
-        "",
-      ].join("\n");
-      const output = String(yield* run(source, [installation], stream));
-      expect(output).toContain("### `<Marker>`");
-      expect(output).not.toContain("planted symbols");
-    },
-  );
+  it("SYN15: a document-authored context and a look-alike reference change nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // Nothing a document writes reaches the reference: it is not addressed by
+    // name. The strongest thing an authored document can do is register and
+    // bind, and the symbols are unchanged by both.
+    const { installation } = stating(symbolsOf("Marker"));
+    const source = [
+      '<Let as="symbols" value="planted symbols" />',
+      '<Syntax as="read" />',
+      "{read}",
+      "",
+    ].join("\n");
+    const output = String(yield* run(source, [installation], stream));
+    expect(output).toContain("### `<Marker>`");
+    expect(output).not.toContain("planted symbols");
+  });
 });
 
 describe("Tier SYN — the site the symbols describe", () => {
-  journalCase(
-    "SYN16: the derived symbols report this execution's own includes and registry",
-    function* (stream) {
-      yield* useWorkingDirectory(function* (dir) {
-        yield* writeTextFile(join(dir, "Local.md"), "a local component\n");
-        // No host contribution: canonical core derives the symbols from the
-        // selection inputs this execution captured.
-        const output = String(yield* run("<Syntax />\n", [], stream, [dir]));
-        expect(output).toContain("### `<Local>`");
-        // And it describes itself, once, with the approved description.
-        expect(output).toContain("### `<Syntax>`");
-        expect(output).toContain(DESCRIPTION);
-        // Its own provenance, not a registration's. A reader deciding whether
-        // they could supply this name themselves gets the opposite answer from
-        // the two phrases, so the symbols must not print the other one.
-        expect(output).toContain("`@executablemd/core` (protected component)");
-        expect(output).not.toContain("reserved registration");
-      });
-    },
-  );
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
+  it("SYN16: the derived symbols report this execution's own includes and registry", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    yield* useWorkingDirectory(function* (dir) {
+      yield* writeTextFile(join(dir, "Local.md"), "a local component\n");
+      // No host contribution: canonical core derives the symbols from the
+      // selection inputs this execution captured.
+      const output = String(yield* run("<Syntax />\n", [], stream, [dir]));
+      expect(output).toContain("### `<Local>`");
+      // And it describes itself, once, with the approved description.
+      expect(output).toContain("### `<Syntax>`");
+      expect(output).toContain(DESCRIPTION);
+      // Its own provenance, not a registration's. A reader deciding whether
+      // they could supply this name themselves gets the opposite answer from
+      // the two phrases, so the symbols must not print the other one.
+      expect(output).toContain("`@executablemd/core` (protected component)");
+      expect(output).not.toContain("reserved registration");
+    });
+  });
 
   it("SYN27: the symbols report a protected component as protected, not registered", function* () {
     const { installation } = stating(symbolsOf("Marker"));
@@ -1969,109 +1955,102 @@ describe("Tier SYN — the site the symbols describe", () => {
     expect(info.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
   });
 
-  journalCase(
-    "SYN28: a bundled component is reported as pinned, not as a repository file",
-    function* (stream) {
-      const sourceHash = "1".repeat(40);
-      const bundle = {
-        components: [
-          {
-            name: "Bundled",
-            path: "components/Bundled.md",
-            sourceHash,
-            content: "a bundled component\n",
-          },
-        ],
-      };
-      const output = String(yield* run("<Syntax />\n", [{ bundle }], stream));
+  it("SYN28: a bundled component is reported as pinned, not as a repository file", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const sourceHash = "1".repeat(40);
+    const bundle = {
+      components: [
+        {
+          name: "Bundled",
+          path: "components/Bundled.md",
+          sourceHash,
+          content: "a bundled component\n",
+        },
+      ],
+    };
+    const output = String(yield* run("<Syntax />\n", [{ bundle }], stream));
 
-      // The path alone would read as a file the reader could edit; the blob id is
-      // what says this is the exact source the run was defined against.
-      expect(output).toContain("`components/Bundled.md` (workflow bundle, `111111111111`)");
+    // The path alone would read as a file the reader could edit; the blob id is
+    // what says this is the exact source the run was defined against.
+    expect(output).toContain("`components/Bundled.md` (workflow bundle, `111111111111`)");
 
-      const symbols = yield* scoped(function* () {
-        const registry = yield* Component.operations.registry;
-        const workflow = installedBundle([bundle], registry);
-        if (workflow === undefined) {
-          throw new Error("expected the bundle to install");
-        }
-        return yield* inspectSyntax({ includes: [], workflow });
-      });
-      // User-provided: the third category.
-      const entry = symbols.categories[2].entries.find((candidate) => candidate.name === "Bundled");
-      if (entry === undefined || entry.inspectability !== "complete") {
-        throw new Error("expected the symbols to describe <Bundled> completely");
+    const symbols = yield* scoped(function* () {
+      const registry = yield* Component.operations.registry;
+      const workflow = installedBundle([bundle], registry);
+      if (workflow === undefined) {
+        throw new Error("expected the bundle to install");
       }
-      expect(entry.origin).toEqual({
-        kind: "workflow",
-        path: "components/Bundled.md",
-        sourceHash,
-      });
-      expect(entry.sourceKind).toBe("workflow-markdown");
-    },
-  );
+      return yield* inspectSyntax({ includes: [], workflow });
+    });
+    // User-provided: the third category.
+    const entry = symbols.categories[2].entries.find((candidate) => candidate.name === "Bundled");
+    if (entry === undefined || entry.inspectability !== "complete") {
+      throw new Error("expected the symbols to describe <Bundled> completely");
+    }
+    expect(entry.origin).toEqual({
+      kind: "workflow",
+      path: "components/Bundled.md",
+      sourceHash,
+    });
+    expect(entry.sourceKind).toBe("workflow-markdown");
+  });
 
-  journalCase(
-    "SYN17: a workflow root reports its own bundle without running a member",
-    function* (stream) {
-      const entered: string[] = [];
-      const bundle = {
-        components: [
-          {
-            name: "Bundled",
-            path: "components/Bundled.md",
-            sourceHash: "1".repeat(40),
-            content: "a bundled component\n",
-          },
-        ],
-      };
-      const output = String(yield* run("<Syntax />\n", [{ bundle }], stream));
-      expect(output).toContain("### `<Bundled>`");
-      // Described, not run: nothing imported or expanded the member.
-      expect(entered).toEqual([]);
-      const imported = (yield* stream.readAll()).filter(
-        (event) => event.type === "yield" && event.description.type === "import_component",
-      );
-      expect(
-        imported.some((event) => event.type === "yield" && event.description.name === "Bundled"),
-      ).toBe(false);
-    },
-  );
+  it("SYN17: a workflow root reports its own bundle without running a member", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const entered: string[] = [];
+    const bundle = {
+      components: [
+        {
+          name: "Bundled",
+          path: "components/Bundled.md",
+          sourceHash: "1".repeat(40),
+          content: "a bundled component\n",
+        },
+      ],
+    };
+    const output = String(yield* run("<Syntax />\n", [{ bundle }], stream));
+    expect(output).toContain("### `<Bundled>`");
+    // Described, not run: nothing imported or expanded the member.
+    expect(entered).toEqual([]);
+    const imported = (yield* stream.readAll()).filter(
+      (event) => event.type === "yield" && event.description.type === "import_component",
+    );
+    expect(
+      imported.some((event) => event.type === "yield" && event.description.name === "Bundled"),
+    ).toBe(false);
+  });
 
-  journalCase(
-    "SYN18: a declared Markdown component's own body reports the site it inherited",
-    function* (stream) {
-      const source = ['<Syntax as="symbols" />', "policy sees {symbols}", ""].join("\n");
-      const declaration = Markdown({
-        name: "Policy",
-        origin: "@executablemd/test/Policy.md",
-        source,
-        digest: sourceDigest(source),
-      });
-      const { installation } = stating(symbolsOf("Marker"));
-      const output = String(
-        yield* run("<Policy />\n", [installation, { declarations: [declaration] }], stream),
-      );
-      expect(output).toContain("policy sees");
-      expect(output).toContain("### `<Marker>`");
-    },
-  );
+  it("SYN18: a declared Markdown component's own body reports the site it inherited", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const source = ['<Syntax as="symbols" />', "policy sees {symbols}", ""].join("\n");
+    const declaration = Markdown({
+      name: "Policy",
+      origin: "@executablemd/test/Policy.md",
+      source,
+      digest: sourceDigest(source),
+    });
+    const { installation } = stating(symbolsOf("Marker"));
+    const output = String(
+      yield* run("<Policy />\n", [installation, { declarations: [declaration] }], stream),
+    );
+    expect(output).toContain("policy sees");
+    expect(output).toContain("### `<Marker>`");
+  });
 });
 
 describe("Tier SYN — the record one occurrence keeps", () => {
-  journalCase(
-    "SYN19: a bare occurrence that rendered retains exactly { symbols }",
-    function* (stream) {
-      yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
-      const [reference] = syntaxReads(yield* stream.readAll());
-      if (reference?.type !== "yield" || reference.result.status !== "ok") {
-        throw new Error("the run retained no syntax record");
-      }
-      const value = Object(reference.result.value);
-      expect(Object.keys(value)).toEqual(["symbols"]);
-      expect(typeof value.symbols).toBe("string");
-    },
-  );
+  beforeEach(journalBeforeEach("packages/core/tests/syntax-component.test.ts"));
+  it("SYN19: a bare occurrence that rendered retains exactly { symbols }", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
+    const [reference] = syntaxReads(yield* stream.readAll());
+    if (reference?.type !== "yield" || reference.result.status !== "ok") {
+      throw new Error("the run retained no syntax record");
+    }
+    const value = Object(reference.result.value);
+    expect(Object.keys(value)).toEqual(["symbols"]);
+    expect(typeof value.symbols).toBe("string");
+  });
 
   it("SYN20: a continuation restores the symbols after the environment moves, and asks nothing", function* () {
     const first = new InMemoryStream();
@@ -2122,7 +2101,8 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     }
   });
 
-  journalCase("SYN22: a cancelled reference tears down and commits no record", function* (stream) {
+  it("SYN22: a cancelled reference tears down and commits no record", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const teardown: string[] = [];
     const hanging: ExecutionInstallation = {
       *install(): Operation<void> {

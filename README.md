@@ -224,6 +224,14 @@ documents. Name an affected suite's path instead, beside any TypeScript paths:
 deno task test examples/adversarial-implementation/tests/Implementation.test.md
 ```
 
+Call `xmd test` directly to choose the reporter for a Markdown test.
+
+```bash
+deno task xmd test examples/adversarial-implementation/tests/Implementation.test.md --reporter=failures
+```
+
+[Choose a test reporter](specs/testing-spec.md#choose-a-reporter).
+
 ### Complete
 
 Run the complete applicable battery concurrently, yielding delivery

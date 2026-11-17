@@ -104,14 +104,6 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import { INLINE_SOURCE_PATH } from "@executablemd/core";
 
 const OWNER = "packages/cli/tests/repl-repositories.test.ts";
-function entryCase(
-  name: string,
-  id: string,
-  body: (entry: ReplExecution) => Operation<void>,
-): void {
-  it(name, () => captureReplEntry({ owner: OWNER, name }, id, INLINE_SOURCE_PATH, body));
-}
-
 function useFixture(): Operation<Fixture> {
   return resource<Fixture>(function* (provide) {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-cli-")))));
@@ -404,76 +396,83 @@ describe("how a REPL entry gets its repository behavior", () => {
     );
   });
 
-  entryCase(
-    "denies a generated Dir, and performs nothing when access is denied",
-    "execution-1",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const counted: Counted = { initialized: 0 };
-      const run = entry;
+  it("denies a generated Dir, and performs nothing when access is denied", () =>
+    captureReplEntry(
+      { owner: OWNER, name: "denies a generated Dir, and performs nothing when access is denied" },
+      "execution-1",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const counted: Counted = { initialized: 0 };
+        const run = entry;
 
-      const source = [
-        `<Evaluate text={${JSON.stringify('<Dir path="made">\n</Dir>\n')}} allow={["write"]} />`,
-        `<Evaluate text={${JSON.stringify('<File path="refused.md">x</File>\n')}} allow={["read"]} />`,
-      ].join("\n");
+        const source = [
+          `<Evaluate text={${JSON.stringify('<Dir path="made">\n</Dir>\n')}} allow={["write"]} />`,
+          `<Evaluate text={${JSON.stringify('<File path="refused.md">x</File>\n')}} allow={["read"]} />`,
+        ].join("\n");
 
-      const events = yield* submit(fixture, source, run, counted);
+        const events = yield* submit(fixture, source, run, counted);
 
-      // The write table is unchanged: carrying an ensure on the captured access
-      // admits no generated `<Dir>`.
-      expect(yield* exists(join(fixture.checkout, "made"))).toBe(false);
-      // And a fragment admitted for reads performs no write at all.
-      expect(yield* exists(join(fixture.checkout, "refused.md"))).toBe(false);
-      expect(recordsOf(events, REPL_REPOSITORY_LOCAL)).toEqual([]);
-    },
-  );
+        // The write table is unchanged: carrying an ensure on the captured access
+        // admits no generated `<Dir>`.
+        expect(yield* exists(join(fixture.checkout, "made"))).toBe(false);
+        // And a fragment admitted for reads performs no write at all.
+        expect(yield* exists(join(fixture.checkout, "refused.md"))).toBe(false);
+        expect(recordsOf(events, REPL_REPOSITORY_LOCAL)).toEqual([]);
+      },
+    ));
 
-  entryCase(
-    "E7: shares the recording with a generated File inside a managed Repository",
-    "execution-1",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const origin = yield* useOrigin(fixture);
-      const counted: Counted = { initialized: 0 };
-      const run = entry;
+  it("E7: shares the recording with a generated File inside a managed Repository", () =>
+    captureReplEntry(
+      {
+        owner: OWNER,
+        name: "E7: shares the recording with a generated File inside a managed Repository",
+      },
+      "execution-1",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const origin = yield* useOrigin(fixture);
+        const counted: Counted = { initialized: 0 };
+        const run = entry;
 
-      // An admitted generated `<File>` inside a managed Repository body, and two
-      // generated selections beside it. The fragment's write crosses the same one
-      // Files route an authored one does; the selections reach the generated
-      // ceiling before any provider is asked.
-      const source = [
-        `<Repository name="project" url=${JSON.stringify(origin)}>`,
-        `<Evaluate text={${JSON.stringify('<File path="generated.md">from a fragment</File>\n')}} allow={["write"]} />`,
-        `<Evaluate text={${JSON.stringify(`<Repository name="other" url=${JSON.stringify(origin)} />\n`)}} allow={["write"]} />`,
-        `<Evaluate text={${JSON.stringify('<Worktree name="other" branch="other" />\n')}} allow={["write"]} />`,
-        `<Evaluate text={${JSON.stringify('<Dir path="made">\n</Dir>\n')}} allow={["write"]} />`,
-        "</Repository>",
-      ].join("\n");
+        // An admitted generated `<File>` inside a managed Repository body, and two
+        // generated selections beside it. The fragment's write crosses the same one
+        // Files route an authored one does; the selections reach the generated
+        // ceiling before any provider is asked.
+        const source = [
+          `<Repository name="project" url=${JSON.stringify(origin)}>`,
+          `<Evaluate text={${JSON.stringify('<File path="generated.md">from a fragment</File>\n')}} allow={["write"]} />`,
+          `<Evaluate text={${JSON.stringify(`<Repository name="other" url=${JSON.stringify(origin)} />\n`)}} allow={["write"]} />`,
+          `<Evaluate text={${JSON.stringify('<Worktree name="other" branch="other" />\n')}} allow={["write"]} />`,
+          `<Evaluate text={${JSON.stringify('<Dir path="made">\n</Dir>\n')}} allow={["write"]} />`,
+          "</Repository>",
+        ].join("\n");
 
-      const events = yield* submit(fixture, source, run, counted);
+        const events = yield* submit(fixture, source, run, counted);
 
-      // One placement: the authored Repository. The generated Repository and
-      // Worktree were never admitted, so neither reached a selector.
-      const selected = recordsOf(events, REPL_REPOSITORY_PLACEMENT);
-      expect(selected.length).toBe(1);
-      const placement = parseReplPlacementRecord(
-        selected[0]?.type === "yield" && selected[0].result.status === "ok"
-          ? selected[0].result.value
-          : undefined,
-      );
-      const checkout = placement?.outcome.ok === true ? placement.outcome.value.checkoutRoot : "";
-      expect(checkout).not.toBe("");
+        // One placement: the authored Repository. The generated Repository and
+        // Worktree were never admitted, so neither reached a selector.
+        const selected = recordsOf(events, REPL_REPOSITORY_PLACEMENT);
+        expect(selected.length).toBe(1);
+        const placement = parseReplPlacementRecord(
+          selected[0]?.type === "yield" && selected[0].result.status === "ok"
+            ? selected[0].result.value
+            : undefined,
+        );
+        const checkout = placement?.outcome.ok === true ? placement.outcome.value.checkoutRoot : "";
+        expect(checkout).not.toBe("");
 
-      // The fragment's write happened in the managed checkout and is recorded
-      // there, exactly as an authored one would be.
-      expect(yield* readTextFile(join(checkout, "generated.md"))).toBe("from a fragment");
-      expect(recordsOf(events, REPL_REPOSITORY_LOCAL).length).toBe(1);
-      // And the generated `<Dir>` made nothing, in the managed checkout or
-      // anywhere else.
-      expect(yield* exists(join(checkout, "made"))).toBe(false);
-      expect(yield* exists(join(fixture.checkout, "made"))).toBe(false);
-    },
-  );
+        // The fragment's write happened in the managed checkout and is recorded
+        // there, exactly as an authored one would be.
+        expect(yield* readTextFile(join(checkout, "generated.md"))).toBe("from a fragment");
+        expect(recordsOf(events, REPL_REPOSITORY_LOCAL).length).toBe(1);
+        // And the generated `<Dir>` made nothing, in the managed checkout or
+        // anywhere else.
+        expect(yield* exists(join(checkout, "made"))).toBe(false);
+        expect(yield* exists(join(fixture.checkout, "made"))).toBe(false);
+      },
+    ));
 
   it("E7: keeps two entries' equal records in their own segments", function* () {
     const fixture = yield* useFixture();
@@ -583,21 +582,23 @@ describe("how a REPL entry gets its repository behavior", () => {
     expect(recordsOf(output, REPL_REPOSITORY_LOCAL).length).toBe(1);
   });
 
-  entryCase(
-    "E9: retains nothing for a host that installs no setup",
-    "execution-1",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const run = entry;
+  it("E9: retains nothing for a host that installs no setup", () =>
+    captureReplEntry(
+      { owner: OWNER, name: "E9: retains nothing for a host that installs no setup" },
+      "execution-1",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const run = entry;
 
-      const events = yield* submit(fixture, '<File path="plain.md">plain</File>', run);
+        const events = yield* submit(fixture, '<File path="plain.md">plain</File>', run);
 
-      // The ordinary Files provider did the work, and nothing was recorded.
-      expect(yield* readTextFile(join(fixture.checkout, "plain.md"))).toBe("plain");
-      expect(recordsOf(events, REPL_REPOSITORY_LOCAL)).toEqual([]);
-      expect(recordsOf(events, REPL_REPOSITORY_SELECTION)).toEqual([]);
-    },
-  );
+        // The ordinary Files provider did the work, and nothing was recorded.
+        expect(yield* readTextFile(join(fixture.checkout, "plain.md"))).toBe("plain");
+        expect(recordsOf(events, REPL_REPOSITORY_LOCAL)).toEqual([]);
+        expect(recordsOf(events, REPL_REPOSITORY_SELECTION)).toEqual([]);
+      },
+    ));
 
   it("prepares nothing for a settled history nobody is continuing", function* () {
     const fixture = yield* useFixture();
@@ -700,19 +701,24 @@ describe("how a REPL entry gets its repository behavior", () => {
     expect(yield* exists(join(fixture.checkout, "after.md"))).toBe(false);
   });
 
-  entryCase(
-    "records the entry's routing once, and no operation outside the checkout",
-    "execution-1",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const counted: Counted = { initialized: 0 };
-      const run = entry;
+  it("records the entry's routing once, and no operation outside the checkout", () =>
+    captureReplEntry(
+      {
+        owner: OWNER,
+        name: "records the entry's routing once, and no operation outside the checkout",
+      },
+      "execution-1",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const counted: Counted = { initialized: 0 };
+        const run = entry;
 
-      const events = yield* submit(fixture, '<File path="note.md">first</File>', run, counted);
-      expect(recordsOf(events, REPL_REPOSITORY_SELECTION).length).toBe(1);
-      expect(recordsOf(events, REPL_REPOSITORY_LOCAL).length).toBe(1);
-    },
-  );
+        const events = yield* submit(fixture, '<File path="note.md">first</File>', run, counted);
+        expect(recordsOf(events, REPL_REPOSITORY_SELECTION).length).toBe(1);
+        expect(recordsOf(events, REPL_REPOSITORY_LOCAL).length).toBe(1);
+      },
+    ));
 });
 
 /**

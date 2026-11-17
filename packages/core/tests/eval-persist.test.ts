@@ -7,7 +7,8 @@
  * Note: In v1, persist delegates directly to next() — actual
  * resource retention via evalScope.eval() is deferred to v2.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -15,16 +16,17 @@ import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { unbox } from "effection";
 import type { Result } from "effection";
 
-const journalCase = journalCases("packages/core/tests/eval-persist.test.ts");
+const owner = "packages/core/tests/eval-persist.test.ts";
 
 describe("Tier T6 — persist modifier", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(owner));
   // T43: eval without persist → block completes normally
-  journalCase("T43: eval without persist → block completes", "test.md", function* (stream) {
+  it("T43: eval without persist → block completes", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
@@ -44,7 +46,8 @@ describe("Tier T6 — persist modifier", () => {
   });
 
   // T44: persist eval → block completes normally
-  journalCase("T44: persist eval → block completes normally", "test.md", function* (stream) {
+  it("T44: persist eval → block completes normally", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js persist eval\nconst server = 'running';\n```\n",
     });
@@ -64,29 +67,26 @@ describe("Tier T6 — persist modifier", () => {
   });
 
   // T45: persist eval followed by eval → bindings available
-  journalCase(
-    "T45: persist eval followed by eval → bindings available",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "test.md":
-          "```js persist eval\nconst server = 'started';\n```\n\n```js eval\nconst status = server;\n```\n",
-      });
-      yield* useEchoExec();
+  it("T45: persist eval followed by eval → bindings available", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "test.md":
+        "```js persist eval\nconst server = 'started';\n```\n\n```js eval\nconst status = server;\n```\n",
+    });
+    yield* useEchoExec();
 
-      const output = asText(
-        yield* collect(
-          yield* execute({
-            path: "test.md",
-            stream,
-          }),
-        ),
-      );
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
+    );
 
-      expect(output.trim()).toBe("");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output.trim()).toBe("");
+    expect(output).not.toContain("ERROR");
+  });
 
   // T46: persist on replay → no-op
   it("T46: persist on replay → normal replay", function* () {
@@ -138,156 +138,144 @@ describe("Tier T6 — persist modifier", () => {
 
   // L2: without persist, a resource a block spawns is torn down when the block
   // completes — the negative that gives L3 its meaning.
-  journalCase(
-    "L2: a non-persist eval block's resource is gone by the next block",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "test.md": [
-          "```js eval",
-          "const status = { alive: false };",
-          "yield* spawn(function*() {",
-          "  status.alive = true;",
-          "  try { yield* suspend(); } finally { status.alive = false; }",
-          "});",
-          "yield* sleep(1);",
-          "```",
-          "",
-          "```js eval",
-          "const observed = status.alive;",
-          "output(`alive=${observed}`);",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("L2: a non-persist eval block's resource is gone by the next block", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "test.md": [
+        "```js eval",
+        "const status = { alive: false };",
+        "yield* spawn(function*() {",
+        "  status.alive = true;",
+        "  try { yield* suspend(); } finally { status.alive = false; }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+        "",
+        "```js eval",
+        "const observed = status.alive;",
+        "output(`alive=${observed}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("alive=false");
-    },
-  );
+    expect(output).toContain("alive=false");
+  });
 
   // L3: a persist resource belongs to the invocation, so a block after the
   // component sees it gone while the document is still running.
-  journalCase(
-    "L3: a persist resource stops when the invocation completes",
-    "doc.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/Holder.md": [
-          "```js persist eval",
-          "globalThis.__l3 = { alive: false };",
-          "yield* spawn(function*() {",
-          "  globalThis.__l3.alive = true;",
-          "  try { yield* suspend(); } finally { globalThis.__l3.alive = false; }",
-          "});",
-          "yield* sleep(1);",
-          "```",
-        ].join("\n"),
-        "doc.md": [
-          "<Holder />",
-          "",
-          "```js eval",
-          "output(`alive=${globalThis.__l3.alive}`);",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("L3: a persist resource stops when the invocation completes", function* () {
+    const stream = yield* useJournalStream("doc.md");
+    yield* useStubFs({
+      "components/Holder.md": [
+        "```js persist eval",
+        "globalThis.__l3 = { alive: false };",
+        "yield* spawn(function*() {",
+        "  globalThis.__l3.alive = true;",
+        "  try { yield* suspend(); } finally { globalThis.__l3.alive = false; }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+      ].join("\n"),
+      "doc.md": [
+        "<Holder />",
+        "",
+        "```js eval",
+        "output(`alive=${globalThis.__l3.alive}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
 
-      expect(output).toContain("alive=false");
-    },
-  );
+    expect(output).toContain("alive=false");
+  });
 
   // L8: a persist block the caller projected into a component anchors in the
   // content scope, so it stops ahead of a persist resource the component
   // retained for itself — even though the component retained that one after
   // projecting, which is the order a single scope would release in reverse.
-  journalCase(
-    "L8: a projected persist resource stops before the component's own",
-    "doc.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/Holder.md": [
-          "<Content />",
-          "",
-          "```js persist eval",
-          "globalThis.__l8.push('start:own');",
-          "yield* spawn(function*() {",
-          "  try { yield* suspend(); } finally { globalThis.__l8.push('stop:own'); }",
-          "});",
-          "yield* sleep(1);",
-          "```",
-        ].join("\n"),
-        "doc.md": [
-          "```js eval",
-          "globalThis.__l8 = [];",
-          "```",
-          "",
-          "<Holder>",
-          "",
-          "```js persist eval",
-          "globalThis.__l8.push('start:projected');",
-          "yield* spawn(function*() {",
-          "  try { yield* suspend(); } finally { globalThis.__l8.push('stop:projected'); }",
-          "});",
-          "yield* sleep(1);",
-          "```",
-          "",
-          "</Holder>",
-          "",
-          "```js eval",
-          "output(globalThis.__l8.join(','));",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("L8: a projected persist resource stops before the component's own", function* () {
+    const stream = yield* useJournalStream("doc.md");
+    yield* useStubFs({
+      "components/Holder.md": [
+        "<Content />",
+        "",
+        "```js persist eval",
+        "globalThis.__l8.push('start:own');",
+        "yield* spawn(function*() {",
+        "  try { yield* suspend(); } finally { globalThis.__l8.push('stop:own'); }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+      ].join("\n"),
+      "doc.md": [
+        "```js eval",
+        "globalThis.__l8 = [];",
+        "```",
+        "",
+        "<Holder>",
+        "",
+        "```js persist eval",
+        "globalThis.__l8.push('start:projected');",
+        "yield* spawn(function*() {",
+        "  try { yield* suspend(); } finally { globalThis.__l8.push('stop:projected'); }",
+        "});",
+        "yield* sleep(1);",
+        "```",
+        "",
+        "</Holder>",
+        "",
+        "```js eval",
+        "output(globalThis.__l8.join(','));",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "doc.md", stream }));
+    const output = yield* collect(yield* execute({ path: "doc.md", stream }));
 
-      expect(output).toContain("start:projected,start:own,stop:projected,stop:own");
-    },
-  );
+    expect(output).toContain("start:projected,start:own,stop:projected,stop:own");
+  });
 
   // T49b: persist eval retains spawned resource across blocks
   // A background task spawned in a persist eval block sets status.ready
   // after 10ms. The next eval block uses when() to converge on it.
-  journalCase(
-    "T49b: persist eval retains spawned resource across blocks",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "test.md": [
-          "```js persist eval",
-          "const status = { ready: false };",
-          "yield* spawn(function*() {",
-          "  yield* sleep(10);",
-          "  status.ready = true;",
-          "});",
-          "```",
-          "",
-          "```js eval",
-          "yield* when(function*() {",
-          '  if (!status.ready) throw new Error("not ready");',
-          "});",
-          "const serverReady = status.ready;",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("T49b: persist eval retains spawned resource across blocks", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "test.md": [
+        "```js persist eval",
+        "const status = { ready: false };",
+        "yield* spawn(function*() {",
+        "  yield* sleep(10);",
+        "  status.ready = true;",
+        "});",
+        "```",
+        "",
+        "```js eval",
+        "yield* when(function*() {",
+        '  if (!status.ready) throw new Error("not ready");',
+        "});",
+        "const serverReady = status.ready;",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = asText(
-        yield* collect(
-          yield* execute({
-            path: "test.md",
-            stream,
-          }),
-        ),
-      );
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          path: "test.md",
+          stream,
+        }),
+      ),
+    );
 
-      expect(output.trim()).toBe("");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output.trim()).toBe("");
+    expect(output).not.toContain("ERROR");
+  });
 });

@@ -12,7 +12,7 @@
  * nothing.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { content, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
@@ -73,9 +73,9 @@ import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./supp
 
 import { filteredRepositoryIdentity } from "../src/composition/selection.ts";
 import { type RepositorySelection } from "@executablemd/git/api";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
-const journalCase = journalCases("packages/git/tests/git-switch.test.ts");
+const OWNER = "packages/git/tests/git-switch.test.ts";
 /**
  * Two branches whose content differs, plus one file that does not.
  *
@@ -491,6 +491,7 @@ describe("workflow Git.Switch", () => {
 });
 
 describe("workflow Git.Switch selection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("selects the enclosing checkout from a directory inside it", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -713,7 +714,7 @@ describe("workflow Git.Switch selection", () => {
     });
   });
 
-  journalCase("does not turn a missing provider into a refusal", "<eval>", function* (stream) {
+  it("does not turn a missing provider into a refusal", function* () {
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
@@ -721,7 +722,7 @@ describe("workflow Git.Switch selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Switch branch="release" />`),
-            stream,
+            stream: yield* useJournalStream("<eval>"),
           }),
         );
       }),

@@ -10,9 +10,12 @@
  * contacts a network host, and no case reads a developer's real credential.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   call,
@@ -71,7 +74,6 @@ import type {
 } from "../src/deno/composition/github.ts";
 
 const OWNER = "packages/git/tests/pull-request-read.test.ts";
-const journalCase = journalCases(OWNER);
 
 const ENDPOINT = "https://api.github.test";
 
@@ -510,6 +512,7 @@ function retainedItems(events: DurableEvent[]): Json {
 }
 
 describe("Tier PRR — pull-request evidence", () => {
+  beforeEach(journalBeforeEach("packages/git/tests/pull-request-read.test.ts"));
   it("PRR3: every body and every check survives normalization byte for byte", function* () {
     const body = "  Two  spaces, a\ttab, and a trailing newline.\n";
     const host = server({
@@ -1053,7 +1056,8 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(host.requests).toEqual([]);
   });
 
-  journalCase("PRR13: an ordinary run resolves none of the three", "<eval>", function* (stream) {
+  it("PRR13: an ordinary run resolves none of the three", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const failure = yield* raised(
       collect(
         yield* execute({
@@ -1793,10 +1797,9 @@ describe("Tier PRR — pull-request evidence", () => {
    * rather than merely started. The gate supplies both: the halt does not
    * settle while cleanup is held, and no read reaches the journal at all.
    */
-  journalCase(
-    "PRR26a: a cancelled read joins its held cleanup and publishes nothing",
-    "<eval>",
-    function* (stream) {
+  const cancelledRead = "PRR26a: a cancelled read joins its held cleanup and publishes nothing";
+  it(cancelledRead, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: cancelledRead }, "<eval>", function* (stream) {
       const entered = withResolvers<void>();
       const order: string[] = [];
       const access: GitHubAccess = {
@@ -1840,8 +1843,8 @@ describe("Tier PRR — pull-request evidence", () => {
       expect(order).toEqual(["open", "closing", "closed"]);
       // Cancellation stays cancellation: no success, and no failed read either.
       expect(readYields(stream.snapshot())).toEqual([]);
-    },
-  );
+    });
+  });
 
   it("PRR32: a received envelope carrying one member more retains the failure", function* () {
     const host = server({

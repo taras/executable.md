@@ -1,6 +1,9 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { cliBase } from "@executablemd/test-support/launch";
@@ -123,9 +126,9 @@ function imports(stream: InMemoryStream) {
 }
 
 const JOURNAL_OWNER = "packages/core/tests/typescript-materialization.test.ts";
-const documentCase = workspaceJournalCases(JOURNAL_OWNER, "doc.md", project);
-
 describe("direct TypeScript materialization", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
+
   const variants =
     "F1: the selected bytes replace same-path behavior while preserving the module contract";
   it(variants, function* () {
@@ -228,61 +231,60 @@ describe("direct TypeScript materialization", () => {
     );
   });
 
-  documentCase(
-    "F2: a fresh process continues retained direct source after its file is removed",
-    function* (stream, directory) {
-      const direct = join(directory, "components/Direct.ts");
-      const original = source("retained");
-      yield* writeTextFile(direct, original);
-      yield* writeTextFile(join(directory, "doc.md"), DOCUMENT);
-      const entered = withResolvers<void>();
-      const parent = yield* spawn(function* () {
-        yield* gate(function* () {
-          entered.resolve();
-          yield* suspend();
-          return "unreachable";
-        });
-        yield* collect(
-          yield* execute({ path: join(directory, "doc.md"), includes: [dirname(direct)], stream }),
-        );
+  it("F2: a fresh process continues retained direct source after its file is removed", function* () {
+    const directory = yield* project();
+    const stream = yield* useJournalStream(join(directory, "doc.md"));
+    const direct = join(directory, "components/Direct.ts");
+    const original = source("retained");
+    yield* writeTextFile(direct, original);
+    yield* writeTextFile(join(directory, "doc.md"), DOCUMENT);
+    const entered = withResolvers<void>();
+    const parent = yield* spawn(function* () {
+      yield* gate(function* () {
+        entered.resolve();
+        yield* suspend();
+        return "unreachable";
       });
-      yield* entered.operation;
-      expect(yield* readTextFile(join(directory, "effects.txt"))).toBe("completed\n");
-      expect(imports(stream)).toMatchObject([
-        { result: { status: "ok", value: { content: original } } },
-      ]);
-      const prefix = stream.snapshot();
-      expect(prefix.some((event) => event.type === "close")).toBe(false);
-      yield* parent.halt();
-      expect(yield* readTextFile(join(directory, "releases.txt"))).toBe("released\n");
-      yield* writeTextFile(
-        join(directory, "journal.jsonl"),
-        prefix.map(serializeDurableEvent).join(""),
+      yield* collect(
+        yield* execute({ path: join(directory, "doc.md"), includes: [dirname(direct)], stream }),
       );
-      yield* rm(direct);
-      const [command, ...arguments_] = cliBase();
-      arguments_.pop();
-      const fixture = fileURLToPath(
-        new URL("./fixtures/typescript-materialization.ts", import.meta.url),
-      );
-      const status = yield* exec(command, {
-        arguments: [...arguments_, fixture, directory],
-      }).join();
-      expect({ code: status.code, stdout: status.stdout, stderr: status.stderr }).toMatchObject({
-        code: 0,
-        stdout: "",
-      });
-      expect(JSON.parse(yield* readTextFile(join(directory, "result.json")))).toEqual({
-        value: "retained:7:relative-helper",
-        origin: pathToFileURL(direct).href,
-        sibling: "sibling",
-        projected: "continued",
-        late: "late-native",
-        resolved: pathToFileURL(join(directory, "components/late.ts")).href,
-      });
-      expect(yield* readTextFile(join(directory, "effects.txt"))).toBe("completed\n");
-      expect(yield* readTextFile(join(directory, "releases.txt"))).toBe("released\nreleased\n");
-      expect(yield* readTextFile(join(directory, "continued.jsonl"))).toContain('"type":"close"');
-    },
-  );
+    });
+    yield* entered.operation;
+    expect(yield* readTextFile(join(directory, "effects.txt"))).toBe("completed\n");
+    expect(imports(stream)).toMatchObject([
+      { result: { status: "ok", value: { content: original } } },
+    ]);
+    const prefix = stream.snapshot();
+    expect(prefix.some((event) => event.type === "close")).toBe(false);
+    yield* parent.halt();
+    expect(yield* readTextFile(join(directory, "releases.txt"))).toBe("released\n");
+    yield* writeTextFile(
+      join(directory, "journal.jsonl"),
+      prefix.map(serializeDurableEvent).join(""),
+    );
+    yield* rm(direct);
+    const [command, ...arguments_] = cliBase();
+    arguments_.pop();
+    const fixture = fileURLToPath(
+      new URL("./fixtures/typescript-materialization.ts", import.meta.url),
+    );
+    const status = yield* exec(command, {
+      arguments: [...arguments_, fixture, directory],
+    }).join();
+    expect({ code: status.code, stdout: status.stdout, stderr: status.stderr }).toMatchObject({
+      code: 0,
+      stdout: "",
+    });
+    expect(JSON.parse(yield* readTextFile(join(directory, "result.json")))).toEqual({
+      value: "retained:7:relative-helper",
+      origin: pathToFileURL(direct).href,
+      sibling: "sibling",
+      projected: "continued",
+      late: "late-native",
+      resolved: pathToFileURL(join(directory, "components/late.ts")).href,
+    });
+    expect(yield* readTextFile(join(directory, "effects.txt"))).toBe("completed\n");
+    expect(yield* readTextFile(join(directory, "releases.txt"))).toBe("released\nreleased\n");
+    expect(yield* readTextFile(join(directory, "continued.jsonl"))).toContain('"type":"close"');
+  });
 });

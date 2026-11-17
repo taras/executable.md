@@ -9,9 +9,9 @@
  * repository can answer.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import type { Json } from "@executablemd/durable-streams";
 import type { InMemoryStream } from "@executablemd/durable-streams";
@@ -58,7 +58,6 @@ import {
   writeFixtureFile,
 } from "./support/observations.ts";
 import {
-  ordinaryDocumentCases,
   commonDirectoryOf,
   countingOrdinaryHost,
   raised,
@@ -66,6 +65,7 @@ import {
   subcommands,
   useHostCheckout,
   useManagedRoot,
+  useOrdinaryDocumentRunner,
 } from "./support/run-composition.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
 import { REMOTE } from "./support/run-composition-tier.ts";
@@ -99,7 +99,6 @@ import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, RepositoryHost } from "../src/deno/composition/host.ts";
 import { performGitObservation } from "../src/deno/composition/observations.ts";
 
-const ordinaryCase = ordinaryDocumentCases("packages/git/tests/git-observations.test.ts");
 import type { ObservationPlace } from "../src/deno/composition/observations.ts";
 
 /**
@@ -205,7 +204,6 @@ function propertiesOf(schema: Json): Record<string, Json> {
 
 /** The four reads, with the smallest invocation each one accepts. */
 const JOURNAL_OWNER = "packages/git/tests/git-observations.test.ts";
-const journalCase = journalCases(JOURNAL_OWNER);
 
 const FOUR_ELEMENTS: readonly { readonly name: string; readonly source: string }[] = [
   { name: "Git.Files", source: '<Git.Files as="bound" />' },
@@ -397,7 +395,10 @@ function paths(value: Json | undefined): string[] {
 }
 
 describe("GO1 — discovery addresses the chosen repository", () => {
-  ordinaryCase("lists the tracked index paths and nothing else", function* (runFresh) {
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
+
+  it("lists the tracked index paths and nothing else", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const fixture = yield* useObservationFixture();
     const seen: Json[] = [];
@@ -427,57 +428,56 @@ describe("GO1 — discovery addresses the chosen repository", () => {
 });
 
 describe("GO2 — discovery excludes what the index does not hold", () => {
-  ordinaryCase(
-    "excludes untracked files, a nested checkout's contents and a sibling checkout",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      yield* writeFixtureFile(fixture.root, "untracked.md", "not tracked\n");
-      const seen: Json[] = [];
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
 
-      yield* runFresh(
-        ['<Git.Files limit={1000} as="files" />', "", "<Captured value={files} />", ""].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+  it("excludes untracked files, a nested checkout's contents and a sibling checkout", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    yield* writeFixtureFile(fixture.root, "untracked.md", "not tracked\n");
+    const seen: Json[] = [];
 
-      const listed = paths(seen[0]);
-      expect(listed).not.toContain("untracked.md");
-      // The tracked gitlink is one path. Nothing beneath it, and nothing in the
-      // untracked checkout beside it, is a path this repository's index holds.
-      expect(listed).toContain("nested");
-      expect(listed.filter((path) => path.startsWith("nested/"))).toEqual([]);
-      expect(listed.filter((path) => path.startsWith("scratch-repo"))).toEqual([]);
-    },
-  );
+    yield* runFresh(
+      ['<Git.Files limit={1000} as="files" />', "", "<Captured value={files} />", ""].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-  ordinaryCase(
-    "matches prefix literally and answers root-relative paths from a subdirectory",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      const seen: Json[] = [];
+    const listed = paths(seen[0]);
+    expect(listed).not.toContain("untracked.md");
+    // The tracked gitlink is one path. Nothing beneath it, and nothing in the
+    // untracked checkout beside it, is a path this repository's index holds.
+    expect(listed).toContain("nested");
+    expect(listed.filter((path) => path.startsWith("nested/"))).toEqual([]);
+    expect(listed.filter((path) => path.startsWith("scratch-repo"))).toEqual([]);
+  });
 
-      yield* runFresh(
-        [
-          '<Dir path="src">',
-          "",
-          '<Git.Files prefix="src/a" as="partial" />',
-          "",
-          "<Captured value={partial} />",
-          "",
-          "</Dir>",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+  it("matches prefix literally and answers root-relative paths from a subdirectory", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    const seen: Json[] = [];
 
-      // An incomplete final segment is a prefix, and the answer is relative to
-      // the repository root rather than to the directory the element was in.
-      expect(paths(seen[0])).toEqual(["src/a.ts", "src/added.ts"]);
-    },
-  );
+    yield* runFresh(
+      [
+        '<Dir path="src">',
+        "",
+        '<Git.Files prefix="src/a" as="partial" />',
+        "",
+        "<Captured value={partial} />",
+        "",
+        "</Dir>",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-  ordinaryCase("reads a prefix holding glob characters as those characters", function* (runFresh) {
+    // An incomplete final segment is a prefix, and the answer is relative to
+    // the repository root rather than to the directory the element was in.
+    expect(paths(seen[0])).toEqual(["src/a.ts", "src/added.ts"]);
+  });
+
+  it("reads a prefix holding glob characters as those characters", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const fixture = yield* useObservationFixture();
     const seen: Json[] = [];
@@ -497,7 +497,10 @@ describe("GO2 — discovery excludes what the index does not hold", () => {
 });
 
 describe("GO3 — the three comparisons", () => {
-  ordinaryCase("compares two commits with every status the fixture produces", function* (runFresh) {
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
+
+  it("compares two commits with every status the fixture produces", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const fixture = yield* useObservationFixture();
     const seen: Json[] = [];
@@ -530,41 +533,39 @@ describe("GO3 — the three comparisons", () => {
     expect(result.next).toBe(null);
   });
 
-  ordinaryCase(
-    "compares the index with the working tree, and HEAD with the index",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 2;\n");
-      yield* writeFixtureFile(fixture.root, "staged.ts", "export const staged = true;\n");
-      fixture.run("add", "--", "staged.ts");
-      yield* writeFixtureFile(fixture.root, "untracked.md", "not tracked\n");
-      const seen: Json[] = [];
+  it("compares the index with the working tree, and HEAD with the index", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 2;\n");
+    yield* writeFixtureFile(fixture.root, "staged.ts", "export const staged = true;\n");
+    fixture.run("add", "--", "staged.ts");
+    yield* writeFixtureFile(fixture.root, "untracked.md", "not tracked\n");
+    const seen: Json[] = [];
 
-      yield* runFresh(
-        [
-          '<Git.Changes compare="unstaged" as="unstaged" />',
-          "",
-          "<Captured value={unstaged} />",
-          "",
-          '<Git.Changes compare="staged" as="staged" />',
-          "",
-          "<Captured value={staged} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+    yield* runFresh(
+      [
+        '<Git.Changes compare="unstaged" as="unstaged" />',
+        "",
+        "<Captured value={unstaged} />",
+        "",
+        '<Git.Changes compare="staged" as="staged" />',
+        "",
+        "<Captured value={staged} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-      const unstaged = object(seen[0]);
-      expect(unstaged.comparison).toEqual({ compare: "unstaged" });
-      // The untracked file is not a tracked change, so it is not here.
-      expect(unstaged.changes).toEqual([{ path: "src/a.ts", status: "M", previousPath: null }]);
+    const unstaged = object(seen[0]);
+    expect(unstaged.comparison).toEqual({ compare: "unstaged" });
+    // The untracked file is not a tracked change, so it is not here.
+    expect(unstaged.changes).toEqual([{ path: "src/a.ts", status: "M", previousPath: null }]);
 
-      const staged = object(seen[1]);
-      expect(staged.comparison).toEqual({ compare: "staged", base: fixture.c2 });
-      expect(staged.changes).toEqual([{ path: "staged.ts", status: "A", previousPath: null }]);
-    },
-  );
+    const staged = object(seen[1]);
+    expect(staged.comparison).toEqual({ compare: "staged", base: fixture.c2 });
+    expect(staged.changes).toEqual([{ path: "staged.ts", status: "A", previousPath: null }]);
+  });
 
   // Driven at the native performer rather than through a document, because no
   // installed provider can select an unborn repository: a selection's identity
@@ -596,118 +597,115 @@ describe("GO3 — the three comparisons", () => {
 });
 
 describe("GO4 — the patch a comparison produces", () => {
-  ordinaryCase(
-    "answers the comparison's own unified text, with Git's binary and mode metadata",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      const seen: Json[] = [];
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
 
-      yield* runFresh(
-        [
-          `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" limit={100000} as="patch" />`,
-          "",
-          "<Captured value={patch} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+  it("answers the comparison's own unified text, with Git's binary and mode metadata", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    const seen: Json[] = [];
 
-      const result = object(seen[0]);
-      const patch = String(result.text);
-      expect(result.comparison).toEqual({ compare: "commits", base: fixture.c1, head: fixture.c2 });
-      // Every shape the fixture produces, as patch text rather than as a summary.
-      expect(patch).toContain("rename from doc/orig.md");
-      expect(patch).toContain("rename to doc/renamed.md");
-      expect(patch).toContain("Binary files a/src/bin.dat and b/src/bin.dat differ");
-      expect(patch).toContain("old mode 100644");
-      expect(patch).toContain("new mode 100755");
-      expect(patch).toContain("new file mode 100644");
-      expect(patch).toContain("deleted file mode 100644");
-      expect(patch).toContain("Subproject commit");
-      expect(result.offset).toBe(0);
-      expect(result.length).toBe([...patch].length);
-      expect(result.next).toBe(null);
-    },
-  );
+    yield* runFresh(
+      [
+        `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" limit={100000} as="patch" />`,
+        "",
+        "<Captured value={patch} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-  ordinaryCase(
-    "narrows to literal files and directories, matching a rename on either side",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      const seen: Json[] = [];
+    const result = object(seen[0]);
+    const patch = String(result.text);
+    expect(result.comparison).toEqual({ compare: "commits", base: fixture.c1, head: fixture.c2 });
+    // Every shape the fixture produces, as patch text rather than as a summary.
+    expect(patch).toContain("rename from doc/orig.md");
+    expect(patch).toContain("rename to doc/renamed.md");
+    expect(patch).toContain("Binary files a/src/bin.dat and b/src/bin.dat differ");
+    expect(patch).toContain("old mode 100644");
+    expect(patch).toContain("new mode 100755");
+    expect(patch).toContain("new file mode 100644");
+    expect(patch).toContain("deleted file mode 100644");
+    expect(patch).toContain("Subproject commit");
+    expect(result.offset).toBe(0);
+    expect(result.length).toBe([...patch].length);
+    expect(result.next).toBe(null);
+  });
 
-      yield* runFresh(
-        [
-          `<Git.Changes compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["src/"]} as="under" />`,
-          "",
-          "<Captured value={under} />",
-          "",
-          `<Git.Changes compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["doc/orig.md"]} as="byOldPath" />`,
-          "",
-          "<Captured value={byOldPath} />",
-          "",
-          `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["doc/orig.md"]} limit={100000} as="renamePatch" />`,
-          "",
-          "<Captured value={renamePatch} />",
-          "",
-          `<Git.Changes compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={[]} as="none" />`,
-          "",
-          "<Captured value={none} />",
-          "",
-          `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={[]} as="noPatch" />`,
-          "",
-          "<Captured value={noPatch} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+  it("narrows to literal files and directories, matching a rename on either side", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    const seen: Json[] = [];
 
-      expect(object(seen[0]).changes).toEqual([
-        { path: "src/added.ts", status: "A", previousPath: null },
-        { path: "src/bin.dat", status: "M", previousPath: null },
-      ]);
-      // The old path selects the whole rename record, not half of it.
-      expect(object(seen[1]).changes).toEqual([
-        { path: "doc/renamed.md", status: "R", previousPath: "doc/orig.md" },
-      ]);
-      expect(String(object(seen[2]).text)).toContain("rename from doc/orig.md");
-      // An empty selector is a thing a document says, and it selects nothing.
-      expect(object(seen[3]).changes).toEqual([]);
-      expect(object(seen[4]).text).toBe("");
-      expect(object(seen[4]).length).toBe(0);
-      expect(object(seen[4]).next).toBe(null);
-    },
-  );
+    yield* runFresh(
+      [
+        `<Git.Changes compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["src/"]} as="under" />`,
+        "",
+        "<Captured value={under} />",
+        "",
+        `<Git.Changes compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["doc/orig.md"]} as="byOldPath" />`,
+        "",
+        "<Captured value={byOldPath} />",
+        "",
+        `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["doc/orig.md"]} limit={100000} as="renamePatch" />`,
+        "",
+        "<Captured value={renamePatch} />",
+        "",
+        `<Git.Changes compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={[]} as="none" />`,
+        "",
+        "<Captured value={none} />",
+        "",
+        `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={[]} as="noPatch" />`,
+        "",
+        "<Captured value={noPatch} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-  ordinaryCase(
-    "keeps a tracked gitlink's moved pointer without reading inside it",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      const seen: Json[] = [];
+    expect(object(seen[0]).changes).toEqual([
+      { path: "src/added.ts", status: "A", previousPath: null },
+      { path: "src/bin.dat", status: "M", previousPath: null },
+    ]);
+    // The old path selects the whole rename record, not half of it.
+    expect(object(seen[1]).changes).toEqual([
+      { path: "doc/renamed.md", status: "R", previousPath: "doc/orig.md" },
+    ]);
+    expect(String(object(seen[2]).text)).toContain("rename from doc/orig.md");
+    // An empty selector is a thing a document says, and it selects nothing.
+    expect(object(seen[3]).changes).toEqual([]);
+    expect(object(seen[4]).text).toBe("");
+    expect(object(seen[4]).length).toBe(0);
+    expect(object(seen[4]).next).toBe(null);
+  });
 
-      yield* runFresh(
-        [
-          `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["nested"]} limit={100000} as="pointer" />`,
-          "",
-          "<Captured value={pointer} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+  it("keeps a tracked gitlink's moved pointer without reading inside it", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    const seen: Json[] = [];
 
-      const patch = String(object(seen[0]).text);
-      expect(patch).toContain(`-Subproject commit ${fixture.gitlink.before}`);
-      expect(patch).toContain(`+Subproject commit ${fixture.gitlink.after}`);
-      // One path and one pointer. Nothing beneath the gitlink is read, so the
-      // nested repository's own file never appears.
-      expect(patch).not.toContain("inner.txt");
-    },
-  );
+    yield* runFresh(
+      [
+        `<Git.Diff compare="commits" base="${fixture.c1}" head="${fixture.c2}" paths={["nested"]} limit={100000} as="pointer" />`,
+        "",
+        "<Captured value={pointer} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-  ordinaryCase("collapses an unmerged path to one record", function* (runFresh) {
+    const patch = String(object(seen[0]).text);
+    expect(patch).toContain(`-Subproject commit ${fixture.gitlink.before}`);
+    expect(patch).toContain(`+Subproject commit ${fixture.gitlink.after}`);
+    // One path and one pointer. Nothing beneath the gitlink is read, so the
+    // nested repository's own file never appears.
+    expect(patch).not.toContain("inner.txt");
+  });
+
+  it("collapses an unmerged path to one record", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const conflicted = yield* useConflictedCheckout();
     const seen: Json[] = [];
@@ -729,9 +727,11 @@ describe("GO4 — the patch a comparison produces", () => {
 });
 
 describe("GO5 — pages are bounded, complete, and about one observation", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "defaults to 100 records, follows every page once, and honors a larger limit";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream3) {
           const root = yield* useManagedRoot();
@@ -790,7 +790,8 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
     });
   }
 
-  ordinaryCase("pages changes at a limit of one and at the default", function* (runFresh) {
+  it("pages changes at a limit of one and at the default", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const fixture = yield* useGeneratedFixture(1002);
     for (const path of fixture.paths) {
@@ -827,7 +828,8 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
 
   {
     const name = "windows a patch at the default, above 65536, and reassembles the whole text";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         const root = yield* useManagedRoot();
         const fixture = yield* useGeneratedFixture(1002);
@@ -941,7 +943,10 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
 });
 
 describe("GO6 — a changed observation cannot be paged over", () => {
-  ordinaryCase("refuses a file listing whose paths changed between pages", function* (runFresh) {
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
+
+  it("refuses a file listing whose paths changed between pages", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const fixture = yield* useGeneratedFixture(150);
 
@@ -978,123 +983,117 @@ describe("GO6 — a changed observation cannot be paged over", () => {
   // editing a path already reported as modified leaves the normalized listing
   // identical, and a read that restarted for that would refuse a page it could
   // honestly answer. So this adds a record the first page never described.
-  ordinaryCase(
-    "refuses a changes listing whose records changed between pages",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useGeneratedFixture(150);
-      for (const path of fixture.paths.slice(0, 120)) {
-        yield* writeFixtureFile(fixture.root, path, "changed\n");
-      }
+  it("refuses a changes listing whose records changed between pages", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useGeneratedFixture(150);
+    for (const path of fixture.paths.slice(0, 120)) {
+      yield* writeFixtureFile(fixture.root, path, "changed\n");
+    }
 
-      const raised_ = yield* raised(
-        runFresh(
-          [
-            '<Git.Changes compare="unstaged" limit={100} as="page" />',
-            "",
-            "<Mutates />",
-            "",
-            '<Git.Changes compare="unstaged" limit={100} cursor={page.next.cursor} as="second" />',
-            "",
-          ].join("\n"),
-          {
-            root,
-            cwd: fixture.root,
-            components: [
-              actionProbe("Mutates", function* () {
-                yield* writeFixtureFile(fixture.root, fixture.paths[149] ?? "", "changed too\n");
-              }),
-            ],
-          },
-        ),
-      );
-
-      expect(reasonOf(raised_)).toBe("stale-continuation");
-      expect(messageOf(raised_)).toBe(
-        "The Git observation changed. Restart <Git.Changes> without cursor.",
-      );
-    },
-  );
-
-  ordinaryCase(
-    "refuses a patch whose text changed between windows, and names offset zero",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useGeneratedFixture(150);
-      for (const path of fixture.paths) {
-        yield* writeFixtureFile(fixture.root, path, "changed\n");
-      }
-
-      const raised_ = yield* raised(
-        runFresh(
-          [
-            '<Git.Diff compare="unstaged" as="page" />',
-            "",
-            "<Mutates />",
-            "",
-            '<Git.Diff compare="unstaged" offset={page.next.offset} cursor={page.next.cursor} as="second" />',
-            "",
-          ].join("\n"),
-          {
-            root,
-            cwd: fixture.root,
-            components: [
-              actionProbe("Mutates", function* () {
-                yield* writeFixtureFile(fixture.root, fixture.paths[0] ?? "", "changed again\n");
-              }),
-            ],
-          },
-        ),
-      );
-
-      expect(reasonOf(raised_)).toBe("stale-continuation");
-      expect(messageOf(raised_)).toBe(
-        "The Git observation changed. Restart <Git.Diff> without cursor and offset={0}.",
-      );
-    },
-  );
-
-  ordinaryCase(
-    "follows a continuation unchanged when the repository changed elsewhere",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useGeneratedFixture(150);
-      const seen: Json[] = [];
-
-      yield* runFresh(
+    const raised_ = yield* raised(
+      runFresh(
         [
-          '<Git.Files prefix="gen/file-0000" limit={5} as="page" />',
+          '<Git.Changes compare="unstaged" limit={100} as="page" />',
           "",
           "<Mutates />",
           "",
-          '<Git.Files prefix="gen/file-0000" limit={5} cursor={page.next.cursor} as="second" />',
-          "",
-          "<Captured value={second} />",
+          '<Git.Changes compare="unstaged" limit={100} cursor={page.next.cursor} as="second" />',
           "",
         ].join("\n"),
         {
           root,
           cwd: fixture.root,
           components: [
-            capturingProbe(seen),
             actionProbe("Mutates", function* () {
-              // Outside the selected observation: an untracked file changes no
-              // tracked path, so this page is still a page of the same answer.
-              yield* writeFixtureFile(fixture.root, "untracked-elsewhere.txt", "elsewhere\n");
+              yield* writeFixtureFile(fixture.root, fixture.paths[149] ?? "", "changed too\n");
             }),
           ],
         },
-      );
+      ),
+    );
 
-      expect(paths(seen[0])).toEqual([
-        "gen/file-00005.txt",
-        "gen/file-00006.txt",
-        "gen/file-00007.txt",
-        "gen/file-00008.txt",
-        "gen/file-00009.txt",
-      ]);
-    },
-  );
+    expect(reasonOf(raised_)).toBe("stale-continuation");
+    expect(messageOf(raised_)).toBe(
+      "The Git observation changed. Restart <Git.Changes> without cursor.",
+    );
+  });
+
+  it("refuses a patch whose text changed between windows, and names offset zero", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useGeneratedFixture(150);
+    for (const path of fixture.paths) {
+      yield* writeFixtureFile(fixture.root, path, "changed\n");
+    }
+
+    const raised_ = yield* raised(
+      runFresh(
+        [
+          '<Git.Diff compare="unstaged" as="page" />',
+          "",
+          "<Mutates />",
+          "",
+          '<Git.Diff compare="unstaged" offset={page.next.offset} cursor={page.next.cursor} as="second" />',
+          "",
+        ].join("\n"),
+        {
+          root,
+          cwd: fixture.root,
+          components: [
+            actionProbe("Mutates", function* () {
+              yield* writeFixtureFile(fixture.root, fixture.paths[0] ?? "", "changed again\n");
+            }),
+          ],
+        },
+      ),
+    );
+
+    expect(reasonOf(raised_)).toBe("stale-continuation");
+    expect(messageOf(raised_)).toBe(
+      "The Git observation changed. Restart <Git.Diff> without cursor and offset={0}.",
+    );
+  });
+
+  it("follows a continuation unchanged when the repository changed elsewhere", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useGeneratedFixture(150);
+    const seen: Json[] = [];
+
+    yield* runFresh(
+      [
+        '<Git.Files prefix="gen/file-0000" limit={5} as="page" />',
+        "",
+        "<Mutates />",
+        "",
+        '<Git.Files prefix="gen/file-0000" limit={5} cursor={page.next.cursor} as="second" />',
+        "",
+        "<Captured value={second} />",
+        "",
+      ].join("\n"),
+      {
+        root,
+        cwd: fixture.root,
+        components: [
+          capturingProbe(seen),
+          actionProbe("Mutates", function* () {
+            // Outside the selected observation: an untracked file changes no
+            // tracked path, so this page is still a page of the same answer.
+            yield* writeFixtureFile(fixture.root, "untracked-elsewhere.txt", "elsewhere\n");
+          }),
+        ],
+      },
+    );
+
+    expect(paths(seen[0])).toEqual([
+      "gen/file-00005.txt",
+      "gen/file-00006.txt",
+      "gen/file-00007.txt",
+      "gen/file-00008.txt",
+      "gen/file-00009.txt",
+    ]);
+  });
 
   it("refuses a cursor that is malformed, for another read, or for another checkout", function* () {
     const root = yield* useManagedRoot();
@@ -1147,9 +1146,11 @@ describe("GO6 — a changed observation cannot be paged over", () => {
 });
 
 describe("GO7 — a file is read as one commit holds it", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "windows the committed text, stays on its commit, and reassembles it";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         const root = yield* useManagedRoot();
         const fixture = yield* useFileFixture();
@@ -1226,58 +1227,56 @@ describe("GO7 — a file is read as one commit holds it", () => {
     });
   }
 
-  ordinaryCase(
-    "answers a middle window, an empty window past the end, and an empty file",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useFileFixture();
-      const seen: Json[] = [];
-      const total = [...LONG_BLOB].length;
+  it("answers a middle window, an empty window past the end, and an empty file", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useFileFixture();
+    const seen: Json[] = [];
+    const total = [...LONG_BLOB].length;
 
-      yield* runFresh(
-        [
-          `<Git.File commit="${fixture.f1}" path="big.txt" offset={10} limit={5} as="middle" />`,
-          "",
-          "<Captured value={middle} />",
-          "",
-          `<Git.File commit="${fixture.f1}" path="big.txt" offset={${total}} as="atEnd" />`,
-          "",
-          "<Captured value={atEnd} />",
-          "",
-          `<Git.File commit="${fixture.f1}" path="big.txt" offset={${total + 500}} as="pastEnd" />`,
-          "",
-          "<Captured value={pastEnd} />",
-          "",
-          `<Git.File commit="${fixture.f1}" path="empty.txt" as="empty" />`,
-          "",
-          "<Captured value={empty} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+    yield* runFresh(
+      [
+        `<Git.File commit="${fixture.f1}" path="big.txt" offset={10} limit={5} as="middle" />`,
+        "",
+        "<Captured value={middle} />",
+        "",
+        `<Git.File commit="${fixture.f1}" path="big.txt" offset={${total}} as="atEnd" />`,
+        "",
+        "<Captured value={atEnd} />",
+        "",
+        `<Git.File commit="${fixture.f1}" path="big.txt" offset={${total + 500}} as="pastEnd" />`,
+        "",
+        "<Captured value={pastEnd} />",
+        "",
+        `<Git.File commit="${fixture.f1}" path="empty.txt" as="empty" />`,
+        "",
+        "<Captured value={empty} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-      expect(object(seen[0]).text).toBe("aaaaa");
-      expect(object(seen[0]).next).toEqual({
-        commit: fixture.f1,
-        path: "big.txt",
-        offset: 15,
-        limit: 5,
-      });
+    expect(object(seen[0]).text).toBe("aaaaa");
+    expect(object(seen[0]).next).toEqual({
+      commit: fixture.f1,
+      path: "big.txt",
+      offset: 15,
+      limit: 5,
+    });
 
-      for (const past of [object(seen[1]), object(seen[2])]) {
-        expect(past.text).toBe("");
-        expect(past.length).toBe(total);
-        expect(past.next).toBe(null);
-      }
-      expect(object(seen[1]).offset).toBe(total);
-      expect(object(seen[2]).offset).toBe(total + 500);
+    for (const past of [object(seen[1]), object(seen[2])]) {
+      expect(past.text).toBe("");
+      expect(past.length).toBe(total);
+      expect(past.next).toBe(null);
+    }
+    expect(object(seen[1]).offset).toBe(total);
+    expect(object(seen[2]).offset).toBe(total + 500);
 
-      const empty = object(seen[3]);
-      expect(empty.text).toBe("");
-      expect(empty.length).toBe(0);
-      expect(empty.next).toBe(null);
-    },
-  );
+    const empty = object(seen[3]);
+    expect(empty.text).toBe("");
+    expect(empty.length).toBe(0);
+    expect(empty.next).toBe(null);
+  });
 
   {
     const name =
@@ -1347,7 +1346,8 @@ describe("GO7 — a file is read as one commit holds it", () => {
     });
   }
 
-  ordinaryCase("still reads a directory's own child by its exact path", function* (runFresh) {
+  it("still reads a directory's own child by its exact path", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
     const root = yield* useManagedRoot();
     const fixture = yield* useFileFixture();
     const seen: Json[] = [];
@@ -1368,31 +1368,30 @@ describe("GO7 — a file is read as one commit holds it", () => {
     expect(object(seen[0]).text).toBe("inside\n");
   });
 
-  ordinaryCase(
-    "answers a symbolic link's own stored text rather than what it points at",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useFileFixture();
-      const seen: Json[] = [];
+  it("answers a symbolic link's own stored text rather than what it points at", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useFileFixture();
+    const seen: Json[] = [];
 
-      yield* runFresh(
-        [
-          `<Git.File commit="${fixture.f1}" path="points-at-big" as="link" />`,
-          "",
-          "<Captured value={link} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+    yield* runFresh(
+      [
+        `<Git.File commit="${fixture.f1}" path="points-at-big" as="link" />`,
+        "",
+        "<Captured value={link} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
 
-      // The link's target, as the blob holds it. Nothing followed it.
-      expect(object(seen[0]).text).toBe("big.txt");
-      expect(object(seen[0]).length).toBe(7);
-    },
-  );
+    // The link's target, as the blob holds it. Nothing followed it.
+    expect(object(seen[0]).text).toBe("big.txt");
+    expect(object(seen[0]).length).toBe(7);
+  });
 });
 
 describe("GO8 — a read runs no repository-defined program and changes nothing", () => {
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
   it("leaves every sentinel unfired and the repository byte-identical", function* () {
     const root = yield* useManagedRoot();
     const fixture = yield* useObservationFixture();
@@ -1443,54 +1442,54 @@ describe("GO8 — a read runs no repository-defined program and changes nothing"
     }
   });
 
-  ordinaryCase(
-    "reads a linked checkout's own split index and leaves all three untouched",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      const linked = yield* useLinkedWorktree(fixture);
-      fixture.run("update-index", "--split-index");
-      linked.run("update-index", "--split-index");
-      yield* writeFixtureFile(linked.root, "src/a.ts", "export const a = 9;\n");
+  it("reads a linked checkout's own split index and leaves all three untouched", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    const linked = yield* useLinkedWorktree(fixture);
+    fixture.run("update-index", "--split-index");
+    linked.run("update-index", "--split-index");
+    yield* writeFixtureFile(linked.root, "src/a.ts", "export const a = 9;\n");
 
-      const indexes = yield* indexFingerprints(fixture, linked);
-      const seen: Json[] = [];
+    const indexes = yield* indexFingerprints(fixture, linked);
+    const seen: Json[] = [];
 
-      yield* runFresh(
-        [
-          '<Git.Files limit={1000} as="files" />',
-          "",
-          "<Captured value={files} />",
-          "",
-          '<Git.Changes compare="unstaged" as="changes" />',
-          "",
-          "<Captured value={changes} />",
-          "",
-          '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
-          "",
-          "<Captured value={diff} />",
-          "",
-        ].join("\n"),
-        { root, cwd: linked.root, components: [capturingProbe(seen)] },
-      );
+    yield* runFresh(
+      [
+        '<Git.Files limit={1000} as="files" />',
+        "",
+        "<Captured value={files} />",
+        "",
+        '<Git.Changes compare="unstaged" as="changes" />',
+        "",
+        "<Captured value={changes} />",
+        "",
+        '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
+        "",
+        "<Captured value={diff} />",
+        "",
+      ].join("\n"),
+      { root, cwd: linked.root, components: [capturingProbe(seen)] },
+    );
 
-      // The linked checkout's own index answered: its working tree holds the
-      // edit, and the primary checkout's does not.
-      expect(paths(seen[0])).toContain("src/a.ts");
-      expect(object(seen[1]).changes).toEqual([
-        { path: "src/a.ts", status: "M", previousPath: null },
-      ]);
-      expect(String(object(seen[2]).text)).toContain("+export const a = 9;");
+    // The linked checkout's own index answered: its working tree holds the
+    // edit, and the primary checkout's does not.
+    expect(paths(seen[0])).toContain("src/a.ts");
+    expect(object(seen[1]).changes).toEqual([
+      { path: "src/a.ts", status: "M", previousPath: null },
+    ]);
+    expect(String(object(seen[2]).text)).toContain("+export const a = 9;");
 
-      expect(yield* indexFingerprints(fixture, linked)).toEqual(indexes);
-    },
-  );
+    expect(yield* indexFingerprints(fixture, linked)).toEqual(indexes);
+  });
 });
 
 describe("GO9 — which checkout answers, and what cannot choose one", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "distinguishes two sibling checkouts of one repository by their content";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: JOURNAL_OWNER, name }, "<eval>", function* (stream2) {
         const root = yield* useManagedRoot();
         const fixture = yield* useObservationFixture();
@@ -1578,42 +1577,42 @@ describe("GO9 — which checkout answers, and what cannot choose one", () => {
 });
 
 describe("GO10 — the comparison sees an edit the index's own times would hide", () => {
-  ordinaryCase(
-    "reports a modification whose size and recorded time match the index entry",
-    function* (runFresh) {
-      const root = yield* useManagedRoot();
-      const fixture = yield* useObservationFixture();
-      const indexPath = join(fixture.root, ".git", "index");
-      const indexTimes = yield* lstat(indexPath);
-      // The same length, and the index's own modification time. This is exactly
-      // the state Git calls racily clean: the cached stat data matches, so the
-      // only way to see the change is to compare content — and the only reason
-      // Git does is that the entry is no older than the index holding it. A
-      // private copy stamped with the current time destroys that relationship.
-      yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 7;\n");
-      yield* until(utimes(join(fixture.root, "src", "a.ts"), indexTimes.mtime, indexTimes.mtime));
-      const seen: Json[] = [];
+  beforeEach(journalBeforeEach("packages/git/tests/git-observations.test.ts"));
 
-      yield* runFresh(
-        [
-          '<Git.Changes compare="unstaged" as="changes" />',
-          "",
-          "<Captured value={changes} />",
-          "",
-          '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
-          "",
-          "<Captured value={diff} />",
-          "",
-        ].join("\n"),
-        { root, cwd: fixture.root, components: [capturingProbe(seen)] },
-      );
+  it("reports a modification whose size and recorded time match the index entry", function* () {
+    const runFresh = yield* useOrdinaryDocumentRunner();
+    const root = yield* useManagedRoot();
+    const fixture = yield* useObservationFixture();
+    const indexPath = join(fixture.root, ".git", "index");
+    const indexTimes = yield* lstat(indexPath);
+    // The same length, and the index's own modification time. This is exactly
+    // the state Git calls racily clean: the cached stat data matches, so the
+    // only way to see the change is to compare content — and the only reason
+    // Git does is that the entry is no older than the index holding it. A
+    // private copy stamped with the current time destroys that relationship.
+    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 7;\n");
+    yield* until(utimes(join(fixture.root, "src", "a.ts"), indexTimes.mtime, indexTimes.mtime));
+    const seen: Json[] = [];
 
-      expect(object(seen[0]).changes).toEqual([
-        { path: "src/a.ts", status: "M", previousPath: null },
-      ]);
-      expect(String(object(seen[1]).text)).toContain("+export const a = 7;");
-    },
-  );
+    yield* runFresh(
+      [
+        '<Git.Changes compare="unstaged" as="changes" />',
+        "",
+        "<Captured value={changes} />",
+        "",
+        '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
+        "",
+        "<Captured value={diff} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
+
+    expect(object(seen[0]).changes).toEqual([
+      { path: "src/a.ts", status: "M", previousPath: null },
+    ]);
+    expect(String(object(seen[1]).text)).toContain("+export const a = 7;");
+  });
 });
 
 describe("GO11 — the authored contract, before a provider is reached", () => {
@@ -1745,6 +1744,7 @@ describe("GO11 — the authored contract, before a provider is reached", () => {
 });
 
 describe("GO12 — availability is the installed provider's, with no fallback", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   {
     const name = "refuses all four on a host that installs nothing for them";
     it(name, function* () {
@@ -1778,65 +1778,62 @@ describe("GO12 — availability is the installed provider's, with no fallback", 
     });
   }
 
-  journalCase(
-    "answers through the same Api when a host supplies the four methods",
-    "<eval>",
-    function* (stream) {
-      const asked: string[] = [];
-      const seen: Json[] = [];
+  it("answers through the same Api when a host supplies the four methods", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const asked: string[] = [];
+    const seen: Json[] = [];
 
-      yield* runNeutralDocument(
-        [
-          '<Git.Files prefix="a/" as="files" />',
-          "",
-          "<Captured value={files} />",
-          "",
-          '<Git.Changes compare="staged" as="changes" />',
-          "",
-          "<Captured value={changes} />",
-          "",
-          '<Git.Diff compare="staged" as="diff" />',
-          "",
-          "<Captured value={diff} />",
-          "",
-          '<Git.File commit="HEAD~1" path="a/b.ts" as="source" />',
-          "",
-          "<Captured value={source} />",
-          "",
-        ].join("\n"),
-        { repository: true, reads: asked, components: [capturingProbe(seen)] },
-        stream,
-      );
+    yield* runNeutralDocument(
+      [
+        '<Git.Files prefix="a/" as="files" />',
+        "",
+        "<Captured value={files} />",
+        "",
+        '<Git.Changes compare="staged" as="changes" />',
+        "",
+        "<Captured value={changes} />",
+        "",
+        '<Git.Diff compare="staged" as="diff" />',
+        "",
+        "<Captured value={diff} />",
+        "",
+        '<Git.File commit="HEAD~1" path="a/b.ts" as="source" />',
+        "",
+        "<Captured value={source} />",
+        "",
+      ].join("\n"),
+      { repository: true, reads: asked, components: [capturingProbe(seen)] },
+      stream,
+    );
 
-      // The request each component composed, in the order they ran.
-      expect(asked).toEqual([
-        'files {"cursor":null,"kind":"files","limit":100,"prefix":"a/"}',
-        'changes {"comparison":{"compare":"staged"},"cursor":null,"kind":"changes","limit":100,"paths":null}',
-        'diff {"comparison":{"compare":"staged"},"cursor":null,"kind":"diff","limit":4096,"offset":0,"paths":null}',
-        'file {"commit":"HEAD~1","kind":"file","limit":4096,"offset":0,"path":"a/b.ts"}',
-      ]);
-      // And the typed JSON each one bound.
-      expect(seen[0]).toEqual({ paths: ["a/b.ts"], next: null });
-      expect(seen[1]).toEqual({
-        comparison: { compare: "staged", base: null },
-        changes: [],
-        next: null,
-      });
-      expect(seen[2]).toEqual({
-        comparison: { compare: "staged", base: null },
-        text: "",
-        offset: 0,
-        length: 0,
-        next: null,
-      });
-      expect(seen[3]).toEqual({
-        commit: "0".repeat(40),
-        path: "a/b.ts",
-        text: "supplied",
-        offset: 0,
-        length: 8,
-        next: null,
-      });
-    },
-  );
+    // The request each component composed, in the order they ran.
+    expect(asked).toEqual([
+      'files {"cursor":null,"kind":"files","limit":100,"prefix":"a/"}',
+      'changes {"comparison":{"compare":"staged"},"cursor":null,"kind":"changes","limit":100,"paths":null}',
+      'diff {"comparison":{"compare":"staged"},"cursor":null,"kind":"diff","limit":4096,"offset":0,"paths":null}',
+      'file {"commit":"HEAD~1","kind":"file","limit":4096,"offset":0,"path":"a/b.ts"}',
+    ]);
+    // And the typed JSON each one bound.
+    expect(seen[0]).toEqual({ paths: ["a/b.ts"], next: null });
+    expect(seen[1]).toEqual({
+      comparison: { compare: "staged", base: null },
+      changes: [],
+      next: null,
+    });
+    expect(seen[2]).toEqual({
+      comparison: { compare: "staged", base: null },
+      text: "",
+      offset: 0,
+      length: 0,
+      next: null,
+    });
+    expect(seen[3]).toEqual({
+      commit: "0".repeat(40),
+      path: "a/b.ts",
+      text: "supplied",
+      offset: 0,
+      length: 8,
+      next: null,
+    });
+  });
 });

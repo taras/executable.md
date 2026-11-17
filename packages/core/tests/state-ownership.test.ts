@@ -12,8 +12,8 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -236,7 +236,6 @@ describe("Tier SO — each run compiles with a compiler of its own", () => {
  * the second run accept props its schema no longer allows.
  */
 const OWNER = "packages/core/tests/state-ownership.test.ts";
-const journalCase = journalCases(OWNER);
 
 describe("Tier SO — two executions of a registered component", () => {
   function run(
@@ -262,34 +261,40 @@ describe("Tier SO — two executions of a registered component", () => {
   }
 
   const tightenedSchema = "SO13: validates the second run against the schema the host now declares";
-  journalCase(tightenedSchema, "doc.md", function* (stream) {
-    const schema: PropsSchema = {
-      type: "object",
-      properties: { a: { type: "string" }, b: { type: "string" } },
-      required: ["a"],
-      additionalProperties: false,
-    };
-
-    const first = String(yield* run(stream, { "doc.md": '<Widget a="one" />' }, schema));
-    expect(first).toContain("widget:one");
-
-    // The host tightens the contract between runs, on the object it registered.
-    schema["required"] = ["a", "b"];
-
-    // The invocation no longer satisfies the schema, and nothing recovers the
-    // refusal, so the second run reports it instead of rendering a widget.
+  it(tightenedSchema, function* () {
     yield* captureTestJournal(
       { owner: OWNER, name: tightenedSchema },
       "doc.md",
-      function* (secondStream) {
-        let second = "";
-        try {
-          second = String(yield* run(secondStream, { "doc.md": '<Widget a="two" />' }, schema));
-        } catch (error) {
-          second = error instanceof Error ? error.message : String(error);
-        }
-        expect(second).toContain("required property");
-        expect(second).not.toContain("widget:two");
+      function* (stream) {
+        const schema: PropsSchema = {
+          type: "object",
+          properties: { a: { type: "string" }, b: { type: "string" } },
+          required: ["a"],
+          additionalProperties: false,
+        };
+
+        const first = String(yield* run(stream, { "doc.md": '<Widget a="one" />' }, schema));
+        expect(first).toContain("widget:one");
+
+        // The host tightens the contract between runs, on the object it registered.
+        schema["required"] = ["a", "b"];
+
+        // The invocation no longer satisfies the schema, and nothing recovers the
+        // refusal, so the second run reports it instead of rendering a widget.
+        yield* captureTestJournal(
+          { owner: OWNER, name: tightenedSchema },
+          "doc.md",
+          function* (secondStream) {
+            let second = "";
+            try {
+              second = String(yield* run(secondStream, { "doc.md": '<Widget a="two" />' }, schema));
+            } catch (error) {
+              second = error instanceof Error ? error.message : String(error);
+            }
+            expect(second).toContain("required property");
+            expect(second).not.toContain("widget:two");
+          },
+        );
       },
     );
   });

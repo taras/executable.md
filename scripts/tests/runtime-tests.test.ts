@@ -125,7 +125,7 @@ describe("running a shard", () => {
     expect(runs.peak).toEqual(1);
     expect(runs.launches).toEqual(
       [ONE, TWO, THREE].map((file) => {
-        const launch = oneFileCommand("deno", file);
+        const launch = oneFileCommand("deno", file, ROOT, { compactReport: true });
         return `${launch.command} ${launch.arguments.join(" ")}`;
       }),
     );
@@ -136,12 +136,13 @@ describe("running a shard", () => {
       const runs = recorder();
       yield* TestRuns.with(runs.run, () => runShardFiles(runtime, [ONE], ROOT));
 
-      const launch = oneFileCommand(runtime, ONE);
+      const launch = oneFileCommand(runtime, ONE, ROOT, { compactReport: true });
+      expect(launch.arguments.includes("--reporter=dot")).toBe(runtime === "deno");
       expect(runs.launches).toEqual([`${launch.command} ${launch.arguments.join(" ")}`]);
     }
   });
 
-  it("routes a Markdown suite through its one-file command, from the repository", function* () {
+  it("uses the failures reporter for Markdown in each runtime shard", function* () {
     for (const runtime of RUNTIMES) {
       const seen: Array<{ line: string; cwd: string; env?: Record<string, string> }> = [];
       yield* TestRuns.with(
@@ -153,9 +154,10 @@ describe("running a shard", () => {
       );
 
       expect(seen.map((entry) => entry.line)).toEqual([
-        line(oneFileCommand(runtime, ONE)),
-        line(oneFileCommand(runtime, SUITE, ROOT)),
+        line(oneFileCommand(runtime, ONE, ROOT, { compactReport: true })),
+        line(oneFileCommand(runtime, SUITE, ROOT, { compactReport: true })),
       ]);
+      expect(seen[1].line).toContain(`test ${SUITE} --reporter=failures`);
       expect(seen.map((entry) => entry.cwd)).toEqual([fileURLToPath(ROOT), fileURLToPath(ROOT)]);
       expect(seen[1].env).toEqual(oneFileCommand(runtime, SUITE, ROOT).env);
     }

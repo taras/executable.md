@@ -1,5 +1,9 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Stream } from "effection";
@@ -50,7 +54,7 @@ function* document(
   documentSource: string,
   report: Report,
   failures: unknown[] = [],
-  journal = new InMemoryStream(),
+  journal?: InMemoryStream,
 ): Operation<{ ok: boolean; output: string }> {
   return yield* scoped(function* () {
     const command = mode === "strong" ? "codex" : f.command(mode);
@@ -109,7 +113,8 @@ function* document(
     yield* useNormalizedOutput();
     const path = join(f.dir, "document.md");
     yield* writeTextFile(path, documentSource);
-    const execution = yield* executeInstalled({ path, stream: journal }, [
+    const stream = journal ?? (yield* useJournalStream(path));
+    const execution = yield* executeInstalled({ path, stream }, [
       { components: agentIdentityComponents() },
     ]);
     const subscription = yield* execution.output;
@@ -126,6 +131,7 @@ describe(
   "production local-agent qualification controls",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach("packages/acp/tests/agent-certification.test.ts"));
     it("recovers a private marker in sequential Prompts and keeps another Session independent", function* () {
       yield* withCertificationFixture(function* (f) {
         const marker = randomUUID();
@@ -446,6 +452,7 @@ describe(
 );
 
 describe("standard completed replay", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeEach(journalBeforeEach("packages/acp/tests/agent-certification.test.ts"));
   it("completed standard output replays without provider requests", function* () {
     yield* withCertificationFixture(function* (f) {
       const journal = new InMemoryStream();
@@ -475,6 +482,7 @@ describe("standard completed replay", { sanitizeOps: false, sanitizeResources: f
 });
 
 describe("strong qualification evidence", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeEach(journalBeforeEach("packages/acp/tests/agent-certification.test.ts"));
   it("reports declared acceptance and asserted identity independently", function* () {
     yield* withCertificationFixture(function* (f) {
       const report = reportFor("codex");

@@ -4,8 +4,8 @@
  * Tests .ts files as components alongside .md files.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -43,12 +43,6 @@ function* makeTempDir(): Operation<string> {
   yield* until(symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"));
   return dir;
 }
-
-const journalCase = workspaceJournalCases(
-  "packages/core/tests/function-components.test.ts",
-  "doc.md",
-  makeTempDir,
-);
 
 function* writeFiles(dir: string, files: Record<string, string>): Operation<void> {
   for (const [filePath, content] of Object.entries(files)) {
@@ -109,7 +103,11 @@ function said(dir: string, stream: InMemoryStream): Operation<string> {
 }
 
 describe("Tier FC — Function components", () => {
-  journalCase("FC1: basic function component returns string", function* (stream, tmpDir) {
+  beforeEach(journalBeforeEach("packages/core/tests/function-components.test.ts"));
+
+  it("FC1: basic function component returns string", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Hello.ts": [
         "export default function*() {",
@@ -122,7 +120,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("Hello from TypeScript!");
   });
 
-  journalCase("FC-async: rejects an async props schema at the function-component load boundary", function* (stream, tmpDir) {
+  it("FC-async: rejects an async props schema at the function-component load boundary", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Bad.ts": [
         "export const props = {",
@@ -139,7 +139,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("async");
   });
 
-  journalCase("FC-reserved: rejects a reserved slot property at the function-component load boundary", function* (stream, tmpDir) {
+  it("FC-reserved: rejects a reserved slot property at the function-component load boundary", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Bad.ts": [
         "export const props = {",
@@ -157,7 +159,9 @@ describe("Tier FC — Function components", () => {
 
   // A function component declares its schema through `props`; an `inputs`
   // export is ignored, leaving the default closed empty-object schema.
-  journalCase("FC-alias: an `inputs` export declares no props and rejects one", function* (stream, tmpDir) {
+  it("FC-alias: an `inputs` export declares no props and rejects one", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Legacy.ts": [
         "export const inputs = {",
@@ -174,7 +178,9 @@ describe("Tier FC — Function components", () => {
     expect(output).not.toContain("name=world");
   });
 
-  journalCase("FC-alias: the same component declared with `props` validates normally", function* (stream, tmpDir) {
+  it("FC-alias: the same component declared with `props` validates normally", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Modern.ts": [
         "export const props = {",
@@ -190,7 +196,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("name=world");
   });
 
-  journalCase("FC2: function component with props", function* (stream, tmpDir) {
+  it("FC2: function component with props", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Greet.ts": [
         "export const props = {",
@@ -210,7 +218,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("Hello, world!");
   });
 
-  journalCase("FC2-defaults: receives the validated object directly", function* (stream, tmpDir) {
+  it("FC2-defaults: receives the validated object directly", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Defaults.ts": [
         "export const props = {",
@@ -237,7 +247,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("default->changed");
   });
 
-  journalCase("FC3: function component renders its content with content()", function* (stream, tmpDir) {
+  it("FC3: function component renders its content with content()", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Wrapper.ts": [
         'import { content } from "@executablemd/core";',
@@ -257,7 +269,9 @@ describe("Tier FC — Function components", () => {
 
   // `content()` is the canonical operation; a component written against the
   // `useContent()` alias keeps working, including for a named slot.
-  journalCase("FC3-compat: a component written with useContent() still renders its content", function* (stream, tmpDir) {
+  it("FC3-compat: a component written with useContent() still renders its content", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Legacy.ts": [
         'import { useContent } from "@executablemd/core";',
@@ -287,7 +301,9 @@ describe("Tier FC — Function components", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  journalCase("FC4: .md wins over .ts when both exist", function* (stream, tmpDir) {
+  it("FC4: .md wins over .ts when both exist", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Dual.md": [
         "---",
@@ -312,7 +328,9 @@ describe("Tier FC — Function components", () => {
 
   // The default: a component that fails fails the operation it is part of, so
   // the document stops rather than rendering a note and carrying on.
-  journalCase("FC5: an unmarked component's failure fails the execution", function* (stream, tmpDir) {
+  it("FC5: an unmarked component's failure fails the execution", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Broken.ts": [
         "export default function*() {",
@@ -343,7 +361,9 @@ describe("Tier FC — Function components", () => {
 
   // The explicit choice: `printErrors` says this component reports rather
   // than stops, so the failure becomes one printed error and the document goes on.
-  journalCase("FC5b: a component marked with printErrors reports and continues", function* (stream, tmpDir) {
+  it("FC5b: a component marked with printErrors reports and continues", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Broken.ts": [
         'import { printErrors } from "@executablemd/core";',
@@ -358,7 +378,9 @@ describe("Tier FC — Function components", () => {
     expect(String(output)).toContain("AFTER");
   });
 
-  journalCase("FC6: function component prop validation", function* (stream, tmpDir) {
+  it("FC6: function component prop validation", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Typed.ts": [
         "export const props = {",
@@ -378,7 +400,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("count=42");
   });
 
-  journalCase("FC7: function component missing required prop → error", function* (stream, tmpDir) {
+  it("FC7: function component missing required prop → error", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Req.ts": [
         "export const props = {",
@@ -398,7 +422,9 @@ describe("Tier FC — Function components", () => {
     expect(output).toContain("must have required property");
   });
 
-  journalCase("FC8: function component alongside markdown components", function* (stream, tmpDir) {
+  it("FC8: function component alongside markdown components", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/MdComp.md": [
         "---",
@@ -450,7 +476,9 @@ describe("Tier FC — Function components", () => {
 
   // FC10: only the requested slot is expanded, so a slot the component never
   // asks for cannot fail the invocation — nothing in it runs.
-  journalCase("FC10: an error in an unrequested slot is never expanded or observed", function* (stream, tmpDir) {
+  it("FC10: an error in an unrequested slot is never expanded or observed", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Body.ts": [
         'import { content } from "@executablemd/core";',
@@ -472,7 +500,9 @@ describe("Tier FC — Function components", () => {
 
   // FC11: content is expanded because the component asks for it. One that never
   // calls content() leaves it unexpanded, however broken it is.
-  journalCase("FC11: a component that never calls content() does not expand it", function* (stream, tmpDir) {
+  it("FC11: a component that never calls content() does not expand it", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Ignores.ts": [
         "export default function*() {",
@@ -493,7 +523,9 @@ describe("Tier FC — Function components", () => {
   // compiled by the engine, importing `ContentError` from the package. The
   // `instanceof` check is the assertion: it only matches if the class the
   // component imported is the class the engine threw.
-  journalCase("FC12: a compiled component catches ContentError and returns its own fallback", function* (stream, tmpDir) {
+  it("FC12: a compiled component catches ContentError and returns its own fallback", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Preview.ts": [
         'import { content, ContentError } from "@executablemd/core";',
@@ -536,6 +568,7 @@ describe("Tier FC — Function components", () => {
  * component needs neither the raw element nor an expression resolver.
  */
 describe("Tier FC-WF — props, returns, and as around content()", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/function-components.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -624,7 +657,9 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
     return (yield* readTextFile(log)).trim().split("\n");
   }
 
-  journalCase("FC-WF1: an object-valued schema prop reaches the function and its return binds", function* (stream, tmpDir) {
+  it("FC-WF1: an object-valued schema prop reaches the function and its return binds", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Analyze.ts": analyze(tmpDir),
       "doc.md": invocation("analysis body"),
@@ -647,7 +682,9 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
     expect(yield* events(tmpDir)).toEqual(["props:object:question,answer", "post-content"]);
   });
 
-  journalCase("FC-WF2: failed content skips the return, the binding, and post-content work", function* (stream, tmpDir) {
+  it("FC-WF2: failed content skips the return, the binding, and post-content work", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Analyze.ts": analyze(tmpDir),
       // Written in a region that prints, because what this reads is what
@@ -680,10 +717,13 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
 });
 
 describe("Tier O — Eval scope hierarchy", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/function-components.test.ts"));
   // O22: the widened component contract keeps durability compositional — a
   // component can journal a durable effect and hold an ordinary resource in the
   // same body, and each keeps its own semantics across a partial replay.
-  journalCase("O22: a component combines a durable effect with a directly acquired resource", function* (stream, tmpDir) {
+  it("O22: a component combines a durable effect with a directly acquired resource", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Mixed.ts": [
         'import { durableCall } from "@executablemd/durable-streams";',
@@ -749,6 +789,7 @@ describe("Tier O — Eval scope hierarchy", () => {
 });
 
 describe("Tier RT — Retained resources under durability", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/function-components.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -777,7 +818,9 @@ describe("Tier RT — Retained resources under durability", () => {
   // durability the way an ordinary resource does (O22). The import and the
   // durable effect replay; the retained resource is re-established on each
   // execution that actually runs, and released with its site scope each time.
-  journalCase("RT15: a retained resource is re-established on every execution", function* (stream, tmpDir) {
+  it("RT15: a retained resource is re-established on every execution", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Held.ts": [
         'import { durableCall } from "@executablemd/durable-streams";',
@@ -832,7 +875,9 @@ describe("Tier RT — Retained resources under durability", () => {
 
   // RT16: the same request from an eval block is refused. Eval is durable, so a
   // replay would restore the block's values without re-establishing anything.
-  journalCase("RT16: an eval block cannot retain at the invocation site", function* (stream, tmpDir) {
+  it("RT16: an eval block cannot retain at the invocation site", function* () {
+    const tmpDir = yield* makeTempDir();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "doc.md": [
         "```js eval",

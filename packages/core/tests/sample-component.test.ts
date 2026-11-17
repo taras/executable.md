@@ -12,7 +12,7 @@
  * Uses stub providers (Sample.around middleware) to intercept Sample Api
  * calls and return canned responses for testing.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -23,9 +23,7 @@ import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import type { Operation } from "effection";
 import * as path from "node:path";
-import { journalCases } from "../../test-support/journal-cases.ts";
-
-const journalCase = journalCases("packages/core/tests/sample-component.test.ts");
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 function* writeFiles(dir: string, files: Record<string, string>): Operation<void> {
   for (const [filePath, content] of Object.entries(files)) {
@@ -416,9 +414,11 @@ describe("Tier SC — Sample component", () => {
 });
 
 describe("Tier EO — eval output() function", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/sample-component.test.ts"));
   beforeAll(() => useTempFileCompiler());
   // EO1: output() sets eval block output
-  journalCase("EO1: output() produces eval block output", "test.md", function* (stream) {
+  it("EO1: output() produces eval block output", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": '```js eval\noutput("hello from eval");\n```\n',
     });
@@ -464,7 +464,8 @@ describe("Tier EO — eval output() function", () => {
   });
 
   // EO3: eval block without output() still returns empty
-  journalCase("EO3: eval block without output() produces no output", "test.md", function* (stream) {
+  it("EO3: eval block without output() produces no output", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js eval\nconst x = 42;\n```\nafter-eval",
     });
@@ -483,7 +484,8 @@ describe("Tier EO — eval output() function", () => {
   });
 
   // EO4: output() with multiline content
-  journalCase("EO4: output() with multiline content", "test.md", function* (stream) {
+  it("EO4: output() with multiline content", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": '```js eval\noutput("line1\\nline2\\nline3");\n```\n',
     });
@@ -500,7 +502,8 @@ describe("Tier EO — eval output() function", () => {
   });
 
   // EO5: output() converts non-string to string
-  journalCase("EO5: output() converts non-string to string", "test.md", function* (stream) {
+  it("EO5: output() converts non-string to string", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js eval\noutput(12345);\n```\n",
     });
@@ -518,41 +521,40 @@ describe("Tier EO — eval output() function", () => {
 });
 
 describe("Tier RC — renderChildren and render closures", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/sample-component.test.ts"));
   beforeAll(() => useTempFileCompiler());
   // RC1: renderChildren() returns empty string for self-closing component
-  journalCase(
-    "RC1: renderChildren returns empty for self-closing component",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/TestComp.md": [
-          "---",
-          "meta:",
-          "  componentName: TestComp",
-          "---",
-          "",
-          "```js eval",
-          "const result = yield* renderChildren();",
-          "output('children:[' + result + ']');",
-          "```",
-        ].join("\n"),
-        "test.md": "<TestComp />",
-      });
-      yield* useEchoExec();
+  it("RC1: renderChildren returns empty for self-closing component", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "const result = yield* renderChildren();",
+        "output('children:[' + result + ']');",
+        "```",
+      ].join("\n"),
+      "test.md": "<TestComp />",
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(
-        yield* execute({
-          path: "test.md",
-          stream,
-        }),
-      );
+    const output = yield* collect(
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
+    );
 
-      expect(output).toContain("children:[]");
-    },
-  );
+    expect(output).toContain("children:[]");
+  });
 
   // RC2: renderChildren() captures children text content
-  journalCase("RC2: renderChildren captures children text", "test.md", function* (stream) {
+  it("RC2: renderChildren captures children text", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "components/TestComp.md": [
         "---",
@@ -580,7 +582,8 @@ describe("Tier RC — renderChildren and render closures", () => {
   });
 
   // RC3: render() expands arbitrary markdown string
-  journalCase("RC3: render() expands arbitrary markdown string", "test.md", function* (stream) {
+  it("RC3: render() expands arbitrary markdown string", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "components/TestComp.md": [
         "---",
@@ -607,108 +610,99 @@ describe("Tier RC — renderChildren and render closures", () => {
     expect(output).toContain("rendered:[arbitrary **markdown** content]");
   });
 
-  journalCase(
-    "RC4: renderChildren(override) is visible to children and wins over the caller value",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/TestComp.md": [
-          "---",
-          "meta:",
-          "  componentName: TestComp",
-          "---",
-          "",
-          "```js eval",
-          "const result = yield* renderChildren({ item: 'injected', shadow: 'override-wins' });",
-          "output('r:[' + result.trim() + ']');",
-          "```",
-        ].join("\n"),
-        "test.md": [
-          "```js eval",
-          "const shadow = 'caller-value';",
-          "```",
-          "<TestComp>",
-          "text item={item} shadow={shadow}",
-          "```js eval",
-          "output('child-eval:' + shadow + '/' + item);",
-          "```",
-          "</TestComp>",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("RC4: renderChildren(override) is visible to children and wins over the caller value", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "const result = yield* renderChildren({ item: 'injected', shadow: 'override-wins' });",
+        "output('r:[' + result.trim() + ']');",
+        "```",
+      ].join("\n"),
+      "test.md": [
+        "```js eval",
+        "const shadow = 'caller-value';",
+        "```",
+        "<TestComp>",
+        "text item={item} shadow={shadow}",
+        "```js eval",
+        "output('child-eval:' + shadow + '/' + item);",
+        "```",
+        "</TestComp>",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("text item=injected shadow=override-wins");
-      expect(output).toContain("child-eval:override-wins/injected");
-      expect(output).not.toContain("caller-value");
-    },
-  );
+    expect(output).toContain("text item=injected shadow=override-wins");
+    expect(output).toContain("child-eval:override-wins/injected");
+    expect(output).not.toContain("caller-value");
+  });
 
-  journalCase(
-    "RC5: renderChildren(override) does not leak into the caller env",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/TestComp.md": [
-          "---",
-          "meta:",
-          "  componentName: TestComp",
-          "---",
-          "",
-          "```js eval",
-          "yield* renderChildren({ item: 'injected' });",
-          "```",
-        ].join("\n"),
-        "test.md": [
-          "<TestComp>x={item}</TestComp>",
-          "```js eval",
-          "output('caller-after:' + (typeof item === 'undefined' ? 'undefined' : item));",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("RC5: renderChildren(override) does not leak into the caller env", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "yield* renderChildren({ item: 'injected' });",
+        "```",
+      ].join("\n"),
+      "test.md": [
+        "<TestComp>x={item}</TestComp>",
+        "```js eval",
+        "output('caller-after:' + (typeof item === 'undefined' ? 'undefined' : item));",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("caller-after:undefined");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("caller-after:undefined");
+    expect(output).not.toContain("ERROR");
+  });
 
-  journalCase(
-    "RC6: renderChildren(override) rejects null, arrays, primitives, and non-plain objects",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/TestComp.md": [
-          "---",
-          "meta:",
-          "  componentName: TestComp",
-          "---",
-          "",
-          "```js eval",
-          "const bad = [null, [1, 2, 3], 42, 'str', new Date(), new Map()];",
-          "let caught = 0;",
-          "for (const value of bad) {",
-          "  try {",
-          "    yield* renderChildren(value);",
-          "  } catch (e) {",
-          "    if (e.message === 'renderChildren(override) requires a plain object.') caught++;",
-          "  }",
-          "}",
-          "output('caught:' + caught + '/' + bad.length);",
-          "```",
-        ].join("\n"),
-        "test.md": "<TestComp>body</TestComp>",
-      });
-      yield* useEchoExec();
+  it("RC6: renderChildren(override) rejects null, arrays, primitives, and non-plain objects", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "const bad = [null, [1, 2, 3], 42, 'str', new Date(), new Map()];",
+        "let caught = 0;",
+        "for (const value of bad) {",
+        "  try {",
+        "    yield* renderChildren(value);",
+        "  } catch (e) {",
+        "    if (e.message === 'renderChildren(override) requires a plain object.') caught++;",
+        "  }",
+        "}",
+        "output('caught:' + caught + '/' + bad.length);",
+        "```",
+      ].join("\n"),
+      "test.md": "<TestComp>body</TestComp>",
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("caught:6/6");
-    },
-  );
+    expect(output).toContain("caught:6/6");
+  });
 });
 
 describe("Tier IN — Instruction component", () => {

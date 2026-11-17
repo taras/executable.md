@@ -19,7 +19,7 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { rm, writeTextFile } from "@effectionx/fs";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import type { JournalCase } from "../../cli/src/test-diagnostics.ts";
 
 import { FormAssets } from "../src/assets.ts";

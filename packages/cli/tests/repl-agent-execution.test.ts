@@ -65,11 +65,6 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import { INLINE_SOURCE_PATH } from "@executablemd/core";
 
 const OWNER = "packages/cli/tests/repl-agent-execution.test.ts";
-function entryCase(name: string, body: (entry: ReplExecution) => Operation<void>): void {
-  it(name, () =>
-    captureReplEntry({ owner: OWNER, name }, "agent-kernel", INLINE_SOURCE_PATH, body),
-  );
-}
 
 /**
  * How long a signal a correct kernel publishes immediately may go unpublished
@@ -667,226 +662,241 @@ const TWO_SPAWNS = [
 describe("L1 — transparent queued/start/delta/terminal observation", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "L1: queued before the provider is asked, then the turn's own facts",
-    function* (entry) {
-      const stub = createStub({ one: { deltas: ["first", "second"] } });
-      yield* useStub(stub);
-      const holder = entry;
-      const seen: ReplAgentReading[] = [];
-      const session = opened(yield* start(holder, ONE_PROMPT));
-      stub.watch(() => session.agent);
-      yield* spawn(function* () {
-        const readings = yield* session.agentChanges;
-        let next = yield* readings.next();
-        while (!next.done) {
-          seen.push(next.value);
-          next = yield* readings.next();
+  const name = "L1: queued before the provider is asked, then the turn's own facts";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({ one: { deltas: ["first", "second"] } });
+        yield* useStub(stub);
+        const holder = entry;
+        const seen: ReplAgentReading[] = [];
+        const session = opened(yield* start(holder, ONE_PROMPT));
+        stub.watch(() => session.agent);
+        yield* spawn(function* () {
+          const readings = yield* session.agentChanges;
+          let next = yield* readings.next();
+          while (!next.done) {
+            seen.push(next.value);
+            next = yield* readings.next();
+          }
+        });
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+
+        // Queued before delegation: what the provider saw when it was asked
+        // already held this turn, and held it as queued.
+        expect(stub.seenWhenAsked).toHaveLength(1);
+        const atDelegation = stub.seenWhenAsked[0]!;
+        expect(atDelegation.turns).toHaveLength(1);
+        expect(atDelegation.turns[0]!.state).toBe("queued");
+        expect(atDelegation.turns[0]!.prompt).toBe("one");
+        // A queued turn has no conversation to select yet.
+        expect(atDelegation.turns[0]!.sessionKey).toBe(undefined);
+
+        // One logical turn under one key, advanced by immutable replacements.
+        const key = atDelegation.turns[0]!.key;
+        const mine = seen.map((reading) => reading.turns[0]).filter((one) => one !== undefined);
+        expect(new Set(mine.map((one) => one.key))).toEqual(new Set([key]));
+        const states = mine.map((one) => one.state);
+        expect(states).toContain("active");
+        expect(states).toContain("terminal");
+        const settled = mine.filter((one) => one.state === "terminal").at(-1)!;
+        expect(settled.text).toBe("firstsecond");
+        expect(settled.agent).toBe("stub-agent");
+        expect(settled.sessionKey).toBe("stub:1");
+        expect(settled.status).toBe("completed");
+
+        // Deltas in order, and neither dropped.
+        const texts = mine.map((one) => one.text);
+        expect(texts).toContain("first");
+        expect(texts).toContain("firstsecond");
+        expect(texts.indexOf("first")).toBeLessThan(texts.indexOf("firstsecond"));
+
+        // Every exposed value is detached and frozen.
+        for (const reading of seen) {
+          expect(Object.isFrozen(reading)).toBe(true);
+          expect(Object.isFrozen(reading.turns)).toBe(true);
+          for (const one of reading.turns) {
+            expect(Object.isFrozen(one)).toBe(true);
+          }
         }
-      });
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-
-      // Queued before delegation: what the provider saw when it was asked
-      // already held this turn, and held it as queued.
-      expect(stub.seenWhenAsked).toHaveLength(1);
-      const atDelegation = stub.seenWhenAsked[0]!;
-      expect(atDelegation.turns).toHaveLength(1);
-      expect(atDelegation.turns[0]!.state).toBe("queued");
-      expect(atDelegation.turns[0]!.prompt).toBe("one");
-      // A queued turn has no conversation to select yet.
-      expect(atDelegation.turns[0]!.sessionKey).toBe(undefined);
-
-      // One logical turn under one key, advanced by immutable replacements.
-      const key = atDelegation.turns[0]!.key;
-      const mine = seen.map((reading) => reading.turns[0]).filter((one) => one !== undefined);
-      expect(new Set(mine.map((one) => one.key))).toEqual(new Set([key]));
-      const states = mine.map((one) => one.state);
-      expect(states).toContain("active");
-      expect(states).toContain("terminal");
-      const settled = mine.filter((one) => one.state === "terminal").at(-1)!;
-      expect(settled.text).toBe("firstsecond");
-      expect(settled.agent).toBe("stub-agent");
-      expect(settled.sessionKey).toBe("stub:1");
-      expect(settled.status).toBe("completed");
-
-      // Deltas in order, and neither dropped.
-      const texts = mine.map((one) => one.text);
-      expect(texts).toContain("first");
-      expect(texts).toContain("firstsecond");
-      expect(texts.indexOf("first")).toBeLessThan(texts.indexOf("firstsecond"));
-
-      // Every exposed value is detached and frozen.
-      for (const reading of seen) {
-        expect(Object.isFrozen(reading)).toBe(true);
-        expect(Object.isFrozen(reading.turns)).toBe(true);
-        for (const one of reading.turns) {
-          expect(Object.isFrozen(one)).toBe(true);
+        // `<Prompt>` is the stream's only subscriber: the observer wrapped the
+        // cold stream rather than consuming it and handing on a second turn.
+        expect(stub.subscriptions).toBe(1);
+        // The provider's own event objects reached `<Prompt>` in order, unchanged
+        // and unfrozen, and its final value is what the document rendered.
+        const produced = stub.produced.get("one")!;
+        expect(produced.map((event) => event.type)).toEqual([
+          "started",
+          "text_delta",
+          "text_delta",
+          "terminal",
+        ]);
+        for (const event of produced) {
+          expect(Object.isFrozen(event)).toBe(false);
         }
-      }
-      // `<Prompt>` is the stream's only subscriber: the observer wrapped the
-      // cold stream rather than consuming it and handing on a second turn.
-      expect(stub.subscriptions).toBe(1);
-      // The provider's own event objects reached `<Prompt>` in order, unchanged
-      // and unfrozen, and its final value is what the document rendered.
-      const produced = stub.produced.get("one")!;
-      expect(produced.map((event) => event.type)).toEqual([
-        "started",
-        "text_delta",
-        "text_delta",
-        "terminal",
-      ]);
-      for (const event of produced) {
-        expect(Object.isFrozen(event)).toBe(false);
-      }
-      expect(session.overlay.output).toContain("firstsecond");
-    },
-  );
+        expect(session.overlay.output).toContain("firstsecond");
+      },
+    );
+  });
 });
 
 describe("L2 — exact atomic live-to-durable replacement", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "L2: identical concurrent turns replace their own overlays, in reverse order",
-    function* (entry) {
-      const stub = createStub({ same: { deltas: ["reply"], gated: "each" } });
-      yield* useStub(stub);
-      const holder = entry;
-      const snapshots: Array<{ live: number; durable: number }> = [];
-      const session = opened(yield* start(holder, TWO_SPAWNS));
-      stub.watch(() => session.agent);
-      const recorded = watchAppends(holder);
+  const name = "L2: identical concurrent turns replace their own overlays, in reverse order";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({ same: { deltas: ["reply"], gated: "each" } });
+        yield* useStub(stub);
+        const holder = entry;
+        const snapshots: Array<{ live: number; durable: number }> = [];
+        const session = opened(yield* start(holder, TWO_SPAWNS));
+        stub.watch(() => session.agent);
+        const recorded = watchAppends(holder);
 
-      // Every announced snapshot, so "no duplicate and no disappearance" is
-      // checked against all of them rather than against the end state.
-      yield* spawn(function* () {
-        const readings = yield* session.agentChanges;
-        let next = yield* readings.next();
-        while (!next.done) {
-          snapshots.push({ live: next.value.turns.length, durable: session.model.turns.length });
-          next = yield* readings.next();
-        }
-      });
+        // Every announced snapshot, so "no duplicate and no disappearance" is
+        // checked against all of them rather than against the end state.
+        yield* spawn(function* () {
+          const readings = yield* session.agentChanges;
+          let next = yield* readings.next();
+          while (!next.done) {
+            snapshots.push({ live: next.value.turns.length, durable: session.model.turns.length });
+            next = yield* readings.next();
+          }
+        });
 
-      yield* spawn(function* () {
-        // Both ordinary Prompt paths reach the provider before either is let go.
-        yield* stub.reached("root.0");
-        yield* stub.reached("root.1");
-        yield* reported(session, "both turns live", (reading) => reading.turns.length === 2);
-        const keys = session.agent.turns.map((one) => one.key);
-        expect(new Set(keys).size).toBe(2);
-        expect(session.agent.turns.map((one) => one.prompt)).toEqual(["same", "same"]);
-        // The second spawn is released first, so its record appends first.
-        stub.let_("root.1");
-        yield* recorded(1);
-        // Only its own overlay went. Which one survived is named by what it is
-        // rather than by where it sat: the other spawn is still held before its
-        // first event, so it is the one that has reached no conversation.
-        expect(session.agent.turns).toHaveLength(1);
-        const survivor = session.agent.turns[0]!;
-        expect(keys).toContain(survivor.key);
-        expect(survivor.state).toBe("queued");
-        expect(survivor.sessionKey).toBe(undefined);
-        // And the record that replaced the other one describes the turn that
-        // actually ran, not this one.
-        expect(session.model.turns).toHaveLength(1);
-        expect(session.model.turns[0]!.sessionKey).not.toBe(survivor.sessionKey);
-        stub.let_("root.0");
-      });
+        yield* spawn(function* () {
+          // Both ordinary Prompt paths reach the provider before either is let go.
+          yield* stub.reached("root.0");
+          yield* stub.reached("root.1");
+          yield* reported(session, "both turns live", (reading) => reading.turns.length === 2);
+          const keys = session.agent.turns.map((one) => one.key);
+          expect(new Set(keys).size).toBe(2);
+          expect(session.agent.turns.map((one) => one.prompt)).toEqual(["same", "same"]);
+          // The second spawn is released first, so its record appends first.
+          stub.let_("root.1");
+          yield* recorded(1);
+          // Only its own overlay went. Which one survived is named by what it is
+          // rather than by where it sat: the other spawn is still held before its
+          // first event, so it is the one that has reached no conversation.
+          expect(session.agent.turns).toHaveLength(1);
+          const survivor = session.agent.turns[0]!;
+          expect(keys).toContain(survivor.key);
+          expect(survivor.state).toBe("queued");
+          expect(survivor.sessionKey).toBe(undefined);
+          // And the record that replaced the other one describes the turn that
+          // actually ran, not this one.
+          expect(session.model.turns).toHaveLength(1);
+          expect(session.model.turns[0]!.sessionKey).not.toBe(survivor.sessionKey);
+          stub.let_("root.0");
+        });
 
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
 
-      const written = appends(yield* holder.stream.readAll());
-      expect(written).toHaveLength(2);
-      // Completion order in the journal: the second spawn's child coroutine
-      // appended first, and the document still holds both turns.
-      expect(written.map((entry) => entry.coroutineId)).toEqual(["root.1", "root.0"]);
-      expect(session.model.turns).toHaveLength(2);
-      expect(session.agent.turns).toHaveLength(0);
-      // Distinct conversations, identical text: nothing correlated by content.
-      // The two conversations the authored `<Session>` elements named, each
-      // carrying its own retained turn although the text is identical.
-      expect(new Set(session.model.turns.map((one) => one.sessionKey))).toEqual(
-        new Set(["stub:planner", "stub:reviewer"]),
-      );
-      expect(new Set(session.model.turns.map((one) => one.text))).toEqual(new Set(["reply"]));
-
-      // No announced snapshot held one turn twice or neither time: from the
-      // moment both were live, live plus durable is exactly two.
-      const from = snapshots.findIndex((one) => one.live === 2);
-      expect(from).toBeGreaterThanOrEqual(0);
-      for (const snapshot of snapshots.slice(from)) {
-        expect(snapshot.live + snapshot.durable).toBe(2);
-      }
-    },
-  );
-
-  entryCase(
-    "L2: the turn that finished first is not the turn the first record replaced",
-    function* (entry) {
-      // The one arrangement in which finishing and recording come apart. Both
-      // turns produce every event they ever will, so both are terminal to
-      // anything watching; only then is one of them allowed to return and write
-      // its record. A view that matched a record to "the turn that finished
-      // first" would replace the wrong overlay here, and nowhere else.
-      const stub = createStub({ same: { deltas: ["reply"], gated: "each", settle: "each" } });
-      yield* useStub(stub);
-      const holder = entry;
-      const session = opened(yield* start(holder, TWO_SPAWNS));
-      stub.watch(() => session.agent);
-      const recorded = watchAppends(holder);
-
-      yield* spawn(function* () {
-        // Both live before either streams anything.
-        yield* stub.reached("root.0");
-        yield* stub.reached("root.1");
-        // Then one at a time, so which turn finishes first is decided by this
-        // row rather than by scheduling: the first spawn reaches its terminal
-        // event and is held there, and only then does the second start.
-        stub.let_("root.0");
-        yield* stub.finished("root.0");
-        stub.let_("root.1");
-        yield* stub.finished("root.1");
-        yield* reported(
-          session,
-          "both turns terminal",
-          (reading) => reading.turns.filter((one) => one.state === "terminal").length === 2,
+        const written = appends(yield* holder.stream.readAll());
+        expect(written).toHaveLength(2);
+        // Completion order in the journal: the second spawn's child coroutine
+        // appended first, and the document still holds both turns.
+        expect(written.map((entry) => entry.coroutineId)).toEqual(["root.1", "root.0"]);
+        expect(session.model.turns).toHaveLength(2);
+        expect(session.agent.turns).toHaveLength(0);
+        // Distinct conversations, identical text: nothing correlated by content.
+        // The two conversations the authored `<Session>` elements named, each
+        // carrying its own retained turn although the text is identical.
+        expect(new Set(session.model.turns.map((one) => one.sessionKey))).toEqual(
+          new Set(["stub:planner", "stub:reviewer"]),
         );
-        expect(session.model.turns).toHaveLength(0);
+        expect(new Set(session.model.turns.map((one) => one.text))).toEqual(new Set(["reply"]));
 
-        // The second spawn finishes second and records first.
-        stub.settle("root.1");
-        yield* recorded(1);
-        // The record replaced its own overlay and no other: the turn still live
-        // is the one that reached terminal *first*, and the durable turn is the
-        // one that got there second.
-        expect(session.agent.turns.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
-        expect(session.agent.turns.map((one) => one.state)).toEqual(["terminal"]);
-        expect(session.model.turns.map((one) => one.sessionKey)).toEqual(["stub:reviewer"]);
+        // No announced snapshot held one turn twice or neither time: from the
+        // moment both were live, live plus durable is exactly two.
+        const from = snapshots.findIndex((one) => one.live === 2);
+        expect(from).toBeGreaterThanOrEqual(0);
+        for (const snapshot of snapshots.slice(from)) {
+          expect(snapshot.live + snapshot.durable).toBe(2);
+        }
+      },
+    );
+  });
 
-        stub.settle("root.0");
-      });
+  const secondName = "L2: the turn that finished first is not the turn the first record replaced";
+  it(secondName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: secondName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        // The one arrangement in which finishing and recording come apart. Both
+        // turns produce every event they ever will, so both are terminal to
+        // anything watching; only then is one of them allowed to return and write
+        // its record. A view that matched a record to "the turn that finished
+        // first" would replace the wrong overlay here, and nowhere else.
+        const stub = createStub({ same: { deltas: ["reply"], gated: "each", settle: "each" } });
+        yield* useStub(stub);
+        const holder = entry;
+        const session = opened(yield* start(holder, TWO_SPAWNS));
+        stub.watch(() => session.agent);
+        const recorded = watchAppends(holder);
 
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      // And the second record replaced only the turn that was left.
-      expect(session.agent.turns).toEqual([]);
-      // Both conversations retained, each exactly once. Compared as a set: a
-      // retained turn is ordered by its Prompt sequence, and two concurrent
-      // children allocate that sequence in whichever order they reach it — so
-      // source order is what the *rendering* preserves, not what this list does.
-      expect(new Set(session.model.turns.map((one) => one.sessionKey))).toEqual(
-        new Set(["stub:planner", "stub:reviewer"]),
-      );
-      expect(session.model.turns).toHaveLength(2);
-      expect(appends(yield* holder.stream.readAll()).map((entry) => entry.coroutineId)).toEqual([
-        "root.1",
-        "root.0",
-      ]);
-    },
-  );
+        yield* spawn(function* () {
+          // Both live before either streams anything.
+          yield* stub.reached("root.0");
+          yield* stub.reached("root.1");
+          // Then one at a time, so which turn finishes first is decided by this
+          // row rather than by scheduling: the first spawn reaches its terminal
+          // event and is held there, and only then does the second start.
+          stub.let_("root.0");
+          yield* stub.finished("root.0");
+          stub.let_("root.1");
+          yield* stub.finished("root.1");
+          yield* reported(
+            session,
+            "both turns terminal",
+            (reading) => reading.turns.filter((one) => one.state === "terminal").length === 2,
+          );
+          expect(session.model.turns).toHaveLength(0);
+
+          // The second spawn finishes second and records first.
+          stub.settle("root.1");
+          yield* recorded(1);
+          // The record replaced its own overlay and no other: the turn still live
+          // is the one that reached terminal *first*, and the durable turn is the
+          // one that got there second.
+          expect(session.agent.turns.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
+          expect(session.agent.turns.map((one) => one.state)).toEqual(["terminal"]);
+          expect(session.model.turns.map((one) => one.sessionKey)).toEqual(["stub:reviewer"]);
+
+          stub.settle("root.0");
+        });
+
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        // And the second record replaced only the turn that was left.
+        expect(session.agent.turns).toEqual([]);
+        // Both conversations retained, each exactly once. Compared as a set: a
+        // retained turn is ordered by its Prompt sequence, and two concurrent
+        // children allocate that sequence in whichever order they reach it — so
+        // source order is what the *rendering* preserves, not what this list does.
+        expect(new Set(session.model.turns.map((one) => one.sessionKey))).toEqual(
+          new Set(["stub:planner", "stub:reviewer"]),
+        );
+        expect(session.model.turns).toHaveLength(2);
+        expect(appends(yield* holder.stream.readAll()).map((entry) => entry.coroutineId)).toEqual([
+          "root.1",
+          "root.0",
+        ]);
+      },
+    );
+  });
 
   it("L2: a replayed turn consumes its record without creating a live overlay", function* () {
     const golden = execution();
@@ -921,57 +931,75 @@ describe("L2 — exact atomic live-to-durable replacement", () => {
 describe("L3 — execution owns live work, presentation does not", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "L3: a document with no Agent work publishes nothing and materializes nothing",
-    function* (entry) {
-      const stub = createStub();
-      yield* useStub(stub);
-      const session = opened(yield* start(entry, "just text\n"));
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      // The provider was never asked for anything, so no adapter was ever
-      // materialized: installing the factory only installs middleware.
-      expect(stub.asked).toEqual([]);
-      expect(session.agent.turns).toEqual([]);
-      expect(session.agent.requests).toEqual([]);
-    },
-  );
+  const name = "L3: a document with no Agent work publishes nothing and materializes nothing";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub();
+        yield* useStub(stub);
+        const session = opened(yield* start(entry, "just text\n"));
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        // The provider was never asked for anything, so no adapter was ever
+        // materialized: installing the factory only installs middleware.
+        expect(stub.asked).toEqual([]);
+        expect(session.agent.turns).toEqual([]);
+        expect(session.agent.requests).toEqual([]);
+      },
+    );
+  });
 
-  entryCase(
-    "L3: a turn completes and publishes with nobody subscribed to changes",
-    function* (entry) {
-      const stub = createStub({ one: { deltas: ["reply"] } });
-      yield* useStub(stub);
-      // Nothing subscribes to `agentChanges` anywhere in this row.
-      const session = opened(yield* start(entry, ONE_PROMPT));
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      expect(session.model.turns).toHaveLength(1);
-      expect(session.agent.turns).toEqual([]);
-    },
-  );
+  const secondName = "L3: a turn completes and publishes with nobody subscribed to changes";
+  it(secondName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: secondName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({ one: { deltas: ["reply"] } });
+        yield* useStub(stub);
+        // Nothing subscribes to `agentChanges` anywhere in this row.
+        const session = opened(yield* start(entry, ONE_PROMPT));
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        expect(session.model.turns).toHaveLength(1);
+        expect(session.agent.turns).toEqual([]);
+      },
+    );
+  });
 
-  entryCase("L3: cancelling the session owner cancels and joins a held turn", function* (entry) {
-    const holder = entry;
-    const stub = createStub({ one: { gated: true } });
-    const [owner, dispose] = createScope(yield* useScope());
-    const held = withResolvers<ReplSession>();
-    owner.run(function* () {
-      yield* useStub(stub);
-      held.resolve(opened(yield* start(holder, ONE_PROMPT)));
-      yield* sleep(DEADLOCK_MS);
-    });
-    const session = yield* held.operation;
-    yield* stub.arrival("one");
-    yield* reported(session, "a live turn", (reading) => reading.turns.length === 1);
+  const thirdName = "L3: cancelling the session owner cancels and joins a held turn";
+  it(thirdName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: thirdName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const holder = entry;
+        const stub = createStub({ one: { gated: true } });
+        const [owner, dispose] = createScope(yield* useScope());
+        const held = withResolvers<ReplSession>();
+        owner.run(function* () {
+          yield* useStub(stub);
+          held.resolve(opened(yield* start(holder, ONE_PROMPT)));
+          yield* sleep(DEADLOCK_MS);
+        });
+        const session = yield* held.operation;
+        yield* stub.arrival("one");
+        yield* reported(session, "a live turn", (reading) => reading.turns.length === 1);
 
-    yield* until(dispose());
+        yield* until(dispose());
 
-    // Nothing the provider had not finished was recorded, and releasing it
-    // afterwards moves nothing: the work is gone with its owner.
-    expect(appends(yield* holder.stream.readAll())).toEqual([]);
-    stub.release("one");
-    expect(appends(yield* holder.stream.readAll())).toEqual([]);
+        // Nothing the provider had not finished was recorded, and releasing it
+        // afterwards moves nothing: the work is gone with its owner.
+        expect(appends(yield* holder.stream.readAll())).toEqual([]);
+        stub.release("one");
+        expect(appends(yield* holder.stream.readAll())).toEqual([]);
+      },
+    );
   });
 
   it("L3: a divergence before admission returns no session and leaves nothing alive", function* () {
@@ -1012,43 +1040,48 @@ describe("L3 — execution owns live work, presentation does not", () => {
 describe("L4 — an admitted session failure terminates its owner", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "L4: a post-admission correlation failure withdraws authority and join returns it",
-    function* (entry) {
-      const stub = createStub({
-        one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
-      });
-      yield* useStub(stub);
-      const holder = entry;
-      const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
-      // Admitted on a real queued turn and held at an interactive request.
-      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-      expect(session.live).toBe(true);
-      const pending = session.agent.requests[0]!;
+  const name = "L4: a post-admission correlation failure withdraws authority and join returns it";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+        });
+        yield* useStub(stub);
+        const holder = entry;
+        const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
+        // Admitted on a real queued turn and held at an interactive request.
+        yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+        expect(session.live).toBe(true);
+        const pending = session.agent.requests[0]!;
 
-      // An `agent_prompt` on a coroutine this session never observed a turn
-      // on. Correlation cannot be exact, and the session is already admitted,
-      // so there is nothing left to refuse atomically.
-      yield* holder.stream.append({
-        type: "yield",
-        coroutineId: "root.7",
-        description: { type: "agent_prompt", name: "prompt:elsewhere#0" },
-        result: {
-          status: "ok",
-          value: { sequence: 9, agent: "x", sessionKey: "y", status: "completed", text: "" },
-        },
-      });
+        // An `agent_prompt` on a coroutine this session never observed a turn
+        // on. Correlation cannot be exact, and the session is already admitted,
+        // so there is nothing left to refuse atomically.
+        yield* holder.stream.append({
+          type: "yield",
+          coroutineId: "root.7",
+          description: { type: "agent_prompt", name: "prompt:elsewhere#0" },
+          result: {
+            status: "ok",
+            value: { sequence: 9, agent: "x", sessionKey: "y", status: "completed", text: "" },
+          },
+        });
 
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && outcome.error.name).toBe("ReplAgentCorrelationError");
-      // The held request and its authority are gone, and a late choice cannot
-      // replace the first failure.
-      expect(session.agent.requests).toEqual([]);
-      expect(session.permissions.choose(pending.key, "once")).toBe(false);
-      expect(stub.outcomes.has("call-1")).toBe(false);
-    },
-  );
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && outcome.error.name).toBe("ReplAgentCorrelationError");
+        // The held request and its authority are gone, and a late choice cannot
+        // replace the first failure.
+        expect(session.agent.requests).toEqual([]);
+        expect(session.permissions.choose(pending.key, "once")).toBe(false);
+        expect(stub.outcomes.has("call-1")).toBe(false);
+      },
+    );
+  });
 });
 
 describe("P1 — exact policy and per-turn suspension", () => {
@@ -1127,203 +1160,245 @@ describe("P1 — exact policy and per-turn suspension", () => {
   ];
 
   for (const decided of cases) {
-    entryCase(`P1: ${decided.title}`, function* (entry) {
-      const stub = createStub({
-        one: {
-          permission: { toolCallId: "call-1", kind: decided.kind, options: decided.options },
+    const name = `P1: ${decided.title}`;
+    it(name, function* () {
+      yield* captureReplEntry(
+        { owner: OWNER, name },
+        "agent-kernel",
+        INLINE_SOURCE_PATH,
+        function* (entry) {
+          const stub = createStub({
+            one: {
+              permission: { toolCallId: "call-1", kind: decided.kind, options: decided.options },
+            },
+          });
+          yield* useStub(stub);
+          const session = opened(yield* start(entry, ONE_PROMPT, decided.mode));
+          const outcome = yield* session.join();
+          expect(outcome.ok).toBe(true);
+          expect(stub.outcomes.get("call-1")).toEqual(decided.expected);
+          // An automatic decision publishes no pending request, and asks nobody.
+          expect(session.agent.requests).toEqual([]);
         },
-      });
-      yield* useStub(stub);
-      const session = opened(yield* start(entry, ONE_PROMPT, decided.mode));
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      expect(stub.outcomes.get("call-1")).toEqual(decided.expected);
-      // An automatic decision publishes no pending request, and asks nobody.
-      expect(session.agent.requests).toEqual([]);
+      );
     });
   }
 
-  entryCase("P1: one held request does not suspend its sibling spawn", function* (entry) {
-    const stub = createStub({
-      blocked: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["held"] },
-      continue: { deltas: ["free"] },
-    });
-    yield* useStub(stub);
-    const holder = entry;
-    const session = opened(
-      yield* start(
-        holder,
-        [
-          "<All>",
-          '<Spawn><Session name="permission"><Prompt text="blocked" /></Session></Spawn>',
-          '<Spawn><Session name="other"><Prompt text="continue" /></Session></Spawn>',
-          "</All>",
-        ].join("\n"),
-        "approve-reads",
-      ),
+  const name = "P1: one held request does not suspend its sibling spawn";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          blocked: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["held"] },
+          continue: { deltas: ["free"] },
+        });
+        yield* useStub(stub);
+        const holder = entry;
+        const session = opened(
+          yield* start(
+            holder,
+            [
+              "<All>",
+              '<Spawn><Session name="permission"><Prompt text="blocked" /></Session></Spawn>',
+              '<Spawn><Session name="other"><Prompt text="continue" /></Session></Spawn>',
+              "</All>",
+            ].join("\n"),
+            "approve-reads",
+          ),
+        );
+        const recorded = watchAppends(holder);
+
+        yield* spawn(function* () {
+          yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+          const pending = session.agent.requests[0]!;
+          // The request identifies only its own turn.
+          const owner = session.agent.turns.find((one) => one.key === pending.turn);
+          expect(owner?.prompt).toBe("blocked");
+          expect(pending.toolCallId).toBe("call-1");
+          // While it waits, the sibling starts, streams, settles and appends
+          // durably — one held request does not suspend the whole `<All>`.
+          yield* recorded(1);
+          expect(session.model.turns.map((one) => one.input)).toEqual(["continue"]);
+          expect(session.agent.requests).toHaveLength(1);
+          // Answering releases only its own turn.
+          expect(session.permissions.choose(pending.key, "once")).toBe(true);
+        });
+
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "once" });
+        expect(appends(yield* holder.stream.readAll())).toHaveLength(2);
+        expect(session.agent.requests).toEqual([]);
+      },
     );
-    const recorded = watchAppends(holder);
-
-    yield* spawn(function* () {
-      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-      const pending = session.agent.requests[0]!;
-      // The request identifies only its own turn.
-      const owner = session.agent.turns.find((one) => one.key === pending.turn);
-      expect(owner?.prompt).toBe("blocked");
-      expect(pending.toolCallId).toBe("call-1");
-      // While it waits, the sibling starts, streams, settles and appends
-      // durably — one held request does not suspend the whole `<All>`.
-      yield* recorded(1);
-      expect(session.model.turns.map((one) => one.input)).toEqual(["continue"]);
-      expect(session.agent.requests).toHaveLength(1);
-      // Answering releases only its own turn.
-      expect(session.permissions.choose(pending.key, "once")).toBe(true);
-    });
-
-    const outcome = yield* session.join();
-    expect(outcome.ok).toBe(true);
-    expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "once" });
-    expect(appends(yield* holder.stream.readAll())).toHaveLength(2);
-    expect(session.agent.requests).toEqual([]);
   });
 });
 
 describe("L2 — a pending permission is a waiting element (#881 PR 2)", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "L2: the element the request was asked on behalf of is waiting, and stops when it is answered",
-    function* (entry) {
-      const stub = createStub({
-        one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
-      });
-      yield* useStub(stub);
-      const holder = entry;
-      const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
-
-      yield* spawn(function* () {
-        yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-        const pending = session.agent.requests[0]!;
-
-        // The waiting is counted on the element the request was asked inside —
-        // the `<Prompt>` whose turn owns it — and not on the session. A reading
-        // that said "busy" would name every element here.
-        const waiting = session.lifecycle.occurrences.filter((one) => one.waiting.length > 0);
-        expect(waiting.map((one) => `${one.name}:${one.waiting.join()}`)).toEqual([
-          "Prompt:permission",
-        ]);
-
-        // Answering it releases that element and nothing else.
-        expect(session.permissions.choose(pending.key, "once")).toBe(true);
-        yield* sleep(0);
-        expect(session.lifecycle.occurrences.filter((one) => one.waiting.length > 0)).toEqual([]);
-      });
-
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      // And the reading goes with the entry, the way every other one does.
-      yield* sleep(0);
-      expect(session.lifecycle.occurrences).toEqual([]);
-    },
-  );
-
-  entryCase(
-    "L2: a request abandoned at teardown releases its wait without deciding anything",
-    function* (entry) {
-      const stub = createStub({
-        one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
-      });
-      yield* useStub(stub);
-      const holder = entry;
-      // Held inside a scope of its own, so leaving the scope is the teardown.
-      const left = yield* scoped(function* () {
+  const name =
+    "L2: the element the request was asked on behalf of is waiting, and stops when it is answered";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+        });
+        yield* useStub(stub);
+        const holder = entry;
         const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
-        yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-        expect(
-          session.lifecycle.occurrences.some((one) => one.waiting.includes("permission")),
-        ).toBe(true);
-        // Nobody answers.
-        return session;
-      });
-      yield* sleep(0);
-      // The scope went away and took the reading with it. No decision was
-      // invented on the way out: a denial recorded here would be a decision
-      // nobody made.
-      expect(left.lifecycle.occurrences).toEqual([]);
-      expect(stub.outcomes.get("call-1")).toBe(undefined);
-    },
-  );
+
+        yield* spawn(function* () {
+          yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+          const pending = session.agent.requests[0]!;
+
+          // The waiting is counted on the element the request was asked inside —
+          // the `<Prompt>` whose turn owns it — and not on the session. A reading
+          // that said "busy" would name every element here.
+          const waiting = session.lifecycle.occurrences.filter((one) => one.waiting.length > 0);
+          expect(waiting.map((one) => `${one.name}:${one.waiting.join()}`)).toEqual([
+            "Prompt:permission",
+          ]);
+
+          // Answering it releases that element and nothing else.
+          expect(session.permissions.choose(pending.key, "once")).toBe(true);
+          yield* sleep(0);
+          expect(session.lifecycle.occurrences.filter((one) => one.waiting.length > 0)).toEqual([]);
+        });
+
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        // And the reading goes with the entry, the way every other one does.
+        yield* sleep(0);
+        expect(session.lifecycle.occurrences).toEqual([]);
+      },
+    );
+  });
+
+  const secondName =
+    "L2: a request abandoned at teardown releases its wait without deciding anything";
+  it(secondName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: secondName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+        });
+        yield* useStub(stub);
+        const holder = entry;
+        // Held inside a scope of its own, so leaving the scope is the teardown.
+        const left = yield* scoped(function* () {
+          const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
+          yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+          expect(
+            session.lifecycle.occurrences.some((one) => one.waiting.includes("permission")),
+          ).toBe(true);
+          // Nobody answers.
+          return session;
+        });
+        yield* sleep(0);
+        // The scope went away and took the reading with it. No decision was
+        // invented on the way out: a denial recorded here would be a decision
+        // nobody made.
+        expect(left.lifecycle.occurrences).toEqual([]);
+        expect(stub.outcomes.get("call-1")).toBe(undefined);
+      },
+    );
+  });
 });
 
 describe("P2 — one live request, one direct settlement", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "P2: an unknown option and a stale key settle nothing; the offered one settles once",
-    function* (entry) {
-      const stub = createStub({
-        one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
-      });
-      yield* useStub(stub);
-      const session = opened(yield* start(entry, ONE_PROMPT, "approve-reads"));
-      yield* spawn(function* () {
-        yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-        const pending = session.agent.requests[0]!;
-        // Never an option the provider did not offer, and never a key this
-        // process did not issue.
-        expect(session.permissions.choose(pending.key, "invented")).toBe(false);
-        expect(session.permissions.choose("request-999", "once")).toBe(false);
-        expect(session.agent.requests).toHaveLength(1);
-        expect(session.permissions.choose(pending.key, "always")).toBe(true);
-        // Already settled: the same key acts on nothing a second time.
-        expect(session.permissions.choose(pending.key, "once")).toBe(false);
-        expect(session.permissions.dismiss(pending.key)).toBe(false);
-      });
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "always" });
-      // And the turn that asked retains exactly that decision, once: the outcome
-      // the REPL's own authority returned, copied into the place the request
-      // reserved on its way in.
-      expect(audited(session)).toEqual([
-        {
-          toolCallId: "call-1",
-          kind: "execute",
-          options: ALL_KINDS,
-          outcome: "selected",
-          selected: "always",
-        },
-      ]);
-    },
-  );
-
-  entryCase("P2: dismissal while live denies once and the turn resumes", function* (entry) {
-    const stub = createStub({
-      one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["resumed"] },
-    });
-    yield* useStub(stub);
-    const session = opened(yield* start(entry, ONE_PROMPT, "approve-reads"));
-    yield* spawn(function* () {
-      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-      expect(session.permissions.dismiss(session.agent.requests[0]!.key)).toBe(true);
-    });
-    const outcome = yield* session.join();
-    expect(outcome.ok).toBe(true);
-    // The established denial rule, and the turn carried on with it.
-    expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "no" });
-    expect(session.agent.requests).toEqual([]);
-    expect(session.model.turns).toHaveLength(1);
-    expect(session.model.turns[0]!.text).toBe("resumed");
-    // Retained once, as the denial it was — not as a cancellation, and not twice.
-    expect(audited(session)).toEqual([
-      {
-        toolCallId: "call-1",
-        kind: "execute",
-        options: ALL_KINDS,
-        outcome: "selected",
-        selected: "no",
+  const firstName =
+    "P2: an unknown option and a stale key settle nothing; the offered one settles once";
+  it(firstName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: firstName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+        });
+        yield* useStub(stub);
+        const session = opened(yield* start(entry, ONE_PROMPT, "approve-reads"));
+        yield* spawn(function* () {
+          yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+          const pending = session.agent.requests[0]!;
+          // Never an option the provider did not offer, and never a key this
+          // process did not issue.
+          expect(session.permissions.choose(pending.key, "invented")).toBe(false);
+          expect(session.permissions.choose("request-999", "once")).toBe(false);
+          expect(session.agent.requests).toHaveLength(1);
+          expect(session.permissions.choose(pending.key, "always")).toBe(true);
+          // Already settled: the same key acts on nothing a second time.
+          expect(session.permissions.choose(pending.key, "once")).toBe(false);
+          expect(session.permissions.dismiss(pending.key)).toBe(false);
+        });
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "always" });
+        // And the turn that asked retains exactly that decision, once: the outcome
+        // the REPL's own authority returned, copied into the place the request
+        // reserved on its way in.
+        expect(audited(session)).toEqual([
+          {
+            toolCallId: "call-1",
+            kind: "execute",
+            options: ALL_KINDS,
+            outcome: "selected",
+            selected: "always",
+          },
+        ]);
       },
-    ]);
+    );
+  });
+
+  const name = "P2: dismissal while live denies once and the turn resumes";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["resumed"] },
+        });
+        yield* useStub(stub);
+        const session = opened(yield* start(entry, ONE_PROMPT, "approve-reads"));
+        yield* spawn(function* () {
+          yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+          expect(session.permissions.dismiss(session.agent.requests[0]!.key)).toBe(true);
+        });
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        // The established denial rule, and the turn carried on with it.
+        expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "no" });
+        expect(session.agent.requests).toEqual([]);
+        expect(session.model.turns).toHaveLength(1);
+        expect(session.model.turns[0]!.text).toBe("resumed");
+        // Retained once, as the denial it was — not as a cancellation, and not twice.
+        expect(audited(session)).toEqual([
+          {
+            toolCallId: "call-1",
+            kind: "execute",
+            options: ALL_KINDS,
+            outcome: "selected",
+            selected: "no",
+          },
+        ]);
+      },
+    );
   });
 
   it("P2: a cold retained audit has no pending reading and no authority", function* () {
@@ -1398,74 +1473,84 @@ describe("P2 — one live request, one direct settlement", () => {
 describe("P3 — whole-session teardown is structured cancellation", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "P3: teardown cancels and joins the held request without claiming a denial",
-    function* (entry) {
-      const holder = entry;
-      const stub = createStub({
-        one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
-      });
-      const [owner, dispose] = createScope(yield* useScope());
-      const held = withResolvers<ReplSession>();
-      owner.run(function* () {
-        yield* useStub(stub);
-        held.resolve(opened(yield* start(holder, ONE_PROMPT, "approve-reads")));
-        yield* sleep(DEADLOCK_MS);
-      });
-      const session = yield* held.operation;
-      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-      const pending = session.agent.requests[0]!;
+  const name = "P3: teardown cancels and joins the held request without claiming a denial";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const holder = entry;
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+        });
+        const [owner, dispose] = createScope(yield* useScope());
+        const held = withResolvers<ReplSession>();
+        owner.run(function* () {
+          yield* useStub(stub);
+          held.resolve(opened(yield* start(holder, ONE_PROMPT, "approve-reads")));
+          yield* sleep(DEADLOCK_MS);
+        });
+        const session = yield* held.operation;
+        yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+        const pending = session.agent.requests[0]!;
 
-      yield* until(dispose());
+        yield* until(dispose());
 
-      // Absence only. The permission operation was cancelled with its owner, so
-      // nothing here asserts that it observed a denial or any other outcome.
-      expect(session.agent.requests).toEqual([]);
-      expect(stub.outcomes.has("call-1")).toBe(false);
-      expect(appends(yield* holder.stream.readAll())).toEqual([]);
-      // A late choice acts on nothing, and settles nothing afterwards either.
-      expect(session.permissions.choose(pending.key, "once")).toBe(false);
-      expect(stub.outcomes.has("call-1")).toBe(false);
-      // And no audit was published for a decision nobody made: the place the
-      // request reserved was never completed, so nothing names an outcome.
-      expect(session.model.turns).toEqual([]);
-      expect(audited(session)).toEqual([]);
-    },
-  );
+        // Absence only. The permission operation was cancelled with its owner, so
+        // nothing here asserts that it observed a denial or any other outcome.
+        expect(session.agent.requests).toEqual([]);
+        expect(stub.outcomes.has("call-1")).toBe(false);
+        expect(appends(yield* holder.stream.readAll())).toEqual([]);
+        // A late choice acts on nothing, and settles nothing afterwards either.
+        expect(session.permissions.choose(pending.key, "once")).toBe(false);
+        expect(stub.outcomes.has("call-1")).toBe(false);
+        // And no audit was published for a decision nobody made: the place the
+        // request reserved was never completed, so nothing names an outcome.
+        expect(session.model.turns).toEqual([]);
+        expect(audited(session)).toEqual([]);
+      },
+    );
+  });
 
-  entryCase(
-    "P3: releasing the owning scope retires the agent owner and wakes nobody",
-    function* (entry) {
-      const holder = entry;
-      const stub = createStub({
-        one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
-      });
-      const [owner, dispose] = createScope(yield* useScope());
-      const held = withResolvers<ReplSession>();
-      owner.run(function* () {
-        yield* useStub(stub);
-        held.resolve(opened(yield* start(holder, ONE_PROMPT, "approve-reads")));
-        yield* sleep(DEADLOCK_MS);
-      });
-      const session = yield* held.operation;
-      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
-      const pending = session.agent.requests[0]!;
+  const secondName = "P3: releasing the owning scope retires the agent owner and wakes nobody";
+  it(secondName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: secondName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const holder = entry;
+        const stub = createStub({
+          one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+        });
+        const [owner, dispose] = createScope(yield* useScope());
+        const held = withResolvers<ReplSession>();
+        owner.run(function* () {
+          yield* useStub(stub);
+          held.resolve(opened(yield* start(holder, ONE_PROMPT, "approve-reads")));
+          yield* sleep(DEADLOCK_MS);
+        });
+        const session = yield* held.operation;
+        yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+        const pending = session.agent.requests[0]!;
 
-      yield* until(dispose());
-      yield* sleep(0);
+        yield* until(dispose());
+        yield* sleep(0);
 
-      // The owner is retired: nothing it was presenting is presented any more.
-      expect(session.agent.turns).toEqual([]);
-      expect(session.agent.requests).toEqual([]);
-      // Retiring answered nothing. The held request was abandoned with its
-      // scope, not decided on the way out.
-      expect(stub.outcomes.has("call-1")).toBe(false);
-      expect(session.permissions.choose(pending.key, "once")).toBe(false);
-      expect(stub.outcomes.has("call-1")).toBe(false);
-      // Nothing durable was written by any of it.
-      expect(appends(yield* holder.stream.readAll())).toEqual([]);
-    },
-  );
+        // The owner is retired: nothing it was presenting is presented any more.
+        expect(session.agent.turns).toEqual([]);
+        expect(session.agent.requests).toEqual([]);
+        // Retiring answered nothing. The held request was abandoned with its
+        // scope, not decided on the way out.
+        expect(stub.outcomes.has("call-1")).toBe(false);
+        expect(session.permissions.choose(pending.key, "once")).toBe(false);
+        expect(stub.outcomes.has("call-1")).toBe(false);
+        // Nothing durable was written by any of it.
+        expect(appends(yield* holder.stream.readAll())).toEqual([]);
+      },
+    );
+  });
 
   it("P3: retiring the owner wakes nobody who was waiting on its failure", function* () {
     // The owner acquired directly, so what is under test is the resource's own
@@ -1501,68 +1586,73 @@ describe("P3 — whole-session teardown is structured cancellation", () => {
 describe("P4 — a request without one live owner fails the session", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "P4: an unowned request publishes nothing, denies nothing and fails the session",
-    function* (entry) {
-      const stub = createStub();
-      yield* useStub(stub);
-      const answered: PermissionOutcome[] = [];
-      const raised: string[] = [];
-      // An authored component, outside any live Prompt, reaching the public
-      // operation exactly as a provider would.
-      yield* registerComponents([
-        {
-          name: "AskOutside",
-          origin: "tier-854",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          *fn() {
-            try {
-              answered.push(
-                yield* Agent.operations.requestPermission({
-                  session: { sessionKey: "stub:none", cwd: "/stub" },
-                  toolCall: { toolCallId: "orphan", kind: "execute" },
-                  options: ALL_KINDS,
-                }),
-              );
-            } catch (error) {
-              // Swallowed and carried on, the way an ordinary `<Prompt>` turns a
-              // provider failure into its own durable result and continues. If
-              // the failure reached only this operation, the session would still
-              // be live — which is exactly what it may not be.
-              raised.push(error instanceof Error ? error.name : String(error));
-            }
-            return "continued";
+  const name = "P4: an unowned request publishes nothing, denies nothing and fails the session";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub();
+        yield* useStub(stub);
+        const answered: PermissionOutcome[] = [];
+        const raised: string[] = [];
+        // An authored component, outside any live Prompt, reaching the public
+        // operation exactly as a provider would.
+        yield* registerComponents([
+          {
+            name: "AskOutside",
+            origin: "tier-854",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn() {
+              try {
+                answered.push(
+                  yield* Agent.operations.requestPermission({
+                    session: { sessionKey: "stub:none", cwd: "/stub" },
+                    toolCall: { toolCallId: "orphan", kind: "execute" },
+                    options: ALL_KINDS,
+                  }),
+                );
+              } catch (error) {
+                // Swallowed and carried on, the way an ordinary `<Prompt>` turns a
+                // provider failure into its own durable result and continues. If
+                // the failure reached only this operation, the session would still
+                // be live — which is exactly what it may not be.
+                raised.push(error instanceof Error ? error.name : String(error));
+              }
+              return "continued";
+            },
           },
-        },
-      ]);
-      const holder = entry;
-      const session = opened(yield* start(holder, "<AskOutside />\n", "approve-reads"));
-      // Bounded, because the failure mode of not failing the session is that it
-      // waits forever on a request nobody can answer. A correct kernel never
-      // reaches the deadline.
-      const outcome = yield* race([
-        session.join(),
-        (function* (): Operation<Result<unknown>> {
-          yield* sleep(DEADLOCK_MS);
-          throw new Error(
-            "the session never ended: an unowned request was published, denied, or left waiting",
-          );
-        })(),
-      ]);
+        ]);
+        const holder = entry;
+        const session = opened(yield* start(holder, "<AskOutside />\n", "approve-reads"));
+        // Bounded, because the failure mode of not failing the session is that it
+        // waits forever on a request nobody can answer. A correct kernel never
+        // reaches the deadline.
+        const outcome = yield* race([
+          session.join(),
+          (function* (): Operation<Result<unknown>> {
+            yield* sleep(DEADLOCK_MS);
+            throw new Error(
+              "the session never ended: an unowned request was published, denied, or left waiting",
+            );
+          })(),
+        ]);
 
-      // The document did not fail on its own — the component carried on — and
-      // the session failed anyway, because the owner was told too.
-      expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && outcome.error.name).toBe("ReplPermissionOwnerError");
-      // Reported to the permission operation as well as to the session owner.
-      expect(raised).toEqual(["ReplPermissionOwnerError"]);
-      // Never published, and never converted into a denial.
-      expect(session.agent.requests).toEqual([]);
-      expect(answered).toEqual([]);
-      // No invented audit: the journal holds only what actually happened.
-      expect(appends(yield* holder.stream.readAll())).toEqual([]);
-    },
-  );
+        // The document did not fail on its own — the component carried on — and
+        // the session failed anyway, because the owner was told too.
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && outcome.error.name).toBe("ReplPermissionOwnerError");
+        // Reported to the permission operation as well as to the session owner.
+        expect(raised).toEqual(["ReplPermissionOwnerError"]);
+        // Never published, and never converted into a denial.
+        expect(session.agent.requests).toEqual([]);
+        expect(answered).toEqual([]);
+        // No invented audit: the journal holds only what actually happened.
+        expect(appends(yield* holder.stream.readAll())).toEqual([]);
+      },
+    );
+  });
 });
 
 /** Two spawned turns, each asking its own question. */
@@ -1576,129 +1666,152 @@ const TWO_ASKS = [
 describe("P5 — the durable audit of a live REPL turn", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "P5: two live turns settle in reverse order, and each record holds only its own",
-    function* (entry) {
-      const stub = createStub({
-        first: { permission: { toolCallId: "call-first", kind: "execute" }, deltas: ["a"] },
-        second: { permission: { toolCallId: "call-second", kind: "execute" }, deltas: ["b"] },
-      });
-      yield* useStub(stub);
-      const holder = entry;
-      const session = opened(yield* start(holder, TWO_ASKS, "approve-reads"));
-      yield* spawn(function* () {
-        // Both waiting at once, which is what makes ownership a question at all.
-        yield* reported(
-          session,
-          "two pending requests",
-          (reading) => reading.requests.length === 2,
-        );
-        const asked = session.agent.requests;
-        const first = asked.find((request) => request.toolCallId === "call-first");
-        const second = asked.find((request) => request.toolCallId === "call-second");
-        expect(first).toBeDefined();
-        expect(second).toBeDefined();
-        // Different turns, so neither decision could belong to the other.
-        expect(first?.turn).not.toBe(second?.turn);
-        // Answered in the opposite order to the one they arrived in.
-        expect(session.permissions.choose(second?.key ?? "", "always")).toBe(true);
-        expect(session.permissions.choose(first?.key ?? "", "once")).toBe(true);
-      });
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
+  const name = "P5: two live turns settle in reverse order, and each record holds only its own";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          first: { permission: { toolCallId: "call-first", kind: "execute" }, deltas: ["a"] },
+          second: { permission: { toolCallId: "call-second", kind: "execute" }, deltas: ["b"] },
+        });
+        yield* useStub(stub);
+        const holder = entry;
+        const session = opened(yield* start(holder, TWO_ASKS, "approve-reads"));
+        yield* spawn(function* () {
+          // Both waiting at once, which is what makes ownership a question at all.
+          yield* reported(
+            session,
+            "two pending requests",
+            (reading) => reading.requests.length === 2,
+          );
+          const asked = session.agent.requests;
+          const first = asked.find((request) => request.toolCallId === "call-first");
+          const second = asked.find((request) => request.toolCallId === "call-second");
+          expect(first).toBeDefined();
+          expect(second).toBeDefined();
+          // Different turns, so neither decision could belong to the other.
+          expect(first?.turn).not.toBe(second?.turn);
+          // Answered in the opposite order to the one they arrived in.
+          expect(session.permissions.choose(second?.key ?? "", "always")).toBe(true);
+          expect(session.permissions.choose(first?.key ?? "", "once")).toBe(true);
+        });
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
 
-      // One audit each, and each on the turn that asked it: nothing correlated by
-      // which turn was newest or which decision settled first.
-      const turns = session.model.turns;
-      expect(turns).toHaveLength(2);
-      const asking = (text: string): readonly ReplAgentPermission[] =>
-        turns.find((turn) => turn.input === text)?.permissions ?? [];
-      expect(asking("first").map((one) => one.toolCallId)).toEqual(["call-first"]);
-      expect(asking("second").map((one) => one.toolCallId)).toEqual(["call-second"]);
-      expect(asking("first")[0]?.selected).toBe("once");
-      expect(asking("second")[0]?.selected).toBe("always");
-    },
-  );
-
-  entryCase("P5: a later request from an earlier turn is still that turn's", function* (entry) {
-    const stub = createStub({
-      first: {
-        // Held until its sibling has asked, so the sibling's ledger is the most
-        // recently placed one when this turn finally asks anything at all.
-        gated: "each",
-        permission: { toolCallId: "call-first", kind: "execute" },
-        // And asked again once it is running, with the sibling still waiting.
-        late: { toolCallId: "call-later", kind: "execute" },
-        deltas: ["a"],
+        // One audit each, and each on the turn that asked it: nothing correlated by
+        // which turn was newest or which decision settled first.
+        const turns = session.model.turns;
+        expect(turns).toHaveLength(2);
+        const asking = (text: string): readonly ReplAgentPermission[] =>
+          turns.find((turn) => turn.input === text)?.permissions ?? [];
+        expect(asking("first").map((one) => one.toolCallId)).toEqual(["call-first"]);
+        expect(asking("second").map((one) => one.toolCallId)).toEqual(["call-second"]);
+        expect(asking("first")[0]?.selected).toBe("once");
+        expect(asking("second")[0]?.selected).toBe("always");
       },
-      second: { permission: { toolCallId: "call-second", kind: "execute" }, deltas: ["b"] },
-    });
-    yield* useStub(stub);
-    const session = opened(yield* start(entry, TWO_ASKS, "approve-reads"));
-    yield* spawn(function* () {
-      yield* reported(session, "the sibling's request", (reading) =>
-        reading.requests.some((request) => request.toolCallId === "call-second"),
-      );
-      stub.let_("root.0");
-      yield* reported(session, "two pending requests", (reading) => reading.requests.length === 2);
-      const held = (id: string): string =>
-        session.agent.requests.find((request) => request.toolCallId === id)?.key ?? "";
-      // The first turn is released and asks again while the second still waits.
-      expect(session.permissions.choose(held("call-first"), "once")).toBe(true);
-      yield* reported(session, "the later request", (reading) =>
-        reading.requests.some((request) => request.toolCallId === "call-later"),
-      );
-      expect(session.permissions.choose(held("call-later"), "always")).toBe(true);
-      expect(session.permissions.choose(held("call-second"), "no")).toBe(true);
-    });
-    const outcome = yield* session.join();
-    expect(outcome.ok).toBe(true);
-    const asking = (text: string): string[] =>
-      session.model.turns
-        .find((turn) => turn.input === text)
-        ?.permissions.map((one) => one.toolCallId) ?? [];
-    // Both of the first turn's requests are the first turn's, including the one
-    // it asked after its sibling had placed a ledger of its own.
-    expect(asking("first")).toEqual(["call-first", "call-later"]);
-    expect(asking("second")).toEqual(["call-second"]);
+    );
   });
 
-  entryCase(
-    "P5: two requests from one turn keep the order they were asked, not the order they settled",
-    function* (entry) {
-      const stub = createStub({
-        one: {
-          permissions: [
-            { toolCallId: "call-a", title: "Asked first", kind: "execute" },
-            { toolCallId: "call-b", title: "Asked second", kind: "execute" },
-          ],
-          deltas: ["reply"],
-        },
-      });
-      yield* useStub(stub);
-      const session = opened(yield* start(entry, ONE_PROMPT, "approve-reads"));
-      yield* spawn(function* () {
-        yield* reported(
-          session,
-          "two pending requests",
-          (reading) => reading.requests.length === 2,
-        );
-        const asked = session.agent.requests;
-        const a = asked.find((request) => request.toolCallId === "call-a");
-        const b = asked.find((request) => request.toolCallId === "call-b");
-        // One turn, both places already reserved, and the second one answered
-        // first — which is exactly what a record sorted by completion would show
-        // the wrong way round.
-        expect(a?.turn).toBe(b?.turn);
-        expect(session.permissions.choose(b?.key ?? "", "always")).toBe(true);
-        expect(session.permissions.choose(a?.key ?? "", "once")).toBe(true);
-      });
-      const outcome = yield* session.join();
-      expect(outcome.ok).toBe(true);
-      expect(audited(session).map((one) => one.toolCallId)).toEqual(["call-a", "call-b"]);
-      expect(audited(session).map((one) => one.selected)).toEqual(["once", "always"]);
-    },
-  );
+  const secondName = "P5: a later request from an earlier turn is still that turn's";
+  it(secondName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: secondName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          first: {
+            // Held until its sibling has asked, so the sibling's ledger is the most
+            // recently placed one when this turn finally asks anything at all.
+            gated: "each",
+            permission: { toolCallId: "call-first", kind: "execute" },
+            // And asked again once it is running, with the sibling still waiting.
+            late: { toolCallId: "call-later", kind: "execute" },
+            deltas: ["a"],
+          },
+          second: { permission: { toolCallId: "call-second", kind: "execute" }, deltas: ["b"] },
+        });
+        yield* useStub(stub);
+        const session = opened(yield* start(entry, TWO_ASKS, "approve-reads"));
+        yield* spawn(function* () {
+          yield* reported(session, "the sibling's request", (reading) =>
+            reading.requests.some((request) => request.toolCallId === "call-second"),
+          );
+          stub.let_("root.0");
+          yield* reported(
+            session,
+            "two pending requests",
+            (reading) => reading.requests.length === 2,
+          );
+          const held = (id: string): string =>
+            session.agent.requests.find((request) => request.toolCallId === id)?.key ?? "";
+          // The first turn is released and asks again while the second still waits.
+          expect(session.permissions.choose(held("call-first"), "once")).toBe(true);
+          yield* reported(session, "the later request", (reading) =>
+            reading.requests.some((request) => request.toolCallId === "call-later"),
+          );
+          expect(session.permissions.choose(held("call-later"), "always")).toBe(true);
+          expect(session.permissions.choose(held("call-second"), "no")).toBe(true);
+        });
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        const asking = (text: string): string[] =>
+          session.model.turns
+            .find((turn) => turn.input === text)
+            ?.permissions.map((one) => one.toolCallId) ?? [];
+        // Both of the first turn's requests are the first turn's, including the one
+        // it asked after its sibling had placed a ledger of its own.
+        expect(asking("first")).toEqual(["call-first", "call-later"]);
+        expect(asking("second")).toEqual(["call-second"]);
+      },
+    );
+  });
+
+  const thirdName =
+    "P5: two requests from one turn keep the order they were asked, not the order they settled";
+  it(thirdName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: thirdName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          one: {
+            permissions: [
+              { toolCallId: "call-a", title: "Asked first", kind: "execute" },
+              { toolCallId: "call-b", title: "Asked second", kind: "execute" },
+            ],
+            deltas: ["reply"],
+          },
+        });
+        yield* useStub(stub);
+        const session = opened(yield* start(entry, ONE_PROMPT, "approve-reads"));
+        yield* spawn(function* () {
+          yield* reported(
+            session,
+            "two pending requests",
+            (reading) => reading.requests.length === 2,
+          );
+          const asked = session.agent.requests;
+          const a = asked.find((request) => request.toolCallId === "call-a");
+          const b = asked.find((request) => request.toolCallId === "call-b");
+          // One turn, both places already reserved, and the second one answered
+          // first — which is exactly what a record sorted by completion would show
+          // the wrong way round.
+          expect(a?.turn).toBe(b?.turn);
+          expect(session.permissions.choose(b?.key ?? "", "always")).toBe(true);
+          expect(session.permissions.choose(a?.key ?? "", "once")).toBe(true);
+        });
+        const outcome = yield* session.join();
+        expect(outcome.ok).toBe(true);
+        expect(audited(session).map((one) => one.toolCallId)).toEqual(["call-a", "call-b"]);
+        expect(audited(session).map((one) => one.selected)).toEqual(["once", "always"]);
+      },
+    );
+  });
 
   it("P5: provider-owned input reaches neither the journal nor the model", function* () {
     const canary = "canary-9f3b7c1e-only-in-rawInput";
@@ -1741,102 +1854,112 @@ describe("P5 — the durable audit of a live REPL turn", () => {
 describe("P6 — only a canonical Prompt claims a record", () => {
   beforeAll(() => useTempFileCompiler());
 
-  entryCase(
-    "P6: a direct public prompt neither claims the canonical record nor lingers",
-    function* (entry) {
-      const stub = createStub({
-        direct: { deltas: ["off-books"] },
-        one: { deltas: ["reply"] },
-      });
-      yield* useStub(stub);
-      // A registered component reaching the public operation itself. This is
-      // ordinary — the Api is exported — and it is not journal-owned work: no
-      // `agent_prompt` record will ever describe it.
-      yield* registerComponents([
-        {
-          name: "DirectPrompt",
-          origin: "tier-854",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          *fn() {
-            const stream = yield* Agent.operations.prompt("direct", {});
-            const subscription = yield* stream;
-            let next = yield* subscription.next();
-            while (!next.done) {
-              next = yield* subscription.next();
-            }
-            return "direct";
+  const name = "P6: a direct public prompt neither claims the canonical record nor lingers";
+  it(name, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const stub = createStub({
+          direct: { deltas: ["off-books"] },
+          one: { deltas: ["reply"] },
+        });
+        yield* useStub(stub);
+        // A registered component reaching the public operation itself. This is
+        // ordinary — the Api is exported — and it is not journal-owned work: no
+        // `agent_prompt` record will ever describe it.
+        yield* registerComponents([
+          {
+            name: "DirectPrompt",
+            origin: "tier-854",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn() {
+              const stream = yield* Agent.operations.prompt("direct", {});
+              const subscription = yield* stream;
+              let next = yield* subscription.next();
+              while (!next.done) {
+                next = yield* subscription.next();
+              }
+              return "direct";
+            },
           },
-        },
-      ]);
-      const holder = entry;
-      // Both on the root coroutine, the direct call first: a queue drained on
-      // append would hand the canonical record the direct call's entry.
-      const session = opened(yield* start(holder, '<DirectPrompt />\n\n<Prompt text="one" />\n'));
-      const outcome = yield* session.join();
+        ]);
+        const holder = entry;
+        // Both on the root coroutine, the direct call first: a queue drained on
+        // append would hand the canonical record the direct call's entry.
+        const session = opened(yield* start(holder, '<DirectPrompt />\n\n<Prompt text="one" />\n'));
+        const outcome = yield* session.join();
 
-      expect(outcome.ok).toBe(true);
-      // The provider answered both, so the direct call really did happen.
-      expect(stub.asked).toEqual(["direct", "one"]);
-      // Exactly one record, and it is the canonical Prompt's.
-      expect(session.model.turns).toHaveLength(1);
-      expect(session.model.turns[0]?.text).toBe("reply");
-      // Nothing live is left over: the canonical publication removed its own
-      // turn, and the direct call never had one to leave behind.
-      expect(session.agent.turns).toEqual([]);
-      expect(session.live).toBe(false);
-    },
-  );
+        expect(outcome.ok).toBe(true);
+        // The provider answered both, so the direct call really did happen.
+        expect(stub.asked).toEqual(["direct", "one"]);
+        // Exactly one record, and it is the canonical Prompt's.
+        expect(session.model.turns).toHaveLength(1);
+        expect(session.model.turns[0]?.text).toBe("reply");
+        // Nothing live is left over: the canonical publication removed its own
+        // turn, and the direct call never had one to leave behind.
+        expect(session.agent.turns).toEqual([]);
+        expect(session.live).toBe(false);
+      },
+    );
+  });
 
-  entryCase(
-    "P6: concurrent spawns with a direct call each retire only their own turn",
-    function* (entry) {
-      // Two canonical turns running at once, one of them on a coroutine that
-      // also made a direct public call. Reversed *completion* is held by the L2
-      // and P5 rows above, which run the same mechanism; what this adds is a
-      // direct call in the middle of concurrent work.
-      const stub = createStub({
-        direct: { deltas: ["off-books"] },
-        same: { deltas: ["reply"] },
-      });
-      yield* useStub(stub);
-      yield* registerComponents([
-        {
-          name: "DirectPrompt",
-          origin: "tier-854",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          *fn() {
-            const stream = yield* Agent.operations.prompt("direct", {});
-            const subscription = yield* stream;
-            let next = yield* subscription.next();
-            while (!next.done) {
-              next = yield* subscription.next();
-            }
-            return "direct";
+  const secondName = "P6: concurrent spawns with a direct call each retire only their own turn";
+  it(secondName, function* () {
+    yield* captureReplEntry(
+      { owner: OWNER, name: secondName },
+      "agent-kernel",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        // Two canonical turns running at once, one of them on a coroutine that
+        // also made a direct public call. Reversed *completion* is held by the L2
+        // and P5 rows above, which run the same mechanism; what this adds is a
+        // direct call in the middle of concurrent work.
+        const stub = createStub({
+          direct: { deltas: ["off-books"] },
+          same: { deltas: ["reply"] },
+        });
+        yield* useStub(stub);
+        yield* registerComponents([
+          {
+            name: "DirectPrompt",
+            origin: "tier-854",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn() {
+              const stream = yield* Agent.operations.prompt("direct", {});
+              const subscription = yield* stream;
+              let next = yield* subscription.next();
+              while (!next.done) {
+                next = yield* subscription.next();
+              }
+              return "direct";
+            },
           },
-        },
-      ]);
-      const holder = entry;
-      const source = [
-        "<All>",
-        '<Spawn><Session name="planner"><DirectPrompt /><Prompt text="same" /></Session></Spawn>',
-        '<Spawn><Session name="reviewer"><Prompt text="same" /></Session></Spawn>',
-        "</All>",
-      ].join("\n");
-      const session = opened(yield* start(holder, source));
-      const outcome = yield* session.join();
+        ]);
+        const holder = entry;
+        const source = [
+          "<All>",
+          '<Spawn><Session name="planner"><DirectPrompt /><Prompt text="same" /></Session></Spawn>',
+          '<Spawn><Session name="reviewer"><Prompt text="same" /></Session></Spawn>',
+          "</All>",
+        ].join("\n");
+        const session = opened(yield* start(holder, source));
+        const outcome = yield* session.join();
 
-      expect(outcome.ok).toBe(true);
-      // The direct call really happened, beside both canonical turns.
-      expect(stub.asked.filter((asked) => asked === "direct")).toHaveLength(1);
-      expect(stub.asked.filter((asked) => asked === "same")).toHaveLength(2);
-      // Two canonical records, and the direct call is in neither.
-      expect(session.model.turns).toHaveLength(2);
-      expect(session.model.turns.map((turn) => turn.text)).toEqual(["reply", "reply"]);
-      // Every live turn retired, including on the coroutine that also made a
-      // direct call — which had no live turn to leave behind.
-      expect(session.agent.turns).toEqual([]);
-    },
-  );
+        expect(outcome.ok).toBe(true);
+        // The direct call really happened, beside both canonical turns.
+        expect(stub.asked.filter((asked) => asked === "direct")).toHaveLength(1);
+        expect(stub.asked.filter((asked) => asked === "same")).toHaveLength(2);
+        // Two canonical records, and the direct call is in neither.
+        expect(session.model.turns).toHaveLength(2);
+        expect(session.model.turns.map((turn) => turn.text)).toEqual(["reply", "reply"]);
+        // Every live turn retired, including on the coroutine that also made a
+        // direct call — which had no live turn to leave behind.
+        expect(session.agent.turns).toEqual([]);
+      },
+    );
+  });
 
   it("P6: a refused publication leaves the turn neither retained nor mounted", function* () {
     const stub = createStub({ one: { deltas: ["reply"] } });
@@ -1858,27 +1981,32 @@ describe("P6 — only a canonical Prompt claims a record", () => {
 
   const endings: readonly ("failed" | "cancelled")[] = ["failed", "cancelled"];
   for (const ended of endings) {
-    entryCase(
-      `P6: a ${ended} canonical Prompt hands off exactly as a completed one does`,
-      function* (entry) {
-        // `association` is absent for every unsuccessful turn, so this is the
-        // case where nothing but the handle can say which live turn ended.
-        const stub = createStub({ one: { deltas: ["partial"], status: ended } });
-        yield* useStub(stub);
-        const holder = entry;
-        const session = opened(yield* start(holder, ONE_PROMPT));
-        const outcome = yield* session.join();
+    const name = `P6: a ${ended} canonical Prompt hands off exactly as a completed one does`;
+    it(name, function* () {
+      yield* captureReplEntry(
+        { owner: OWNER, name },
+        "agent-kernel",
+        INLINE_SOURCE_PATH,
+        function* (entry) {
+          // `association` is absent for every unsuccessful turn, so this is the
+          // case where nothing but the handle can say which live turn ended.
+          const stub = createStub({ one: { deltas: ["partial"], status: ended } });
+          yield* useStub(stub);
+          const holder = entry;
+          const session = opened(yield* start(holder, ONE_PROMPT));
+          const outcome = yield* session.join();
 
-        // Whether an unsuccessful turn also fails the document is the Prompt
-        // failure policy's business and not this row's. What this row holds is
-        // the handoff: the record was appended, and the live turn it began is
-        // gone — with no `association` to identify it by, only the handle.
-        expect(outcome).toBeDefined();
-        expect(session.model.turns).toHaveLength(1);
-        expect(session.model.turns[0]?.status).toBe(ended);
-        expect(session.agent.turns).toEqual([]);
-      },
-    );
+          // Whether an unsuccessful turn also fails the document is the Prompt
+          // failure policy's business and not this row's. What this row holds is
+          // the handoff: the record was appended, and the live turn it began is
+          // gone — with no `association` to identify it by, only the handle.
+          expect(outcome).toBeDefined();
+          expect(session.model.turns).toHaveLength(1);
+          expect(session.model.turns[0]?.status).toBe(ended);
+          expect(session.agent.turns).toEqual([]);
+        },
+      );
+    });
   }
 });
 
