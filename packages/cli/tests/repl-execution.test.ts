@@ -28,9 +28,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
-import { withFailureJournal } from "@executablemd/testing";
 import { partitionEntrySegments, ROOT_IMPORT } from "../src/repl/entries.ts";
-import { useTestDiagnostics } from "../src/test-diagnostics.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import type { DeliverySink } from "../src/stdout-delivery.ts";
 
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -237,93 +236,106 @@ function* readAll(holder: ReplExecution): Operation<DurableEvent[]> {
 
 const REFERENCE_PATH = join(REFERENCE_DIRECTORY, "entry.md");
 
+const OWNER = "packages/cli/tests/repl-execution.test.ts";
+const SUBMIT_SUITE = "REPL execution: submitting one entry";
+
 function captureReferenceEntry(
+  name: string,
   body: (holder: ReplExecution) => Operation<void>,
   sink: DeliverySink = process.stderr,
+  suite = SUBMIT_SUITE,
 ): Operation<void> {
-  return scoped(function* () {
-    const diagnostics = yield* useTestDiagnostics(sink);
-    const journal = diagnostics.execution("root", REFERENCE_PATH).journal(() => false);
-    yield* withFailureJournal(
-      {
-        ...journal,
-        *save(events) {
-          const partition = partitionEntrySegments(events);
-          if (!partition.ok) {
-            throw partition.error;
-          }
-          if (partition.value.length > 1) {
-            throw new Error("reference execution holds more than one admitted entry");
-          }
-          const [entry] = partition.value;
-          if (entry !== undefined) {
-            yield* journal.save(entry.events);
-          }
-        },
+  return captureTestJournal(
+    { owner: OWNER, suite, name },
+    REFERENCE_PATH,
+    (stream) => body({ id: "kf39sla2", stream }),
+    {
+      sink,
+      selectEvents(events) {
+        const partition = partitionEntrySegments(events);
+        if (!partition.ok) {
+          throw partition.error;
+        }
+        if (partition.value.length > 1) {
+          throw new Error("reference execution holds more than one admitted entry");
+        }
+        return partition.value[0]?.events ?? [];
       },
-      (stream) => body({ id: "kf39sla2", stream }),
-    );
-  });
+    },
+  );
+}
+
+function referenceCases(suite: string) {
+  return (name: string, body: (holder: ReplExecution) => Operation<void>): void => {
+    it(name, () => captureReferenceEntry(name, body, process.stderr, suite));
+  };
 }
 
 function admitReferenceEntry(
+  name: string,
   check?: (holder: ReplExecution) => Operation<void>,
   sink?: DeliverySink,
 ): Operation<void> {
-  return captureReferenceEntry(function* (holder) {
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+  return captureReferenceEntry(
+    name,
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    const question = yield* nextQuestion(session);
-    expect(question.message).toContain("Approve Ship the REPL?");
-    // The whole form the schema reads as, member for member: every field the
-    // drawer draws, with its annotations, its required marker and the values it
-    // accepts.
-    expect(question.form).toEqual({
-      title: undefined,
-      description: undefined,
-      condition: undefined,
-      fields: [
-        {
-          name: "decision",
-          title: undefined,
-          description: undefined,
-          choices: ["approve", "decline"],
-          minLength: undefined,
-          required: true,
-        },
-      ],
-    });
-    expect(session.model.entries[0]?.scope.elicitations).toEqual([]);
+      const question = yield* nextQuestion(session);
+      expect(question.message).toContain("Approve Ship the REPL?");
+      // The whole form the schema reads as, member for member: every field the
+      // drawer draws, with its annotations, its required marker and the values it
+      // accepts.
+      expect(question.form).toEqual({
+        title: undefined,
+        description: undefined,
+        condition: undefined,
+        fields: [
+          {
+            name: "decision",
+            title: undefined,
+            description: undefined,
+            choices: ["approve", "decline"],
+            minLength: undefined,
+            required: true,
+          },
+        ],
+      });
+      expect(session.model.entries[0]?.scope.elicitations).toEqual([]);
 
-    expect(question.submit({ decision: "approve" }).kind).toBe("answered");
-    yield* session.join();
+      expect(question.submit({ decision: "approve" }).kind).toBe("answered");
+      yield* session.join();
 
-    const entry = session.model.entries[0]?.scope;
-    if (entry === undefined) {
-      throw new Error("the entry was admitted");
-    }
-    expect(entry.source).toBe(source);
-    expect(entry.bindings.map((binding) => binding.name)).toContain("plan");
-    expect(entry.scopes.map((scope) => scope.key)).toEqual(["Checklist-1", "generated-1"]);
-    expect(entry.elicitations[0].answer).toEqual({ decision: "approve" });
-    expect(session.model.settled).toBe(true);
-    expect(session.model.terminal?.output).toContain("Decision: approve");
-    expect(session.overlay.output).toBe(session.model.terminal?.output);
-    if (check !== undefined) {
-      yield* check(holder);
-    }
-  }, sink);
+      const entry = session.model.entries[0]?.scope;
+      if (entry === undefined) {
+        throw new Error("the entry was admitted");
+      }
+      expect(entry.source).toBe(source);
+      expect(entry.bindings.map((binding) => binding.name)).toContain("plan");
+      expect(entry.scopes.map((scope) => scope.key)).toEqual(["Checklist-1", "generated-1"]);
+      expect(entry.elicitations[0].answer).toEqual({ decision: "approve" });
+      expect(session.model.settled).toBe(true);
+      expect(session.model.terminal?.output).toContain("Decision: approve");
+      expect(session.overlay.output).toBe(session.model.terminal?.output);
+      if (check !== undefined) {
+        yield* check(holder);
+      }
+    },
+    sink,
+  );
 }
 
-describe("REPL execution: submitting one entry", () => {
+describe(SUBMIT_SUITE, () => {
   beforeAll(() => useTempFileCompiler());
+  const referenceCase = referenceCases(SUBMIT_SUITE);
 
-  it("X1: admits the exact source, binds, generates, asks, and settles", () =>
-    admitReferenceEntry());
+  const admission = "X1: admits the exact source, binds, generates, asks, and settles";
+  it(admission, () => admitReferenceEntry(admission));
 
-  it("X1: the overlay reports its output as the document prints it", () =>
-    captureReferenceEntry(function* (holder) {
+  const overlay = "X1: the overlay reports its output as the document prints it";
+  it(overlay, () =>
+    captureReferenceEntry(overlay, function* (holder) {
       const source = yield* referenceSource();
       const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
@@ -354,9 +366,11 @@ describe("REPL execution: submitting one entry", () => {
 
       question.submit({ decision: "approve" });
       yield* session.join();
-    }));
+    }),
+  );
 
-  it("saves the joined reference entry only when its case fails after admission", function* () {
+  const witness = "saves the joined reference entry only when its case fails after admission";
+  it(witness, function* () {
     const directory = yield* useTempDirectory("xmd-repl-entry-journal-");
     const failed = join(directory, "failed");
     const passed = join(directory, "passed");
@@ -386,19 +400,23 @@ describe("REPL execution: submitting one entry", () => {
     try {
       yield* atArtifactRoot(
         failed,
-        admitReferenceEntry(function* (holder) {
-          recorded = yield* readAll(holder);
-          try {
-            expect(
-              recorded.some(
-                (event) => event.type === "yield" && event.description.name === ROOT_IMPORT,
-              ),
-            ).toBe(false);
-          } catch (error) {
-            assertionFailure = error;
-            throw error;
-          }
-        }, sink),
+        admitReferenceEntry(
+          witness,
+          function* (holder) {
+            recorded = yield* readAll(holder);
+            try {
+              expect(
+                recorded.some(
+                  (event) => event.type === "yield" && event.description.name === ROOT_IMPORT,
+                ),
+              ).toBe(false);
+            } catch (error) {
+              assertionFailure = error;
+              throw error;
+            }
+          },
+          sink,
+        ),
       );
     } catch (error) {
       caught = error;
@@ -417,14 +435,22 @@ describe("REPL execution: submitting one entry", () => {
     const invocations = yield* readdir(failed);
     expect(invocations).toHaveLength(1);
     const invocation = join(failed, invocations[0]);
-    expect(yield* readdir(invocation)).toEqual(["root-1.jsonl"]);
+    expect((yield* readdir(invocation)).sort()).toEqual(["root-1.case.json", "root-1.jsonl"]);
+    expect(JSON.parse(yield* readTextFile(join(invocation, "root-1.case.json")))).toEqual({
+      owner: OWNER,
+      suite: SUBMIT_SUITE,
+      name: witness,
+      kind: "root",
+      ordinal: 1,
+      source: "packages/cli/tests/fixtures/repl/entry.md",
+    });
     const journal = join(invocation, "root-1.jsonl");
     expect(yield* readRecords(journal)).toEqual(entry.events);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(`journal saved: ${journal} (root 1 `);
     expect(lines[0]).toContain("packages/cli/tests/fixtures/repl/entry.md)");
 
-    yield* atArtifactRoot(passed, admitReferenceEntry(undefined, sink));
+    yield* atArtifactRoot(passed, admitReferenceEntry(witness, undefined, sink));
     expect(yield* exists(passed)).toBe(false);
 
     const beforeAdmission = new Error("pre-admission failure");
@@ -432,10 +458,14 @@ describe("REPL execution: submitting one entry", () => {
     try {
       yield* atArtifactRoot(
         empty,
-        captureReferenceEntry(function* (holder) {
-          expect(yield* readAll(holder)).toEqual([]);
-          throw beforeAdmission;
-        }, sink),
+        captureReferenceEntry(
+          witness,
+          function* (holder) {
+            expect(yield* readAll(holder)).toEqual([]);
+            throw beforeAdmission;
+          },
+          sink,
+        ),
       );
     } catch (error) {
       emptyFailure = error;
@@ -445,62 +475,68 @@ describe("REPL execution: submitting one entry", () => {
     expect(lines).toHaveLength(1);
   });
 
-  it("X1: the generated fragment is shown before it is admitted, and follows the binding", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
-    (yield* nextQuestion(session)).submit({ decision: "decline" });
-    yield* session.join();
+  referenceCase(
+    "X1: the generated fragment is shown before it is admitted, and follows the binding",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+      (yield* nextQuestion(session)).submit({ decision: "decline" });
+      yield* session.join();
 
-    const generated = session.model.entries[0]?.scope.generated[0];
-    const fragment = session.model.entries[0]?.scope.scopes.find(
-      (scope) => scope.kind === "generated",
-    );
-    expect(generated?.decision).toBe("admitted");
-    // The value the durable evaluation published is what the fragment says,
-    // which is what makes it deterministic rather than merely repeatable.
-    expect(fragment?.source).toBe('<Json value={{"title":"Ship the REPL","steps":2}} />');
-    expect(session.model.terminal?.output).toContain("Decision: decline");
-  });
+      const generated = session.model.entries[0]?.scope.generated[0];
+      const fragment = session.model.entries[0]?.scope.scopes.find(
+        (scope) => scope.kind === "generated",
+      );
+      expect(generated?.decision).toBe("admitted");
+      // The value the durable evaluation published is what the fragment says,
+      // which is what makes it deterministic rather than merely repeatable.
+      expect(fragment?.source).toBe('<Json value={{"title":"Ship the REPL","steps":2}} />');
+      expect(session.model.terminal?.output).toContain("Decision: decline");
+    },
+  );
 
-  it("X1: shows the generated source before admitting it, then admits and evaluates it", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
-    const fragment = '<Json value={{"title":"Ship the REPL","steps":2}} />';
+  referenceCase(
+    "X1: shows the generated source before admitting it, then admits and evaluates it",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+      const fragment = '<Json value={{"title":"Ship the REPL","steps":2}} />';
 
-    // Stepped rather than inspected at the end: a terminal model shows that
-    // both things happened and says nothing about which came first. Pausing at
-    // each boundary is what lets the order itself be observed.
-    controlling(session).pause();
-    let shownBeforeAdmission = false;
-    let admitted = false;
-    for (let step = 0; step < 500 && session.live && !admitted; step++) {
-      yield* pausedOrDone(session);
-      if (!session.live) {
-        break;
-      }
-      admitted = counted(yield* readAll(holder), "generated_xmd") > 0;
-      if (!admitted && session.overlay.output.includes(fragment)) {
-        shownBeforeAdmission = true;
-      }
-      controlling(session).resume();
+      // Stepped rather than inspected at the end: a terminal model shows that
+      // both things happened and says nothing about which came first. Pausing at
+      // each boundary is what lets the order itself be observed.
       controlling(session).pause();
-    }
+      let shownBeforeAdmission = false;
+      let admitted = false;
+      for (let step = 0; step < 500 && session.live && !admitted; step++) {
+        yield* pausedOrDone(session);
+        if (!session.live) {
+          break;
+        }
+        admitted = counted(yield* readAll(holder), "generated_xmd") > 0;
+        if (!admitted && session.overlay.output.includes(fragment)) {
+          shownBeforeAdmission = true;
+        }
+        controlling(session).resume();
+        controlling(session).pause();
+      }
 
-    expect(shownBeforeAdmission).toBe(true);
-    expect(admitted).toBe(true);
+      expect(shownBeforeAdmission).toBe(true);
+      expect(admitted).toBe(true);
 
-    controlling(session).resume();
-    (yield* nextQuestion(session)).submit({ decision: "approve" });
-    yield* session.join();
+      controlling(session).resume();
+      (yield* nextQuestion(session)).submit({ decision: "approve" });
+      yield* session.join();
 
-    // The admitted fragment then ran where it was written: its rendering
-    // follows the source it was rendered from.
-    const settled = session.model.terminal?.output ?? "";
-    expect(settled.indexOf(fragment)).toBeGreaterThan(-1);
-    expect(settled.indexOf('"title": "Ship the REPL"')).toBeGreaterThan(settled.indexOf(fragment));
-  });
+      // The admitted fragment then ran where it was written: its rendering
+      // follows the source it was rendered from.
+      const settled = session.model.terminal?.output ?? "";
+      expect(settled.indexOf(fragment)).toBeGreaterThan(-1);
+      expect(settled.indexOf('"title": "Ship the REPL"')).toBeGreaterThan(
+        settled.indexOf(fragment),
+      );
+    },
+  );
 
   it("X1: an entry this environment cannot run leaves the history empty", function* () {
     const holder = execution();
@@ -515,31 +551,33 @@ describe("REPL execution: submitting one entry", () => {
     expect(yield* holder.stream.readAll()).toEqual([]);
   });
 
-  it("X1: a choice the form does not offer answers nothing and leaves the question open", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+  referenceCase(
+    "X1: a choice the form does not offer answers nothing and leaves the question open",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    const question = yield* nextQuestion(session);
-    // Not an offered value, so the schema rejects it: the question stays open and
-    // nothing is recorded.
-    expect(question.submit({ decision: "maybe" }).kind).toBe("invalid");
-    yield* sleep(10);
+      const question = yield* nextQuestion(session);
+      // Not an offered value, so the schema rejects it: the question stays open and
+      // nothing is recorded.
+      expect(question.submit({ decision: "maybe" }).kind).toBe("invalid");
+      yield* sleep(10);
 
-    // An incomplete interaction, not a rejected answer. The provider never
-    // returned, so there is nothing for core to judge and nothing to record.
-    // The other case — a provider that really hands back a value the schema
-    // rejects — settles the durable operation `err` with no answer, and E1
-    // proves that in `packages/core/tests/elicit-component.test.ts`. This case
-    // does not prove that one.
-    expect(session.elicitation.pending).toBe(question);
-    expect(counted(yield* readAll(holder), "elicit")).toBe(0);
-    expect(session.model.settled).toBe(false);
+      // An incomplete interaction, not a rejected answer. The provider never
+      // returned, so there is nothing for core to judge and nothing to record.
+      // The other case — a provider that really hands back a value the schema
+      // rejects — settles the durable operation `err` with no answer, and E1
+      // proves that in `packages/core/tests/elicit-component.test.ts`. This case
+      // does not prove that one.
+      expect(session.elicitation.pending).toBe(question);
+      expect(counted(yield* readAll(holder), "elicit")).toBe(0);
+      expect(session.model.settled).toBe(false);
 
-    question.submit({ decision: "approve" });
-    yield* session.join();
-    expect(counted(yield* readAll(holder), "elicit")).toBe(1);
-  });
+      question.submit({ decision: "approve" });
+      yield* session.join();
+      expect(counted(yield* readAll(holder), "elicit")).toBe(1);
+    },
+  );
 
   it("X1: an entry is refused while the entry before it has not settled", function* () {
     // The reference history without its root close: an entry that never reached
@@ -560,6 +598,7 @@ describe("REPL execution: submitting one entry", () => {
 
 describe("REPL execution: reopening one history", () => {
   beforeAll(() => useTempFileCompiler());
+  const referenceCase = referenceCases("REPL execution: reopening one history");
 
   it("X2: replays what was recorded and goes live at the first unrecorded step", function* () {
     const settled = yield* referenceEvents();
@@ -592,26 +631,28 @@ describe("REPL execution: reopening one history", () => {
     expect(session.model.terminal?.output).toContain("Decision: approve");
   });
 
-  it("X2: the same counters do register the work a first run really performs", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const performed = yield* countPerformed();
-    const asked = yield* countAsked();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+  referenceCase(
+    "X2: the same counters do register the work a first run really performs",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const performed = yield* countPerformed();
+      const asked = yield* countAsked();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    (yield* nextQuestion(session)).submit({ decision: "approve" });
-    yield* session.join();
+      (yield* nextQuestion(session)).submit({ decision: "approve" });
+      yield* session.join();
 
-    // The positive control for every count the negatives rely on. Without it, a
-    // counter that never increments for any reason at all would read as proof
-    // of replay, or of a provider that was never reached.
-    expect(performed.reads.filter((path) => path.endsWith("Checklist.md")).length).toBeGreaterThan(
-      0,
-    );
-    expect(performed.compiles).toBeGreaterThan(0);
-    expect(asked.calls).toBe(1);
-    expect(session.elicitation.asked).toBe(1);
-  });
+      // The positive control for every count the negatives rely on. Without it, a
+      // counter that never increments for any reason at all would read as proof
+      // of replay, or of a provider that was never reached.
+      expect(
+        performed.reads.filter((path) => path.endsWith("Checklist.md")).length,
+      ).toBeGreaterThan(0);
+      expect(performed.compiles).toBeGreaterThan(0);
+      expect(asked.calls).toBe(1);
+      expect(session.elicitation.asked).toBe(1);
+    },
+  );
 
   it("X2: a recorded answer is restored without the provider being reached", function* () {
     const settled = yield* referenceEvents();
@@ -773,79 +814,83 @@ describe("REPL execution: reopening one history", () => {
 
 describe("REPL execution: pausing expansion", () => {
   beforeAll(() => useTempFileCompiler());
+  const referenceCase = referenceCases("REPL execution: pausing expansion");
 
-  it("P1: stops at every boundary it crosses and continues past each one", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+  referenceCase(
+    "P1: stops at every boundary it crosses and continues past each one",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    // Held for the length of the test. The session stops *offering* the
-    // capability once nothing is expanding, which is what the cold control
-    // below is about; the controller this run owned is still the thing that
-    // released its holds.
-    const controller = controlling(session);
-    controller.pause();
-    let stops = 0;
-    while (session.live && stops < 500) {
-      yield* pausedOrDone(session);
-      if (!session.live) {
-        break;
-      }
-      expect(session.expansion.state).toBe("paused");
-      stops++;
-      controller.resume();
-      // Re-armed in the same turn as the release, so the continuation this
-      // released stops at the next boundary rather than running to the end.
+      // Held for the length of the test. The session stops *offering* the
+      // capability once nothing is expanding, which is what the cold control
+      // below is about; the controller this run owned is still the thing that
+      // released its holds.
+      const controller = controlling(session);
       controller.pause();
-    }
-    controller.resume();
-    yield* session.join();
+      let stops = 0;
+      while (session.live && stops < 500) {
+        yield* pausedOrDone(session);
+        if (!session.live) {
+          break;
+        }
+        expect(session.expansion.state).toBe("paused");
+        stops++;
+        controller.resume();
+        // Re-armed in the same turn as the release, so the continuation this
+        // released stops at the next boundary rather than running to the end.
+        controller.pause();
+      }
+      controller.resume();
+      yield* session.join();
 
-    expect(stops).toBeGreaterThan(5);
-    expect(controller.released).toBe(stops);
-    expect(session.model.settled).toBe(true);
-    expect(session.model.terminal?.output).toContain("Decision: approve");
-  });
+      expect(stops).toBeGreaterThan(5);
+      expect(controller.released).toBe(stops);
+      expect(session.model.settled).toBe(true);
+      expect(session.model.terminal?.output).toContain("Decision: approve");
+    },
+  );
 
-  it("P1: the Journal advances after pause is requested and before it takes effect", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
-    const controller = controlling(session);
+  referenceCase(
+    "P1: the Journal advances after pause is requested and before it takes effect",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+      const controller = controlling(session);
 
-    // A question is work that has already started: the walk is suspended
-    // inside the provider, not held by the controller, so requesting a pause
-    // here cannot take effect until that operation finishes.
-    const question = yield* nextQuestion(session);
-    const before = (yield* readAll(holder)).length;
+      // A question is work that has already started: the walk is suspended
+      // inside the provider, not held by the controller, so requesting a pause
+      // here cannot take effect until that operation finishes.
+      const question = yield* nextQuestion(session);
+      const before = (yield* readAll(holder)).length;
 
-    controller.pause();
-    expect(session.expansion.state).toBe("pausing");
+      controller.pause();
+      expect(session.expansion.state).toBe("pausing");
 
-    // Answering lets the already-started operation settle. Its record reaches
-    // the Journal while the pause request is outstanding, which is the whole
-    // point: the expansion position and the Journal head are two positions.
-    question.submit({ decision: "approve" });
-    yield* pausedOrDone(session);
+      // Answering lets the already-started operation settle. Its record reaches
+      // the Journal while the pause request is outstanding, which is the whole
+      // point: the expansion position and the Journal head are two positions.
+      question.submit({ decision: "approve" });
+      yield* pausedOrDone(session);
 
-    const atPause = (yield* readAll(holder)).length;
-    expect(session.expansion.state).toBe("paused");
-    expect(atPause).toBeGreaterThan(before);
+      const atPause = (yield* readAll(holder)).length;
+      expect(session.expansion.state).toBe("paused");
+      expect(atPause).toBeGreaterThan(before);
 
-    // And once every walk is satisfied it goes no farther on its own.
-    yield* sleep(25);
-    expect((yield* readAll(holder)).length).toBe(atPause);
-    expect(session.expansion.state).toBe("paused");
+      // And once every walk is satisfied it goes no farther on its own.
+      yield* sleep(25);
+      expect((yield* readAll(holder)).length).toBe(atPause);
+      expect(session.expansion.state).toBe("paused");
 
-    // Only Continue moves it, and then it finishes.
-    controller.resume();
-    yield* session.join();
-    expect(session.model.settled).toBe(true);
-    expect((yield* readAll(holder)).length).toBeGreaterThan(atPause);
-  });
+      // Only Continue moves it, and then it finishes.
+      controller.resume();
+      yield* session.join();
+      expect(session.model.settled).toBe(true);
+      expect((yield* readAll(holder)).length).toBeGreaterThan(atPause);
+    },
+  );
 
-  it("P1: continuing twice releases nothing the second time", function* () {
-    const holder = execution();
+  referenceCase("P1: continuing twice releases nothing the second time", function* (holder) {
     const source = yield* referenceSource();
     const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
@@ -863,28 +908,29 @@ describe("REPL execution: pausing expansion", () => {
     yield* session.join();
   });
 
-  it("P1: a paused expansion is stopped, not cancelled, and the run is still there", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+  referenceCase(
+    "P1: a paused expansion is stopped, not cancelled, and the run is still there",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    controlling(session).pause();
-    yield* pausedOrDone(session);
-    const frozen = (yield* readAll(holder)).length;
-    yield* sleep(25);
+      controlling(session).pause();
+      yield* pausedOrDone(session);
+      const frozen = (yield* readAll(holder)).length;
+      yield* sleep(25);
 
-    expect(session.expansion.state).toBe("paused");
-    expect(session.live).toBe(true);
-    expect((yield* readAll(holder)).length).toBe(frozen);
+      expect(session.expansion.state).toBe("paused");
+      expect(session.live).toBe(true);
+      expect((yield* readAll(holder)).length).toBe(frozen);
 
-    controlling(session).resume();
-    (yield* nextQuestion(session)).submit({ decision: "approve" });
-    yield* session.join();
-    expect(session.model.settled).toBe(true);
-  });
+      controlling(session).resume();
+      (yield* nextQuestion(session)).submit({ decision: "approve" });
+      yield* session.join();
+      expect(session.model.settled).toBe(true);
+    },
+  );
 
-  it("P1: tearing the owner down releases nothing that was held", function* () {
-    const holder = execution();
+  referenceCase("P1: tearing the owner down releases nothing that was held", function* (holder) {
     const source = yield* referenceSource();
     let held = -1;
 
@@ -929,6 +975,7 @@ describe("REPL execution: pausing expansion", () => {
 
 describe("REPL execution: the boundary inventory", () => {
   beforeAll(() => useTempFileCompiler());
+  const referenceCase = referenceCases("REPL execution: the boundary inventory");
 
   it("P1: every member of every wrapped Api is a walk, a gate, or declared not to be one", function* () {
     const partitioned = (partition: BoundaryPartition): string[] =>
@@ -939,36 +986,38 @@ describe("REPL execution: the boundary inventory", () => {
     expect(partitioned(OUTPUT_BOUNDARIES)).toEqual(Object.keys(DocumentOutput.operations).sort());
   });
 
-  it("P1: the reference entry crosses the boundaries this controller accounts for", function* () {
-    const holder = execution();
-    const source = yield* referenceSource();
-    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
-    // The controller, not a snapshot of its crossings: `crossings` answers
-    // with what has been crossed *so far*, and so far is nothing yet.
-    const controller = controlling(session);
-    (yield* nextQuestion(session)).submit({ decision: "approve" });
-    yield* session.join();
-    const crossings = controller.crossings;
+  referenceCase(
+    "P1: the reference entry crosses the boundaries this controller accounts for",
+    function* (holder) {
+      const source = yield* referenceSource();
+      const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+      // The controller, not a snapshot of its crossings: `crossings` answers
+      // with what has been crossed *so far*, and so far is nothing yet.
+      const controller = controlling(session);
+      (yield* nextQuestion(session)).submit({ decision: "approve" });
+      yield* session.join();
+      const crossings = controller.crossings;
 
-    const controlled = [
-      ...COMPONENT_BOUNDARIES.walks,
-      ...COMPONENT_BOUNDARIES.gates,
-      ...EXECUTION_BOUNDARIES.walks,
-      ...OUTPUT_BOUNDARIES.gates,
-      HOST_WALK,
-    ];
-    const crossed = [...crossings.keys()].sort();
-    for (const boundary of crossed) {
-      expect(controlled).toContain(boundary);
-    }
-    // The ones this document is written to reach. A boundary disappearing
-    // from it is what this list is here to notice.
-    expect(crossed).toContain("document");
-    expect(crossed).toContain("importComponent");
-    expect(crossed).toContain("applyModifiers");
-    expect(crossed).toContain("output");
-    expect(crossings.get("document")).toBe(1);
-  });
+      const controlled = [
+        ...COMPONENT_BOUNDARIES.walks,
+        ...COMPONENT_BOUNDARIES.gates,
+        ...EXECUTION_BOUNDARIES.walks,
+        ...OUTPUT_BOUNDARIES.gates,
+        HOST_WALK,
+      ];
+      const crossed = [...crossings.keys()].sort();
+      for (const boundary of crossed) {
+        expect(controlled).toContain(boundary);
+      }
+      // The ones this document is written to reach. A boundary disappearing
+      // from it is what this list is here to notice.
+      expect(crossed).toContain("document");
+      expect(crossed).toContain("importComponent");
+      expect(crossed).toContain("applyModifiers");
+      expect(crossed).toContain("output");
+      expect(crossings.get("document")).toBe(1);
+    },
+  );
 });
 
 describe("REPL execution: one execution's file", () => {

@@ -21,6 +21,9 @@ import { Sample } from "../src/sample-api.ts";
 import { readTextFile } from "@effectionx/fs";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/if.test.ts");
 
 interface IfRun {
   segments: Segment[];
@@ -478,41 +481,47 @@ describe("Tier IF — document execution", () => {
     expect(evaluated).not.toContain("UNSELECTED_RAN");
   });
 
-  it("IF40: an effect in the unselected branch never happens", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "test.md": [
-        "<If condition={false}>",
-        "```js eval",
-        "throw new Error('UNSELECTED_EFFECT');",
-        "```",
-        "<Else>selected</Else>",
-        "</If>",
-      ].join("\n"),
-    });
-    yield* useEchoExec();
+  journalCase(
+    "IF40: an effect in the unselected branch never happens",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "test.md": [
+          "<If condition={false}>",
+          "```js eval",
+          "throw new Error('UNSELECTED_EFFECT');",
+          "```",
+          "<Else>selected</Else>",
+          "</If>",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+      const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    expect(output).toContain("selected");
-    expect(output).not.toContain("UNSELECTED_EFFECT");
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).toContain("selected");
+      expect(output).not.toContain("UNSELECTED_EFFECT");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
-  it("IF41: a component in the unselected branch is never imported", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "components/Boom.md": "```js eval\noutput('BOOM_RAN');\n```\n",
-      "test.md": "<If condition={false}><Boom /><Else>alt</Else></If>",
-    });
-    yield* useEchoExec();
+  journalCase(
+    "IF41: a component in the unselected branch is never imported",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "components/Boom.md": "```js eval\noutput('BOOM_RAN');\n```\n",
+        "test.md": "<If condition={false}><Boom /><Else>alt</Else></If>",
+      });
+      yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+      const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    expect(output).toContain("alt");
-    expect(output).not.toContain("BOOM_RAN");
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).toContain("alt");
+      expect(output).not.toContain("BOOM_RAN");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
   it("IF42: <If> selects the same branch from a restored binding on partial replay", function* () {
     const REPLAY_DOC = [
@@ -561,27 +570,30 @@ describe("Tier IF — document execution", () => {
     expect(evaluated).not.toContain("CLEAN_RAN");
   });
 
-  it("IF43: an <If> projected through <Content /> resolves the caller's binding", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "components/Wrap.md": "<Content />",
-      "test.md": [
-        "```js eval",
-        "const ready = false;",
-        "```",
-        "<Wrap>",
-        "<If condition={ready}>READY<Else>WAITING</Else></If>",
-        "</Wrap>",
-      ].join("\n"),
-    });
-    yield* useEchoExec();
+  journalCase(
+    "IF43: an <If> projected through <Content /> resolves the caller's binding",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "components/Wrap.md": "<Content />",
+        "test.md": [
+          "```js eval",
+          "const ready = false;",
+          "```",
+          "<Wrap>",
+          "<If condition={ready}>READY<Else>WAITING</Else></If>",
+          "</Wrap>",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+      const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    expect(output).toContain("WAITING");
-    expect(output).not.toContain("READY");
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).toContain("WAITING");
+      expect(output).not.toContain("READY");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 });
 
 /**

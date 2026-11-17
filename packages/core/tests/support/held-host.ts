@@ -17,13 +17,15 @@
 
 import { resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 
 import { executeInstalled } from "../../host.ts";
 import type { ExecutionInstallation, HostExecution } from "../../host.ts";
 import { retainedSource } from "../../src/root-source.ts";
 import type { Json } from "../../src/types.ts";
+import { it } from "@executablemd/test-support/bdd";
+import { captureTestJournal, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false } as const;
 
@@ -33,6 +35,16 @@ const HOLD_COMPONENT = "Held";
 /** The root every held execution runs, so a reopening binds to the same text. */
 export const HELD_ROOT_PATH = "host/held.md";
 const HELD_ROOT_SOURCE = `<${HOLD_COMPONENT} />\n`;
+
+export function heldHostCases(owner: string) {
+  return (
+    name: string,
+    body: (stream: InMemoryStream) => Operation<void>,
+    source = HELD_ROOT_PATH,
+  ): void => {
+    it(name, () => captureTestJournal({ owner, name }, source, body));
+  };
+}
 
 /** The document a held execution runs, for a case that needs its own. */
 export interface HeldRoot {
@@ -112,8 +124,8 @@ export function useHeldHost(request: HeldHostRequest = {}): Operation<HeldHost> 
         },
       ],
     };
-    const stream = request.stream ?? new InMemoryStream();
     const document = request.root ?? { path: HELD_ROOT_PATH, source: HELD_ROOT_SOURCE };
+    const stream = request.stream ?? (yield* useJournalStream(document.path));
     const execution = yield* executeInstalled(
       { ...retainedSource(document.path, document.source), stream },
       [...(request.installations ?? []), installation],

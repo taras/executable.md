@@ -23,6 +23,9 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { execute, executeInstalled } from "../src/execute.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/let.test.ts");
 import type { HostExecution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
 import { collect } from "../src/collect.ts";
@@ -454,46 +457,49 @@ describe("Tier LET — failure and overwrite", () => {
 describe("Tier LET — a whole document", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("LET10: a direct binding reaches prose, an expression prop, and a later eval", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": [
-        "```ts eval",
-        'const settings = { title: "Release" };',
-        "```",
-        "",
-        '<Let as="alias" value={settings} />',
-        "",
-        '<Let as="title" value={settings.title} />',
-        "",
-        "Prose reads {title}.",
-        "",
-        "<Note label={alias.title} />",
-        "",
-        "```ts eval",
-        'return alias === settings ? "identical" : "different";',
-        "```",
-      ].join("\n"),
-      "components/Note.md": [
-        "---",
-        "props:",
-        "  type: object",
-        "  properties:",
-        "    label:",
-        "      type: string",
-        "  additionalProperties: false",
-        "---",
-        "",
-        "Note says {props.label}.",
-      ].join("\n"),
-    });
+  journalCase(
+    "LET10: a direct binding reaches prose, an expression prop, and a later eval",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": [
+          "```ts eval",
+          'const settings = { title: "Release" };',
+          "```",
+          "",
+          '<Let as="alias" value={settings} />',
+          "",
+          '<Let as="title" value={settings.title} />',
+          "",
+          "Prose reads {title}.",
+          "",
+          "<Note label={alias.title} />",
+          "",
+          "```ts eval",
+          'return alias === settings ? "identical" : "different";',
+          "```",
+        ].join("\n"),
+        "components/Note.md": [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    label:",
+          "      type: string",
+          "  additionalProperties: false",
+          "---",
+          "",
+          "Note says {props.label}.",
+        ].join("\n"),
+      });
 
-    const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+      const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
 
-    expect(output).toContain("Prose reads Release.");
-    expect(output).toContain("Note says Release.");
-    expect(output).toContain("identical");
-  });
+      expect(output).toContain("Prose reads Release.");
+      expect(output).toContain("Note says Release.");
+      expect(output).toContain("identical");
+    },
+  );
 
   it("LET11: a partial replay rebinds by reference and records nothing of its own", function* () {
     const document = [
@@ -542,19 +548,22 @@ describe("Tier LET — a whole document", () => {
     ]);
   });
 
-  it("LET12: Let is the syntax; Capture is an ordinary component", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": ['<Let as="bound" value={1} />', "", "<Capture />"].join("\n"),
-      "components/Let.md": "A REPOSITORY FILE RAN\n",
-      "components/Capture.md": "an ordinary component ran.\n",
-    });
+  journalCase(
+    "LET12: Let is the syntax; Capture is an ordinary component",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({
+        "README.md": ['<Let as="bound" value={1} />', "", "<Capture />"].join("\n"),
+        "components/Let.md": "A REPOSITORY FILE RAN\n",
+        "components/Capture.md": "an ordinary component ran.\n",
+      });
 
-    const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+      const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
 
-    expect(output).toContain("an ordinary component ran.");
-    expect(output).not.toContain("A REPOSITORY FILE RAN");
-  });
+      expect(output).toContain("an ordinary component ran.");
+      expect(output).not.toContain("A REPOSITORY FILE RAN");
+    },
+  );
 });
 
 /**
@@ -729,29 +738,32 @@ describe("Tier LET — the ordinary inventory, and which values are eligible", (
     expect(stream.snapshot().map(kindOf)).toEqual(["import_component", "eval", "close"]);
   });
 
-  it("C7: the eligible data is the JSON subset of the same document's root", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": EVERY_KIND });
+  journalCase(
+    "C7: the eligible data is the JSON subset of the same document's root",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({ "README.md": EVERY_KIND });
 
-    const execution = yield* executeInstalled({ path: "README.md", stream }, []);
-    const settled = yield* execution;
-    expect(settled.ok).toBe(true);
+      const execution = yield* executeInstalled({ path: "README.md", stream }, []);
+      const settled = yield* execution;
+      expect(settled.ok).toBe(true);
 
-    // The live bindings are unchanged — the document read every one of them
-    // above — and what crosses is decided by one strict JSON walk rather than
-    // by which construct produced the value.
-    const held = yield* readBindings(execution);
-    expect(held["nested"]).toEqual({ list: [1, { deep: true }], nothing: null });
-    expect(held["nothing"]).toBe(null);
-    expect(held["rendered"]).toBe("plain text");
-    // Omitted whole, never coerced: a value that is not plain JSON, a cycle, a
-    // sparse hole, a non-finite number, `undefined` and a function.
-    for (const omitted of ["notPlain", "cycle", "sparse", "infinite", "absent", "work"]) {
-      expect(Object.hasOwn(held, omitted)).toBe(false);
-    }
-    // `props` is each execution's own namespace and never crosses.
-    expect(Object.hasOwn(held, "props")).toBe(false);
-  });
+      // The live bindings are unchanged — the document read every one of them
+      // above — and what crosses is decided by one strict JSON walk rather than
+      // by which construct produced the value.
+      const held = yield* readBindings(execution);
+      expect(held["nested"]).toEqual({ list: [1, { deep: true }], nothing: null });
+      expect(held["nothing"]).toBe(null);
+      expect(held["rendered"]).toBe("plain text");
+      // Omitted whole, never coerced: a value that is not plain JSON, a cycle, a
+      // sparse hole, a non-finite number, `undefined` and a function.
+      for (const omitted of ["notPlain", "cycle", "sparse", "infinite", "absent", "work"]) {
+        expect(Object.hasOwn(held, omitted)).toBe(false);
+      }
+      // `props` is each execution's own namespace and never crosses.
+      expect(Object.hasOwn(held, "props")).toBe(false);
+    },
+  );
 });
 describe("Tier LET — the computed root data an execution hands back", () => {
   beforeAll(() => useTempFileCompiler());

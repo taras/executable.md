@@ -16,7 +16,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { execute, useTempFileCompiler } from "@executablemd/core";
 import { installAgentComponents } from "@executablemd/agent/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
@@ -44,109 +44,94 @@ function* refuseCommand(): Operation<void> {
   });
 }
 
-function* runDoc(
+const OWNER = "packages/test-agent/tests/command-lazy.test.ts";
+const SUITE = "Tier XL — lazy command resolution";
+
+function* checkDocument(
+  name: string,
   doc: string,
   install: () => Operation<void>,
-): Operation<{ output: string; results: readonly TestResult[] }> {
+  check: (run: { output: string; results: readonly TestResult[] }) => void,
+  scenario = false,
+): Operation<void> {
   const dir = path.join(os.tmpdir(), `xmd-xl-${randomUUID()}`);
-  yield* ensureDir(dir);
-  return yield* scoped(function* () {
-    yield* ensure(() => rm(dir, { recursive: true, force: true }));
-    yield* writeTextFile(path.join(dir, "doc.md"), doc);
-
-    return yield* scoped(function* () {
-      const testing = yield* useTesting();
-      yield* install();
-      yield* installTestAgentComponents();
-      yield* installAgentComponents();
-      const execution = yield* execute({
-        path: path.join(dir, "doc.md"),
-        stream: new InMemoryStream(),
-      });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        next = yield* subscription.next();
+  const docPath = path.join(dir, "doc.md");
+  yield* captureTestJournal({ owner: OWNER, suite: SUITE, name }, docPath, function* (stream) {
+    const result = yield* scoped(function* () {
+      yield* ensureDir(dir);
+      yield* ensure(() => rm(dir, { recursive: true, force: true }));
+      yield* writeTextFile(docPath, doc);
+      if (scenario) {
+        yield* writeTextFile(
+          path.join(dir, "agent.md"),
+          '<WhenPrompt template="hi" />\n\nhello there\n',
+        );
       }
-      return { output: next.value, results: yield* testing.results };
+      return yield* scoped(function* () {
+        const testing = yield* useTesting();
+        yield* install();
+        yield* installTestAgentComponents();
+        yield* installAgentComponents();
+        const execution = yield* execute({ path: docPath, stream });
+        const subscription = yield* execution.output;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          next = yield* subscription.next();
+        }
+        if (scenario) {
+          yield* execution;
+        }
+        return { output: next.value, results: yield* testing.results };
+      });
     });
+    check(result);
   });
 }
 
-describe(
-  "Tier XL — lazy command resolution",
-  { sanitizeOps: false, sanitizeResources: false },
-  () => {
-    beforeAll(() => useTempFileCompiler());
+describe(SUITE, { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeAll(() => useTempFileCompiler());
 
-    it("XL1: installing the test-agent components does not ask for the command", function* () {
-      yield* refuseCommand();
-      yield* installTestAgentComponents();
-    });
+  it("XL1: installing the test-agent components does not ask for the command", function* () {
+    yield* refuseCommand();
+    yield* installTestAgentComponents();
+  });
 
-    it("XL2: `xmd test` on a document without <TestAgent> runs where command throws", function* () {
-      const { output } = yield* runDoc("# plain\n\nno agents here\n", refuseCommand);
+  const withoutAgent =
+    "XL2: `xmd test` on a document without <TestAgent> runs where command throws";
+  it(withoutAgent, () =>
+    checkDocument(withoutAgent, "# plain\n\nno agents here\n", refuseCommand, ({ output }) => {
       expect(output).toContain("no agents here");
       expect(output).not.toContain("ERROR");
-    });
+    }),
+  );
 
-    it("XL3: a document using <TestAgent> asks for command(['test-agent'])", function* () {
-      const asked: Asked = { calls: [] };
-      const doc = [
-        "<TestAgent>",
-        '  <TestAgent.Scenario src="./agent.md" />',
-        '  <Test name="asks once">',
-        '    <Prompt text="hi" />',
-        "  </Test>",
-        "</TestAgent>",
-        "",
-      ].join("\n");
-      const { results } = yield* runDocWithScenario(doc, asked);
-      expect(results.map(({ status, error }) => ({ status, error }))).toEqual([
-        { status: "pass", error: undefined },
-      ]);
-      // One provider per isolation boundary — the <TestAgent> scope and each
-      // <Test> lease — so the count tracks boundaries, not documents. What
-      // matters is that every request is for the worker subcommand and nothing
-      // else, and that each one appends it exactly once.
-      expect(asked.calls.length).toBeGreaterThan(0);
-      for (const args of asked.calls) {
-        expect(args).toEqual(["test-agent"]);
-      }
-    });
-  },
-);
-
-function* runDocWithScenario(
-  doc: string,
-  asked: Asked,
-): Operation<{ results: readonly TestResult[] }> {
-  const dir = path.join(os.tmpdir(), `xmd-xl-${randomUUID()}`);
-  yield* ensureDir(dir);
-  return yield* scoped(function* () {
-    yield* ensure(() => rm(dir, { recursive: true, force: true }));
-    yield* writeTextFile(path.join(dir, "doc.md"), doc);
-    yield* writeTextFile(
-      path.join(dir, "agent.md"),
-      '<WhenPrompt template="hi" />\n\nhello there\n',
+  const withAgent = "XL3: a document using <TestAgent> asks for command(['test-agent'])";
+  it(withAgent, function* () {
+    const asked: Asked = { calls: [] };
+    const doc = [
+      "<TestAgent>",
+      '  <TestAgent.Scenario src="./agent.md" />',
+      '  <Test name="asks once">',
+      '    <Prompt text="hi" />',
+      "  </Test>",
+      "</TestAgent>",
+      "",
+    ].join("\n");
+    yield* checkDocument(
+      withAgent,
+      doc,
+      () => recordCommand(asked),
+      ({ results }) => {
+        expect(results.map(({ status, error }) => ({ status, error }))).toEqual([
+          { status: "pass", error: undefined },
+        ]);
+        // Each isolation boundary requests the worker subcommand once.
+        expect(asked.calls.length).toBeGreaterThan(0);
+        for (const args of asked.calls) {
+          expect(args).toEqual(["test-agent"]);
+        }
+      },
+      true,
     );
-
-    return yield* scoped(function* () {
-      const testing = yield* useTesting();
-      yield* recordCommand(asked);
-      yield* installTestAgentComponents();
-      yield* installAgentComponents();
-      const execution = yield* execute({
-        path: path.join(dir, "doc.md"),
-        stream: new InMemoryStream(),
-      });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        next = yield* subscription.next();
-      }
-      yield* execution;
-      return { results: yield* testing.results };
-    });
   });
-}
+});

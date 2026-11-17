@@ -1,6 +1,5 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { scanSegments } from "../src/scanner.ts";
 import { SOURCE_POSITION_FIELD, sourceDescription } from "../src/source-position.ts";
@@ -9,6 +8,9 @@ import { registerComponents } from "../src/components/registration.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { ComponentElement, SourcePosition } from "../src/types.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/source-position.test.ts");
 
 function componentsOf(segments: ReturnType<typeof scanSegments>): ComponentElement[] {
   const found: ComponentElement[] = [];
@@ -51,92 +53,100 @@ describe("source positions", () => {
     });
   });
 
-  it("computes original-file positions past frontmatter, immune to repeated body text", function* () {
-    // The frontmatter contains a copy of the body's first line: a content
-    // search for the body would false-match inside the frontmatter, so only
-    // the suffix computation yields the correct base.
-    const doc = [
-      "---",
-      'title: "<Probe />"',
-      "note: intro line",
-      "---",
-      "intro line",
-      "<Probe />",
-      "",
-    ].join("\n");
+  journalCase(
+    "computes original-file positions past frontmatter, immune to repeated body text",
+    "README.md",
+    function* (stream) {
+      // The frontmatter contains a copy of the body's first line: a content
+      // search for the body would false-match inside the frontmatter, so only
+      // the suffix computation yields the correct base.
+      const doc = [
+        "---",
+        'title: "<Probe />"',
+        "note: intro line",
+        "---",
+        "intro line",
+        "<Probe />",
+        "",
+      ].join("\n");
 
-    const positions: SourcePosition[] = [];
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": doc });
-    // Registered rather than a repository file, so the probe can record what
-    // the engine tells a component about its own call site. That is the public
-    // guarantee now — `getExpansion()` — rather than what a claim was offered.
-    yield* registerComponents([
-      {
-        name: "Probe",
-        origin: "test",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        *fn() {
-          const position = (yield* getExpansion()).position;
-          if (position) {
-            positions.push(position);
-          }
-          return "probed";
+      const positions: SourcePosition[] = [];
+
+      yield* useStubFs({ "README.md": doc });
+      // Registered rather than a repository file, so the probe can record what
+      // the engine tells a component about its own call site. That is the public
+      // guarantee now — `getExpansion()` — rather than what a claim was offered.
+      yield* registerComponents([
+        {
+          name: "Probe",
+          origin: "test",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            const position = (yield* getExpansion()).position;
+            if (position) {
+              positions.push(position);
+            }
+            return "probed";
+          },
         },
-      },
-    ]);
+      ]);
 
-    const output = yield* collect(yield* execute({ path: "README.md", stream }));
-    expect(output).toContain("probed");
+      const output = yield* collect(yield* execute({ path: "README.md", stream }));
+      expect(output).toContain("probed");
 
-    const probeLine = doc.split("\n").indexOf("<Probe />") + 1;
-    expect(positions).toEqual([
-      {
-        path: "README.md",
-        offset: doc.indexOf("\n<Probe />") + 1,
-        line: probeLine,
+      const probeLine = doc.split("\n").indexOf("<Probe />") + 1;
+      expect(positions).toEqual([
+        {
+          path: "README.md",
+          offset: doc.indexOf("\n<Probe />") + 1,
+          line: probeLine,
+          column: 1,
+        },
+      ]);
+    },
+  );
+
+  journalCase(
+    "positions imported-component invocations in the component's own file",
+    "README.md",
+    function* (stream) {
+      const readme = "<Wrapper />\n";
+      const wrapper = ["---", "title: Wrapper", "---", "before", "<Probe />", ""].join("\n");
+
+      const positions: Array<{ name: string; position?: SourcePosition }> = [];
+
+      yield* useStubFs({
+        "README.md": readme,
+        "components/Wrapper.md": wrapper,
+      });
+      yield* registerComponents([
+        {
+          name: "Probe",
+          origin: "test",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            const metadata = yield* getExpansion();
+            positions.push({
+              name: metadata.name,
+              ...(metadata.position ? { position: metadata.position } : {}),
+            });
+            return "probed";
+          },
+        },
+      ]);
+
+      const output = yield* collect(yield* execute({ path: "README.md", stream }));
+      expect(output).toContain("probed");
+
+      const probe = positions.find((p) => p.name === "Probe");
+      expect(probe?.position).toEqual({
+        path: "components/Wrapper.md",
+        offset: wrapper.indexOf("<Probe />"),
+        line: 5,
         column: 1,
-      },
-    ]);
-  });
-
-  it("positions imported-component invocations in the component's own file", function* () {
-    const readme = "<Wrapper />\n";
-    const wrapper = ["---", "title: Wrapper", "---", "before", "<Probe />", ""].join("\n");
-
-    const positions: Array<{ name: string; position?: SourcePosition }> = [];
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "README.md": readme,
-      "components/Wrapper.md": wrapper,
-    });
-    yield* registerComponents([
-      {
-        name: "Probe",
-        origin: "test",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        *fn() {
-          const metadata = yield* getExpansion();
-          positions.push({
-            name: metadata.name,
-            ...(metadata.position ? { position: metadata.position } : {}),
-          });
-          return "probed";
-        },
-      },
-    ]);
-
-    const output = yield* collect(yield* execute({ path: "README.md", stream }));
-    expect(output).toContain("probed");
-
-    const probe = positions.find((p) => p.name === "Probe");
-    expect(probe?.position).toEqual({
-      path: "components/Wrapper.md",
-      offset: wrapper.indexOf("<Probe />"),
-      line: 5,
-      column: 1,
-    });
-  });
+      });
+    },
+  );
 });
 
 /**

@@ -4,6 +4,10 @@ import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { join } from "node:path";
+import { scoped } from "effection";
+import { exists, readdir, readTextFile } from "@effectionx/fs";
+import { API } from "@executablemd/runtime";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 
 import {
   journaled,
@@ -12,8 +16,26 @@ import {
   REVIEW_SCHEMA,
   runWebFormDoc,
   useLocalFixture,
+  withWebFormDocument,
   writeFile,
 } from "./component-support.ts";
+import type { DocRun, RunOptions } from "./component-support.ts";
+
+type RunFreshForm = (
+  source: string,
+  options: Omit<RunOptions, "stream">,
+  check: (run: DocRun) => void | Operation<void>,
+) => Operation<void>;
+
+const OWNER = "packages/web/tests/component.test.ts";
+
+function formCase(name: string, body: (run: RunFreshForm) => Operation<void>): void {
+  it(name, () =>
+    body((source, options, check) =>
+      withWebFormDocument({ owner: OWNER, name }, source, options, check),
+    ),
+  );
+}
 
 const SCHEMA_BLOCK = [
   "```js eval",
@@ -26,8 +48,61 @@ function document(body: string, props = "schema={reviewSchema}"): string {
 }
 
 describe("WebForm: what a document gets", () => {
-  it("binds the validated response and renders nothing", function* () {
-    const run = yield* runWebFormDoc(
+  const artifactCase = "attributes a failed assertion to the settled live form";
+  it(artifactCase, function* () {
+    const root = yield* useTempDirectory("xmd-webform-artifacts-");
+    const failure = new Error("post-response assertion");
+    function attempt(artifacts: string, assertion: () => void): Operation<void> {
+      return scoped(function* () {
+        yield* API.Env.around({
+          *env([variable], next) {
+            return variable === "XMD_TEST_ARTIFACTS" ? artifacts : yield* next(variable);
+          },
+        });
+        yield* withWebFormDocument(
+          { owner: OWNER, name: artifactCase },
+          document("Decide."),
+          { answer: { decision: "approve" } },
+          (run) => {
+            expect(run.completion.ok).toBe(true);
+            expect(run.effects.served).toBe(1);
+            assertion();
+          },
+        );
+      });
+    }
+
+    const passed = join(root, "passed");
+    yield* attempt(passed, () => undefined);
+    expect(yield* exists(passed)).toBe(false);
+
+    const failed = join(root, "failed");
+    let caught: unknown;
+    try {
+      yield* attempt(failed, () => {
+        throw failure;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    const invocations = yield* readdir(failed);
+    expect(invocations).toHaveLength(1);
+    const directory = join(failed, invocations[0]);
+    expect(JSON.parse(yield* readTextFile(join(directory, "root-1.case.json")))).toEqual({
+      owner: OWNER,
+      name: artifactCase,
+      kind: "root",
+      ordinal: 1,
+      source: "README.md",
+    });
+    const records = yield* readTextFile(join(directory, "root-1.jsonl"));
+    expect(records).toContain('"type":"web_form"');
+    expect(records).not.toContain("127.0.0.1");
+  });
+
+  formCase("binds the validated response and renders nothing", function* (runFresh) {
+    yield* runFresh(
       [
         document("# Review required\n\nDecide."),
         "```js eval",
@@ -35,38 +110,45 @@ describe("WebForm: what a document gets", () => {
         "```",
       ].join("\n"),
       { answer: { decision: "approve", note: "fine" } },
+      function (run) {
+        expect(run.completion.ok).toBe(true);
+        // The captured value, and no trace of the form around it.
+        expect(run.output).toContain('"decision":"approve"');
+        expect(run.output).toContain('"note":"fine"');
+        expect(run.output.includes("127.0.0.1")).toBe(false);
+        expect(run.output.includes("Review required")).toBe(false);
+      },
     );
-
-    expect(run.completion.ok).toBe(true);
-    // The captured value, and no trace of the form around it.
-    expect(run.output).toContain('"decision":"approve"');
-    expect(run.output).toContain('"note":"fine"');
-    expect(run.output.includes("127.0.0.1")).toBe(false);
-    expect(run.output.includes("Review required")).toBe(false);
   });
 
-  it("is answered through its own live server", function* () {
-    const run = yield* runWebFormDoc(document("Decide."), {
-      answer: { decision: "reject" },
+  formCase("is answered through its own live server", function* (runFresh) {
+    yield* runFresh(
+      document("Decide."),
+      {
+        answer: { decision: "reject" },
+      },
+      function (run) {
+        expect(run.completion.ok).toBe(true);
+        expect(run.effects.served).toBe(1);
+        expect(run.effects.opened.length).toBe(1);
+        expect(run.effects.responded.length).toBe(1);
+        // Opener and responder were handed the same live URL.
+        expect(run.effects.opened[0]).toBe(run.effects.responded[0]);
+        expect(run.effects.opened[0]).toMatch(
+          /^http:\/\/127\.0\.0\.1:\d+\/f\/[A-Za-z0-9_-]{43}\/$/,
+        );
+      },
+    );
+  });
+
+  formCase("prints the URL a person can use", function* (runFresh) {
+    yield* runFresh(document("Decide."), { answer: { decision: "approve" } }, function (run) {
+      const url = run.effects.opened[0];
+      expect(run.effects.printed.some((line) => line.includes(url))).toBe(true);
     });
-
-    expect(run.completion.ok).toBe(true);
-    expect(run.effects.served).toBe(1);
-    expect(run.effects.opened.length).toBe(1);
-    expect(run.effects.responded.length).toBe(1);
-    // Opener and responder were handed the same live URL.
-    expect(run.effects.opened[0]).toBe(run.effects.responded[0]);
-    expect(run.effects.opened[0]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/f\/[A-Za-z0-9_-]{43}\/$/);
   });
 
-  it("prints the URL a person can use", function* () {
-    const run = yield* runWebFormDoc(document("Decide."), { answer: { decision: "approve" } });
-
-    const url = run.effects.opened[0];
-    expect(run.effects.printed.some((line) => line.includes(url))).toBe(true);
-  });
-
-  it("resolves an expression-valued uiSchema through core", function* () {
+  formCase("resolves an expression-valued uiSchema through core", function* (runFresh) {
     const source = [
       "```js eval",
       `const reviewSchema = ${JSON.stringify(REVIEW_SCHEMA)};`,
@@ -82,10 +164,10 @@ describe("WebForm: what a document gets", () => {
       "```",
     ].join("\n");
 
-    const run = yield* runWebFormDoc(source, { answer: { decision: "approve" } });
-
-    expect(run.completion.ok).toBe(true);
-    expect(run.output).toContain("approve");
+    yield* runFresh(source, { answer: { decision: "approve" } }, function (run) {
+      expect(run.completion.ok).toBe(true);
+      expect(run.output).toContain("approve");
+    });
   });
 });
 
@@ -102,7 +184,7 @@ describe("WebForm: nothing happens before the question is ready", () => {
    * this asserts is the consequence — the diagnostic reached the document and
    * nothing was served.
    */
-  it("causes no live effect when its content fails", function* () {
+  formCase("causes no live effect when its content fails", function* (runFresh) {
     const source = [
       SCHEMA_BLOCK,
       "",
@@ -113,22 +195,22 @@ describe("WebForm: nothing happens before the question is ready", () => {
       "</WebForm>",
     ].join("\n");
 
-    const run = yield* runWebFormDoc(source, { answer: { decision: "approve" } });
-
-    // Nothing recovers the body's failure, so the run reports it.
-    expect(run.completion.ok).toBe(false);
-    expect(run.completion.ok ? "" : run.completion.error.message).toContain("the body failed");
-    expect(run.effects.served).toBe(0);
-    expect(run.effects.opened).toEqual([]);
-    expect(run.effects.responded).toEqual([]);
-    expect(run.effects.printed).toEqual([]);
-    // No entry at all, not merely no successful one: a durable operation that
-    // began and failed would leave an `err` event, and that is still work done
-    // for a question nobody was ever asked.
-    expect(yield* journalEvents(run.stream, "web_form")).toEqual([]);
+    yield* runFresh(source, { answer: { decision: "approve" } }, function* (run) {
+      // Nothing recovers the body's failure, so the run reports it.
+      expect(run.completion.ok).toBe(false);
+      expect(run.completion.ok ? "" : run.completion.error.message).toContain("the body failed");
+      expect(run.effects.served).toBe(0);
+      expect(run.effects.opened).toEqual([]);
+      expect(run.effects.responded).toEqual([]);
+      expect(run.effects.printed).toEqual([]);
+      // No entry at all, not merely no successful one: a durable operation that
+      // began and failed would leave an `err` event, and that is still work done
+      // for a question nobody was ever asked.
+      expect(yield* journalEvents(run.stream, "web_form")).toEqual([]);
+    });
   });
 
-  it("causes no live effect when the schema cannot be used", function* () {
+  formCase("causes no live effect when the schema cannot be used", function* (runFresh) {
     const unusable: [string, string][] = [
       ["not JSON", '<WebForm schema="{ not json" as="r">x</WebForm>'],
       ["not an object", '<WebForm schema="[]" as="r">x</WebForm>'],
@@ -148,33 +230,34 @@ describe("WebForm: nothing happens before the question is ready", () => {
     ];
 
     for (const [label, source] of unusable) {
-      const run = yield* runWebFormDoc(source, { answer: { decision: "approve" } });
-
-      expect({ label, ok: run.completion.ok }).toEqual({ label, ok: false });
-      expect({ label, served: run.effects.served }).toEqual({ label, served: 0 });
-      expect({ label, opened: run.effects.opened }).toEqual({ label, opened: [] });
-      expect({ label, responded: run.effects.responded }).toEqual({ label, responded: [] });
-      expect({ label, printed: run.effects.printed }).toEqual({ label, printed: [] });
-      // Every durable yield, not the successful ones: an operation that began and
-      // failed leaves an `err` event, and that is still work done for a question
-      // nobody was ever asked.
-      expect({ label, events: yield* journalEvents(run.stream, "web_form") }).toEqual({
-        label,
-        events: [],
+      yield* runFresh(source, { answer: { decision: "approve" } }, function* (run) {
+        expect({ label, ok: run.completion.ok }).toEqual({ label, ok: false });
+        expect({ label, served: run.effects.served }).toEqual({ label, served: 0 });
+        expect({ label, opened: run.effects.opened }).toEqual({ label, opened: [] });
+        expect({ label, responded: run.effects.responded }).toEqual({ label, responded: [] });
+        expect({ label, printed: run.effects.printed }).toEqual({ label, printed: [] });
+        // Every durable yield, not the successful ones: an operation that began and
+        // failed leaves an `err` event, and that is still work done for a question
+        // nobody was ever asked.
+        expect({ label, events: yield* journalEvents(run.stream, "web_form") }).toEqual({
+          label,
+          events: [],
+        });
       });
     }
   });
 
   /** Unmarked, so #251's default applies: the failure is the document's. */
-  it("fails the document rather than printing", function* () {
-    const run = yield* runWebFormDoc(
+  formCase("fails the document rather than printing", function* (runFresh) {
+    yield* runFresh(
       '<WebForm schema="[]" as="response">Decide.</WebForm>\n\nafter\n',
       { answer: { decision: "approve" } },
+      function (run) {
+        expect(run.completion.ok).toBe(false);
+        // Nothing after it ran, which a printed error would have allowed.
+        expect(run.output.includes("after")).toBe(false);
+      },
     );
-
-    expect(run.completion.ok).toBe(false);
-    // Nothing after it ran, which a printed error would have allowed.
-    expect(run.output.includes("after")).toBe(false);
   });
 });
 
@@ -309,20 +392,20 @@ describe("WebForm: a repository file outranks the registration", () => {
    * Real files rather than a stubbed filesystem: a `.ts` component is `import()`ed
    * from a real path, so a stub can resolve its name and then fail to load it.
    */
-  it("prefers a repository WebForm.md", function* () {
+  formCase("prefers a repository WebForm.md", function* (runFresh) {
     const dir = yield* useLocalFixture();
     yield* writeFile(join(dir, "WebForm.md"), "the repository's own form\n");
     const doc = join(dir, "README.md");
     yield* writeFile(doc, "<WebForm />\n");
 
-    const run = yield* runWebFormDoc(doc, { realFiles: true, includes: [dir] });
-
-    expect(run.output).toContain("the repository's own form");
-    // The registered default never ran, so nothing was served.
-    expect(run.effects.served).toBe(0);
+    yield* runFresh(doc, { realFiles: true, includes: [dir] }, function (run) {
+      expect(run.output).toContain("the repository's own form");
+      // The registered default never ran, so nothing was served.
+      expect(run.effects.served).toBe(0);
+    });
   });
 
-  it("prefers a repository WebForm.ts", function* () {
+  formCase("prefers a repository WebForm.ts", function* (runFresh) {
     yield* useComponentModuleLoader();
     const dir = yield* useLocalFixture();
     yield* writeFile(
@@ -334,9 +417,9 @@ describe("WebForm: a repository file outranks the registration", () => {
     const doc = join(dir, "README.md");
     yield* writeFile(doc, "<WebForm />\n");
 
-    const run = yield* runWebFormDoc(doc, { realFiles: true, includes: [dir] });
-
-    expect(run.output).toContain("the repository's own function");
-    expect(run.effects.served).toBe(0);
+    yield* runFresh(doc, { realFiles: true, includes: [dir] }, function (run) {
+      expect(run.output).toContain("the repository's own function");
+      expect(run.effects.served).toBe(0);
+    });
   });
 });

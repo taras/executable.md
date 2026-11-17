@@ -19,6 +19,7 @@ import {
  * binding in a scope that never published it.
  */
 
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Component, useTempFileCompiler } from "@executablemd/core";
@@ -451,14 +452,21 @@ describe("REPL model: the histories it refuses", () => {
     expect(refusal(stripped)).toContain("does not retain the schema");
   });
 
-  it("E1: a refused answer leaves no answered question in the projection", function* () {
-    const run = yield* runReference(answering({ decision: "maybe" }));
-    const model = projected(run.events);
+  const rejectedAnswer = "E1: a refused answer leaves no answered question in the projection";
+  it(rejectedAnswer, () =>
+    captureTestJournal(
+      { owner: "packages/cli/tests/repl-model.test.ts", name: rejectedAnswer },
+      "<eval>",
+      function* (stream) {
+        const run = yield* runReference(answering({ decision: "maybe" }), stream);
+        const model = projected(run.events);
 
-    expect(run.asked).toHaveLength(1);
-    expect(only(model)?.elicitations).toEqual([]);
-    expect(model.transcript.some((row) => row.kind === "elicit")).toBe(false);
-  });
+        expect(run.asked).toHaveLength(1);
+        expect(only(model)?.elicitations).toEqual([]);
+        expect(model.transcript.some((row) => row.kind === "elicit")).toBe(false);
+      },
+    ),
+  );
 });
 
 /**

@@ -33,8 +33,10 @@ import {
 import type { GeneratedEvaluationOptions } from "../src/deno/workspace/evaluate.ts";
 import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
 
 const ROOT_PATH = "workflows/agent.md";
+const journalCase = journalCases("packages/workflow/tests/generated-observations.test.ts");
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
 const NOTE = "the retained note\n";
@@ -99,10 +101,11 @@ function run(
     events?: DurableEvent[];
     files?: RecordedFiles;
   } = {},
+  stream?: InMemoryStream,
 ): Operation<Attempt> {
   return scoped(function* () {
     yield* useWorkflowGenerated(options.generated ?? {});
-    return yield* once(source, options);
+    return yield* once(source, options, stream);
   });
 }
 
@@ -117,9 +120,9 @@ function run(
 function once(
   source: string,
   options: { events?: DurableEvent[]; files?: RecordedFiles } = {},
+  stream = new InMemoryStream(options.events ?? []),
 ): Operation<Attempt> {
   return scoped(function* () {
-    const stream = new InMemoryStream(options.events ?? []);
     if (options.files !== undefined) {
       yield* useRecordedFiles(options.files);
     }
@@ -265,114 +268,145 @@ describe("Tier WGX — the selection a workflow run offers", () => {
     yield* useScope();
   });
 
-  it("WGX2: a marker-4 admission holds the selection and nothing live", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
+  journalCase(
+    "WGX2: a marker-4 admission holds the selection and nothing live",
+    ROOT_PATH,
+    function* (stream) {
+      const files = recordedFiles({ "notes.md": NOTE });
 
-    const attempt = yield* run(evaluating(`<File path="notes.md" />\n`), { files });
+      const attempt = yield* run(evaluating(`<File path="notes.md" />\n`), { files }, stream);
 
-    expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("the retained note");
-    const policy = policyOf(admissions(attempt.events)[0]);
-    // The closed shape this build writes: the marker, the selected classes and
-    // the rows. No Workspace basis and no request inventory — what a run stands
-    // on and what a request may reach are both live state, and a grant compared
-    // against a copy of either would refuse a run for its own progress.
-    expect(Object.keys(policy ?? {}).sort()).toEqual(["allow", "allowed", "version"]);
-    expect(policy?.version).toBe(4);
-    expect(policy?.allow).toEqual(["read"]);
-    expect(policy?.allowed).toEqual([
-      {
-        name: "Json",
-        form: "self-closing",
-        identity: "https://executable.md/components/json",
-        kind: "capability",
-        effect: "composition",
-      },
-      {
-        name: "File",
-        form: "self-closing",
-        identity: "https://executable.md/components/file/read",
-        kind: "component-answer",
-        effect: "read",
-      },
-    ]);
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(attempt.output).toContain("the retained note");
+      const policy = policyOf(admissions(attempt.events)[0]);
+      // The closed shape this build writes: the marker, the selected classes and
+      // the rows. No Workspace basis and no request inventory — what a run stands
+      // on and what a request may reach are both live state, and a grant compared
+      // against a copy of either would refuse a run for its own progress.
+      expect(Object.keys(policy ?? {}).sort()).toEqual(["allow", "allowed", "version"]);
+      expect(policy?.version).toBe(4);
+      expect(policy?.allow).toEqual(["read"]);
+      expect(policy?.allowed).toEqual([
+        {
+          name: "Json",
+          form: "self-closing",
+          identity: "https://executable.md/components/json",
+          kind: "capability",
+          effect: "composition",
+        },
+        {
+          name: "File",
+          form: "self-closing",
+          identity: "https://executable.md/components/file/read",
+          kind: "component-answer",
+          effect: "read",
+        },
+      ]);
+    },
+  );
 
-  it("WGX3: a fragment that asks for nothing is admitted and retains its source", function* () {
-    const attempt = yield* run(evaluating("nothing to observe here.\n"));
+  journalCase(
+    "WGX3: a fragment that asks for nothing is admitted and retains its source",
+    ROOT_PATH,
+    function* (stream) {
+      const attempt = yield* run(evaluating("nothing to observe here.\n"), {}, stream);
 
-    expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("nothing to observe here.");
-    expect(admissions(attempt.events)).toHaveLength(1);
-    expect(reads(attempt.events)).toHaveLength(0);
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(attempt.output).toContain("nothing to observe here.");
+      expect(admissions(attempt.events)).toHaveLength(1);
+      expect(reads(attempt.events)).toHaveLength(0);
+    },
+  );
 
-  it("WGX4: a document with no `<Evaluate>` makes no admission at all", function* () {
-    // The untaken half of the previous row: offering a selection is not
-    // evaluating anything, so a run that never writes the element appends no
-    // admission and resolves nothing on its behalf.
-    const attempt = yield* run("The run wrote no fragment.\n");
+  journalCase(
+    "WGX4: a document with no `<Evaluate>` makes no admission at all",
+    ROOT_PATH,
+    function* (stream) {
+      // The untaken half of the previous row: offering a selection is not
+      // evaluating anything, so a run that never writes the element appends no
+      // admission and resolves nothing on its behalf.
+      const attempt = yield* run("The run wrote no fragment.\n", {}, stream);
 
-    expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("The run wrote no fragment.");
-    expect(admissions(attempt.events)).toHaveLength(0);
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(attempt.output).toContain("The run wrote no fragment.");
+      expect(admissions(attempt.events)).toHaveLength(0);
+    },
+  );
 
-  it("WGX5: a name this host did not offer is refused before any effect", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
+  journalCase(
+    "WGX5: a name this host did not offer is refused before any effect",
+    ROOT_PATH,
+    function* (stream) {
+      const files = recordedFiles({ "notes.md": NOTE });
 
-    // `<Glob />` is a core default this host did not choose. A generic workflow
-    // run therefore has no search at all, and the refusal lands before the read
-    // beside it in the same fragment.
-    const attempt = yield* run(
-      evaluating(`<Glob include={["*.md"]} as="paths" />\n<File path="notes.md" />\n`),
-      { files },
-    );
+      // `<Glob />` is a core default this host did not choose. A generic workflow
+      // run therefore has no search at all, and the refusal lands before the read
+      // beside it in the same fragment.
+      const attempt = yield* run(
+        evaluating(`<Glob include={["*.md"]} as="paths" />\n<File path="notes.md" />\n`),
+        { files },
+        stream,
+      );
 
-    expect(attempt.failure).toContain("did not admit");
-    expect(files.performed).toEqual([]);
-    expect(admissions(attempt.events).length).toBeLessThanOrEqual(1);
-    expect(reads(attempt.events)).toHaveLength(0);
-  });
+      expect(attempt.failure).toContain("did not admit");
+      expect(files.performed).toEqual([]);
+      expect(admissions(attempt.events).length).toBeLessThanOrEqual(1);
+      expect(reads(attempt.events)).toHaveLength(0);
+    },
+  );
 });
 
 describe("Tier WGX — what an admitted request may reach is live", () => {
-  it("WGX6: a host that bounds no request offers `<Fetch>` not at all", function* () {
-    const transport = yield* useTransport();
+  journalCase(
+    "WGX6: a host that bounds no request offers `<Fetch>` not at all",
+    ROOT_PATH,
+    function* (stream) {
+      const transport = yield* useTransport();
 
-    const attempt = yield* run(evaluating(`<Fetch url="${URL_ONE}" as="got" />\n`));
+      const attempt = yield* run(evaluating(`<Fetch url="${URL_ONE}" as="got" />\n`), {}, stream);
 
-    expect(attempt.failure).toContain("did not admit");
-    expect(transport.performed).toHaveLength(0);
-  });
+      expect(attempt.failure).toContain("did not admit");
+      expect(transport.performed).toHaveLength(0);
+    },
+  );
 
-  it("WGX7: a bounded destination performs once and retains one observation", function* () {
-    const transport = yield* useTransport();
+  journalCase(
+    "WGX7: a bounded destination performs once and retains one observation",
+    ROOT_PATH,
+    function* (stream) {
+      const transport = yield* useTransport();
 
-    const attempt = yield* run(
-      evaluating(`<Fetch url="${URL_ONE}" as="got" />\n<Json value={got} />\n`),
-      { generated: { requests: [{ url: URL_ONE }] } },
-    );
+      const attempt = yield* run(
+        evaluating(`<Fetch url="${URL_ONE}" as="got" />\n<Json value={got} />\n`),
+        { generated: { requests: [{ url: URL_ONE }] } },
+        stream,
+      );
 
-    expect(attempt.failure).toBe(undefined);
-    expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
-    expect(fetches(attempt.events)).toHaveLength(1);
-  });
+      expect(attempt.failure).toBe(undefined);
+      expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
+      expect(fetches(attempt.events)).toHaveLength(1);
+    },
+  );
 
-  it("WGX8: a destination outside the bound reaches no transport", function* () {
-    const transport = yield* useTransport();
+  journalCase(
+    "WGX8: a destination outside the bound reaches no transport",
+    ROOT_PATH,
+    function* (stream) {
+      const transport = yield* useTransport();
 
-    // The name is offered — this host bounds a request — and the destination is
-    // not. So the refusal is the live terminal's, asked immediately before
-    // transport, and nothing is sent.
-    const attempt = yield* run(
-      evaluating(`<Fetch url="${URL_TWO}" as="got" />\n<Json value={got} />\n`),
-      { generated: { requests: [{ url: URL_ONE }] } },
-    );
+      // The name is offered — this host bounds a request — and the destination is
+      // not. So the refusal is the live terminal's, asked immediately before
+      // transport, and nothing is sent.
+      const attempt = yield* run(
+        evaluating(`<Fetch url="${URL_TWO}" as="got" />\n<Json value={got} />\n`),
+        { generated: { requests: [{ url: URL_ONE }] } },
+        stream,
+      );
 
-    expect(attempt.failure).toContain("not permitted in this scope");
-    expect(transport.performed).toHaveLength(0);
-  });
+      expect(attempt.failure).toContain("not permitted in this scope");
+      expect(transport.performed).toHaveLength(0);
+    },
+  );
 
   it("WGX9: a bound this host stated cannot be moved by editing what it was given", function* () {
     const transport = yield* useTransport();
@@ -474,55 +508,70 @@ describe("Tier WGX — what an admitted request may reach is live", () => {
     expect(transport.performed).toHaveLength(0);
   });
 
-  it("WGX15: the request allowance is read once, and `<Fetch>` comes from that reading", function* () {
-    const server = yield* useLoopback();
-    let reads = 0;
-    // An ordinary accessor-backed options object, which is all a host has to be
-    // for this to matter: the first reading states no bound and a later one
-    // states one. Whichever this host meant, the name a fragment may write and
-    // the policy deciding what it may reach have to come from one reading.
-    const changing: GeneratedEvaluationOptions = {
-      get requests() {
-        reads++;
-        return reads === 1 ? [] : [{ url: `${server.origin}/admitted` }];
-      },
-    };
+  journalCase(
+    "WGX15: the request allowance is read once, and `<Fetch>` comes from that reading",
+    ROOT_PATH,
+    function* (stream) {
+      const server = yield* useLoopback();
+      let reads = 0;
+      // An ordinary accessor-backed options object, which is all a host has to be
+      // for this to matter: the first reading states no bound and a later one
+      // states one. Whichever this host meant, the name a fragment may write and
+      // the policy deciding what it may reach have to come from one reading.
+      const changing: GeneratedEvaluationOptions = {
+        get requests() {
+          reads++;
+          return reads === 1 ? [] : [{ url: `${server.origin}/admitted` }];
+        },
+      };
 
-    const attempt = yield* run(
-      evaluating(`<Fetch url="${server.origin}/not-admitted" as="got" />\n<Json value={got} />\n`),
-      { generated: changing },
-    );
+      const attempt = yield* run(
+        evaluating(
+          `<Fetch url="${server.origin}/not-admitted" as="got" />\n<Json value={got} />\n`,
+        ),
+        { generated: changing },
+        stream,
+      );
 
-    // Asked first, because it is the consequence: the destination the fragment
-    // names is one no reading of this host's list ever admitted, and a
-    // selection taken from a second reading would send it under no policy at
-    // all.
-    expect(server.asked).toEqual([]);
-    // The retained reading bounded nothing, so `<Fetch>` was never offered: the
-    // fragment is refused at admission, by name, and retains no effect.
-    expect(attempt.failure).toContain("did not admit");
-    expect(fetches(attempt.events)).toEqual([]);
-    // One reading for the whole setup. A second one is what would let the
-    // selection and the policy disagree about the same host statement.
-    expect(reads).toBe(1);
-  });
+      // Asked first, because it is the consequence: the destination the fragment
+      // names is one no reading of this host's list ever admitted, and a
+      // selection taken from a second reading would send it under no policy at
+      // all.
+      expect(server.asked).toEqual([]);
+      // The retained reading bounded nothing, so `<Fetch>` was never offered: the
+      // fragment is refused at admission, by name, and retains no effect.
+      expect(attempt.failure).toContain("did not admit");
+      expect(fetches(attempt.events)).toEqual([]);
+      // One reading for the whole setup. A second one is what would let the
+      // selection and the policy disagree about the same host statement.
+      expect(reads).toBe(1);
+    },
+  );
 
-  it("WGX10: an enclosing restriction still refuses what this host bounded", function* () {
-    const transport = yield* useTransport();
+  journalCase(
+    "WGX10: an enclosing restriction still refuses what this host bounded",
+    ROOT_PATH,
+    function* (stream) {
+      const transport = yield* useTransport();
 
-    const attempt = yield* scoped(function* () {
-      // Narrower than the host, installed outside it. A restriction delegates
-      // rather than answering `true`, so the enclosing refusal is never asked
-      // to delegate and the bound cannot widen it.
-      yield* Permissions.around({ fetch: () => false });
-      return yield* run(evaluating(`<Fetch url="${URL_ONE}" as="got" />\n<Json value={got} />\n`), {
-        generated: { requests: [{ url: URL_ONE }] },
+      const attempt = yield* scoped(function* () {
+        // Narrower than the host, installed outside it. A restriction delegates
+        // rather than answering `true`, so the enclosing refusal is never asked
+        // to delegate and the bound cannot widen it.
+        yield* Permissions.around({ fetch: () => false });
+        return yield* run(
+          evaluating(`<Fetch url="${URL_ONE}" as="got" />\n<Json value={got} />\n`),
+          {
+            generated: { requests: [{ url: URL_ONE }] },
+          },
+          stream,
+        );
       });
-    });
 
-    expect(attempt.failure).toContain("not permitted in this scope");
-    expect(transport.performed).toHaveLength(0);
-  });
+      expect(attempt.failure).toContain("not permitted in this scope");
+      expect(transport.performed).toHaveLength(0);
+    },
+  );
 });
 
 describe("Tier WGX — a completed effect restores from its record", () => {

@@ -12,6 +12,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "@executablemd/core";
+import { it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { useTesting } from "../src/use-testing.ts";
 import { installHandlers, installTestingComponents } from "../src/components.ts";
 import { activateTesting } from "../src/activation.ts";
@@ -39,6 +41,27 @@ export interface RunDocOptions {
   handlers?: TestHandlers;
   /** Supply a journal stream (e.g. for replay scenarios). */
   stream?: DurableStream;
+}
+
+type RunFreshDoc = (
+  files: Record<string, string>,
+  options?: Omit<RunDocOptions, "stream" | "path">,
+) => Operation<DocRun>;
+
+export function documentCases(owner: string) {
+  return (name: string, body: (run: RunFreshDoc) => Operation<void>): void => {
+    it(name, () => withFreshDocument(owner, name, body));
+  };
+}
+
+export function withFreshDocument(
+  owner: string,
+  name: string,
+  body: (run: RunFreshDoc) => Operation<void>,
+): Operation<void> {
+  return captureTestJournal({ owner, name }, "README.md", (stream) =>
+    body((files, options) => runDoc(files, { ...options, stream })),
+  );
 }
 
 export function* runDoc(

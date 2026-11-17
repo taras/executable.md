@@ -7,7 +7,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { ensure } from "effection";
 import type { Result, Stream } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -60,7 +60,8 @@ function stubStream(
 }
 
 describe("agent + testing composition", () => {
-  it("both component sets decorate one execution", function* () {
+  const name = "both component sets decorate one execution";
+  it(name, function* () {
     const calls: string[] = [];
     yield* installTestingComponents();
     yield* installAgentComponents({
@@ -114,23 +115,29 @@ describe("agent + testing composition", () => {
     );
     // `<Session>` names durable work after its own invocation, so the host
     // declares it to the execution rather than registering it.
-    const execution = yield* executeInstalled({ path: docPath, stream: new InMemoryStream() }, [
-      { components: agentIdentityComponents() },
-    ]);
-    const subscription = yield* execution.output;
-    let next = yield* subscription.next();
-    while (!next.done) {
-      next = yield* subscription.next();
-    }
-    const result: Result<Json> = yield* execution;
+    yield* captureTestJournal(
+      { owner: "packages/testing/tests/agent-composition.test.ts", name },
+      docPath,
+      function* (stream) {
+        const execution = yield* executeInstalled({ path: docPath, stream }, [
+          { components: agentIdentityComponents() },
+        ]);
+        const subscription = yield* execution.output;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          next = yield* subscription.next();
+        }
+        const result: Result<Json> = yield* execution;
 
-    expect(calls).toEqual(["good", "bad"]);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(AggregateError);
-      if (result.error instanceof AggregateError) {
-        expect(result.error.message).toBe("1 agent prompt(s) failed");
-      }
-    }
+        expect(calls).toEqual(["good", "bad"]);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toBeInstanceOf(AggregateError);
+          if (result.error instanceof AggregateError) {
+            expect(result.error.message).toBe("1 agent prompt(s) failed");
+          }
+        }
+      },
+    );
   });
 });

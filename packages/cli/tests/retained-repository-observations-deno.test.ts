@@ -33,6 +33,7 @@ import {
 import { useCommonDirectoryLease } from "../src/repl/repositories/deno/leases.ts";
 import { useObservationFixture, writeFixtureFile } from "../../git/tests/support/observations.ts";
 import {
+  captureObservationEntry,
   entryCounters,
   methodsCalled,
   readKinds,
@@ -128,7 +129,8 @@ describe("ROB5 — cancellation, persistence and ownership, on a native host", (
     );
   });
 
-  it("keeps the same entry's mutation out of a held read, then lets it through", function* () {
+  const heldRead = "keeps the same entry's mutation out of a held read, then lets it through";
+  it(heldRead, function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
     const counted = entryCounters();
@@ -140,80 +142,86 @@ describe("ROB5 — cancellation, persistence and ownership, on a native host", (
     let holding = false;
     let enteredWhileHeld = false;
 
-    const settled = yield* scoped(function* () {
-      const task = yield* spawn(() =>
-        runEntry(
-          place,
-          [
-            "<All>",
-            '<Spawn><Git.Diff compare="unstaged" as="patch" /></Spawn>',
-            '<Spawn><WaitsForTheRead /><Git.Add paths="src/a.ts" /></Spawn>',
-            "</All>",
-            "",
-          ].join("\n"),
-          new InMemoryStream(),
-          counted,
-          {
-            *between(): Operation<void> {
-              // The second branch starts its mutation only once the read is
-              // genuinely held, so the race the regression needs is arranged
-              // rather than hoped for.
-              yield* registerComponents([
-                {
-                  name: "WaitsForTheRead",
-                  origin: "test://waits-for-the-read",
-                  props: { type: "object", properties: {}, additionalProperties: false },
-                  *fn(): Operation<string> {
-                    yield* readHeld.operation;
-                    return "";
-                  },
+    yield* captureObservationEntry(
+      { owner: "packages/cli/tests/retained-repository-observations-deno.test.ts", name: heldRead },
+      place,
+      function* (stream) {
+        const settled = yield* scoped(function* () {
+          const task = yield* spawn(() =>
+            runEntry(
+              place,
+              [
+                "<All>",
+                '<Spawn><Git.Diff compare="unstaged" as="patch" /></Spawn>',
+                '<Spawn><WaitsForTheRead /><Git.Add paths="src/a.ts" /></Spawn>',
+                "</All>",
+                "",
+              ].join("\n"),
+              stream,
+              counted,
+              {
+                *between(): Operation<void> {
+                  // The second branch starts its mutation only once the read is
+                  // genuinely held, so the race the regression needs is arranged
+                  // rather than hoped for.
+                  yield* registerComponents([
+                    {
+                      name: "WaitsForTheRead",
+                      origin: "test://waits-for-the-read",
+                      props: { type: "object", properties: {}, additionalProperties: false },
+                      *fn(): Operation<string> {
+                        yield* readHeld.operation;
+                        return "";
+                      },
+                    },
+                  ]);
                 },
-              ]);
-            },
-            *barrier(method): Operation<void> {
-              if (method === "add") {
-                if (holding) {
-                  enteredWhileHeld = true;
-                }
-                mutationEntered.resolve();
-                return;
-              }
-              if (method === "observe" && !holding) {
-                holding = true;
-                readHeld.resolve();
-                // Long enough that a mutation on a queue of its own would have
-                // reached the host by now, and short enough to end the case.
-                yield* race([
-                  mutationEntered.operation,
-                  (function* (): Operation<void> {
-                    yield* sleep(2000);
-                  })(),
-                ]);
-                holding = false;
-                releaseRead.resolve();
-              }
-            },
-          },
-        ),
-      );
-      yield* releaseRead.operation;
-      // The read has finished its own turn; the mutation may now proceed.
-      yield* race([
-        mutationEntered.operation,
-        (function* (): Operation<void> {
-          yield* sleep(30_000);
-          throw new Error("the mutation never reached native Git");
-        })(),
-      ]);
-      return yield* task;
-    });
+                *barrier(method): Operation<void> {
+                  if (method === "add") {
+                    if (holding) {
+                      enteredWhileHeld = true;
+                    }
+                    mutationEntered.resolve();
+                    return;
+                  }
+                  if (method === "observe" && !holding) {
+                    holding = true;
+                    readHeld.resolve();
+                    // Long enough that a mutation on a queue of its own would have
+                    // reached the host by now, and short enough to end the case.
+                    yield* race([
+                      mutationEntered.operation,
+                      (function* (): Operation<void> {
+                        yield* sleep(2000);
+                      })(),
+                    ]);
+                    holding = false;
+                    releaseRead.resolve();
+                  }
+                },
+              },
+            ),
+          );
+          yield* releaseRead.operation;
+          // The read has finished its own turn; the mutation may now proceed.
+          yield* race([
+            mutationEntered.operation,
+            (function* (): Operation<void> {
+              yield* sleep(30_000);
+              throw new Error("the mutation never reached native Git");
+            })(),
+          ]);
+          return yield* task;
+        });
 
-    // Nothing of this entry's own Git entered while its read held the turn,
-    // and the mutation did run once the read released it.
-    expect(enteredWhileHeld).toBe(false);
-    expect(settled.refusal).toBe(undefined);
-    expect(readKinds(counted)).toContain("diff");
-    expect(methodsCalled(counted)).toContain("add");
+        // Nothing of this entry's own Git entered while its read held the turn,
+        // and the mutation did run once the read released it.
+        expect(enteredWhileHeld).toBe(false);
+        expect(settled.refusal).toBe(undefined);
+        expect(readKinds(counted)).toContain("diff");
+        expect(methodsCalled(counted)).toContain("add");
+      },
+    );
   });
 
   it("answers while another holder has the checkout's mutation lease", function* () {
