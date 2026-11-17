@@ -17,10 +17,7 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { LiveBindingCollisionError } from "../src/live-env.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const SAMPLE = `---
 meta:

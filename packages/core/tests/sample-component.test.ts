@@ -23,10 +23,7 @@ import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import type { Operation } from "effection";
 import * as path from "node:path";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 function* writeFiles(dir: string, files: Record<string, string>): Operation<void> {
   for (const [filePath, content] of Object.entries(files)) {
@@ -423,15 +420,15 @@ describe("Tier EO — eval output() function", () => {
   it("EO1: output() produces eval block output", function* () {
     const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
-    "test.md": '```js eval\noutput("hello from eval");\n```\n',
+      "test.md": '```js eval\noutput("hello from eval");\n```\n',
     });
     yield* useEchoExec();
 
     const output = yield* collect(
-    yield* execute({
-      path: "test.md",
-      stream,
-    }),
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
     );
 
     expect(output).toContain("hello from eval");
@@ -470,15 +467,15 @@ describe("Tier EO — eval output() function", () => {
   it("EO3: eval block without output() produces no output", function* () {
     const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
-    "test.md": "```js eval\nconst x = 42;\n```\nafter-eval",
+      "test.md": "```js eval\nconst x = 42;\n```\nafter-eval",
     });
     yield* useEchoExec();
 
     const output = yield* collect(
-    yield* execute({
-      path: "test.md",
-      stream,
-    }),
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
     );
 
     // No output from eval block — should see "after-eval" but no "42"
@@ -490,15 +487,15 @@ describe("Tier EO — eval output() function", () => {
   it("EO4: output() with multiline content", function* () {
     const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
-    "test.md": '```js eval\noutput("line1\\nline2\\nline3");\n```\n',
+      "test.md": '```js eval\noutput("line1\\nline2\\nline3");\n```\n',
     });
     yield* useEchoExec();
 
     const output = yield* collect(
-    yield* execute({
-      path: "test.md",
-      stream,
-    }),
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
     );
 
     expect(output).toContain("line1\nline2\nline3");
@@ -508,15 +505,15 @@ describe("Tier EO — eval output() function", () => {
   it("EO5: output() converts non-string to string", function* () {
     const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
-    "test.md": "```js eval\noutput(12345);\n```\n",
+      "test.md": "```js eval\noutput(12345);\n```\n",
     });
     yield* useEchoExec();
 
     const output = yield* collect(
-    yield* execute({
-      path: "test.md",
-      stream,
-    }),
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
     );
 
     expect(output).toContain("12345");
@@ -559,26 +556,26 @@ describe("Tier RC — renderChildren and render closures", () => {
   it("RC2: renderChildren captures children text", function* () {
     const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
-    "components/TestComp.md": [
-      "---",
-      "meta:",
-      "  componentName: TestComp",
-      "---",
-      "",
-      "```js eval",
-      "const result = yield* renderChildren();",
-      "output('children:[' + result.trim() + ']');",
-      "```",
-    ].join("\n"),
-    "test.md": ["<TestComp>", "", "hello from children", "", "</TestComp>"].join("\n"),
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "const result = yield* renderChildren();",
+        "output('children:[' + result.trim() + ']');",
+        "```",
+      ].join("\n"),
+      "test.md": ["<TestComp>", "", "hello from children", "", "</TestComp>"].join("\n"),
     });
     yield* useEchoExec();
 
     const output = yield* collect(
-    yield* execute({
-      path: "test.md",
-      stream,
-    }),
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
     );
 
     expect(output).toContain("children:[hello from children]");
@@ -588,26 +585,26 @@ describe("Tier RC — renderChildren and render closures", () => {
   it("RC3: render() expands arbitrary markdown string", function* () {
     const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
-    "components/TestComp.md": [
-      "---",
-      "meta:",
-      "  componentName: TestComp",
-      "---",
-      "",
-      "```js eval",
-      "const result = yield* render('arbitrary **markdown** content');",
-      "output('rendered:[' + result.trim() + ']');",
-      "```",
-    ].join("\n"),
-    "test.md": "<TestComp />",
+      "components/TestComp.md": [
+        "---",
+        "meta:",
+        "  componentName: TestComp",
+        "---",
+        "",
+        "```js eval",
+        "const result = yield* render('arbitrary **markdown** content');",
+        "output('rendered:[' + result.trim() + ']');",
+        "```",
+      ].join("\n"),
+      "test.md": "<TestComp />",
     });
     yield* useEchoExec();
 
     const output = yield* collect(
-    yield* execute({
-      path: "test.md",
-      stream,
-    }),
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
     );
 
     expect(output).toContain("rendered:[arbitrary **markdown** content]");

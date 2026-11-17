@@ -19,10 +19,7 @@ import { collect } from "../src/collect.ts";
 import { printErrors } from "../src/component-failures.ts";
 import type { ComponentElement, FunctionComponent, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 interface LoopRun {
   segments: Segment[];
@@ -753,24 +750,24 @@ describe("Tier LOOP — document execution", () => {
     const stream = yield* useJournalStream("test.md");
     yield* useHostFiles();
     yield* useStubFs({
-    "test.md": [
-      "```js eval",
-      "const marks = [];",
-      "```",
-      "<Loop max={4}>",
-      "",
-      "```js eval",
-      "marks.push(marks.length);",
-      "```",
-      "",
-      "</Loop>",
-      "",
-      "tally={marks.length}",
-      "",
-      "```js eval",
-      "output(`TALLY:${marks.join(',')}`);",
-      "```",
-    ].join("\n"),
+      "test.md": [
+        "```js eval",
+        "const marks = [];",
+        "```",
+        "<Loop max={4}>",
+        "",
+        "```js eval",
+        "marks.push(marks.length);",
+        "```",
+        "",
+        "</Loop>",
+        "",
+        "tally={marks.length}",
+        "",
+        "```js eval",
+        "output(`TALLY:${marks.join(',')}`);",
+        "```",
+      ].join("\n"),
     });
     yield* useEchoExec();
 
