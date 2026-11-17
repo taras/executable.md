@@ -11,7 +11,6 @@ import { forEach } from "@effectionx/stream-helpers";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "@executablemd/core";
-import { it } from "@executablemd/test-support/bdd";
 import { captureTestJournal, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTesting } from "../src/use-testing.ts";
 import { installHandlers, installTestingComponents } from "../src/components.ts";
@@ -46,12 +45,6 @@ type RunFreshDoc = (
   files: Record<string, string>,
   options?: Omit<RunDocOptions, "stream" | "path">,
 ) => Operation<DocRun>;
-
-export function documentCases() {
-  return (name: string, body: (run: RunFreshDoc) => Operation<void>): void => {
-    it(name, () => body((files, options) => runDoc(files, options)));
-  };
-}
 
 export function withFreshDocument(
   owner: string,
