@@ -18,7 +18,7 @@
 import { exit, scoped, until } from "effection";
 import type { Context, Operation } from "effection";
 import { createContext } from "effection";
-import { exec } from "@effectionx/process";
+import { exec, Stdio } from "@effectionx/process";
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { timebox } from "@effectionx/timebox";
 import { launchEnvironment, shellQuote } from "@executablemd/test-support/launch";
@@ -131,16 +131,23 @@ function retainedEvidence(suite: string): Record<string, string> {
  * `xmd test <file>` under `runtime`. The adversarial suites also receive
  * their fixture plugin and absolute component directories.
  */
-function markdownCommand(runtime: Runtime, file: string, root: URL): Launch {
+function markdownCommand(
+  runtime: Runtime,
+  file: string,
+  root: URL,
+  options: TestLaunchOptions,
+): Launch {
   const [command, ...entry] = cliEntry(runtime);
+  const args = [...entry, "test", file];
+  if (options.compactReport) {
+    args.push("--reporter=failures");
+  }
   const document = DOCUMENT_SUITES.get(file);
   if (document !== undefined) {
     return {
       command,
       arguments: [
-        ...entry,
-        "test",
-        file,
+        ...args,
         ...(runtime === "deno" && document.worker
           ? ["--plugin", checkoutPath("packages/cli/tests/fixtures/prepared-test-worker.mjs")]
           : []),
@@ -155,9 +162,7 @@ function markdownCommand(runtime: Runtime, file: string, root: URL): Launch {
   return {
     command,
     arguments: [
-      ...entry,
-      "test",
-      file,
+      ...args,
       "--plugin",
       checkoutPath("packages/cli/tests/fixtures/workflow-test-permissions.mjs"),
       "--include",
@@ -192,21 +197,35 @@ export const RUNNERS: Record<Runtime, Runner> = {
   bun: { command: "bun", prefix: ["test", `--timeout=${BUN_TEST_TIMEOUT_MS}`], serial: [] },
 };
 
+interface TestLaunchOptions {
+  compactReport?: boolean;
+}
+
 /**
- * The exact command that runs one test file alone under `runtime`.
+ * Build the command that runs one test file alone under `runtime`.
  *
  * Weight measurement times this command, and a shard invokes it once per
  * assigned file — so the millisecond a weight records is the millisecond that
  * shard will spend, rather than a fraction of some larger invocation.
  */
-export function oneFileCommand(runtime: Runtime, file: string, root: URL = CHECKOUT): Launch {
+export function oneFileCommand(
+  runtime: Runtime,
+  file: string,
+  root: URL = CHECKOUT,
+  options: TestLaunchOptions = {},
+): Launch {
   if (isMarkdownSuite(file)) {
-    return markdownCommand(runtime, file, root);
+    return markdownCommand(runtime, file, root, options);
   }
   const runner = RUNNERS[runtime];
   return {
     command: runner.command,
-    arguments: [...runner.prefix, ...runner.serial, file],
+    arguments: [
+      ...runner.prefix,
+      ...runner.serial,
+      ...(runtime === "deno" && options.compactReport ? ["--reporter=dot"] : []),
+      file,
+    ],
   };
 }
 
@@ -268,9 +287,14 @@ function* preparedLink(root: URL): Operation<string | undefined> {
  * the prepared dependency link as it found it. A changed or missing link
  * fails the file. An earlier failure retains its own status.
  */
-export function* runOneFile(runtime: Runtime, file: string, root: URL): Operation<number> {
+export function* runOneFile(
+  runtime: Runtime,
+  file: string,
+  root: URL,
+  options: TestLaunchOptions = {},
+): Operation<number> {
   const run = yield* TestRuns.expect();
-  const launch = { ...oneFileCommand(runtime, file, root), cwd: fileURLToPath(root) };
+  const launch = { ...oneFileCommand(runtime, file, root, options), cwd: fileURLToPath(root) };
   if (!isMarkdownSuite(file)) {
     return yield* run(launch);
   }
@@ -513,10 +537,14 @@ export function* runShardFiles(
 ): Operation<ShardOutcome> {
   const ran: string[] = [];
   let failure: { file: string; status: number } | undefined;
+  const encoder = new TextEncoder();
 
   for (const file of files) {
     ran.push(file);
-    const status = yield* runOneFile(runtime, file, root);
+    if (isMarkdownSuite(file)) {
+      yield* Stdio.operations.stderr(encoder.encode(`Running ${file}\n`));
+    }
+    const status = yield* runOneFile(runtime, file, root, { compactReport: true });
     if (status !== 0 && failure === undefined) {
       failure = { file, status };
     }

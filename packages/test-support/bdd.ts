@@ -10,7 +10,12 @@
 
 import { createTestAdapter } from "@effectionx/test-adapter";
 import type { TestAdapter } from "@effectionx/test-adapter";
+import { ensure, run } from "effection";
 import type { Operation } from "effection";
+import { CaseOutcome } from "./case-outcome.ts";
+import type { CaseSetup, SettledCase } from "./case-outcome.ts";
+
+type Setup = () => Operation<void>;
 
 interface TestPrimitives {
   // deno-lint-ignore no-explicit-any
@@ -148,8 +153,63 @@ export function beforeAll(body: () => Operation<void>): void {
   current?.addOnetimeSetup(body);
 }
 
-export function beforeEach(body: () => Operation<void>): void {
-  current?.addSetup(body);
+export function beforeEach(body: Setup | CaseSetup): void {
+  current?.addSetup(
+    typeof body === "function" ? body : Object.assign(() => body.setup(), { caseOutcome: true }),
+  );
+}
+
+function runCase(adapter: TestAdapter, name: string, body: Setup): Promise<void> {
+  const needsOutcome = adapter.lineage.some((suite) =>
+    suite.setup.each.some((setup) => "caseOutcome" in setup),
+  );
+  if (!needsOutcome) {
+    return adapter.runTest(body).then((result) => {
+      if (!result.ok) {
+        throw result.error;
+      }
+    });
+  }
+
+  const test = createTestAdapter({ parent: adapter, name });
+  const outcome: SettledCase = {
+    name,
+    suite: adapter.fullname,
+  };
+  test.addOnetimeSetup(function* () {
+    yield* CaseOutcome.set(outcome);
+  });
+
+  const task = run(function* () {
+    let failed = false;
+    yield* ensure(function* () {
+      try {
+        yield* test.destroy();
+      } catch (error) {
+        if (!failed) {
+          throw error;
+        }
+      }
+    });
+    try {
+      const result = yield* test.runTest(body);
+      if (!result.ok) {
+        throw result.error;
+      }
+    } catch (error) {
+      failed = true;
+      try {
+        if (outcome.save !== undefined) {
+          yield* outcome.save();
+        }
+      } catch {
+        // A diagnostics failure cannot change the adapter's verdict.
+      }
+      throw error;
+    }
+  });
+  // Bun waits for a native promise from the test callback.
+  return task.then(() => undefined);
 }
 
 export function it(desc: string, body?: () => Operation<void>): void {
@@ -161,12 +221,7 @@ export function it(desc: string, body?: () => Operation<void>): void {
     prims().itSkip(desc, () => {});
     return;
   }
-  prims().it(desc, async () => {
-    const result = await adapter.runTest(body);
-    if (!result.ok) {
-      throw result.error;
-    }
-  });
+  prims().it(desc, () => runCase(adapter, desc, body));
 }
 
 it.skip = (...args: Parameters<typeof it>): ReturnType<typeof it> => {
@@ -179,10 +234,5 @@ it.only = (desc: string, body: () => Operation<void>): void => {
     throw new Error("it.only() must be called within a describe() block");
   }
   const adapter = current;
-  prims().itOnly(desc, async () => {
-    const result = await adapter.runTest(body);
-    if (!result.ok) {
-      throw result.error;
-    }
-  });
+  prims().itOnly(desc, () => runCase(adapter, desc, body));
 };

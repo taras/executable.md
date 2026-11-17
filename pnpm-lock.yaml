@@ -477,6 +477,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/testing':
+        specifier: workspace:*
+        version: link:../testing
       effection:
         specifier: 4.1.0
         version: 4.1.0
