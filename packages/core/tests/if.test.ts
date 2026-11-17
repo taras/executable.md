@@ -21,10 +21,7 @@ import { Sample } from "../src/sample-api.ts";
 import { readTextFile } from "@effectionx/fs";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 interface IfRun {
   segments: Segment[];

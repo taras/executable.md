@@ -8,10 +8,7 @@ import { registerComponents } from "../src/components/registration.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { ComponentElement, SourcePosition } from "../src/types.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 function componentsOf(segments: ReturnType<typeof scanSegments>): ComponentElement[] {
   const found: ComponentElement[] = [];
