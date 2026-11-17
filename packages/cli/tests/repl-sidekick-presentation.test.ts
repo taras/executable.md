@@ -407,6 +407,7 @@ describe("Tier CF — complete messages and following the newest reply", () => {
     expect(at(after, "one-C")).toBeLessThan(at(after, "two-A"));
     expect(at(after, "two-A")).toBeLessThan(at(after, "two-B"));
     expect(page.screen().shows(COMPOSER)).toBe(true);
+    yield* intoDraft(page);
     expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     yield* awaitedFact("two saved replies", function* () {
       return (
@@ -1191,7 +1192,7 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* page.until("the opener receiving Enter after Close", (one) => one.shows("[refresh]"));
     yield* page.key("Escape");
     yield* configured(page);
-    yield* draftText(page, "-more", ["Backtab"]);
+    yield* draftText(page, "-more");
     expect(yield* finishDraft(page)).toBe("note-more");
   });
 
@@ -1276,12 +1277,13 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* page.until("the narrow Agent field taking keys", (one) =>
       one.shows("Agent: scribe-two"),
     );
-    expect(page.screen().shows("DRAFT")).toBe(false);
+    expect(draftOpen(page.screen())).toBe(false);
     yield* page.press("[close]");
     yield* configured(page);
     yield* openEntryCatalog(page);
     yield* closeDrawer(page);
-    expect(page.screen().found("note", { after: "DRAFT" })).toBe(1);
+    yield* intoDraft(page);
+    expect(draftShows(page.screen(), "note")).toBe(true);
     expect(yield* finishDraft(page)).toBe("note");
   });
 
@@ -1336,13 +1338,14 @@ function settledTranscriptHas(reading: ScreenReading, label: string): boolean {
 }
 
 function* chooseTurn(page: ReplPage, text: string): Operation<void> {
-  const row = transcriptLines(page.screen()).find((one) => matchesTurn(one, text));
-  if (row === undefined) {
+  const reading = page.screen();
+  const rows = transcriptLines(reading);
+  const at = rows.findIndex((row) => matchesTurn(row, text));
+  if (at < 0) {
     throw new Error(`no Transcript row says ${text}. ${page.describe()}`);
   }
-  const reading = page.screen();
-  yield* page.press(row.trim(), {
-    within: { top: 0, bottom: reading.size.rows, left: 0, right: transcriptWidth(reading) },
+  yield* page.press(rows[at].trim(), {
+    within: { top: at, bottom: at + 1, left: 0, right: transcriptWidth(reading) },
   });
 }
 
@@ -2373,7 +2376,8 @@ function composerRows(one: ScreenReading, anchor?: string): string[] {
   const prompt = one.locate(COMPOSER);
   const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
   const footer = one.locate("HISTORY");
-  const end = footer.row - (one.size.columns === NARROW.columns ? 2 : 1);
+  // On the narrow Sidekick outlet, the compact selected-work row precedes History.
+  const end = footer.row - (one.size.columns === NARROW.columns ? 1 : 0);
   return one.rows.slice(prompt.row + 1, end).map((row) => row.slice(edge).trimEnd());
 }
 
