@@ -26,7 +26,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { RepositoryContext } from "../../src/composition/context.ts";
 import type { RepositorySelection } from "../../src/composition/selection.ts";

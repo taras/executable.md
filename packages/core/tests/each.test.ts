@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
@@ -11,9 +11,10 @@ import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import type { CodeBlockResult, Segment } from "../src/types.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-
-const journalCase = journalCases("packages/core/tests/each.test.ts");
+import {
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 interface EachRun {
   segments: Segment[];
@@ -219,33 +220,32 @@ describe("Tier Each — native iteration directive", () => {
 
 describe("Tier Each — eval in the loop body", () => {
   beforeAll(() => useTempFileCompiler());
-  journalCase(
-    "E18: a body eval block reads the current item binding",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "test.md": [
-          "```js eval",
-          "const items = [{ name: 'alpha' }, { name: 'beta' }];",
-          "```",
-          '<Each in={items} let="item">',
-          "```js eval",
-          "output('got:' + item.name);",
-          "```",
-          "</Each>",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  beforeEach(journalBeforeEach("packages/core/tests/each.test.ts"));
+  it("E18: a body eval block reads the current item binding", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "test.md": [
+        "```js eval",
+        "const items = [{ name: 'alpha' }, { name: 'beta' }];",
+        "```",
+        '<Each in={items} let="item">',
+        "```js eval",
+        "output('got:' + item.name);",
+        "```",
+        "</Each>",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("got:alpha");
-      expect(output).toContain("got:beta");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("got:alpha");
+    expect(output).toContain("got:beta");
+    expect(output).not.toContain("ERROR");
+  });
 
-  journalCase("E19: renders a table row per item end to end", "test.md", function* (stream) {
+  it("E19: renders a table row per item end to end", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -265,60 +265,54 @@ describe("Tier Each — eval in the loop body", () => {
     expect(output).not.toContain("ERROR");
   });
 
-  journalCase(
-    "E22: each iteration's eval env is fresh — body bindings do not carry over",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "test.md": [
-          "```js eval",
-          "const items = [1, 2];",
-          "```",
-          '<Each in={items} let="n">',
-          "```js eval",
-          "output('iter' + n + ':' + ('carry' in env ? env.carry : 'absent'));",
-          "env.carry = 'from-' + n;",
-          "```",
-          "</Each>",
-          "```js eval",
-          "output('final:' + (typeof carry === 'undefined' ? 'absent' : carry));",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("E22: each iteration's eval env is fresh — body bindings do not carry over", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "test.md": [
+        "```js eval",
+        "const items = [1, 2];",
+        "```",
+        '<Each in={items} let="n">',
+        "```js eval",
+        "output('iter' + n + ':' + ('carry' in env ? env.carry : 'absent'));",
+        "env.carry = 'from-' + n;",
+        "```",
+        "</Each>",
+        "```js eval",
+        "output('final:' + (typeof carry === 'undefined' ? 'absent' : carry));",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("iter1:absent");
-      expect(output).toContain("iter2:absent");
-      expect(output).toContain("final:absent");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("iter1:absent");
+    expect(output).toContain("iter2:absent");
+    expect(output).toContain("final:absent");
+    expect(output).not.toContain("ERROR");
+  });
 
-  journalCase(
-    "E21: an <Each> projected through <Content /> resolves caller bindings",
-    "test.md",
-    function* (stream) {
-      yield* useStubFs({
-        "components/Wrap.md": "<Content />",
-        "test.md": [
-          "```js eval",
-          "const items = [{ n: 1 }, { n: 2 }];",
-          "const label = 'L';",
-          "```",
-          "<Wrap>",
-          '<Each in={items} let="item">[{label}:{item.n}]</Each>',
-          "</Wrap>",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("E21: an <Each> projected through <Content /> resolves caller bindings", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useStubFs({
+      "components/Wrap.md": "<Content />",
+      "test.md": [
+        "```js eval",
+        "const items = [{ n: 1 }, { n: 2 }];",
+        "const label = 'L';",
+        "```",
+        "<Wrap>",
+        '<Each in={items} let="item">[{label}:{item.n}]</Each>',
+        "</Wrap>",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
-      expect(output).toContain("[L:1]");
-      expect(output).toContain("[L:2]");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    expect(output).toContain("[L:1]");
+    expect(output).toContain("[L:2]");
+    expect(output).not.toContain("ERROR");
+  });
 });

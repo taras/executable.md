@@ -1,4 +1,4 @@
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
@@ -19,9 +19,10 @@ import { collect } from "../src/collect.ts";
 import { printErrors } from "../src/component-failures.ts";
 import type { ComponentElement, FunctionComponent, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-
-const journalCase = journalCases("packages/core/tests/loop.test.ts");
+import {
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 interface LoopRun {
   segments: Segment[];
@@ -691,10 +692,11 @@ describe("Tier LOOP — printed errors carry source positions", () => {
 });
 
 describe("Tier LOOP — document execution", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/loop.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("LOOP35: every iteration journals its own eval entry", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useHostFiles();
     yield* useStubFs({
       "test.md": ["<Loop max={3}>", "", "```js eval", "output('RAN');", "```", "", "</Loop>"].join(
@@ -714,7 +716,7 @@ describe("Tier LOOP — document execution", () => {
   });
 
   it("LOOP36: content skipped by <Break> writes no journal entry", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useHostFiles();
     yield* useStubFs({
       "test.md": [
@@ -747,27 +749,28 @@ describe("Tier LOOP — document execution", () => {
     expect(evalNames(stream.snapshot())).toHaveLength(1);
   });
 
-  journalCase("LOOP37: a binding accumulates across iterations", "test.md", function* (stream) {
+  it("LOOP37: a binding accumulates across iterations", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useHostFiles();
     yield* useStubFs({
-      "test.md": [
-        "```js eval",
-        "const marks = [];",
-        "```",
-        "<Loop max={4}>",
-        "",
-        "```js eval",
-        "marks.push(marks.length);",
-        "```",
-        "",
-        "</Loop>",
-        "",
-        "tally={marks.length}",
-        "",
-        "```js eval",
-        "output(`TALLY:${marks.join(',')}`);",
-        "```",
-      ].join("\n"),
+    "test.md": [
+      "```js eval",
+      "const marks = [];",
+      "```",
+      "<Loop max={4}>",
+      "",
+      "```js eval",
+      "marks.push(marks.length);",
+      "```",
+      "",
+      "</Loop>",
+      "",
+      "tally={marks.length}",
+      "",
+      "```js eval",
+      "output(`TALLY:${marks.join(',')}`);",
+      "```",
+    ].join("\n"),
     });
     yield* useEchoExec();
 
@@ -775,22 +778,19 @@ describe("Tier LOOP — document execution", () => {
     expect(output).toContain("TALLY:0,1,2,3");
   });
 
-  journalCase(
-    "LOOP38: a component in the loop body is imported once per iteration",
-    "test.md",
-    function* (stream) {
-      yield* useHostFiles();
-      yield* useStubFs({
-        "components/Step.md": "step\n",
-        "test.md": "<Loop max={3}><Step /></Loop>",
-      });
-      yield* useEchoExec();
+  it("LOOP38: a component in the loop body is imported once per iteration", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useHostFiles();
+    yield* useStubFs({
+      "components/Step.md": "step\n",
+      "test.md": "<Loop max={3}><Step /></Loop>",
+    });
+    yield* useEchoExec();
 
-      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
-      expect(output.match(/step/g)).toHaveLength(3);
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
+    expect(output.match(/step/g)).toHaveLength(3);
+    expect(output).not.toContain("ERROR");
+  });
 
   it("LOOP39: a truncated journal replays one iteration and runs the rest live", function* () {
     const DOC = [
@@ -847,39 +847,36 @@ describe("Tier LOOP — document execution", () => {
     ]);
   });
 
-  journalCase(
-    "LOOP40: a <Break> chosen from a binding stops the document's loop",
-    "test.md",
-    function* (stream) {
-      yield* useHostFiles();
-      yield* useStubFs({
-        "test.md": [
-          "```js eval",
-          "const seen = [];",
-          "```",
-          "<Loop max={5}>",
-          "",
-          "```js eval",
-          "seen.push('iteration');",
-          "```",
-          "",
-          "<If condition={seen.length === 2}>",
-          "<Break />",
-          "</If>",
-          "</Loop>",
-          "",
-          "```js eval",
-          "output(`ITERATIONS:${seen.length}`);",
-          "```",
-        ].join("\n"),
-      });
-      yield* useEchoExec();
+  it("LOOP40: a <Break> chosen from a binding stops the document's loop", function* () {
+    const stream = yield* useJournalStream("test.md");
+    yield* useHostFiles();
+    yield* useStubFs({
+      "test.md": [
+        "```js eval",
+        "const seen = [];",
+        "```",
+        "<Loop max={5}>",
+        "",
+        "```js eval",
+        "seen.push('iteration');",
+        "```",
+        "",
+        "<If condition={seen.length === 2}>",
+        "<Break />",
+        "</If>",
+        "</Loop>",
+        "",
+        "```js eval",
+        "output(`ITERATIONS:${seen.length}`);",
+        "```",
+      ].join("\n"),
+    });
+    yield* useEchoExec();
 
-      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
-      expect(output).toContain("ITERATIONS:2");
-      expect(output).not.toContain("ERROR");
-    },
-  );
+    const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
+    expect(output).toContain("ITERATIONS:2");
+    expect(output).not.toContain("ERROR");
+  });
 });
 
 /**

@@ -1,13 +1,14 @@
-import { describe } from "@executablemd/test-support/bdd";
+import { beforeEach, describe } from "@executablemd/test-support/bdd";
 import { scoped } from "effection";
 import { expect } from "@executablemd/test-support/expect";
 import { AssertionError } from "node:assert/strict";
 import { Component } from "@executablemd/core";
 import type { ComponentElement } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, failureOf } from "./helpers.ts";
 
-const documentCase = documentCases("packages/testing/tests/assert-throws.test.ts");
+const documentCase = documentCases();
 
 const STRICT = [
   "---",
@@ -30,6 +31,7 @@ function inTest(body: string): Record<string, string> {
 }
 
 describe("<AssertThrows>", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/assert-throws.test.ts"));
   documentCase("passes when the body raises an error matching a substring", function* (runFresh) {
     const run = yield* runFresh(
       inTest('<AssertThrows message="must be number"><Strict n="x" /></AssertThrows>'),

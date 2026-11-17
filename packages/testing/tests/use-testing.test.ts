@@ -1,4 +1,4 @@
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { when } from "@effectionx/converge";
@@ -15,11 +15,12 @@ import { execute, Execution, registerComponents } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { Test, TestFailureError, testing } from "../src/test-api.ts";
 import { useTesting } from "../src/use-testing.ts";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, failureOf, runDoc, withFreshDocument } from "./helpers.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
 const OWNER = "packages/testing/tests/use-testing.test.ts";
-const documentCase = documentCases(OWNER);
+const documentCase = documentCases();
 const journalCase = journalCases(OWNER);
 
 function* drain(
@@ -35,6 +36,7 @@ function* drain(
 }
 
 describe("useTesting composition", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const journalWitness = "attributes a fresh document when its caller fails after execution";

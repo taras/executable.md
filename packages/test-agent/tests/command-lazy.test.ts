@@ -5,7 +5,7 @@
  * even where no entrypoint installed a command adapter. These suites install a
  * deliberately throwing adapter and assert what does and does not reach it.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -16,7 +16,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { execute, useTempFileCompiler } from "@executablemd/core";
 import { installAgentComponents } from "@executablemd/agent/host";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
