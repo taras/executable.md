@@ -15,9 +15,12 @@
  * run rather than pass unnoticed.
  */
 
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -1284,7 +1287,6 @@ describe("Tier DV: one parser, one rule catalog", () => {
  * both are folded into one string.
  */
 const OWNER = "packages/core/tests/document-validation.test.ts";
-const journalCase = journalCases(OWNER);
 
 function expansionPrints(
   stream: InMemoryStream,
@@ -1331,9 +1333,11 @@ function* bothCallersAgree(
 }
 
 describe("Tier DV: one decision, both callers", () => {
+  beforeEach(journalBeforeEach(OWNER));
   {
     const name = "DV14: an ordinary component's `as` binding name is decided once";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         // A registration reaches expansion through the function-component path...
         const registered = yield* bothCallersAgree(
@@ -1359,34 +1363,29 @@ describe("Tier DV: one decision, both callers", () => {
     });
   }
 
-  journalCase(
-    "DV14: `as` written as an expression is refused by one rule",
-    "<eval>",
-    function* (stream) {
-      const message = yield* bothCallersAgree(stream, "<TempDir as={name} />\n", "capture-invalid");
-      expect(message).toBe('Prop "as" on <TempDir /> must be a string literal.');
-    },
-  );
+  it("DV14: `as` written as an expression is refused by one rule", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const message = yield* bothCallersAgree(stream, "<TempDir as={name} />\n", "capture-invalid");
+    expect(message).toBe('Prop "as" on <TempDir /> must be a string literal.');
+  });
 
-  journalCase(
-    "DV14: a value component invoked without `as` is refused by one rule",
-    "<eval>",
-    function* (stream) {
-      const message = yield* bothCallersAgree(
-        stream,
-        '<Glob include={["*.md"]} />\n',
-        "return-usage-invalid",
-      );
-      expect(message).toBe(
-        "<Glob /> declares `returns`, so it renders nothing and must be invoked with `as`: " +
-          '<Glob as="binding" />.',
-      );
-    },
-  );
+  it("DV14: a value component invoked without `as` is refused by one rule", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const message = yield* bothCallersAgree(
+      stream,
+      '<Glob include={["*.md"]} />\n',
+      "return-usage-invalid",
+    );
+    expect(message).toBe(
+      "<Glob /> declares `returns`, so it renders nothing and must be invoked with `as`: " +
+        '<Glob as="binding" />.',
+    );
+  });
 
   {
     const name = "DV14: <Answers> props and body shape are decided once";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream3) {
           const prop = yield* bothCallersAgree(
@@ -1418,7 +1417,8 @@ describe("Tier DV: one decision, both callers", () => {
 
   {
     const name = "DV14: <Answer> props, template form and required value are decided once";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream3) {
           const prop = yield* bothCallersAgree(

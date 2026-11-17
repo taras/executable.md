@@ -9,7 +9,7 @@
  * says what.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { registerComponents } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
@@ -63,9 +63,9 @@ import {
   subcommands,
 } from "./support/composition.ts";
 import { gitPluginAdmissions } from "./support/composition.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
-const journalCase = journalCases("packages/git/tests/git-add.test.ts");
+const OWNER = "packages/git/tests/git-add.test.ts";
 
 /**
  * A tracked file at the root, one in a subdirectory, and one more of each.
@@ -467,6 +467,7 @@ describe("workflow Git.Add invocation", () => {
 });
 
 describe("workflow Git.Add selection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("stages inside the linked Worktree the working directory selects", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -600,7 +601,7 @@ describe("workflow Git.Add selection", () => {
     });
   });
 
-  journalCase("does not turn a missing provider into a refusal", "<eval>", function* (stream) {
+  it("does not turn a missing provider into a refusal", function* () {
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
@@ -608,7 +609,7 @@ describe("workflow Git.Add selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Add paths="." />`),
-            stream,
+            stream: yield* useJournalStream("<eval>"),
           }),
         );
       }),

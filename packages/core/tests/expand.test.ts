@@ -5,9 +5,13 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { registerComponents } from "../src/components/registration.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Subscription } from "effection";
@@ -2171,48 +2175,45 @@ describe("993 nested selection and private renderings", () => {
 });
 
 const OWNER = "packages/core/tests/expand.test.ts";
-const journalCase = journalCases(OWNER);
 
 describe("993 exported projection helpers with production eval", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const helper of ["renderChildren", "useContent", "render"]) {
     for (const terminal of helper === "renderChildren" ? ["eval", "persist eval"] : ["eval"]) {
       for (const sameBlock of [true, false]) {
-        journalCase(
-          `${helper} (${terminal}): ${sameBlock ? "same-block control" : "exported helper called in a later block"}`,
-          "root.md",
-          function* (stream) {
-            yield* useTempFileCompiler();
-            yield* useNormalizedOutput();
-            const call = helper === "render" ? 'render("sel")' : `${helper}()`;
-            const consume = [
-              "const projected = yield* project();",
-              'if (projected !== "sel") { throw new Error("wrong projected input: " + projected); }',
-              'output("[" + projected + "]");',
-            ].join("\n");
-            const body = [
-              `\`\`\`ts ${terminal}`,
-              `function* project() { return yield* ${call}; }`,
-              sameBlock ? consume : "",
-              "```",
-              `\`\`\`ts ${terminal}`,
-              sameBlock ? "" : consume,
-              "```",
-            ].join("\n");
-            yield* useStubFs({
-              "root.md":
-                helper === "render"
-                  ? "<If condition={false}><Output>unreached</Output></If><Render />"
-                  : "Documentation.<Render>documentation<Output>sel</Output></Render>",
-              "components/Render.md": body,
-            });
-            const output = asText(yield* collect(yield* execute({ path: "root.md", stream })));
-            expect(output.trim()).toBe(helper === "render" ? "" : "[sel]");
-            const evals = stream
-              .snapshot()
-              .filter((event) => event.type === "yield" && event.description.type === "eval");
-            expect(evals).toHaveLength(2);
-          },
-        );
+        it(`${helper} (${terminal}): ${sameBlock ? "same-block control" : "exported helper called in a later block"}`, function* () {
+          const stream = yield* useJournalStream("root.md");
+          yield* useTempFileCompiler();
+          yield* useNormalizedOutput();
+          const call = helper === "render" ? 'render("sel")' : `${helper}()`;
+          const consume = [
+            "const projected = yield* project();",
+            'if (projected !== "sel") { throw new Error("wrong projected input: " + projected); }',
+            'output("[" + projected + "]");',
+          ].join("\n");
+          const body = [
+            `\`\`\`ts ${terminal}`,
+            `function* project() { return yield* ${call}; }`,
+            sameBlock ? consume : "",
+            "```",
+            `\`\`\`ts ${terminal}`,
+            sameBlock ? "" : consume,
+            "```",
+          ].join("\n");
+          yield* useStubFs({
+            "root.md":
+              helper === "render"
+                ? "<If condition={false}><Output>unreached</Output></If><Render />"
+                : "Documentation.<Render>documentation<Output>sel</Output></Render>",
+            "components/Render.md": body,
+          });
+          const output = asText(yield* collect(yield* execute({ path: "root.md", stream })));
+          expect(output.trim()).toBe(helper === "render" ? "" : "[sel]");
+          const evals = stream
+            .snapshot()
+            .filter((event) => event.type === "yield" && event.description.type === "eval");
+          expect(evals).toHaveLength(2);
+        });
       }
     }
   }

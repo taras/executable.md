@@ -1,6 +1,6 @@
 import type { Operation } from "effection";
 import process from "node:process";
-import { captureTestJournal } from "../../../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import type { JournalCase } from "../../../src/test-diagnostics.ts";
 import type { DeliverySink } from "../../../src/stdout-delivery.ts";
 import { partitionEntrySegments } from "../../../src/repl/entries.ts";

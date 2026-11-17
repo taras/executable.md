@@ -21,12 +21,12 @@
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, suspend, type Operation } from "effection";
-import type { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { API, Service, useHostFiles } from "@executablemd/runtime";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { runCli } from "@executablemd/test-support/launch";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { COMPOSITION_REGISTRATIONS } from "@executablemd/git";
@@ -35,13 +35,6 @@ import { installPlugins } from "../src/plugin-host.ts";
 import type { CommandPlugins } from "../src/plugin-host.ts";
 import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { DEFAULT_REPOSITORY_ROOT } from "../src/run-repositories.ts";
-import {
-  captureTestJournal,
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
-
-const OWNER = "packages/cli/tests/run-composition.test.ts";
 
 /** Every element an author can write that needs a repository provider. */
 const OPERATIONS: readonly { readonly name: string; readonly source: string }[] = [
@@ -102,12 +95,9 @@ const COMPOSITION_NAMES = [
  * Run one element with the declarations registered and no provider installed —
  * which is exactly what Node and Bun assemble.
  */
-function ordinaryWithoutProvider(
-  source: string,
-  cwd: string,
-  stream: InMemoryStream,
-): Operation<unknown> {
+function ordinaryWithoutProvider(source: string, cwd: string): Operation<unknown> {
   return scoped(function* () {
+    const stream = yield* useJournalStream("<eval>");
     yield* API.Env.around(
       {
         // deno-lint-ignore require-yield
@@ -137,7 +127,7 @@ function* gitProfile(command: string): Operation<CommandPlugins> {
 }
 
 describe("ORC1 — describing the vocabulary reaches nothing", () => {
-  beforeEach(journalBeforeEach(OWNER));
+  beforeEach(journalBeforeEach("packages/cli/tests/run-composition.test.ts"));
   it("builds the catalog without a subprocess, a service, a request or a lock", function* () {
     const managed = yield* useTempDirectory("xmd-orc1-managed-");
     const reached: string[] = [];
@@ -216,7 +206,6 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 });
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
-  beforeEach(journalBeforeEach(OWNER));
   it("registers the same sixteen declarations the syntax catalog describes", function* () {
     // The array itself, rather than a second list: the Plugin's own
     // registration and the catalog both consume this one, so there is nothing
@@ -239,44 +228,31 @@ describe("ORC2 — one language, described everywhere and operated somewhere", (
     }
   });
 
-  const absentProvider =
-    "reports an absent provider for every repository operation, and mutates nothing";
-  it(absentProvider, function* () {
+  it("reports an absent provider for every repository operation, and mutates nothing", function* () {
     for (const operation of OPERATIONS) {
-      yield* captureTestJournal(
-        { owner: OWNER, name: absentProvider },
-        "<eval>",
-        function* (stream) {
-          // The working directory is this repository's own checkout, so a provider
-          // that *did* discover an ambient repository would find one — and the
-          // refusal below would then be about something else.
-          const failure = yield* raisedValue(
-            ordinaryWithoutProvider(operation.source, ".", stream),
-          );
-          // The element's name travels with the assertion, so a failure says which
-          // element reported something else.
-          const reported = `${operation.name}: ${String(failure)}`;
-          expect(reported).toMatch(
-            /provider is not installed|no Repository composition provider|no Git composition provider|no issue provider|no Issue provider|no pull-request provider/,
-          );
-        },
+      // The working directory is this repository's own checkout, so a provider
+      // that *did* discover an ambient repository would find one — and the
+      // refusal below would then be about something else.
+      const failure = yield* raisedValue(ordinaryWithoutProvider(operation.source, "."));
+      // The element's name travels with the assertion, so a failure says which
+      // element reported something else.
+      const reported = `${operation.name}: ${String(failure)}`;
+      expect(reported).toMatch(
+        /provider is not installed|no Repository composition provider|no Git composition provider|no issue provider|no Issue provider|no pull-request provider/,
       );
     }
   });
 
   it("leaves <Dir> working, because it needs no provider at all", function* () {
-    const stream = yield* useJournalStream("<eval>");
     const rendered = yield* ordinaryWithoutProvider(
       ['<Dir path=".">', "", "inside", "", "</Dir>"].join("\n"),
       ".",
-      stream,
     );
     expect(String(rendered)).toContain("inside");
   });
 });
 
 describe("ORC2 — Dir is operational where the repository provider is not", () => {
-  beforeEach(journalBeforeEach(OWNER));
   // The one composition element that needs no repository provider. Every other
   // name here reports an absent provider on this runtime; `<Dir>` reaches the
   // host `API.Files` provider instead, which all four entrypoints install — so
@@ -286,14 +262,12 @@ describe("ORC2 — Dir is operational where the repository provider is not", () 
   // the tier suites drive under Deno, and the claim being made here is that
   // nothing about it is Deno's.
   it("creates the directory and runs its content with no repository provider", function* () {
-    const stream = yield* useJournalStream("<eval>");
     const workspace = yield* useTempDirectory("xmd-orc2-dir-");
 
     const rendered = String(
       yield* ordinaryWithoutProvider(
         '<Dir path="made/deep">\n\n<File path="inside.md">landed</File>\n\nINSIDE\n\n</Dir>\n',
         workspace,
-        stream,
       ),
     );
 
@@ -306,7 +280,6 @@ describe("ORC2 — Dir is operational where the repository provider is not", () 
   // rather than answered, so `<Dir>` being operational is not `<Dir>` being
   // permissive.
   it("refuses a non-directory target without a repository provider", function* () {
-    const stream = yield* useJournalStream("<eval>");
     const workspace = yield* useTempDirectory("xmd-orc2-dir-refusal-");
     yield* writeTextFile(join(workspace, "occupied"), "a file");
 
@@ -314,7 +287,6 @@ describe("ORC2 — Dir is operational where the repository provider is not", () 
       yield* ordinaryWithoutProvider(
         '<PrintErrors>\n<Dir path="occupied">\n\nINSIDE\n\n</Dir>\n</PrintErrors>\n',
         workspace,
-        stream,
       ),
     );
 
@@ -325,14 +297,12 @@ describe("ORC2 — Dir is operational where the repository provider is not", () 
 });
 
 describe("ORC2 — where the managed root is", () => {
-  beforeEach(journalBeforeEach(OWNER));
   it("names ~/.xmd/repositories and nothing a document can influence", function* () {
-    const stream = yield* useJournalStream("<eval>");
     expect(DEFAULT_REPOSITORY_ROOT.endsWith("/.xmd/repositories")).toBe(true);
     // Describing the vocabulary and refusing an operation both leave it exactly
     // as they found it — including not existing.
     const before = yield* exists(DEFAULT_REPOSITORY_ROOT);
-    yield* raisedValue(ordinaryWithoutProvider(`<Git.Push />`, ".", stream));
+    yield* raisedValue(ordinaryWithoutProvider(`<Git.Push />`, "."));
     expect(yield* exists(DEFAULT_REPOSITORY_ROOT)).toBe(before);
   });
 });

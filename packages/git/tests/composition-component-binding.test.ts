@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 /**
  * One registry, one authored body, and the invocation an owning execution
  * authenticates for it.

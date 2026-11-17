@@ -1,13 +1,15 @@
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { Component, useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { AssertionError } from "node:assert/strict";
 import { TestFailureError } from "../src/test-api.ts";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, failureOf } from "./helpers.ts";
 
-const documentCase = documentCases("packages/testing/tests/assertions.test.ts");
+const documentCase = documentCases();
 
 describe("assertion components", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/assertions.test.ts"));
   beforeAll(() => useTempFileCompiler());
   documentCase("passing assertions in testing mode emit diagnostics", function* (runFresh) {
     const run = yield* runFresh(
