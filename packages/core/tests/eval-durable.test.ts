@@ -6,7 +6,8 @@
  *
  * Uses InMemoryStream for journaling and API.Fs/API.Process middleware for I/O stubs.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -14,14 +15,14 @@ import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { completion, failureMessage } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
-
-const journalCase = journalCases("packages/core/tests/eval-durable.test.ts");
+const owner = "packages/core/tests/eval-durable.test.ts";
 
 describe("Tier T4 — eval factory and journal integration", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(owner));
   // T31: Golden run — journal entry written with serializable exports
-  journalCase("T31: golden run — journal records eval entry", "test.md", function* (stream) {
+  it("T31: golden run — journal records eval entry", function* () {
+    const stream = yield* useJournalStream("test.md");
     const files = {
       "test.md": "```js eval\nconst x = 42;\n```\n",
     };
@@ -113,7 +114,8 @@ describe("Tier T4 — eval factory and journal integration", () => {
   });
 
   // T36: Serializable binding — present in journal result
-  journalCase("T36: serializable binding present in journal", "test.md", function* (stream) {
+  it("T36: serializable binding present in journal", function* () {
+    const stream = yield* useJournalStream("test.md");
     const files = {
       "test.md": '```js eval\nconst port = 3000;\nconst host = "localhost";\n```\n',
     };
@@ -132,7 +134,8 @@ describe("Tier T4 — eval factory and journal integration", () => {
   });
 
   // T37: Non-serializable binding — absent from journal, present live
-  journalCase("T37: non-serializable binding omitted from journal", "test.md", function* (stream) {
+  it("T37: non-serializable binding omitted from journal", function* () {
+    const stream = yield* useJournalStream("test.md");
     const files = {
       "test.md": "```js eval\nconst fn = () => 42;\nconst x = 1;\n```\n",
     };
@@ -152,34 +155,31 @@ describe("Tier T4 — eval factory and journal integration", () => {
   });
 
   // T-import-1: eval block with user import — runs through full pipeline
-  journalCase(
-    "T-import-1: eval block with user import runs correctly",
-    "test.md",
-    function* (stream) {
-      // Import from a well-known Deno/Node built-in to avoid needing
-      // an actual package. We use a self-contained data: URI import
-      // that's resolvable at runtime.
-      const files = {
-        "test.md": [
-          "```ts eval",
-          'import { basename } from "node:path";',
-          "",
-          'const name = basename("/foo/bar/baz.txt");',
-          "return name;",
-          "```",
-        ].join("\n"),
-      };
-      yield* useStubFs(files);
-      yield* useEchoExec();
+  it("T-import-1: eval block with user import runs correctly", function* () {
+    const stream = yield* useJournalStream("test.md");
+    // Import from a well-known Deno/Node built-in to avoid needing
+    // an actual package. We use a self-contained data: URI import
+    // that's resolvable at runtime.
+    const files = {
+      "test.md": [
+        "```ts eval",
+        'import { basename } from "node:path";',
+        "",
+        'const name = basename("/foo/bar/baz.txt");',
+        "return name;",
+        "```",
+      ].join("\n"),
+    };
+    yield* useStubFs(files);
+    yield* useEchoExec();
 
-      const output = yield* collect(
-        yield* execute({
-          path: "test.md",
-          stream,
-        }),
-      );
+    const output = yield* collect(
+      yield* execute({
+        path: "test.md",
+        stream,
+      }),
+    );
 
-      expect(output).toContain("baz.txt");
-    },
-  );
+    expect(output).toContain("baz.txt");
+  });
 });
