@@ -46,6 +46,7 @@ import {
   DRAFT_VALUE,
   intoDraft,
   draftText,
+  draftShows,
   entrySettles,
   openHistory,
   pasteDraft,
@@ -889,11 +890,18 @@ function longEntry(lines: number): string {
   return `${Array.from({ length: lines }, (_, at) => (at % 4 === 3 ? "" : `<Json value={{ ordinal: ${at}, note: "line ${at} of a long entry" }} as="n${at}" />`)).join("\n")}\n`;
 }
 
-function* interactionCost(page: ReplPage, send: () => Operation<void>): Operation<number> {
+function* interactionCost(
+  page: ReplPage,
+  send: () => Operation<void>,
+  applied: (screen: ScreenReading) => boolean,
+): Operation<number> {
   const before = page.repl.terminal.sized;
   const index = page.screen().index;
   yield* send();
-  yield* page.until("the interaction's completed presentation", (one) => one.index > index);
+  yield* page.until(
+    "the interaction's completed presentation",
+    (one) => one.index > index && applied(one),
+  );
   return page.repl.terminal.sized - before;
 }
 
@@ -906,14 +914,37 @@ describe("REPL original interaction costs and visible exit routes", () => {
       yield* entrySettles(page, 1, "ok");
       yield* selectCatalog(page, "entry-1");
       yield* intoDraft(page);
-      yield* interactionCost(page, () => page.type("a"));
+      // Opening New Round can still publish its focus restoration. Begin
+      // sampling once the editor has applied an actual edit.
+      yield* page.type("q");
+      yield* page.until("the first edit applied", (one) => draftShows(one, "q"));
       const typed = [
-        yield* interactionCost(page, () => page.type("b")),
-        yield* interactionCost(page, () => page.type("c")),
+        yield* interactionCost(
+          page,
+          () => page.type("r"),
+          (one) => draftShows(one, "qr"),
+        ),
+        yield* interactionCost(
+          page,
+          () => page.type("s"),
+          (one) => draftShows(one, "qrs"),
+        ),
       ];
-      const erased = yield* interactionCost(page, () => page.key("Backspace"));
-      const forward = yield* interactionCost(page, () => page.key("Tab"));
-      const backward = yield* interactionCost(page, () => page.key("Backtab"));
+      const erased = yield* interactionCost(
+        page,
+        () => page.key("Backspace"),
+        (one) => !draftShows(one, "qrs") && draftShows(one, "qr"),
+      );
+      const forward = yield* interactionCost(
+        page,
+        () => page.key("Tab"),
+        (one) => one.shows("> Send"),
+      );
+      const backward = yield* interactionCost(
+        page,
+        () => page.key("Backtab"),
+        (one) => one.shows("> Round"),
+      );
       expect(typed[0]).toBe(typed[1]);
       for (const reads of [...typed, erased, forward, backward]) {
         expect(reads).toBeGreaterThanOrEqual(4);
@@ -948,12 +979,18 @@ describe("REPL original interaction costs and visible exit routes", () => {
     yield* page.until("the joined entry", (one) => one.shows("Ready for Entry 2"));
     yield* intoDraft(page);
     expect(page.screen().shows("> Round")).toBe(true);
+    yield* page.type("q");
+    yield* page.until("the editor applying the probe", (one) => draftShows(one, "q"));
+    yield* page.key("Backspace");
+    yield* page.until("the editor clearing the probe", (one) =>
+      draftShows(one, "Executable Markdown"),
+    );
     const before = page.repl.terminal.presented.length;
     const index = page.screen().index;
     yield* page.key("Tab");
     yield* page.until(
       "focus leaving Draft input",
-      (one) => one.index > index && !one.shows("> Round"),
+      (one) => one.index > index && one.shows("> Send"),
     );
     expect(page.repl.terminal.presented.length - before).toBe(1);
     const back = page.repl.terminal.presented.length;

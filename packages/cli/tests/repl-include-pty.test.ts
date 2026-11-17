@@ -127,21 +127,18 @@ function* refused(pty: Pty, history: string, name: string): Operation<void> {
   for (let at = 0; at < `<${name} />`.length; at += 1) {
     yield* pty.type("\x7f");
   }
-  // The script allocator queues writes without waiting for a frame. Clearing
-  // the refusal changes the footer height and moves Exit before its next click.
+  // Clearing the source removes the document refusal from the identity header.
   const deadline = Date.now() + ACT_MS;
   while (true) {
     const screen = yield* pty.shows();
-    const draft = screen.findIndex((row) => row.includes("> Round"));
-    const rail = screen.findIndex((row) => row.includes(" HISTORY"));
-    const column = screen[draft]?.split("│").findIndex((part) => part.includes("> Round"));
+    const bar = screen.findIndex((row) => row.includes("✎ draft") && row.includes("+ New Round"));
     if (
-      draft >= 0 &&
-      rail > draft &&
-      column !== undefined &&
-      column > 0 &&
-      screen.slice(draft + 1, rail - 2).every((row) => row.split("│")[column]?.trim() === "") &&
-      screen[rail - 1]?.includes("Ready for Entry") === true
+      bar >= 0 &&
+      screen[bar + 1]?.includes("HISTORY") === true &&
+      screen.some((row) => row.includes("> Round")) &&
+      screen.some((row) => /│ *Executable Markdown *│/.test(row)) &&
+      screen[0]?.includes("Ready for Entry") === true &&
+      !screen.some((row) => row.includes(`<${name} />`))
     ) {
       return;
     }

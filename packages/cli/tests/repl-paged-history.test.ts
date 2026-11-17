@@ -288,6 +288,10 @@ describe("Paged REPL history", () => {
       "the running third entry with its submitted Draft cleared",
       (screen) => screen.shows("Entry 3 running") && !screen.shows("✎ draft"),
     );
+    yield* page.press("Entries", { onRow: "Entries" });
+    yield* page.until("the Entries catalog", (screen) => screen.shows("[close]"));
+    yield* page.press("entry-1");
+    yield* page.until("the first entry selected", (screen) => screen.shows("Entries › Entry 1"));
     yield* page.press("BINDINGS");
     yield* page.until("the first entry Input", (screen) => screen.shows("entry-1 Input"));
     yield* page.press("Output", SIDEKICK_PANE);

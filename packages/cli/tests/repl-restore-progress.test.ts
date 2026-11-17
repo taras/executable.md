@@ -263,7 +263,11 @@ describe("#1037 cold restore progress", () => {
     yield* shown(terminal, "Saved round 155 witness.");
     yield* shown(terminal, "Saved Sidekick reply witness.");
     yield* shown(terminal, "Restored 155 rounds in ");
-    terminal.feed("\x074\rreopened-draft");
+    terminal.feed("\x074");
+    yield* shown(terminal, "> + New Round");
+    terminal.feed("\r");
+    yield* shown(terminal, "> Round 156");
+    terminal.feed("reopened-draft");
     const live = yield* shown(terminal, "reopened-draft");
     const draft = live.map((row) => row.slice(36, 90));
     const heading = draft.findIndex((row) => row.includes("· draft"));

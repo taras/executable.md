@@ -7,6 +7,7 @@ import {
   intoComposer,
   typed,
   draftText,
+  draftShows,
   openHistory,
   selectPane,
   openConfigure,
@@ -318,12 +319,17 @@ describe("1048 — generated retained output", () => {
     yield* page.type("!");
     yield* page.until("the saved middle Message caret", (one) => one.shows("ab!界"));
     yield* draftText(page, "draft");
+    yield* page.until("the editor holding the draft", (one) => draftShows(one, "draft"));
     yield* completedKey(page, "ArrowLeft");
+    yield* page.type("!");
+    yield* page.until("the middle Draft caret before History", (one) => draftShows(one, "draf!t"));
+    yield* page.key("Backspace");
+    yield* page.until("the Draft probe erased", (one) => draftShows(one, "draft"));
     yield* openHistory(page);
     yield* page.key("Escape");
     yield* page.until("History closed", (one) => !one.shows("[close]"));
     yield* page.type("!");
-    yield* page.until("the saved middle Draft caret", (one) => one.shows("draf!t"));
+    yield* page.until("the saved middle Draft caret", (one) => draftShows(one, "draf!t"));
     const after = yield* settledReading(page.repl);
     expect(after).toEqual(read);
     expect(page.repl.fake.prompts).toHaveLength(4);

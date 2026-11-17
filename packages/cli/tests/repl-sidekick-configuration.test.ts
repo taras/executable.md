@@ -1447,6 +1447,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // Genuinely below the window before it is scrolled to.
     expect(offered(page.screen(), last)).toBe(false);
     yield* scrollDrawerTo(page, last);
+    yield* page.until("the scrolled Content focus", (one) =>
+      one.rows.some((row) => />\s+\([ x]\) Model \d+\s*$/.test(row)),
+    );
     yield* chooseNamed(page, last);
     // Apply is below the window too, which is the state this is about: the
     // window has been moved a long way, and the way out is still on the screen.

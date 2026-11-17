@@ -4,7 +4,13 @@ import { expect } from "@executablemd/test-support/expect";
 import { writeTextFile } from "@effectionx/fs";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
-import { composerHolds, draftText, intoComposer } from "./support/screen-journeys.ts";
+import {
+  composerHolds,
+  draftShows,
+  draftText,
+  intoComposer,
+  intoDraft,
+} from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
@@ -240,8 +246,8 @@ for (const size of [
       yield* page.key("Backspace");
       yield* page.until("Message caret edit undone", (one) => composerHolds(one, "kept message"));
       if (size.columns < 120) {
-        yield* page.press("Entries");
-        yield* page.until("draft survives", (one) => one.shows("kept entry"));
+        yield* intoDraft(page);
+        yield* page.until("draft survives on Entries", (one) => draftShows(one, "kept entry"));
       } else {
         expect(page.screen().shows("kept entry")).toBe(true);
       }
