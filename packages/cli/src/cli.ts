@@ -430,6 +430,9 @@ const planConfig = object({
   },
 });
 
+const TEST_REPORTER_OPTION = "--reporter";
+const testReporter = z.enum(["pretty", "failures"]);
+
 const testConfig = object({
   path: {
     description: "markdown document or directory to test (defaults to the current directory)",
@@ -438,6 +441,10 @@ const testConfig = object({
   pattern: {
     description: "glob for test documents, relative to a directory target (repeatable)",
     ...field(z.array(z.string()), field.default(["**/*.test.md"]), field.array()),
+  },
+  reporter: {
+    description: "test output: pretty (default) or failures",
+    ...field(testReporter, field.default("pretty")),
   },
   include: {
     description: "component search directory",
@@ -1776,9 +1783,7 @@ type TestPlugins = (document: string) => Operation<CommandPlugins>;
 /**
  * `xmd test` — one document, or every document a directory holds.
  *
- * A directory keeps going after a failure and decides the status once at the
- * end. A single document behaves exactly as it always has: one reported
- * failure, no heading, no summary.
+ * A directory runs every matching document and settles the exit status once.
  */
 function* test(
   config: TestConfig,
@@ -1786,7 +1791,15 @@ function* test(
   installService: HostServiceInstaller,
   testPlugins: TestPlugins,
 ): Operation<void> {
-  const patterns = readPatternFlags(args);
+  const reporterFlags = readTestOption(args, TEST_REPORTER_OPTION);
+  const reporter = testReporter.safeParse(reporterFlags.values[0] ?? "pretty");
+  if (reporterFlags.missingValue || reporterFlags.values.length > 1 || !reporter.success) {
+    console.error("--reporter accepts one value: pretty or failures");
+    yield* exit(1);
+    return;
+  }
+  const failuresOnly = reporter.data === "failures";
+  const patterns = readTestOption(args, PATTERN_OPTION);
   if (patterns.missingValue) {
     console.error(
       `${PATTERN_OPTION} requires a value — write \`${PATTERN_OPTION} <glob>\`, or ` +
@@ -1814,14 +1827,27 @@ function* test(
       return;
     }
     announceSecretDetection(config.secretDetection);
-    const { value: result, delivery } = yield* withTestProgress((diagnostics) =>
-      runTestDocument({ ...config, root: { path } }, testPlugins, installService, diagnostics),
+    const {
+      value: result,
+      delivery,
+      summary,
+    } = yield* withTestProgress(failuresOnly, (diagnostics) =>
+      runTestDocument(
+        { ...config, root: { path }, discardOutput: failuresOnly },
+        testPlugins,
+        installService,
+        diagnostics,
+      ),
     );
     if (!result.ok) {
       reportFailure(result.error);
-      yield* exit(1);
     } else if (!delivery.ok) {
       reportFailure(delivery.error);
+    }
+    if (failuresOnly) {
+      console.error(summary);
+    }
+    if (!result.ok || !delivery.ok) {
       yield* exit(1);
     }
     return;
@@ -1847,15 +1873,22 @@ function* test(
   // and a directory of fifty documents would otherwise say so fifty times.
   announceSecretDetection(config.secretDetection);
 
-  const { value: failures, delivery } = yield* withTestProgress(function* (diagnostics) {
+  const {
+    value: failures,
+    delivery,
+    summary,
+  } = yield* withTestProgress(failuresOnly, function* (diagnostics) {
     const failed: string[] = [];
     for (const document of target.documents) {
-      process.stdout.write(`\n# ${document.relativePath}\n\n`);
+      if (!failuresOnly) {
+        process.stdout.write(`\n# ${document.relativePath}\n\n`);
+      }
       const result = yield* runTestDocument(
         {
           ...config,
           root: { path: document.path },
           include: componentSearchPath(document, target.root, config.include),
+          discardOutput: failuresOnly,
         },
         testPlugins,
         installService,
@@ -1869,11 +1902,19 @@ function* test(
     return failed;
   });
 
-  if (failures.length > 0) {
-    console.error(`\n${failures.length} of ${target.documents.length} documents failed`);
-    yield* exit(1);
-  } else if (!delivery.ok) {
+  const failedDocuments =
+    failures.length > 0
+      ? `${failures.length} of ${target.documents.length} documents failed`
+      : undefined;
+  if (failedDocuments === undefined && !delivery.ok) {
     reportFailure(delivery.error);
+  }
+  if (failuresOnly) {
+    console.error(failedDocuments === undefined ? summary : `${summary} · ${failedDocuments}`);
+  } else if (failedDocuments !== undefined) {
+    console.error(`\n${failedDocuments}`);
+  }
+  if (failures.length > 0 || !delivery.ok) {
     yield* exit(1);
   }
 }
@@ -1886,15 +1927,22 @@ function* test(
  * returns, so whatever the command reports next follows them.
  */
 function* withTestProgress<T>(
+  failuresOnly: boolean,
   body: (diagnostics: TestDiagnostics) => Operation<T>,
-): Operation<{ value: T; delivery: Result<void> }> {
-  let delivery: () => Result<void> = () => Ok(undefined);
-  const value = yield* scoped(function* () {
-    const diagnostics = yield* useTestDiagnostics(process.stderr);
-    delivery = diagnostics.delivery;
-    return yield* body(diagnostics);
+): Operation<{ value: T; delivery: Result<void>; summary: string }> {
+  const started = performance.now();
+  const run = yield* scoped(function* () {
+    const diagnostics = yield* useTestDiagnostics(process.stderr, failuresOnly);
+    const value = yield* body(diagnostics);
+    return { value, diagnostics };
   });
-  return { value, delivery: delivery() };
+  const { pass, fail } = run.diagnostics.results();
+  const elapsed = Math.round(performance.now() - started);
+  return {
+    value: run.value,
+    delivery: run.diagnostics.delivery(),
+    summary: `[xmd test] ${pass} passed | ${fail} failed (${elapsed}ms)`,
+  };
 }
 
 /**
@@ -2002,15 +2050,13 @@ function findPropsFlag(args: string[]): string | undefined {
 
 const PATTERN_OPTION = "--pattern";
 
-interface PatternFlags {
-  /** Values the caller wrote, in the order they wrote them. */
+interface TestOption {
   values: string[];
-  /** A `--pattern` that ran out of argv or was followed by another option. */
   missingValue: boolean;
 }
 
 /**
- * Read `--pattern` from argv.
+ * Read an explicitly supplied test option from argv.
  *
  * The resolved configuration answers none of the questions this serves. It
  * cannot say whether the option was given at all — the default is a real
@@ -2021,7 +2067,7 @@ interface PatternFlags {
  * A separated value that begins with `-` is another option, not a glob;
  * `--pattern=<glob>` expresses a glob that really does begin with one.
  */
-function readPatternFlags(args: string[]): PatternFlags {
+function readTestOption(args: string[], option: string): TestOption {
   const values: string[] = [];
   let missingValue = false;
 
@@ -2029,7 +2075,7 @@ function readPatternFlags(args: string[]): PatternFlags {
     if (arg === "--") {
       break;
     }
-    if (arg === PATTERN_OPTION) {
+    if (arg === option) {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) {
         missingValue = true;
@@ -2038,8 +2084,8 @@ function readPatternFlags(args: string[]): PatternFlags {
       values.push(value);
       continue;
     }
-    if (arg.startsWith(`${PATTERN_OPTION}=`)) {
-      values.push(arg.slice(PATTERN_OPTION.length + 1));
+    if (arg.startsWith(`${option}=`)) {
+      values.push(arg.slice(option.length + 1));
     }
   }
 
