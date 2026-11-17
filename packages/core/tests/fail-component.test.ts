@@ -15,8 +15,9 @@
  * sentinel message being nowhere in the failure.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -55,11 +56,7 @@ interface Run {
   events: DurableEvent[];
 }
 
-const journalCase = workspaceJournalCases(
-  "packages/core/tests/fail-component.test.ts",
-  "doc.md",
-  useDir,
-);
+const OWNER = "packages/core/tests/fail-component.test.ts";
 
 function useDir(): Operation<string> {
   return resource<string>(function* (provide) {
@@ -179,56 +176,55 @@ const MISSING_RETURN = "The root document declares `returns` but produced no <Re
 const VALUE_ROOT = ["---", "returns:", "  type: string", "---", ""].join("\n");
 
 describe("Tier FAIL — stopping a document deliberately", () => {
-  journalCase(
-    "FAIL1: ends a plain root with the authored message and runs no later sibling",
-    function* (stream, dir) {
-      const result = yield* run(
-        dir,
-        [
-          "before",
-          "",
-          '<Fail message="Review aborted; nothing was saved." />',
-          "",
-          '<Ran mark="after" />',
-          "",
-        ].join("\n"),
-        { stream },
-      );
+  beforeEach(journalBeforeEach(OWNER));
+  it("FAIL1: ends a plain root with the authored message and runs no later sibling", function* () {
+    const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const result = yield* run(
+      dir,
+      [
+        "before",
+        "",
+        '<Fail message="Review aborted; nothing was saved." />',
+        "",
+        '<Ran mark="after" />',
+        "",
+      ].join("\n"),
+      { stream },
+    );
 
-      // The authored sentence is the outcome, unprefixed and unclassified.
-      expect(failureOf(result).message).toBe("Review aborted; nothing was saved.");
-      // Text before it had already streamed; the component itself rendered none.
-      expect(result.output).toBe("before\n\n");
-      expect(result.ran).toEqual([]);
-      // Nothing printed it: an unmarked component leaves recovery to the region.
-      expect(result.observed).toEqual([]);
-    },
-  );
+    // The authored sentence is the outcome, unprefixed and unclassified.
+    expect(failureOf(result).message).toBe("Review aborted; nothing was saved.");
+    // Text before it had already streamed; the component itself rendered none.
+    expect(result.output).toBe("before\n\n");
+    expect(result.ran).toEqual([]);
+    // Nothing printed it: an unmarked component leaves recovery to the region.
+    expect(result.observed).toEqual([]);
+  });
 
-  journalCase(
-    "FAIL2: fails a value root instead of reporting a missing <Return>",
-    function* (stream, dir) {
-      const result = yield* run(
-        dir,
-        [
-          VALUE_ROOT,
-          '<Fail message="No candidate was approvable." />',
-          "",
-          '<Return value={"late"} />',
-          "",
-        ].join("\n"),
-        { stream },
-      );
+  it("FAIL2: fails a value root instead of reporting a missing <Return>", function* () {
+    const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const result = yield* run(
+      dir,
+      [
+        VALUE_ROOT,
+        '<Fail message="No candidate was approvable." />',
+        "",
+        '<Return value={"late"} />',
+        "",
+      ].join("\n"),
+      { stream },
+    );
 
-      const failure = failureOf(result);
-      // The authored error itself, by identity, rather than a message that reads
-      // like it.
-      expect(reaches(failure, offeredByFail(result).error)).toBe(true);
-      expect(failure.message).toBe("No candidate was approvable.");
-      expect(failure.message).not.toBe(MISSING_RETURN);
-      expect(everythingSaid(result)).not.toContain("produced no <Return> value");
-    },
-  );
+    const failure = failureOf(result);
+    // The authored error itself, by identity, rather than a message that reads
+    // like it.
+    expect(reaches(failure, offeredByFail(result).error)).toBe(true);
+    expect(failure.message).toBe("No candidate was approvable.");
+    expect(failure.message).not.toBe(MISSING_RETURN);
+    expect(everythingSaid(result)).not.toContain("produced no <Return> value");
+  });
 
   it("FAIL3: does nothing beneath an unselected <If>, and the root returns", function* () {
     const dir = yield* useDir();
@@ -252,66 +248,66 @@ describe("Tier FAIL — stopping a document deliberately", () => {
     expect(importedNames(result.events)).not.toContain("Fail");
   });
 
-  journalCase(
-    "FAIL4: names loop exhaustion after the loop reached its own max",
-    function* (stream, dir) {
-      const result = yield* run(
-        dir,
-        [
-          VALUE_ROOT,
-          '<Loop max={2}><Ran mark="attempt" /></Loop>',
-          "",
-          '<Fail message="No attempt produced an approvable candidate in 2 tries." />',
-          "",
-          '<Ran mark="after" />',
-          "",
-          '<Return value={"approved"} />',
-          "",
-        ].join("\n"),
-        { stream },
-      );
+  it("FAIL4: names loop exhaustion after the loop reached its own max", function* () {
+    const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const result = yield* run(
+      dir,
+      [
+        VALUE_ROOT,
+        '<Loop max={2}><Ran mark="attempt" /></Loop>',
+        "",
+        '<Fail message="No attempt produced an approvable candidate in 2 tries." />',
+        "",
+        '<Ran mark="after" />',
+        "",
+        '<Return value={"approved"} />',
+        "",
+      ].join("\n"),
+      { stream },
+    );
 
-      // The loop finished normally; the failure is the sibling chosen after it.
-      expect(result.ran).toEqual(["attempt", "attempt"]);
-      expect(failureOf(result).message).toBe(
-        "No attempt produced an approvable candidate in 2 tries.",
-      );
-      expect(result.ran).not.toContain("after");
-      expect(everythingSaid(result)).not.toContain("produced no <Return> value");
-    },
-  );
+    // The loop finished normally; the failure is the sibling chosen after it.
+    expect(result.ran).toEqual(["attempt", "attempt"]);
+    expect(failureOf(result).message).toBe(
+      "No attempt produced an approvable candidate in 2 tries.",
+    );
+    expect(result.ran).not.toContain("after");
+    expect(everythingSaid(result)).not.toContain("produced no <Return> value");
+  });
 
-  journalCase(
-    "FAIL5: is recovered by an authored <PrintErrors> in a text root, once",
-    function* (stream, dir) {
-      const result = yield* run(
-        dir,
-        [
-          "<PrintErrors>",
-          '<Fail message="This region was abandoned." />',
-          "</PrintErrors>",
-          "",
-          '<Ran mark="after" />',
-          "tail",
-          "",
-        ].join("\n"),
-        { stream },
-      );
+  it("FAIL5: is recovered by an authored <PrintErrors> in a text root, once", function* () {
+    const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const result = yield* run(
+      dir,
+      [
+        "<PrintErrors>",
+        '<Fail message="This region was abandoned." />',
+        "</PrintErrors>",
+        "",
+        '<Ran mark="after" />',
+        "tail",
+        "",
+      ].join("\n"),
+      { stream },
+    );
 
-      expect(result.outcome.ok).toBe(true);
-      // Reported exactly once, as an ordinary function-component diagnostic.
-      expect(result.observed.map((segment) => segment.message)).toEqual([
-        "Function component Fail error: This region was abandoned.",
-      ]);
-      // Later siblings run, and the component contributed nothing but that one
-      // printed error — the sentence appears exactly once in what the reader saw.
-      expect(result.ran).toEqual(["after"]);
-      expect(result.output).toContain("tail");
-      expect(result.output.split("This region was abandoned.").length - 1).toBe(1);
-    },
-  );
+    expect(result.outcome.ok).toBe(true);
+    // Reported exactly once, as an ordinary function-component diagnostic.
+    expect(result.observed.map((segment) => segment.message)).toEqual([
+      "Function component Fail error: This region was abandoned.",
+    ]);
+    // Later siblings run, and the component contributed nothing but that one
+    // printed error — the sentence appears exactly once in what the reader saw.
+    expect(result.ran).toEqual(["after"]);
+    expect(result.output).toContain("tail");
+    expect(result.output.split("This region was abandoned.").length - 1).toBe(1);
+  });
 
-  journalCase("FAIL6: is not recovered by <PrintErrors> in a value root", function* (stream, dir) {
+  it("FAIL6: is not recovered by <PrintErrors> in a value root", function* () {
+    const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -393,31 +389,31 @@ describe("Tier FAIL — invocations that never raise the authored message", () =
 });
 
 describe("Tier FAIL — position, durability and precedence", () => {
-  journalCase(
-    "FAIL8: positions the failure at the opening tag it was written on",
-    function* (stream, dir) {
-      const lines = [
-        "# Review",
-        "",
-        "some prose",
-        "",
-        '<Fail message="Stopped at line five." />',
-        "",
-      ];
-      const source = lines.join("\n");
-      const result = yield* run(dir, source, { stream });
+  beforeEach(journalBeforeEach(OWNER));
+  it("FAIL8: positions the failure at the opening tag it was written on", function* () {
+    const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const lines = [
+      "# Review",
+      "",
+      "some prose",
+      "",
+      '<Fail message="Stopped at line five." />',
+      "",
+    ];
+    const source = lines.join("\n");
+    const result = yield* run(dir, source, { stream });
 
-      const failure = offeredByFail(result);
-      expect(failure.name).toBe("Fail");
-      expect(failure.error.message).toBe("Stopped at line five.");
-      expect(failure.position).toEqual({
-        path: join(dir, "doc.md"),
-        offset: source.indexOf("<Fail"),
-        line: 5,
-        column: 1,
-      });
-    },
-  );
+    const failure = offeredByFail(result);
+    expect(failure.name).toBe("Fail");
+    expect(failure.error.message).toBe("Stopped at line five.");
+    expect(failure.position).toEqual({
+      path: join(dir, "doc.md"),
+      offset: source.indexOf("<Fail"),
+      line: 5,
+      column: 1,
+    });
+  });
 
   it("FAIL9: journals no effect of its own, and a completed root replays", function* () {
     const dir = yield* useDir();

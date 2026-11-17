@@ -10,7 +10,6 @@ import {
   journalBeforeEach,
   useJournalStream,
 } from "@executablemd/test-support/failure-journal";
-import { journalCases } from "../../test-support/journal-cases.ts";
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -108,7 +107,6 @@ function* runDoc(
 }
 
 const OWNER = "packages/core/tests/root-props.test.ts";
-const rootCase = journalCases(OWNER);
 
 describe("Tier RP — root document properties", () => {
   beforeEach(journalBeforeEach(OWNER));
@@ -247,24 +245,16 @@ describe("Tier RI — document inspection", () => {
 });
 
 describe("Tier RS — concise props declarations", () => {
-  rootCase(
-    "RS1: a concise root receives props and applies defaults",
-    "hello.md",
-    function* (stream) {
-      const { output, result } = yield* runDoc(
-        { "hello.md": GREETING_CONCISE },
-        "hello.md",
-        {
-          name: "Ada",
-        },
-        stream,
-      );
-      expect(result.ok).toBe(true);
-      expect(output).toContain("Hello, Ada!");
-      expect(output).toContain("loud=false");
-      expect(output).toContain("bare={name}");
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
+  it("RS1: a concise root receives props and applies defaults", function* () {
+    const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
+      name: "Ada",
+    });
+    expect(result.ok).toBe(true);
+    expect(output).toContain("Hello, Ada!");
+    expect(output).toContain("loud=false");
+    expect(output).toContain("bare={name}");
+  });
 
   const comparison = "RS2: the concise and full spellings behave identically";
   it(comparison, function* () {
@@ -279,45 +269,22 @@ describe("Tier RS — concise props declarations", () => {
     });
   });
 
-  rootCase(
-    "RS3: a missing required property prevents every body effect",
-    "hello.md",
-    function* (stream) {
-      const { output, result } = yield* runDoc(
-        { "hello.md": GREETING_CONCISE },
-        "hello.md",
-        {},
-        stream,
-      );
-      expect(result.ok).toBe(false);
-      expect(output).not.toContain("Hello");
-    },
-  );
+  it("RS3: a missing required property prevents every body effect", function* () {
+    const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {});
+    expect(result.ok).toBe(false);
+    expect(output).not.toContain("Hello");
+  });
 
-  rootCase(
-    "RS4: the implicit closed object rejects an undeclared property",
-    "hello.md",
-    function* (stream) {
-      const { result } = yield* runDoc(
-        { "hello.md": GREETING_CONCISE },
-        "hello.md",
-        {
-          name: "Ada",
-          nope: 1,
-        },
-        stream,
-      );
-      expect(result.ok).toBe(false);
-    },
-  );
+  it("RS4: the implicit closed object rejects an undeclared property", function* () {
+    const { result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
+      name: "Ada",
+      nope: 1,
+    });
+    expect(result.ok).toBe(false);
+  });
 
-  rootCase("RS5: object defaults fill recursively", "nested.md", function* (stream) {
-    const { output, result } = yield* runDoc(
-      { "nested.md": NESTED_CONCISE },
-      "nested.md",
-      {},
-      stream,
-    );
+  it("RS5: object defaults fill recursively", function* () {
+    const { output, result } = yield* runDoc({ "nested.md": NESTED_CONCISE }, "nested.md", {});
     expect(result.ok).toBe(true);
     expect(output).toContain("port=8080");
   });
