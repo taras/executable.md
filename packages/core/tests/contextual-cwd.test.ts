@@ -144,11 +144,12 @@ function cwdCase(
   });
 }
 
+const OWNER = "packages/core/tests/contextual-cwd.test.ts";
 const PWD = "```sh exec\npwd\n```";
 
 describe("Tier CW — Contextual working directory", () => {
   beforeAll(() => useTempFileCompiler());
-  beforeEach(journalBeforeEach("packages/core/tests/contextual-cwd.test.ts"));
+  beforeEach(journalBeforeEach(OWNER));
 
   // CW1: the contract a component rebinding `Env.cwd` depends on.
   cwdCase(
@@ -240,6 +241,7 @@ describe("Tier CW — Contextual working directory", () => {
 });
 
 describe("1113: Cwd reports the performing scope", () => {
+  beforeEach(journalBeforeEach(OWNER));
   cwdCase(
     "1113: reads and captures launch cwd without filesystem permission or a newline",
     function* (fixture, stream) {
@@ -291,6 +293,7 @@ describe("1113: Cwd reports the performing scope", () => {
 });
 
 describe("1113: source location does not set execution cwd", () => {
+  beforeEach(journalBeforeEach(OWNER));
   cwdCase(
     "1113: Cwd and the supported shell report P when the source is elsewhere",
     function* (fixture, stream) {
