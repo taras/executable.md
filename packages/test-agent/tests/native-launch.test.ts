@@ -14,8 +14,8 @@
  * asserts "no hidden prompt" by the answer that later prompt gets, not by an
  * absence.
  */
-import { fileJournalCases } from "../../test-support/journal-cases.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempFileCompiler } from "@executablemd/core";
 import { agentIdentityComponents } from "@executablemd/agent/host";
@@ -61,11 +61,7 @@ interface RunOptions {
   hostLauncher?: (request: NativeLaunchRequest) => void;
 }
 
-const journalCase = fileJournalCases(
-  "packages/test-agent/tests/native-launch.test.ts",
-  "xmd-tl-",
-  "doc.md",
-);
+const owner = "packages/test-agent/tests/native-launch.test.ts";
 
 function* runDoc(
   doc: string,
@@ -75,7 +71,7 @@ function* runDoc(
   yield* ensureDir(dir);
   const launches: NativeLaunchRequest[] = [];
   const sessions: NativeSessionReport[] = [];
-  const stream = options.stream ?? new InMemoryStream();
+  const stream = options.stream ?? (yield* useJournalStream(path.join(dir, "doc.md")));
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     yield* writeTextFile(path.join(dir, "scenario.md"), SCENARIO);
@@ -199,6 +195,7 @@ describe(
   },
   () => {
     beforeAll(() => useTempFileCompiler());
+    beforeEach(journalBeforeEach(owner));
 
     it("TL1: the rendered body installs as the agent's session instruction layer", function* () {
       const run = yield* runDoc(testDoc(LAUNCH_BODY));
@@ -215,23 +212,16 @@ describe(
       expect(instructions).not.toContain("TestAgent");
     });
 
-    journalCase(
-      "TL2: the native UI is started with the identity the agent asserted",
-      function* (stream, directory) {
-        const run = yield* runDoc(testDoc(LAUNCH_BODY), { stream }, directory);
+    it("TL2: the native UI is started with the identity the agent asserted", function* () {
+      const run = yield* runDoc(testDoc(LAUNCH_BODY));
 
-        expect(run.launches.length).toBe(1);
-        const nativeSessionId = run.sessions.at(-1)!.nativeSessionId;
-        expect(nativeSessionId.startsWith("native-")).toBe(true);
-        expect(run.launches[0]?.command).toEqual([
-          "xmd-test-agent-ui",
-          "--resume",
-          nativeSessionId,
-        ]);
-        // And the retained record names that same identity.
-        expect(preparedRecords(run.events)[0]?.nativeSessionId).toBe(nativeSessionId);
-      },
-    );
+      expect(run.launches.length).toBe(1);
+      const nativeSessionId = run.sessions.at(-1)!.nativeSessionId;
+      expect(nativeSessionId.startsWith("native-")).toBe(true);
+      expect(run.launches[0]?.command).toEqual(["xmd-test-agent-ui", "--resume", nativeSessionId]);
+      // And the retained record names that same identity.
+      expect(preparedRecords(run.events)[0]?.nativeSessionId).toBe(nativeSessionId);
+    });
 
     it("TL3: raw prepared instructions never reach argv or environment", function* () {
       const run = yield* runDoc(testDoc(LAUNCH_BODY));
@@ -241,225 +231,197 @@ describe(
       expect(JSON.stringify(request.env ?? {})).not.toContain("repository implementor");
     });
 
-    journalCase(
-      "TL5: a later prompt reattaches to the session the native UI was given",
-      function* (stream, directory) {
-        const run = yield* runDoc(
-          testDoc(
-            [
-              LAUNCH_BODY,
-              "",
-              '<Session name="implementor">',
-              "<Prompt>what changed?</Prompt>",
-              "</Session>",
-            ].join("\n"),
-          ),
-          { stream },
-          directory,
-        );
-
-        expect(run.result.ok).toBe(true);
-        // Reattaching re-establishes the session rather than reusing the handle
-        // that predates the handoff, and it lands on the provider-native state the
-        // launch retained.
-        const launched = preparedRecords(run.events)[0]?.nativeSessionId;
-        expect(launched).toBeDefined();
-        expect(run.sessions.at(-1)?.nativeSessionId).toBe(launched);
-      },
-    );
-
-    journalCase(
-      "TL6: a nonzero native exit fails the test that launched",
-      function* (stream, directory) {
-        const run = yield* runDoc(testDoc(LAUNCH_BODY), { stream, exitCode: 4 }, directory);
-
-        expect(run.results.some((result) => result.status === "fail")).toBe(true);
-        // The provider session facts survive the failure.
-        expect(preparedRecords(run.events)[0]?.nativeSessionId).toBeDefined();
-      },
-    );
-
-    journalCase(
-      "TL7: a launch under <TestAgent> never reaches the host's launcher",
-      function* (stream, directory) {
-        // The host has one, and it is the wrong one to reach: a scripted agent's
-        // native UI does not exist, and the terminal a host would hand it belongs
-        // to whoever is running the tests. Under `xmd test` there is no host
-        // launcher at all, which is the same fact from the other side.
-        const hostReached: NativeLaunchRequest[] = [];
-        const run = yield* runDoc(
-          testDoc(LAUNCH_BODY),
-          { stream, hostLauncher: (request) => hostReached.push(request) },
-          directory,
-        );
-
-        expect(run.result.ok ? "" : run.result.error.message).toBe("");
-        expect(hostReached).toEqual([]);
-        // The component's own launcher took it instead.
-        expect(run.launches.length).toBe(1);
-      },
-    );
-
-    journalCase(
-      "TL9: two sibling tests naming one session each get a session of their own",
-      function* (stream, directory) {
-        // Identical agent, identical session name, identical cwd — so the natural
-        // key a coordinator would exclude on is the same for both. What keeps
-        // them apart is that each `<Test>` owns a complete provider partition,
-        // with its own runtime, store, managed sessions, scenarios and
-        // coordinator. Two sessions, not two owners of one.
-        //
-        // The layers differ deliberately: identical ones would resume, and a
-        // shared partition would then look like an isolated pair.
-        const run = yield* runDoc(
+    it("TL5: a later prompt reattaches to the session the native UI was given", function* () {
+      const run = yield* runDoc(
+        testDoc(
           [
-            "<TestAgent>",
-            '<TestAgent.Scenario src="scenario.md" session="implementor" />',
-            "",
-            '<Test name="first">',
-            '<Session.Launch session="implementor">',
-            "You are the repository implementor.",
-            "</Session.Launch>",
-            '<Session name="implementor">',
-            "<Prompt>what changed?</Prompt>",
-            "</Session>",
-            "</Test>",
-            "",
-            '<Test name="second">',
-            '<Session.Launch session="implementor">',
-            "You are the repository reviewer.",
-            "</Session.Launch>",
-            '<Session name="implementor">',
-            "<Prompt>what changed?</Prompt>",
-            "</Session>",
-            "</Test>",
-            "</TestAgent>",
-            "",
-          ].join("\n"),
-          { stream },
-          directory,
-        );
-
-        expect(run.result.ok ? "" : run.result.error.message).toBe("");
-        expect(run.results.map((result) => result.status)).toEqual(["pass", "pass"]);
-
-        // Two native identities, so neither test saw the other's session — and
-        // neither waited on the other, which a shared coordinator would have
-        // made them do.
-        const identities = new Set(run.launches.map((request) => request.command.at(-1)));
-        expect(run.launches.length).toBe(2);
-        expect(identities.size).toBe(2);
-
-        // Both session/new and session/load report the layer for the same identity.
-        const reportsByIdentity = new Map<string, NativeSessionReport[]>();
-        for (const report of run.sessions) {
-          const reports = reportsByIdentity.get(report.nativeSessionId) ?? [];
-          reports.push(report);
-          reportsByIdentity.set(report.nativeSessionId, reports);
-        }
-        expect(new Set(reportsByIdentity.keys())).toEqual(identities);
-        const layers: string[] = [];
-        const scenarioIds = new Set<string>();
-        for (const reports of reportsByIdentity.values()) {
-          expect(reports.length).toBeGreaterThan(0);
-          const first = reports[0];
-          if (first === undefined || first.systemPrompt === undefined) {
-            throw new Error("A launched identity has no instruction layer.");
-          }
-          for (const report of reports) {
-            expect(report.systemPrompt).toBe(first.systemPrompt);
-          }
-          layers.push(first.systemPrompt.trim());
-          expect(new Set(reports.map((report) => report.scenarioId)).size).toBe(1);
-          scenarioIds.add(first.scenarioId);
-        }
-        expect(layers.sort()).toEqual([
-          "You are the repository implementor.",
-          "You are the repository reviewer.",
-        ]);
-        expect(scenarioIds.size).toBe(2);
-
-        // Each test's prompt was answered by a scenario of its own: one stage
-        // exists per instance, and a shared one would have been exhausted.
-        const answers = run.output.split("nothing yet").length - 1;
-        expect(answers).toBe(2);
-      },
-    );
-
-    journalCase(
-      "TL10: the provider is installed once, in <TestAgent>, not per test",
-      function* (stream, directory) {
-        // Outside every `<Test>`, so the only installation that can serve this
-        // launch is the one the `<TestAgent>` invocation made. A provider
-        // installed per test would leave this content with none.
-        const run = yield* runDoc(
-          [
-            "<TestAgent>",
-            '<TestAgent.Scenario src="scenario.md" session="implementor" />',
-            "",
-            '<Session.Launch session="implementor">',
-            "You are the repository implementor.",
-            "</Session.Launch>",
-            "",
-            // A testing session needs one, and this one is deliberately empty:
-            // the launch above it is what reaches the installation.
-            '<Test name="present">',
-            "nothing to check here",
-            "</Test>",
-            "</TestAgent>",
-            "",
-          ].join("\n"),
-          { stream },
-          directory,
-        );
-
-        expect(run.result.ok ? "" : run.result.error.message).toBe("");
-        expect(run.launches.length).toBe(1);
-        expect(run.sessions.filter((report) => report.systemPrompt !== undefined).length).toBe(1);
-      },
-    );
-
-    journalCase(
-      "TL11: a prompt attaches to the conversation XMD named, under that same identity",
-      function* (stream, directory) {
-        const run = yield* runDoc(
-          [
-            "<TestAgent>",
-            '<TestAgent.Scenario agent="test-agent-client-native" session="implementor" src="scenario.md" />',
-            "",
-            '<Test name="client-native">',
-            '<Agent name="test-agent-client-native">',
             LAUNCH_BODY,
             "",
             '<Session name="implementor">',
             "<Prompt>what changed?</Prompt>",
             "</Session>",
-            "</Agent>",
-            "</Test>",
-            "</TestAgent>",
-            "",
           ].join("\n"),
-          { stream },
-          directory,
-        );
+        ),
+      );
 
-        expect(run.result.ok ? "" : run.result.error.message).toBe("");
-        expect(run.results.map((result) => result.status)).toEqual(["pass"]);
-        // XMD chose the identity and handed it to the native process...
-        const named = preparedRecords(run.events)[0]?.nativeSessionId;
-        expect(typeof named).toBe("string");
-        expect(run.launches[0]?.command.slice(1, 3)).toEqual(["--session-id", named]);
-        // ...and the worker the prompt attached to reported that conversation,
-        // not one of its own and not the loading target it was asked for.
-        expect(run.sessions.length).toBeGreaterThan(0);
-        for (const report of run.sessions) {
-          expect(report.nativeSessionId).toBe(named);
+      expect(run.result.ok).toBe(true);
+      // Reattaching re-establishes the session rather than reusing the handle
+      // that predates the handoff, and it lands on the provider-native state the
+      // launch retained.
+      const launched = preparedRecords(run.events)[0]?.nativeSessionId;
+      expect(launched).toBeDefined();
+      expect(run.sessions.at(-1)?.nativeSessionId).toBe(launched);
+    });
+
+    it("TL6: a nonzero native exit fails the test that launched", function* () {
+      const run = yield* runDoc(testDoc(LAUNCH_BODY), { exitCode: 4 });
+
+      expect(run.results.some((result) => result.status === "fail")).toBe(true);
+      // The provider session facts survive the failure.
+      expect(preparedRecords(run.events)[0]?.nativeSessionId).toBeDefined();
+    });
+
+    it("TL7: a launch under <TestAgent> never reaches the host's launcher", function* () {
+      // The host has one, and it is the wrong one to reach: a scripted agent's
+      // native UI does not exist, and the terminal a host would hand it belongs
+      // to whoever is running the tests. Under `xmd test` there is no host
+      // launcher at all, which is the same fact from the other side.
+      const hostReached: NativeLaunchRequest[] = [];
+      const run = yield* runDoc(testDoc(LAUNCH_BODY), {
+        hostLauncher: (request) => hostReached.push(request),
+      });
+
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(hostReached).toEqual([]);
+      // The component's own launcher took it instead.
+      expect(run.launches.length).toBe(1);
+    });
+
+    it("TL9: two sibling tests naming one session each get a session of their own", function* () {
+      // Identical agent, identical session name, identical cwd — so the natural
+      // key a coordinator would exclude on is the same for both. What keeps
+      // them apart is that each `<Test>` owns a complete provider partition,
+      // with its own runtime, store, managed sessions, scenarios and
+      // coordinator. Two sessions, not two owners of one.
+      //
+      // The layers differ deliberately: identical ones would resume, and a
+      // shared partition would then look like an isolated pair.
+      const run = yield* runDoc(
+        [
+          "<TestAgent>",
+          '<TestAgent.Scenario src="scenario.md" session="implementor" />',
+          "",
+          '<Test name="first">',
+          '<Session.Launch session="implementor">',
+          "You are the repository implementor.",
+          "</Session.Launch>",
+          '<Session name="implementor">',
+          "<Prompt>what changed?</Prompt>",
+          "</Session>",
+          "</Test>",
+          "",
+          '<Test name="second">',
+          '<Session.Launch session="implementor">',
+          "You are the repository reviewer.",
+          "</Session.Launch>",
+          '<Session name="implementor">',
+          "<Prompt>what changed?</Prompt>",
+          "</Session>",
+          "</Test>",
+          "</TestAgent>",
+          "",
+        ].join("\n"),
+      );
+
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.results.map((result) => result.status)).toEqual(["pass", "pass"]);
+
+      // Two native identities, so neither test saw the other's session — and
+      // neither waited on the other, which a shared coordinator would have
+      // made them do.
+      const identities = new Set(run.launches.map((request) => request.command.at(-1)));
+      expect(run.launches.length).toBe(2);
+      expect(identities.size).toBe(2);
+
+      // Both session/new and session/load report the layer for the same identity.
+      const reportsByIdentity = new Map<string, NativeSessionReport[]>();
+      for (const report of run.sessions) {
+        const reports = reportsByIdentity.get(report.nativeSessionId) ?? [];
+        reports.push(report);
+        reportsByIdentity.set(report.nativeSessionId, reports);
+      }
+      expect(new Set(reportsByIdentity.keys())).toEqual(identities);
+      const layers: string[] = [];
+      const scenarioIds = new Set<string>();
+      for (const reports of reportsByIdentity.values()) {
+        expect(reports.length).toBeGreaterThan(0);
+        const first = reports[0];
+        if (first === undefined || first.systemPrompt === undefined) {
+          throw new Error("A launched identity has no instruction layer.");
         }
-        expect(promptRecords(run.events).map((record) => record.agentSessionId)).toEqual([named]);
-        // The one scripted stage answered exactly once.
-        expect(run.output.split("nothing yet").length - 1).toBe(1);
-      },
-    );
+        for (const report of reports) {
+          expect(report.systemPrompt).toBe(first.systemPrompt);
+        }
+        layers.push(first.systemPrompt.trim());
+        expect(new Set(reports.map((report) => report.scenarioId)).size).toBe(1);
+        scenarioIds.add(first.scenarioId);
+      }
+      expect(layers.sort()).toEqual([
+        "You are the repository implementor.",
+        "You are the repository reviewer.",
+      ]);
+      expect(scenarioIds.size).toBe(2);
+
+      // Each test's prompt was answered by a scenario of its own: one stage
+      // exists per instance, and a shared one would have been exhausted.
+      const answers = run.output.split("nothing yet").length - 1;
+      expect(answers).toBe(2);
+    });
+
+    it("TL10: the provider is installed once, in <TestAgent>, not per test", function* () {
+      // Outside every `<Test>`, so the only installation that can serve this
+      // launch is the one the `<TestAgent>` invocation made. A provider
+      // installed per test would leave this content with none.
+      const run = yield* runDoc(
+        [
+          "<TestAgent>",
+          '<TestAgent.Scenario src="scenario.md" session="implementor" />',
+          "",
+          '<Session.Launch session="implementor">',
+          "You are the repository implementor.",
+          "</Session.Launch>",
+          "",
+          // A testing session needs one, and this one is deliberately empty:
+          // the launch above it is what reaches the installation.
+          '<Test name="present">',
+          "nothing to check here",
+          "</Test>",
+          "</TestAgent>",
+          "",
+        ].join("\n"),
+      );
+
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.launches.length).toBe(1);
+      expect(run.sessions.filter((report) => report.systemPrompt !== undefined).length).toBe(1);
+    });
+
+    it("TL11: a prompt attaches to the conversation XMD named, under that same identity", function* () {
+      const run = yield* runDoc(
+        [
+          "<TestAgent>",
+          '<TestAgent.Scenario agent="test-agent-client-native" session="implementor" src="scenario.md" />',
+          "",
+          '<Test name="client-native">',
+          '<Agent name="test-agent-client-native">',
+          LAUNCH_BODY,
+          "",
+          '<Session name="implementor">',
+          "<Prompt>what changed?</Prompt>",
+          "</Session>",
+          "</Agent>",
+          "</Test>",
+          "</TestAgent>",
+          "",
+        ].join("\n"),
+      );
+
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.results.map((result) => result.status)).toEqual(["pass"]);
+      // XMD chose the identity and handed it to the native process...
+      const named = preparedRecords(run.events)[0]?.nativeSessionId;
+      expect(typeof named).toBe("string");
+      expect(run.launches[0]?.command.slice(1, 3)).toEqual(["--session-id", named]);
+      // ...and the worker the prompt attached to reported that conversation,
+      // not one of its own and not the loading target it was asked for.
+      expect(run.sessions.length).toBeGreaterThan(0);
+      for (const report of run.sessions) {
+        expect(report.nativeSessionId).toBe(named);
+      }
+      expect(promptRecords(run.events).map((record) => record.agentSessionId)).toEqual([named]);
+      // The one scripted stage answered exactly once.
+      expect(run.output.split("nothing yet").length - 1).toBe(1);
+    });
 
     it("TL8: full replay contacts neither the agent nor the launcher", function* () {
       const stream = new InMemoryStream();
