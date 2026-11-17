@@ -94,6 +94,7 @@ function stubProvider(componentName: string): string {
 }
 
 describe("Tier SC — Sample component", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/sample-component.test.ts"));
   beforeAll(() => useTempFileCompiler());
   // SC1: Self-closing with prompt — prompt sent to Sample Api
   it("SC1: self-closing with prompt — response in output", function* () {
@@ -116,7 +117,7 @@ describe("Tier SC — Sample component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -162,7 +163,7 @@ describe("Tier SC — Sample component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -203,7 +204,7 @@ describe("Tier SC — Sample component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -230,7 +231,7 @@ describe("Tier SC — Sample component", () => {
       "doc.md": '<Sample prompt="no provider" />',
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const execution = yield* execute({
       path: path.join(tmpDir, "doc.md"),
       stream,
@@ -310,7 +311,7 @@ describe("Tier SC — Sample component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -349,7 +350,7 @@ describe("Tier SC — Sample component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -396,7 +397,7 @@ describe("Tier SC — Sample component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -706,6 +707,7 @@ describe("Tier RC — renderChildren and render closures", () => {
 });
 
 describe("Tier IN — Instruction component", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/sample-component.test.ts"));
   beforeAll(() => useTempFileCompiler());
   // IN1: Instruction enriches Sample context with instructions
   it("IN1: Instruction enriches Sample context", function* () {
@@ -733,7 +735,7 @@ describe("Tier IN — Instruction component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -766,7 +768,7 @@ describe("Tier IN — Instruction component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -808,7 +810,7 @@ describe("Tier IN — Instruction component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -840,7 +842,7 @@ describe("Tier IN — Instruction component", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -855,6 +857,7 @@ describe("Tier IN — Instruction component", () => {
 });
 
 describe("Tier AG — Agent component pattern", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/sample-component.test.ts"));
   beforeAll(() => useTempFileCompiler());
   // AG1: Agent component installs instruction middleware + Content
   it("AG1: agent component with instruction middleware", function* () {
@@ -899,7 +902,7 @@ describe("Tier AG — Agent component pattern", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -979,7 +982,7 @@ describe("Tier AG — Agent component pattern", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(path.join(tmpDir, "doc.md"));
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),

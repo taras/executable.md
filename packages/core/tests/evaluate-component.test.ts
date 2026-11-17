@@ -248,7 +248,7 @@ describe("protected generated component answers", () => {
 
   it("keeps the producer's route while the generated child admits only Syntax", function* () {
     const told: string[] = [];
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     yield* scoped(function* () {
       yield* registerComponents([
         {
@@ -286,7 +286,13 @@ describe("protected generated component answers", () => {
     });
     for (const text of ["<Producer />", "<Evaluate text='inert' />", "<File path='x' />"]) {
       expect(
-        yield* refusal(run(`<Evaluate text={${JSON.stringify(text)}} />`, [syntaxProfile()])),
+        yield* refusal(
+          run(
+            `<Evaluate text={${JSON.stringify(text)}} />`,
+            [syntaxProfile()],
+            yield* useJournalStream(ROOT_PATH),
+          ),
+        ),
       ).toContain("did not admit");
     }
   });
@@ -1551,7 +1557,11 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     ];
     for (const [fragment, expected] of cases) {
       const failed = yield* refusal(
-        run(`<Evaluate text={'${fragment}'} allow={["read"]} />\n`, [reading(files)]),
+        run(
+          `<Evaluate text={'${fragment}'} allow={["read"]} />\n`,
+          [reading(files)],
+          yield* useJournalStream(ROOT_PATH),
+        ),
       );
       expect(failed).toContain(expected);
     }
@@ -1579,7 +1589,11 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     ];
     for (const fragment of cases) {
       const failed = yield* refusal(
-        run(`<Evaluate text={'${fragment}'} allow={["read"]} />\n`, [reading(files)]),
+        run(
+          `<Evaluate text={'${fragment}'} allow={["read"]} />\n`,
+          [reading(files)],
+          yield* useJournalStream(ROOT_PATH),
+        ),
       );
       expect(failed).toContain("declarative data");
     }
@@ -1611,6 +1625,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
       run(
         `<Evaluate text={'<Each in={["a"]} let="item">\\nx\\n</Each>\\n<Json value={item} />\\n'} />\n`,
         [reading(files)],
+        yield* useJournalStream(ROOT_PATH),
       ),
     );
     expect(leaked).toContain("declarative data");
@@ -1620,6 +1635,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
       `<Evaluate text={'<Each in={["a"]} let="item" as="all">\\nx\\n</Each>\\n` +
         `<Json value={all} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files)],
+      yield* useJournalStream(ROOT_PATH),
     );
     expect(String(captured)).toContain("x");
     expect(files.performed).toEqual([]);
@@ -1645,7 +1661,11 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     ];
     for (const [fragment, expected] of cases) {
       const failed = yield* refusal(
-        run(`<Evaluate text={'${fragment}'} allow={["read"]} />\n`, [reading(files)]),
+        run(
+          `<Evaluate text={'${fragment}'} allow={["read"]} />\n`,
+          [reading(files)],
+          yield* useJournalStream(ROOT_PATH),
+        ),
       );
       expect(failed).toContain(expected);
     }
@@ -1661,6 +1681,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
         `<Evaluate text={'<Loop max={2}>\\n<Dir path="d">\\n<Break />\\n</Dir>\\n</Loop>\\n'} ` +
           `allow={["write"]} />\n`,
         [both(writable)],
+        yield* useJournalStream(ROOT_PATH),
       ),
     );
     expect(stray).toContain("structural construct");
@@ -1732,7 +1753,11 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     ];
     for (const [body, expected] of cases) {
       const failed = yield* refusal(
-        run(`<Evaluate text={'<If condition={true}>\\n${body}\\n</If>\\n'} />\n`, [reading(files)]),
+        run(
+          `<Evaluate text={'<If condition={true}>\\n${body}\\n</If>\\n'} />\n`,
+          [reading(files)],
+          yield* useJournalStream(ROOT_PATH),
+        ),
       );
       expect(failed).toContain(expected);
     }
