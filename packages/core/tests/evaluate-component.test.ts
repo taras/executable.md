@@ -13,8 +13,8 @@
  * the provider to perform.
  */
 
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -49,9 +49,7 @@ import { expectAvailability, syntaxInstallation } from "./support/syntax-availab
 import { admittedSymbols } from "../src/syntax-admitted.ts";
 
 const ROOT_PATH = "evaluate.md";
-const registerJournalCase = journalCases("packages/core/tests/evaluate-component.test.ts");
-const journalCase = (name: string, body: (stream: InMemoryStream) => Operation<void>) =>
-  registerJournalCase(name, ROOT_PATH, body);
+const OWNER = "packages/core/tests/evaluate-component.test.ts";
 
 function independentWrapper(answer: FunctionComponentDefinition): FunctionComponentDefinition {
   const fn = answer.fn;
@@ -115,64 +113,64 @@ function coreFilesystemAnswers(...names: readonly string[]): ResolvedAnswers {
 }
 
 describe("protected generated component answers", () => {
-  journalCase(
-    "routes delegated Syntax through both wrappers and renders its ordinary output",
-    function* (stream) {
-      const profile = syntaxProfile();
-      // syntax_symbols retains rendered text, so sourceKind must be checked on
-      // the captured profile's structured symbols before rendering drops that
-      // field.
-      const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
-      const lifetime = evaluationLifetime();
-      try {
-        const definition = identity.protected.get("Syntax");
-        if (definition === undefined) {
-          throw new Error("expected canonical Syntax");
-        }
-        const captured = captureEvaluationProfile(
-          new Map([["Syntax", ["self-closing"]]]),
-          new Map([["Syntax", { definition, origin: "@executablemd/core" }]]),
-          lifetime,
-          identity.componentRouting.project,
-        );
-        const symbols = admittedSymbols(captured.read);
-        expect(symbols.categories[2].entries).toMatchObject([
-          {
-            name: "Syntax",
-            origin: { kind: "protected", origin: "@executablemd/core" },
-            sourceKind: "protected",
-          },
-        ]);
-      } finally {
-        lifetime.revoke();
-        identity.identities.revoke();
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("routes delegated Syntax through both wrappers and renders its ordinary output", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const profile = syntaxProfile();
+    // syntax_symbols retains rendered text, so sourceKind must be checked on
+    // the captured profile's structured symbols before rendering drops that
+    // field.
+    const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
+    const lifetime = evaluationLifetime();
+    try {
+      const definition = identity.protected.get("Syntax");
+      if (definition === undefined) {
+        throw new Error("expected canonical Syntax");
       }
-      const source = '<Syntax names={["Syntax", "File"]} />';
-      // Written without `as` inside the fragment, so the delegated answer's own
-      // text is the fragment's output and Evaluate emits exactly that.
-      const result = yield* run(`<Evaluate text={${JSON.stringify(source)}} />`, [profile], stream);
-      const rendered = String(result);
-      expect(rendered).toContain("**Available in this evaluation:** yes");
-      expect(rendered).toContain("**Available in this evaluation:** no");
-      const retained = (yield* stream.readAll()).filter(
-        (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+      const captured = captureEvaluationProfile(
+        new Map([["Syntax", ["self-closing"]]]),
+        new Map([["Syntax", { definition, origin: "@executablemd/core" }]]),
+        lifetime,
+        identity.componentRouting.project,
       );
-      expect(retained).toHaveLength(1);
-      // The one retained reading is the text the fragment rendered, rather than a
-      // second reading taken to fill a result the evaluator no longer builds.
-      const symbols = retained[0];
-      const value =
-        symbols?.type === "yield" && symbols.result.status === "ok"
-          ? symbols.result.value
-          : undefined;
-      const held =
-        typeof value === "object" && value !== null && !Array.isArray(value)
-          ? String(value.symbols)
-          : "";
-      expect(held.length).toBeGreaterThan(0);
-      expect(rendered).toContain(held.trim());
-    },
-  );
+      const symbols = admittedSymbols(captured.read);
+      expect(symbols.categories[2].entries).toMatchObject([
+        {
+          name: "Syntax",
+          origin: { kind: "protected", origin: "@executablemd/core" },
+          sourceKind: "protected",
+        },
+      ]);
+    } finally {
+      lifetime.revoke();
+      identity.identities.revoke();
+    }
+    const source = '<Syntax names={["Syntax", "File"]} />';
+    // Written without `as` inside the fragment, so the delegated answer's own
+    // text is the fragment's output and Evaluate emits exactly that.
+    const result = yield* run(`<Evaluate text={${JSON.stringify(source)}} />`, [profile], stream);
+    const rendered = String(result);
+    expect(rendered).toContain("**Available in this evaluation:** yes");
+    expect(rendered).toContain("**Available in this evaluation:** no");
+    const retained = (yield* stream.readAll()).filter(
+      (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+    );
+    expect(retained).toHaveLength(1);
+    // The one retained reading is the text the fragment rendered, rather than a
+    // second reading taken to fill a result the evaluator no longer builds.
+    const symbols = retained[0];
+    const value =
+      symbols?.type === "yield" && symbols.result.status === "ok"
+        ? symbols.result.value
+        : undefined;
+    const held =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? String(value.symbols)
+        : "";
+    expect(held.length).toBeGreaterThan(0);
+    expect(rendered).toContain(held.trim());
+  });
 
   /**
    * A selected name canonical core protects is reported as the component it is.
@@ -356,92 +354,87 @@ describe("protected generated component answers", () => {
     expect(ran).toEqual([]);
   });
 
-  journalCase(
-    "exposes no route to middleware and rejects a generated-import wrapper replacement",
-    function* (stream) {
-      const seen: FunctionComponentDefinition[] = [];
-      const surfaces: string[][] = [];
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* Component.around({
-            *importComponent([name, position], next) {
-              const answer = yield* next(name, position);
-              if (name === "Syntax" && answer.kind === "function") {
-                seen.push(answer);
-                surfaces.push(Reflect.ownKeys(answer).map(String));
-                surfaces.push(Reflect.ownKeys(answer.fn).map(String));
-                const projection = yield* ActiveProjection.get();
-                surfaces.push(
-                  projection === undefined ? [] : Reflect.ownKeys(projection).map(String),
-                );
-                if (seen.length === 2) {
-                  return independentWrapper(answer);
-                }
+  it("exposes no route to middleware and rejects a generated-import wrapper replacement", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const seen: FunctionComponentDefinition[] = [];
+    const surfaces: string[][] = [];
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const answer = yield* next(name, position);
+            if (name === "Syntax" && answer.kind === "function") {
+              seen.push(answer);
+              surfaces.push(Reflect.ownKeys(answer).map(String));
+              surfaces.push(Reflect.ownKeys(answer.fn).map(String));
+              const projection = yield* ActiveProjection.get();
+              surfaces.push(
+                projection === undefined ? [] : Reflect.ownKeys(projection).map(String),
+              );
+              if (seen.length === 2) {
+                return independentWrapper(answer);
               }
-              return answer;
-            },
-          });
-          return yield* run(`<Evaluate text={'<Syntax />'} />`, [syntaxProfile()], stream);
-        }),
-      );
-      expect(failed).toContain("canonical execution");
-      expect(seen).toHaveLength(2);
-      for (const keys of surfaces) {
-        expect(keys).not.toContain("componentRouting");
-        expect(keys).not.toContain("narrowComponentRouting");
-        expect(keys).not.toContain("syntax");
-      }
-      expect(
-        (yield* stream.readAll()).some(
-          (event) => event.type === "yield" && event.description.type === "syntax_symbols",
-        ),
-      ).toBe(false);
-    },
-  );
+            }
+            return answer;
+          },
+        });
+        return yield* run(`<Evaluate text={'<Syntax />'} />`, [syntaxProfile()], stream);
+      }),
+    );
+    expect(failed).toContain("canonical execution");
+    expect(seen).toHaveLength(2);
+    for (const keys of surfaces) {
+      expect(keys).not.toContain("componentRouting");
+      expect(keys).not.toContain("narrowComponentRouting");
+      expect(keys).not.toContain("syntax");
+    }
+    expect(
+      (yield* stream.readAll()).some(
+        (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+      ),
+    ).toBe(false);
+  });
 
-  journalCase(
-    "rebuilds routes on continuation and cannot resurrect a retained callable",
-    function* (stream) {
-      const source = `<Evaluate text={'<Syntax names={["File"]} />'} as="answer" />\n<Json value={answer} />`;
-      const retained: FunctionComponentDefinition[] = [];
-      const original = yield* run(source, [syntaxProfile({ retained })], stream);
-      const events = yield* stream.readAll();
-      const admission = events.findIndex(
-        (event) => event.type === "yield" && event.description.type === "generated_xmd",
-      );
-      expect(admission).toBeGreaterThanOrEqual(0);
-      const partial = events.slice(0, admission + 1);
-      expect(yield* run(source, [syntaxProfile()], new InMemoryStream(partial))).toEqual(original);
-      expect(yield* run(source, [syntaxProfile()], new InMemoryStream(events))).toEqual(original);
-      const held = retained[0];
-      if (held === undefined || typeof held.fn !== "function") {
-        throw new Error("no delegated answer was retained");
-      }
-      expect(yield* refusal(held.fn({}, { hasContent: () => false }))).toContain("canonical core");
-      expect(
-        yield* refusal(
-          run(source, [syntaxProfile({ transform: () => held })], new InMemoryStream(partial)),
-        ),
-      ).toContain("nor one a provider published");
-      function inspect(value: unknown): void {
-        expect(typeof value).not.toBe("function");
-        if (typeof value === "object" && value !== null) {
-          for (const key of Reflect.ownKeys(value)) {
-            expect([
-              "componentRouting",
-              "narrowComponentRouting",
-              "projectContent",
-              "protectedOrigin",
-            ]).not.toContain(String(key));
-            inspect(Reflect.get(value, key));
-          }
+  it("rebuilds routes on continuation and cannot resurrect a retained callable", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const source = `<Evaluate text={'<Syntax names={["File"]} />'} as="answer" />\n<Json value={answer} />`;
+    const retained: FunctionComponentDefinition[] = [];
+    const original = yield* run(source, [syntaxProfile({ retained })], stream);
+    const events = yield* stream.readAll();
+    const admission = events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admission).toBeGreaterThanOrEqual(0);
+    const partial = events.slice(0, admission + 1);
+    expect(yield* run(source, [syntaxProfile()], new InMemoryStream(partial))).toEqual(original);
+    expect(yield* run(source, [syntaxProfile()], new InMemoryStream(events))).toEqual(original);
+    const held = retained[0];
+    if (held === undefined || typeof held.fn !== "function") {
+      throw new Error("no delegated answer was retained");
+    }
+    expect(yield* refusal(held.fn({}, { hasContent: () => false }))).toContain("canonical core");
+    expect(
+      yield* refusal(
+        run(source, [syntaxProfile({ transform: () => held })], new InMemoryStream(partial)),
+      ),
+    ).toContain("nor one a provider published");
+    function inspect(value: unknown): void {
+      expect(typeof value).not.toBe("function");
+      if (typeof value === "object" && value !== null) {
+        for (const key of Reflect.ownKeys(value)) {
+          expect([
+            "componentRouting",
+            "narrowComponentRouting",
+            "projectContent",
+            "protectedOrigin",
+          ]).not.toContain(String(key));
+          inspect(Reflect.get(value, key));
         }
       }
-      inspect(events);
-    },
-  );
+    }
+    inspect(events);
+  });
 });
-
 
 const NOTE = "the retained note\n";
 
@@ -499,7 +492,10 @@ function admissions(events: readonly DurableEvent[]): DurableEvent[] {
 }
 
 describe("Tier FE — a program the document holds", () => {
-  journalCase("FE1: `text` runs, and its observations bind by name and order", function* (stream) {
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("FE1: `text` runs, and its observations bind by name and order", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
     const output = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n\\n<File path="other.md" />\\n'} as="answer" />` +
@@ -515,29 +511,29 @@ describe("Tier FE — a program the document holds", () => {
     expect(files.performed).toEqual(["read notes.md", "read other.md"]);
   });
 
-  journalCase("FE1: an element with no program and no content is refused", function* (stream) {
+  it("FE1: an element with no program and no content is refused", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     expect(yield* refusal(run(`<Evaluate />\n`, [reading(recordedFiles())], stream))).toContain(
       "requires the program as a string",
     );
   });
 
-  journalCase(
-    "FE1: `text` beside content is refused rather than resolved by precedence",
-    function* (stream) {
-      expect(
-        yield* refusal(
-          run(
-            `<Evaluate text="<File path='a.md' />">\ncontent\n</Evaluate>\n`,
-            [reading(recordedFiles())],
-            stream,
-          ),
+  it("FE1: `text` beside content is refused rather than resolved by precedence", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    expect(
+      yield* refusal(
+        run(
+          `<Evaluate text="<File path='a.md' />">\ncontent\n</Evaluate>\n`,
+          [reading(recordedFiles())],
+          stream,
         ),
-      ).toContain("does not also carry `text`");
-    },
-  );
+      ),
+    ).toContain("does not also carry `text`");
+  });
 });
 
 describe("Tier FE — a fragment reaches the captured operations and nothing else", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * One chain, crossed by both.
    *
@@ -553,113 +549,106 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
    * the host admitted, the identity a continuation is compared against, and the
    * effective `Permissions` of the scope the operation runs in.
    */
-  journalCase(
-    "FE13: one Files middleware sees the document's read and the fragment's",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE, "renamed.md": "the renamed note\n" });
-      const crossed: string[] = [];
+  it("FE13: one Files middleware sees the document's read and the fragment's", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE, "renamed.md": "the renamed note\n" });
+    const crossed: string[] = [];
 
-      const output = yield* scoped(function* () {
-        // Installed where a document, a repository component or a middleware
-        // package installs one, and it both observes and transforms.
-        yield* API.Files.around({
-          *readTextFile([input], next) {
-            crossed.push(String(input.path));
-            return yield* next(
-              input.path === "notes.md" ? { ...input, path: "renamed.md" } : input,
-            );
-          },
-        });
-        return yield* run(
-          `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-          [reading(files)],
-          stream,
-        );
+    const output = yield* scoped(function* () {
+      // Installed where a document, a repository component or a middleware
+      // package installs one, and it both observes and transforms.
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          crossed.push(String(input.path));
+          return yield* next(input.path === "notes.md" ? { ...input, path: "renamed.md" } : input);
+        },
       });
-
-      // The read the fragment asked for crossed the middleware, and the provider
-      // performed the path the middleware substituted.
-      expect(crossed).toEqual(["notes.md"]);
-      expect(files.performed).toEqual(["read renamed.md"]);
-      expect(String(output)).toContain("the renamed note");
-    },
-  );
-
-  journalCase(
-    "FE13: a fragment cannot glob, however the document's provider is arranged",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const failed = yield* refusal(
-        run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)], stream),
+      return yield* run(
+        `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+        [reading(files)],
+        stream,
       );
+    });
 
-      // Not "globbing failed" — `<Glob>` is not a name this fragment has at all.
-      expect(failed).toContain("did not admit");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // The read the fragment asked for crossed the middleware, and the provider
+    // performed the path the middleware substituted.
+    expect(crossed).toEqual(["notes.md"]);
+    expect(files.performed).toEqual(["read renamed.md"]);
+    expect(String(output)).toContain("the renamed note");
+  });
 
-  journalCase(
-    "FE13: an operation retained past its execution refuses rather than acting",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n`, [reading(files)], stream);
-      const during = [...files.performed];
+  it("FE13: a fragment cannot glob, however the document's provider is arranged", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)], stream),
+    );
 
-      // The execution has ended. Whatever a fragment body, a handler or a
-      // retained callback still holds is bound to operations this execution
-      // revoked at teardown.
-      expect(during).toEqual(["read notes.md"]);
-      expect(files.performed).toEqual(during);
-    },
-  );
+    // Not "globbing failed" — `<Glob>` is not a name this fragment has at all.
+    expect(failed).toContain("did not admit");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE13: an operation retained past its execution refuses rather than acting", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n`, [reading(files)], stream);
+    const during = [...files.performed];
+
+    // The execution has ended. Whatever a fragment body, a handler or a
+    // retained callback still holds is bound to operations this execution
+    // revoked at teardown.
+    expect(during).toEqual(["read notes.md"]);
+    expect(files.performed).toEqual(during);
+  });
 });
 
 describe("Tier FE — the paired form produces its own program", () => {
-  journalCase(
-    "FE2: the exact bytes the producer rendered are the admitted source",
-    function* (stream) {
-      // Not "contains" and not "after trimming": the retained admission is a
-      // decision about one exact fragment, and a continuation is held to those
-      // bytes. A projection that trimmed, re-indented or normalised newlines
-      // would make the retained text disagree with what the producer wrote.
-      const PROGRAM = `\n<File path="notes.md" />\n\n<File path="other.md" />\n`;
-      const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
-      yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Producer",
-            origin: "test://producer",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            // deno-lint-ignore require-yield
-            *fn(): Operation<string> {
-              return PROGRAM;
-            },
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("FE2: the exact bytes the producer rendered are the admitted source", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // Not "contains" and not "after trimming": the retained admission is a
+    // decision about one exact fragment, and a continuation is held to those
+    // bytes. A projection that trimmed, re-indented or normalised newlines
+    // would make the retained text disagree with what the producer wrote.
+    const PROGRAM = `\n<File path="notes.md" />\n\n<File path="other.md" />\n`;
+    const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
+    yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Producer",
+          origin: "test://producer",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            return PROGRAM;
           },
-        ]);
-        return yield* run(`<Evaluate>\n<Producer />\n</Evaluate>\n`, [reading(files)], stream);
-      });
+        },
+      ]);
+      return yield* run(`<Evaluate>\n<Producer />\n</Evaluate>\n`, [reading(files)], stream);
+    });
 
-      const recorded = admissions(yield* stream.readAll());
-      expect(recorded).toHaveLength(1);
-      const event = recorded[0];
-      const value =
-        event?.type === "yield" && event.result.status === "ok" ? event.result.value : undefined;
-      const source =
-        typeof value === "object" && value !== null && !Array.isArray(value)
-          ? value.source
-          : undefined;
-      // The content region is `\n<Producer />\n` — the newlines the document put
-      // around the element are part of what `<Evaluate>` was given to render, so
-      // the admitted source is those bytes with the producer's own in place of
-      // the element. Byte-exact in both directions: nothing was trimmed, and
-      // nothing the document did not write was added.
-      expect(source).toBe(`\n${PROGRAM}\n`);
-      expect(files.performed).toEqual(["read notes.md", "read other.md"]);
-    },
-  );
+    const recorded = admissions(yield* stream.readAll());
+    expect(recorded).toHaveLength(1);
+    const event = recorded[0];
+    const value =
+      event?.type === "yield" && event.result.status === "ok" ? event.result.value : undefined;
+    const source =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? value.source
+        : undefined;
+    // The content region is `\n<Producer />\n` — the newlines the document put
+    // around the element are part of what `<Evaluate>` was given to render, so
+    // the admitted source is those bytes with the producer's own in place of
+    // the element. Byte-exact in both directions: nothing was trimmed, and
+    // nothing the document did not write was added.
+    expect(source).toBe(`\n${PROGRAM}\n`);
+    expect(files.performed).toEqual(["read notes.md", "read other.md"]);
+  });
 
-  journalCase("FE2: content renders once, and what it rendered is the program", function* (stream) {
+  it("FE2: content renders once, and what it rendered is the program", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const rendered: string[] = [];
     const output = yield* scoped(function* () {
@@ -687,324 +676,313 @@ describe("Tier FE — the paired form produces its own program", () => {
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
-  journalCase(
-    "FE2: a producer keeps its own permission while the fragment does not",
-    function* (stream) {
-      // The producer's content runs at the document's site, so its `<File />` is
-      // the ordinary component written where an author wrote it. The program it
-      // renders runs under the admitted tables instead. Both now cross the same
-      // Files chain — what differs is what each may *name*, and narrowing a
-      // fragment's vocabulary must not narrow what the producer may do to write
-      // it.
-      const files = recordedFiles({ "notes.md": NOTE });
-      const crossed: string[] = [];
+  it("FE2: a producer keeps its own permission while the fragment does not", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // The producer's content runs at the document's site, so its `<File />` is
+    // the ordinary component written where an author wrote it. The program it
+    // renders runs under the admitted tables instead. Both now cross the same
+    // Files chain — what differs is what each may *name*, and narrowing a
+    // fragment's vocabulary must not narrow what the producer may do to write
+    // it.
+    const files = recordedFiles({ "notes.md": NOTE });
+    const crossed: string[] = [];
 
-      const output = yield* scoped(function* () {
-        yield* API.Files.around({
-          *readTextFile([input], next) {
-            crossed.push(String(input.path));
-            // The producer's own input is answered here, as a document's provider
-            // may; the fragment's read is delegated to the one underneath.
-            return input.path === "producer-input.md"
-              ? Ok(`<File path="notes.md" />\n`)
-              : yield* next(input);
-          },
-        });
-        return yield* run(
-          `<Evaluate as="answer">\n<File path="producer-input.md" />\n</Evaluate>\n\n` +
-            `<Json value={answer} />\n`,
-          [reading(files)],
-          stream,
-        );
+    const output = yield* scoped(function* () {
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          crossed.push(String(input.path));
+          // The producer's own input is answered here, as a document's provider
+          // may; the fragment's read is delegated to the one underneath.
+          return input.path === "producer-input.md"
+            ? Ok(`<File path="notes.md" />\n`)
+            : yield* next(input);
+        },
       });
+      return yield* run(
+        `<Evaluate as="answer">\n<File path="producer-input.md" />\n</Evaluate>\n\n` +
+          `<Json value={answer} />\n`,
+        [reading(files)],
+        stream,
+      );
+    });
 
-      // One chain, two payloads, in the order the two sites ran.
-      expect(crossed).toEqual(["producer-input.md", "notes.md"]);
-      expect(files.performed).toEqual(["read notes.md"]);
-      expect(String(output)).toContain("the retained note");
-    },
-  );
+    // One chain, two payloads, in the order the two sites ran.
+    expect(crossed).toEqual(["producer-input.md", "notes.md"]);
+    expect(files.performed).toEqual(["read notes.md"]);
+    expect(String(output)).toContain("the retained note");
+  });
 
-  journalCase(
-    "FE2: a producer that fails stops the evaluation before any fragment work",
-    function* (stream) {
-      const files = recordedFiles();
-      const failed = yield* refusal(
+  it("FE2: a producer that fails stops the evaluation before any fragment work", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "Broken",
+            origin: "test://producer",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              throw new Error("the producer refused");
+            },
+          },
+        ]);
+        return yield* run(`<Evaluate>\n<Broken />\n</Evaluate>\n`, [reading(files)], stream);
+      }),
+    );
+
+    expect(failed).toContain("the producer refused");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE17: cancelling inside the producer waits for its cleanup and admits nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const cleanup: string[] = [];
+    const reached = withResolvers<void>();
+
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
         scoped(function* () {
           yield* registerComponents([
             {
-              name: "Broken",
+              name: "Slow",
+              origin: "test://producer",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              *fn(): Operation<string> {
+                // Registered before the barrier, so cancellation cannot arrive
+                // between entering the body and owning the cleanup.
+                yield* ensure(function* () {
+                  cleanup.push("producer cleanup");
+                });
+                reached.resolve();
+                yield* suspend();
+                return `<File path="notes.md" />\n`;
+              },
+            },
+          ]);
+          return yield* run(`<Evaluate>\n<Slow />\n</Evaluate>\n`, [reading(files)], stream);
+        }),
+      );
+      // The producer has actually entered, so this is cancellation of work in
+      // flight rather than of work that never started.
+      yield* reached.operation;
+      yield* running.halt();
+    });
+
+    // Halt waited for the producer's own cleanup before returning.
+    expect(cleanup).toEqual(["producer cleanup"]);
+    // And nothing was decided: no admission, and no fragment operation. A run
+    // that recorded an admission here would resume believing a decision was
+    // made about a program that never finished being written.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE17: cancelling after fragment work starts records no terminal result", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // The other half of FE17. That row cancels while the *producer* is running,
+    // so it proves the projector side and nothing about the evaluation. This one
+    // cancels after the admission committed and an admitted operation is
+    // actually in flight, which is the only state where a fragment effect is
+    // interrupted rather than never started.
+    const reached = withResolvers<void>();
+    const files = recordedFiles(
+      { "notes.md": NOTE, "second.md": "the second note\n" },
+      {
+        *hold(path) {
+          if (path === "notes.md") {
+            reached.resolve();
+            yield* suspend();
+          }
+        },
+      },
+    );
+
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
+        run(
+          `<Evaluate text={'<File path="notes.md" />\\n\\n<File path="second.md" />\\n'} />\n`,
+          [reading(files)],
+          stream,
+        ),
+      );
+      yield* reached.operation;
+      yield* running.halt();
+    });
+
+    const events = yield* stream.readAll();
+    // The admission committed — it is the decision, and it precedes the effects
+    // it authorized.
+    expect(admissions(events)).toHaveLength(1);
+    // The first admitted read entered and never answered; the second never
+    // started. A run that recorded a terminal result here would resume
+    // believing the fragment finished.
+    expect(files.performed).toEqual(["read notes.md"]);
+    expect(events.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
+      false,
+    );
+  });
+
+  it("FE17: cancellation before the producer enters is the negative control", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const entered: string[] = [];
+
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
+        scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Never",
               origin: "test://producer",
               props: { type: "object", properties: {}, additionalProperties: false },
               // deno-lint-ignore require-yield
               *fn(): Operation<string> {
-                throw new Error("the producer refused");
+                entered.push("entered");
+                return `<File path="notes.md" />\n`;
               },
             },
           ]);
-          return yield* run(`<Evaluate>\n<Broken />\n</Evaluate>\n`, [reading(files)], stream);
+          return yield* run(`<Evaluate>\n<Never />\n</Evaluate>\n`, [reading(files)], stream);
         }),
       );
+      // Halted without waiting for any signal that work began.
+      yield* running.halt();
+    });
 
-      expect(failed).toContain("the producer refused");
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // Whether the producer entered at all is not what this row fixes — what it
+    // fixes is that halting early records no admission either, so the row above
+    // is about *cancelling live work* rather than about halting in general.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(files.performed).toEqual([]);
+    expect(entered.length).toBeLessThanOrEqual(1);
+  });
 
-  journalCase(
-    "FE17: cancelling inside the producer waits for its cleanup and admits nothing",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const cleanup: string[] = [];
-      const reached = withResolvers<void>();
-
-      yield* scoped(function* () {
-        const running = yield* spawn(() =>
-          scoped(function* () {
-            yield* registerComponents([
-              {
-                name: "Slow",
-                origin: "test://producer",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                *fn(): Operation<string> {
-                  // Registered before the barrier, so cancellation cannot arrive
-                  // between entering the body and owning the cleanup.
-                  yield* ensure(function* () {
-                    cleanup.push("producer cleanup");
-                  });
-                  reached.resolve();
-                  yield* suspend();
-                  return `<File path="notes.md" />\n`;
-                },
-              },
-            ]);
-            return yield* run(`<Evaluate>\n<Slow />\n</Evaluate>\n`, [reading(files)], stream);
-          }),
-        );
-        // The producer has actually entered, so this is cancellation of work in
-        // flight rather than of work that never started.
-        yield* reached.operation;
-        yield* running.halt();
-      });
-
-      // Halt waited for the producer's own cleanup before returning.
-      expect(cleanup).toEqual(["producer cleanup"]);
-      // And nothing was decided: no admission, and no fragment operation. A run
-      // that recorded an admission here would resume believing a decision was
-      // made about a program that never finished being written.
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(files.performed).toEqual([]);
-    },
-  );
-
-  journalCase(
-    "FE17: cancelling after fragment work starts records no terminal result",
-    function* (stream) {
-      // The other half of FE17. That row cancels while the *producer* is running,
-      // so it proves the projector side and nothing about the evaluation. This one
-      // cancels after the admission committed and an admitted operation is
-      // actually in flight, which is the only state where a fragment effect is
-      // interrupted rather than never started.
-      const reached = withResolvers<void>();
-      const files = recordedFiles(
-        { "notes.md": NOTE, "second.md": "the second note\n" },
+  it("FE3: the producer is told the narrowed vocabulary, not the site's", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const told: string[] = [];
+    yield* scoped(function* () {
+      yield* registerComponents([
         {
-          *hold(path) {
-            if (path === "notes.md") {
-              reached.resolve();
-              yield* suspend();
-            }
+          name: "Peek",
+          origin: "test://peek",
+          props: {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+            additionalProperties: false,
+          },
+          // deno-lint-ignore require-yield
+          *fn(props: Record<string, Json>): Operation<string> {
+            told.push(String(props.text));
+            return "";
           },
         },
+        {
+          name: "Program",
+          origin: "test://producer",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            return `<File path="notes.md" />\n`;
+          },
+        },
+      ]);
+      return yield* run(
+        `<Evaluate>\n<Syntax as="vocab" />\n\n<Peek text={vocab} />\n\n<Program />\n</Evaluate>\n`,
+        [reading(files)],
+        stream,
       );
+    });
 
-      yield* scoped(function* () {
-        const running = yield* spawn(() =>
-          run(
-            `<Evaluate text={'<File path="notes.md" />\\n\\n<File path="second.md" />\\n'} />\n`,
-            [reading(files)],
-            stream,
-          ),
-        );
-        yield* reached.operation;
-        yield* running.halt();
+    expect(told).toHaveLength(1);
+    const vocabulary = told[0] ?? "";
+    // The admitted entry is described, and only in the form it was admitted
+    // for. Nothing else is: an agent told it had `<Loop>`, `<Evaluate>` or the
+    // producer's own `<Program />` would write a fragment the evaluator refuses
+    // whole, before its first effect.
+    expect(vocabulary).toContain("File");
+    expect(vocabulary).not.toContain("Loop");
+    expect(vocabulary).not.toContain("Evaluate");
+    expect(vocabulary).not.toContain("Program");
+    expect(vocabulary).not.toContain("Glob");
+  });
+
+  it("FE3: hostile content middleware does not reach the producer projection", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const intercepted: string[] = [];
+    const output = yield* scoped(function* () {
+      // Every public way a handler can reach an element's content, answered
+      // rather than delegated. A handler that could substitute at any of them
+      // would decide what program ran.
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *content(_args, _next) {
+          intercepted.push("content");
+          return `<File path="substituted.md" />\n`;
+        },
+        // deno-lint-ignore require-yield
+        *tryContent(_args, _next) {
+          intercepted.push("tryContent");
+          return { text: `<File path="substituted.md" />\n`, segments: [], failure: undefined };
+        },
+        // deno-lint-ignore require-yield
+        *hasContent(_args, _next) {
+          return false;
+        },
       });
-
-      const events = yield* stream.readAll();
-      // The admission committed — it is the decision, and it precedes the effects
-      // it authorized.
-      expect(admissions(events)).toHaveLength(1);
-      // The first admitted read entered and never answered; the second never
-      // started. A run that recorded a terminal result here would resume
-      // believing the fragment finished.
-      expect(files.performed).toEqual(["read notes.md"]);
-      expect(events.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
-        false,
+      yield* registerComponents([
+        {
+          name: "Producer",
+          origin: "test://producer",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            return `<File path="notes.md" />\n`;
+          },
+        },
+        {
+          // The positive control, in the same run and under the same handlers:
+          // an ordinary component reading its content through the public chain.
+          // If this one is not intercepted either, the handlers are not live and
+          // the assertion below would pass for the wrong reason.
+          name: "Ordinary",
+          origin: "test://ordinary",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn(): Operation<string> {
+            return yield* content();
+          },
+        },
+      ]);
+      return yield* run(
+        `<Evaluate as="answer">\n<Producer />\n</Evaluate>\n\n<Ordinary>ignored</Ordinary>\n\n` +
+          `<Json value={answer} />\n`,
+        [reading(files)],
+        stream,
       );
-    },
-  );
+    });
 
-  journalCase(
-    "FE17: cancellation before the producer enters is the negative control",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const entered: string[] = [];
-
-      yield* scoped(function* () {
-        const running = yield* spawn(() =>
-          scoped(function* () {
-            yield* registerComponents([
-              {
-                name: "Never",
-                origin: "test://producer",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                // deno-lint-ignore require-yield
-                *fn(): Operation<string> {
-                  entered.push("entered");
-                  return `<File path="notes.md" />\n`;
-                },
-              },
-            ]);
-            return yield* run(`<Evaluate>\n<Never />\n</Evaluate>\n`, [reading(files)], stream);
-          }),
-        );
-        // Halted without waiting for any signal that work began.
-        yield* running.halt();
-      });
-
-      // Whether the producer entered at all is not what this row fixes — what it
-      // fixes is that halting early records no admission either, so the row above
-      // is about *cancelling live work* rather than about halting in general.
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(files.performed).toEqual([]);
-      expect(entered.length).toBeLessThanOrEqual(1);
-    },
-  );
-
-  journalCase(
-    "FE3: the producer is told the narrowed vocabulary, not the site's",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const told: string[] = [];
-      yield* scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Peek",
-            origin: "test://peek",
-            props: {
-              type: "object",
-              properties: { text: { type: "string" } },
-              required: ["text"],
-              additionalProperties: false,
-            },
-            // deno-lint-ignore require-yield
-            *fn(props: Record<string, Json>): Operation<string> {
-              told.push(String(props.text));
-              return "";
-            },
-          },
-          {
-            name: "Program",
-            origin: "test://producer",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            // deno-lint-ignore require-yield
-            *fn(): Operation<string> {
-              return `<File path="notes.md" />\n`;
-            },
-          },
-        ]);
-        return yield* run(
-          `<Evaluate>\n<Syntax as="vocab" />\n\n<Peek text={vocab} />\n\n<Program />\n</Evaluate>\n`,
-          [reading(files)],
-          stream,
-        );
-      });
-
-      expect(told).toHaveLength(1);
-      const vocabulary = told[0] ?? "";
-      // The admitted entry is described, and only in the form it was admitted
-      // for. Nothing else is: an agent told it had `<Loop>`, `<Evaluate>` or the
-      // producer's own `<Program />` would write a fragment the evaluator refuses
-      // whole, before its first effect.
-      expect(vocabulary).toContain("File");
-      expect(vocabulary).not.toContain("Loop");
-      expect(vocabulary).not.toContain("Evaluate");
-      expect(vocabulary).not.toContain("Program");
-      expect(vocabulary).not.toContain("Glob");
-    },
-  );
-
-  journalCase(
-    "FE3: hostile content middleware does not reach the producer projection",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const intercepted: string[] = [];
-      const output = yield* scoped(function* () {
-        // Every public way a handler can reach an element's content, answered
-        // rather than delegated. A handler that could substitute at any of them
-        // would decide what program ran.
-        yield* Component.around({
-          // deno-lint-ignore require-yield
-          *content(_args, _next) {
-            intercepted.push("content");
-            return `<File path="substituted.md" />\n`;
-          },
-          // deno-lint-ignore require-yield
-          *tryContent(_args, _next) {
-            intercepted.push("tryContent");
-            return { text: `<File path="substituted.md" />\n`, segments: [], failure: undefined };
-          },
-          // deno-lint-ignore require-yield
-          *hasContent(_args, _next) {
-            return false;
-          },
-        });
-        yield* registerComponents([
-          {
-            name: "Producer",
-            origin: "test://producer",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            // deno-lint-ignore require-yield
-            *fn(): Operation<string> {
-              return `<File path="notes.md" />\n`;
-            },
-          },
-          {
-            // The positive control, in the same run and under the same handlers:
-            // an ordinary component reading its content through the public chain.
-            // If this one is not intercepted either, the handlers are not live and
-            // the assertion below would pass for the wrong reason.
-            name: "Ordinary",
-            origin: "test://ordinary",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn(): Operation<string> {
-              return yield* content();
-            },
-          },
-        ]);
-        return yield* run(
-          `<Evaluate as="answer">\n<Producer />\n</Evaluate>\n\n<Ordinary>ignored</Ordinary>\n\n` +
-            `<Json value={answer} />\n`,
-          [reading(files)],
-          stream,
-        );
-      });
-
-      // The handlers are live: the ordinary component's content was answered by
-      // them, and its element rendered the substitution rather than "ignored".
-      expect(intercepted).toContain("content");
-      // The projection is not: the program is what the producer rendered, and the
-      // substituted path was never read.
-      expect(String(output)).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-      expect(files.performed).not.toContain("read substituted.md");
-    },
-  );
+    // The handlers are live: the ordinary component's content was answered by
+    // them, and its element rendered the substitution rather than "ignored".
+    expect(intercepted).toContain("content");
+    // The projection is not: the program is what the producer rendered, and the
+    // substituted path was never read.
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+    expect(files.performed).not.toContain("read substituted.md");
+  });
 });
 
 describe("Tier FE — allow selects, and never adds", () => {
-  journalCase("FE4: omitting `allow` admits exactly the read table", function* (stream) {
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("FE4: omitting `allow` admits exactly the read table", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const failed = yield* refusal(
       run(`<Evaluate text={'<File path="out.md">x</File>\\n'} />\n`, [both(files)], stream),
@@ -1014,50 +992,46 @@ describe("Tier FE — allow selects, and never adds", () => {
     expect(files.performed).toEqual([]);
   });
 
-  journalCase(
-    "FE4: a class this host installed nothing for is refused before any program",
-    function* (stream) {
-      const files = recordedFiles();
-      const failed = yield* refusal(
-        run(
-          `<Evaluate text={'<File path="a.md" />\\n'} allow={["write"]} />\n`,
-          [reading(files)],
-          stream,
-        ),
-      );
-
-      expect(failed).toContain("installed no write table");
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(files.performed).toEqual([]);
-    },
-  );
-
-  journalCase(
-    "FE4: an admitted write reaches the captured write operations and binds nothing",
-    function* (stream) {
-      const files = recordedFiles();
-      const output = yield* run(
-        `<Evaluate text={'<Dir path="nested">\\n\\n<File path="nested/out.md">made</File>\\n\\n</Dir>\\n'} ` +
-          `allow={["write"]} as="answer" />\n\n<Json value={answer} />\n`,
-        [both(files)],
+  it("FE4: a class this host installed nothing for is refused before any program", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const failed = yield* refusal(
+      run(
+        `<Evaluate text={'<File path="a.md" />\\n'} allow={["write"]} />\n`,
+        [reading(files)],
         stream,
-      );
+      ),
+    );
 
-      expect(files.performed).toEqual([
-        "ensure nested",
-        "check nested/out.md",
-        "write nested/out.md",
-      ]);
-      expect(files.entries.get("nested/out.md")).toBe("made");
-      // The mutations rendered nothing of their own, so what the fragment
-      // produced is its own whitespace and `<Json>` renders exactly that string.
-      // No receipt, no observation array, no envelope.
-      const rendered = String(output).trim();
-      expect(rendered.startsWith('"')).toBe(true);
-      expect(rendered.endsWith('"')).toBe(true);
-      expect(JSON.parse(rendered)).toMatch(/^\s*$/);
-    },
-  );
+    expect(failed).toContain("installed no write table");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE4: an admitted write reaches the captured write operations and binds nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const output = yield* run(
+      `<Evaluate text={'<Dir path="nested">\\n\\n<File path="nested/out.md">made</File>\\n\\n</Dir>\\n'} ` +
+        `allow={["write"]} as="answer" />\n\n<Json value={answer} />\n`,
+      [both(files)],
+      stream,
+    );
+
+    expect(files.performed).toEqual([
+      "ensure nested",
+      "check nested/out.md",
+      "write nested/out.md",
+    ]);
+    expect(files.entries.get("nested/out.md")).toBe("made");
+    // The mutations rendered nothing of their own, so what the fragment
+    // produced is its own whitespace and `<Json>` renders exactly that string.
+    // No receipt, no observation array, no envelope.
+    const rendered = String(output).trim();
+    expect(rendered.startsWith('"')).toBe(true);
+    expect(rendered.endsWith('"')).toBe(true);
+    expect(JSON.parse(rendered)).toMatch(/^\s*$/);
+  });
 
   it("FE4: an admitted deletion runs, and reads are not admitted with it", function* () {
     const files = recordedFiles({ "gone.md": "x" });
@@ -1078,7 +1052,8 @@ describe("Tier FE — allow selects, and never adds", () => {
     expect(second.performed).toEqual([]);
   });
 
-  journalCase("FE4: a selection this component does not have is refused", function* (stream) {
+  it("FE4: a selection this component does not have is refused", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     expect(
       yield* refusal(
         run(
@@ -1092,6 +1067,7 @@ describe("Tier FE — allow selects, and never adds", () => {
 });
 
 describe("Tier FE — an execution with no selection has no evaluation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE5: a host that selected nothing refuses at the element, not at startup", function* () {
     expect(String(yield* run(`nothing asked for\n`, []))).toContain("nothing asked for");
 
@@ -1109,20 +1085,18 @@ describe("Tier FE — an execution with no selection has no evaluation", () => {
    * composition answers it: the nearer handler decides, the chain is what a
    * host assembled, and there is no contributor count to refuse on.
    */
-  journalCase(
-    "FE5: two handlers offering a selection compose rather than refusing",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(
-        `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-        [reading(files), reading(files)],
-        stream,
-      );
+  it("FE5: two handlers offering a selection compose rather than refusing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files), reading(files)],
+      stream,
+    );
 
-      expect(String(output)).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-    },
-  );
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
 
   /**
    * A profile states names, and no operations at all.
@@ -1136,20 +1110,18 @@ describe("Tier FE — an execution with no selection has no evaluation", () => {
    * entry alone is a complete admission, and an absent provider is fatal
    * exactly where it is fatal for an authored element.
    */
-  journalCase(
-    "FE5: a file entry states no operations, and reads what the provider has",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(
-        `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-        [reading(files)],
-        stream,
-      );
+  it("FE5: a file entry states no operations, and reads what the provider has", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+      stream,
+    );
 
-      expect(String(output)).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-    },
-  );
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
 });
 
 describe("Tier FE — what the element itself may say", () => {
@@ -1215,7 +1187,10 @@ describe("Tier FE — what the element itself may say", () => {
 });
 
 describe("Tier FE — one occurrence, one durable decision", () => {
-  journalCase("FE16: two occurrences do not consume one another's records", function* (stream) {
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("FE16: two occurrences do not consume one another's records", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "one.md": "first\n", "two.md": "second\n" });
     yield* run(
       `<Evaluate text={'<File path="one.md" />\\n'} />\n\n` +
@@ -1233,7 +1208,8 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     expect(files.performed).toEqual(["read one.md", "read two.md"]);
   });
 
-  journalCase("FE10: a continuation resumes the exact admitted text", function* (stream) {
+  it("FE10: a continuation resumes the exact admitted text", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const first = recordedFiles({ "notes.md": NOTE });
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n`;
     yield* run(source, [reading(first)], stream);
@@ -1255,113 +1231,108 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     expect(second.performed).toEqual(["read notes.md"]);
   });
 
-  journalCase(
-    "FE10: a continuation offering different text refuses before any effect",
-    function* (stream) {
-      // The document is byte-identical across both attempts, so the occurrence
-      // identity — and therefore the durable name — is the same. What differs is
-      // the program the producer rendered, which is exactly the case a retained
-      // admission has to refuse: a decision was made about one fragment, and the
-      // run is now holding another.
-      const DOCUMENT = `<Evaluate>\n<Program />\n</Evaluate>\n`;
+  it("FE10: a continuation offering different text refuses before any effect", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // The document is byte-identical across both attempts, so the occurrence
+    // identity — and therefore the durable name — is the same. What differs is
+    // the program the producer rendered, which is exactly the case a retained
+    // admission has to refuse: a decision was made about one fragment, and the
+    // run is now holding another.
+    const DOCUMENT = `<Evaluate>\n<Program />\n</Evaluate>\n`;
 
-      function producing(fragment: string) {
-        return function* (): Operation<void> {
-          yield* registerComponents([
-            {
-              name: "Program",
-              origin: "test://producer",
-              props: { type: "object", properties: {}, additionalProperties: false },
-              // deno-lint-ignore require-yield
-              *fn(): Operation<string> {
-                return fragment;
-              },
+    function producing(fragment: string) {
+      return function* (): Operation<void> {
+        yield* registerComponents([
+          {
+            name: "Program",
+            origin: "test://producer",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              return fragment;
             },
-          ]);
-        };
-      }
-
-      const first = recordedFiles({ "notes.md": NOTE });
-      yield* scoped(function* () {
-        yield* producing(`<File path="notes.md" />\n`)();
-        yield* run(DOCUMENT, [reading(first)], stream);
-      });
-      const complete = yield* stream.readAll();
-      const admitted = complete.findIndex(
-        (event) => event.type === "yield" && event.description.type === "generated_xmd",
-      );
-      expect(admitted).toBeGreaterThanOrEqual(0);
-      const partial = complete.slice(0, admitted + 1);
-
-      const second = recordedFiles({ "notes.md": NOTE, "other.md": "elsewhere\n" });
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* producing(`<File path="other.md" />\n`)();
-          return yield* run(DOCUMENT, [reading(second)], new InMemoryStream(partial));
-        }),
-      );
-
-      expect(failed).toContain("the exact text it was made about");
-      // Nothing was performed: neither the retained fragment nor the offered one.
-      expect(second.performed).toEqual([]);
-    },
-  );
-
-  journalCase(
-    "FE10: a continuation whose ceiling moved refuses before any effect",
-    function* (stream) {
-      const first = recordedFiles({ "notes.md": NOTE });
-      const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
-      yield* run(source, [reading(first)], stream);
-      const complete = yield* stream.readAll();
-      const admitted = complete.findIndex(
-        (event) => event.type === "yield" && event.description.type === "generated_xmd",
-      );
-      const partial = complete.slice(0, admitted + 1);
-
-      // The same fragment, admitted under a read table that now admits a second
-      // component as well. A grant is the exact set of spellings it was made
-      // under, so a widened one is a different grant rather than the same one
-      // restated.
-      const second = recordedFiles({ "notes.md": NOTE });
-      const widened: ExecutionInstallation = {
-        *install(): Operation<void> {
-          yield* useSelection({ File: ["self-closing"], Glob: ["self-closing"] });
-          yield* useRecordedFiles(second);
-        },
+          },
+        ]);
       };
-      const failed = yield* refusal(run(source, [widened], new InMemoryStream(partial)));
+    }
 
-      expect(failed).toContain("no longer states");
-      expect(second.performed).toEqual([]);
-    },
-  );
+    const first = recordedFiles({ "notes.md": NOTE });
+    yield* scoped(function* () {
+      yield* producing(`<File path="notes.md" />\n`)();
+      yield* run(DOCUMENT, [reading(first)], stream);
+    });
+    const complete = yield* stream.readAll();
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    const partial = complete.slice(0, admitted + 1);
 
-  journalCase(
-    "FE11: a completed evaluation replays without performing anything again",
-    function* (stream) {
-      const first = recordedFiles({ "notes.md": NOTE });
-      const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
-      const original = yield* run(source, [reading(first)], stream);
-      expect(first.performed).toEqual(["read notes.md"]);
+    const second = recordedFiles({ "notes.md": NOTE, "other.md": "elsewhere\n" });
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* producing(`<File path="other.md" />\n`)();
+        return yield* run(DOCUMENT, [reading(second)], new InMemoryStream(partial));
+      }),
+    );
 
-      // The whole history, terminal close included. A second run over it restores
-      // the admission *and* the observation it authorized.
-      const complete = yield* stream.readAll();
-      const second = recordedFiles({ "notes.md": "a note this run must not read\n" });
-      const replayed = yield* run(source, [reading(second)], new InMemoryStream(complete));
+    expect(failed).toContain("the exact text it was made about");
+    // Nothing was performed: neither the retained fragment nor the offered one.
+    expect(second.performed).toEqual([]);
+  });
 
-      // Nothing was performed again — the recorder's log is empty, and the file
-      // it holds now says something else, so a re-read would be visible in the
-      // output rather than merely in the count.
-      expect(second.performed).toEqual([]);
-      expect(String(replayed)).toContain("the retained note");
-      expect(String(replayed)).not.toContain("must not read");
-      expect(String(replayed)).toBe(String(original));
-    },
-  );
+  it("FE10: a continuation whose ceiling moved refuses before any effect", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const first = recordedFiles({ "notes.md": NOTE });
+    const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
+    yield* run(source, [reading(first)], stream);
+    const complete = yield* stream.readAll();
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    const partial = complete.slice(0, admitted + 1);
 
-  journalCase("FE12: a retained record this version cannot read fails closed", function* (stream) {
+    // The same fragment, admitted under a read table that now admits a second
+    // component as well. A grant is the exact set of spellings it was made
+    // under, so a widened one is a different grant rather than the same one
+    // restated.
+    const second = recordedFiles({ "notes.md": NOTE });
+    const widened: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* useSelection({ File: ["self-closing"], Glob: ["self-closing"] });
+        yield* useRecordedFiles(second);
+      },
+    };
+    const failed = yield* refusal(run(source, [widened], new InMemoryStream(partial)));
+
+    expect(failed).toContain("no longer states");
+    expect(second.performed).toEqual([]);
+  });
+
+  it("FE11: a completed evaluation replays without performing anything again", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const first = recordedFiles({ "notes.md": NOTE });
+    const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
+    const original = yield* run(source, [reading(first)], stream);
+    expect(first.performed).toEqual(["read notes.md"]);
+
+    // The whole history, terminal close included. A second run over it restores
+    // the admission *and* the observation it authorized.
+    const complete = yield* stream.readAll();
+    const second = recordedFiles({ "notes.md": "a note this run must not read\n" });
+    const replayed = yield* run(source, [reading(second)], new InMemoryStream(complete));
+
+    // Nothing was performed again — the recorder's log is empty, and the file
+    // it holds now says something else, so a re-read would be visible in the
+    // output rather than merely in the count.
+    expect(second.performed).toEqual([]);
+    expect(String(replayed)).toContain("the retained note");
+    expect(String(replayed)).not.toContain("must not read");
+    expect(String(replayed)).toBe(String(original));
+  });
+
+  it("FE12: a retained record this version cannot read fails closed", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
     yield* run(source, [reading(files)], stream);
@@ -1390,26 +1361,27 @@ describe("Tier FE — one occurrence, one durable decision", () => {
 });
 
 describe("Tier FE — protection settles which implementation runs, and grants nothing", () => {
-  journalCase(
-    "FE26: protection adds no class and no identity to what `allow` selects",
-    function* (stream) {
-      // A profile with no write table. `<Evaluate>` being canonical core's does
-      // not add one, and no spelling of `allow` conjures one.
-      const files = recordedFiles();
-      expect(
-        yield* refusal(
-          run(
-            `<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`,
-            [reading(files)],
-            stream,
-          ),
-        ),
-      ).toContain("installed no write table");
-      expect(files.performed).toEqual([]);
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
 
-  journalCase("FE23: a name in the enclosing symbols is still not admitted", function* (stream) {
+  it("FE26: protection adds no class and no identity to what `allow` selects", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // A profile with no write table. `<Evaluate>` being canonical core's does
+    // not add one, and no spelling of `allow` conjures one.
+    const files = recordedFiles();
+    expect(
+      yield* refusal(
+        run(
+          `<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`,
+          [reading(files)],
+          stream,
+        ),
+      ),
+    ).toContain("installed no write table");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE23: a name in the enclosing symbols is still not admitted", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // `<Glob>` is an ordinary core component and appears in the document's own
     // vocabulary. Naming it in a fragment reaches the fragment's table, which
     // does not hold it — symbols text registers, resolves and authorizes
@@ -1422,47 +1394,45 @@ describe("Tier FE — protection settles which implementation runs, and grants n
     expect(files.performed).toEqual([]);
   });
 
-  journalCase(
-    "FE29: nothing a document controls reads, replaces or widens the profile",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* scoped(function* () {
-        // A component that binds every composable channel it has before the
-        // `<Evaluate>` beneath it runs.
-        yield* registerComponents([
-          {
-            name: "Forge",
-            origin: "test://forge",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            *fn(): Operation<string> {
-              yield* API.Files.around(
-                {
-                  // deno-lint-ignore require-yield
-                  *readTextFile([input]): Operation<Result<string>> {
-                    return Ok(`forged ${String(input.path)}`);
-                  },
+  it("FE29: nothing a document controls reads, replaces or widens the profile", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* scoped(function* () {
+      // A component that binds every composable channel it has before the
+      // `<Evaluate>` beneath it runs.
+      yield* registerComponents([
+        {
+          name: "Forge",
+          origin: "test://forge",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn(): Operation<string> {
+            yield* API.Files.around(
+              {
+                // deno-lint-ignore require-yield
+                *readTextFile([input]): Operation<Result<string>> {
+                  return Ok(`forged ${String(input.path)}`);
                 },
-                { at: "min" },
-              );
-              return yield* content();
-            },
+              },
+              { at: "min" },
+            );
+            return yield* content();
           },
-        ]);
-        return yield* run(
-          `<Forge>\n<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
-            `<Json value={answer} />\n</Forge>\n`,
-          [reading(files)],
-          stream,
-        );
-      });
+        },
+      ]);
+      return yield* run(
+        `<Forge>\n<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
+          `<Json value={answer} />\n</Forge>\n`,
+        [reading(files)],
+        stream,
+      );
+    });
 
-      // What a document controls is the provider, and that is now deliberately
-      // shared: the fragment's read crossed the one `<Forge>` installed, exactly
-      // as the document's own read would have. A provider is not a permission.
-      expect(String(output)).toContain("forged notes.md");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // What a document controls is the provider, and that is now deliberately
+    // shared: the fragment's read crossed the one `<Forge>` installed, exactly
+    // as the document's own read would have. A provider is not a permission.
+    expect(String(output)).toContain("forged notes.md");
+    expect(files.performed).toEqual([]);
+  });
 
   /**
    * And what it still cannot do is widen the profile.
@@ -1473,58 +1443,56 @@ describe("Tier FE — protection settles which implementation runs, and grants n
    * selection a class the host installed no table for — none of which is
    * reachable from anything a document holds.
    */
-  journalCase(
-    "FE29: a document that answers the operation still admits no name",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* registerComponents([
-            {
-              name: "Forge",
-              origin: "test://forge",
-              props: { type: "object", properties: {}, additionalProperties: false },
-              *fn(): Operation<string> {
-                // Everything a document can reach: its own provider, and its own
-                // registration under the name a fragment would have to write.
-                yield* API.Files.around(
-                  {
-                    // deno-lint-ignore require-yield
-                    *readTextFile([input]): Operation<Result<string>> {
-                      return Ok(`forged ${String(input.path)}`);
-                    },
+  it("FE29: a document that answers the operation still admits no name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "Forge",
+            origin: "test://forge",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(): Operation<string> {
+              // Everything a document can reach: its own provider, and its own
+              // registration under the name a fragment would have to write.
+              yield* API.Files.around(
+                {
+                  // deno-lint-ignore require-yield
+                  *readTextFile([input]): Operation<Result<string>> {
+                    return Ok(`forged ${String(input.path)}`);
                   },
-                  { at: "min" },
-                );
-                yield* registerComponents([
-                  {
-                    name: "Glob",
-                    origin: "test://forge",
-                    props: { type: "object", properties: {}, additionalProperties: false },
-                    // deno-lint-ignore require-yield
-                    *fn(): Operation<string> {
-                      return "forged search";
-                    },
+                },
+                { at: "min" },
+              );
+              yield* registerComponents([
+                {
+                  name: "Glob",
+                  origin: "test://forge",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    return "forged search";
                   },
-                ]);
-                return yield* content();
-              },
+                },
+              ]);
+              return yield* content();
             },
-          ]);
-          return yield* run(
-            `<Forge>\n<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} />\n</Forge>\n`,
-            [reading(files)],
-            stream,
-          );
-        }),
-      );
+          },
+        ]);
+        return yield* run(
+          `<Forge>\n<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} />\n</Forge>\n`,
+          [reading(files)],
+          stream,
+        );
+      }),
+    );
 
-      // Not "the search failed" — `<Glob>` is not a name this fragment has, and a
-      // registration under that name did not give it one.
-      expect(failed).toContain("did not admit");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // Not "the search failed" — `<Glob>` is not a name this fragment has, and a
+    // registration under that name did not give it one.
+    expect(failed).toContain("did not admit");
+    expect(files.performed).toEqual([]);
+  });
 });
 
 /**
@@ -1542,27 +1510,27 @@ describe("Tier FE — protection settles which implementation runs, and grants n
  * with the recorder's log still empty.
  */
 describe("Tier FE35 — structural constructs in a generated fragment", () => {
-  journalCase(
-    "FE35: branching, binding and bounded iteration compose with admitted reads",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE, "other.md": "second\n" });
-      const output = yield* run(
-        `<Evaluate text={'<Let as="wanted" value={["notes.md"]} />\\n` +
-          `<Each in={wanted} let="path" as="seen">\\n<File path="notes.md" as="note" />\\n` +
-          `<Json value={note} />\\n</Each>\\n` +
-          `<If condition={true}>\\n<Json value={seen} />\\n<Else>\\nnot taken\\n</Else>\\n</If>\\n'} ` +
-          `as="answer" />\n\n<Json value={answer} />\n`,
-        [reading(files)],
-        stream,
-      );
+  beforeEach(journalBeforeEach(OWNER));
 
-      const rendered = String(output);
-      expect(rendered).toContain("the retained note");
-      expect(rendered).not.toContain("not taken");
-      // One admitted read, reached through the constructs rather than around them.
-      expect(files.performed).toEqual(["read notes.md"]);
-    },
-  );
+  it("FE35: branching, binding and bounded iteration compose with admitted reads", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE, "other.md": "second\n" });
+    const output = yield* run(
+      `<Evaluate text={'<Let as="wanted" value={["notes.md"]} />\\n` +
+        `<Each in={wanted} let="path" as="seen">\\n<File path="notes.md" as="note" />\\n` +
+        `<Json value={note} />\\n</Each>\\n` +
+        `<If condition={true}>\\n<Json value={seen} />\\n<Else>\\nnot taken\\n</Else>\\n</If>\\n'} ` +
+        `as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+      stream,
+    );
+
+    const rendered = String(output);
+    expect(rendered).toContain("the retained note");
+    expect(rendered).not.toContain("not taken");
+    // One admitted read, reached through the constructs rather than around them.
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
 
   it("FE35: a prohibited component in an untaken branch refuses at zero reads", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
@@ -1619,24 +1587,22 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     expect(files.performed).toEqual([]);
   });
 
-  journalCase(
-    "FE35: Loop, a valid Break and PrintErrors run around an admitted read",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(
-        `<Evaluate text={'<Loop max={3}>\\n<PrintErrors>\\n<File path="notes.md" />\\n` +
-          `</PrintErrors>\\n<Break />\\n</Loop>\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-        [reading(files)],
-        stream,
-      );
+  it("FE35: Loop, a valid Break and PrintErrors run around an admitted read", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Loop max={3}>\\n<PrintErrors>\\n<File path="notes.md" />\\n` +
+        `</PrintErrors>\\n<Break />\\n</Loop>\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+      stream,
+    );
 
-      // Each of these has its own handler rather than falling through to the
-      // generic structural refusal: the loop ran, the break ended it after one
-      // pass, and the region rendered the read it wrapped.
-      expect(String(output)).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-    },
-  );
+    // Each of these has its own handler rather than falling through to the
+    // generic structural refusal: the loop ran, the break ended it after one
+    // pass, and the region rendered the read it wrapped.
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
 
   it("FE35: an Each item does not escape, and its capture does", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
@@ -1706,7 +1672,8 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
    * neither, so a plan is addressed by the element it was made for rather than
    * consumed from a per-name queue in walk order.
    */
-  journalCase("FE35: a selected write does not consume an untaken read's plan", function* (stream) {
+  it("FE35: a selected write does not consume an untaken read's plan", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "untaken.md": NOTE, "written.md": "before\n" });
     const output = yield* run(
       `<Evaluate text={'<If condition={false}>\\n<File path="untaken.md" />\\n` +
@@ -1725,25 +1692,24 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     expect(files.entries.get("untaken.md")).toBe(NOTE);
   });
 
-  journalCase(
-    "FE35: one authored occurrence invoked twice reuses its own plan",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(
-        `<Evaluate text={'<Each in={["a", "b"]} let="item">\\n<File path="notes.md" />\\n</Each>\\n'} ` +
-          `as="answer" />\n\n<Json value={answer} />\n`,
-        [reading(files)],
-        stream,
-      );
+  it("FE35: one authored occurrence invoked twice reuses its own plan", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Each in={["a", "b"]} let="item">\\n<File path="notes.md" />\\n</Each>\\n'} ` +
+        `as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+      stream,
+    );
 
-      // Two iterations of one element: the second import finds the same plan
-      // rather than an exhausted queue.
-      expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
-      expect(String(output)).toContain("the retained note");
-    },
-  );
+    // Two iterations of one element: the second import finds the same plan
+    // rather than an exhausted queue.
+    expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
+    expect(String(output)).toContain("the retained note");
+  });
 
-  journalCase("FE35: a zero-iteration occurrence consumes no plan", function* (stream) {
+  it("FE35: a zero-iteration occurrence consumes no plan", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "after.md": "after\n" });
     const output = yield* run(
       `<Evaluate text={'<Each in={[]} let="item">\\n<File path="notes.md" />\\n</Each>\\n` +
@@ -1791,6 +1757,8 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
  * provider, so a search that appears in its log went through the profile.
  */
 describe("Tier FE34 — the shared read profile", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   /** The read table `xmd run` states, over one recorder. */
   function shared(files: RecordedFiles): ExecutionInstallation {
     return {
@@ -1806,66 +1774,60 @@ describe("Tier FE34 — the shared read profile", () => {
     };
   }
 
-  journalCase(
-    "FE34: one fragment binds Glob, File and Syntax and renders chosen findings",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE, "other.md": "unused\n" });
-      const output = yield* run(
-        `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
-          `<File path="notes.md" as="note" />\\n` +
-          `<Syntax as="vocabulary" />\\n` +
-          `<Json value={{ paths, note }} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-        [shared(files)],
-        stream,
-      );
+  it("FE34: one fragment binds Glob, File and Syntax and renders chosen findings", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE, "other.md": "unused\n" });
+    const output = yield* run(
+      `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
+        `<File path="notes.md" as="note" />\\n` +
+        `<Syntax as="vocabulary" />\\n` +
+        `<Json value={{ paths, note }} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [shared(files)],
+      stream,
+    );
 
-      const rendered = String(output);
-      expect(rendered).toContain("notes.md");
-      expect(rendered).toContain("the retained note");
-      // The vocabulary was bound rather than rendered, so nothing about it
-      // reaches the caller: the fragment renders exactly what it chose to. That
-      // the occurrence ran at all is the retained reading, not the output.
-      expect(rendered).not.toContain("Available in this evaluation");
-      expect(
-        (yield* stream.readAll()).filter(
-          (event) => event.type === "yield" && event.description.type === "syntax_symbols",
-        ),
-      ).toHaveLength(1);
-      expect(files.performed).toEqual(["glob notes.md", "read notes.md"]);
-    },
-  );
+    const rendered = String(output);
+    expect(rendered).toContain("notes.md");
+    expect(rendered).toContain("the retained note");
+    // The vocabulary was bound rather than rendered, so nothing about it
+    // reaches the caller: the fragment renders exactly what it chose to. That
+    // the occurrence ran at all is the retained reading, not the output.
+    expect(rendered).not.toContain("Available in this evaluation");
+    expect(
+      (yield* stream.readAll()).filter(
+        (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+      ),
+    ).toHaveLength(1);
+    expect(files.performed).toEqual(["glob notes.md", "read notes.md"]);
+  });
 
-  journalCase(
-    "FE34: an empty result is the answer to a search that matched nothing",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(
-        `<Evaluate text={'<Glob include={["absent.md"]} as="paths" />\\n` +
-          `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-        [shared(files)],
-        stream,
-      );
+  it("FE34: an empty result is the answer to a search that matched nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Glob include={["absent.md"]} as="paths" />\\n` +
+        `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [shared(files)],
+      stream,
+    );
 
-      expect(String(output)).toContain("[]");
-      expect(String(output)).not.toContain("notes.md");
-      expect(files.performed).toEqual(["glob absent.md"]);
-    },
-  );
+    expect(String(output)).toContain("[]");
+    expect(String(output)).not.toContain("notes.md");
+    expect(files.performed).toEqual(["glob absent.md"]);
+  });
 
-  journalCase(
-    "FE34: a search written without `as` is refused before any traversal",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const failed = yield* refusal(
-        run(`<Evaluate text={'<Glob include={["notes.md"]} />\\n'} />\n`, [shared(files)], stream),
-      );
+  it("FE34: a search written without `as` is refused before any traversal", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Glob include={["notes.md"]} />\\n'} />\n`, [shared(files)], stream),
+    );
 
-      // The entry declares what it binds, so the ordinary value-component rule
-      // decides this — and it decides before the provider is asked anything.
-      expect(failed).toContain("must be invoked with `as`");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // The entry declares what it binds, so the ordinary value-component rule
+    // decides this — and it decides before the provider is asked anything.
+    expect(failed).toContain("must be invoked with `as`");
+    expect(files.performed).toEqual([]);
+  });
 
   it("FE34: a paired search and a paired read are both refused before any operation", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
@@ -1902,97 +1864,91 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(files.performed).toEqual([]);
   });
 
-  journalCase(
-    "FE34: a provider failure becomes one safe sentence that names no path",
-    function* (stream) {
-      const files = recordedFiles(
-        { "notes.md": NOTE },
-        { found: () => Err(new Error("EACCES: permission denied, scandir '/private/host/root'")) },
-      );
-      const failed = yield* refusal(
-        run(
-          `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} as="answer" />\n`,
-          [shared(files)],
-          stream,
-        ),
-      );
-
-      expect(failed).toContain("cannot search the working directory");
-      expect(failed).not.toContain("/private/host/root");
-      expect(failed).not.toContain("EACCES");
-      expect(files.performed).toEqual(["glob notes.md"]);
-    },
-  );
-
-  journalCase(
-    "FE34: the search reaches the captured operation and the captured directory",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const searched: string[] = [];
-      const reachedDocumentProvider: string[] = [];
-
-      const output = yield* scoped(function* () {
-        // Installed exactly where a document, a repository component or a
-        // middleware package would install one, and answering every search.
-        yield* API.Files.around(
-          {
-            // deno-lint-ignore require-yield
-            *globFiles([input]): Operation<never> {
-              reachedDocumentProvider.push(String(input.cwd));
-              throw new Error("the document's provider answered");
-            },
-          },
-          { at: "min" },
-        );
-        return yield* run(
-          `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
-            `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-          [
-            {
-              *install(): Operation<void> {
-                yield* useSelection({ Glob: ["self-closing"] });
-                yield* useRecordedFiles({
-                  ...files,
-                  *globFiles(input) {
-                    searched.push(input.cwd);
-                    return yield* files.globFiles(input);
-                  },
-                });
-              },
-            },
-          ],
-          stream,
-        );
-      });
-
-      expect(String(output)).toContain("notes.md");
-      // The recorder's own logical root, which is the working directory the host
-      // stated when it built the profile — not whatever the process is in.
-      expect(searched).toEqual(["/workspace"]);
-      expect(reachedDocumentProvider).toEqual([]);
-    },
-  );
-
-  journalCase(
-    "FE34: bare Syntax reports composition plus the read vocabulary, and nothing else",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(
-        `<Evaluate text={'<Syntax />\\n'} allow={["read"]} />\n`,
+  it("FE34: a provider failure becomes one safe sentence that names no path", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles(
+      { "notes.md": NOTE },
+      { found: () => Err(new Error("EACCES: permission denied, scandir '/private/host/root'")) },
+    );
+    const failed = yield* refusal(
+      run(
+        `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} as="answer" />\n`,
         [shared(files)],
         stream,
-      );
+      ),
+    );
 
-      const rendered = String(output);
-      for (const name of ["`<Json>`", "`<File>`", "`<Glob>`", "`<Syntax>`"]) {
-        expect(rendered).toContain(name);
-      }
-      // The write table was not selected, so the deletion is not in the
-      // vocabulary this fragment was told it has.
-      expect(rendered).not.toContain("`<File.Delete>`");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    expect(failed).toContain("cannot search the working directory");
+    expect(failed).not.toContain("/private/host/root");
+    expect(failed).not.toContain("EACCES");
+    expect(files.performed).toEqual(["glob notes.md"]);
+  });
+
+  it("FE34: the search reaches the captured operation and the captured directory", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const searched: string[] = [];
+    const reachedDocumentProvider: string[] = [];
+
+    const output = yield* scoped(function* () {
+      // Installed exactly where a document, a repository component or a
+      // middleware package would install one, and answering every search.
+      yield* API.Files.around(
+        {
+          // deno-lint-ignore require-yield
+          *globFiles([input]): Operation<never> {
+            reachedDocumentProvider.push(String(input.cwd));
+            throw new Error("the document's provider answered");
+          },
+        },
+        { at: "min" },
+      );
+      return yield* run(
+        `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
+          `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+        [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Glob: ["self-closing"] });
+              yield* useRecordedFiles({
+                ...files,
+                *globFiles(input) {
+                  searched.push(input.cwd);
+                  return yield* files.globFiles(input);
+                },
+              });
+            },
+          },
+        ],
+        stream,
+      );
+    });
+
+    expect(String(output)).toContain("notes.md");
+    // The recorder's own logical root, which is the working directory the host
+    // stated when it built the profile — not whatever the process is in.
+    expect(searched).toEqual(["/workspace"]);
+    expect(reachedDocumentProvider).toEqual([]);
+  });
+
+  it("FE34: bare Syntax reports composition plus the read vocabulary, and nothing else", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Syntax />\\n'} allow={["read"]} />\n`,
+      [shared(files)],
+      stream,
+    );
+
+    const rendered = String(output);
+    for (const name of ["`<Json>`", "`<File>`", "`<Glob>`", "`<Syntax>`"]) {
+      expect(rendered).toContain(name);
+    }
+    // The write table was not selected, so the deletion is not in the
+    // vocabulary this fragment was told it has.
+    expect(rendered).not.toContain("`<File.Delete>`");
+    expect(files.performed).toEqual([]);
+  });
 
   it("FE34: named Syntax describes a component that stays unavailable", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
@@ -2028,35 +1984,33 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(files.entries.get("notes.md")).toBe(NOTE);
   });
 
-  journalCase(
-    "FE34: canonical core publishes the Syntax answer, and a replacement loses it",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const seen: FunctionComponentDefinition[] = [];
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* Component.around({
-            *importComponent([name, position], next) {
-              const answer = yield* next(name, position);
-              if (name === "Syntax" && answer.kind === "function") {
-                seen.push(answer);
-                return independentWrapper(answer);
-              }
-              return answer;
-            },
-          });
-          return yield* run(`<Evaluate text={'<Syntax />\\n'} />\n`, [shared(files)], stream);
-        }),
-      );
+  it("FE34: canonical core publishes the Syntax answer, and a replacement loses it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const seen: FunctionComponentDefinition[] = [];
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const answer = yield* next(name, position);
+            if (name === "Syntax" && answer.kind === "function") {
+              seen.push(answer);
+              return independentWrapper(answer);
+            }
+            return answer;
+          },
+        });
+        return yield* run(`<Evaluate text={'<Syntax />\\n'} />\n`, [shared(files)], stream);
+      }),
+    );
 
-      // Core publishes what is behind the protected name from the innermost
-      // position, on the exact object materialization produced. A handler that
-      // returns anything else returns something nobody published.
-      expect(seen.length).toBeGreaterThan(0);
-      expect(failed).toContain("nor one a provider published");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // Core publishes what is behind the protected name from the innermost
+    // position, on the exact object materialization produced. A handler that
+    // returns anything else returns something nobody published.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(failed).toContain("nor one a provider published");
+    expect(files.performed).toEqual([]);
+  });
 
   it("FE34: an unknown documented name is classified, and Evaluate still throws", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
@@ -2270,33 +2224,31 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(generatedRequestRefusal(classified)).toContain("NoSuchComponent");
   });
 
-  journalCase(
-    "FE34: `<Evaluate>` offers no generated form, so it cannot admit itself",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const failed = yield* refusal(
-        run(
-          `<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`,
-          [
-            {
-              *install(): Operation<void> {
-                yield* useSelection({ Evaluate: ["self-closing"] });
-                yield* useRecordedFiles(files);
-              },
+  it("FE34: `<Evaluate>` offers no generated form, so it cannot admit itself", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(
+        `<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`,
+        [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Evaluate: ["self-closing"] });
+              yield* useRecordedFiles(files);
             },
-          ],
-          stream,
-        ),
-      );
+          },
+        ],
+        stream,
+      ),
+    );
 
-      // Canonical resolution answers for `Evaluate` — it is a protected name —
-      // and its declaration offers no generated use of either spelling. So
-      // evaluation inside evaluation is refused where the selection is captured:
-      // being shown a vocabulary is a different grant from being able to open one.
-      expect(failed).toContain("offers no generated use of it");
-      expect(files.performed).toEqual([]);
-    },
-  );
+    // Canonical resolution answers for `Evaluate` — it is a protected name —
+    // and its declaration offers no generated use of either spelling. So
+    // evaluation inside evaluation is refused where the selection is captured:
+    // being shown a vocabulary is a different grant from being able to open one.
+    expect(failed).toContain("offers no generated use of it");
+    expect(files.performed).toEqual([]);
+  });
 });
 
 /**
@@ -2316,6 +2268,8 @@ describe("Tier FE34 — the shared read profile", () => {
  * satisfy an error-shape assertion and none of these.
  */
 describe("Tier FE14 — the chain answers, and the answer is held to what it offers", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
   /** The entry a host states for a provider-backed name. */
@@ -2361,235 +2315,221 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
-  journalCase(
-    "FE14: the final chain answer is the implementation a fragment runs",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      // Nothing registers `Open`, no file supplies it, and the provider answers
-      // without delegating — so the chain's final answer is this implementation
-      // or the import fails. There is no second place it could have come from.
-      const output = yield* run(OPEN, [backed(A)], stream);
+  it("FE14: the final chain answer is the implementation a fragment runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    // Nothing registers `Open`, no file supplies it, and the provider answers
+    // without delegating — so the chain's final answer is this implementation
+    // or the import fails. There is no second place it could have come from.
+    const output = yield* run(OPEN, [backed(A)], stream);
 
-      expect(String(output)).toContain("A ran");
-      expect(A.invoked).toEqual(["A ran"]);
-    },
-  );
+    expect(String(output)).toContain("A ran");
+    expect(A.invoked).toEqual(["A ran"]);
+  });
 
-  journalCase(
-    "FE14: a fresh admission records the URL the admitted spelling runs under",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      yield* run(OPEN, [backed(A)], stream);
+  it("FE14: a fresh admission records the URL the admitted spelling runs under", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    yield* run(OPEN, [backed(A)], stream);
 
-      const events = yield* stream.readAll();
-      const admission = events[admittedAt(events)];
-      if (admission === undefined) {
-        throw new Error("the run recorded no admission");
-      }
-      // The spelling, the URL its owner offers it under, which effect table
-      // admitted it, and what kind of thing answered for the name: an answer the
-      // chain resolved is a different grant from an operation core supplies the
-      // body for, even under the same URL.
-      expect(retainedRow(admission)).toEqual({
-        name: "Open",
-        form: "self-closing",
-        identity: "https://executable.md/components/open/read",
-        kind: "component-answer",
-        effect: "read",
-      });
-      expect(A.invoked).toEqual(["A ran"]);
-    },
-  );
+    const events = yield* stream.readAll();
+    const admission = events[admittedAt(events)];
+    if (admission === undefined) {
+      throw new Error("the run recorded no admission");
+    }
+    // The spelling, the URL its owner offers it under, which effect table
+    // admitted it, and what kind of thing answered for the name: an answer the
+    // chain resolved is a different grant from an operation core supplies the
+    // body for, even under the same URL.
+    expect(retainedRow(admission)).toEqual({
+      name: "Open",
+      form: "self-closing",
+      identity: "https://executable.md/components/open/read",
+      kind: "component-answer",
+      effect: "read",
+    });
+    expect(A.invoked).toEqual(["A ran"]);
+  });
 
-  journalCase(
-    "FE14: an inner publication and an outer unpublished answer refuse before any body",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      const B = implementation("Open", "B ran");
-      const files = recordedFiles({ "notes.md": NOTE });
+  it("FE14: an inner publication and an outer unpublished answer refuse before any body", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const files = recordedFiles({ "notes.md": NOTE });
 
-      const failed = yield* refusal(
-        scoped(function* () {
-          // A handler further out returns its own object. The inner provider
-          // published the object it returned, and this is not that object — so
-          // nobody published the answer the chain finally gave.
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              return name === "Open" ? B.definition : definition;
-            },
-          });
-          return yield* run(
-            OPEN,
-            [
-              {
-                ...backed(A),
-                *install(): Operation<void> {
-                  yield* admits();
-                  yield* useRecordedFiles(files);
-                },
+    const failed = yield* refusal(
+      scoped(function* () {
+        // A handler further out returns its own object. The inner provider
+        // published the object it returned, and this is not that object — so
+        // nobody published the answer the chain finally gave.
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            return name === "Open" ? B.definition : definition;
+          },
+        });
+        return yield* run(
+          OPEN,
+          [
+            {
+              ...backed(A),
+              *install(): Operation<void> {
+                yield* admits();
+                yield* useRecordedFiles(files);
               },
-            ],
-            stream,
-          );
-        }),
-      );
+            },
+          ],
+          stream,
+        );
+      }),
+    );
 
-      expect(failed).toContain("nor one a provider published");
-      // Ahead of everything: no admission, neither body, no fragment effect.
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(A.invoked).toEqual([]);
-      expect(B.invoked).toEqual([]);
-      expect(files.performed).toEqual([]);
-    },
-  );
+    expect(failed).toContain("nor one a provider published");
+    // Ahead of everything: no admission, neither body, no fragment effect.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+    expect(B.invoked).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
 
-  journalCase(
-    "FE14: an inner published A and an outer published B compose, and only B runs",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      const B = implementation("Open", "B ran");
-      const delegated: unknown[] = [];
-      const outerRequests: string[] = [];
+  it("FE14: an inner published A and an outer published B compose, and only B runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const delegated: unknown[] = [];
+    const outerRequests: string[] = [];
 
-      // The positive control for the row above, and a real chain rather than one
-      // provider. Two providers answer for one name: the one installed first
-      // composes outermost, delegates — so the inner one genuinely answers and
-      // publishes A — and then returns its own published B. The difference from
-      // the refusal above is only that the publication travels with the object
-      // the chain finally gives back, which is what makes the substitution
-      // honest.
-      const output = yield* run(
+    // The positive control for the row above, and a real chain rather than one
+    // provider. Two providers answer for one name: the one installed first
+    // composes outermost, delegates — so the inner one genuinely answers and
+    // publishes A — and then returns its own published B. The difference from
+    // the refusal above is only that the publication travels with the object
+    // the chain finally gives back, which is what makes the substitution
+    // honest.
+    const output = yield* run(
+      OPEN,
+      [
+        {
+          install: admits,
+          componentAnswers: [
+            answerProvider("Open", B.definition, {
+              delegatesFirst: true,
+              delegated,
+              whileResolving(request) {
+                outerRequests.push(request.name);
+              },
+            }),
+            answerProvider("Open", A.definition, {}),
+          ],
+        },
+      ],
+      stream,
+    );
+
+    // The inner half really answered: what delegation returned is the exact
+    // object the inner provider published. So A was resolvable, and the row
+    // below it is about which of two live answers runs rather than about one.
+    expect(delegated[0]).toBe(A.definition);
+    expect(outerRequests).toEqual(["Open"]);
+    expect(String(output)).toContain("B ran");
+    expect(B.invoked).toEqual(["B ran"]);
+    expect(A.invoked).toEqual([]);
+  });
+
+  it("FE14: an answer whose contract reads differently each time cannot substitute", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const reads: string[] = [];
+    // The published contract accepts one prop; the substitution accepts none.
+    const A = implementation("Open", "A ran", {
+      type: "object",
+      properties: { flag: { type: "string" } },
+      additionalProperties: false,
+    });
+
+    // The check/use gap, planted. Reading the answer's schema alternates, and
+    // comparing own descriptors — which is how a publication is checked — does
+    // not run the trap. So the reading the capture *keeps* decides what a
+    // fragment is validated against: the publication-time schema admits `flag`,
+    // and the substitution refuses it.
+    const output = yield* run(
+      `<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`,
+      [
+        {
+          install: admits,
+          componentAnswers: [
+            answerProvider("Open", A.definition, {
+              alternating: {
+                substitute: { type: "object", properties: {}, additionalProperties: false },
+                reads,
+              },
+            }),
+          ],
+        },
+      ],
+      stream,
+    );
+
+    expect(String(output)).not.toContain("Error");
+    expect(A.invoked).toEqual(["A ran"]);
+    // The plant is live rather than inert: the object the chain returned was
+    // read, and it does answer differently on the next read.
+    expect(reads.length).toBeGreaterThan(0);
+  });
+
+  it("FE14: a provider still answering when a fragment resolves is refused there", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+
+    // A provider settles at the capture: the profile sealed what it retained,
+    // and a fragment runs that snapshot. One that keeps answering is answering
+    // a *generated* import, which only canonical execution answers — so the
+    // witness refuses it rather than letting a live provider substitute into an
+    // admitted fragment.
+    const failed = yield* refusal(
+      run(
         OPEN,
         [
           {
             install: admits,
-            componentAnswers: [
-              answerProvider("Open", B.definition, {
-                delegatesFirst: true,
-                delegated,
-                whileResolving(request) {
-                  outerRequests.push(request.name);
-                },
-              }),
-              answerProvider("Open", A.definition, {}),
-            ],
+            componentAnswers: [answerProvider("Open", A.definition, { keepsAnswering: true })],
           },
         ],
         stream,
-      );
+      ),
+    );
 
-      // The inner half really answered: what delegation returned is the exact
-      // object the inner provider published. So A was resolvable, and the row
-      // below it is about which of two live answers runs rather than about one.
-      expect(delegated[0]).toBe(A.definition);
-      expect(outerRequests).toEqual(["Open"]);
-      expect(String(output)).toContain("B ran");
-      expect(B.invoked).toEqual(["B ran"]);
-      expect(A.invoked).toEqual([]);
-    },
-  );
+    expect(failed).toContain("canonical execution did not produce");
+    expect(B.invoked).toEqual([]);
+    // The admission committed — the refusal is at the import, not the ceiling —
+    // and no body ran.
+    expect(A.invoked).toEqual([]);
+  });
 
-  journalCase(
-    "FE14: an answer whose contract reads differently each time cannot substitute",
-    function* (stream) {
-      const reads: string[] = [];
-      // The published contract accepts one prop; the substitution accepts none.
-      const A = implementation("Open", "A ran", {
-        type: "object",
-        properties: { flag: { type: "string" } },
-        additionalProperties: false,
-      });
+  it("FE14: a provider still publishing when a fragment resolves is refused earlier", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
 
-      // The check/use gap, planted. Reading the answer's schema alternates, and
-      // comparing own descriptors — which is how a publication is checked — does
-      // not run the trap. So the reading the capture *keeps* decides what a
-      // fragment is validated against: the publication-time schema admits `flag`,
-      // and the substitution refuses it.
-      const output = yield* run(
-        `<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`,
+    // The same substitution, one step earlier. The resolution this provider
+    // answered settled during the capture, so there is no window left to
+    // publish into — the publication refuses before the witness is consulted,
+    // and an answer nobody could have published never reaches the fragment.
+    const failed = yield* refusal(
+      run(
+        OPEN,
         [
           {
             install: admits,
-            componentAnswers: [
-              answerProvider("Open", A.definition, {
-                alternating: {
-                  substitute: { type: "object", properties: {}, additionalProperties: false },
-                  reads,
-                },
-              }),
-            ],
+            componentAnswers: [answerProvider("Open", A.definition, { publishesLater: true })],
           },
         ],
         stream,
-      );
+      ),
+    );
 
-      expect(String(output)).not.toContain("Error");
-      expect(A.invoked).toEqual(["A ran"]);
-      // The plant is live rather than inert: the object the chain returned was
-      // read, and it does answer differently on the next read.
-      expect(reads.length).toBeGreaterThan(0);
-    },
-  );
-
-  journalCase(
-    "FE14: a provider still answering when a fragment resolves is refused there",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      const B = implementation("Open", "B ran");
-
-      // A provider settles at the capture: the profile sealed what it retained,
-      // and a fragment runs that snapshot. One that keeps answering is answering
-      // a *generated* import, which only canonical execution answers — so the
-      // witness refuses it rather than letting a live provider substitute into an
-      // admitted fragment.
-      const failed = yield* refusal(
-        run(
-          OPEN,
-          [
-            {
-              install: admits,
-              componentAnswers: [answerProvider("Open", A.definition, { keepsAnswering: true })],
-            },
-          ],
-          stream,
-        ),
-      );
-
-      expect(failed).toContain("canonical execution did not produce");
-      expect(B.invoked).toEqual([]);
-      // The admission committed — the refusal is at the import, not the ceiling —
-      // and no body ran.
-      expect(A.invoked).toEqual([]);
-    },
-  );
-
-  journalCase(
-    "FE14: a provider still publishing when a fragment resolves is refused earlier",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-
-      // The same substitution, one step earlier. The resolution this provider
-      // answered settled during the capture, so there is no window left to
-      // publish into — the publication refuses before the witness is consulted,
-      // and an answer nobody could have published never reaches the fragment.
-      const failed = yield* refusal(
-        run(
-          OPEN,
-          [
-            {
-              install: admits,
-              componentAnswers: [answerProvider("Open", A.definition, { publishesLater: true })],
-            },
-          ],
-          stream,
-        ),
-      );
-
-      expect(failed).toContain("this resolution has settled");
-      expect(A.invoked).toEqual([]);
-    },
-  );
+    expect(failed).toContain("this resolution has settled");
+    expect(A.invoked).toEqual([]);
+  });
 
   it("FE14: an unpublished, a copied and a mutated answer each refuse", function* () {
     const cases: readonly (readonly [string, ProviderOptions])[] = [
@@ -2627,121 +2567,116 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     }
   });
 
-  journalCase(
-    "FE14: an answer stating forms this engine does not have refuses",
-    function* (stream) {
-      const files = recordedFiles();
-      // The same reading as the unit row, at the live boundary: the provider
-      // answers honestly with a definition whose stated forms are not a
-      // declaration this engine has, so the spelling it offers cannot be held to
-      // them and the publication refuses before the root import.
-      const A = implementation("Open", "A ran");
-      const stating = Object.assign({ ...A.definition }, { forms: "paired" });
+  it("FE14: an answer stating forms this engine does not have refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    // The same reading as the unit row, at the live boundary: the provider
+    // answers honestly with a definition whose stated forms are not a
+    // declaration this engine has, so the spelling it offers cannot be held to
+    // them and the publication refuses before the root import.
+    const A = implementation("Open", "A ran");
+    const stating = Object.assign({ ...A.definition }, { forms: "paired" });
 
-      const failed = yield* refusal(
-        run(
-          OPEN,
-          [
-            {
-              *install(): Operation<void> {
-                yield* admits();
-                yield* useRecordedFiles(files);
-              },
-              componentAnswers: [answerProvider("Open", stating)],
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            *install(): Operation<void> {
+              yield* admits();
+              yield* useRecordedFiles(files);
             },
-          ],
-          stream,
-        ),
-      );
+            componentAnswers: [answerProvider("Open", stating)],
+          },
+        ],
+        stream,
+      ),
+    );
 
-      expect(failed).toContain("the accepted declarations are");
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(A.invoked).toEqual([]);
-      expect(files.performed).toEqual([]);
-    },
-  );
+    expect(failed).toContain("the accepted declarations are");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
 
-  journalCase(
-    "FE14: an answer offering no generated use of the admitted spelling refuses",
-    function* (stream) {
-      const files = recordedFiles();
-      // The provider answers honestly, with a definition whose own declaration
-      // offers no generated use of the spelling this host admitted. There is no
-      // identity for a continuation to be compared against, so the entry refuses
-      // before the root import rather than running something unaccountable.
-      const A = implementation("Open", "A ran", undefined, null);
+  it("FE14: an answer offering no generated use of the admitted spelling refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    // The provider answers honestly, with a definition whose own declaration
+    // offers no generated use of the spelling this host admitted. There is no
+    // identity for a continuation to be compared against, so the entry refuses
+    // before the root import rather than running something unaccountable.
+    const A = implementation("Open", "A ran", undefined, null);
 
-      const failed = yield* refusal(
-        run(
-          OPEN,
-          [
-            {
-              *install(): Operation<void> {
-                yield* admits();
-                yield* useRecordedFiles(files);
-              },
-              componentAnswers: [answerProvider("Open", A.definition)],
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            *install(): Operation<void> {
+              yield* admits();
+              yield* useRecordedFiles(files);
             },
-          ],
-          stream,
-        ),
-      );
+            componentAnswers: [answerProvider("Open", A.definition)],
+          },
+        ],
+        stream,
+      ),
+    );
 
-      expect(failed).toContain("offers no generated use of it");
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      expect(A.invoked).toEqual([]);
-    },
-  );
+    expect(failed).toContain("offers no generated use of it");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+  });
 
-  journalCase(
-    "FE14: a continuation whose outer provider now answers B runs neither",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      yield* run(OPEN, [backed(A)], stream);
-      const complete = yield* stream.readAll();
-      const admitted = admittedAt(complete);
-      expect(admitted).toBeGreaterThanOrEqual(0);
-      // Truncated to the admission itself: the decision committed and the body it
-      // authorized had not, which is the only state with fragment work left.
-      const partial = complete.slice(0, admitted + 1);
+  it("FE14: a continuation whose outer provider now answers B runs neither", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    yield* run(OPEN, [backed(A)], stream);
+    const complete = yield* stream.readAll();
+    const admitted = admittedAt(complete);
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    // Truncated to the admission itself: the decision committed and the body it
+    // authorized had not, which is the only state with fragment work left.
+    const partial = complete.slice(0, admitted + 1);
 
-      // The resumed run supplies both implementations, live. The inner provider
-      // answers the unchanged A, whose declaration offers the identity the
-      // admission was made over; the outer one delegates to it and then answers
-      // with its own published B, whose declaration offers that spelling under a
-      // different URL. So capture seals B — and then the *retained* policy
-      // refuses, because the admission was made over one URL and this run states
-      // another behind the same name.
-      const resumedA = implementation("Open", "A ran");
-      const B = implementation("Open", "B ran", undefined, offering("Other", "read"));
-      const delegated: unknown[] = [];
-      const failed = yield* refusal(
-        run(
-          OPEN,
-          [
-            {
-              install: admits,
-              componentAnswers: [
-                answerProvider("Open", B.definition, { delegatesFirst: true, delegated }),
-                answerProvider("Open", resumedA.definition),
-              ],
-            },
-          ],
-          new InMemoryStream(partial),
-        ),
-      );
+    // The resumed run supplies both implementations, live. The inner provider
+    // answers the unchanged A, whose declaration offers the identity the
+    // admission was made over; the outer one delegates to it and then answers
+    // with its own published B, whose declaration offers that spelling under a
+    // different URL. So capture seals B — and then the *retained* policy
+    // refuses, because the admission was made over one URL and this run states
+    // another behind the same name.
+    const resumedA = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran", undefined, offering("Other", "read"));
+    const delegated: unknown[] = [];
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            install: admits,
+            componentAnswers: [
+              answerProvider("Open", B.definition, { delegatesFirst: true, delegated }),
+              answerProvider("Open", resumedA.definition),
+            ],
+          },
+        ],
+        new InMemoryStream(partial),
+      ),
+    );
 
-      expect(failed).toContain("admitted under");
-      // Both were genuinely reachable in this run — the unchanged A answered the
-      // chain, which is what makes its silence a fact rather than an absence —
-      // and neither body ran.
-      expect(delegated[0]).toBe(resumedA.definition);
-      expect(resumedA.invoked).toEqual([]);
-      expect(B.invoked).toEqual([]);
-    },
-  );
+    expect(failed).toContain("admitted under");
+    // Both were genuinely reachable in this run — the unchanged A answered the
+    // chain, which is what makes its silence a fact rather than an absence —
+    // and neither body ran.
+    expect(delegated[0]).toBe(resumedA.definition);
+    expect(resumedA.invoked).toEqual([]);
+    expect(B.invoked).toEqual([]);
+  });
 
-  journalCase("FE14: an unchanged continuation resumes and invokes A once", function* (stream) {
+  it("FE14: an unchanged continuation resumes and invokes A once", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
     yield* run(OPEN, [backed(A)], stream);
     const complete = yield* stream.readAll();
@@ -2756,40 +2691,39 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     expect(resumed.invoked).toEqual(["A ran"]);
   });
 
-  journalCase(
-    "FE14: two occurrences share one capture lookup and reach no chain again",
-    function* (stream) {
-      const A = implementation("Open", "A ran");
-      const B = implementation("Open", "B ran");
-      const lookups: string[] = [];
+  it("FE14: two occurrences share one capture lookup and reach no chain again", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const lookups: string[] = [];
 
-      const asked: string[] = [];
-      const output = yield* run(
-        `<Evaluate text={'<Open />\\n'} as="one" />\n\n<Json value={one} />\n\n` +
-          `<Evaluate text={'<Open />\\n'} as="two" />\n\n<Json value={two} />\n`,
-        [
-          {
-            install: admits,
-            componentAnswers: [answerProvider("Open", A.definition, { lookups, asked })],
-          },
-        ],
-        stream,
-      );
+    const asked: string[] = [];
+    const output = yield* run(
+      `<Evaluate text={'<Open />\\n'} as="one" />\n\n<Json value={one} />\n\n` +
+        `<Evaluate text={'<Open />\\n'} as="two" />\n\n<Json value={two} />\n`,
+      [
+        {
+          install: admits,
+          componentAnswers: [answerProvider("Open", A.definition, { lookups, asked })],
+        },
+      ],
+      stream,
+    );
 
-      // Answered exactly once, eagerly, during capture — and the two fragments
-      // between them asked twice more, which the provider observed and delegated.
-      // So neither fragment resolved this name through the provider; both ran the
-      // snapshot the capture sealed.
-      expect(lookups).toEqual(["Open"]);
-      expect(asked).toEqual(["Open", "Open", "Open"]);
-      expect(admissions(yield* stream.readAll())).toHaveLength(2);
-      expect(A.invoked).toEqual(["A ran", "A ran"]);
-      expect(B.invoked).toEqual([]);
-      expect(String(output)).not.toContain("B ran");
-    },
-  );
+    // Answered exactly once, eagerly, during capture — and the two fragments
+    // between them asked twice more, which the provider observed and delegated.
+    // So neither fragment resolved this name through the provider; both ran the
+    // snapshot the capture sealed.
+    expect(lookups).toEqual(["Open"]);
+    expect(asked).toEqual(["Open", "Open", "Open"]);
+    expect(admissions(yield* stream.readAll())).toHaveLength(2);
+    expect(A.invoked).toEqual(["A ran", "A ran"]);
+    expect(B.invoked).toEqual([]);
+    expect(String(output)).not.toContain("B ran");
+  });
 
-  journalCase("FE14: a capability-only profile resolves no name at all", function* (stream) {
+  it("FE14: a capability-only profile resolves no name at all", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const lookups: string[] = [];
     const files = recordedFiles({ "notes.md": NOTE });
 
@@ -2818,6 +2752,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
 });
 
 describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** The question the fragment asks, and the shape its answer must have. */
   const SCHEMA =
     '{ type: "object", properties: { decision: { type: "string", enum: ["Approve", "Decline"] } }, ' +
@@ -2899,132 +2834,125 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     ]);
   }
 
-  journalCase(
-    "EL2: `write` admits the question, the host provider answers it, and the answer writes",
-    function* (stream) {
-      const files = recordedFiles();
-      const requests: ElicitationRequest[] = [];
+  it("EL2: `write` admits the question, the host provider answers it, and the answer writes", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
 
-      const output = yield* scoped(function* () {
-        yield* asked(requests);
-        yield* producing(ASKING);
-        return yield* run(DOCUMENT, [writing(files)], stream);
+    const output = yield* scoped(function* () {
+      yield* asked(requests);
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(files)], stream);
+    });
+
+    // One question, carrying the rendered request and the compiled schema. The
+    // provider is the enclosing host's: the fragment installed nothing.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.message).toContain("Approve this write?");
+    expect(requests[0]?.schema).toEqual({
+      type: "object",
+      properties: { decision: { type: "string", enum: ["Approve", "Decline"] } },
+      required: ["decision"],
+      additionalProperties: false,
+    });
+    // And the answer drove the write that followed it, through the captured
+    // operation and nothing else.
+    expect(files.performed).toEqual(["check out.md", "write out.md"]);
+    expect(files.entries.get("out.md")).toContain('"decision": "Approve"');
+    expect(String(output)).not.toContain("did not admit");
+
+    // One admission, and the question's own ordinary durable record beside it.
+    expect(admissions(yield* stream.readAll())).toHaveLength(1);
+    const kinds = (yield* stream.readAll())
+      .filter((event) => event.type === "yield")
+      .map((event) => (event.type === "yield" ? event.description.type : ""));
+    expect(kinds).toContain("elicit");
+  });
+
+  it("EL7: a selected question is resolved at capture even when nothing writes it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
+    const asksFor: string[] = [];
+
+    // Every selected name is resolved once, before public execution policy,
+    // whether or not the fragment goes on to write it. That is the whole of the
+    // substitution this closes: a name resolved lazily would be resolved
+    // through whatever middleware the running document had arranged by then.
+    // So `Elicit` is asked for here — once — and nobody is asked a question.
+    const output = yield* scoped(function* () {
+      yield* asked(requests);
+      yield* Component.around({
+        *importComponent([name, position], next) {
+          asksFor.push(name);
+          return yield* next(name, position);
+        },
       });
+      yield* producing(`<File path="out.md">just a write</File>\n`);
+      return yield* run(DOCUMENT, [writing(files)], stream);
+    });
 
-      // One question, carrying the rendered request and the compiled schema. The
-      // provider is the enclosing host's: the fragment installed nothing.
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.message).toContain("Approve this write?");
-      expect(requests[0]?.schema).toEqual({
-        type: "object",
-        properties: { decision: { type: "string", enum: ["Approve", "Decline"] } },
-        required: ["decision"],
-        additionalProperties: false,
-      });
-      // And the answer drove the write that followed it, through the captured
-      // operation and nothing else.
-      expect(files.performed).toEqual(["check out.md", "write out.md"]);
-      expect(files.entries.get("out.md")).toContain('"decision": "Approve"');
-      expect(String(output)).not.toContain("did not admit");
+    // Resolved before the root import, which is what "at capture" means here.
+    expect(asksFor.slice(0, asksFor.indexOf("__root__"))).toContain("Elicit");
+    expect(asksFor.filter((name) => name === "Elicit")).toHaveLength(1);
+    expect(requests).toEqual([]);
+    expect(files.entries.get("out.md")).toContain("just a write");
+    expect(String(output)).not.toContain("did not admit");
+  });
 
-      // One admission, and the question's own ordinary durable record beside it.
-      expect(admissions(yield* stream.readAll())).toHaveLength(1);
-      const kinds = (yield* stream.readAll())
-        .filter((event) => event.type === "yield")
-        .map((event) => (event.type === "yield" ? event.description.type : ""));
-      expect(kinds).toContain("elicit");
-    },
-  );
+  it("EL8: a surrounding `<Answers>` answers the generated question, and asks nobody", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
 
-  journalCase(
-    "EL7: a selected question is resolved at capture even when nothing writes it",
-    function* (stream) {
-      const files = recordedFiles();
-      const requests: ElicitationRequest[] = [];
-      const asksFor: string[] = [];
+    // The region is the author's, around the element that evaluates the
+    // fragment. A generated question is an ordinary elicitation, so the region
+    // answers it exactly as it answers an authored one — which is a fact about
+    // reaching the active Elicitation Api rather than about who supplied the
+    // body.
+    yield* scoped(function* () {
+      yield* asked(requests);
+      yield* producing(ASKING);
+      return yield* run(
+        `<Answers>\n<Answer value={{ decision: "Decline" }}>\nApprove this write?\n</Answer>\n` +
+          `${DOCUMENT}</Answers>\n`,
+        [writing(files)],
+        stream,
+      );
+    });
 
-      // Every selected name is resolved once, before public execution policy,
-      // whether or not the fragment goes on to write it. That is the whole of the
-      // substitution this closes: a name resolved lazily would be resolved
-      // through whatever middleware the running document had arranged by then.
-      // So `Elicit` is asked for here — once — and nobody is asked a question.
-      const output = yield* scoped(function* () {
-        yield* asked(requests);
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            asksFor.push(name);
-            return yield* next(name, position);
-          },
-        });
-        yield* producing(`<File path="out.md">just a write</File>\n`);
-        return yield* run(DOCUMENT, [writing(files)], stream);
-      });
+    // Nobody was asked, and what the region said is what the fragment wrote.
+    expect(requests).toEqual([]);
+    expect(files.entries.get("out.md")).toContain("Decline");
+  });
 
-      // Resolved before the root import, which is what "at capture" means here.
-      expect(asksFor.slice(0, asksFor.indexOf("__root__"))).toContain("Elicit");
-      expect(asksFor.filter((name) => name === "Elicit")).toHaveLength(1);
-      expect(requests).toEqual([]);
-      expect(files.entries.get("out.md")).toContain("just a write");
-      expect(String(output)).not.toContain("did not admit");
-    },
-  );
+  it("EL3: `read` refuses the same fragment before the provider or a write is reached", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const requests: ElicitationRequest[] = [];
 
-  journalCase(
-    "EL8: a surrounding `<Answers>` answers the generated question, and asks nobody",
-    function* (stream) {
-      const files = recordedFiles();
-      const requests: ElicitationRequest[] = [];
-
-      // The region is the author's, around the element that evaluates the
-      // fragment. A generated question is an ordinary elicitation, so the region
-      // answers it exactly as it answers an authored one — which is a fact about
-      // reaching the active Elicitation Api rather than about who supplied the
-      // body.
-      yield* scoped(function* () {
+    const failed = yield* refusal(
+      scoped(function* () {
         yield* asked(requests);
         yield* producing(ASKING);
         return yield* run(
-          `<Answers>\n<Answer value={{ decision: "Decline" }}>\nApprove this write?\n</Answer>\n` +
-            `${DOCUMENT}</Answers>\n`,
+          `<Evaluate allow={["read"]}>\n<Program />\n</Evaluate>\n`,
           [writing(files)],
           stream,
         );
-      });
+      }),
+    );
 
-      // Nobody was asked, and what the region said is what the fragment wrote.
-      expect(requests).toEqual([]);
-      expect(files.entries.get("out.md")).toContain("Decline");
-    },
-  );
+    // The class, and nothing about the fragment: a question is admitted by the
+    // table that also admits mutation, and a read selection promises nobody
+    // will be interrupted.
+    expect(failed).toContain("did not admit");
+    expect(requests).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
 
-  journalCase(
-    "EL3: `read` refuses the same fragment before the provider or a write is reached",
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const requests: ElicitationRequest[] = [];
-
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* asked(requests);
-          yield* producing(ASKING);
-          return yield* run(
-            `<Evaluate allow={["read"]}>\n<Program />\n</Evaluate>\n`,
-            [writing(files)],
-            stream,
-          );
-        }),
-      );
-
-      // The class, and nothing about the fragment: a question is admitted by the
-      // table that also admits mutation, and a read selection promises nobody
-      // will be interrupted.
-      expect(failed).toContain("did not admit");
-      expect(requests).toEqual([]);
-      expect(files.performed).toEqual([]);
-    },
-  );
-
-  journalCase("EL3: a write selection that omits the entry refuses it too", function* (stream) {
+  it("EL3: a write selection that omits the entry refuses it too", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const requests: ElicitationRequest[] = [];
 
@@ -3041,27 +2969,25 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(files.performed).toEqual([]);
   });
 
-  journalCase(
-    "EL4: a prohibited sibling refuses the whole fragment before the question is asked",
-    function* (stream) {
-      const files = recordedFiles();
-      const requests: ElicitationRequest[] = [];
+  it("EL4: a prohibited sibling refuses the whole fragment before the question is asked", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
 
-      // The question is first and legal; what follows it is not. Preflight reads
-      // the whole fragment before its first effect, so nobody is asked at all.
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* asked(requests);
-          yield* producing(`${ASKING}\n<Fetch url="https://example.test/data" />\n`);
-          return yield* run(DOCUMENT, [writing(files)], stream);
-        }),
-      );
+    // The question is first and legal; what follows it is not. Preflight reads
+    // the whole fragment before its first effect, so nobody is asked at all.
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* asked(requests);
+        yield* producing(`${ASKING}\n<Fetch url="https://example.test/data" />\n`);
+        return yield* run(DOCUMENT, [writing(files)], stream);
+      }),
+    );
 
-      expect(failed).toContain("did not admit");
-      expect(requests).toEqual([]);
-      expect(files.performed).toEqual([]);
-    },
-  );
+    expect(failed).toContain("did not admit");
+    expect(requests).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
 
   it("EL5: a selected question resolves the actual host answer, and refuses an unoffered one", function* () {
     // `Elicit` is a replaceable name, and selecting it resolves what this host
@@ -3145,47 +3071,45 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(wrapped.performed).toEqual([]);
   });
 
-  journalCase(
-    "EL5: a continuation that no longer admits Elicit refuses before any effect",
-    function* (stream) {
-      const files = recordedFiles();
-      yield* scoped(function* () {
-        yield* asked([]);
+  it("EL5: a continuation that no longer admits Elicit refuses before any effect", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles();
+    yield* scoped(function* () {
+      yield* asked([]);
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(files)], stream);
+    });
+    const complete = yield* stream.readAll();
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    const partial = complete.slice(0, admitted + 1);
+
+    // The same fragment and the same text, under a table that no longer admits
+    // the question at all. A grant is the exact set of spellings it was made
+    // under, so a table missing one is a different grant rather than the same
+    // one restated.
+    const second = recordedFiles();
+    const moved: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* useSelection({ File: ["self-closing", "paired"] });
+        yield* useRecordedFiles(second);
+      },
+    };
+    const requests: ElicitationRequest[] = [];
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* asked(requests);
         yield* producing(ASKING);
-        return yield* run(DOCUMENT, [writing(files)], stream);
-      });
-      const complete = yield* stream.readAll();
-      const admitted = complete.findIndex(
-        (event) => event.type === "yield" && event.description.type === "generated_xmd",
-      );
-      expect(admitted).toBeGreaterThanOrEqual(0);
-      const partial = complete.slice(0, admitted + 1);
+        return yield* run(DOCUMENT, [moved], new InMemoryStream(partial));
+      }),
+    );
 
-      // The same fragment and the same text, under a table that no longer admits
-      // the question at all. A grant is the exact set of spellings it was made
-      // under, so a table missing one is a different grant rather than the same
-      // one restated.
-      const second = recordedFiles();
-      const moved: ExecutionInstallation = {
-        *install(): Operation<void> {
-          yield* useSelection({ File: ["self-closing", "paired"] });
-          yield* useRecordedFiles(second);
-        },
-      };
-      const requests: ElicitationRequest[] = [];
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* asked(requests);
-          yield* producing(ASKING);
-          return yield* run(DOCUMENT, [moved], new InMemoryStream(partial));
-        }),
-      );
-
-      expect(failed.length).toBeGreaterThan(0);
-      expect(requests).toEqual([]);
-      expect(second.performed).toEqual([]);
-    },
-  );
+    expect(failed.length).toBeGreaterThan(0);
+    expect(requests).toEqual([]);
+    expect(second.performed).toEqual([]);
+  });
 
   it("EL6: a replay restores the answer without asking anyone, byte for byte", function* () {
     const files = recordedFiles();
