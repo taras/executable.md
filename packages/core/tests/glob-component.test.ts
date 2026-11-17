@@ -225,15 +225,32 @@ function globCase(
 
 describe(SUITE, () => {
   // GB1: props are validated like any component's — no name-specific check.
-  it("GB1: include is required and undeclared props are rejected", function* () {
-    const fixture = yield* useFixture();
+  {
+    const name = "GB1: include is required and undeclared props are rejected";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name, suite: "missing include" },
+        fixtureDocument(fixture),
+        (stream1) =>
+          captureTestJournal(
+            { owner: "packages/core/tests/glob-component.test.ts", name, suite: "extra prop" },
+            fixtureDocument(fixture),
+            function* (stream2) {
+              const missing = yield* said(fixture, '<Glob as="found" />', stream1);
+              expect(missing).toContain("must have required property 'include'");
 
-    const missing = yield* said(fixture, '<Glob as="found" />');
-    expect(missing).toContain("must have required property 'include'");
-
-    const extra = yield* said(fixture, '<Glob include={["*.md"]} hidden={true} as="found" />');
-    expect(extra).toContain("additional properties");
-  });
+              const extra = yield* said(
+                fixture,
+                '<Glob include={["*.md"]} hidden={true} as="found" />',
+                stream2,
+              );
+              expect(extra).toContain("additional properties");
+            },
+          ),
+      );
+    });
+  }
 
   // GB2: an empty include list is not "match nothing" — it is a pattern list
   // that forgot to say anything, and the schema is where that is caught.
@@ -245,18 +262,52 @@ describe(SUITE, () => {
 
   // GB3: the props schema types both lists, so a bare string and a list of
   // non-strings are refused before the component runs.
-  it("GB3: include and exclude must be lists of strings", function* () {
-    const fixture = yield* useFixture();
+  {
+    const name = "GB3: include and exclude must be lists of strings";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name, suite: "bare include" },
+        fixtureDocument(fixture),
+        (stream1) =>
+          captureTestJournal(
+            { owner: "packages/core/tests/glob-component.test.ts", name, suite: "numeric include" },
+            fixtureDocument(fixture),
+            (stream2) =>
+              captureTestJournal(
+                {
+                  owner: "packages/core/tests/glob-component.test.ts",
+                  name,
+                  suite: "bare exclude",
+                },
+                fixtureDocument(fixture),
+                function* (stream3) {
+                  const bare = yield* said(
+                    fixture,
+                    '<Glob include={"*.md"} as="found" />',
+                    stream1,
+                  );
+                  expect(bare).toContain('"/include" must be array');
 
-    const bare = yield* said(fixture, '<Glob include={"*.md"} as="found" />');
-    expect(bare).toContain('"/include" must be array');
+                  const numbers = yield* said(
+                    fixture,
+                    '<Glob include={[1, 2]} as="found" />',
+                    stream2,
+                  );
+                  expect(numbers).toContain('"/include/0" must be string');
 
-    const numbers = yield* said(fixture, '<Glob include={[1, 2]} as="found" />');
-    expect(numbers).toContain('"/include/0" must be string');
-
-    const badExclude = yield* said(fixture, '<Glob include={["*.md"]} exclude={"x"} as="found" />');
-    expect(badExclude).toContain('"/exclude" must be array');
-  });
+                  const badExclude = yield* said(
+                    fixture,
+                    '<Glob include={["*.md"]} exclude={"x"} as="found" />',
+                    stream3,
+                  );
+                  expect(badExclude).toContain('"/exclude" must be array');
+                },
+              ),
+          ),
+      );
+    });
+  }
 
   // GB4: declaring `returns` is what requires `as` (§6.10). Nothing in the
   // component enforces it, which is the point — it is the value-component
@@ -281,52 +332,109 @@ describe(SUITE, () => {
   // indistinguishable from an empty directory, so it fails instead — and the
   // printed error quotes the document's own text, which is the one absolute path
   // §1.2 does not have to withhold, because the document wrote it.
-  it("GB6: an absolute pattern fails", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["a.md"]);
+  {
+    const name = "GB6: an absolute pattern fails";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name, suite: "include" },
+        fixtureDocument(fixture),
+        (stream1) =>
+          captureTestJournal(
+            { owner: "packages/core/tests/glob-component.test.ts", name, suite: "exclude" },
+            fixtureDocument(fixture),
+            function* (stream2) {
+              yield* plant(fixture, ["a.md"]);
 
-    const include = text(yield* run(fixture, '<Glob include={["/etc/**"]} as="found" />'));
-    expect(include).toContain("include");
-    expect(include).toContain("is absolute");
-    expect(include).toContain("/etc/**");
+              const include = text(
+                yield* run(fixture, '<Glob include={["/etc/**"]} as="found" />', stream1),
+              );
+              expect(include).toContain("include");
+              expect(include).toContain("is absolute");
+              expect(include).toContain("/etc/**");
 
-    const exclude = text(
-      yield* run(fixture, '<Glob include={["*.md"]} exclude={["/etc/**"]} as="found" />'),
-    );
-    expect(exclude).toContain("exclude");
-    expect(exclude).toContain("is absolute");
-  });
+              const exclude = text(
+                yield* run(
+                  fixture,
+                  '<Glob include={["*.md"]} exclude={["/etc/**"]} as="found" />',
+                  stream2,
+                ),
+              );
+              expect(exclude).toContain("exclude");
+              expect(exclude).toContain("is absolute");
+            },
+          ),
+      );
+    });
+  }
 
   // GB7: the same for a pattern that starts by leaving. Only a whole leading
   // `..` segment does: `..notes.md` is an ordinary name, and a `..` further
   // along is a path a search never produces, so it matches nothing for the
   // ordinary reason.
-  it("GB7: a pattern that reaches outside fails, but a dotted name does not", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["..notes.md"]);
+  {
+    const name = "GB7: a pattern that reaches outside fails, but a dotted name does not";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name, suite: "escaping" },
+        fixtureDocument(fixture),
+        (stream1) =>
+          captureTestJournal(
+            { owner: "packages/core/tests/glob-component.test.ts", name, suite: "bare parent" },
+            fixtureDocument(fixture),
+            (stream2) =>
+              captureTestJournal(
+                { owner: "packages/core/tests/glob-component.test.ts", name, suite: "dotted" },
+                fixtureDocument(fixture),
+                (stream3) =>
+                  captureTestJournal(
+                    {
+                      owner: "packages/core/tests/glob-component.test.ts",
+                      name,
+                      suite: "interior parent",
+                    },
+                    fixtureDocument(fixture),
+                    function* (stream4) {
+                      yield* plant(fixture, ["..notes.md"]);
 
-    const escaping = text(yield* run(fixture, '<Glob include={["../*.md"]} as="found" />'));
-    expect(escaping).toContain("reaches outside the working directory");
+                      const escaping = text(
+                        yield* run(fixture, '<Glob include={["../*.md"]} as="found" />', stream1),
+                      );
+                      expect(escaping).toContain("reaches outside the working directory");
 
-    const bare = text(yield* run(fixture, '<Glob include={[".."]} as="found" />'));
-    expect(bare).toContain("reaches outside the working directory");
+                      const bare = text(
+                        yield* run(fixture, '<Glob include={[".."]} as="found" />', stream2),
+                      );
+                      expect(bare).toContain("reaches outside the working directory");
 
-    const dotted = text(
-      yield* run(fixture, '<Glob include={["..notes.md"]} as="found" />\n\nfound: {found}'),
-    );
-    expect(dotted).toContain(found("..notes.md"));
+                      const dotted = text(
+                        yield* run(
+                          fixture,
+                          '<Glob include={["..notes.md"]} as="found" />\n\nfound: {found}',
+                          stream3,
+                        ),
+                      );
+                      expect(dotted).toContain(found("..notes.md"));
 
-    // A `..` further along needs no refusal: traversal never produces a path
-    // containing one, so it matches nothing for the ordinary reason. This is
-    // the claim that makes refusing only a leading segment sufficient.
-    const deep = text(
-      yield* run(
-        fixture,
-        '<Glob include={["docs/../../../etc/passwd"]} as="found" />\n\nfound: [{found}]',
-      ),
-    );
-    expect(deep).toContain("found: []");
-  });
+                      // A `..` further along needs no refusal: traversal never produces a path
+                      // containing one, so it matches nothing for the ordinary reason. This is
+                      // the claim that makes refusing only a leading segment sufficient.
+                      const deep = text(
+                        yield* run(
+                          fixture,
+                          '<Glob include={["docs/../../../etc/passwd"]} as="found" />\n\nfound: [{found}]',
+                          stream4,
+                        ),
+                      );
+                      expect(deep).toContain("found: []");
+                    },
+                  ),
+              ),
+          ),
+      );
+    });
+  }
 
   // GB8: an empty pattern matches nothing by construction, so it is the same
   // authoring mistake as an absolute one.
@@ -340,54 +448,92 @@ describe(SUITE, () => {
   // — arrives as a `SyntaxError` about a translated regular expression the
   // author never wrote. Which pattern it was is not recoverable from the error,
   // so the candidates are listed rather than one being named.
-  it("GB9: a pattern that cannot be compiled fails naming the candidates", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["a.md"]);
+  {
+    const name = "GB9: a pattern that cannot be compiled fails naming the candidates";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name, suite: "include" },
+        fixtureDocument(fixture),
+        (stream1) =>
+          captureTestJournal(
+            { owner: "packages/core/tests/glob-component.test.ts", name, suite: "exclude" },
+            fixtureDocument(fixture),
+            function* (stream2) {
+              yield* plant(fixture, ["a.md"]);
 
-    const include = text(yield* run(fixture, '<Glob include={["*.md", "[bad"]} as="found" />'));
-    expect(include).toContain("cannot be used");
-    expect(include).toContain('"[bad"');
-    expect(include).not.toContain("Unterminated");
+              const include = text(
+                yield* run(fixture, '<Glob include={["*.md", "[bad"]} as="found" />', stream1),
+              );
+              expect(include).toContain("cannot be used");
+              expect(include).toContain('"[bad"');
+              expect(include).not.toContain("Unterminated");
 
-    const exclude = text(
-      yield* run(fixture, '<Glob include={["*.md"]} exclude={["[bad"]} as="found" />'),
-    );
-    expect(exclude).toContain("cannot be used");
-    expect(exclude).toContain('"[bad"');
-  });
+              const exclude = text(
+                yield* run(
+                  fixture,
+                  '<Glob include={["*.md"]} exclude={["[bad"]} as="found" />',
+                  stream2,
+                ),
+              );
+              expect(exclude).toContain("cannot be used");
+              expect(exclude).toContain('"[bad"');
+            },
+          ),
+      );
+    });
+  }
 
   // GB10: a working directory that is not there, and one that is a file. Both
   // are about the document's environment rather than about one entry inside a
   // directory that was fine, and both withhold the path (§1.2).
-  it("GB10: a missing working directory fails", function* () {
-    const fixture = yield* useFixture();
-    const gone = join(fixture.workspace, "gone");
+  {
+    const name = "GB10: a missing working directory fails";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name },
+        fixtureDocument(fixture),
+        function* (stream) {
+          const gone = join(fixture.workspace, "gone");
 
-    const output = text(
-      yield* runWith(fixture, FIND_ALL, new InMemoryStream(), function* () {
-        yield* useCwd(gone);
-      }),
-    );
+          const output = text(
+            yield* runWith(fixture, FIND_ALL, stream, function* () {
+              yield* useCwd(gone);
+            }),
+          );
 
-    expect(output).toContain("the working directory does not exist");
-    expectNoAbsolutePaths(output, fixture);
-    expect(output).not.toContain(gone);
-  });
+          expect(output).toContain("the working directory does not exist");
+          expectNoAbsolutePaths(output, fixture);
+          expect(output).not.toContain(gone);
+        },
+      );
+    });
+  }
 
-  it("GB11: a working directory that is a file fails", function* () {
-    const fixture = yield* useFixture();
-    const file = join(fixture.workspace, "a.md");
-    yield* writeTextFile(file, "a");
+  {
+    const name = "GB11: a working directory that is a file fails";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name },
+        fixtureDocument(fixture),
+        function* (stream) {
+          const file = join(fixture.workspace, "a.md");
+          yield* writeTextFile(file, "a");
 
-    const output = text(
-      yield* runWith(fixture, FIND_ALL, new InMemoryStream(), function* () {
-        yield* useCwd(file);
-      }),
-    );
+          const output = text(
+            yield* runWith(fixture, FIND_ALL, stream, function* () {
+              yield* useCwd(file);
+            }),
+          );
 
-    expect(output).toContain("the working directory is not a directory");
-    expectNoAbsolutePaths(output, fixture);
-  });
+          expect(output).toContain("the working directory is not a directory");
+          expectNoAbsolutePaths(output, fixture);
+        },
+      );
+    });
+  }
 
   // GB12: a directory read that fails part-way through traversal. The error
   // names the directory it failed on, which is an absolute path under the
@@ -554,33 +700,42 @@ describe(SUITE, () => {
   // cancellation point. Suspending the second read halts the walk part-way: the
   // third directory is never read, and the run produces nothing at all — no
   // partial listing reaches the document.
-  it("GB17: cancellation during traversal stops the search", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["a.md", "one/b.md", "two/c.md"]);
+  {
+    const name = "GB17: cancellation during traversal stops the search";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name },
+        fixtureDocument(fixture),
+        function* (stream) {
+          yield* plant(fixture, ["a.md", "one/b.md", "two/c.md"]);
 
-    const read: string[] = [];
-    const output = yield* race([
-      runWith(fixture, FIND_ALL, new InMemoryStream(), function* () {
-        yield* FsApi.around({
-          *readdirDirents([path], next) {
-            // The engine reads directories of its own; only the walk under the
-            // workspace is being counted and interrupted.
-            if (String(path).startsWith(fixture.workspace)) {
-              read.push(String(path));
-              if (read.length === 2) {
-                yield* suspend();
-              }
-            }
-            return yield* next(path);
-          },
-        });
-      }),
-      sleep(250),
-    ]);
+          const read: string[] = [];
+          const output = yield* race([
+            runWith(fixture, FIND_ALL, stream, function* () {
+              yield* FsApi.around({
+                *readdirDirents([path], next) {
+                  // The engine reads directories of its own; only the walk under the
+                  // workspace is being counted and interrupted.
+                  if (String(path).startsWith(fixture.workspace)) {
+                    read.push(String(path));
+                    if (read.length === 2) {
+                      yield* suspend();
+                    }
+                  }
+                  return yield* next(path);
+                },
+              });
+            }),
+            sleep(250),
+          ]);
 
-    expect(read).toHaveLength(2);
-    expect(output).toBeUndefined();
-  });
+          expect(read).toHaveLength(2);
+          expect(output).toBeUndefined();
+        },
+      );
+    });
+  }
 
   // GB18: a journal with the root's close is a finished execution. Replaying it
   // restores that result without expanding anything, so `<Glob>` does not run
@@ -610,35 +765,56 @@ describe(SUITE, () => {
   // expansion reaches `<Glob>`. It records no durable effect, so there is
   // nothing to restore and the search happens again — against whatever is on
   // disk now, which is how the repetition is observable.
-  it("GB18b: a partial replay searches again", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["a.md"]);
+  {
+    const name = "GB18b: a partial replay searches again";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name },
+        fixtureDocument(fixture),
+        function* (stream) {
+          yield* plant(fixture, ["a.md"]);
+          const live = yield* runWith(fixture, FIND_ALL, stream);
+          expect(text(live)).toContain(found("a.md"));
 
-    const stream = new InMemoryStream();
-    const live = yield* runWith(fixture, FIND_ALL, stream);
-    expect(text(live)).toContain(found("a.md"));
+          yield* plant(fixture, ["b.md"]);
 
-    yield* plant(fixture, ["b.md"]);
+          const replay = yield* runWith(fixture, undefined, yield* partial(stream));
 
-    const replay = yield* runWith(fixture, undefined, yield* partial(stream));
-
-    // The search really ran again: a restored result would still say only a.md.
-    expect(text(replay)).toContain(found("a.md", "b.md"));
-  });
+          // The search really ran again: a restored result would still say only a.md.
+          expect(text(replay)).toContain(found("a.md", "b.md"));
+        },
+      );
+    });
+  }
 
   // GB19: the same tree searched twice gives the same array in the same order.
   // Sorting is what makes that true — the order entries come back in belongs to
   // the filesystem, and a document that branches on a listing must not.
-  it("GB19: repeated searches return the same order", function* () {
-    const fixture = yield* useFixture();
-    yield* plant(fixture, ["zebra.md", "one/middle.md", "Beta.md", "alpha.md"]);
+  {
+    const name = "GB19: repeated searches return the same order";
+    it(name, function* () {
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: "packages/core/tests/glob-component.test.ts", name, suite: "first search" },
+        fixtureDocument(fixture),
+        (stream1) =>
+          captureTestJournal(
+            { owner: "packages/core/tests/glob-component.test.ts", name, suite: "second search" },
+            fixtureDocument(fixture),
+            function* (stream2) {
+              yield* plant(fixture, ["zebra.md", "one/middle.md", "Beta.md", "alpha.md"]);
 
-    const first = text(yield* run(fixture, FIND_ALL));
-    const second = text(yield* run(fixture, FIND_ALL));
+              const first = text(yield* run(fixture, FIND_ALL, stream1));
+              const second = text(yield* run(fixture, FIND_ALL, stream2));
 
-    expect(first).toContain(found("Beta.md", "alpha.md", "one/middle.md", "zebra.md"));
-    expect(second).toBe(first);
-  });
+              expect(first).toContain(found("Beta.md", "alpha.md", "one/middle.md", "zebra.md"));
+              expect(second).toBe(first);
+            },
+          ),
+      );
+    });
+  }
 });
 
 /** Fail rather than hang, so a runaway traversal is a test failure. */

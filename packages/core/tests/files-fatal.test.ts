@@ -295,52 +295,68 @@ describe("Tier FF — Files infrastructure failure", () => {
   // reaches this suite by the same path the real component would take. That the
   // shipped `<Dir>` makes this call and no other is asserted where `<Dir>`
   // lives.
-  it("FF2: read, delete, ensureDirectory, Glob and TempDir all stop at their first provider call", function* () {
-    const dir = yield* useFixture();
+  {
+    const name =
+      "FF2: read, delete, ensureDirectory, Glob and TempDir all stop at their first provider call";
+    it(name, function* () {
+      const dir = yield* useFixture();
 
-    const ensures = function* (): Operation<void> {
-      yield* registerComponents([
-        {
-          name: "Ensures",
-          origin: "test://ensures",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          *fn(): Operation<string> {
-            yield* ensureDirectory({ cwd: dir, path: "made" });
-            return "REACHED";
+      const ensures = function* (): Operation<void> {
+        yield* registerComponents([
+          {
+            name: "Ensures",
+            origin: "test://ensures",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(): Operation<string> {
+              yield* ensureDirectory({ cwd: dir, path: "made" });
+              return "REACHED";
+            },
           },
+        ]);
+      };
+      yield* captureTestJournal(
+        { owner: OWNER, name, suite: "ensureDirectory" },
+        join(dir, "doc.md"),
+        function* (stream) {
+          const absent = yield* run(dir, "<Ensures />\n\nAFTER", ensures, stream);
+          expect(absent.ok).toBe(false);
+          expect(parseFilesFatal(fatalCause(absent.error))?.kind).toBe("provider-unavailable");
+          expect(absent.output).not.toContain("AFTER");
+          // The operation is what failed, not the element around it: nothing after the
+          // call inside the component ran either.
+          expect(absent.output).not.toContain("REACHED");
+          expect(yield* exists(join(dir, "made"))).toBe(false);
         },
-      ]);
-    };
+      );
 
-    const absent = yield* run(dir, "<Ensures />\n\nAFTER", ensures);
-    expect(absent.ok).toBe(false);
-    expect(parseFilesFatal(fatalCause(absent.error))?.kind).toBe("provider-unavailable");
-    expect(absent.output).not.toContain("AFTER");
-    // The operation is what failed, not the element around it: nothing after the
-    // call inside the component ran either.
-    expect(absent.output).not.toContain("REACHED");
-    expect(yield* exists(join(dir, "made"))).toBe(false);
-
-    for (const source of [
-      '<File path="notes.md" />\n\nAFTER',
-      // Deletion has no preliminary check to fail at, so its first and only
-      // provider call is the one that lands here.
-      '<File.Delete path="notes.md" />\n\nAFTER',
-      '<Glob include={["**/*"]} as="found" />\n\nAFTER',
-      "<TempDir>INSIDE</TempDir>\n\nAFTER",
-      // The self-closing form acquires through `retain()`, which owns the
-      // resource at the invocation site — a different path to the same call,
-      // and one whose wrapper could otherwise launder the failure into an
-      // ordinary one.
-      '<TempDir as="workspace" />\n\nAFTER',
-    ]) {
-      const outcome = yield* run(dir, source);
-      expect(outcome.ok).toBe(false);
-      expect(parseFilesFatal(fatalCause(outcome.error))?.kind).toBe("provider-unavailable");
-      expect(outcome.output).not.toContain("AFTER");
-      expect(outcome.output).not.toContain("INSIDE");
-    }
-  });
+      let variant = 0;
+      for (const source of [
+        '<File path="notes.md" />\n\nAFTER',
+        // Deletion has no preliminary check to fail at, so its first and only
+        // provider call is the one that lands here.
+        '<File.Delete path="notes.md" />\n\nAFTER',
+        '<Glob include={["**/*"]} as="found" />\n\nAFTER',
+        "<TempDir>INSIDE</TempDir>\n\nAFTER",
+        // The self-closing form acquires through `retain()`, which owns the
+        // resource at the invocation site — a different path to the same call,
+        // and one whose wrapper could otherwise launder the failure into an
+        // ordinary one.
+        '<TempDir as="workspace" />\n\nAFTER',
+      ]) {
+        yield* captureTestJournal(
+          { owner: OWNER, name, suite: `variant ${++variant}` },
+          join(dir, "doc.md"),
+          function* (stream) {
+            const outcome = yield* run(dir, source, undefined, stream);
+            expect(outcome.ok).toBe(false);
+            expect(parseFilesFatal(fatalCause(outcome.error))?.kind).toBe("provider-unavailable");
+            expect(outcome.output).not.toContain("AFTER");
+            expect(outcome.output).not.toContain("INSIDE");
+          },
+        );
+      }
+    });
+  }
 
   // FF3: a provider that exists but refuses one operation. A logical filesystem
   // owned by a transaction has no temporary directories to give, and inventing
@@ -1226,50 +1242,69 @@ describe("Tier FF — Files infrastructure failure", () => {
   // spells one as its shared `Unit` — `{ ok: true }`, with no `value` member —
   // so requiring the member to be present would reject the very thing the host
   // adapter returns from `checkFilePath`.
-  it("FF14c: a payload-free success is accepted, however it is spelled", function* () {
-    const dir = yield* useFixture();
+  {
+    const name = "FF14c: a payload-free success is accepted, however it is spelled";
+    it(name, function* () {
+      const dir = yield* useFixture();
 
-    for (const admitted of [() => Ok(undefined), () => Ok(void 0)]) {
-      const outcome = yield* run(dir, '<File path="out.txt">content</File>\n\nAFTER', function* () {
-        yield* useHostFiles();
-        yield* Files.around({
-          // deno-lint-ignore require-yield
-          *checkFilePath() {
-            return admitted();
+      let variant = 0;
+      for (const admitted of [() => Ok(undefined), () => Ok(void 0)]) {
+        yield* captureTestJournal(
+          { owner: OWNER, name, suite: `variant ${++variant}` },
+          join(dir, "doc.md"),
+          function* (stream) {
+            const outcome = yield* run(
+              dir,
+              '<File path="out.txt">content</File>\n\nAFTER',
+              function* () {
+                yield* useHostFiles();
+                yield* Files.around({
+                  // deno-lint-ignore require-yield
+                  *checkFilePath() {
+                    return admitted();
+                  },
+                });
+              },
+              stream,
+            );
+
+            expect(outcome.ok).toBe(true);
+            expect(outcome.output).toContain("AFTER");
+            expect(yield* readTextFile(join(dir, "out.txt"))).toBe("content");
           },
-        });
-      });
+        );
+      }
 
-      expect(outcome.ok).toBe(true);
-      expect(outcome.output).toContain("AFTER");
-      expect(yield* readTextFile(join(dir, "out.txt"))).toBe("content");
-    }
-
-    // A payload-free success that carries a payload anyway is not one. The
-    // payload arrives through a Proxy, so the declared type survives without a
-    // cast and the boundary is what first observes it.
-    const carrying = yield* run(dir, '<File path="out.txt">content</File>\n\nAFTER', function* () {
-      yield* useHostFiles();
-      yield* Files.around({
-        // deno-lint-ignore require-yield
-        *checkFilePath() {
-          return new Proxy(Ok(undefined), {
-            has(target, property) {
-              return property === "value" ? true : Reflect.has(target, property);
-            },
-            get(target, property, receiver) {
-              return property === "value"
-                ? "/planted/secret.txt"
-                : Reflect.get(target, property, receiver);
+      // A payload-free success that carries a payload anyway is not one. The
+      // payload arrives through a Proxy, so the declared type survives without a
+      // cast and the boundary is what first observes it.
+      const carrying = yield* run(
+        dir,
+        '<File path="out.txt">content</File>\n\nAFTER',
+        function* () {
+          yield* useHostFiles();
+          yield* Files.around({
+            // deno-lint-ignore require-yield
+            *checkFilePath() {
+              return new Proxy(Ok(undefined), {
+                has(target, property) {
+                  return property === "value" ? true : Reflect.has(target, property);
+                },
+                get(target, property, receiver) {
+                  return property === "value"
+                    ? "/planted/secret.txt"
+                    : Reflect.get(target, property, receiver);
+                },
+              });
             },
           });
         },
-      });
+      );
+      expect(carrying.ok).toBe(false);
+      expect(invariantCategory(carrying.error)).toBe("protocol");
+      expect(leaked(carrying)).toBe(false);
     });
-    expect(carrying.ok).toBe(false);
-    expect(invariantCategory(carrying.error)).toBe("protocol");
-    expect(leaked(carrying)).toBe(false);
-  });
+  }
 
   // FF15: the one hostile shape that is *not* fatal. A non-write failure whose
   // data does not validate has no claim about a target in it, and the vocabulary
