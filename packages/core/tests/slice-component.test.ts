@@ -383,8 +383,7 @@ describe("Tier SL1 — S2: an invalid window runs no body", () => {
       ];
 
       for (const attributes of refused) {
-        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* () {
-          const stream = yield* useJournalStream("doc.md");
+        yield* captureTestJournal({ owner: OWNER, name }, "doc.md", function* (stream) {
           const result = yield* run(stream, `<Slice${attributes}><Tripwire /></Slice>`);
 
           expect(reported(result)).toContain("Prop validation failed for <Slice />");
