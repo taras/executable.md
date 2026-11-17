@@ -14,12 +14,17 @@
  * released lock, delivery, resume — is Tier CKX's, against the real command.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { call, race, scoped } from "effection";
 import type { Operation } from "effection";
 import { DatabaseSync } from "node:sqlite";
-import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
+import {
+  collect,
+  execute,
+  inlineSource,
+  isJsonObject,
+} from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import type { DurableEvent, Yield } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
@@ -28,10 +33,12 @@ import { runPath, useStorageRoot, withBegunRun } from "./support/storage.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";
 import { SUSPENSION_REQUEST } from "../src/suspension/suspend.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/workflow/tests/workflow-checkpoint.test.ts";
-const journalCase = journalCases(OWNER);
 
 /** The durable record core's `<Elicit>` writes and the workflow's must not. */
 const ELICIT = "elicit";
@@ -75,7 +82,8 @@ decision: {decision.proceed}
  * boolean some path produced on purpose. Nothing reads a missing elicitation as
  * consent, and the branch that would have asked is never expanded.
  */
-const NO_MATERIAL_CHOICE = `<Parse schema={${ASSESSMENT_SCHEMA}} as="assessment">
+const NO_MATERIAL_CHOICE =
+  `<Parse schema={${ASSESSMENT_SCHEMA}} as="assessment">
 {"requiresUser": false, "question": ""}
 </Parse>
 
@@ -117,7 +125,9 @@ function* yields(database: WorkflowRunDatabase): Operation<string[]> {
 /** The retained suspension requests, in order. */
 function* requests(database: WorkflowRunDatabase): Operation<Yield[]> {
   const events: DurableEvent[] = yield* database.journal.readAll();
-  return events.filter(isYield).filter((event) => event.description.type === SUSPENSION_REQUEST);
+  return events.filter(isYield).filter((event) =>
+    event.description.type === SUSPENSION_REQUEST
+  );
 }
 
 /** The run's retained status, read the way something outside XMD would. */
@@ -125,7 +135,8 @@ function status(root: string, runId: string): string {
   const database = new DatabaseSync(runPath(root, runId), { readOnly: true });
   try {
     return String(
-      database.prepare("SELECT status FROM workflow_run WHERE id = 1").get()?.["status"],
+      database.prepare("SELECT status FROM workflow_run WHERE id = 1").get()
+        ?.["status"],
     );
   } finally {
     database.close();
@@ -172,6 +183,7 @@ function suspending(
 }
 
 describe("Tier CK — the durable checkpoint", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CK2: the workflow's <Elicit> answers without writing a durable elicit record", function* () {
     yield* withRun(function* (database) {
       const output = yield* runWorkflowDocument(database, ANSWERED);
@@ -195,7 +207,9 @@ describe("Tier CK — the durable checkpoint", () => {
       const request = object(description.request, "the retained request");
       expect(request.kind).toBe("elicitation");
       expect(String(request.message)).toContain("Proceed with the change?");
-      expect(object(description.responseSchema, "the retained response schema").type).toBe(
+      expect(
+        object(description.responseSchema, "the retained response schema").type,
+      ).toBe(
         "object",
       );
 
@@ -221,7 +235,9 @@ describe("Tier CK — the durable checkpoint", () => {
       // The decision is produced by the branch that ran, with the reason it
       // gave — an advance because a decision said so, not because none existed.
       expect(String(output)).toContain("proceed: true");
-      expect(String(output)).toContain("The assessing agent found no material choice");
+      expect(String(output)).toContain(
+        "The assessing agent found no material choice",
+      );
 
       expect(yield* requests(database)).toHaveLength(0);
       expect(yield* yields(database)).not.toContain(ELICIT);
@@ -229,17 +245,18 @@ describe("Tier CK — the durable checkpoint", () => {
     });
   });
 
-  journalCase(
-    "CK7: ordinary execution is unchanged — core's <Elicit> still records",
-    "<eval>",
-    function* (stream) {
-      const output = yield* collect(yield* execute({ ...inlineSource(ANSWERED), stream }));
+  it("CK7: ordinary execution is unchanged — core's <Elicit> still records", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const output = yield* collect(
+      yield* execute({ ...inlineSource(ANSWERED), stream }),
+    );
 
-      expect(String(output)).toContain("decision: true");
+    expect(String(output)).toContain("decision: true");
 
-      const events: DurableEvent[] = yield* stream.readAll();
-      const recorded = events.filter(isYield).filter((event) => event.description.type === ELICIT);
-      expect(recorded).toHaveLength(1);
-    },
-  );
+    const events: DurableEvent[] = yield* stream.readAll();
+    const recorded = events.filter(isYield).filter((event) =>
+      event.description.type === ELICIT
+    );
+    expect(recorded).toHaveLength(1);
+  });
 });

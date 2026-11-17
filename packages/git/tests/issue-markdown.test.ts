@@ -11,7 +11,7 @@
  * `github-issues.test.ts`, and nothing there duplicates a scenario here.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,13 @@ import type { Operation } from "effection";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import { issueYields, runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/git/tests/issue-markdown.test.ts";
 
 /** The scenarios, in the order a reader meets them. */
 const SCENARIOS = [
@@ -59,28 +65,13 @@ function* stated(observation: ScenarioObservation): Operation<ScenarioObservatio
 }
 
 describe("workflow Issue scenarios", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const name of SCENARIOS) {
     const title = `${name} states a contract that holds`;
     const path = pathOf(name);
-    if (name === "IssueRead.test.md" || name === "IssueUpsert.test.md") {
-      it(title, () =>
-        captureTestJournal(
-          {
-            owner: "packages/git/tests/issue-markdown.test.ts",
-            suite: "workflow Issue scenarios",
-            name: title,
-          },
-          path,
-          function* (stream) {
-            yield* stated(yield* runScenario(path, stream));
-          },
-        ),
-      );
-    } else {
-      it(title, function* () {
-        yield* stated(yield* runScenario(path));
-      });
-    }
+    it(title, function* () {
+      yield* stated(yield* runScenario(path, yield* useJournalStream(path)));
+    });
   }
 
   it("IssueDurability.test.md states a contract that holds", function* () {
@@ -90,7 +81,8 @@ describe("workflow Issue scenarios", () => {
     // put a run in the state this scenario is about.
     yield* fixture.stage("IssueDurability.attempt.stage.md");
     yield* fixture.stage("IssueDurability.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueDurability.test.md")));
+    const path = pathOf("IssueDurability.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 
   it("an issue effect retains where its <Issue> was written", function* () {
@@ -123,7 +115,8 @@ describe("workflow Issue scenarios", () => {
     const fixture = yield* useScenarioFixture();
     yield* fixture.stage("IssueReadDurability.attempt.stage.md");
     yield* fixture.stage("IssueReadDurability.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueReadDurability.test.md")));
+    const path = pathOf("IssueReadDurability.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 
   // Each hazard is its own run. They cannot share one: a process that ended
@@ -140,7 +133,8 @@ describe("workflow Issue scenarios", () => {
       const fixture = yield* useScenarioFixture();
       yield* fixture.stage(`${hazard}.attempt.stage.md`);
       yield* fixture.stage(`${hazard}.attempt.stage.md`);
-      yield* stated(yield* fixture.observe(pathOf(`${hazard}.test.md`)));
+      const path = pathOf(`${hazard}.test.md`);
+      yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
     });
   }
 
@@ -149,7 +143,8 @@ describe("workflow Issue scenarios", () => {
     // Staged twice so the second attempt shows there was nothing to restore.
     yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
     yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueReadSubstituted.test.md")));
+    const path = pathOf("IssueReadSubstituted.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 
   it("IssueRecovery.test.md states a contract that holds", function* () {
@@ -157,7 +152,8 @@ describe("workflow Issue scenarios", () => {
     // The interrupted attempt first, then one that inherits what it left.
     yield* fixture.stage("IssueRecovery.attempt.stage.md");
     yield* fixture.stage("IssueRecovery.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueRecovery.test.md")));
+    const path = pathOf("IssueRecovery.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 });
 

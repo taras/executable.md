@@ -1,5 +1,6 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { when } from "@effectionx/converge";
 import { once } from "@effectionx/node/events";
@@ -14,7 +15,6 @@ import { useStubFs } from "@executablemd/runtime/test";
 import { inheritedEnvironment, installHostService } from "../src/service-host.ts";
 
 const OWNER = "packages/cli/tests/service-document.test.ts";
-const journalCase = journalCases(OWNER);
 
 const fixture = new URL("./fixtures/attached-service.mjs", import.meta.url).pathname;
 
@@ -369,27 +369,31 @@ yield* Sample.around({
     });
   });
 
-  journalCase(
-    "supervises an attached service that exits during projected content without restarting it",
-    "doc.md",
-    function* (stream) {
-      const stderr: string[] = [];
-      let tokenCalls = 0;
-      yield* scoped(function* () {
-        yield* installHostService({
-          token() {
-            tokenCalls += 1;
-            return tokenCalls.toString(16).padStart(64, "0");
-          },
-          environment: () => inheritedEnvironment(process.env),
-          stdout() {},
-          stderr(bytes) {
-            stderr.push(new TextDecoder().decode(bytes));
-          },
-        });
-        yield* useStubFs({
-          "doc.md": "<Provider><Sample /></Provider>\n",
-          "components/Provider.md": `---
+  it("supervises an attached service that exits during projected content without restarting it", function* () {
+    yield* captureTestJournal(
+      {
+        owner: OWNER,
+        name: "supervises an attached service that exits during projected content without restarting it",
+      },
+      "doc.md",
+      function* (stream) {
+        const stderr: string[] = [];
+        let tokenCalls = 0;
+        yield* scoped(function* () {
+          yield* installHostService({
+            token() {
+              tokenCalls += 1;
+              return tokenCalls.toString(16).padStart(64, "0");
+            },
+            environment: () => inheritedEnvironment(process.env),
+            stdout() {},
+            stderr(bytes) {
+              stderr.push(new TextDecoder().decode(bytes));
+            },
+          });
+          yield* useStubFs({
+            "doc.md": "<Provider><Sample /></Provider>\n",
+            "components/Provider.md": `---
 meta:
   componentName: Provider
 ---
@@ -412,45 +416,50 @@ yield* Sample.around({
 
 <Content />
 `,
-          "components/Sample.md": SAMPLE,
+            "components/Sample.md": SAMPLE,
+          });
+
+          let failure: unknown;
+          try {
+            yield* runDocument(stream);
+          } catch (error) {
+            failure = error;
+          }
+
+          expect(stderr.join("")).toContain("service request:projected-exit");
+          expect(hasUnexpectedExit(failure)).toBe(true);
+          expect(tokenCalls).toBe(1);
         });
+        yield* expectGone(fixturePids(stderr));
+      },
+    );
+  });
 
-        let failure: unknown;
-        try {
-          yield* runDocument(stream);
-        } catch (error) {
-          failure = error;
-        }
-
-        expect(stderr.join("")).toContain("service request:projected-exit");
-        expect(hasUnexpectedExit(failure)).toBe(true);
-        expect(tokenCalls).toBe(1);
-      });
-      yield* expectGone(fixturePids(stderr));
-    },
-  );
-
-  journalCase(
-    "fails projected content promptly, tears down retained service attachments, and does not restart",
-    "doc.md",
-    function* (stream) {
-      const stderr: string[] = [];
-      let tokenCalls = 0;
-      yield* scoped(function* () {
-        yield* installHostService({
-          token() {
-            tokenCalls += 1;
-            return tokenCalls.toString(16).padStart(64, "0");
-          },
-          environment: () => inheritedEnvironment(process.env),
-          stdout() {},
-          stderr(bytes) {
-            stderr.push(new TextDecoder().decode(bytes));
-          },
-        });
-        yield* useStubFs({
-          "doc.md": "<Output><Provider><Broken /></Provider></Output>\n",
-          "components/Provider.md": `---
+  it("fails projected content promptly, tears down retained service attachments, and does not restart", function* () {
+    yield* captureTestJournal(
+      {
+        owner: OWNER,
+        name: "fails projected content promptly, tears down retained service attachments, and does not restart",
+      },
+      "doc.md",
+      function* (stream) {
+        const stderr: string[] = [];
+        let tokenCalls = 0;
+        yield* scoped(function* () {
+          yield* installHostService({
+            token() {
+              tokenCalls += 1;
+              return tokenCalls.toString(16).padStart(64, "0");
+            },
+            environment: () => inheritedEnvironment(process.env),
+            stdout() {},
+            stderr(bytes) {
+              stderr.push(new TextDecoder().decode(bytes));
+            },
+          });
+          yield* useStubFs({
+            "doc.md": "<Output><Provider><Broken /></Provider></Output>\n",
+            "components/Provider.md": `---
 meta:
   componentName: Provider
 ---
@@ -465,7 +474,7 @@ ${command("normal", "second-retained")}
 
 <Content />
 `,
-          "components/Broken.md": `---
+            "components/Broken.md": `---
 meta:
   componentName: Broken
 ---
@@ -474,55 +483,60 @@ meta:
 throw new Error("projected content failure");
 \`\`\`
 `,
-        });
+          });
 
-        const outcome = yield* timebox(2_000, function* () {
-          try {
-            yield* runDocument(stream);
-          } catch (error) {
-            return error;
+          const outcome = yield* timebox(2_000, function* () {
+            try {
+              yield* runDocument(stream);
+            } catch (error) {
+              return error;
+            }
+            return undefined;
+          });
+          expect(outcome.timeout).toBe(false);
+          if (outcome.timeout) {
+            throw new Error("document failure did not complete promptly");
           }
-          return undefined;
+          expect(String(outcome.value)).toContain("projected content failure");
+          expect(tokenCalls).toBe(2);
+          yield* sleep(50);
+          expect(tokenCalls).toBe(2);
         });
-        expect(outcome.timeout).toBe(false);
-        if (outcome.timeout) {
-          throw new Error("document failure did not complete promptly");
-        }
-        expect(String(outcome.value)).toContain("projected content failure");
-        expect(tokenCalls).toBe(2);
-        yield* sleep(50);
-        expect(tokenCalls).toBe(2);
-      });
 
-      const pids = fixturePids(stderr);
-      expect(pids).toHaveLength(2);
-      expect(stderr.join("")).toContain("service stopping:first-retained");
-      expect(stderr.join("")).toContain("service stopping:second-retained");
-      yield* expectGone(pids);
-    },
-  );
+        const pids = fixturePids(stderr);
+        expect(pids).toHaveLength(2);
+        expect(stderr.join("")).toContain("service stopping:first-retained");
+        expect(stderr.join("")).toContain("service stopping:second-retained");
+        yield* expectGone(pids);
+      },
+    );
+  });
 
-  journalCase(
-    "tears down nested service attachments from inner lifetime to outer lifetime",
-    "doc.md",
-    function* (stream) {
-      const stderr: string[] = [];
-      let tokenCalls = 0;
-      yield* scoped(function* () {
-        yield* installHostService({
-          token() {
-            tokenCalls += 1;
-            return tokenCalls.toString(16).padStart(64, "0");
-          },
-          environment: () => inheritedEnvironment(process.env),
-          stdout() {},
-          stderr(bytes) {
-            stderr.push(new TextDecoder().decode(bytes));
-          },
-        });
-        yield* useStubFs({
-          "doc.md": "<Outer><Inner>nested content</Inner></Outer>\n",
-          "components/Outer.md": `---
+  it("tears down nested service attachments from inner lifetime to outer lifetime", function* () {
+    yield* captureTestJournal(
+      {
+        owner: OWNER,
+        name: "tears down nested service attachments from inner lifetime to outer lifetime",
+      },
+      "doc.md",
+      function* (stream) {
+        const stderr: string[] = [];
+        let tokenCalls = 0;
+        yield* scoped(function* () {
+          yield* installHostService({
+            token() {
+              tokenCalls += 1;
+              return tokenCalls.toString(16).padStart(64, "0");
+            },
+            environment: () => inheritedEnvironment(process.env),
+            stdout() {},
+            stderr(bytes) {
+              stderr.push(new TextDecoder().decode(bytes));
+            },
+          });
+          yield* useStubFs({
+            "doc.md": "<Outer><Inner>nested content</Inner></Outer>\n",
+            "components/Outer.md": `---
 meta:
   componentName: Outer
 ---
@@ -533,7 +547,7 @@ ${command("normal", "outer")}
 
 <Content />
 `,
-          "components/Inner.md": `---
+            "components/Inner.md": `---
 meta:
   componentName: Inner
 ---
@@ -544,19 +558,20 @@ ${command("normal", "inner")}
 
 <Content />
 `,
+          });
+
+          const output = yield* runDocument(stream);
+          expect(output).toContain("nested content");
+          expect(tokenCalls).toBe(2);
         });
 
-        const output = yield* runDocument(stream);
-        expect(output).toContain("nested content");
-        expect(tokenCalls).toBe(2);
-      });
-
-      const log = stderr.join("");
-      expect(log.indexOf("service stopping:inner")).toBeGreaterThan(-1);
-      expect(log.indexOf("service stopping:outer")).toBeGreaterThan(
-        log.indexOf("service stopping:inner"),
-      );
-      yield* expectGone(fixturePids(stderr));
-    },
-  );
+        const log = stderr.join("");
+        expect(log.indexOf("service stopping:inner")).toBeGreaterThan(-1);
+        expect(log.indexOf("service stopping:outer")).toBeGreaterThan(
+          log.indexOf("service stopping:inner"),
+        );
+        yield* expectGone(fixturePids(stderr));
+      },
+    );
+  });
 });

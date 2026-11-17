@@ -14,8 +14,9 @@ import { Permissions } from "@executablemd/runtime";
  * `run-composition-nested.test.ts`.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
 import { expect } from "@executablemd/test-support/expect";
 import { type Operation, scoped, until } from "effection";
 import { realpath } from "node:fs/promises";
@@ -90,7 +91,7 @@ function* useAmbient(
   return { checkout, root: join(managed, "repositories"), home };
 }
 
-const journalCase = journalCases("packages/cli/tests/run-composition-deno.test.ts");
+const OWNER = "packages/cli/tests/run-composition-deno.test.ts";
 
 /**
  * Run one document under the ordinary provider, on a stream a caller chose.
@@ -146,206 +147,200 @@ function runOrdinary(
 }
 
 describe("ORC7 — a Session launched in a managed Worktree", () => {
-  journalCase(
-    "hands the launch that worktree's own root and a session key of its own",
-    "<eval>",
-    function* (stream) {
-      yield* Permissions.around(
-        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
-        { at: "min" },
-      );
-      const ambient = yield* useAmbient();
+  beforeEach(journalBeforeEach(OWNER));
+  it("hands the launch that worktree's own root and a session key of its own", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
+    const ambient = yield* useAmbient();
 
-      /** Every launch this document routed, as the session details it was given. */
-      const routed: { cwd: string; session: string | undefined }[] = [];
+    /** Every launch this document routed, as the session details it was given. */
+    const routed: { cwd: string; session: string | undefined }[] = [];
 
-      // The public launch surface a provider answers. A real `<Session.Launch>`
-      // reaches exactly this, through the same installation `xmd run` makes, and
-      // what it is handed is the details: the directory the session belongs to.
-      const capture = function* (): Operation<void> {
-        // A registered provider, reached the way `<AgentProvider>` reaches one.
-        // Only a registered provider is handed the launch coordinator, so only one
-        // can settle a launch — middleware can route a request and cannot
-        // perform it, which is the boundary this uses rather than works around.
-        yield* registerAgentProvider("probe", function* (options, launchCoordinator) {
-          yield* Agent.around(
-            {
-              // deno-lint-ignore require-yield
-              *agent([name]): Operation<string> {
-                return name ?? options.defaultAgent;
-              },
-              *launch([request]): Operation<void> {
-                routed.push({
-                  cwd: request.cwd,
-                  session: typeof request.session === "string" ? request.session : undefined,
-                });
-                // Settled as a refusal rather than performed: this suite is about
-                // where a launch is placed, and starting a native UI would need a
-                // terminal nothing here has.
-                yield* launchCoordinator.refuse(request, {
-                  phase: "prepared",
-                  agent: "codex",
-                  sessionKey: deriveSessionKey(
-                    "codex",
-                    request.cwd,
-                    typeof request.session === "string" ? request.session : undefined,
-                  ),
-                  provider: "probe",
-                  nativeSessionId: "probe-session",
-                  sessionState: "created",
-                  instructionChannel: "probe",
-                  instructionReconciliation: "installed",
-                  identityProvenance: "provider-returned",
-                  instructionsDigest: "0".repeat(64),
-                  instructions: request.instructions,
-                  cwd: request.cwd,
-                  additionalDirectories: [...request.additionalDirectories],
-                  permissionMode: request.permissionMode,
-                  launcher: "probe",
-                  failure: {
-                    class: "unsupported-capability",
-                    message: "this suite launches nothing",
-                  },
-                });
-              },
-            },
-            { at: "min" },
-          );
-        });
-        // The terminal a native launch reserves before it is routed. Reserving is
-        // what `xmd run` installs a real launcher for; a suite installs one that
-        // owns nothing, so the launch reaches the surface below rather than
-        // failing on a host with no terminal.
-        yield* NativeLauncher.around(
+    // The public launch surface a provider answers. A real `<Session.Launch>`
+    // reaches exactly this, through the same installation `xmd run` makes, and
+    // what it is handed is the details: the directory the session belongs to.
+    const capture = function* (): Operation<void> {
+      // A registered provider, reached the way `<AgentProvider>` reaches one.
+      // Only a registered provider is handed the launch coordinator, so only one
+      // can settle a launch — middleware can route a request and cannot
+      // perform it, which is the boundary this uses rather than works around.
+      yield* registerAgentProvider("probe", function* (options, launchCoordinator) {
+        yield* Agent.around(
           {
             // deno-lint-ignore require-yield
-            *reserve(): Operation<void> {},
-            // deno-lint-ignore require-yield
-            *flush(): Operation<void> {},
+            *agent([name]): Operation<string> {
+              return name ?? options.defaultAgent;
+            },
+            *launch([request]): Operation<void> {
+              routed.push({
+                cwd: request.cwd,
+                session: typeof request.session === "string" ? request.session : undefined,
+              });
+              // Settled as a refusal rather than performed: this suite is about
+              // where a launch is placed, and starting a native UI would need a
+              // terminal nothing here has.
+              yield* launchCoordinator.refuse(request, {
+                phase: "prepared",
+                agent: "codex",
+                sessionKey: deriveSessionKey(
+                  "codex",
+                  request.cwd,
+                  typeof request.session === "string" ? request.session : undefined,
+                ),
+                provider: "probe",
+                nativeSessionId: "probe-session",
+                sessionState: "created",
+                instructionChannel: "probe",
+                instructionReconciliation: "installed",
+                identityProvenance: "provider-returned",
+                instructionsDigest: "0".repeat(64),
+                instructions: request.instructions,
+                cwd: request.cwd,
+                additionalDirectories: [...request.additionalDirectories],
+                permissionMode: request.permissionMode,
+                launcher: "probe",
+                failure: {
+                  class: "unsupported-capability",
+                  message: "this suite launches nothing",
+                },
+              });
+            },
           },
           { at: "min" },
         );
-      };
-
-      // One launch inside a managed Worktree, and one in the ambient checkout, in
-      // the same document — so the two sessions are decided by where each
-      // element was written and by nothing else.
-      const bound = yield* runOrdinary(
-        [
-          '<AgentProvider name="probe" defaultAgent="codex">',
-          `<Worktree name="review" branch="review" as="w" />`,
-          // The provider settles each launch as a refusal, so the region that
-          // prints one is what lets the second launch happen at all. What is
-          // under test is where each was placed, not whether a UI started.
-          "<PrintErrors>",
-          "<Dir path={w}>",
-          '<Session.Launch session="implementer">',
-          "INSIDE",
-          "</Session.Launch>",
-          "</Dir>",
-          '<Session.Launch session="implementer">',
-          "OUTSIDE",
-          "</Session.Launch>",
-          "</PrintErrors>",
-          "</AgentProvider>",
-          "",
-          "{w}",
-        ].join("\n"),
-        { root: ambient.root, cwd: ambient.checkout, agent: capture, stream },
+      });
+      // The terminal a native launch reserves before it is routed. Reserving is
+      // what `xmd run` installs a real launcher for; a suite installs one that
+      // owns nothing, so the launch reaches the surface below rather than
+      // failing on a host with no terminal.
+      yield* NativeLauncher.around(
+        {
+          // deno-lint-ignore require-yield
+          *reserve(): Operation<void> {},
+          // deno-lint-ignore require-yield
+          *flush(): Operation<void> {},
+        },
+        { at: "min" },
       );
-      const worktree = String(bound).trim().split("\n").at(-1) ?? "";
-      expect(yield* exists(worktree)).toBe(true);
+    };
 
-      // Both launches were routed, and each received the directory it was
-      // written in.
-      expect(routed).toHaveLength(2);
-      expect(routed[0]?.cwd).toBe(worktree);
-      expect(routed[1]?.cwd).toBe(ambient.checkout);
-      expect(routed[0]?.session).toBe("implementer");
-      expect(routed[1]?.session).toBe("implementer");
+    // One launch inside a managed Worktree, and one in the ambient checkout, in
+    // the same document — so the two sessions are decided by where each
+    // element was written and by nothing else.
+    const bound = yield* runOrdinary(
+      [
+        '<AgentProvider name="probe" defaultAgent="codex">',
+        `<Worktree name="review" branch="review" as="w" />`,
+        // The provider settles each launch as a refusal, so the region that
+        // prints one is what lets the second launch happen at all. What is
+        // under test is where each was placed, not whether a UI started.
+        "<PrintErrors>",
+        "<Dir path={w}>",
+        '<Session.Launch session="implementer">',
+        "INSIDE",
+        "</Session.Launch>",
+        "</Dir>",
+        '<Session.Launch session="implementer">',
+        "OUTSIDE",
+        "</Session.Launch>",
+        "</PrintErrors>",
+        "</AgentProvider>",
+        "",
+        "{w}",
+      ].join("\n"),
+      { root: ambient.root, cwd: ambient.checkout, agent: capture, stream },
+    );
+    const worktree = String(bound).trim().split("\n").at(-1) ?? "";
+    expect(yield* exists(worktree)).toBe(true);
 
-      // The same agent and the same session name in the two places are two
-      // sessions, because the directory differs.
-      const agent = "codex";
-      const inWorktree = deriveSessionKey(agent, routed[0]?.cwd ?? "", "implementer");
-      const inAmbient = deriveSessionKey(agent, routed[1]?.cwd ?? "", "implementer");
-      expect(inWorktree).not.toBe(inAmbient);
+    // Both launches were routed, and each received the directory it was
+    // written in.
+    expect(routed).toHaveLength(2);
+    expect(routed[0]?.cwd).toBe(worktree);
+    expect(routed[1]?.cwd).toBe(ambient.checkout);
+    expect(routed[0]?.session).toBe("implementer");
+    expect(routed[1]?.session).toBe("implementer");
 
-      // Supporting evidence for *why* the walk stops at the worktree: `.git`
-      // there is a file, and the candidate walk is bounded by it.
-      expect(yield* readTextFile(`${worktree}/.git`)).toContain("gitdir:");
-      const candidates = yield* sessionCandidates(agent, worktree);
-      expect(candidates.map((candidate: { cwd: string }) => candidate.cwd)).toEqual([worktree]);
-      const ambientCandidates = yield* sessionCandidates(agent, ambient.checkout);
-      expect(ambientCandidates.map((candidate: { cwd: string }) => candidate.cwd)).toEqual([
-        ambient.checkout,
-      ]);
-    },
-  );
+    // The same agent and the same session name in the two places are two
+    // sessions, because the directory differs.
+    const agent = "codex";
+    const inWorktree = deriveSessionKey(agent, routed[0]?.cwd ?? "", "implementer");
+    const inAmbient = deriveSessionKey(agent, routed[1]?.cwd ?? "", "implementer");
+    expect(inWorktree).not.toBe(inAmbient);
+
+    // Supporting evidence for *why* the walk stops at the worktree: `.git`
+    // there is a file, and the candidate walk is bounded by it.
+    expect(yield* readTextFile(`${worktree}/.git`)).toContain("gitdir:");
+    const candidates = yield* sessionCandidates(agent, worktree);
+    expect(candidates.map((candidate: { cwd: string }) => candidate.cwd)).toEqual([worktree]);
+    const ambientCandidates = yield* sessionCandidates(agent, ambient.checkout);
+    expect(ambientCandidates.map((candidate: { cwd: string }) => candidate.cwd)).toEqual([
+      ambient.checkout,
+    ]);
+  });
 });
 
 describe("ORC18 — the journal is diagnostic", () => {
-  journalCase(
-    "performs the same live work with and without a trace, once each",
-    "<eval>",
-    function* (stream) {
-      yield* Permissions.around(
-        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
-        { at: "min" },
-      );
-      const first = yield* useAmbient();
-      const second = yield* useAmbient();
-      const trace = join(second.root, "..", "diagnostic.jsonl");
+  beforeEach(journalBeforeEach(OWNER));
+  it("performs the same live work with and without a trace, once each", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
+    const first = yield* useAmbient();
+    const second = yield* useAmbient();
+    const trace = join(second.root, "..", "diagnostic.jsonl");
 
-      const document = [
-        `<Worktree name="traced" branch="traced" as="w" />`,
-        "<Dir path={w}>",
-        `<File path="made.md">made</File>`,
-        `<Git.Add paths="made.md" />`,
-        `<Git.Commit message="Traced" as="commit" />`,
-        "</Dir>",
-      ].join("\n");
+    const document = [
+      `<Worktree name="traced" branch="traced" as="w" />`,
+      "<Dir path={w}>",
+      `<File path="made.md">made</File>`,
+      `<Git.Add paths="made.md" />`,
+      `<Git.Commit message="Traced" as="commit" />`,
+      "</Dir>",
+    ].join("\n");
 
-      yield* runOrdinary(document, { root: first.root, cwd: first.checkout, stream });
-      yield* runOrdinary(document, {
-        root: second.root,
-        cwd: second.checkout,
-        journal: trace,
-      });
+    yield* runOrdinary(document, { root: first.root, cwd: first.checkout, stream });
+    yield* runOrdinary(document, {
+      root: second.root,
+      cwd: second.checkout,
+      journal: trace,
+    });
 
-      // One live mutation per invocation, either way: each repository has exactly
-      // one commit on the branch beyond the one it started with.
-      for (const ambient of [first, second]) {
-        expect(
-          git(["log", "--oneline", "traced"], ambient.checkout, ambient.home).split("\n"),
-        ).toHaveLength(2);
-        expect(git(["log", "-1", "--pretty=%s", "traced"], ambient.checkout, ambient.home)).toBe(
-          "Traced",
-        );
-      }
-
-      // The trace was newly created by that run and holds its events.
-      expect(yield* exists(trace)).toBe(true);
-      const written = yield* readTextFile(trace);
-      expect(written.length).toBeGreaterThan(0);
-
-      // And it is not continuation. A third execution handed that exact trace
-      // performs its own work against its own repository — the trace neither
-      // restores the earlier commit nor stands in for one.
-      const third = yield* useAmbient();
-      yield* runOrdinary(document, {
-        root: third.root,
-        cwd: third.checkout,
-        journal: trace,
-      });
-      expect(git(["log", "-1", "--pretty=%s", "traced"], third.checkout, third.home)).toBe(
+    // One live mutation per invocation, either way: each repository has exactly
+    // one commit on the branch beyond the one it started with.
+    for (const ambient of [first, second]) {
+      expect(
+        git(["log", "--oneline", "traced"], ambient.checkout, ambient.home).split("\n"),
+      ).toHaveLength(2);
+      expect(git(["log", "-1", "--pretty=%s", "traced"], ambient.checkout, ambient.home)).toBe(
         "Traced",
       );
-      expect(
-        git(["log", "--oneline", "traced"], third.checkout, third.home).split("\n"),
-      ).toHaveLength(2);
-    },
-  );
+    }
+
+    // The trace was newly created by that run and holds its events.
+    expect(yield* exists(trace)).toBe(true);
+    const written = yield* readTextFile(trace);
+    expect(written.length).toBeGreaterThan(0);
+
+    // And it is not continuation. A third execution handed that exact trace
+    // performs its own work against its own repository — the trace neither
+    // restores the earlier commit nor stands in for one.
+    const third = yield* useAmbient();
+    yield* runOrdinary(document, {
+      root: third.root,
+      cwd: third.checkout,
+      journal: trace,
+    });
+    expect(git(["log", "-1", "--pretty=%s", "traced"], third.checkout, third.home)).toBe("Traced");
+    expect(
+      git(["log", "--oneline", "traced"], third.checkout, third.home).split("\n"),
+    ).toHaveLength(2);
+  });
 });
 
 describe("ORC15 — a trace is not evidence", () => {

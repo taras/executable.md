@@ -1,6 +1,9 @@
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -16,7 +19,6 @@ import { Documentation } from "../src/documentation-api.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 
 const OWNER = "packages/core/tests/execution-init.test.ts";
-const journalCase = journalCases(OWNER);
 
 const State = createContext<{ id: number } | undefined>("executablemd.test.init.state", undefined);
 
@@ -34,10 +36,12 @@ function* failure(operation: Operation<unknown>): Operation<unknown> {
 }
 
 describe("Tier EI — execution-owned initialization", () => {
+  beforeEach(journalBeforeEach(OWNER));
   {
     const name =
       "EI1: the public descriptors agree, default init is no-op and each fresh owner dispatches once";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         expect(Execution).toBe(RootExecution);
         yield* Execution.operations.init();
@@ -66,50 +70,47 @@ describe("Tier EI — execution-owned initialization", () => {
     });
   }
 
-  journalCase(
-    "EI2: initialization precedes assembly, captured documentation and execution/document policy",
-    "<eval>",
-    function* (stream) {
-      const order: string[] = [];
-      yield* Execution.around({
-        *init(_args, next) {
-          order.push("init");
-          yield* State.set({ id: 7 });
-          yield* next();
-        },
-        *execute([request], next) {
-          expect((yield* State.expect())?.id).toBe(7);
-          order.push("execute");
-          yield* next(request);
-        },
-        *document([request], next) {
-          expect((yield* State.expect())?.id).toBe(7);
-          order.push("document");
-          yield* next(request);
-        },
-      });
-      yield* Documentation.around({
-        *contributions([read], next) {
-          expect((yield* State.expect())?.id).toBe(7);
-          order.push("documentation");
-          return yield* next(read);
-        },
-      });
-      const execution = yield* executeInstalled(
-        { ...inlineSource("<Syntax />\n"), includes: [], stream },
-        [
-          {
-            *install() {
-              expect((yield* State.expect())?.id).toBe(7);
-              order.push("install");
-            },
+  it("EI2: initialization precedes assembly, captured documentation and execution/document policy", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const order: string[] = [];
+    yield* Execution.around({
+      *init(_args, next) {
+        order.push("init");
+        yield* State.set({ id: 7 });
+        yield* next();
+      },
+      *execute([request], next) {
+        expect((yield* State.expect())?.id).toBe(7);
+        order.push("execute");
+        yield* next(request);
+      },
+      *document([request], next) {
+        expect((yield* State.expect())?.id).toBe(7);
+        order.push("document");
+        yield* next(request);
+      },
+    });
+    yield* Documentation.around({
+      *contributions([read], next) {
+        expect((yield* State.expect())?.id).toBe(7);
+        order.push("documentation");
+        return yield* next(read);
+      },
+    });
+    const execution = yield* executeInstalled(
+      { ...inlineSource("<Syntax />\n"), includes: [], stream },
+      [
+        {
+          *install() {
+            expect((yield* State.expect())?.id).toBe(7);
+            order.push("install");
           },
-        ],
-      );
-      expect(String(yield* collect(execution))).toContain("### `<Syntax>`");
-      expect(order).toEqual(["init", "install", "documentation", "execute", "document"]);
-    },
-  );
+        },
+      ],
+    );
+    expect(String(yield* collect(execution))).toContain("### `<Syntax>`");
+    expect(order).toEqual(["init", "install", "documentation", "execute", "document"]);
+  });
 
   /**
    * EI3 — what init runs *after*, and what it runs *before*.
@@ -121,134 +122,126 @@ describe("Tier EI — execution-owned initialization", () => {
    * — before public execution policy, which is the boundary the selection is
    * protected at. That half is `generated-selection` U5-2's.
    */
-  journalCase(
-    "EI3: init cannot rewrite captured admissions or declarations",
-    "<eval>",
-    function* (stream) {
-      const admitted: string[] = [];
-      const admissions: JournalAdmission[] = [
-        function* () {
-          admitted.push("original");
-        },
-      ];
-      const source = "CAPTURED DECLARATION\n";
-      const declarations = [
-        Markdown({
-          name: "Kept",
-          origin: "test://init/kept",
-          source,
-          digest: sourceDigest(source),
-        }),
-      ];
-      const files = recordedFiles({ "note.md": "CAPTURED PROFILE" });
-      yield* Execution.around({
-        *init(_args, next) {
-          admissions.length = 0;
-          declarations.length = 0;
-          // The selection, established here: this is init's own job rather than
-          // something it is editing behind core's back.
-          yield* useSelection({ File: ["self-closing"] });
-          yield* useRecordedFiles(files);
-          yield* next();
-        },
-      });
-      const text = "<Kept />\n<Evaluate text={'<File path=\"note.md\" />'} />\n";
-      const execution = yield* executeInstalled({ ...inlineSource(text), includes: [], stream }, [
-        { admissions, declarations },
-      ]);
-      const output = String(yield* collect(execution));
-      expect(admitted).toEqual(["original"]);
-      expect(output).toContain("CAPTURED DECLARATION");
-      expect(output).toContain("CAPTURED PROFILE");
-      expect(files.performed).toEqual(["read note.md"]);
-    },
-  );
+  it("EI3: init cannot rewrite captured admissions or declarations", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const admitted: string[] = [];
+    const admissions: JournalAdmission[] = [
+      function* () {
+        admitted.push("original");
+      },
+    ];
+    const source = "CAPTURED DECLARATION\n";
+    const declarations = [
+      Markdown({
+        name: "Kept",
+        origin: "test://init/kept",
+        source,
+        digest: sourceDigest(source),
+      }),
+    ];
+    const files = recordedFiles({ "note.md": "CAPTURED PROFILE" });
+    yield* Execution.around({
+      *init(_args, next) {
+        admissions.length = 0;
+        declarations.length = 0;
+        // The selection, established here: this is init's own job rather than
+        // something it is editing behind core's back.
+        yield* useSelection({ File: ["self-closing"] });
+        yield* useRecordedFiles(files);
+        yield* next();
+      },
+    });
+    const text = "<Kept />\n<Evaluate text={'<File path=\"note.md\" />'} />\n";
+    const execution = yield* executeInstalled({ ...inlineSource(text), includes: [], stream }, [
+      { admissions, declarations },
+    ]);
+    const output = String(yield* collect(execution));
+    expect(admitted).toEqual(["original"]);
+    expect(output).toContain("CAPTURED DECLARATION");
+    expect(output).toContain("CAPTURED PROFILE");
+    expect(files.performed).toEqual(["read note.md"]);
+  });
 
-  journalCase(
-    "EI4: initializer failure settles only after acquired teardown and reaches no policy or root",
-    "<eval>",
-    function* (stream) {
-      const entered = withResolvers<void>();
-      const release = withResolvers<void>();
-      const cleanup = withResolvers<void>();
-      const phases: string[] = [];
-      yield* Execution.around({
-        *init() {
-          yield* ensure(function* () {
-            cleanup.resolve();
-            yield* release.operation;
-            phases.push("released");
-          });
-          entered.resolve();
-          throw new Error("init refused");
-        },
-        *execute([request], next) {
-          phases.push("policy");
-          yield* next(request);
-        },
-      });
-      let settled = false;
-      const running = yield* spawn(function* () {
-        const error = yield* failure(
-          execute({ ...inlineSource("must not run"), stream, includes: [] }),
-        );
-        settled = true;
-        return error;
-      });
-      yield* entered.operation;
-      yield* cleanup.operation;
-      expect(settled).toBe(false);
-      expect(stream.snapshot()).toEqual([]);
-      release.resolve();
-      expect(String(yield* running)).toContain("init refused");
-      expect(phases).toEqual(["released"]);
-    },
-  );
-
-  journalCase(
-    "EI5: deterministic cancellation during init joins cleanup before halt returns",
-    "<eval>",
-    function* (stream) {
-      const entered = withResolvers<void>();
-      const cleaning = withResolvers<void>();
-      const release = withResolvers<void>();
-      const phases: string[] = [];
-      yield* Execution.around({
-        *init() {
-          yield* ensure(function* () {
-            cleaning.resolve();
-            yield* release.operation;
-            phases.push("released");
-          });
-          entered.resolve();
-          yield* suspend();
-        },
-        *execute([request], next) {
-          phases.push("policy");
-          yield* next(request);
-        },
-      });
-      const running = yield* spawn(() =>
+  it("EI4: initializer failure settles only after acquired teardown and reaches no policy or root", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    const cleanup = withResolvers<void>();
+    const phases: string[] = [];
+    yield* Execution.around({
+      *init() {
+        yield* ensure(function* () {
+          cleanup.resolve();
+          yield* release.operation;
+          phases.push("released");
+        });
+        entered.resolve();
+        throw new Error("init refused");
+      },
+      *execute([request], next) {
+        phases.push("policy");
+        yield* next(request);
+      },
+    });
+    let settled = false;
+    const running = yield* spawn(function* () {
+      const error = yield* failure(
         execute({ ...inlineSource("must not run"), stream, includes: [] }),
       );
-      yield* entered.operation;
-      let halted = false;
-      const halting = yield* spawn(function* () {
-        yield* running.halt();
-        halted = true;
-      });
-      yield* cleaning.operation;
-      expect(halted).toBe(false);
-      expect(stream.snapshot()).toEqual([]);
-      release.resolve();
-      yield* halting;
-      expect(phases).toEqual(["released"]);
-    },
-  );
+      settled = true;
+      return error;
+    });
+    yield* entered.operation;
+    yield* cleanup.operation;
+    expect(settled).toBe(false);
+    expect(stream.snapshot()).toEqual([]);
+    release.resolve();
+    expect(String(yield* running)).toContain("init refused");
+    expect(phases).toEqual(["released"]);
+  });
+
+  it("EI5: deterministic cancellation during init joins cleanup before halt returns", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const entered = withResolvers<void>();
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    const phases: string[] = [];
+    yield* Execution.around({
+      *init() {
+        yield* ensure(function* () {
+          cleaning.resolve();
+          yield* release.operation;
+          phases.push("released");
+        });
+        entered.resolve();
+        yield* suspend();
+      },
+      *execute([request], next) {
+        phases.push("policy");
+        yield* next(request);
+      },
+    });
+    const running = yield* spawn(() =>
+      execute({ ...inlineSource("must not run"), stream, includes: [] }),
+    );
+    yield* entered.operation;
+    let halted = false;
+    const halting = yield* spawn(function* () {
+      yield* running.halt();
+      halted = true;
+    });
+    yield* cleaning.operation;
+    expect(halted).toBe(false);
+    expect(stream.snapshot()).toEqual([]);
+    release.resolve();
+    yield* halting;
+    expect(phases).toEqual(["released"]);
+  });
 
   {
     const name = "EI6: concurrent owners get independent state inherited by ordinary descendants";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         let counter = 0;
         const both = withResolvers<void>();
@@ -286,7 +279,8 @@ describe("Tier EI — execution-owned initialization", () => {
   {
     const name =
       "EI7: a no-op initializer invents no Files provider; explicit initialization supplies one";
-    journalCase(name, "<eval>", function* (stream) {
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
       yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
         yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream3) {
           expect(
