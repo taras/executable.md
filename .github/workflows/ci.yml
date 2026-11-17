@@ -186,7 +186,7 @@ jobs:
       - name: Check REPL bench tools
         working-directory: repl bench checkout
         run: |
-          deno test --allow-all --cached-only --frozen --node-modules-dir=none \
+          deno test --reporter=dot --allow-all --cached-only --frozen --node-modules-dir=none \
             --ignore=examples/repl-bench/tests/driver-exit.test.ts,examples/repl-bench/tests/teardown.test.ts \
             examples/repl-bench/tests
 
@@ -194,11 +194,12 @@ jobs:
         if: github.event_name == 'push'
         working-directory: repl bench checkout
         run: |
-          deno test --allow-all --cached-only --frozen --node-modules-dir=none \
+          deno test --reporter=dot --allow-all --cached-only --frozen --node-modules-dir=none \
             examples/repl-bench/tests/driver-exit.test.ts \
             examples/repl-bench/tests/teardown.test.ts
+          echo "Running Markdown REPL Bench journeys"
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
-            packages/cli/src/deno.ts test examples/repl-bench/journeys
+            packages/cli/src/deno.ts test examples/repl-bench/journeys --reporter=failures
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: github.event_name == 'push' && (failure() || cancelled())
@@ -284,19 +285,19 @@ jobs:
           ./dist/xmd test smoke-test/README.md \
             --include smoke-test \
             --include packages/core/components \
-            --raw
+            --reporter=failures
 
       # Progress on stderr and a failed test's journal, from the binary rather
       # than the source entrypoint the runtime shards launch.
       - name: Test diagnostics from the compiled binary
-        run: deno test --allow-all --frozen scripts/tests/test-diagnostics-compiled.test.ts
+        run: deno test --reporter=dot --allow-all --frozen scripts/tests/test-diagnostics-compiled.test.ts
 
       - name: Smoke test attached-service ping-pong with the compiled binary
         run: |
           ./dist/xmd test smoke-test/attached-service-ping-pong.test.md \
             --include smoke-test \
             --include packages/core/components \
-            --raw
+            --reporter=failures
 
       # Foreground execution is about what a caller sees and what status they
       # get, and only the binary shows both surviving `deno compile`.
@@ -314,14 +315,14 @@ jobs:
       # search path supplied the implementation. It lives here because its
       # subject is `dist/xmd`, and this is the job that builds one.
       - name: Form dispatch across the compiled binary's loaded copies
-        run: deno test --allow-all --frozen scripts/tests/component-form-dispatch.test.ts
+        run: deno test --reporter=dot --allow-all --frozen scripts/tests/component-form-dispatch.test.ts
 
       # `<Plan>` is packaged Markdown rather than a module, so it is exactly the
       # kind of thing `deno compile` ships only because an `--include` names it.
       # Asking the binary which Component source it carries is what catches a forgotten
       # include here rather than at a person's first `xmd plan`.
       - name: The <Plan> Component the compiled binary carries
-        run: deno test --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
+        run: deno test --reporter=dot --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
 
       # The compiled entrypoint states its own Prompt usage host facts, a
       # different assembly from the source CLI's, so its carriage is asserted
@@ -336,13 +337,13 @@ jobs:
       # reopened location. This drives the same journey the source row drives,
       # on a real terminal, against the binary this job just built.
       - name: A REPL entry's files across the compiled binary
-        run: deno test --allow-all --frozen scripts/tests/repl-repositories-compiled.test.ts
+        run: deno test --reporter=dot --allow-all --frozen scripts/tests/repl-repositories-compiled.test.ts
 
       - name: A REPL entry's issues across the compiled binary
-        run: deno test --allow-all --frozen scripts/tests/repl-issues-compiled.test.ts
+        run: deno test --reporter=dot --allow-all --frozen scripts/tests/repl-issues-compiled.test.ts
 
       - name: A REPL entry's publications across the compiled binary
-        run: deno test --allow-all --frozen scripts/tests/repl-push-compiled.test.ts
+        run: deno test --reporter=dot --allow-all --frozen scripts/tests/repl-push-compiled.test.ts
 
       # Each package's `components.md` is a packaged asset on the same footing,
       # and the long-form documentation is the only thing that reports whether
@@ -374,7 +375,7 @@ jobs:
       # source at once — the built-in components under `components/`, and the
       # structural directives, which resolve no file at all.
       - name: Smoke test the built-ins with no search path
-        run: ./dist/xmd test packages/core/src --raw
+        run: ./dist/xmd test packages/core/src --reporter=failures
 
       # An inline root document exercises the compiled module graph the same way
       # a file does, and only the binary proves the graph survived `deno compile`.
@@ -520,13 +521,13 @@ jobs:
       # Covers the compiled binary relaunching itself as `xmd test-agent`,
       # which the source-mode worker command never exercises.
       - name: Smoke test the compiled binary as a test agent
-        run: ./dist/xmd test smoke-test/test-agent/README.md --raw
+        run: ./dist/xmd test smoke-test/test-agent/README.md --reporter=failures
 
       - name: Smoke test xmd run through ACPX
         run: |
           ./dist/xmd test smoke-test/agent/README.md \
             --include smoke-test/agent/components \
-            --raw
+            --reporter=failures
 
       # A failed or cancelled run leaves the journals of the executions that
       # failed; a passing one uploads nothing.
@@ -611,7 +612,7 @@ jobs:
       # each rewrite `node_modules` into their own layout, so a Deno step after
       # one of them resolves through links the other pruned (#279).
       - name: Host contract under Deno
-        run: deno test --allow-all --frozen packages/runtime/tests/host-files.test.ts
+        run: deno test --reporter=dot --allow-all --frozen packages/runtime/tests/host-files.test.ts
 
       - name: Host contract as a compiled binary
         run: |

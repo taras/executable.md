@@ -361,7 +361,7 @@ describe("measuring one runtime", () => {
 
       expect(runs.launches).toEqual(
         [ALPHA, BETA].map((file) => {
-          const launch = oneFileCommand(runtime, file);
+          const launch = oneFileCommand(runtime, file, root, { compactReport: true });
           return `${launch.command} ${launch.arguments.join(" ")}`;
         }),
       );
@@ -392,7 +392,9 @@ describe("measuring one runtime", () => {
         () => measureRuntime(runtime, root, SOURCE, measurementFile(root, runtime)),
       );
 
-      const [alpha, suite] = [ALPHA, SUITE].map((file) => oneFileCommand(runtime, file, root));
+      const alpha = oneFileCommand(runtime, ALPHA, root, { compactReport: true });
+      const suite = oneFileCommand(runtime, SUITE, root, { compactReport: true });
+      expect(suite.arguments).toContain("--reporter=failures");
       expect(seen).toEqual([
         {
           line: `${suite.command} ${suite.arguments.join(" ")}`,
