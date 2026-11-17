@@ -1,3 +1,8 @@
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 /**
  * Tier GH — one shared reconciliation for every external Git-host effect.
  *
@@ -13,7 +18,7 @@
  * state machine appearing in this layer is what GH13 exists to red.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -332,9 +337,17 @@ function identityOf(seen: Attempt): { runId: string; expansionId: string } {
   return { runId: RUN.runId, expansionId };
 }
 
+const OWNER = "packages/git/tests/git-host-effect.test.ts";
+
+function captureEffect(name: string, body: (stream: InMemoryStream) => Operation<void>) {
+  return captureTestJournal({ owner: OWNER, name }, "<eval>", body);
+}
+
 describe("Tier GH — shared external Git-host effect reconciliation", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("GH1: proven absence performs once, under identity only the host can name", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
     // The document supplies an identity of its own. It is not a member of a
     // request, so it is not read, and the provider still sees the run and the
@@ -378,7 +391,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
   });
 
   it("GH2: a proven compatible completion is adopted and performs nothing", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const host = recordingProvider(answering(Ok(COMPATIBLE)));
 
     const seen = yield* runDocument({ stream, provider: host.provider });
@@ -421,7 +434,9 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     }
   });
 
-  it("GH4: a remote success whose result was never published is adopted, not repeated", function* () {
+  const unpublished =
+    "GH4: a remote success whose result was never published is adopted, not repeated";
+  it(unpublished, function* () {
     const remote: { mutations: number; state: Json | undefined } = {
       mutations: 0,
       state: undefined,
@@ -460,19 +475,20 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
 
     // A new execution of the same run, same expansion and same request, with no
     // history of the effect at all.
-    const resumed = new InMemoryStream();
-    const second = yield* runDocument({ stream: resumed, provider: host.provider });
+    yield* captureEffect(unpublished, function* (resumed) {
+      const second = yield* runDocument({ stream: resumed, provider: host.provider });
 
-    expect(second.failures).toEqual([]);
-    expect(remote.mutations).toBe(1);
-    expect(host.observed).toHaveLength(2);
-    expect(host.performed).toHaveLength(1);
-    expect(recordOf(second).decision).toBe("adopted");
-    expect(recordOf(second).result).toEqual({
-      ref: "refs/heads/release-1.4",
-      commit: "9fceb02",
+      expect(second.failures).toEqual([]);
+      expect(remote.mutations).toBe(1);
+      expect(host.observed).toHaveLength(2);
+      expect(host.performed).toHaveLength(1);
+      expect(recordOf(second).decision).toBe("adopted");
+      expect(recordOf(second).result).toEqual({
+        ref: "refs/heads/release-1.4",
+        commit: "9fceb02",
+      });
+      expect(gitHostYields(resumed.snapshot())).toHaveLength(1);
     });
-    expect(gitHostYields(resumed.snapshot())).toHaveLength(1);
   });
 
   it("GH5: conflict refuses, mutates nothing, and replays as itself", function* () {
@@ -519,7 +535,8 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(gitHostYields(replayed.snapshot())).toHaveLength(1);
   });
 
-  it("GH7: temporary unavailability is its own failure, retried by nobody here", function* () {
+  const unavailable = "GH7: temporary unavailability is its own failure, retried by nobody here";
+  it(unavailable, function* () {
     const rows = [
       {
         name: "observation",
@@ -535,40 +552,42 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     ];
 
     for (const row of rows) {
-      const stream = new InMemoryStream();
-      const host = row.host();
-      const seen = yield* runDocument({ stream, provider: host.provider });
+      yield* captureEffect(unavailable, function* (stream) {
+        const host = row.host();
+        const seen = yield* runDocument({ stream, provider: host.provider });
 
-      expect(seen.failures[0]).toBeInstanceOf(GitHostUnavailableError);
-      expect(seen.failures[0]).not.toBeInstanceOf(GitHostConflictError);
-      expect(seen.failures[0]).not.toBeInstanceOf(GitHostAmbiguousError);
-      expect(seen.records).toEqual([]);
-      // One observation and no hidden second attempt at either phase.
-      expect(host.observed).toHaveLength(1);
-      expect(host.performed).toHaveLength(row.performs);
+        expect(seen.failures[0]).toBeInstanceOf(GitHostUnavailableError);
+        expect(seen.failures[0]).not.toBeInstanceOf(GitHostConflictError);
+        expect(seen.failures[0]).not.toBeInstanceOf(GitHostAmbiguousError);
+        expect(seen.records).toEqual([]);
+        // One observation and no hidden second attempt at either phase.
+        expect(host.observed).toHaveLength(1);
+        expect(host.performed).toHaveLength(row.performs);
+      });
     }
 
     // Cancellation is Effection control flow, not a forge condition.
-    const stream = new InMemoryStream();
-    const entered = withResolvers<void>();
-    const host = recordingProvider(function* (): Operation<Result<GitHostObservation>> {
-      entered.resolve();
-      yield* suspend();
-      return Ok(ABSENT);
-    });
-    const seen = attempt();
+    yield* captureEffect(unavailable, function* (stream) {
+      const entered = withResolvers<void>();
+      const host = recordingProvider(function* (): Operation<Result<GitHostObservation>> {
+        entered.resolve();
+        yield* suspend();
+        return Ok(ABSENT);
+      });
+      const seen = attempt();
 
-    yield* scoped(function* () {
-      const task = yield* spawn(() => runDocument({ stream, provider: host.provider, seen }));
-      yield* entered.operation;
-      yield* task.halt();
-    });
+      yield* scoped(function* () {
+        const task = yield* spawn(() => runDocument({ stream, provider: host.provider, seen }));
+        yield* entered.operation;
+        yield* task.halt();
+      });
 
-    expect(host.observed).toHaveLength(1);
-    expect(host.performed).toEqual([]);
-    expect(seen.failures).toEqual([]);
-    expect(seen.records).toEqual([]);
-    expect(gitHostYields(stream.snapshot())).toEqual([]);
+      expect(host.observed).toHaveLength(1);
+      expect(host.performed).toEqual([]);
+      expect(seen.failures).toEqual([]);
+      expect(seen.records).toEqual([]);
+      expect(gitHostYields(stream.snapshot())).toEqual([]);
+    });
   });
 
   it("GH8: a changed request cannot consume a retained completion", function* () {
@@ -601,7 +620,8 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(recordOf(replayed)).toEqual(recordOf(first));
   });
 
-  it("GH9: routing may inspect or refuse, and can complete nothing", function* () {
+  const routingCase = "GH9: routing may inspect or refuse, and can complete nothing";
+  it(routingCase, function* () {
     // Every one of these is a public handler doing the most it can do with what
     // the one surface hands it. None of them can answer a phase, because the
     // only route to this invocation's terminal is a continuation held by the
@@ -672,56 +692,58 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
 
     // A request replayed after its own routing finished finds the invocation
     // spent. The replay reaches no provider and produces no second answer.
-    const reused = new InMemoryStream();
-    const reusedHost = recordingProvider(answering(Ok(COMPATIBLE)));
-    const reuseRefusals: unknown[] = [];
-    const reusedRun = yield* runDocument({
-      stream: reused,
-      provider: reusedHost.provider,
-      around: (operation) =>
-        scoped(function* () {
-          yield* GitHostWitness.around({
-            *route([call], next): Operation<unknown> {
-              const answered = yield* next(call);
-              try {
-                yield* next(call);
-              } catch (error) {
-                reuseRefusals.push(error);
-              }
-              return answered;
-            },
-          });
-          return yield* operation;
-        }),
-    });
+    yield* captureEffect(routingCase, function* (reused) {
+      const reusedHost = recordingProvider(answering(Ok(COMPATIBLE)));
+      const reuseRefusals: unknown[] = [];
+      const reusedRun = yield* runDocument({
+        stream: reused,
+        provider: reusedHost.provider,
+        around: (operation) =>
+          scoped(function* () {
+            yield* GitHostWitness.around({
+              *route([call], next): Operation<unknown> {
+                const answered = yield* next(call);
+                try {
+                  yield* next(call);
+                } catch (error) {
+                  reuseRefusals.push(error);
+                }
+                return answered;
+              },
+            });
+            return yield* operation;
+          }),
+      });
 
-    expect(reuseRefusals[0]).toBeInstanceOf(GitHostProviderError);
-    expect(reusedHost.observed).toHaveLength(1);
-    expect(recordOf(reusedRun).decision).toBe("adopted");
-    expect(gitHostYields(reused.snapshot())).toHaveLength(1);
+      expect(reuseRefusals[0]).toBeInstanceOf(GitHostProviderError);
+      expect(reusedHost.observed).toHaveLength(1);
+      expect(recordOf(reusedRun).decision).toBe("adopted");
+      expect(gitHostYields(reused.snapshot())).toHaveLength(1);
+    });
 
     // A throw after the real provider's accepted answer cannot take it away.
-    const completed = new InMemoryStream();
-    const completedHost = recordingProvider(answering(Ok(COMPATIBLE)));
-    const completedRun = yield* runDocument({
-      stream: completed,
-      provider: completedHost.provider,
-      around: (operation) =>
-        scoped(function* () {
-          yield* GitHostWitness.around({
-            *route([call], next): Operation<unknown> {
-              yield* next(call);
-              throw new Error("post-answer routing failure");
-            },
-          });
-          return yield* operation;
-        }),
-    });
+    yield* captureEffect(routingCase, function* (completed) {
+      const completedHost = recordingProvider(answering(Ok(COMPATIBLE)));
+      const completedRun = yield* runDocument({
+        stream: completed,
+        provider: completedHost.provider,
+        around: (operation) =>
+          scoped(function* () {
+            yield* GitHostWitness.around({
+              *route([call], next): Operation<unknown> {
+                yield* next(call);
+                throw new Error("post-answer routing failure");
+              },
+            });
+            return yield* operation;
+          }),
+      });
 
-    expect(completedRun.failures).toEqual([]);
-    expect(recordOf(completedRun).decision).toBe("adopted");
-    expect(completedHost.observed).toHaveLength(1);
-    expect(gitHostYields(completed.snapshot())).toHaveLength(1);
+      expect(completedRun.failures).toEqual([]);
+      expect(recordOf(completedRun).decision).toBe("adopted");
+      expect(completedHost.observed).toHaveLength(1);
+      expect(gitHostYields(completed.snapshot())).toHaveLength(1);
+    });
   });
 
   it("GH10: combined middleware at both priorities still authors nothing", function* () {
@@ -954,7 +976,8 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(leaking.snapshot().map(serializeDurableEvent).join("")).not.toContain(CREDENTIAL);
   });
 
-  it("GH13: every downstream kind runs through this one engine", function* () {
+  const effectKinds = "GH13: every downstream kind runs through this one engine";
+  it(effectKinds, function* () {
     const kinds: GitHostEffectRequest[] = [
       PUSH,
       {
@@ -970,22 +993,23 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     ];
 
     for (const request of kinds) {
-      const stream = new InMemoryStream();
-      const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
-      const seen = yield* runDocument({ stream, provider: host.provider, request });
+      yield* captureEffect(effectKinds, function* (stream) {
+        const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+        const seen = yield* runDocument({ stream, provider: host.provider, request });
 
-      expect(seen.failures).toEqual([]);
-      expect(recordOf(seen).decision).toBe("performed");
-      expect(recordOf(seen).request.kind).toBe(request.kind);
-      expect(recordOf(seen).request.naturalKey).toEqual(request.naturalKey);
-      expect(host.observed).toHaveLength(1);
-      expect(host.performed).toHaveLength(1);
-      expect(gitHostYields(stream.snapshot())).toHaveLength(1);
-      // Every kind is named by its own durable identity.
-      const description = gitHostYields(stream.snapshot())[0];
-      expect(description?.type === "yield" ? description.description.name : "").toMatch(
-        /^[0-9a-f]{64}$/,
-      );
+        expect(seen.failures).toEqual([]);
+        expect(recordOf(seen).decision).toBe("performed");
+        expect(recordOf(seen).request.kind).toBe(request.kind);
+        expect(recordOf(seen).request.naturalKey).toEqual(request.naturalKey);
+        expect(host.observed).toHaveLength(1);
+        expect(host.performed).toHaveLength(1);
+        expect(gitHostYields(stream.snapshot())).toHaveLength(1);
+        // Every kind is named by its own durable identity.
+        const description = gitHostYields(stream.snapshot())[0];
+        expect(description?.type === "yield" ? description.description.name : "").toMatch(
+          /^[0-9a-f]{64}$/,
+        );
+      });
     }
 
     // A plain Git server hosts branches and nothing else. It says so from
@@ -1000,17 +1024,18 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
       return Err(refusal);
     };
 
-    const supported = new InMemoryStream();
-    const supportedHost = recordingProvider(
-      // deno-lint-ignore require-yield
-      function* (request): Operation<Result<GitHostObservation>> {
-        return pushOnly(request);
-      },
-      answering(Ok(PERFORMED)),
-    );
-    const pushed = yield* runDocument({ stream: supported, provider: supportedHost.provider });
-    expect(pushed.failures).toEqual([]);
-    expect(recordOf(pushed).decision).toBe("performed");
+    yield* captureEffect(effectKinds, function* (supported) {
+      const supportedHost = recordingProvider(
+        // deno-lint-ignore require-yield
+        function* (request): Operation<Result<GitHostObservation>> {
+          return pushOnly(request);
+        },
+        answering(Ok(PERFORMED)),
+      );
+      const pushed = yield* runDocument({ stream: supported, provider: supportedHost.provider });
+      expect(pushed.failures).toEqual([]);
+      expect(recordOf(pushed).decision).toBe("performed");
+    });
 
     const unsupported = new InMemoryStream();
     const unsupportedHost = recordingProvider(

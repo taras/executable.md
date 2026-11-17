@@ -37,8 +37,11 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionRequest } from "@executablemd/core";
 import { GitQuery } from "@executablemd/git/api";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { getWorkflowRun, retainedWorkflowInstallation } from "../src/run.ts";
 import type { WorkflowRun } from "../src/run.ts";
+
+const OWNER = "packages/workflow/tests/retained-run.test.ts";
 
 const COMMIT = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 const OTHER_COMMIT = "1111111111111111111111111111111111111111";
@@ -334,18 +337,25 @@ function completedWith(
 }
 
 describe("Tier RR — retained workflow runs", () => {
-  it("RR1: records exactly the retained run, without allocating or resolving", function* () {
-    const stream = new InMemoryStream();
-    const attempt = yield* runRetained(RETAINED, stream);
+  it("RR1: records exactly the retained run, without allocating or resolving", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "RR1: records exactly the retained run, without allocating or resolving",
+      },
+      "<eval>",
+      function* (stream) {
+        const attempt = yield* runRetained(RETAINED, stream);
 
-    expect(attempt.thrown).toBeUndefined();
-    expect(attempt.seen).toEqual([RETAINED]);
-    expect(recordedRun(stream)).toEqual({
-      runId: "release-1.4",
-      bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    });
-    expect(workflowEvents(stream)).toHaveLength(1);
-  });
+        expect(attempt.thrown).toBeUndefined();
+        expect(attempt.seen).toEqual([RETAINED]);
+        expect(recordedRun(stream)).toEqual({
+          runId: "release-1.4",
+          bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        });
+        expect(workflowEvents(stream)).toHaveLength(1);
+      },
+    ));
 
   it("RR2: restores the retained run from a truncated journal without recording again", function* () {
     const first = new InMemoryStream();

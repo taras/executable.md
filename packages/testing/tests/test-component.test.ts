@@ -18,7 +18,7 @@ import { Component, registerComponents, useTempFileCompiler } from "@executablem
 import type { ErrorSegment } from "@executablemd/core";
 import { createTestHandlers } from "../src/handlers.ts";
 import { absorbTestFailure, Staging } from "../src/test-component.ts";
-import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { runDoc, withFreshDocument } from "./helpers.ts";
 
 const OWNER = "packages/testing/tests/test-component.test.ts";
@@ -88,7 +88,7 @@ describe("<Test> as a function component", () => {
     let fatal: unknown;
     let later = 0;
     let released = false;
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* registerComponents([
       {
         name: "LaterTestWork",
@@ -308,7 +308,7 @@ describe("<Test> as a function component", () => {
       "",
     ].join("\n");
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     const run = yield* runDoc({ "README.md": doc }, { stream });
 
     expect(run.results.map((r) => [r.name, r.error?.kind])).toEqual([
@@ -360,7 +360,7 @@ describe("<Test> as a function component", () => {
   it("writes no boundary entry for a root run", function* () {
     const doc = ['<Test name="solo"><Assert expr={true} /></Test>', ""].join("\n");
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* runDoc({ "README.md": doc }, { stream, testing: true });
 
     expect(yield* entriesOf(stream, "testing_boundary")).toEqual([]);

@@ -119,7 +119,7 @@ describe("Tier B — durable import", () => {
   beforeEach(journalBeforeEach(OWNER));
   // B1: durableImportComponent golden run — journal shape
   it("B1: import golden run — journal has import_component with path and content", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({ "README.md": "Hello world\n" });
     yield* useStubExec();
 
@@ -226,7 +226,7 @@ describe("Tier B — durable import", () => {
 
   // B12: root document as component — __root__ import, same journal shape
   it("B12: root document imported as __root__", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     yield* useStubFs({ "doc.md": "Root content\n" });
     yield* useStubExec();
 
@@ -252,7 +252,7 @@ describe("Tier B — durable import", () => {
 
   // B13: dotted name resolution — Ns.Sub → components/Ns/Sub.md
   it("B13: dotted component name resolves to nested path", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": "<Ui.Button />\n",
       "components/Ui/Button.md": "Click me\n",
@@ -313,7 +313,7 @@ describe("Tier D — code execution and modifiers", () => {
   beforeEach(journalBeforeEach(OWNER));
   // D1: bash exec golden run
   it("D1: bash exec golden run — stdout displayed, exec in journal", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": ["```bash exec", "echo hello", "```"].join("\n"),
     });
@@ -409,7 +409,7 @@ describe("Tier D — code execution and modifiers", () => {
   // D4: multi-line command — full script passed to -c
   it("D4: multi-line command — full script in journal", function* () {
     const multiLineScript = "echo line1\necho line2";
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": ["```bash exec", multiLineScript, "```"].join("\n"),
     });
@@ -440,7 +440,7 @@ describe("Tier D — code execution and modifiers", () => {
       "README.md": ["```python exec", "print('hello')", "```"].join("\n"),
     };
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs(files);
     // Custom exec middleware that handles python -c
     yield* API.Process.around({
@@ -473,7 +473,7 @@ describe("Tier D — code execution and modifiers", () => {
 
   // D6: bash silent exec — chain: silent wraps exec, exec journals, silent returns empty
   it("D6: bash silent exec — exec journals, output suppressed", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
     });
@@ -533,7 +533,7 @@ describe("Tier D — code execution and modifiers", () => {
   // success (#307). The command's exit code and stderr are the chain's, so a
   // silenced failure is still a failure — with nothing of what it printed.
   it("D6b: failing silent exec — output suppressed, failure still reported", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": ["```bash silent exec", "echo secret", "```"].join("\n"),
     });
@@ -551,7 +551,7 @@ describe("Tier D — code execution and modifiers", () => {
   });
 
   it("D6c: a failing silent exec in documentation aborts before the next block", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": [
         "```bash silent exec",
@@ -712,7 +712,7 @@ describe("execute", () => {
   beforeEach(journalBeforeEach(OWNER));
   // E1: Full document golden run
   it("E1: full document golden run — root + component + exec", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": [
         "---",
@@ -854,7 +854,7 @@ describe("execute", () => {
 
   // E8: Silent exec in full document
   it("E8: silent exec — command runs, result journaled, output omitted", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": ["before", "", "```bash silent exec", "echo hidden", "```", "", "after"].join(
         "\n",
@@ -1138,7 +1138,7 @@ describe("execute", () => {
 
   // Multiple components — verify all are imported and expanded
   it("multiple components — all imported and expanded", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": "<Header />\n<Footer />\n",
       "components/Header.md": "HEADER\n",
@@ -1168,7 +1168,7 @@ describe("execute", () => {
 
   // Transitive components — A references B
   it("transitive components — A → B, both imported", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": "<Wrapper />\n",
       "components/Wrapper.md": "before\n<Inner />\nafter\n",
@@ -1220,8 +1220,9 @@ describe("execute", () => {
 });
 
 describe("Component Api dispatch — journal shape", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("import, exec, and eval journal entries keep their identities", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     // The eval block is here for its journal entry, so it has to compile.
     yield* useTempFileCompiler();
     yield* useStubFs({
@@ -1355,7 +1356,7 @@ describe("component-declared output — document workflow", () => {
   });
 
   it("diagnoses an invalid root <Output> and runs no body side effects", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     yield* useStubFs({
       "README.md": "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output invalid>x</Output>\n</Wrapper>\n",
     });
@@ -1378,6 +1379,7 @@ describe("component-declared output — document workflow", () => {
 });
 
 describe("993 nested document execution", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const ready of [true, false]) {
     for (const reusable of [false, true]) {
       it(`W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`, function* () {
@@ -1405,7 +1407,7 @@ describe("993 nested document execution", () => {
           },
         });
         const text = yield* collect(
-          yield* execute({ path: "doc.md", stream: new InMemoryStream() }),
+          yield* execute({ path: "doc.md", stream: yield* useJournalStream("doc.md") }),
         );
         expect(text).toBe(ready ? "Review complete." : "Review pending.");
         expect(writes).toEqual([ready ? "complete" : "pending"]);
@@ -1449,12 +1451,13 @@ describe("993 nested document execution", () => {
       yield* ensureDir(`${directory}/components`);
       yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
       yield* writeTextFile(`${directory}/components/Report.md`, source);
+      const stream = yield* useJournalStream(`${directory}/doc.md`);
       expect(
         yield* collect(
           yield* execute({
             path: `${directory}/doc.md`,
             includes: [`${directory}/components`],
-            stream: new InMemoryStream(),
+            stream,
           }),
         ),
       ).toBe("REPORT");
@@ -1471,7 +1474,10 @@ describe("993 nested document execution", () => {
     ]) {
       yield* scoped(function* () {
         yield* useStubFs({ "doc.md": body });
-        const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
+        const execution = yield* execute({
+          path: "doc.md",
+          stream: yield* useJournalStream("doc.md"),
+        });
         const chunks: string[] = [];
         yield* forEach(function* (chunk) {
           chunks.push(chunk);

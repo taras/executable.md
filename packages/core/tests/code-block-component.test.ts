@@ -34,7 +34,11 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { Json } from "../src/types.ts";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/code-block-component.test.ts";
 
@@ -151,20 +155,30 @@ function* captured(
 
 describe("Tier CB — the envelope", () => {
   beforeEach(journalBeforeEach(OWNER));
-  it("CB1: an empty value is three backticks, two line feeds and nothing else", function* () {
-    const result = yield* directly(undefined, "");
-
-    expect(result.failure).toBe("");
-    expect(result.output).toBe("```\n\n```");
-    expect(yield* captured(undefined, "")).toBe("```\n\n```");
+  const emptyValue = "CB1: an empty value is three backticks, two line feeds and nothing else";
+  it(emptyValue, function* () {
+    const label = { owner: OWNER, name: emptyValue };
+    yield* captureTestJournal(label, "doc.md", function* (stream) {
+      yield* captureTestJournal(label, "doc.md", function* (compared) {
+        const result = yield* directly(stream, "");
+        expect(result.failure).toBe("");
+        expect(result.output).toBe("```\n\n```");
+        expect(yield* captured(compared, "")).toBe("```\n\n```");
+      });
+    });
   });
 
-  it("CB1: ordinary Markdown keeps its own lines, and gains no final line feed", function* () {
-    const value = "# Title\n\n- one\n- two";
-    const result = yield* directly(undefined, value);
-
-    expect(result.output).toBe("```\n# Title\n\n- one\n- two\n```");
-    expect(yield* captured(undefined, value)).toBe("```\n# Title\n\n- one\n- two\n```");
+  const markdownValue = "CB1: ordinary Markdown keeps its own lines, and gains no final line feed";
+  it(markdownValue, function* () {
+    const label = { owner: OWNER, name: markdownValue };
+    yield* captureTestJournal(label, "doc.md", function* (stream) {
+      yield* captureTestJournal(label, "doc.md", function* (compared) {
+        const value = "# Title\n\n- one\n- two";
+        const result = yield* directly(stream, value);
+        expect(result.output).toBe("```\n# Title\n\n- one\n- two\n```");
+        expect(yield* captured(compared, value)).toBe("```\n# Title\n\n- one\n- two\n```");
+      });
+    });
   });
 
   it("CB1: the block lands where the element was written", function* () {
@@ -183,7 +197,8 @@ describe("Tier CB — the envelope", () => {
 
 describe("Tier CB — the fence the value cannot close", () => {
   beforeEach(journalBeforeEach(OWNER));
-  it("CB2: the fence is the longest backtick run plus one, never fewer than three", function* () {
+  const fenceCase = "CB2: the fence is the longest backtick run plus one, never fewer than three";
+  it(fenceCase, function* () {
     const cases: ReadonlyArray<readonly [string, number]> = [
       ["no backticks at all", 3],
       ["one ` here", 3],
@@ -198,25 +213,34 @@ describe("Tier CB — the fence the value cannot close", () => {
     ];
 
     for (const [value, length] of cases) {
-      const block = yield* captured(undefined, value);
-      const fence = "`".repeat(length);
+      yield* captureTestJournal({ owner: OWNER, name: fenceCase }, "doc.md", function* (stream) {
+        const block = yield* captured(stream, value);
+        const fence = "`".repeat(length);
 
-      expect(block).toBe(`${fence}\n${value}\n${fence}`);
-      // Stated twice on purpose: the complete string pins the layout, and this
-      // pins the count the layout was built from.
-      expect(block.split("\n")[0]?.length).toBe(length);
+        expect(block).toBe(`${fence}\n${value}\n${fence}`);
+        // Stated twice on purpose: the complete string pins the layout, and this
+        // pins the count the layout was built from.
+        expect(block.split("\n")[0]?.length).toBe(length);
+      });
     }
   });
 
-  it("CB2: a run broken by any other character is two runs, not one", function* () {
-    // Counting backticks without resetting would read five here and open a
-    // six-backtick fence.
-    expect(yield* captured(undefined, "```\n``")).toBe("````\n```\n``\n````");
-    expect(yield* captured(undefined, "``x``x``")).toBe("```\n``x``x``\n```");
+  const brokenRun = "CB2: a run broken by any other character is two runs, not one";
+  it(brokenRun, function* () {
+    const label = { owner: OWNER, name: brokenRun };
+    yield* captureTestJournal(label, "doc.md", function* (stream) {
+      yield* captureTestJournal(label, "doc.md", function* (compared) {
+        // Counting backticks without resetting would read five here and open a
+        // six-backtick fence.
+        expect(yield* captured(stream, "```\n``")).toBe("````\n```\n``\n````");
+        expect(yield* captured(compared, "``x``x``")).toBe("```\n``x``x``\n```");
+      });
+    });
   });
 });
 
 describe("Tier CB — the value is not read for anything else", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CB3: removing the envelope recovers the source code units exactly", function* () {
     const value = [
       "   leading spaces",
@@ -248,18 +272,25 @@ describe("Tier CB — the language token", () => {
     expect((yield* captured(undefined, "plain")).split("\n")[0]).toBe("```");
   });
 
-  it("CB4: every accepted token renders on the opening fence, unchanged", function* () {
+  const acceptedLanguage = "CB4: every accepted token renders on the opening fence, unchanged";
+  it(acceptedLanguage, function* () {
     const accepted = ["markdown", "md", "json", "shell-session", "c++", "c#", "F", "x1._+#-"];
 
     for (const language of accepted) {
-      const result = yield* directly(undefined, "body", ` language="${language}"`);
-
-      expect(result.failure).toBe("");
-      expect(result.output).toBe("```" + language + "\nbody\n```");
+      yield* captureTestJournal(
+        { owner: OWNER, name: acceptedLanguage },
+        "doc.md",
+        function* (stream) {
+          const result = yield* directly(stream, "body", ` language="${language}"`);
+          expect(result.failure).toBe("");
+          expect(result.output).toBe("```" + language + "\nbody\n```");
+        },
+      );
     }
   });
 
-  it("CB4: a refused token fails validation and renders no fence", function* () {
+  const refusedLanguage = "CB4: a refused token fails validation and renders no fence";
+  it(refusedLanguage, function* () {
     const refused = [
       "",
       " ",
@@ -285,16 +316,22 @@ describe("Tier CB — the language token", () => {
     ];
 
     for (const language of refused) {
-      const result = yield* run(
-        undefined,
-        '<Value key="v" as="v" /><Value key="lang" as="lang" /><CodeBlock value={v} language={lang} />',
-        { v: "body", lang: language },
-      );
+      yield* captureTestJournal(
+        { owner: OWNER, name: refusedLanguage },
+        "doc.md",
+        function* (stream) {
+          const result = yield* run(
+            stream,
+            '<Value key="v" as="v" /><Value key="lang" as="lang" /><CodeBlock value={v} language={lang} />',
+            { v: "body", lang: language },
+          );
 
-      expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
-      expect(reported(result)).toContain("language");
-      expect(result.output).not.toContain("```");
-      expect(result.output).not.toContain("body");
+          expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
+          expect(reported(result)).toContain("language");
+          expect(result.output).not.toContain("```");
+          expect(result.output).not.toContain("body");
+        },
+      );
     }
   });
 });
@@ -309,12 +346,14 @@ describe("Tier CB — the invocation is refused before the body", () => {
     expect(result.output).not.toContain("```");
   });
 
-  it("CB5: a non-string value is refused rather than coerced", function* () {
+  const nonString = "CB5: a non-string value is refused rather than coerced";
+  it(nonString, function* () {
     for (const value of ["42", "true", "null", "{ text: 'x' }", "['x']"]) {
-      const result = yield* run(undefined, `<CodeBlock value={${value}} />`);
-
-      expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
-      expect(result.output).not.toContain("```");
+      yield* captureTestJournal({ owner: OWNER, name: nonString }, "doc.md", function* (stream) {
+        const result = yield* run(stream, `<CodeBlock value={${value}} />`);
+        expect(reported(result)).toContain("Prop validation failed for <CodeBlock />");
+        expect(result.output).not.toContain("```");
+      });
     }
   });
 

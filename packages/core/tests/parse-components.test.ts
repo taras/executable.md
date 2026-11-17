@@ -1,3 +1,8 @@
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 /**
  * Tier PC — `<Parse>` and `<SafeParse>` (spec §6.12).
  *
@@ -8,7 +13,6 @@
  * none of it.
  */
 import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -21,7 +25,7 @@ import { Execution, execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { Json } from "../src/types.ts";
-const owner = "packages/core/tests/parse-components.test.ts";
+const OWNER = "packages/core/tests/parse-components.test.ts";
 
 interface Run {
   /** Rendered output, or the failure message when the document aborted. */
@@ -107,7 +111,7 @@ const SCHEMA_INVALID = `<Parse schema={${OBJECT_SCHEMA}} as="v">{ "a": 1 }</Pars
 
 describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResources: false }, () => {
   beforeAll(() => useTempFileCompiler());
-  beforeEach(journalBeforeEach(owner));
+  beforeEach(journalBeforeEach(OWNER));
 
   it("PC1: schema is required", function* () {
     const stream = yield* useJournalStream("doc.md");
@@ -245,94 +249,109 @@ describe("Tier PC — Parse and SafeParse", { sanitizeOps: false, sanitizeResour
   // Completion is the execution's settlement, so it waits for everything the
   // execution owns — including cleanup a host established at initialization.
   it("PC11a: a Parse failure keeps earlier output and settles after owned cleanup", function* () {
-    yield* useStubFs({ "doc.md": laterEffect(SCHEMA_INVALID) });
-    const commands: string[] = [];
-    yield* API.Process.around({
-      // deno-lint-ignore require-yield
-      *exec([options]) {
-        commands.push(options.command.join(" "));
-        return { exitCode: 0, stdout: "", stderr: "" };
+    yield* captureTestJournal(
+      {
+        owner: OWNER,
+        name: "PC11a: a Parse failure keeps earlier output and settles after owned cleanup",
       },
-    });
-    const live: string[] = [];
-    yield* DocumentOutput.around({
-      *output([text, exact], next) {
-        live.push(text);
-        return yield* next(text, exact);
-      },
-    });
-    const cleanupStarted = withResolvers<void>();
-    const release = withResolvers<void>();
-    yield* Execution.around({
-      *init(_args, next) {
-        yield* ensure(function* () {
-          cleanupStarted.resolve();
-          yield* release.operation;
+      "doc.md",
+      function* (stream) {
+        yield* useStubFs({ "doc.md": laterEffect(SCHEMA_INVALID) });
+        const commands: string[] = [];
+        yield* API.Process.around({
+          // deno-lint-ignore require-yield
+          *exec([options]) {
+            commands.push(options.command.join(" "));
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
         });
-        yield* next();
+        const live: string[] = [];
+        yield* DocumentOutput.around({
+          *output([text, exact], next) {
+            live.push(text);
+            return yield* next(text, exact);
+          },
+        });
+        const cleanupStarted = withResolvers<void>();
+        const release = withResolvers<void>();
+        yield* Execution.around({
+          *init(_args, next) {
+            yield* ensure(function* () {
+              cleanupStarted.resolve();
+              yield* release.operation;
+            });
+            yield* next();
+          },
+        });
+
+        const execution = yield* execute({ path: "doc.md", stream });
+        let completed = false;
+        const completion = yield* spawn(function* () {
+          const outcome = yield* execution;
+          completed = true;
+          return outcome;
+        });
+
+        yield* cleanupStarted.operation;
+        for (let turn = 0; turn < 5; turn++) {
+          yield* sleep(0);
+        }
+        // Read while held, asserted after release: a failed assertion here would
+        // otherwise leave the execution's teardown waiting for ever.
+        const completedWhileHeld = completed;
+        const liveWhileHeld = live.join("");
+        const commandsWhileHeld = [...commands];
+
+        release.resolve();
+        const outcome = yield* completion;
+        expect(completedWhileHeld).toBe(false);
+        expect(liveWhileHeld).toContain("PREFIX");
+        expect(commandsWhileHeld).toEqual([]);
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok ? "" : outcome.error.message).toContain("content failed its schema");
+
+        const recorded = retained(stream.snapshot());
+        expect(recorded.status).toBe("err");
+        expect(recorded.output).toContain("PREFIX");
+        expect(live.join("")).not.toContain("LATER_EFFECT");
+        expect(commands).toEqual([]);
       },
-    });
-
-    const stream = new InMemoryStream();
-    const execution = yield* execute({ path: "doc.md", stream });
-    let completed = false;
-    const completion = yield* spawn(function* () {
-      const outcome = yield* execution;
-      completed = true;
-      return outcome;
-    });
-
-    yield* cleanupStarted.operation;
-    for (let turn = 0; turn < 5; turn++) {
-      yield* sleep(0);
-    }
-    // Read while held, asserted after release: a failed assertion here would
-    // otherwise leave the execution's teardown waiting for ever.
-    const completedWhileHeld = completed;
-    const liveWhileHeld = live.join("");
-    const commandsWhileHeld = [...commands];
-
-    release.resolve();
-    const outcome = yield* completion;
-    expect(completedWhileHeld).toBe(false);
-    expect(liveWhileHeld).toContain("PREFIX");
-    expect(commandsWhileHeld).toEqual([]);
-    expect(outcome.ok).toBe(false);
-    expect(outcome.ok ? "" : outcome.error.message).toContain("content failed its schema");
-
-    const recorded = retained(stream.snapshot());
-    expect(recorded.status).toBe("err");
-    expect(recorded.output).toContain("PREFIX");
-    expect(live.join("")).not.toContain("LATER_EFFECT");
-    expect(commands).toEqual([]);
+    );
   });
 
-  it("PC11b: SafeParse leaves invalid input to the document, which can still succeed", function* () {
+  const safeParseCase =
+    "PC11b: SafeParse leaves invalid input to the document, which can still succeed";
+  it(safeParseCase, function* () {
     for (const [content, keyword, path] of [
       ["nope", "parse", ""],
       ['{ "a": 1 }', "type", "/a"],
     ]) {
-      const source = [
-        `<SafeParse schema={${OBJECT_SCHEMA}} as="r">${content}</SafeParse>`,
-        "",
-        "<If condition={!r.ok}>",
-        "",
-        '<Each in={r.errors} let="issue">INPUT {r.input}|{issue.keyword}|{issue.instancePath}</Each>',
-        "",
-        "```sh exec",
-        "echo RECOVERED_EFFECT",
-        "```",
-        "",
-        "</If>",
-        "",
-      ].join("\n");
-      const stream = yield* useJournalStream("doc.md");
-      const { output, failed, commands, events } = yield* run(stream, source);
-      expect(failed).toBe(false);
-      expect(output).toContain(`INPUT ${content}|${keyword}|${path}`);
-      expect(commands).toHaveLength(1);
-      expect(commands[0]).toContain("RECOVERED_EFFECT");
-      expect(retained(events).status).toBe("ok");
+      yield* captureTestJournal(
+        { owner: OWNER, name: safeParseCase },
+        "doc.md",
+        function* (stream) {
+          const source = [
+            `<SafeParse schema={${OBJECT_SCHEMA}} as="r">${content}</SafeParse>`,
+            "",
+            "<If condition={!r.ok}>",
+            "",
+            '<Each in={r.errors} let="issue">INPUT {r.input}|{issue.keyword}|{issue.instancePath}</Each>',
+            "",
+            "```sh exec",
+            "echo RECOVERED_EFFECT",
+            "```",
+            "",
+            "</If>",
+            "",
+          ].join("\n");
+          const { output, failed, commands, events } = yield* run(stream, source);
+          expect(failed).toBe(false);
+          expect(output).toContain(`INPUT ${content}|${keyword}|${path}`);
+          expect(commands).toHaveLength(1);
+          expect(commands[0]).toContain("RECOVERED_EFFECT");
+          expect(retained(events).status).toBe("ok");
+        },
+      );
     }
   });
 

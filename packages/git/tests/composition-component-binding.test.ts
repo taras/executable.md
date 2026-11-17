@@ -1,3 +1,5 @@
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 /**
  * One registry, one authored body, and the invocation an owning execution
  * authenticates for it.
@@ -14,7 +16,6 @@
  * repair matrix.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
@@ -36,7 +37,7 @@ import { collect, Component, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration, Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, IdentityComponent } from "@executablemd/core/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { COMPOSITION_REGISTRATIONS } from "../src/composition/installation.ts";
 import { pushDeclaration } from "../src/composition/components/GitPush.ts";
 import { issueDeclaration } from "../src/composition/components/Issue.ts";
@@ -141,12 +142,13 @@ interface Ran {
 /** One document, through canonical execution, under this row's declarations. */
 function run(
   root: string,
+  path: string,
+  stream: InMemoryStream,
   source: string,
   installations: readonly ExecutionInstallation[],
   before?: () => Operation<void>,
 ): Operation<Ran> {
   return scoped(function* (): Operation<Ran> {
-    const path = join(root, `entry-${crypto.randomUUID()}.md`);
     yield* writeTextFile(path, source);
     // The whole vocabulary, as the Plugin registers it for every command. What
     // a row declares below is attached inside the execution, over the ordinary
@@ -162,9 +164,7 @@ function run(
     try {
       output = String(
         yield* collect(
-          yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [root] }, [
-            ...installations,
-          ]),
+          yield* executeInstalled({ path, stream, includes: [root] }, [...installations]),
         ),
       );
     } catch (error) {
@@ -217,7 +217,10 @@ function paired(name: string): {
   };
 }
 
+const OWNER = "packages/git/tests/composition-component-binding.test.ts";
+
 describe("one registry for every repository operation, and the policy an execution owns", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A1: describes one component whichever path carries it", function* (): Operation<void> {
     // The whole vocabulary is registered ordinarily, and an execution that owns
     // one of these operations declares that same name again with its own policy
@@ -275,6 +278,8 @@ describe("one registry for every repository operation, and the policy an executi
 
   it("A1: canonical dispatch decides the form, whatever a contextual answer says", function* (): Operation<void> {
     const root = yield* useRoot();
+    const path = join(root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const seen = watched();
 
     // A handler that reports the opposite shape to anything that asks. The form
@@ -291,6 +296,8 @@ describe("one registry for every repository operation, and the policy an executi
 
     const ran = yield* run(
       root,
+      path,
+      stream,
       [
         `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
         `<Issue url=${JSON.stringify(`${TRACKER}/issues/7`)} as="found" />`,
@@ -307,10 +314,14 @@ describe("one registry for every repository operation, and the policy an executi
 
   it("A2: a nested read finishes before the upsert around it is performed", function* (): Operation<void> {
     const root = yield* useRoot();
+    const path = join(root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const seen = watched();
 
     const ran = yield* run(
       root,
+      path,
+      stream,
       [
         `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
         `<Issue title="Outer" as="filed">`,
@@ -333,10 +344,14 @@ describe("one registry for every repository operation, and the policy an executi
 
   it("A2: two concurrent invocations keep their own sites", function* (): Operation<void> {
     const root = yield* useRoot();
+    const path = join(root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const seen = watched();
 
     const ran = yield* run(
       root,
+      path,
+      stream,
       [
         `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
         `<All>`,
@@ -356,6 +371,8 @@ describe("one registry for every repository operation, and the policy an executi
 
   it("A5: cancelling an invocation stops the operation it was performing", function* (): Operation<void> {
     const root = yield* useRoot();
+    const path = join(root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const seen = watched();
     const reached = withResolvers<void>();
 
@@ -380,6 +397,8 @@ describe("one registry for every repository operation, and the policy an executi
       const task = yield* spawn(() =>
         run(
           root,
+          path,
+          stream,
           [
             `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
             `<Issue title="Filed" as="filed">described</Issue>`,

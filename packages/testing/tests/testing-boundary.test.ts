@@ -14,7 +14,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { registerComponents, useTempFileCompiler } from "@executablemd/core";
-import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { runDoc } from "./helpers.ts";
 import type { DocRun } from "./helpers.ts";
 
@@ -58,10 +58,11 @@ function stopping(files: Record<string, string>, stream: InMemoryStream): Operat
 }
 
 describe("Tier TB — a boundary that never finished", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/testing-boundary.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("TB1: a stopped body reports no outcome and journals nothing", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     const doc = [
       "<Testing>",
       '<Test name="t"><Assert expr={true} /></Test>',
@@ -100,7 +101,7 @@ describe("Tier TB — a boundary that never finished", () => {
   });
 
   it("TB3: a body that only printed is complete, and does report", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("README.md");
     const doc = [
       "<PrintErrors>",
       "<Testing>",

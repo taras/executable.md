@@ -1,3 +1,5 @@
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 /**
  * The durable envelope an owned Issue operation runs inside, and the
  * compatibility it owes the profile that used to be the only one.
@@ -20,7 +22,6 @@
  *   execution still refuses.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { resource, scoped } from "effection";
 import type { Operation } from "effection";
@@ -249,6 +250,7 @@ function run(
   stream: DurableStream,
   live: Live,
   options: {
+    readonly path?: string;
     readonly transport?: Transport;
     readonly installations?: readonly ExecutionInstallation[];
     /** Install the workflow run's own Issue lifecycle, as a workflow host does. */
@@ -256,7 +258,7 @@ function run(
   } = {},
 ): Operation<Ran> {
   return scoped(function* (): Operation<Ran> {
-    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const path = options.path ?? join(fixture.root, `entry-${crypto.randomUUID()}.md`);
     yield* writeTextFile(path, source);
     const seen = observed();
     yield* useCompositionComponents();
@@ -370,10 +372,15 @@ function workflowProfile(runId: string): readonly ExecutionInstallation[] {
   ];
 }
 
+const OWNER = "packages/git/tests/issue-owned.test.ts";
+
 describe("the durable envelope an owned Issue operation runs inside", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("E1: retains the answer one live read composed, and names it after the request", function* (): Operation<void> {
     const fixture = yield* useFixture();
-    const stream = new InMemoryStream();
+    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const ran = yield* run(
       fixture,
       '<OwnedRead url="https://github.com/octo/project/issues/7" />',
@@ -385,6 +392,7 @@ describe("the durable envelope an owned Issue operation runs inside", () => {
           return { ...DETAILS, tags: [...DETAILS.tags] };
         },
       },
+      { path },
     );
 
     expect(ran.refusal).toBe(undefined);
@@ -495,6 +503,8 @@ describe("the durable envelope an owned Issue operation runs inside", () => {
 
   it("E1: a child's record lands before its parent's, and each call retains one", function* (): Operation<void> {
     const fixture = yield* useFixture();
+    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const ran = yield* run(
       fixture,
       [
@@ -503,7 +513,7 @@ describe("the durable envelope an owned Issue operation runs inside", () => {
         "</OwnedParent>",
         '<OwnedUpsert title="Filed" site="parent" />',
       ].join("\n"),
-      new InMemoryStream(),
+      stream,
       {
         read: function* (): Operation<unknown> {
           return { ...DETAILS, tags: [...DETAILS.tags] };
@@ -512,6 +522,7 @@ describe("the durable envelope an owned Issue operation runs inside", () => {
           return { url: `${TRACKER}/issues/12` };
         },
       },
+      { path },
     );
 
     expect(ran.refusal).toBe(undefined);
@@ -526,13 +537,15 @@ describe("the durable envelope an owned Issue operation runs inside", () => {
 
   it("E7: writes a workflow run's record exactly as it has always written it", function* (): Operation<void> {
     const fixture = yield* useFixture();
-    const stream = new InMemoryStream();
+    const path = join(fixture.root, `entry-${crypto.randomUUID()}.md`);
+    const stream = yield* useJournalStream(path);
     const ran = yield* run(
       fixture,
       WORKFLOW_ENTRY,
       stream,
       {},
       {
+        path,
         retained: true,
         installations: workflowProfile(RUN.runId),
         transport: {

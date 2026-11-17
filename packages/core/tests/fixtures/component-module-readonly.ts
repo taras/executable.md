@@ -3,8 +3,10 @@ import { argv } from "node:process";
 import { join } from "node:path";
 import { writeTextFile } from "@effectionx/fs";
 import { collect, execute, useNormalizedOutput } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import { useDenoComponentModuleLoader } from "@executablemd/core/host/deno";
+
+import { boundedJournalResult } from "../../../test-support/subprocess-journal.ts";
 
 main(function* () {
   const directory = argv[2];
@@ -25,14 +27,20 @@ main(function* () {
     throw new Error("the loader granted an authored write");
   }
   yield* useNormalizedOutput();
-  console.log(
-    yield* collect(
-      yield* execute({
-        source: "<ReadOnly />",
-        path: "<eval>",
-        includes: [directory],
-        stream: new InMemoryStream(),
-      }),
-    ),
+  const stream = new InMemoryStream();
+  const output = yield* collect(
+    yield* execute({
+      source: "<ReadOnly />",
+      path: "<eval>",
+      includes: [directory],
+      stream,
+    }),
   );
+  if (argv[4] === "--capture-journal") {
+    console.log(
+      boundedJournalResult({ output }, [(yield* stream.readAll()).map(serializeDurableEvent)]),
+    );
+  } else {
+    console.log(output);
+  }
 });

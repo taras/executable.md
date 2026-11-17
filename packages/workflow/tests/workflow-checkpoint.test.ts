@@ -14,7 +14,7 @@
  * released lock, delivery, resume — is Tier CKX's, against the real command.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { call, race, scoped } from "effection";
 import type { Operation } from "effection";
@@ -22,13 +22,15 @@ import { DatabaseSync } from "node:sqlite";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import type { DurableEvent, Yield } from "@executablemd/durable-streams";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { runWorkflowDocument } from "../../git/tests/support/composition.ts";
 import { runPath, useStorageRoot, withBegunRun } from "./support/storage.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";
 import { SUSPENSION_REQUEST } from "../src/suspension/suspend.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/workflow/tests/workflow-checkpoint.test.ts";
 
 /** The durable record core's `<Elicit>` writes and the workflow's must not. */
 const ELICIT = "elicit";
@@ -169,6 +171,7 @@ function suspending(
 }
 
 describe("Tier CK — the durable checkpoint", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CK2: the workflow's <Elicit> answers without writing a durable elicit record", function* () {
     yield* withRun(function* (database) {
       const output = yield* runWorkflowDocument(database, ANSWERED);
@@ -227,7 +230,7 @@ describe("Tier CK — the durable checkpoint", () => {
   });
 
   it("CK7: ordinary execution is unchanged — core's <Elicit> still records", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const output = yield* collect(yield* execute({ ...inlineSource(ANSWERED), stream }));
 
     expect(String(output)).toContain("decision: true");

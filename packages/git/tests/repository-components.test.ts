@@ -7,7 +7,8 @@
  * descendants, and what working directory those descendants observe.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { exists } from "@effectionx/fs";
@@ -31,7 +32,6 @@ import { useCompositionComponents } from "../src/composition/installation.ts";
 import { RepositoryCompositionProviderError } from "../src/composition/errors.ts";
 import { DirInvocationError } from "../../core/src/components/Dir.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";
 import { withWorkflowWorkspace } from "../../workflow/src/deno/workspace/host.ts";
 import { gitWorkspaceAttachment } from "../src/deno/attachment.ts";
@@ -59,6 +59,8 @@ function isRepositoryRefusal(value: unknown): value is RepositoryCompositionErro
 function isWorktreeRefusal(value: unknown): value is WorktreeCompositionError {
   return value instanceof WorktreeCompositionError;
 }
+
+const OWNER = "packages/git/tests/repository-components.test.ts";
 
 describe("workflow Repository composition", () => {
   it("binds a self-closing Repository's Workspace-relative checkout path", function* () {
@@ -301,6 +303,7 @@ describe("workflow Git locator admission", () => {
  * not in force.
  */
 describe("workflow composition failure policy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const LATER = "later sibling marker";
 
   /** The one printed error a region produced, so "exactly once" is checkable. */
@@ -462,13 +465,14 @@ describe("workflow composition failure policy", () => {
    * nothing may print, and what escapes must still be the original failure.
    */
   it("does not turn a missing provider into a refusal", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Repository name="project" url="/tmp/x.git" as="r" />`),
-            stream: new InMemoryStream(),
+            stream,
           }),
         );
       }),
@@ -770,7 +774,10 @@ function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
  * and this could pass while the operation quietly answered instead of refusing.
  */
 describe("Dir without a Files provider", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("stops at ensureDirectory, and no directory, content or sibling follows", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const calls: string[] = [];
     // Sentinel components rather than rendered text. What escapes a failed
     // execution is an error, and searching an error's string for a marker
@@ -829,7 +836,7 @@ describe("Dir without a Files provider", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource('<Dir path="made/here">\n\n<Inside />\n\n</Dir>\n\n<After />\n'),
-            stream: new InMemoryStream(),
+            stream,
           }),
         );
       }),
