@@ -273,78 +273,77 @@ done
     },
   );
 
-  journalCase(
-    "rejects forbidden output and return values before live exports commit",
-    "doc.md",
-    function* (stream) {
-      const cases = [
-        `const leaked = 1; output("secret-value");`,
-        `const leaked = 1; return "secret-value";`,
-      ];
+  it("rejects forbidden output and return values before live exports commit", function* () {
+    const cases = [
+      `const leaked = 1; output("secret-value");`,
+      `const leaked = 1; return "secret-value";`,
+    ];
 
-      for (const source of cases) {
-        const stream = new InMemoryStream();
-        yield* useStubFs({
-          "doc.md": `<Output>\n\n\`\`\`js ephemeral eval\n${source}\n\`\`\`\n\n</Output>\n`,
-        });
-        let failure: unknown;
-        try {
-          yield* collect(yield* execute({ path: "doc.md", stream }));
-        } catch (error) {
-          failure = error;
-        }
-        expect(String(failure)).toContain("ephemeral eval cannot");
-        expect(String(failure)).not.toContain("secret-value");
-        expect(
-          stream
-            .snapshot()
-            .some((event) => event.type === "yield" && event.description.type === "eval"),
-        ).toBe(false);
+    for (const source of cases) {
+      const stream = new InMemoryStream();
+      yield* useStubFs({
+        "doc.md": `<Output>\n\n\`\`\`js ephemeral eval\n${source}\n\`\`\`\n\n</Output>\n`,
+      });
+      let failure: unknown;
+      try {
+        yield* collect(yield* execute({ path: "doc.md", stream }));
+      } catch (error) {
+        failure = error;
       }
-    },
-  );
+      expect(String(failure)).toContain("ephemeral eval cannot");
+      expect(String(failure)).not.toContain("secret-value");
+      expect(
+        stream
+          .snapshot()
+          .some((event) => event.type === "yield" && event.description.type === "eval"),
+      ).toBe(false);
+    }
+  });
 
-  journalCase(
-    "validates attached-service binding collisions before spawning",
-    "doc.md",
-    function* (stream) {
-      const cases: Array<[string, string, number]> = [
-        ["service", "requires a binding name", 0],
-        ["service=bad-name", "must be a valid JavaScript identifier", 0],
-        ["service=taken", "collides with a durable binding", 0],
-        ["service=server", "collides with a live binding", 1],
-      ];
+  const collisionCase = "validates attached-service binding collisions before spawning";
+  it(collisionCase, function* () {
+    const cases: Array<[string, string, number]> = [
+      ["service", "requires a binding name", 0],
+      ["service=bad-name", "must be a valid JavaScript identifier", 0],
+      ["service=taken", "collides with a durable binding", 0],
+      ["service=server", "collides with a live binding", 1],
+    ];
 
-      for (const [modifier, expectedMessage, expectedStarts] of cases) {
-        const lifecycle = { starts: 0, stops: 0 };
-        const failure = yield* scoped(function* () {
-          yield* useServiceStub(
-            Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_001 + expectedStarts }),
-            lifecycle,
-          );
-          const prefix =
-            modifier === "service=taken"
-              ? "```js eval\nconst taken = 1;\n```\n\n"
-              : modifier === "service=server"
-                ? "```bash service=server exec\none\n```\n\n"
-                : "";
-          yield* useStubFs({
-            "doc.md": `<Output>\n\n${prefix}\`\`\`bash ${modifier} exec\ntwo\n\`\`\`\n\n</Output>\n`,
+    for (const [modifier, expectedMessage, expectedStarts] of cases) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: collisionCase, suite: modifier },
+        "doc.md",
+        function* (stream) {
+          const lifecycle = { starts: 0, stops: 0 };
+          const failure = yield* scoped(function* () {
+            yield* useServiceStub(
+              Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_001 + expectedStarts }),
+              lifecycle,
+            );
+            const prefix =
+              modifier === "service=taken"
+                ? "```js eval\nconst taken = 1;\n```\n\n"
+                : modifier === "service=server"
+                  ? "```bash service=server exec\none\n```\n\n"
+                  : "";
+            yield* useStubFs({
+              "doc.md": `<Output>\n\n${prefix}\`\`\`bash ${modifier} exec\ntwo\n\`\`\`\n\n</Output>\n`,
+            });
+
+            try {
+              yield* collect(yield* execute({ path: "doc.md", stream }));
+            } catch (error) {
+              return error;
+            }
+            return undefined;
           });
-
-          try {
-            yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() }));
-          } catch (error) {
-            return error;
-          }
-          return undefined;
-        });
-        expect(String(failure)).toContain(expectedMessage);
-        expect(lifecycle.starts).toBe(expectedStarts);
-        expect(lifecycle.stops).toBe(expectedStarts);
-      }
-    },
-  );
+          expect(String(failure)).toContain(expectedMessage);
+          expect(lifecycle.starts).toBe(expectedStarts);
+          expect(lifecycle.stops).toBe(expectedStarts);
+        },
+      );
+    }
+  });
 
   journalCase(
     "prints a live durable-export collision, skips its Yield, and continues durably",
