@@ -206,6 +206,7 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 });
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/run-composition.test.ts"));
   it("registers the same sixteen declarations the syntax catalog describes", function* () {
     // The array itself, rather than a second list: the Plugin's own
     // registration and the catalog both consume this one, so there is nothing
@@ -253,6 +254,7 @@ describe("ORC2 — one language, described everywhere and operated somewhere", (
 });
 
 describe("ORC2 — Dir is operational where the repository provider is not", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/run-composition.test.ts"));
   // The one composition element that needs no repository provider. Every other
   // name here reports an absent provider on this runtime; `<Dir>` reaches the
   // host `API.Files` provider instead, which all four entrypoints install — so
@@ -297,6 +299,7 @@ describe("ORC2 — Dir is operational where the repository provider is not", () 
 });
 
 describe("ORC2 — where the managed root is", () => {
+  beforeEach(journalBeforeEach("packages/cli/tests/run-composition.test.ts"));
   it("names ~/.xmd/repositories and nothing a document can influence", function* () {
     expect(DEFAULT_REPOSITORY_ROOT.endsWith("/.xmd/repositories")).toBe(true);
     // Describing the vocabulary and refusing an operation both leave it exactly
