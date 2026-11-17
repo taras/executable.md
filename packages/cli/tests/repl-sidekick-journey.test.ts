@@ -105,7 +105,6 @@ import {
   draftShows,
   draftText,
   entrySettles,
-  DRAFT,
   DRAFT_VALUE,
   intoComposer,
   intoDraft,
@@ -1283,10 +1282,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(during.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(during.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(during.model.entries).toEqual([]);
-    // The screen says the same thing by what it is showing: the catalog holds
-    // no entry, and the draft is still a draft somebody is holding rather than
-    // work that has been admitted.
-    expect(page.screen().shows("No entry yet")).toBe(true);
+    // History shows the empty execution while the editor still holds the draft.
+    expect(page.screen().shows("HEAD · EMPTY")).toBe(true);
     // Both composers keep newer text while the active exchange owns Stop.
     expect(draftHolds(page.screen(), "mine")).toBe(true);
     expect(composerHolds(page.screen(), "later")).toBe(true);
@@ -1320,7 +1317,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(complete.model.entries).toEqual([]);
     expect(draftHolds(page.screen(), "mine")).toBe(true);
-    expect(page.screen().shows("No entry yet")).toBe(true);
+    expect(page.screen().shows("HEAD · EMPTY")).toBe(true);
     expect(repl.terminal.fed).toBe(fed);
 
     repl.fake.releaseDeltas();
@@ -2167,6 +2164,8 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
 
     yield* sendMessage(page, "greet");
     yield* repl.fake.holdingTurns(1);
+    yield* intoDraft(page);
+    yield* page.key("Home");
     yield* page.until(
       "the draft holding the prepared greetings",
       (one) => one.found("<Each in={names}", DRAFT_VALUE) > 0,
@@ -3496,13 +3495,8 @@ describe("975 — the shipped session component journey", () => {
       expect(yield* cwd()).toBe(project);
       const sibling = yield* spawn(() => cwd());
       expect(yield* sibling).toBe(project);
-      yield* draftText(page, '<File path="manual.md">project manual</File>', [
-        "Tab",
-        "Tab",
-        "Tab",
-        "Tab",
-      ]);
-      yield* page.key("Enter");
+      yield* draftText(page, '<File path="manual.md">project manual</File>');
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* page.until("the manual successor", (one) =>
         one.rows.some((line) => {
           // The same fact the catalog used to spell as `entry-4 [ok]`: the fourth

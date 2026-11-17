@@ -55,7 +55,6 @@ import {
   draftText,
   pasteDraft,
   composerHolds,
-  DRAFT,
   draftHolds,
   draftOpen,
   draftShows,
@@ -604,10 +603,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* running.started();
-    yield* page.until(
-      "the admitted source leaving the draft",
-      (one) => one.found("second =", DRAFT_VALUE) === 0,
-    );
+    yield* page.until("the admitted source leaving the draft", (one) => !draftOpen(one));
     yield* compose(page, "explain");
     yield* sendComposed(page);
     yield* sleep(100);
@@ -707,6 +703,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
   it("M5: while generation is held, Send remains beside Stop without starting unrequested work", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ held: true, reply: "<Output>Done.</Output>\n" });
+    yield* intoDraft(page);
     yield* compose(page, "ask");
     yield* page.type("\r\r");
     yield* page.repl.fake.holdingTurns(1);
@@ -791,10 +788,10 @@ describe("Sidekick texts and reading across every profile", () => {
       if (size.columns > NARROW.columns) {
         expect(draftHolds(drawn, "note")).toBe(true);
       } else {
-        expect(drawn.shows("DRAFT")).toBe(false);
+        expect(draftOpen(drawn)).toBe(false);
         yield* openEntryCatalog(page);
         yield* closeDrawer(page);
-        expect(page.screen().found("note", { after: "DRAFT" })).toBe(1);
+        expect(draftShows(page.screen(), "note")).toBe(true);
         yield* page.resize(WIDE);
         expect(composerHolds(page.screen(), "ask")).toBe(true);
         expect(draftHolds(page.screen(), "note")).toBe(true);
@@ -809,7 +806,8 @@ describe("Sidekick texts and reading across every profile", () => {
     yield* compose(page, "my question");
     yield* selectPane(page, "bindings");
     expect(page.screen().shows(COMPOSER)).toBe(false);
-    expect(page.screen().occurrences("[send]")).toBe(1);
+    expect(page.screen().occurrences("[send]")).toBe(0);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     expect(page.screen().found("my entry", DRAFT_VALUE)).toBe(1);
     yield* intoComposer(page);
     expect(composerHolds(page.screen(), "my question")).toBe(true);
@@ -1040,7 +1038,7 @@ describe("Sidekick question announcement and modal ownership", () => {
     yield* sendMessage(page, "review it");
     yield* filing.started();
     yield* selectPane(page, "bindings");
-    yield* draftText(page, "mine", ["Tab", "Tab", "Tab"]);
+    yield* draftText(page, "mine");
     const fed = page.repl.terminal.fed;
     filing.release();
     yield* page.until("the question announcing without input", (one) =>
@@ -1049,12 +1047,17 @@ describe("Sidekick question announcement and modal ownership", () => {
     expect(page.repl.terminal.fed).toBe(fed);
     expect(page.screen().shows(COMPOSER)).toBe(false);
     expect(page.screen().shows("[submit]")).toBe(false);
-    expect(entryTrail(page.screen())).toContain("Entry 1");
     yield* page.type("-still-draft");
     yield* page.until(
       "the original input still receiving text",
       (one) => one.found("mine-still-draft", DRAFT_VALUE) === 1,
     );
+    yield* page.key("Ctrl+G");
+    yield* page.type("3");
+    yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    yield* intoDraft(page);
+    expect(draftShows(page.screen(), "mine-still-draft")).toBe(true);
     yield* selectPane(page, "sidekick");
     yield* page.until("the notice in its pane", (one) => one.shows("[answer sidekick]"));
     expect(page.screen().shows("[submit]")).toBe(false);
@@ -1162,7 +1165,7 @@ describe("PV3/PV4: question and Configure editing", () => {
     yield* sleep(30);
     yield* page.type("!");
     yield* page.until("the Agent caret survived History", (one) => one.shows("Agent: s!cribe"));
-    expect(page.screen().found("draft-kept", { after: "DRAFT" })).toBe(1);
+    expect(draftShows(page.screen(), "draft-kept")).toBe(true);
   });
 });
 
@@ -1675,11 +1678,8 @@ describe("Sidekick resize ownership", () => {
     const page = yield* questionThroughKeyboard(false);
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("[submit]")).toBe(false);
-    yield* draftText(page, "ordinary", ["Tab"]);
-    yield* page.until(
-      "the visible Draft taking text",
-      (one) => one.found("ordinary", { after: "DRAFT" }) === 1,
-    );
+    yield* draftText(page, "ordinary");
+    yield* page.until("the visible Draft taking text", (one) => draftShows(one, "ordinary"));
     yield* page.resize(WIDE);
     yield* page.until("the form returning", (one) => one.shows("[submit]"));
     expect(page.screen().shows("partialordinary")).toBe(false);
@@ -1692,11 +1692,11 @@ describe("Sidekick resize ownership", () => {
     const page = yield* questionThroughKeyboard(true);
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("[submit]")).toBe(true);
-    expect(narrow.shows("DRAFT")).toBe(false);
+    expect(draftOpen(narrow)).toBe(false);
     yield* page.type(" more");
     yield* page.until("the visible form taking text", (one) => one.shows("message: partial more"));
     yield* page.resize(WIDE);
-    expect(page.screen().found("partial more", DRAFT_VALUE)).toBe(0);
+    expect(draftOpen(page.screen())).toBe(false);
     expect(yield* finishDraft(page)).toBeUndefined();
   });
 
@@ -1709,10 +1709,9 @@ describe("Sidekick resize ownership", () => {
     expect(page.repl.outcome()).toBeUndefined();
     expect(page.screen().shows("[refresh]")).toBe(true);
     expect((yield* page.resize(NARROW)).shows("[refresh]")).toBe(false);
-    yield* page.type("-more");
-    yield* page.until(
-      "the visible Draft receiving the text",
-      (one) => one.found("note-more", { after: "DRAFT" }) === 1,
+    yield* draftText(page, "-more");
+    yield* page.until("the visible Draft receiving the text", (one) =>
+      draftShows(one, "note-more"),
     );
     yield* page.resize(WIDE);
     yield* page.until("Configure returning", (one) => one.shows("[refresh]"));
@@ -1790,7 +1789,7 @@ describe("Sidekick drawers across every supported size", () => {
       if (size.columns > NARROW.columns) {
         expect(reading.found("mine", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(reading.shows("DRAFT")).toBe(false);
+        expect(draftOpen(reading)).toBe(false);
       }
     }
     const refused = yield* page.resize(TOO_SMALL);
@@ -1832,7 +1831,7 @@ describe("Sidekick drawers across every supported size", () => {
       if (size.columns > NARROW.columns) {
         expect(reading.found("note", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(reading.shows("DRAFT")).toBe(false);
+        expect(draftOpen(reading)).toBe(false);
       }
     }
     const refused = yield* page.resize(TOO_SMALL);
@@ -3262,7 +3261,7 @@ describe("Sidekick original populated chat profiles", () => {
         expect(one.shows("SIDEKICK")).toBe(true);
         expect(one.found("my entry", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(one.shows("DRAFT")).toBe(false);
+        expect(draftOpen(one)).toBe(false);
       }
     }
     yield* page.resize(WIDE);
@@ -3292,7 +3291,7 @@ describe("Sidekick original populated chat profiles", () => {
         expect(one.shows("SIDEKICK")).toBe(true);
         expect(one.found("my entry", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(one.shows("DRAFT")).toBe(false);
+        expect(draftOpen(one)).toBe(false);
       }
     }
     yield* page.resize(WIDE);
@@ -3301,7 +3300,7 @@ describe("Sidekick original populated chat profiles", () => {
 });
 
 describe("Sidekick original independent body controls", () => {
-  it("BP3: both bodies stay usable through their own controls, and narrow gains no inset", function* () {
+  it("BP3: both bodies stay usable through their own controls across resize", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
     yield* entryRun(page, promptEntry("entry-ask"), 1);
@@ -3314,21 +3313,30 @@ describe("Sidekick original independent body controls", () => {
     const before = yield* pairBytes(page.repl.root, execution);
     for (const size of [WIDE, { columns: 120, rows: 30 }]) {
       yield* atSize(page, size);
-      for (const scope of [{ after: COMPOSER }, SIDEKICK_CONTROLS]) {
-        const index = page.screen().index;
-        const heading = page.screen().locate(scope === SIDEKICK_CONTROLS ? COMPOSER : "DRAFT");
-        yield* page.wheel("down", { column: heading.column, row: heading.row - 3 });
-        yield* page.until("the body's own scroll response", (one) => one.index > index);
-        expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
+      for (const anchor of ["kept entry", COMPOSER]) {
+        const screen = page.screen();
+        const target =
+          anchor === COMPOSER ? screen.locate(COMPOSER) : screen.locate(anchor, DRAFT_VALUE);
+        yield* page.wheel("down", {
+          column: target.column,
+          row: target.row - (anchor === COMPOSER ? 3 : 0),
+        });
+        yield* page.until("the body's own scroll response", (one) => one.index > screen.index);
+        expect(draftShows(page.screen(), "kept entry")).toBe(true);
         expect(composerHolds(page.screen(), "kept question")).toBe(true);
-        expect(entryTrail(page.screen())).toContain("Entry 1");
       }
+      yield* page.key("Ctrl+G");
+      yield* page.type("3");
+      yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
+      expect(entryTrail(page.screen())).toContain("Entry 1");
+      yield* intoDraft(page);
+      expect(draftShows(page.screen(), "kept entry")).toBe(true);
     }
     yield* page.resize(NARROW);
     yield* page.press("Entries");
     yield* page.until("the narrow Entries catalog", (one) => one.shows("[close]"));
     yield* closeDrawer(page);
-    expect(page.screen().shows("DRAFT")).toBe(true);
+    expect(draftOpen(page.screen())).toBe(true);
     expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
     yield* page.resize(WIDE);
     expect(composerHolds(page.screen(), "kept question")).toBe(true);
