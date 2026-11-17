@@ -1288,26 +1288,20 @@ describe(
         const recorded = refused.history.find(
           (event) => event.type === "yield" && event.description.type === "agent_prompt",
         );
-        expect(recorded).toMatchObject({
-          result: {
-            status: "ok",
-            value: {
-              status: "failed",
-              text: "",
-              error: { message: expect.stringContaining("Name a different <Session>") },
-            },
-          },
-        });
         if (recorded?.type !== "yield" || recorded.result.status !== "ok") {
           throw new Error("No canonical refusal");
         }
-        const saved = parsePromptRecord(recorded.result.value)?.error;
-        if (saved === undefined) {
+        const prompt = parsePromptRecord(recorded.result.value);
+        if (prompt?.error === undefined) {
           throw new Error("No saved failure");
         }
+        const saved = prompt.error;
+        expect(prompt.status).toBe("failed");
+        expect(prompt.text).toBe("");
+        expect(saved.message).toContain("Name a different <Session>");
         const sensitive = detail?.startsWith("ghp_") === true;
         expect(saved).toEqual({
-          message: expect.stringContaining("Name a different <Session>"),
+          message: saved.message,
           name: "SessionResumeRequiredError",
           diagnostic: {
             provider: "acp",
