@@ -10,8 +10,9 @@
  * contextual boundary a host uses, so what passes here is what a host gets.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
@@ -30,11 +31,7 @@ import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { execute } from "../src/execute.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 
-const journalCase = workspaceJournalCases(
-  "packages/core/tests/elicit-component.test.ts",
-  "doc.md",
-  useWorkspace,
-);
+const OWNER = "packages/core/tests/elicit-component.test.ts";
 
 function useWorkspace(): Operation<string> {
   return resource(function* (provide) {
@@ -172,28 +169,30 @@ function document(body: string, schema: string = DECISION_SCHEMA): string {
 }
 
 describe("Elicit: the question", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
-  journalCase(
-    "hands the provider the rendered message and the compiled schema, and nothing else",
-    function* (stream, workspace) {
-      const result = yield* run(
-        workspace,
-        document("Approve the plan?"),
-        constant({ decision: "approve" }),
-        stream,
-      );
+  it("hands the provider the rendered message and the compiled schema, and nothing else", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const result = yield* run(
+      workspace,
+      document("Approve the plan?"),
+      constant({ decision: "approve" }),
+      stream,
+    );
 
-      expect(result.failure).toBe(undefined);
-      expect(result.requests).toHaveLength(1);
-      expect(Object.keys(result.requests[0]).sort()).toEqual(["message", "schema"]);
-      expect(result.requests[0].message).toContain("Approve the plan?");
-      expect(result.requests[0].schema).toEqual(JSON.parse(DECISION_SCHEMA));
-      expect(result.output).toContain("Decision: approve");
-    },
-  );
+    expect(result.failure).toBe(undefined);
+    expect(result.requests).toHaveLength(1);
+    expect(Object.keys(result.requests[0]).sort()).toEqual(["message", "schema"]);
+    expect(result.requests[0].message).toContain("Approve the plan?");
+    expect(result.requests[0].schema).toEqual(JSON.parse(DECISION_SCHEMA));
+    expect(result.output).toContain("Decision: approve");
+  });
 
-  journalCase("renders nothing of its own", function* (stream, workspace) {
+  it("renders nothing of its own", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       document("Approve the plan?"),
@@ -204,7 +203,9 @@ describe("Elicit: the question", () => {
     expect(result.output).not.toContain("Approve the plan?");
   });
 
-  journalCase("accepts a schema as captured JSON text", function* (stream, workspace) {
+  it("accepts a schema as captured JSON text", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const source = [
       "```js eval",
       `const schemaText = ${JSON.stringify(DECISION_SCHEMA)};`,
@@ -225,16 +226,16 @@ describe("Elicit: the question", () => {
 });
 
 describe("Elicit: what it refuses", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
-  journalCase(
-    "fails with no provider configured, before asking anything",
-    function* (stream, workspace) {
-      const result = yield* runWithoutProvider(workspace, document("Approve?"), stream);
+  it("fails with no provider configured, before asking anything", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const result = yield* runWithoutProvider(workspace, document("Approve?"), stream);
 
-      expect(result.failure?.message).toContain("no elicitation provider configured");
-    },
-  );
+    expect(result.failure?.message).toContain("no elicitation provider configured");
+  });
 
   /**
    * The schema compiles before the body expands, so an unusable schema produces
@@ -242,70 +243,69 @@ describe("Elicit: what it refuses", () => {
    * does not exist is what proves the ordering, where asserting only that the
    * run failed would pass even if the body had run first.
    */
-  journalCase(
-    "compiles the schema before the invocation content expands",
-    function* (stream, workspace) {
-      const marker = join(workspace, "expanded.txt");
-      const source = [
-        "```js eval",
-        'const badSchema = {"type":"object","properties":{"decision":{"type":"not-a-type"}}};',
-        "```",
-        "",
-        '<Elicit schema={badSchema} as="response">',
-        "",
-        "```js eval",
-        `Deno.writeTextFileSync(${JSON.stringify(marker)}, "expanded");`,
-        "```",
-        "",
-        "</Elicit>",
-        "",
-      ].join("\n");
+  it("compiles the schema before the invocation content expands", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const marker = join(workspace, "expanded.txt");
+    const source = [
+      "```js eval",
+      'const badSchema = {"type":"object","properties":{"decision":{"type":"not-a-type"}}};',
+      "```",
+      "",
+      '<Elicit schema={badSchema} as="response">',
+      "",
+      "```js eval",
+      `Deno.writeTextFileSync(${JSON.stringify(marker)}, "expanded");`,
+      "```",
+      "",
+      "</Elicit>",
+      "",
+    ].join("\n");
 
-      const result = yield* run(workspace, source, constant({ decision: "approve" }), stream);
+    const result = yield* run(workspace, source, constant({ decision: "approve" }), stream);
 
-      expect(result.failure).toBeDefined();
-      expect(result.requests).toHaveLength(0);
-      expect(yield* exists(marker)).toBe(false);
-    },
-  );
+    expect(result.failure).toBeDefined();
+    expect(result.requests).toHaveLength(0);
+    expect(yield* exists(marker)).toBe(false);
+  });
 
-  journalCase(
-    "refuses a schema declaring __proto__ as a name, naming the position",
-    function* (stream, workspace) {
-      const schema = '{"type":"object","properties":{"__proto__":{"type":"string"}}}';
+  it("refuses a schema declaring __proto__ as a name, naming the position", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const schema = '{"type":"object","properties":{"__proto__":{"type":"string"}}}';
 
-      const result = yield* run(
-        workspace,
-        document("Approve?", schema),
-        constant({ decision: "approve" }),
-        stream,
-      );
+    const result = yield* run(
+      workspace,
+      document("Approve?", schema),
+      constant({ decision: "approve" }),
+      stream,
+    );
 
-      expect(result.failure?.message).toContain("__proto__");
-      expect(result.failure?.message).toContain("#/properties");
-      expect(result.requests).toHaveLength(0);
-    },
-  );
+    expect(result.failure?.message).toContain("__proto__");
+    expect(result.failure?.message).toContain("#/properties");
+    expect(result.requests).toHaveLength(0);
+  });
 
-  journalCase(
-    "refuses a reference that leaves the schema, naming the position",
-    function* (stream, workspace) {
-      const schema = '{"type":"object","properties":{"decision":{"$ref":"other.json#/x"}}}';
+  it("refuses a reference that leaves the schema, naming the position", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const schema = '{"type":"object","properties":{"decision":{"$ref":"other.json#/x"}}}';
 
-      const result = yield* run(
-        workspace,
-        document("Approve?", schema),
-        constant({ decision: "approve" }),
-        stream,
-      );
+    const result = yield* run(
+      workspace,
+      document("Approve?", schema),
+      constant({ decision: "approve" }),
+      stream,
+    );
 
-      expect(result.failure?.message).toContain("other.json#/x");
-      expect(result.failure?.message).toContain("#192");
-      expect(result.requests).toHaveLength(0);
-    },
-  );
+    expect(result.failure?.message).toContain("other.json#/x");
+    expect(result.failure?.message).toContain("#192");
+    expect(result.requests).toHaveLength(0);
+  });
 
-  journalCase("refuses a schema that is not an object", function* (stream, workspace) {
+  it("refuses a schema that is not an object", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       document("Approve?", "[1,2]"),
@@ -317,7 +317,9 @@ describe("Elicit: what it refuses", () => {
     expect(result.requests).toHaveLength(0);
   });
 
-  journalCase("refuses schema text that is not JSON", function* (stream, workspace) {
+  it("refuses schema text that is not JSON", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const source = ['<Elicit schema="not json at all" as="response">Approve?</Elicit>', ""].join(
       "\n",
     );
@@ -330,24 +332,26 @@ describe("Elicit: what it refuses", () => {
 });
 
 describe("Elicit: judging the answer", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
-  journalCase(
-    "validates the provider's answer against the same schema",
-    function* (stream, workspace) {
-      const result = yield* run(
-        workspace,
-        document("Approve?"),
-        constant({ decision: "maybe" }),
-        stream,
-      );
+  it("validates the provider's answer against the same schema", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const result = yield* run(
+      workspace,
+      document("Approve?"),
+      constant({ decision: "maybe" }),
+      stream,
+    );
 
-      expect(result.failure?.message).toContain("failed its schema");
-      expect(result.failure?.message).toContain("decision");
-    },
-  );
+    expect(result.failure?.message).toContain("failed its schema");
+    expect(result.failure?.message).toContain("decision");
+  });
 
-  journalCase("fails once, without asking a second time", function* (stream, workspace) {
+  it("fails once, without asking a second time", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(workspace, document("Approve?"), constant({ wrong: true }), stream);
 
     expect(result.failure).toBeDefined();
@@ -388,37 +392,35 @@ describe("Elicit: judging the answer", () => {
     ]);
   });
 
-  journalCase(
-    "renders those issues into the printed error a document sees",
-    function* (stream, workspace) {
-      const result = yield* run(workspace, document("Approve?"), constant({ decision: 7 }), stream);
+  it("renders those issues into the printed error a document sees", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const result = yield* run(workspace, document("Approve?"), constant({ decision: 7 }), stream);
 
-      expect(result.failure?.message).toContain("<Elicit />");
-      expect(result.failure?.message).toContain('"/decision" must be string');
-    },
-  );
+    expect(result.failure?.message).toContain("<Elicit />");
+    expect(result.failure?.message).toContain('"/decision" must be string');
+  });
 
   /**
    * A provider's own failure travels verbatim. Wrapping it would replace the
    * only description of what actually went wrong — the provider knows why it
    * could not reach anyone and `<Elicit>` does not.
    */
-  journalCase(
-    "propagates a provider failure rather than swallowing it",
-    function* (stream, workspace) {
-      const result = yield* run(
-        workspace,
-        document("Approve?"),
-        function* () {
-          throw new Error("the provider could not reach anyone");
-        },
-        stream,
-      );
+  it("propagates a provider failure rather than swallowing it", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
+    const result = yield* run(
+      workspace,
+      document("Approve?"),
+      function* () {
+        throw new Error("the provider could not reach anyone");
+      },
+      stream,
+    );
 
-      expect(result.failure?.message).toBe("the provider could not reach anyone");
-      expect(result.output).toBe("");
-    },
-  );
+    expect(result.failure?.message).toBe("the provider could not reach anyone");
+    expect(result.output).toBe("");
+  });
 });
 
 describe("Elicit: the provider is contextual", () => {

@@ -1,4 +1,4 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";

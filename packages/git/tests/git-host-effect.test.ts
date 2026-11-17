@@ -1,5 +1,8 @@
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 /**
  * Tier GH — one shared reconciliation for every external Git-host effect.
  *
@@ -15,7 +18,7 @@ import { journalCases } from "../../test-support/journal-cases.ts";
  * state machine appearing in this layer is what GH13 exists to red.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -335,86 +338,81 @@ function identityOf(seen: Attempt): { runId: string; expansionId: string } {
 }
 
 const OWNER = "packages/git/tests/git-host-effect.test.ts";
-const journalCase = journalCases(OWNER);
 
 function captureEffect(name: string, body: (stream: InMemoryStream) => Operation<void>) {
   return captureTestJournal({ owner: OWNER, name }, "<eval>", body);
 }
 
 describe("Tier GH — shared external Git-host effect reconciliation", () => {
-  journalCase(
-    "GH1: proven absence performs once, under identity only the host can name",
-    "<eval>",
-    function* (stream) {
-      const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
-      // The document supplies an identity of its own. It is not a member of a
-      // request, so it is not read, and the provider still sees the run and the
-      // expansion the engine derived.
-      const forged = {
-        ...PUSH,
-        identity: { runId: "forged-run", expansionId: "forged-expansion" },
-      };
+  beforeEach(journalBeforeEach(OWNER));
 
-      const seen = yield* runDocument({ stream, provider: host.provider, request: forged });
+  it("GH1: proven absence performs once, under identity only the host can name", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    // The document supplies an identity of its own. It is not a member of a
+    // request, so it is not read, and the provider still sees the run and the
+    // expansion the engine derived.
+    const forged = {
+      ...PUSH,
+      identity: { runId: "forged-run", expansionId: "forged-expansion" },
+    };
 
-      expect(seen.failures).toEqual([]);
-      expect(host.observed).toHaveLength(1);
-      expect(host.performed).toHaveLength(1);
-      expect(host.observed[0]?.identity).toEqual(identityOf(seen));
-      expect(host.performed[0]?.identity).toEqual(identityOf(seen));
-      expect(host.observed[0]?.kind).toBe("git-push");
-      // Perform is reached from the proven absence, and receives it as evidence.
-      expect(host.evidence).toEqual([ABSENT]);
+    const seen = yield* runDocument({ stream, provider: host.provider, request: forged });
 
-      expect(recordOf(seen)).toEqual({
-        request: {
-          identity: identityOf(seen),
-          kind: PUSH.kind,
-          inputs: PUSH.inputs,
-          naturalKey: PUSH.naturalKey,
-        },
-        preState: ABSENT.preState,
-        observations: PERFORMED.observations,
-        decision: "performed",
-        result: PERFORMED.result,
-      });
+    expect(seen.failures).toEqual([]);
+    expect(host.observed).toHaveLength(1);
+    expect(host.performed).toHaveLength(1);
+    expect(host.observed[0]?.identity).toEqual(identityOf(seen));
+    expect(host.performed[0]?.identity).toEqual(identityOf(seen));
+    expect(host.observed[0]?.kind).toBe("git-push");
+    // Perform is reached from the proven absence, and receives it as evidence.
+    expect(host.evidence).toEqual([ABSENT]);
 
-      const yields = gitHostYields(stream.snapshot());
-      expect(yields).toHaveLength(1);
-      expect(yields[0]).toEqual(
-        expect.objectContaining({
-          result: { status: "ok", value: recordOf(seen) },
-        }),
-      );
-    },
-  );
+    expect(recordOf(seen)).toEqual({
+      request: {
+        identity: identityOf(seen),
+        kind: PUSH.kind,
+        inputs: PUSH.inputs,
+        naturalKey: PUSH.naturalKey,
+      },
+      preState: ABSENT.preState,
+      observations: PERFORMED.observations,
+      decision: "performed",
+      result: PERFORMED.result,
+    });
 
-  journalCase(
-    "GH2: a proven compatible completion is adopted and performs nothing",
-    "<eval>",
-    function* (stream) {
-      const host = recordingProvider(answering(Ok(COMPATIBLE)));
+    const yields = gitHostYields(stream.snapshot());
+    expect(yields).toHaveLength(1);
+    expect(yields[0]).toEqual(
+      expect.objectContaining({
+        result: { status: "ok", value: recordOf(seen) },
+      }),
+    );
+  });
 
-      const seen = yield* runDocument({ stream, provider: host.provider });
+  it("GH2: a proven compatible completion is adopted and performs nothing", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const host = recordingProvider(answering(Ok(COMPATIBLE)));
 
-      expect(seen.failures).toEqual([]);
-      expect(host.observed).toHaveLength(1);
-      expect(host.performed).toEqual([]);
-      expect(recordOf(seen)).toEqual({
-        request: {
-          identity: identityOf(seen),
-          kind: PUSH.kind,
-          inputs: PUSH.inputs,
-          naturalKey: PUSH.naturalKey,
-        },
-        preState: COMPATIBLE.preState,
-        observations: COMPATIBLE.observations,
-        decision: "adopted",
-        result: COMPATIBLE.result,
-      });
-      expect(gitHostYields(stream.snapshot())).toHaveLength(1);
-    },
-  );
+    const seen = yield* runDocument({ stream, provider: host.provider });
+
+    expect(seen.failures).toEqual([]);
+    expect(host.observed).toHaveLength(1);
+    expect(host.performed).toEqual([]);
+    expect(recordOf(seen)).toEqual({
+      request: {
+        identity: identityOf(seen),
+        kind: PUSH.kind,
+        inputs: PUSH.inputs,
+        naturalKey: PUSH.naturalKey,
+      },
+      preState: COMPATIBLE.preState,
+      observations: COMPATIBLE.observations,
+      decision: "adopted",
+      result: COMPATIBLE.result,
+    });
+    expect(gitHostYields(stream.snapshot())).toHaveLength(1);
+  });
 
   it("GH3: a recorded decision replays without a provider at all", function* () {
     for (const observation of [ABSENT, COMPATIBLE]) {

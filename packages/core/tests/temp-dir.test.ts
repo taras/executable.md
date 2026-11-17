@@ -6,8 +6,8 @@
  * document gets, including the working directory its subprocesses run in.
  */
 
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Stdio } from "@effectionx/process";
 import {
@@ -53,11 +53,7 @@ function useFixture(): Operation<string> {
   });
 }
 
-const journalCase = workspaceJournalCases(
-  "packages/core/tests/temp-dir.test.ts",
-  "doc.md",
-  useFixture,
-);
+const OWNER = "packages/core/tests/temp-dir.test.ts";
 
 function writeDocument(dir: string, source: string): Operation<void> {
   return writeTextFile(join(dir, "doc.md"), source);
@@ -157,68 +153,67 @@ function* recorded(dir: string, name: string): Operation<string[]> {
 const PWD = "```sh exec\npwd\n```";
 
 describe("Tier TD — TempDir", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   // TD1: the component is core's, not the document's — the fixture directory
   // holds no TempDir file, and it still resolves. Selection is an observation of
   // the environment, so it is journaled like any other import; what the entry
   // records is the registration's origin, never the function.
-  journalCase(
-    "TD1: resolves with no component file, and journals the selection",
-    function* (stream, dir) {
-      yield* writeDocument(dir, "<TempDir>inside</TempDir>");
+  it("TD1: resolves with no component file, and journals the selection", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* writeDocument(dir, "<TempDir>inside</TempDir>");
 
-      const output = yield* scoped(function* () {
-        yield* useHostFiles();
-        return yield* collect(
-          yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }),
-        );
-      });
+    const output = yield* scoped(function* () {
+      yield* useHostFiles();
+      return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }));
+    });
 
-      expect(String(output)).toContain("inside");
-      expect(yield* imported(stream)).toEqual(["__root__", "TempDir"]);
-    },
-  );
+    expect(String(output)).toContain("inside");
+    expect(yield* imported(stream)).toEqual(["__root__", "TempDir"]);
+  });
 
   // TD2: the whole process contract, asserted from inside the subprocess.
   // `pwd` and `$PWD` are the shell's own answers, not the engine's, and the
   // directory has to be there while the command runs and gone afterwards.
-  journalCase(
-    "TD2: a process runs in the temporary directory, which exists only then",
-    function* (stream, dir) {
-      yield* writeDocument(
-        dir,
-        [
-          "<TempDir>",
-          "```bash exec",
-          "pwd",
-          'echo "$PWD"',
-          'test -d "$PWD" && echo LIVE',
-          "```",
-          "</TempDir>",
-        ].join("\n"),
-      );
+  it("TD2: a process runs in the temporary directory, which exists only then", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* writeDocument(
+      dir,
+      [
+        "<TempDir>",
+        "```bash exec",
+        "pwd",
+        'echo "$PWD"',
+        'test -d "$PWD" && echo LIVE',
+        "```",
+        "</TempDir>",
+      ].join("\n"),
+    );
 
-      const output = String(yield* run(dir, stream));
-      const [fromPwd, fromEnv] = directories(output);
+    const output = String(yield* run(dir, stream));
+    const [fromPwd, fromEnv] = directories(output);
 
-      // The identity of this invocation's directory, from the process itself.
-      expect(fromPwd).toContain("xmd-tempdir-");
-      // `pwd` and the shell's own `$PWD` agree: it is the real working
-      // directory, not something the block was told.
-      expect(fromEnv).toBe(fromPwd);
-      // It existed while the command ran...
-      expect(output).toContain("LIVE");
-      // ...and the canonical path is gone once the component finished. Both
-      // sides are canonical, so a /var vs /private/var alias cannot make this
-      // pass by naming a different directory.
-      expect(fromPwd.startsWith("/")).toBe(true);
-      expect(yield* exists(fromPwd)).toBe(false);
-    },
-  );
+    // The identity of this invocation's directory, from the process itself.
+    expect(fromPwd).toContain("xmd-tempdir-");
+    // `pwd` and the shell's own `$PWD` agree: it is the real working
+    // directory, not something the block was told.
+    expect(fromEnv).toBe(fromPwd);
+    // It existed while the command ran...
+    expect(output).toContain("LIVE");
+    // ...and the canonical path is gone once the component finished. Both
+    // sides are canonical, so a /var vs /private/var alias cannot make this
+    // pass by naming a different directory.
+    expect(fromPwd.startsWith("/")).toBe(true);
+    expect(yield* exists(fromPwd)).toBe(false);
+  });
 
   // TD3: the previous working directory is what the next block sees.
-  journalCase("TD3: the working directory is restored afterwards", function* (stream, dir) {
+  it("TD3: the working directory is restored afterwards", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(dir, `<TempDir>\n${PWD}\n</TempDir>\n\n${PWD}`);
 
     const lines = String(yield* run(dir, stream))
@@ -230,7 +225,9 @@ describe("Tier TD — TempDir", () => {
 
   // TD4: nesting and siblings are separate directories, and the inner one
   // does not survive its own element.
-  journalCase("TD4: nested and sibling instances are isolated", function* (stream, dir) {
+  it("TD4: nested and sibling instances are isolated", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(
       dir,
       [
@@ -258,7 +255,9 @@ describe("Tier TD — TempDir", () => {
   });
 
   // TD5: cleanup on the ordinary path.
-  journalCase("TD5: the directory is removed after the content finishes", function* (stream, dir) {
+  it("TD5: the directory is removed after the content finishes", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(dir, `<TempDir>\n${PWD}\n</TempDir>`);
 
     const [created] = directories(yield* run(dir, stream));
@@ -269,7 +268,9 @@ describe("Tier TD — TempDir", () => {
   // TD6: a failure inside the content does not strand the directory. The block
   // records where it ran in the fixture — which outlives the run — before
   // failing, so the removed directory can still be named.
-  journalCase("TD6: the directory is removed after the content fails", function* (stream, dir) {
+  it("TD6: the directory is removed after the content fails", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(
       dir,
       [
@@ -298,7 +299,9 @@ describe("Tier TD — TempDir", () => {
 
   // TD7: halting mid-expansion still removes it. The suspended block keeps the
   // document running so the halt lands while the directory is live.
-  journalCase("TD7: the directory is removed when the run is cancelled", function* (stream, dir) {
+  it("TD7: the directory is removed when the run is cancelled", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(
       dir,
       [
@@ -319,45 +322,46 @@ describe("Tier TD — TempDir", () => {
 
   // TD8: a daemon inherits the directory and is stopped before it is removed —
   // §4.4's stage 1 running ahead of the component's own resource.
-  journalCase(
-    "TD8: a daemon runs in the directory and stops before cleanup",
-    function* (stream, dir) {
-      const marker = join(dir, "daemon.txt");
-      yield* writeDocument(
-        dir,
-        [
-          "<TempDir>",
-          "```bash daemon exec",
-          `pwd > ${marker}; echo $$ >> ${marker}; sleep 30`,
-          "```",
-          "```sh exec",
-          "sleep 0.5",
-          "```",
-          "</TempDir>",
-        ].join("\n"),
-      );
+  it("TD8: a daemon runs in the directory and stops before cleanup", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const marker = join(dir, "daemon.txt");
+    yield* writeDocument(
+      dir,
+      [
+        "<TempDir>",
+        "```bash daemon exec",
+        `pwd > ${marker}; echo $$ >> ${marker}; sleep 30`,
+        "```",
+        "```sh exec",
+        "sleep 0.5",
+        "```",
+        "</TempDir>",
+      ].join("\n"),
+    );
 
-      yield* run(dir, stream);
+    yield* run(dir, stream);
 
-      const [reported, pid] = yield* recorded(dir, "daemon.txt");
-      expect(reported).toContain("xmd-tempdir-");
-      expect(yield* exists(reported)).toBe(false);
-      // No `@effectionx/fs` equivalent: whether a pid is live is not a file
-      // question. Converged on rather than sampled once: the daemon is signalled
-      // as the invocation unwinds and is gone only once the OS has reaped it, so
-      // `kill(pid, 0)` still answers for one that has exited but not been reaped.
-      yield* when(
-        function* () {
-          expect(() => process.kill(Number(pid), 0)).toThrow();
-        },
-        { timeout: 5000 },
-      );
-    },
-  );
+    const [reported, pid] = yield* recorded(dir, "daemon.txt");
+    expect(reported).toContain("xmd-tempdir-");
+    expect(yield* exists(reported)).toBe(false);
+    // No `@effectionx/fs` equivalent: whether a pid is live is not a file
+    // question. Converged on rather than sampled once: the daemon is signalled
+    // as the invocation unwinds and is gone only once the OS has reaped it, so
+    // `kill(pid, 0)` still answers for one that has exited but not been reaped.
+    yield* when(
+      function* () {
+        expect(() => process.kill(Number(pid), 0)).toThrow();
+      },
+      { timeout: 5000 },
+    );
+  });
 
   // TD9: the bare form has no capture to hide behind — the path it returns is
   // what the document renders.
-  journalCase("TD9: a bare TempDir renders its canonical path", function* (stream, dir) {
+  it("TD9: a bare TempDir renders its canonical path", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(dir, "<TempDir />");
 
     const output = String(yield* run(dir, stream));
@@ -369,54 +373,54 @@ describe("Tier TD — TempDir", () => {
   // TD10: the captured form renders nothing where it is written, binds the
   // path, and leaves the directory live for what follows — the reason the
   // standalone form retains at all.
-  journalCase(
-    "TD10: a captured TempDir renders nothing and stays live for a sibling",
-    function* (stream, dir) {
-      yield* writeDocument(
-        dir,
-        [
-          '<TempDir as="workspace" />',
-          "",
-          "```sh exec",
-          `test -d {workspace} && echo PRESENT; echo {workspace} > ${join(dir, "captured.txt")}`,
-          "```",
-        ].join("\n"),
-      );
+  it("TD10: a captured TempDir renders nothing and stays live for a sibling", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* writeDocument(
+      dir,
+      [
+        '<TempDir as="workspace" />',
+        "",
+        "```sh exec",
+        `test -d {workspace} && echo PRESENT; echo {workspace} > ${join(dir, "captured.txt")}`,
+        "```",
+      ].join("\n"),
+    );
 
-      const output = String(yield* run(dir, stream));
-      expect(output).toContain("PRESENT");
-      // Nothing rendered at the invocation site: the only path in the output is
-      // the one the sibling block echoed, and the capture itself emitted none.
-      expect(output.split("PRESENT")[0]).not.toContain("xmd-tempdir-");
-    },
-  );
+    const output = String(yield* run(dir, stream));
+    expect(output).toContain("PRESENT");
+    // Nothing rendered at the invocation site: the only path in the output is
+    // the one the sibling block echoed, and the capture itself emitted none.
+    expect(output.split("PRESENT")[0]).not.toContain("xmd-tempdir-");
+  });
 
   // TD11: retained is not permanent. The path is recorded outside the
   // directory so it can still be named after the execution that owned it ends.
-  journalCase(
-    "TD11: a retained directory is removed when the document scope closes",
-    function* (stream, dir) {
-      yield* writeDocument(
-        dir,
-        [
-          '<TempDir as="workspace" />',
-          "",
-          "```sh exec",
-          `echo {workspace} > ${join(dir, "captured.txt")}`,
-          "```",
-        ].join("\n"),
-      );
+  it("TD11: a retained directory is removed when the document scope closes", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* writeDocument(
+      dir,
+      [
+        '<TempDir as="workspace" />',
+        "",
+        "```sh exec",
+        `echo {workspace} > ${join(dir, "captured.txt")}`,
+        "```",
+      ].join("\n"),
+    );
 
-      yield* run(dir, stream);
+    yield* run(dir, stream);
 
-      const [captured] = yield* recorded(dir, "captured.txt");
-      expect(captured).toContain("xmd-tempdir-");
-      expect(yield* exists(captured)).toBe(false);
-    },
-  );
+    const [captured] = yield* recorded(dir, "captured.txt");
+    expect(captured).toContain("xmd-tempdir-");
+    expect(yield* exists(captured)).toBe(false);
+  });
 
   // TD12: props are validated like any component's — no name-specific check.
-  journalCase("TD12: an undeclared prop is rejected", function* (stream, dir) {
+  it("TD12: an undeclared prop is rejected", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     yield* writeDocument(dir, '<TempDir keep="yes">inside</TempDir>');
 
     // Ordinary validation, and nothing recovers it, so the run reports it.
@@ -433,74 +437,73 @@ describe("Tier TD — TempDir", () => {
   // recorded under a directory this run never created. It is a durability
   // failure, not a document printed error: the execution fails, and nothing after
   // the component runs.
-  journalCase(
-    "TD13: a stale replay fails the execution instead of rendering a printed error",
-    function* (stream, dir) {
-      const after = join(dir, "sibling-ran.txt");
-      yield* writeDocument(
-        dir,
-        [
-          "<TempDir>",
-          "```sh exec",
-          "pwd; touch made-here",
-          "```",
-          "</TempDir>",
-          "",
-          "```sh exec",
-          `touch ${after}`,
-          "```",
-        ].join("\n"),
-      );
+  it("TD13: a stale replay fails the execution instead of rendering a printed error", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const after = join(dir, "sibling-ran.txt");
+    yield* writeDocument(
+      dir,
+      [
+        "<TempDir>",
+        "```sh exec",
+        "pwd; touch made-here",
+        "```",
+        "</TempDir>",
+        "",
+        "```sh exec",
+        `touch ${after}`,
+        "```",
+      ].join("\n"),
+    );
 
-      const first = String(
-        yield* scoped(function* () {
-          yield* useHostFiles();
-          let displayed = "";
-          const decoder = new TextDecoder();
-          yield* Stdio.around({
-            *stdout([bytes]) {
-              displayed += decoder.decode(bytes);
-            },
-          });
-          const rendered = String(
-            yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] })),
-          );
-          return `${rendered}\n${displayed}`;
-        }),
-      );
-      const [recordedDirectory] = directories(first);
-      expect(recordedDirectory).toContain("xmd-tempdir-");
-      // The sibling ran on the live pass, so its absence below means something.
-      expect(yield* exists(after)).toBe(true);
-      yield* rm(after);
-
-      // Without the root Close the next run replays what is journaled and then
-      // continues live — the shape that would consume the stale exec entry. The
-      // root error mode is "print", so this also proves the ambient error mode cannot
-      // downgrade the refusal to a rendered comment.
-      const events = yield* stream.readAll();
-      const partial = events.filter(
-        (event) => !(event.type === "close" && event.coroutineId === "root"),
-      );
-      const outcome = yield* scoped(function* () {
+    const first = String(
+      yield* scoped(function* () {
         yield* useHostFiles();
-        const execution = yield* execute({
-          path: join(dir, "doc.md"),
-          stream: new InMemoryStream(partial),
-          includes: [dir],
+        let displayed = "";
+        const decoder = new TextDecoder();
+        yield* Stdio.around({
+          *stdout([bytes]) {
+            displayed += decoder.decode(bytes);
+          },
         });
-        return yield* execution;
-      });
+        const rendered = String(
+          yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] })),
+        );
+        return `${rendered}\n${displayed}`;
+      }),
+    );
+    const [recordedDirectory] = directories(first);
+    expect(recordedDirectory).toContain("xmd-tempdir-");
+    // The sibling ran on the live pass, so its absence below means something.
+    expect(yield* exists(after)).toBe(true);
+    yield* rm(after);
 
-      // The execution failed rather than completing with a printed error in it.
-      expect(outcome.ok).toBe(false);
-      const error = outcome.ok ? undefined : outcome.error;
-      expect(error).toBeInstanceOf(StaleInputError);
-      expect(String(error?.message)).toContain("cannot replay the recorded exec effect");
-      // And expansion stopped: the block after </TempDir> never ran.
-      expect(yield* exists(after)).toBe(false);
-    },
-  );
+    // Without the root Close the next run replays what is journaled and then
+    // continues live — the shape that would consume the stale exec entry. The
+    // root error mode is "print", so this also proves the ambient error mode cannot
+    // downgrade the refusal to a rendered comment.
+    const events = yield* stream.readAll();
+    const partial = events.filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+    const outcome = yield* scoped(function* () {
+      yield* useHostFiles();
+      const execution = yield* execute({
+        path: join(dir, "doc.md"),
+        stream: new InMemoryStream(partial),
+        includes: [dir],
+      });
+      return yield* execution;
+    });
+
+    // The execution failed rather than completing with a printed error in it.
+    expect(outcome.ok).toBe(false);
+    const error = outcome.ok ? undefined : outcome.error;
+    expect(error).toBeInstanceOf(StaleInputError);
+    expect(String(error?.message)).toContain("cannot replay the recorded exec effect");
+    // And expansion stopped: the block after </TempDir> never ran.
+    expect(yield* exists(after)).toBe(false);
+  });
 
   // TD15: acquisition and its cleanup are one step. A halt cannot land between
   // creating the directory and owning its removal, so no cancellation leaves
@@ -546,54 +549,53 @@ describe("Tier TD — TempDir", () => {
   // component's import is journaled, so on a partial replay it is the first
   // entry the directory's content would restore — and it goes through
   // expansion's import catch rather than the code-block one.
-  journalCase(
-    "TD16: a replayed component import inside TempDir fails the execution",
-    function* (stream, dir) {
-      const after = join(dir, "sibling-ran.txt");
-      yield* writeTextFile(join(dir, "Nested.md"), "nested content");
-      yield* writeDocument(
-        dir,
-        ["<TempDir>", "<Nested />", "</TempDir>", "", "```sh exec", `touch ${after}`, "```"].join(
-          "\n",
-        ),
-      );
+  it("TD16: a replayed component import inside TempDir fails the execution", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const after = join(dir, "sibling-ran.txt");
+    yield* writeTextFile(join(dir, "Nested.md"), "nested content");
+    yield* writeDocument(
+      dir,
+      ["<TempDir>", "<Nested />", "</TempDir>", "", "```sh exec", `touch ${after}`, "```"].join(
+        "\n",
+      ),
+    );
 
-      const first = String(
-        yield* scoped(function* () {
-          yield* useHostFiles();
-          return yield* collect(
-            yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }),
-          );
-        }),
-      );
-      expect(first).toContain("nested content");
-      // The import this replay will consume.
-      expect(yield* imported(stream)).toContain("Nested");
-      expect(yield* exists(after)).toBe(true);
-      yield* rm(after);
-
-      const events = yield* stream.readAll();
-      const partial = events.filter(
-        (event) => !(event.type === "close" && event.coroutineId === "root"),
-      );
-      const outcome = yield* scoped(function* () {
+    const first = String(
+      yield* scoped(function* () {
         yield* useHostFiles();
-        const execution = yield* execute({
-          path: join(dir, "doc.md"),
-          stream: new InMemoryStream(partial),
-          includes: [dir],
-        });
-        return yield* execution;
-      });
+        return yield* collect(
+          yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }),
+        );
+      }),
+    );
+    expect(first).toContain("nested content");
+    // The import this replay will consume.
+    expect(yield* imported(stream)).toContain("Nested");
+    expect(yield* exists(after)).toBe(true);
+    yield* rm(after);
 
-      expect(outcome.ok).toBe(false);
-      const error = outcome.ok ? undefined : outcome.error;
-      expect(error).toBeInstanceOf(StaleInputError);
-      expect(String(error?.message)).toContain("import_component");
-      // Expansion stopped: the block after the component never ran.
-      expect(yield* exists(after)).toBe(false);
-    },
-  );
+    const events = yield* stream.readAll();
+    const partial = events.filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+    const outcome = yield* scoped(function* () {
+      yield* useHostFiles();
+      const execution = yield* execute({
+        path: join(dir, "doc.md"),
+        stream: new InMemoryStream(partial),
+        includes: [dir],
+      });
+      return yield* execution;
+    });
+
+    expect(outcome.ok).toBe(false);
+    const error = outcome.ok ? undefined : outcome.error;
+    expect(error).toBeInstanceOf(StaleInputError);
+    expect(String(error?.message)).toContain("import_component");
+    // Expansion stopped: the block after the component never ran.
+    expect(yield* exists(after)).toBe(false);
+  });
 
   // TD14: an ordinary failure inside the directory is still an ordinary
   // printed error — the fatal rule is for stale journal entries, not for
@@ -605,52 +607,51 @@ describe("Tier TD — TempDir", () => {
    * that suffered one (#441). The directory is still cleaned up: the run fails,
    * it does not leak.
    */
-  journalCase(
-    "TD14: a checked command failure inside TempDir still fails the run",
-    function* (stream, dir) {
-      const after = join(dir, "sibling-ran.txt");
-      const inside = join(dir, "later-inside.txt");
-      yield* writeDocument(
-        dir,
-        [
-          "<TempDir>",
-          "```sh exec",
-          `pwd > ${join(dir, "seen.txt")}; echo nope >&2; exit 4`,
-          "```",
-          "",
-          "```sh exec",
-          `touch ${inside}`,
-          "```",
-          "</TempDir>",
-          "",
-          "```sh exec",
-          `touch ${after}`,
-          "```",
-        ].join("\n"),
-      );
+  it("TD14: a checked command failure inside TempDir still fails the run", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const after = join(dir, "sibling-ran.txt");
+    const inside = join(dir, "later-inside.txt");
+    yield* writeDocument(
+      dir,
+      [
+        "<TempDir>",
+        "```sh exec",
+        `pwd > ${join(dir, "seen.txt")}; echo nope >&2; exit 4`,
+        "```",
+        "",
+        "```sh exec",
+        `touch ${inside}`,
+        "```",
+        "</TempDir>",
+        "",
+        "```sh exec",
+        `touch ${after}`,
+        "```",
+      ].join("\n"),
+    );
 
-      const outcome = yield* scoped(function* () {
-        yield* useHostFiles();
-        const execution = yield* execute({
-          path: join(dir, "doc.md"),
-          stream,
-          includes: [dir],
-        });
-        return yield* execution;
+    const outcome = yield* scoped(function* () {
+      yield* useHostFiles();
+      const execution = yield* execute({
+        path: join(dir, "doc.md"),
+        stream,
+        includes: [dir],
       });
+      return yield* execution;
+    });
 
-      // No successful root outcome, and the failure is the command's.
-      expect(outcome.ok).toBe(false);
-      expect(String(outcome.ok === false && outcome.error)).toContain("Command failed");
-      // Nothing after it started, inside the region or after it.
-      expect(yield* exists(inside)).toBe(false);
-      expect(yield* exists(after)).toBe(false);
-      // And the directory it made is gone.
-      const [created] = yield* recorded(dir, "seen.txt");
-      expect(created).toContain("xmd-tempdir-");
-      expect(yield* exists(created)).toBe(false);
-    },
-  );
+    // No successful root outcome, and the failure is the command's.
+    expect(outcome.ok).toBe(false);
+    expect(String(outcome.ok === false && outcome.error)).toContain("Command failed");
+    // Nothing after it started, inside the region or after it.
+    expect(yield* exists(inside)).toBe(false);
+    expect(yield* exists(after)).toBe(false);
+    // And the directory it made is gone.
+    const [created] = yield* recorded(dir, "seen.txt");
+    expect(created).toContain("xmd-tempdir-");
+    expect(yield* exists(created)).toBe(false);
+  });
 
   /**
    * TD17/TD17b: `<TempDir>` gives its content a working directory; it does not
@@ -688,55 +689,53 @@ describe("Tier TD — TempDir", () => {
     );
   }
 
-  journalCase(
-    "TD17: an ordinary failure at a plain root fails the run and stops what follows",
-    function* (stream, dir) {
-      yield* writeDocument(
+  it("TD17: an ordinary failure at a plain root fails the run and stops what follows", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* writeDocument(
+      dir,
+      stage(dir, (body) => `${body}\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n`),
+    );
+
+    const outcome = yield* runOutcome(dir, stream);
+
+    // No `<Output>` anywhere: the root settles the failure by itself, and the
+    // prose the content rendered before it is still emitted.
+    expect(outcome.ok).toBe(false);
+    expect(outcome.output).toContain("PREVIEW-HEADING");
+    // Nothing later inside the directory started, and neither did the sibling
+    // after it: the two probes a printed error would have let through.
+    expect(yield* exists(join(dir, "later-inside.txt"))).toBe(false);
+    expect(yield* exists(join(dir, "after.txt"))).toBe(false);
+    // The command before the failure did run, in the temporary directory,
+    // which is gone.
+    const [created] = yield* recorded(dir, "inside.txt");
+    expect(created).toContain("xmd-tempdir-");
+    expect(yield* exists(created)).toBe(false);
+  });
+
+  it("TD17b: <PrintErrors> around the same region continues, and cleans up", function* () {
+    const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    yield* writeDocument(
+      dir,
+      stage(
         dir,
-        stage(dir, (body) => `${body}\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n`),
-      );
+        (body) =>
+          `<PrintErrors>\n\n${body}\n\n</PrintErrors>\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n`,
+      ),
+    );
 
-      const outcome = yield* runOutcome(dir, stream);
+    const outcome = yield* runOutcome(dir, stream);
 
-      // No `<Output>` anywhere: the root settles the failure by itself, and the
-      // prose the content rendered before it is still emitted.
-      expect(outcome.ok).toBe(false);
-      expect(outcome.output).toContain("PREVIEW-HEADING");
-      // Nothing later inside the directory started, and neither did the sibling
-      // after it: the two probes a printed error would have let through.
-      expect(yield* exists(join(dir, "later-inside.txt"))).toBe(false);
-      expect(yield* exists(join(dir, "after.txt"))).toBe(false);
-      // The command before the failure did run, in the temporary directory,
-      // which is gone.
-      const [created] = yield* recorded(dir, "inside.txt");
-      expect(created).toContain("xmd-tempdir-");
-      expect(yield* exists(created)).toBe(false);
-    },
-  );
-
-  journalCase(
-    "TD17b: <PrintErrors> around the same region continues, and cleans up",
-    function* (stream, dir) {
-      yield* writeDocument(
-        dir,
-        stage(
-          dir,
-          (body) =>
-            `<PrintErrors>\n\n${body}\n\n</PrintErrors>\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n`,
-        ),
-      );
-
-      const outcome = yield* runOutcome(dir, stream);
-
-      // Continuation is available, and asking for it is what an author writes.
-      expect(outcome.ok).toBe(true);
-      expect(outcome.output).toContain("<!-- ERROR");
-      expect(yield* exists(join(dir, "later-inside.txt"))).toBe(true);
-      expect(yield* exists(join(dir, "after.txt"))).toBe(true);
-      // Recovery is not retention: the directory is still removed.
-      const [created] = yield* recorded(dir, "inside.txt");
-      expect(created).toContain("xmd-tempdir-");
-      expect(yield* exists(created)).toBe(false);
-    },
-  );
+    // Continuation is available, and asking for it is what an author writes.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.output).toContain("<!-- ERROR");
+    expect(yield* exists(join(dir, "later-inside.txt"))).toBe(true);
+    expect(yield* exists(join(dir, "after.txt"))).toBe(true);
+    // Recovery is not retention: the directory is still removed.
+    const [created] = yield* recorded(dir, "inside.txt");
+    expect(created).toContain("xmd-tempdir-");
+    expect(yield* exists(created)).toBe(false);
+  });
 });

@@ -18,8 +18,12 @@
  * symlinks rather than following them.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -99,11 +103,12 @@ function run(
   fixture: Fixture,
   source: string,
   install?: () => Operation<void>,
-  stream = new InMemoryStream(),
+  suppliedStream?: InMemoryStream,
 ): Operation<string> {
   return scoped(function* () {
     const path = join(fixture.workspace, "doc.md");
     yield* writeTextFile(path, source);
+    const stream = suppliedStream ?? (yield* useJournalStream(path));
     yield* useWorkspaceCwd(fixture);
     if (install) {
       yield* install();
@@ -194,79 +199,64 @@ function* useLyingContent(script: readonly boolean[], answered: boolean[]): Oper
 
 const OWNER = "packages/core/tests/file-delete-component.test.ts";
 
-function fixtureCase(
-  name: string,
-  body: (fixture: Fixture, stream: InMemoryStream) => Operation<void>,
-): void {
-  it(name, function* () {
-    const fixture = yield* useFixture();
-    yield* captureTestJournal({ owner: OWNER, name }, join(fixture.workspace, "doc.md"), (stream) =>
-      body(fixture, stream),
-    );
-  });
-}
-
 describe("Tier FD — File.Delete", () => {
+  beforeEach(journalBeforeEach(OWNER));
   // FD1: the ordinary case, and the whole of what a success looks like from the
   // document: the file is gone, and nothing is rendered or bound in its place.
-  fixtureCase(
-    "FD1: removes one regular file, rendering nothing and binding the empty string",
-    function* (fixture, stream) {
-      yield* writeTextFile(join(fixture.workspace, "obsolete.md"), "stale");
-      yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+  it("FD1: removes one regular file, rendering nothing and binding the empty string", function* () {
+    const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* writeTextFile(join(fixture.workspace, "obsolete.md"), "stale");
+    yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
 
-      const output = yield* run(
-        fixture,
-        [
-          '<File.Delete path="obsolete.md" />',
-          "",
-          '<File.Delete path="kept.md" as="gone" />',
-          "",
-          "[{gone}]",
-        ].join("\n"),
-        undefined,
-        stream,
-      );
+    const output = yield* run(
+      fixture,
+      [
+        '<File.Delete path="obsolete.md" />',
+        "",
+        '<File.Delete path="kept.md" as="gone" />',
+        "",
+        "[{gone}]",
+      ].join("\n"),
+      undefined,
+      stream,
+    );
 
-      // `as` captures the empty string the component returns, exactly as it does
-      // for any component that returns text — nothing is invented for it to hold.
-      expect(output).toContain("[]");
-      expect(output).not.toContain("obsolete.md");
-      expect(yield* entries(fixture.workspace)).toEqual([]);
-    },
-  );
+    // `as` captures the empty string the component returns, exactly as it does
+    // for any component that returns text — nothing is invented for it to hold.
+    expect(output).toContain("[]");
+    expect(output).not.toContain("obsolete.md");
+    expect(yield* entries(fixture.workspace)).toEqual([]);
+  });
 
   // FD2: absence is the answer the document asked for, not a condition. Two
   // deletions of the same path both succeed, so a document may remove a file it
   // is not sure it created.
-  fixtureCase(
-    "FD2: deleting a path that names nothing succeeds, twice",
-    function* (fixture, stream) {
-      const output = yield* run(
-        fixture,
-        [
-          '<File.Delete path="absent.md" />',
-          "",
-          '<File.Delete path="absent.md" />',
-          "",
-          "done",
-        ].join("\n"),
-        undefined,
-        stream,
-      );
+  it("FD2: deleting a path that names nothing succeeds, twice", function* () {
+    const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    const output = yield* run(
+      fixture,
+      ['<File.Delete path="absent.md" />', "", '<File.Delete path="absent.md" />', "", "done"].join(
+        "\n",
+      ),
+      undefined,
+      stream,
+    );
 
-      expect(output).toContain("done");
-      expect(output).not.toContain("cannot delete");
-      expect(output).not.toContain("no such file");
-      expect(yield* entries(fixture.workspace)).toEqual([]);
-    },
-  );
+    expect(output).toContain("done");
+    expect(output).not.toContain("cannot delete");
+    expect(output).not.toContain("no such file");
+    expect(yield* entries(fixture.workspace)).toEqual([]);
+  });
 
   // FD3: the shape of the invocation decides its one form, and paired-*empty*
   // is the case that says so — there is no rendered content to blame, so a
   // component that branched on rendered length would accept it.
   const pairedDelete = "FD3: paired content is refused before Env.cwd or the provider is reached";
-  fixtureCase(pairedDelete, function* (fixture, stream) {
+  it(pairedDelete, function* () {
+    const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
     const reached: string[] = [];
 
@@ -308,36 +298,35 @@ describe("Tier FD — File.Delete", () => {
   // the sibling after a nested region means what the *restored* one says. One
   // document proves both: the inner file goes, the outer file of the same name
   // stays, and the element after the region reaches the outer directory.
-  fixtureCase(
-    "FD4: Env.cwd selects the target, and lexical restoration is whole",
-    function* (fixture, stream) {
-      const nested = join(fixture.workspace, "nested");
-      yield* ensureDir(nested);
-      yield* writeTextFile(join(nested, "target.md"), "inner");
-      yield* writeTextFile(join(fixture.workspace, "target.md"), "outer");
-      yield* writeTextFile(join(fixture.workspace, "keep.md"), "sibling");
+  it("FD4: Env.cwd selects the target, and lexical restoration is whole", function* () {
+    const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    const nested = join(fixture.workspace, "nested");
+    yield* ensureDir(nested);
+    yield* writeTextFile(join(nested, "target.md"), "inner");
+    yield* writeTextFile(join(fixture.workspace, "target.md"), "outer");
+    yield* writeTextFile(join(fixture.workspace, "keep.md"), "sibling");
 
-      yield* run(
-        fixture,
-        [
-          "<Nested>",
-          '<File.Delete path="target.md" />',
-          "</Nested>",
-          "",
-          '<File.Delete path="keep.md" />',
-        ].join("\n"),
-        () => useNested(nested),
-        stream,
-      );
+    yield* run(
+      fixture,
+      [
+        "<Nested>",
+        '<File.Delete path="target.md" />',
+        "</Nested>",
+        "",
+        '<File.Delete path="keep.md" />',
+      ].join("\n"),
+      () => useNested(nested),
+      stream,
+    );
 
-      expect(yield* exists(join(nested, "target.md"))).toBe(false);
-      // The outer file of the same name is untouched, which is what says the
-      // inner directory selected the target rather than the outer one.
-      expect(yield* readTextFile(join(fixture.workspace, "target.md"))).toBe("outer");
-      // And the element after the region resolved against the outer directory.
-      expect(yield* exists(join(fixture.workspace, "keep.md"))).toBe(false);
-    },
-  );
+    expect(yield* exists(join(nested, "target.md"))).toBe(false);
+    // The outer file of the same name is untouched, which is what says the
+    // inner directory selected the target rather than the outer one.
+    expect(yield* readTextFile(join(fixture.workspace, "target.md"))).toBe("outer");
+    // And the element after the region resolved against the outer directory.
+    expect(yield* exists(join(fixture.workspace, "keep.md"))).toBe(false);
+  });
 
   // FD3b: the form is read from the invocation the engine issued, so a
   // contextual handler answering "self-closing" for a paired element cannot
@@ -356,140 +345,132 @@ describe("Tier FD — File.Delete", () => {
   ];
 
   for (const [what, script] of DENYING) {
-    fixtureCase(
-      `FD3b: a paired File.Delete removes nothing under ${what}`,
-      function* (fixture, stream) {
-        yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
-        yield* writeTextFile(join(fixture.workspace, "kept-empty.md"), "also kept");
-        yield* writeTextFile(join(fixture.workspace, "gone.md"), "removed");
-        const reached: string[] = [];
-        const answered: boolean[] = [];
+    it(`FD3b: a paired File.Delete removes nothing under ${what}`, function* () {
+      const fixture = yield* useFixture();
+      const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+      yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+      yield* writeTextFile(join(fixture.workspace, "kept-empty.md"), "also kept");
+      yield* writeTextFile(join(fixture.workspace, "gone.md"), "removed");
+      const reached: string[] = [];
+      const answered: boolean[] = [];
 
-        const output = yield* run(
-          fixture,
-          [
-            "<Says />",
-            "",
-            '<File.Delete path="kept.md">paired</File.Delete>',
-            "",
-            '<File.Delete path="kept-empty.md"></File.Delete>',
-            "",
-            '<File.Delete path="gone.md" />',
-            "",
-            "<Says />",
-          ].join("\n"),
-          function* () {
-            yield* useLyingContent(script, answered);
-            yield* API.Env.around({
-              *cwd(_args, next) {
-                reached.push("cwd");
-                return yield* next();
-              },
-            });
-            yield* Files.around({
-              *deleteFile([input], next) {
-                reached.push(`delete:${input.path}`);
-                return yield* next(input);
-              },
-            });
-          },
-          stream,
-        );
+      const output = yield* run(
+        fixture,
+        [
+          "<Says />",
+          "",
+          '<File.Delete path="kept.md">paired</File.Delete>',
+          "",
+          '<File.Delete path="kept-empty.md"></File.Delete>',
+          "",
+          '<File.Delete path="gone.md" />',
+          "",
+          "<Says />",
+        ].join("\n"),
+        function* () {
+          yield* useLyingContent(script, answered);
+          yield* API.Env.around({
+            *cwd(_args, next) {
+              reached.push("cwd");
+              return yield* next();
+            },
+          });
+          yield* Files.around({
+            *deleteFile([input], next) {
+              reached.push(`delete:${input.path}`);
+              return yield* next(input);
+            },
+          });
+        },
+        stream,
+      );
 
-        // The handler is live, and the lie is visible on a component that does
-        // read the chain.
-        expect(answered.length).toBeGreaterThanOrEqual(2);
-        expect(output).toContain("false");
+      // The handler is live, and the lie is visible on a component that does
+      // read the chain.
+      expect(answered.length).toBeGreaterThanOrEqual(2);
+      expect(output).toContain("false");
 
-        // Both paired spellings refused, and both targets are byte-for-byte what
-        // they were.
-        expect(output).toContain("<File.Delete> is self-closing");
-        expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
-        expect(yield* readTextFile(join(fixture.workspace, "kept-empty.md"))).toBe("also kept");
+      // Both paired spellings refused, and both targets are byte-for-byte what
+      // they were.
+      expect(output).toContain("<File.Delete> is self-closing");
+      expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
+      expect(yield* readTextFile(join(fixture.workspace, "kept-empty.md"))).toBe("also kept");
 
-        // Neither of them reached the working directory or the provider: the only
-        // calls belong to the genuinely self-closing control, which still deleted.
-        expect(reached).toEqual(["cwd", "delete:gone.md"]);
-        expect(yield* exists(join(fixture.workspace, "gone.md"))).toBe(false);
-      },
-    );
+      // Neither of them reached the working directory or the provider: the only
+      // calls belong to the genuinely self-closing control, which still deleted.
+      expect(reached).toEqual(["cwd", "delete:gone.md"]);
+      expect(yield* exists(join(fixture.workspace, "gone.md"))).toBe(false);
+    });
   }
 
   // FD3c: there is no fallback to guess with. A call arriving without a genuine
   // invocation is not one the engine made, and guessing "self-closing" there
   // would be guessing *delete* — so it refuses before `cwd()` and therefore
   // before any provider.
-  fixtureCase(
-    "FD3c: a look-alike invocation removes nothing and reaches no provider",
-    function* (fixture, stream) {
-      yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
-      const reached: string[] = [];
+  it("FD3c: a look-alike invocation removes nothing and reaches no provider", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+    const reached: string[] = [];
 
-      // Not an absence — a forgery. The whole public shape is here: a method of
-      // the right name, taking nothing, returning a boolean. Every check written
-      // against the shape passes, which is why the component authenticates the
-      // object instead. `false` is the dangerous answer for a paired element, and
-      // it is the one this reports.
-      const mismatched: ComponentInvocation = {
-        hasContent() {
-          return false;
-        },
-      };
+    // Not an absence — a forgery. The whole public shape is here: a method of
+    // the right name, taking nothing, returning a boolean. Every check written
+    // against the shape passes, which is why the component authenticates the
+    // object instead. `false` is the dangerous answer for a paired element, and
+    // it is the one this reports.
+    const mismatched: ComponentInvocation = {
+      hasContent() {
+        return false;
+      },
+    };
 
-      let failure: string | undefined;
-      try {
-        yield* run(
-          fixture,
-          '<File.Delete path="kept.md" />',
-          function* () {
-            yield* API.Env.around({
-              *cwd(_args, next) {
-                reached.push("cwd");
-                return yield* next();
-              },
-            });
-            yield* Files.around({
-              *deleteFile([input], next) {
-                reached.push(`delete:${input.path}`);
-                return yield* next(input);
-              },
-            });
-            yield* Component.around({
-              *importComponent([name, position], next) {
-                const definition = yield* next(name, position);
-                if (name !== "File.Delete" || definition.kind !== "function") {
-                  return definition;
-                }
-                const original = definition.fn;
-                if (typeof original !== "function") {
-                  return definition;
-                }
-                return {
-                  ...definition,
-                  *fn(props: Record<string, Json>) {
-                    return yield* original(props, mismatched);
-                  },
-                };
-              },
-            });
+    let failure: string | undefined;
+    try {
+      yield* run(fixture, '<File.Delete path="kept.md" />', function* () {
+        yield* API.Env.around({
+          *cwd(_args, next) {
+            reached.push("cwd");
+            return yield* next();
           },
-          stream,
-        );
-      } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
-      }
+        });
+        yield* Files.around({
+          *deleteFile([input], next) {
+            reached.push(`delete:${input.path}`);
+            return yield* next(input);
+          },
+        });
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const definition = yield* next(name, position);
+            if (name !== "File.Delete" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>) {
+                return yield* original(props, mismatched);
+              },
+            };
+          },
+        });
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
 
-      // It stops one layer earlier than it used to. The wrapper returns a
-      // definition canonical execution did not issue, and this is a name
-      // canonical core owns, so verification refuses the answer before anything
-      // is invoked with the forged invocation at all. The dispatcher's own
-      // refusal is still there underneath — `fixed-filesystem-components.test.ts`
-      // reaches it directly, without an import to intercept.
-      expect(failure).toContain("canonical execution did not produce");
-      expect(reached).toEqual([]);
-      expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
-    },
-  );
+    // It stops one layer earlier than it used to. The wrapper returns a
+    // definition canonical execution did not issue, and this is a name
+    // canonical core owns, so verification refuses the answer before anything
+    // is invoked with the forged invocation at all. The dispatcher's own
+    // refusal is still there underneath — `fixed-filesystem-components.test.ts`
+    // reaches it directly, without an import to intercept.
+    expect(failure).toContain("canonical execution did not produce");
+    expect(reached).toEqual([]);
+    expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
+  });
 
   // FD5: every refusal the component has its own sentence for, and the one rule
   // they share — a printed error names the path the document wrote and nothing
@@ -510,41 +491,26 @@ describe("Tier FD — File.Delete", () => {
       { path: "held", says: 'cannot delete "held": it is a directory, not a file.' },
     ];
 
-    const verifyRefusals = cases.reduceRight<() => Operation<void>>(
-      (next, refused) => () =>
-        captureTestJournal(
-          { owner: OWNER, name: pathRefusals },
-          join(fixture.workspace, "doc.md"),
-          function* (stream) {
-            const removed: string[] = [];
-            const output = yield* run(
-              fixture,
-              `<File.Delete path="${refused.path}" />`,
-              function* () {
-                yield* API.Fs.around({
-                  *remove([path, options], proceed) {
-                    removed.push(path);
-                    return yield* proceed(path, options);
-                  },
-                });
-              },
-              stream,
-            );
-
-            expect(output).toContain(refused.says);
-            expectNoAbsolutePaths(output, fixture);
-            // Nothing was attempted: each of these is decided before the removal.
-            expect(removed).toEqual([]);
-            yield* next();
+    for (const refused of cases) {
+      const removed: string[] = [];
+      const output = yield* run(fixture, `<File.Delete path="${refused.path}" />`, function* () {
+        yield* API.Fs.around({
+          *remove([path, options], next) {
+            removed.push(path);
+            return yield* next(path, options);
           },
-        ),
-      function* () {
-        // And none of them touched what they named.
-        expect(yield* readTextFile(join(fixture.outside, "secret.txt"))).toBe("SECRET");
-        expect(yield* readTextFile(join(fixture.workspace, "held", "inner.txt"))).toBe("kept");
-      },
-    );
-    yield* verifyRefusals();
+        });
+      });
+
+      expect(output).toContain(refused.says);
+      expectNoAbsolutePaths(output, fixture);
+      // Nothing was attempted: each of these is decided before the removal.
+      expect(removed).toEqual([]);
+    }
+
+    // And none of them touched what they named.
+    expect(yield* readTextFile(join(fixture.outside, "secret.txt"))).toBe("SECRET");
+    expect(yield* readTextFile(join(fixture.workspace, "held", "inner.txt"))).toBe("kept");
 
     // The same spy on a deletion that is admitted, so the empty lists above are
     // a removal that did not happen rather than a spy that never fired.
@@ -576,30 +542,29 @@ describe("Tier FD — File.Delete", () => {
   // printed error rather than a failure of the run, and the sibling after it
   // still runs. The document reads a sentence from the fixed vocabulary and
   // nothing the provider chose.
-  fixtureCase(
-    "FD6: a structural provider refusal is printed, and changes nothing",
-    function* (fixture, stream) {
-      yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+  it("FD6: a structural provider refusal is printed, and changes nothing", function* () {
+    const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
 
-      const output = yield* run(
-        fixture,
-        ['<File.Delete path="kept.md" />', "", "after"].join("\n"),
-        function* () {
-          yield* Files.around({
-            // deno-lint-ignore require-yield
-            *deleteFile(_args: [FilePathInput]): Operation<Result<void>> {
-              return Err(
-                filesFailure({ operation: "delete", phase: "access", reason: "permission-denied" }),
-              );
-            },
-          });
-        },
-        stream,
-      );
+    const output = yield* run(
+      fixture,
+      ['<File.Delete path="kept.md" />', "", "after"].join("\n"),
+      function* () {
+        yield* Files.around({
+          // deno-lint-ignore require-yield
+          *deleteFile(_args: [FilePathInput]): Operation<Result<void>> {
+            return Err(
+              filesFailure({ operation: "delete", phase: "access", reason: "permission-denied" }),
+            );
+          },
+        });
+      },
+      stream,
+    );
 
-      expect(output).toContain('cannot delete "kept.md": permission denied.');
-      expect(output).toContain("after");
-      expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
-    },
-  );
+    expect(output).toContain('cannot delete "kept.md": permission denied.');
+    expect(output).toContain("after");
+    expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
+  });
 });

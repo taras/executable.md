@@ -51,14 +51,6 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import { INLINE_SOURCE_PATH } from "@executablemd/core";
 
 const OWNER = "packages/cli/tests/repl-push.test.ts";
-function entryCase(
-  name: string,
-  id: string,
-  body: (entry: ReplExecution) => Operation<void>,
-): void {
-  it(name, () => captureReplEntry({ owner: OWNER, name }, id, INLINE_SOURCE_PATH, body));
-}
-
 /** The credential-helper assembly these rows' host selects. Never invoked. */
 const SUITE_HELPER: HelperAssembly = Object.freeze({
   runtime: "source",
@@ -311,131 +303,153 @@ const PUBLISHING = (fixture: Fixture): string =>
   ].join("\n");
 
 describe("how a REPL entry gets its publication capability", () => {
-  entryCase(
-    "C1: one executing entry initializes once, and publishes under its own owner",
-    "execution-cli-1",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const seen = counted();
-      const run = entry;
+  it("C1: one executing entry initializes once, and publishes under its own owner", () =>
+    captureReplEntry(
+      {
+        owner: OWNER,
+        name: "C1: one executing entry initializes once, and publishes under its own owner",
+      },
+      "execution-cli-1",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const seen = counted();
+        const run = entry;
 
-      const ran = yield* submit(fixture, PUBLISHING(fixture), run, seen);
-      expect(ran.outcome?.ok).toBe(true);
+        const ran = yield* submit(fixture, PUBLISHING(fixture), run, seen);
+        expect(ran.outcome?.ok).toBe(true);
 
-      // Exactly one owner, derived by the session, and exactly one
-      // initialization: the factory registers it and core calls it once.
-      expect(seen.owners).toHaveLength(1);
-      expect(seen.owners[0]).toContain("executablemd.repl");
-      expect(seen.initialized).toBe(1);
-      // The capability its entry ran with is the whole of what this host selects:
-      // the checkouts, the local Git and the publication, in one history.
-      const held = types(ran.events);
-      expect(held).toContain("repl_repository_placement");
-      expect(held).toContain("repl_repository_git");
-      expect(held).toContain("repl_repository_local");
-      expect(held).toContain(REPL_REPOSITORY_PUSH_REQUEST);
-      expect(held).toContain(GIT_HOST_EFFECT);
-    },
-  );
+        // Exactly one owner, derived by the session, and exactly one
+        // initialization: the factory registers it and core calls it once.
+        expect(seen.owners).toHaveLength(1);
+        expect(seen.owners[0]).toContain("executablemd.repl");
+        expect(seen.initialized).toBe(1);
+        // The capability its entry ran with is the whole of what this host selects:
+        // the checkouts, the local Git and the publication, in one history.
+        const held = types(ran.events);
+        expect(held).toContain("repl_repository_placement");
+        expect(held).toContain("repl_repository_git");
+        expect(held).toContain("repl_repository_local");
+        expect(held).toContain(REPL_REPOSITORY_PUSH_REQUEST);
+        expect(held).toContain(GIT_HOST_EFFECT);
+      },
+    ));
 
-  entryCase(
-    "C2: a session that only reads a history initializes nothing",
-    "execution-cli-2",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const first = counted();
-      const run = entry;
-      const ran = yield* submit(fixture, PUBLISHING(fixture), run, first);
-      expect(ran.outcome?.ok).toBe(true);
-      expect(first.initialized).toBe(1);
+  it("C2: a session that only reads a history initializes nothing", () =>
+    captureReplEntry(
+      { owner: OWNER, name: "C2: a session that only reads a history initializes nothing" },
+      "execution-cli-2",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const first = counted();
+        const run = entry;
+        const ran = yield* submit(fixture, PUBLISHING(fixture), run, first);
+        expect(ran.outcome?.ok).toBe(true);
+        expect(first.initialized).toBe(1);
 
-      // Reopened over the settled history: a passive view runs no entry, so the
-      // factory is never called, nothing is initialized, and no managed root or
-      // publication is reached.
-      const passive = counted();
-      const again = yield* reopen(fixture, execution(run.id, ran.events), passive);
-      expect(again.outcome?.ok).toBe(true);
-      expect(passive.owners).toEqual([]);
-      expect(passive.initialized).toBe(0);
-    },
-  );
+        // Reopened over the settled history: a passive view runs no entry, so the
+        // factory is never called, nothing is initialized, and no managed root or
+        // publication is reached.
+        const passive = counted();
+        const again = yield* reopen(fixture, execution(run.id, ran.events), passive);
+        expect(again.outcome?.ok).toBe(true);
+        expect(passive.owners).toEqual([]);
+        expect(passive.initialized).toBe(0);
+      },
+    ));
 
-  entryCase(
-    "C3: two entries of one execution are two owners and two initializations",
-    "execution-cli-3",
-    function* (run) {
-      const fixture = yield* useFixture();
-      const seen = counted();
+  it("C3: two entries of one execution are two owners and two initializations", () =>
+    captureReplEntry(
+      {
+        owner: OWNER,
+        name: "C3: two entries of one execution are two owners and two initializations",
+      },
+      "execution-cli-3",
+      INLINE_SOURCE_PATH,
+      function* (run) {
+        const fixture = yield* useFixture();
+        const seen = counted();
 
-      const first = yield* submit(fixture, PUBLISHING(fixture), run, seen);
-      expect(first.outcome?.ok).toBe(true);
-      const second = yield* submit(
-        fixture,
-        [
-          `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
-          `  <File path="second.md">second</File>`,
-          `  <Git.Add paths="second.md" />`,
-          `  <Git.Commit message="Second" as="commit" />`,
-          `  <Git.Push />`,
-          `</Repository>`,
-          "",
-        ].join("\n"),
-        execution(run.id, first.events),
-        seen,
-      );
-      expect(second.outcome?.ok).toBe(true);
+        const first = yield* submit(fixture, PUBLISHING(fixture), run, seen);
+        expect(first.outcome?.ok).toBe(true);
+        const second = yield* submit(
+          fixture,
+          [
+            `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
+            `  <File path="second.md">second</File>`,
+            `  <Git.Add paths="second.md" />`,
+            `  <Git.Commit message="Second" as="commit" />`,
+            `  <Git.Push />`,
+            `</Repository>`,
+            "",
+          ].join("\n"),
+          execution(run.id, first.events),
+          seen,
+        );
+        expect(second.outcome?.ok).toBe(true);
 
-      expect(seen.initialized).toBe(2);
-      expect(seen.owners).toHaveLength(2);
-      expect(new Set(seen.owners).size).toBe(2);
-    },
-  );
+        expect(seen.initialized).toBe(2);
+        expect(seen.owners).toHaveLength(2);
+        expect(new Set(seen.owners).size).toBe(2);
+      },
+    ));
 
-  entryCase(
-    "C4: with no entry capability selected, publishing reaches the ordinary refusal",
-    "execution-cli-4",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const seen = counted();
-      const run = entry;
+  it("C4: with no entry capability selected, publishing reaches the ordinary refusal", () =>
+    captureReplEntry(
+      {
+        owner: OWNER,
+        name: "C4: with no entry capability selected, publishing reaches the ordinary refusal",
+      },
+      "execution-cli-4",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const seen = counted();
+        const run = entry;
 
-      // What Node and Bun leave: the components are declared by the Plugin for
-      // this command, and reaching one is the missing-provider refusal.
-      const ran = yield* submit(fixture, PUBLISHING(fixture), run, seen, { host: false });
-      expect(ran.outcome?.ok).toBe(false);
-      expect(seen.owners).toEqual([]);
-      expect(types(ran.events)).not.toContain(REPL_REPOSITORY_PUSH_REQUEST);
-      expect(types(ran.events)).not.toContain(GIT_HOST_EFFECT);
-    },
-  );
+        // What Node and Bun leave: the components are declared by the Plugin for
+        // this command, and reaching one is the missing-provider refusal.
+        const ran = yield* submit(fixture, PUBLISHING(fixture), run, seen, { host: false });
+        expect(ran.outcome?.ok).toBe(false);
+        expect(seen.owners).toEqual([]);
+        expect(types(ran.events)).not.toContain(REPL_REPOSITORY_PUSH_REQUEST);
+        expect(types(ran.events)).not.toContain(GIT_HOST_EFFECT);
+      },
+    ));
 
-  entryCase(
-    "C5: an entry with no managed root declares the component and publishes nothing",
-    "execution-cli-5",
-    function* (entry) {
-      const fixture = yield* useFixture();
-      const seen = counted();
-      const run = entry;
+  it("C5: an entry with no managed root declares the component and publishes nothing", () =>
+    captureReplEntry(
+      {
+        owner: OWNER,
+        name: "C5: an entry with no managed root declares the component and publishes nothing",
+      },
+      "execution-cli-5",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        const fixture = yield* useFixture();
+        const seen = counted();
+        const run = entry;
 
-      const ran = yield* submit(
-        fixture,
-        [
-          `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
-          `  <Git.Push />`,
-          `</Repository>`,
-          "",
-        ].join("\n"),
-        run,
-        seen,
-        { root: undefined },
-      );
-      expect(ran.outcome?.ok).toBe(false);
-      // It initialized — an entry with no managed root still records its file
-      // work — and no publication exists to retain.
-      expect(seen.initialized).toBe(1);
-      expect(types(ran.events)).not.toContain(REPL_REPOSITORY_PUSH_REQUEST);
-    },
-  );
+        const ran = yield* submit(
+          fixture,
+          [
+            `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
+            `  <Git.Push />`,
+            `</Repository>`,
+            "",
+          ].join("\n"),
+          run,
+          seen,
+          { root: undefined },
+        );
+        expect(ran.outcome?.ok).toBe(false);
+        // It initialized — an entry with no managed root still records its file
+        // work — and no publication exists to retain.
+        expect(seen.initialized).toBe(1);
+        expect(types(ran.events)).not.toContain(REPL_REPOSITORY_PUSH_REQUEST);
+      },
+    ));
 
   it("C6: the production selector carries one factory for every retained capability", function* () {
     const fixture = yield* useFixture();

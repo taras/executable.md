@@ -25,8 +25,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../../test-support/failure-journal.ts";
+import { useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { RepositoryContext } from "../../src/composition/context.ts";
 import type { RepositorySelection } from "../../src/composition/selection.ts";
@@ -282,14 +281,9 @@ export function runOrdinaryDocument(
 
 type RunOrdinary = (source: string, options: RunOptions) => Operation<Json>;
 
-export function ordinaryDocumentCases(owner: string) {
-  return (name: string, body: (run: RunOrdinary) => Operation<void>): void => {
-    it(name, () =>
-      captureTestJournal({ owner, name }, "<eval>", (stream) =>
-        body((source, options) => runOrdinaryDocument(source, options, stream)),
-      ),
-    );
-  };
+export function* useOrdinaryDocumentRunner(): Operation<RunOrdinary> {
+  const stream = yield* useJournalStream("<eval>");
+  return (source, options) => runOrdinaryDocument(source, options, stream);
 }
 
 /** What a suite reads back about one managed slot. */
