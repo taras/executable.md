@@ -94,8 +94,8 @@ export function guardedWorkflowWorkspaceFilesystem(
 ): DenoWorkspaceFilesystem {
   return {
     ...guardedWorkflowWorkspaceReads(filesystem, held),
-    writeFile: (path, content, mode) =>
-      gatedOperation(held, () => filesystem.writeFile(path, content, mode)),
+    writeFile: (path, content, mode, exclusive) =>
+      gatedOperation(held, () => filesystem.writeFile(path, content, mode, exclusive)),
     mkdir: (path, options) => gatedOperation(held, () => filesystem.mkdir(path, options)),
     remove: (path, options) => gatedOperation(held, () => filesystem.remove(path, options)),
     rename: (from, to) => gatedOperation(held, () => filesystem.rename(from, to)),

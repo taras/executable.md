@@ -115,6 +115,7 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
   // checkout it read, and nothing outside this snapshot may authorize one: the
   // route has to be a placement a preceding record in the same history made.
   const placements: ReplPlacement[] = [];
+  const lastCopy = new Map<string, number>();
   for (const event of retained) {
     if (event.type !== "yield") {
       continue;
@@ -162,7 +163,13 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       yield* admitObservation(payload, event.description.name, placements);
       continue;
     }
-    yield* admitLocal(payload, event.description.name);
+    const ordinal = yield* admitLocal(payload, event.description.name);
+    if (ordinal !== undefined) {
+      if (ordinal <= (lastCopy.get(event.coroutineId) ?? -1)) {
+        throw malformed(REPL_REPOSITORY_LOCAL);
+      }
+      lastCopy.set(event.coroutineId, ordinal);
+    }
   }
 }
 
@@ -244,21 +251,19 @@ function* admitObservation(
   }
 }
 
-function* admitLocal(payload: unknown, name: string): Operation<void> {
+function* admitLocal(payload: unknown, name: string): Operation<number | undefined> {
   const record = parseReplLocalRecord(payload);
   if (record === undefined) {
     throw malformed(REPL_REPOSITORY_LOCAL);
   }
-  const fingerprint = yield* replLocalFingerprint({
-    operation: record.operation,
-    request: record.request,
-  });
+  const fingerprint = yield* replLocalFingerprint(record);
   if (record.fingerprint !== fingerprint) {
     throw changed(REPL_REPOSITORY_LOCAL);
   }
-  if (name !== replLocalRecordName({ operation: record.operation, fingerprint })) {
+  if (name !== replLocalRecordName(record)) {
     throw misnamed(REPL_REPOSITORY_LOCAL);
   }
+  return record.ordinal;
 }
 
 /**

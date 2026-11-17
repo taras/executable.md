@@ -126,6 +126,7 @@ describe("the Markdown suites", () => {
       ),
     ).toEqual([
       "packages/cli/tests/document-suites/evaluate/Evaluate.test.md",
+      "packages/cli/tests/document-suites/file-copy/FileCopy.test.md",
       "packages/cli/tests/document-suites/inline/Inline.test.md",
       "packages/cli/tests/document-suites/plan/Plan.test.md",
       "packages/cli/tests/document-suites/props/Props.test.md",

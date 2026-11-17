@@ -32,6 +32,7 @@ import Cwd, { props as cwdProps, generated as cwdGenerated } from "./Cwd.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import { form as failForm, props as failProps } from "./Fail.ts";
 import Fetch, { generated as fetchGenerated, props as fetchProps } from "./Fetch.ts";
+import { form as fileCopyForm, props as fileCopyProps } from "./FileCopy.ts";
 import Glob, {
   generated as globGenerated,
   props as globProps,
@@ -102,9 +103,8 @@ interface CoreOptions {
  *
  * The accepted forms are read off that same declaration rather than restated,
  * so `<Fail>`'s and `<CodeBlock>`'s one accepted form each is documented by the
- * value that dispatches it. Documentation is a parameter rather than an option
- * because a core default states what it is for, and says explicitly whether
- * `as` and content apply to it.
+ * value that dispatches it. Each registration specifies which prose it
+ * contributes to the catalog.
  */
 function core(
   name: string,
@@ -232,6 +232,11 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       generated: fetchGenerated,
     },
   ),
+  core("File.Copy", fileCopyForm, parseJsonObject(fileCopyProps), {
+    description: null,
+    as: null,
+    context: null,
+  }),
   core(
     "Glob",
     Glob,

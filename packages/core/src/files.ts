@@ -31,6 +31,7 @@ import {
   parseFilesFailure,
 } from "@executablemd/runtime";
 import type {
+  FileCopyInput,
   FilePathInput,
   FilesOperation,
   FilesPhase,
@@ -320,6 +321,10 @@ export function checkFilePath(input: FilePathInput): Operation<Result<void>> {
  */
 export function deleteFile(input: FilePathInput): Operation<Result<void>> {
   return unit(Files.operations.deleteFile(input), { operation: "delete", phase: "access" });
+}
+
+export function copyFile(input: FileCopyInput): Operation<Result<void>> {
+  return unit(Files.operations.copyFile(input), { operation: "copy", phase: "access" });
 }
 
 /**

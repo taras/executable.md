@@ -19,14 +19,14 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
+import { ensure, Err, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
-import { exists, readTextFile, rm } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm } from "@effectionx/fs";
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { API, Permissions, useHostFiles } from "@executablemd/runtime";
+import { API, filesFailure, Permissions, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
@@ -39,6 +39,11 @@ import {
   REPL_REPOSITORY_PLACEMENT,
 } from "../src/repl/repositories/placement-records.ts";
 import { Execution } from "@executablemd/core/api";
+import { collect, inlineSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { useCompositionComponents } from "@executablemd/git";
+import { useReplFileRecorder } from "../src/repl/repositories/deno/files.ts";
+import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
@@ -453,6 +458,149 @@ describe("how a REPL entry gets its repository behavior", () => {
     // anywhere else.
     expect(yield* exists(join(checkout, "made"))).toBe(false);
     expect(yield* exists(join(fixture.checkout, "made"))).toBe(false);
+  });
+
+  it("retains an authored byte copy in a managed Repository", function* () {
+    const fixture = yield* useFixture();
+    const origin = yield* useOrigin(fixture);
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(origin)}>`,
+      '<File path="original.md">original</File>',
+      '<File.Copy from="original.md" to="copy.md" />',
+      "</Repository>",
+    ].join("\n");
+    const events = yield* submit(fixture, source, execution(), { initialized: 0 });
+    const copies = recordsOf(events, REPL_REPOSITORY_LOCAL).flatMap((event) => {
+      const record = parseReplLocalRecord(
+        event.type === "yield" && event.result.status === "ok" ? event.result.value : undefined,
+      );
+      return record?.operation === "file-copy" ? [record] : [];
+    });
+    expect(copies).toHaveLength(1);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]?.outcome).toEqual({ ok: true, value: undefined });
+    const directory = copies[0]?.request.cwd;
+    if (directory === undefined) {
+      throw new Error("No managed copy directory");
+    }
+    expect(yield* readTextFile(join(directory, "copy.md"))).toBe("original");
+  });
+
+  it("uses both placement slots and only the destination mutation hold from a mounted cwd", function* () {
+    const fixture = yield* useFixture();
+    const destination = join(fixture.root, "destination");
+    yield* ensureDir(destination);
+    const sourceCommon = join(fixture.checkout, ".git");
+    const destinationCommon = join(destination, ".git");
+    const calls: string[] = [];
+    yield* useHostFiles({
+      observe(event) {
+        if (event.operation === "copy") {
+          calls.push(event.phase);
+        }
+      },
+    });
+    let delegated = 0;
+    yield* API.Files.around(
+      {
+        *copyFile([input], next) {
+          if (input.destination !== "uncovered.md") {
+            return yield* next(input);
+          }
+          delegated++;
+          const copied = yield* next({ ...input, destination: "destination/rewritten.md" });
+          expect(copied.ok).toBe(true);
+          return Err(filesFailure({ operation: "copy", phase: "target", reason: "occupied" }));
+        },
+      },
+      { at: "min" },
+    );
+    yield* useCompositionComponents();
+    yield* useWorkingDirectory(fixture.root);
+    yield* Permissions.around({
+      files: ([op], next) => (op === "absolute" ? true : next(op)),
+    });
+    const mounts = [{ source: fixture.root, target: "/reference" }];
+    function* runCopy(stream: InMemoryStream) {
+      const files = yield* useReplFileRecorder(
+        {
+          *selection() {
+            return undefined;
+          },
+          *hold(common) {
+            calls.push(`hold ${common}`);
+          },
+          placements() {
+            return [
+              {
+                checkoutRoot: fixture.checkout,
+                commonDirectory: sourceCommon,
+                *own() {
+                  calls.push("source slot");
+                },
+              },
+              {
+                checkoutRoot: destination,
+                commonDirectory: destinationCommon,
+                *own() {
+                  calls.push("destination slot");
+                },
+              },
+            ];
+          },
+        },
+        undefined,
+        mounts,
+        fixture.root,
+      );
+      const source = [
+        '<Dir path="/reference">',
+        '<File.Copy from="checkout/seed.md" to="destination/..notes.md" />',
+        "</Dir>",
+        '<File.Copy from="checkout/seed.md" to="uncovered.md" />',
+      ].join("\n");
+      return String(
+        yield* collect(
+          yield* executeInstalled({ ...inlineSource(source), stream }, [
+            workspaceMountInstallation(mounts, () => files),
+          ]),
+        ),
+      );
+    }
+    const stream = new InMemoryStream();
+    const first = yield* scoped(() => runCopy(stream));
+    expect(calls).toEqual([
+      "source slot",
+      "destination slot",
+      `hold ${destinationCommon}`,
+      "target",
+      "access",
+      "source slot",
+      "destination slot",
+      `hold ${destinationCommon}`,
+      "target",
+      "access",
+    ]);
+    const records = recordsOf(yield* stream.readAll(), REPL_REPOSITORY_LOCAL);
+    const copy = records.flatMap((event) => {
+      const parsed = parseReplLocalRecord(
+        event.type === "yield" && event.result.status === "ok" ? event.result.value : undefined,
+      );
+      return parsed?.operation === "file-copy" ? [parsed] : [];
+    });
+    expect(copy).toHaveLength(2);
+    expect(copy[0]?.request.cwd).toBe(fixture.root);
+    expect(copy[1]?.request.path).toBe("uncovered.md");
+    expect(copy[1]?.outcome.ok).toBe(false);
+    expect(first).toContain("already exists");
+    expect(yield* readTextFile(join(destination, "..notes.md"))).toBe("seed\n");
+    expect(yield* readTextFile(join(destination, "rewritten.md"))).toBe("seed\n");
+    const prefix = (yield* stream.readAll()).filter((event) => event.type !== "close");
+    calls.length = 0;
+    const restored = yield* scoped(() => runCopy(new InMemoryStream(prefix)));
+    expect(restored).toBe(first);
+    expect(calls).toEqual([]);
+    expect(delegated).toBe(1);
   });
 
   it("E7: keeps two entries' equal records in their own segments", function* () {

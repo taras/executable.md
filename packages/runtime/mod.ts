@@ -115,6 +115,7 @@ export {
   parseFilesFatal,
 } from "./files.ts";
 export type {
+  FileCopyInput,
   FilePathInput,
   FilesDeniableOperation,
   FilesErrorData,

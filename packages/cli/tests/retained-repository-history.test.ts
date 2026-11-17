@@ -212,6 +212,9 @@ function invocationFiles(temporary: string): InvocationFiles {
   const resolved = (input: FilePathInput): string =>
     input.path.startsWith("/") ? input.path : join(input.cwd, input.path);
   const handler: FilesHandler = {
+    *copyFile() {
+      throw new Error("Unexpected copy");
+    },
     // deno-lint-ignore require-yield
     *checkFilePath(): Operation<Result<void>> {
       return Ok(undefined);
