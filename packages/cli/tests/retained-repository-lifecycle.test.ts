@@ -16,7 +16,8 @@ import { Permissions } from "@executablemd/runtime";
  * the kernel, would pass a helper test and fail that rule.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   type Operation,
@@ -313,6 +314,7 @@ function localRecords(events: readonly DurableEvent[]): number {
 
 /** The question a held entry stands at, never answered. */
 const QUESTION = '<Elicit schema={{ type: "object" }} as="answer">Holding</Elicit>';
+const OWNER = "packages/cli/tests/retained-repository-lifecycle.test.ts";
 
 /** A question that is answered at once, for a continuation past one. */
 function answeringOnce(): () => Operation<unknown> {
@@ -323,12 +325,13 @@ function answeringOnce(): () => Operation<unknown> {
 }
 
 describe("an entry's hold on the checkout it is working in", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E8: refuses a second live entry, preserving what the first recorded", function* () {
     const fixture = yield* useFixture();
     const holding = counters();
     const blocked = counters();
-    const stream = new InMemoryStream();
-    const first = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.checkout, "entry.md"));
+    const first = yield* useJournalStream(join(fixture.checkout, "entry.md"));
 
     yield* scoped(function* (): Operation<void> {
       // One entry holding the checkout, kept open by a write it has already
@@ -386,7 +389,7 @@ describe("an entry's hold on the checkout it is working in", () => {
     const after = yield* entry(
       fixture.checkout,
       '<File path="later.md">later</File>',
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       later,
     );
     expect(after.refusal).toBe(undefined);
@@ -405,7 +408,7 @@ describe("an entry's hold on the checkout it is working in", () => {
         yield* entry(
           fixture.checkout,
           ['<File path="held.md">held</File>', QUESTION].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(fixture.checkout, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -419,7 +422,7 @@ describe("an entry's hold on the checkout it is working in", () => {
       const elsewhere = yield* entry(
         fixture.elsewhere,
         '<File path="free.md">free</File>',
-        new InMemoryStream(),
+        yield* useJournalStream(join(fixture.elsewhere, "entry.md")),
         other,
       );
       expect(elsewhere.refusal).toBe(undefined);
@@ -440,7 +443,7 @@ describe("an entry's hold on the checkout it is working in", () => {
         yield* entry(
           fixture.checkout,
           ['<File path="held.md">held</File>', QUESTION].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(fixture.checkout, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -453,7 +456,7 @@ describe("an entry's hold on the checkout it is working in", () => {
       // Watched from here, after the holder has its descriptor: what this row
       // is about is whether the reader opens one of its own.
       const observed = yield* useObservedDescriptors();
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream(join(fixture.checkout, "entry.md"));
       const read = yield* entry(
         fixture.checkout,
         '<File path="held.md" as="seen" />\n{seen}',
@@ -482,7 +485,7 @@ describe("an entry's hold on the checkout it is working in", () => {
     const wrote = yield* entry(
       fixture.checkout,
       '<File path="later.md">later</File>',
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       after,
     );
     expect(wrote.refusal).toBe(undefined);
@@ -505,7 +508,7 @@ describe("an entry's hold on the checkout it is working in", () => {
         '<File.Delete path="one.md" />',
         "</Dir>",
       ].join("\n"),
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       counted,
     );
 
@@ -647,7 +650,7 @@ describe("an entry's hold on the checkout it is working in", () => {
         yield* entry(
           fixture.checkout,
           source,
-          new InMemoryStream(),
+          yield* useJournalStream(join(fixture.checkout, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -665,7 +668,7 @@ describe("an entry's hold on the checkout it is working in", () => {
       const second = yield* entry(
         fixture.checkout,
         source,
-        new InMemoryStream(),
+        yield* useJournalStream(join(fixture.checkout, "entry.md")),
         blocked,
         answeringOnce(),
         managed,
@@ -684,7 +687,7 @@ describe("an entry's hold on the checkout it is working in", () => {
     const later = yield* entry(
       fixture.checkout,
       source,
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       after,
       answeringOnce(),
       managed,
@@ -733,7 +736,7 @@ describe("an entry's hold on the checkout it is working in", () => {
         yield* entry(
           origin,
           ['<Worktree name="held" branch="held">', QUESTION, "</Worktree>"].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(origin, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -1067,7 +1070,7 @@ describe("an entry's hold on the checkout it is working in", () => {
             `<Repository name="project" url=${JSON.stringify(origin)} as="project" />`,
             QUESTION,
           ].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(fixture.elsewhere, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
