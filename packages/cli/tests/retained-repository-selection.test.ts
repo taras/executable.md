@@ -164,6 +164,7 @@ function countingFiles(counted: Counters): FilesHandler {
   const host = hostFilesHandler();
   return {
     checkFilePath: (input) => host.checkFilePath(input),
+    copyFile: (input) => host.copyFile(input),
     *readTextFile(input: FilePathInput) {
       counted.reads.push(input.path);
       return yield* host.readTextFile(input);
@@ -306,6 +307,7 @@ function run(
         globFiles: ([input]) => files.globFiles(input),
         temporaryDirectory: () => files.temporaryDirectory(),
         writeTextFile: ([input]) => files.writeTextFile(input),
+        copyFile: ([input]) => files.copyFile(input),
         deleteFile: ([input]) => files.deleteFile(input),
         ensureDirectory: ([input]) => files.ensureDirectory(input),
       },

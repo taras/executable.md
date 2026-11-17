@@ -124,6 +124,7 @@ function countingFiles(counted: Counters): FilesHandler {
   const host = hostFilesHandler();
   return {
     checkFilePath: (input) => host.checkFilePath(input),
+    copyFile: (input) => host.copyFile(input),
     *readTextFile(input: FilePathInput) {
       counted.reads.push(input.path);
       return yield* host.readTextFile(input);
@@ -210,6 +211,7 @@ function run(
         globFiles: ([input]) => files.globFiles(input),
         temporaryDirectory: () => files.temporaryDirectory(),
         writeTextFile: ([input]) => files.writeTextFile(input),
+        copyFile: ([input]) => files.copyFile(input),
         deleteFile: ([input]) => files.deleteFile(input),
         ensureDirectory: ([input]) => files.ensureDirectory(input),
       },
@@ -1449,5 +1451,165 @@ describe("marked workspace mount initialization", () => {
       ["ensure", { cwd: "/workspace", path: "/external" }],
       ["read", { cwd: "/external", path: "one.md" }],
     ]);
+  });
+});
+
+describe("retained File.Copy", () => {
+  const source = '<File.Copy source="seed.md" destination="copy.md" />';
+
+  it("replays success and occupied refusal before current permissions and routing", function* () {
+    for (const occupied of [false, true]) {
+      const fixture = yield* useFixture();
+      const target = join(fixture.checkout, "copy.md");
+      if (occupied) {
+        yield* writeTextFile(target, "occupied");
+      }
+      const first = yield* run(fixture, source, new InMemoryStream(), counters());
+      expect(
+        localRecords(first.events).map((record) => [record.operation, record.outcome.ok]),
+      ).toEqual([["file-copy", !occupied]]);
+      yield* writeTextFile(target, "external");
+      const checked = counters();
+      const asked: string[] = [];
+      const resumed = yield* run(fixture, source, unfinished(first.events), checked, {
+        *between() {
+          yield* Permissions.around({
+            files: ([op]) => {
+              asked.push(op);
+              return false;
+            },
+          });
+          yield* API.Fs.around({
+            *realpath([path], next) {
+              if (path.includes("seed.md") || path === fixture.checkout) {
+                checked.resolved++;
+              }
+              return yield* next(path);
+            },
+          });
+        },
+      });
+      expect(resumed.refusal).toBe(undefined);
+      expect(resumed.output).toBe(first.output);
+      expect(asked).toEqual([]);
+      expect(checked.discoveries).toEqual([]);
+      expect(checked.resolved).toBe(0);
+      expect(yield* readTextFile(target)).toBe("external");
+    }
+  });
+
+  it("rejects either changed operand before routing and leaves uncovered copy live", function* () {
+    const fixture = yield* useFixture();
+    const doc = '<File.Copy source="checkout/seed.md" destination="checkout/copy.md" />';
+    const placement = { cwd: fixture.root, projectCwd: fixture.checkout };
+    const first = yield* run(fixture, doc, new InMemoryStream(), counters(), placement);
+    expect(localRecords(first.events).map((record) => record.operation)).toEqual(["file-copy"]);
+    for (const change of [{ source: "checkout/other.md" }, { destination: "outside.md" }]) {
+      const checked = counters();
+      const asked: string[] = [];
+      const resumed = yield* run(fixture, doc, unfinished(first.events), checked, {
+        ...placement,
+        *between() {
+          yield* API.Files.around({ copyFile: ([input], next) => next({ ...input, ...change }) });
+          yield* Permissions.around({
+            files: ([op]) => {
+              asked.push(op);
+              return true;
+            },
+          });
+        },
+      });
+      expect(resumed.refusal).toContain("file-copy");
+      expect(asked).toEqual([]);
+      expect(checked.discoveries).toEqual([]);
+      expect(localRecords(resumed.events)).toEqual(localRecords(first.events));
+    }
+    const outside = join(fixture.root, "outside.md");
+    expect(yield* exists(outside)).toBe(false);
+    const uncovered = yield* run(
+      fixture,
+      doc.replace("checkout/copy.md", "outside.md"),
+      new InMemoryStream(),
+      counters(),
+      placement,
+    );
+    expect(uncovered.refusal).toBe(undefined);
+    expect(localRecords(uncovered.events)).toEqual([]);
+    expect(yield* readTextFile(outside)).toBe("seed\n");
+  });
+
+  it("refuses occupancy after a native copy whose acknowledgement was halted", function* () {
+    const fixture = yield* useFixture();
+    const events: DurableEvent[] = [];
+    const reached = withResolvers<void>();
+    const barrier: DurableStream = {
+      *readAll(): Operation<DurableEvent[]> {
+        return [...events];
+      },
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === REPL_REPOSITORY_LOCAL) {
+          reached.resolve();
+          yield* suspend();
+        }
+        events.push(event);
+      },
+    };
+    yield* scoped(function* () {
+      const task = yield* spawn(() => run(fixture, source, barrier, counters()));
+      yield* reached.operation;
+      yield* task.halt();
+    });
+    expect(localRecords(events)).toEqual([]);
+    const target = join(fixture.checkout, "copy.md");
+    const copied = yield* readTextFile(target);
+    expect(copied).toBe(yield* readTextFile(join(fixture.checkout, "seed.md")));
+    const resumed = yield* run(fixture, source, new InMemoryStream(events), counters());
+    expect(resumed.output).toContain("already exists");
+    expect(localRecords(resumed.events).map((record) => record.outcome.ok)).toEqual([false]);
+    expect(yield* readTextFile(target)).toBe(copied);
+  });
+
+  it("records copies in the mount installation fallback and restores without live copy", function* () {
+    const fixture = yield* useFixture();
+    const owned = join(fixture.root, "owned");
+    yield* ensureDir(owned);
+    yield* writeTextFile(join(owned, "seed.md"), "owned seed");
+    const first = yield* scoped(function* () {
+      yield* API.Env.around({
+        *cwd() {
+          return owned;
+        },
+      });
+      const host = hostFilesHandler();
+      yield* API.Files.around({ copyFile: ([input]) => host.copyFile(input) }, { at: "min" });
+      const stream = new InMemoryStream();
+      yield* collect(
+        yield* executeInstalled({ ...inlineSource(source), stream }, [
+          workspaceMountInstallation([], undefined, undefined, owned),
+        ]),
+      );
+      return yield* stream.readAll();
+    });
+    expect(localRecords(first).map((record) => record.operation)).toEqual(["file-copy"]);
+    expect(recordsOf(first, REPL_REPOSITORY_SELECTION)).toEqual([]);
+    yield* writeTextFile(join(owned, "copy.md"), "changed");
+    yield* scoped(function* () {
+      yield* API.Env.around({
+        *cwd() {
+          return owned;
+        },
+      });
+      yield* Permissions.around({
+        files: () => {
+          throw new Error("live policy");
+        },
+      });
+      yield* collect(
+        yield* executeInstalled({ ...inlineSource(source), stream: unfinished(first) }, [
+          workspaceMountInstallation([], undefined, undefined, owned),
+        ]),
+      );
+    });
+    expect(yield* readTextFile(join(owned, "copy.md"))).toBe("changed");
   });
 });

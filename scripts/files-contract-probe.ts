@@ -19,7 +19,7 @@
 import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exit, main, scoped, until } from "effection";
 import type { Result } from "effection";
-import { lstat, realpath, symlink } from "node:fs/promises";
+import { lstat, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { useTempDirectory } from "./lib/temp-directory.ts";
 import process from "node:process";
@@ -86,6 +86,24 @@ await main(function* () {
   );
 
   yield* useHostFiles();
+
+  const binary = Uint8Array.of(0, 255, 128);
+  const copy = { cwd: workspace, source: "source.bin", destination: "destination.bin" };
+  yield* until(writeFile(join(workspace, copy.source), binary));
+  check("native copy returns Unit", (yield* Files.operations.copyFile(copy)).ok);
+  check(
+    "native copy preserves bytes",
+    (yield* until(readFile(join(workspace, copy.destination)))).equals(binary),
+  );
+  yield* until(writeFile(join(workspace, copy.destination), Uint8Array.of(42)));
+  check(
+    "native copy refuses occupancy",
+    reasonOf(yield* Files.operations.copyFile(copy)) === "occupied",
+  );
+  check(
+    "native copy preserves an occupied destination",
+    (yield* until(readFile(join(workspace, copy.destination)))).equals(Uint8Array.of(42)),
+  );
 
   check(
     "an empty path is refused lexically",
