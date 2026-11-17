@@ -19,8 +19,8 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * capture must leave no partial allowance anywhere in the execution.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { journalCases } from "../../test-support/journal-cases.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { createApi } from "@effectionx/context-api";
@@ -46,6 +46,11 @@ import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import type { ComponentDefinition, FunctionComponentDefinition } from "../src/types.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/generated-selection.test.ts";
 const journalCase = journalCases(OWNER);
@@ -276,6 +281,7 @@ describe("Tier GS — the property and its default", () => {
 });
 
 describe("Tier GS — a selection core cannot capture refuses setup", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** Every malformed selection a host can offer, and the word it refuses with. */
   const MALFORMED: readonly (readonly [string, unknown, string])[] = [
     ["an empty selection", {}, "selected no component"],
@@ -300,42 +306,39 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
   ];
 
   for (const [what, offered, diagnostic] of MALFORMED) {
-    journalCase(
-      `U5-1: ${what} refuses before policy, the root import and any effect`,
-      ROOT_PATH,
-      function* (stream) {
-        const files = recordedFiles({ "notes.md": NOTE });
-        const policy: string[] = [];
-        const produced: string[] = [];
+    it(`U5-1: ${what} refuses before policy, the root import and any effect`, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
+      const files = recordedFiles({ "notes.md": NOTE });
+      const policy: string[] = [];
+      const produced: string[] = [];
 
-        const attempt = yield* run(
-          producing(`<File path="notes.md" />\n`),
-          {
-            offered,
-            files,
-            *around(): Operation<void> {
-              yield* useProducer(produced);
-              yield* Execution.around({
-                *execute([request], next) {
-                  policy.push("execute");
-                  yield* next(request);
-                },
-              });
-            },
+      const attempt = yield* run(
+        producing(`<File path="notes.md" />\n`),
+        {
+          offered,
+          files,
+          *around(): Operation<void> {
+            yield* useProducer(produced);
+            yield* Execution.around({
+              *execute([request], next) {
+                policy.push("execute");
+                yield* next(request);
+              },
+            });
           },
-          stream,
-        );
+        },
+        stream,
+      );
 
-        expect([what, attempt.failure ?? ""]).toEqual([what, expect.stringContaining(diagnostic)]);
-        // Nothing after setup happened: no public execution policy, no root
-        // import, no producer, no effect and no admission.
-        expect([what, policy]).toEqual([what, []]);
-        expect([what, rootImports(attempt.events)]).toEqual([what, []]);
-        expect([what, produced]).toEqual([what, []]);
-        expect([what, files.performed]).toEqual([what, []]);
-        expect([what, admissions(attempt.events)]).toEqual([what, []]);
-      },
-    );
+      expect([what, attempt.failure ?? ""]).toEqual([what, expect.stringContaining(diagnostic)]);
+      // Nothing after setup happened: no public execution policy, no root
+      // import, no producer, no effect and no admission.
+      expect([what, policy]).toEqual([what, []]);
+      expect([what, rootImports(attempt.events)]).toEqual([what, []]);
+      expect([what, produced]).toEqual([what, []]);
+      expect([what, files.performed]).toEqual([what, []]);
+      expect([what, admissions(attempt.events)]).toEqual([what, []]);
+    });
   }
 
   journalCase(
@@ -659,6 +662,7 @@ describe("Tier GS — the selection is read once, before public policy", () => {
 });
 
 describe("Tier GS — what a selected name resolves to", () => {
+  beforeEach(journalBeforeEach(OWNER));
   journalCase(
     "U5-3: a registered function and a published provider answer both run",
     ROOT_PATH,
@@ -828,7 +832,8 @@ describe("Tier GS — what a selected name resolves to", () => {
     },
   );
 
-  journalCase("U5-3: an unsupported answer refuses", ROOT_PATH, function* (stream) {
+  it("U5-3: an unsupported answer refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // A repository Markdown component is a legitimate answer for an authored
     // import and is not something a generated fragment can be given: there is
     // no implementation to invoke and no declaration to read an identity off.
@@ -858,135 +863,129 @@ describe("Tier GS — what a selected name resolves to", () => {
     expect(attempt.failure).not.toContain("rendered");
   });
 
-  journalCase(
-    "U5-3: a definition edited after publication cannot be rebaselined",
-    ROOT_PATH,
-    function* (stream) {
-      const ran: string[] = [];
-      const definition: FunctionComponentDefinition = {
-        kind: "function",
-        name: "Edited",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        forms: ["self-closing"],
-        generated: {
-          "self-closing": {
-            identity: "https://executable.md/components/edited/read",
-            effect: "read",
-          },
+  it("U5-3: a definition edited after publication cannot be rebaselined", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const ran: string[] = [];
+    const definition: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Edited",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing"],
+      generated: {
+        "self-closing": {
+          identity: "https://executable.md/components/edited/read",
+          effect: "read",
         },
-        // deno-lint-ignore require-yield
-        *fn(): Operation<string> {
-          ran.push("edited ran");
-          return "the edited answer ran";
-        },
-      };
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        ran.push("edited ran");
+        return "the edited answer ran";
+      },
+    };
 
-      const attempt = yield* run(
-        evaluating("<Edited />\n"),
-        {
-          installations: [
-            {
-              *install(): Operation<void> {
-                yield* useSelection({ Edited: ["self-closing"] });
-              },
-              componentAnswers: [
-                {
-                  origin: "test://edited",
-                  *install(registrar): Operation<void> {
-                    yield* registrar.around(function* (request, next) {
-                      if (request.name !== "Edited") {
-                        return yield* next();
-                      }
-                      const published = request.answer(definition);
-                      // Published, and then edited in place. What the execution
-                      // retained is the copy taken at publication, so this reaches
-                      // nothing — and the answer the chain is now holding no longer
-                      // describes what was published, which refuses.
-                      Object.assign(definition, {
-                        generated: {
-                          "self-closing": {
-                            identity: "https://executable.md/components/edited/write",
-                            effect: "write",
-                          },
+    const attempt = yield* run(
+      evaluating("<Edited />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Edited: ["self-closing"] });
+            },
+            componentAnswers: [
+              {
+                origin: "test://edited",
+                *install(registrar): Operation<void> {
+                  yield* registrar.around(function* (request, next) {
+                    if (request.name !== "Edited") {
+                      return yield* next();
+                    }
+                    const published = request.answer(definition);
+                    // Published, and then edited in place. What the execution
+                    // retained is the copy taken at publication, so this reaches
+                    // nothing — and the answer the chain is now holding no longer
+                    // describes what was published, which refuses.
+                    Object.assign(definition, {
+                      generated: {
+                        "self-closing": {
+                          identity: "https://executable.md/components/edited/write",
+                          effect: "write",
                         },
-                      });
-                      return published;
+                      },
                     });
-                  },
+                    return published;
+                  });
                 },
-              ],
-            },
-          ],
-        },
-        stream,
-      );
-
-      expect(attempt.failure).toBeDefined();
-      expect(ran).toEqual([]);
-      expect(admissions(attempt.events)).toHaveLength(0);
-    },
-  );
-
-  journalCase(
-    "U5-3: accessor-backed metadata is refused before it can answer twice",
-    ROOT_PATH,
-    function* (stream) {
-      const readings: string[] = [];
-      // A declaration whose metadata would answer one thing while it is validated
-      // and another when it is read again. The reading that was validated is the
-      // reading that is retained, so a value that behaved once is not a value
-      // this execution may retain — and it never gets a second turn to prove it.
-      const definition = {
-        kind: "function" as const,
-        name: "Shifty",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        forms: ["self-closing"] as const,
-        get generated() {
-          readings.push("read");
-          return readings.length === 1
-            ? {
-                "self-closing": {
-                  identity: "https://executable.md/components/shifty/read",
-                  effect: "read" as const,
-                },
-              }
-            : {
-                "self-closing": {
-                  identity: "https://executable.md/components/shifty/write",
-                  effect: "write" as const,
-                },
-              };
-        },
-        // deno-lint-ignore require-yield
-        *fn(): Operation<string> {
-          return "the shifty answer ran";
-        },
-      };
-
-      const attempt = yield* run(
-        evaluating("<Shifty />\n"),
-        {
-          installations: [
-            {
-              *install(): Operation<void> {
-                yield* useSelection({ Shifty: ["self-closing"] });
               },
-              componentAnswers: [answerProvider("Shifty", definition)],
-            },
-          ],
-        },
-        stream,
-      );
+            ],
+          },
+        ],
+      },
+      stream,
+    );
 
-      expect(attempt.failure).toBeDefined();
-      expect(attempt.output ?? "").not.toContain("the shifty answer ran");
-      expect(admissions(attempt.events)).toHaveLength(0);
-      // At most one reading, which is the whole of the protection: what the check
-      // was made about is what would have been retained, and the second answer
-      // this accessor was waiting to give is never asked for.
-      expect(readings.length).toBeLessThanOrEqual(1);
-    },
-  );
+    expect(attempt.failure).toBeDefined();
+    expect(ran).toEqual([]);
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+
+  it("U5-3: accessor-backed metadata is refused before it can answer twice", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const readings: string[] = [];
+    // A declaration whose metadata would answer one thing while it is validated
+    // and another when it is read again. The reading that was validated is the
+    // reading that is retained, so a value that behaved once is not a value
+    // this execution may retain — and it never gets a second turn to prove it.
+    const definition = {
+      kind: "function" as const,
+      name: "Shifty",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing"] as const,
+      get generated() {
+        readings.push("read");
+        return readings.length === 1
+          ? {
+              "self-closing": {
+                identity: "https://executable.md/components/shifty/read",
+                effect: "read" as const,
+              },
+            }
+          : {
+              "self-closing": {
+                identity: "https://executable.md/components/shifty/write",
+                effect: "write" as const,
+              },
+            };
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        return "the shifty answer ran";
+      },
+    };
+
+    const attempt = yield* run(
+      evaluating("<Shifty />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Shifty: ["self-closing"] });
+            },
+            componentAnswers: [answerProvider("Shifty", definition)],
+          },
+        ],
+      },
+      stream,
+    );
+
+    expect(attempt.failure).toBeDefined();
+    expect(attempt.output ?? "").not.toContain("the shifty answer ran");
+    expect(admissions(attempt.events)).toHaveLength(0);
+    // At most one reading, which is the whole of the protection: what the check
+    // was made about is what would have been retained, and the second answer
+    // this accessor was waiting to give is never asked for.
+    expect(readings.length).toBeLessThanOrEqual(1);
+  });
 
   journalCase(
     "U5-3: the retained admission holds the identity the owner declared",

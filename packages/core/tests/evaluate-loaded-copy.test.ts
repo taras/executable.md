@@ -19,9 +19,8 @@
  * canonical core owns and a registration for it is refused outright (FE27b).
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
 import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -38,9 +37,14 @@ import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+  captureTestJournal,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/evaluate-loaded-copy.test.ts";
-const journalCase = journalCases(OWNER);
+
 const ROOT_PATH = "evaluate.md";
 const NOTE = "the retained note\n";
 
@@ -98,6 +102,7 @@ const READS =
   `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` + `<Json value={answer} />\n`;
 
 describe("Tier FE — nothing replaces the protected implementation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE24: the name cannot be registered at all", function* () {
     const reached: string[] = [];
     const failed = yield* refusal(
@@ -124,274 +129,264 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
     expect(reached).toEqual([]);
   });
 
-  journalCase(
-    "FE24: a live registration of the name does not exist to be selected",
-    ROOT_PATH,
-    function* (stream) {
-      // The positive half of the row above: with the claim refused, an ordinary
-      // document still resolves `<Evaluate>` to canonical core's implementation
-      // and the fragment runs.
-      const files = recordedFiles({ "notes.md": NOTE });
-      const output = yield* run(READS, [reading(files)], stream);
-      expect(String(output)).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-    },
-  );
-
-  const comparison = "FE24: a middleware answer is refused, and honest delegation is not";
-  journalCase(comparison, ROOT_PATH, function* (stream) {
+  it("FE24: a live registration of the name does not exist to be selected", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // The positive half of the row above: with the claim refused, an ordinary
+    // document still resolves `<Evaluate>` to canonical core's implementation
+    // and the fragment runs.
     const files = recordedFiles({ "notes.md": NOTE });
-    const substituted = yield* refusal(
-      scoped(function* () {
-        yield* Component.around({
-          *importComponent([name], next) {
-            const definition = yield* next(name);
-            if (name !== "Evaluate" || definition.kind !== "function") {
-              return definition;
-            }
-            // A wrapper that forwards everything and changes nothing. Refused
-            // anyway: only canonical execution answers a protected import.
-            return { ...definition };
-          },
-        });
-        return yield* run(READS, [reading(files)], stream);
-      }),
-    );
-    expect(substituted).toContain("canonical core owns");
-    expect(files.performed).toEqual([]);
-
-    // The same handler, delegating honestly, is still supported.
-    const observed: string[] = [];
-    const clean = recordedFiles({ "notes.md": NOTE });
-    yield* captureTestJournal(
-      { owner: OWNER, name: comparison },
-      ROOT_PATH,
-      function* (secondStream) {
-        const output = yield* scoped(function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              observed.push(name);
-              return definition;
-            },
-          });
-          return yield* run(READS, [reading(clean)], secondStream);
-        });
-        expect(observed).toContain("Evaluate");
-        expect(String(output)).toContain("the retained note");
-      },
-    );
+    const output = yield* run(READS, [reading(files)], stream);
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
   });
 
-  journalCase(
-    "FE24: a deliberate middleware refusal stays a refusal",
-    ROOT_PATH,
-    function* (stream) {
+  const comparison = "FE24: a middleware answer is refused, and honest delegation is not";
+  it(comparison, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: comparison }, ROOT_PATH, function* (stream) {
       const files = recordedFiles({ "notes.md": NOTE });
-      const failed = yield* refusal(
+      const substituted = yield* refusal(
         scoped(function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              if (name === "Evaluate") {
-                throw new Error("this environment does not offer Evaluate");
-              }
-              return yield* next(name);
-            },
-          });
-          return yield* run(READS, [reading(files)], stream);
-        }),
-      );
-
-      // A handler may refuse an import. What it may not do is answer one.
-      expect(failed).toContain("does not offer Evaluate");
-      expect(files.performed).toEqual([]);
-    },
-  );
-
-  journalCase(
-    "FE25: a replacement written to ignore `allow` is never invoked",
-    ROOT_PATH,
-    function* (stream) {
-      // The replacement's body would write through the widest ambient permission
-      // it can reach, under a read-only selection. It never runs, and canonical
-      // `<Evaluate>` refuses the write before any provider call.
-      const files = recordedFiles();
-      const ambientWrites: string[] = [];
-      const reached: string[] = [];
-
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* API.Files.around(
-            {
-              // deno-lint-ignore require-yield
-              *writeTextFile([input]) {
-                ambientWrites.push(String(input.path));
-                return Ok(fileWriteSuccess("host-committed"));
-              },
-            },
-            { at: "min" },
-          );
-          // Registration is refused outright, so the only channel left for a
-          // replacement is a handler answering the import. This one answers with
-          // a body that writes through the widest ambient permission it can reach.
           yield* Component.around({
             *importComponent([name], next) {
               const definition = yield* next(name);
               if (name !== "Evaluate" || definition.kind !== "function") {
                 return definition;
               }
-              return {
-                ...definition,
-                *fn(): Operation<string> {
-                  reached.push("replacement");
-                  yield* API.Files.operations.writeTextFile({
-                    cwd: "/",
-                    path: "escaped.md",
-                    content: "written by the replacement",
-                  });
-                  return "";
-                },
-              };
+              // A wrapper that forwards everything and changes nothing. Refused
+              // anyway: only canonical execution answers a protected import.
+              return { ...definition };
             },
           });
-          return yield* run(
-            `<Evaluate text={'<File path="out.md">x</File>\\n'} allow={["write"]} />\n`,
-            [reading(files)],
-            stream,
-          );
+          return yield* run(READS, [reading(files)], stream);
         }),
       );
-
-      // The replacement was never entered and nothing was written anywhere: the
-      // refusal happens at the import boundary, before the body could ignore
-      // `allow`.
-      expect(reached).toEqual([]);
-      expect(ambientWrites).toEqual([]);
-      expect(failed).toContain("canonical core owns");
+      expect(substituted).toContain("canonical core owns");
       expect(files.performed).toEqual([]);
-    },
-  );
+
+      // The same handler, delegating honestly, is still supported.
+      const observed: string[] = [];
+      const clean = recordedFiles({ "notes.md": NOTE });
+      yield* captureTestJournal(
+        { owner: OWNER, name: comparison },
+        ROOT_PATH,
+        function* (secondStream) {
+          const output = yield* scoped(function* () {
+            yield* Component.around({
+              *importComponent([name], next) {
+                const definition = yield* next(name);
+                observed.push(name);
+                return definition;
+              },
+            });
+            return yield* run(READS, [reading(clean)], secondStream);
+          });
+          expect(observed).toContain("Evaluate");
+          expect(String(output)).toContain("the retained note");
+        },
+      );
+    });
+  });
+
+  it("FE24: a deliberate middleware refusal stays a refusal", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            if (name === "Evaluate") {
+              throw new Error("this environment does not offer Evaluate");
+            }
+            return yield* next(name);
+          },
+        });
+        return yield* run(READS, [reading(files)], stream);
+      }),
+    );
+
+    // A handler may refuse an import. What it may not do is answer one.
+    expect(failed).toContain("does not offer Evaluate");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE25: a replacement written to ignore `allow` is never invoked", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    // The replacement's body would write through the widest ambient permission
+    // it can reach, under a read-only selection. It never runs, and canonical
+    // `<Evaluate>` refuses the write before any provider call.
+    const files = recordedFiles();
+    const ambientWrites: string[] = [];
+    const reached: string[] = [];
+
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* API.Files.around(
+          {
+            // deno-lint-ignore require-yield
+            *writeTextFile([input]) {
+              ambientWrites.push(String(input.path));
+              return Ok(fileWriteSuccess("host-committed"));
+            },
+          },
+          { at: "min" },
+        );
+        // Registration is refused outright, so the only channel left for a
+        // replacement is a handler answering the import. This one answers with
+        // a body that writes through the widest ambient permission it can reach.
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Evaluate" || definition.kind !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(): Operation<string> {
+                reached.push("replacement");
+                yield* API.Files.operations.writeTextFile({
+                  cwd: "/",
+                  path: "escaped.md",
+                  content: "written by the replacement",
+                });
+                return "";
+              },
+            };
+          },
+        });
+        return yield* run(
+          `<Evaluate text={'<File path="out.md">x</File>\\n'} allow={["write"]} />\n`,
+          [reading(files)],
+          stream,
+        );
+      }),
+    );
+
+    // The replacement was never entered and nothing was written anywhere: the
+    // refusal happens at the import boundary, before the body could ignore
+    // `allow`.
+    expect(reached).toEqual([]);
+    expect(ambientWrites).toEqual([]);
+    expect(failed).toContain("canonical core owns");
+    expect(files.performed).toEqual([]);
+  });
 });
 
 describe("Tier FE — ownership is not permission", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const comparison = "FE26: owning the name adds no class and no identity";
-  journalCase(comparison, ROOT_PATH, function* (stream) {
-    const files = recordedFiles();
-    // A host offering only reads. Canonical `<Evaluate>` cannot add a write
-    // table, and no spelling of `allow` conjures one.
-    expect(
-      yield* refusal(
-        run(
-          `<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`,
-          [reading(files)],
-          stream,
-        ),
-      ),
-    ).toContain("installed no write table");
-
-    // And with a write table, the read table is still not part of `write`:
-    // selecting a class reaches that class's own entries and no others.
-    const mixed = recordedFiles({ "notes.md": NOTE });
-    yield* captureTestJournal(
-      { owner: OWNER, name: comparison },
-      ROOT_PATH,
-      function* (secondStream) {
-        expect(
-          yield* refusal(
-            run(
-              `<Evaluate text={'<File path="notes.md" />\\n'} allow={["write"]} />\n`,
-              [both(mixed)],
-              secondStream,
-            ),
+  it(comparison, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: comparison }, ROOT_PATH, function* (stream) {
+      const files = recordedFiles();
+      // A host offering only reads. Canonical `<Evaluate>` cannot add a write
+      // table, and no spelling of `allow` conjures one.
+      expect(
+        yield* refusal(
+          run(
+            `<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`,
+            [reading(files)],
+            stream,
           ),
-        ).toContain("admitted only in its paired form");
-        expect(mixed.performed).toEqual([]);
-      },
-    );
+        ),
+      ).toContain("installed no write table");
+
+      // And with a write table, the read table is still not part of `write`:
+      // selecting a class reaches that class's own entries and no others.
+      const mixed = recordedFiles({ "notes.md": NOTE });
+      yield* captureTestJournal(
+        { owner: OWNER, name: comparison },
+        ROOT_PATH,
+        function* (secondStream) {
+          expect(
+            yield* refusal(
+              run(
+                `<Evaluate text={'<File path="notes.md" />\\n'} allow={["write"]} />\n`,
+                [both(mixed)],
+                secondStream,
+              ),
+            ),
+          ).toContain("admitted only in its paired form");
+          expect(mixed.performed).toEqual([]);
+        },
+      );
+    });
   });
 
-  journalCase(
-    "FE27: a replaceable ordinary component still wins at an authored site",
-    ROOT_PATH,
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-      const reached: string[] = [];
-      const output = yield* scoped(function* () {
-        // `<Glob>` is an ordinary registration, so a repository or host component
-        // of that name replaces it at an authored site. That is unchanged.
-        //
-        // It is `<Glob>` rather than `<File>` because canonical core now owns
-        // `<File>` and a registration for it is refused outright (FE27b). The
-        // claim here is about a *replaceable* component, so it needs one.
+  it("FE27: a replaceable ordinary component still wins at an authored site", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+    const reached: string[] = [];
+    const output = yield* scoped(function* () {
+      // `<Glob>` is an ordinary registration, so a repository or host component
+      // of that name replaces it at an authored site. That is unchanged.
+      //
+      // It is `<Glob>` rather than `<File>` because canonical core now owns
+      // `<File>` and a registration for it is refused outright (FE27b). The
+      // claim here is about a *replaceable* component, so it needs one.
+      yield* registerComponents([
+        {
+          name: "Glob",
+          origin: "test://repository",
+          props: {
+            type: "object",
+            properties: { pattern: { type: "string" } },
+            required: ["pattern"],
+            additionalProperties: false,
+          },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            reached.push("repository");
+            return "the repository component answered";
+          },
+        },
+      ]);
+      return yield* run(`<Glob pattern="*.md" />\n\n${READS}`, [reading(files)], stream);
+    });
+
+    const rendered = String(output);
+    // The authored site got the replacement...
+    expect(rendered).toContain("the repository component answered");
+    expect(reached).toEqual(["repository"]);
+    // ...and the fragment did not: it reached the pinned identity the profile
+    // admitted, through the captured operation.
+    expect(rendered).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+    expect(admissions(yield* stream.readAll())).toHaveLength(1);
+  });
+
+  it("FE27b: an admitted name canonical core owns cannot be registered at all", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const files = recordedFiles({ "notes.md": NOTE });
+
+    // Where this used to prove that a *live* registration for `<File>` could
+    // not enter a fragment, the registration itself is now refused: canonical
+    // core owns the name, so the protection happens a layer earlier than this
+    // tier used to observe it. The fragment half is unchanged.
+    const failed = yield* refusal(
+      scoped(function* () {
         yield* registerComponents([
           {
-            name: "Glob",
+            name: "File",
             origin: "test://repository",
             props: {
               type: "object",
-              properties: { pattern: { type: "string" } },
-              required: ["pattern"],
+              properties: { path: { type: "string" } },
+              required: ["path"],
               additionalProperties: false,
             },
             // deno-lint-ignore require-yield
             *fn(): Operation<string> {
-              reached.push("repository");
-              return "the repository component answered";
+              return "replaced";
             },
           },
         ]);
-        return yield* run(`<Glob pattern="*.md" />\n\n${READS}`, [reading(files)], stream);
-      });
+      }),
+    );
+    expect(failed).toContain("canonical core owns that name");
 
-      const rendered = String(output);
-      // The authored site got the replacement...
-      expect(rendered).toContain("the repository component answered");
-      expect(reached).toEqual(["repository"]);
-      // ...and the fragment did not: it reached the pinned identity the profile
-      // admitted, through the captured operation.
-      expect(rendered).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-      expect(admissions(yield* stream.readAll())).toHaveLength(1);
-    },
-  );
-
-  journalCase(
-    "FE27b: an admitted name canonical core owns cannot be registered at all",
-    ROOT_PATH,
-    function* (stream) {
-      const files = recordedFiles({ "notes.md": NOTE });
-
-      // Where this used to prove that a *live* registration for `<File>` could
-      // not enter a fragment, the registration itself is now refused: canonical
-      // core owns the name, so the protection happens a layer earlier than this
-      // tier used to observe it. The fragment half is unchanged.
-      const failed = yield* refusal(
-        scoped(function* () {
-          yield* registerComponents([
-            {
-              name: "File",
-              origin: "test://repository",
-              props: {
-                type: "object",
-                properties: { path: { type: "string" } },
-                required: ["path"],
-                additionalProperties: false,
-              },
-              // deno-lint-ignore require-yield
-              *fn(): Operation<string> {
-                return "replaced";
-              },
-            },
-          ]);
-        }),
-      );
-      expect(failed).toContain("canonical core owns that name");
-
-      const output = yield* scoped(function* () {
-        return yield* run(READS, [reading(files)], stream);
-      });
-      expect(String(output)).toContain("the retained note");
-      expect(files.performed).toEqual(["read notes.md"]);
-    },
-  );
+    const output = yield* scoped(function* () {
+      return yield* run(READS, [reading(files)], stream);
+    });
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
 });

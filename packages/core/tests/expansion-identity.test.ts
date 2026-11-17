@@ -20,7 +20,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
