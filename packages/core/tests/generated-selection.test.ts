@@ -301,23 +301,28 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
 
   for (const [what, offered, diagnostic] of MALFORMED) {
     it(`U5-1: ${what} refuses before policy, the root import and any effect`, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
       const files = recordedFiles({ "notes.md": NOTE });
       const policy: string[] = [];
       const produced: string[] = [];
 
-      const attempt = yield* run(producing(`<File path="notes.md" />\n`), {
-        offered,
-        files,
-        *around(): Operation<void> {
-          yield* useProducer(produced);
-          yield* Execution.around({
-            *execute([request], next) {
-              policy.push("execute");
-              yield* next(request);
-            },
-          });
+      const attempt = yield* run(
+        producing(`<File path="notes.md" />\n`),
+        {
+          offered,
+          files,
+          *around(): Operation<void> {
+            yield* useProducer(produced);
+            yield* Execution.around({
+              *execute([request], next) {
+                policy.push("execute");
+                yield* next(request);
+              },
+            });
+          },
         },
-      });
+        stream,
+      );
 
       expect([what, attempt.failure ?? ""]).toEqual([what, expect.stringContaining(diagnostic)]);
       // Nothing after setup happened: no public execution policy, no root
@@ -820,32 +825,38 @@ describe("Tier GS — what a selected name resolves to", () => {
   });
 
   it("U5-3: an unsupported answer refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // A repository Markdown component is a legitimate answer for an authored
     // import and is not something a generated fragment can be given: there is
     // no implementation to invoke and no declaration to read an identity off.
-    const attempt = yield* run(evaluating("<Markdowny />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Markdowny: ["self-closing"] });
-            yield* Component.around({
-              *importComponent([name, position], next) {
-                if (name !== "Markdowny") {
-                  return yield* next(name, position);
-                }
-                return markdownAnswer();
-              },
-            });
+    const attempt = yield* run(
+      evaluating("<Markdowny />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Markdowny: ["self-closing"] });
+              yield* Component.around({
+                *importComponent([name, position], next) {
+                  if (name !== "Markdowny") {
+                    return yield* next(name, position);
+                  }
+                  return markdownAnswer();
+                },
+              });
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toBeDefined();
     expect(attempt.failure).not.toContain("rendered");
   });
 
   it("U5-3: a definition edited after publication cannot be rebaselined", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const ran: string[] = [];
     const definition: FunctionComponentDefinition = {
       kind: "function",
@@ -865,41 +876,45 @@ describe("Tier GS — what a selected name resolves to", () => {
       },
     };
 
-    const attempt = yield* run(evaluating("<Edited />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Edited: ["self-closing"] });
-          },
-          componentAnswers: [
-            {
-              origin: "test://edited",
-              *install(registrar): Operation<void> {
-                yield* registrar.around(function* (request, next) {
-                  if (request.name !== "Edited") {
-                    return yield* next();
-                  }
-                  const published = request.answer(definition);
-                  // Published, and then edited in place. What the execution
-                  // retained is the copy taken at publication, so this reaches
-                  // nothing — and the answer the chain is now holding no longer
-                  // describes what was published, which refuses.
-                  Object.assign(definition, {
-                    generated: {
-                      "self-closing": {
-                        identity: "https://executable.md/components/edited/write",
-                        effect: "write",
-                      },
-                    },
-                  });
-                  return published;
-                });
-              },
+    const attempt = yield* run(
+      evaluating("<Edited />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Edited: ["self-closing"] });
             },
-          ],
-        },
-      ],
-    });
+            componentAnswers: [
+              {
+                origin: "test://edited",
+                *install(registrar): Operation<void> {
+                  yield* registrar.around(function* (request, next) {
+                    if (request.name !== "Edited") {
+                      return yield* next();
+                    }
+                    const published = request.answer(definition);
+                    // Published, and then edited in place. What the execution
+                    // retained is the copy taken at publication, so this reaches
+                    // nothing — and the answer the chain is now holding no longer
+                    // describes what was published, which refuses.
+                    Object.assign(definition, {
+                      generated: {
+                        "self-closing": {
+                          identity: "https://executable.md/components/edited/write",
+                          effect: "write",
+                        },
+                      },
+                    });
+                    return published;
+                  });
+                },
+              },
+            ],
+          },
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toBeDefined();
     expect(ran).toEqual([]);
@@ -907,6 +922,7 @@ describe("Tier GS — what a selected name resolves to", () => {
   });
 
   it("U5-3: accessor-backed metadata is refused before it can answer twice", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const readings: string[] = [];
     // A declaration whose metadata would answer one thing while it is validated
     // and another when it is read again. The reading that was validated is the
@@ -939,16 +955,20 @@ describe("Tier GS — what a selected name resolves to", () => {
       },
     };
 
-    const attempt = yield* run(evaluating("<Shifty />\n"), {
-      installations: [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Shifty: ["self-closing"] });
+    const attempt = yield* run(
+      evaluating("<Shifty />\n"),
+      {
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Shifty: ["self-closing"] });
+            },
+            componentAnswers: [answerProvider("Shifty", definition)],
           },
-          componentAnswers: [answerProvider("Shifty", definition)],
-        },
-      ],
-    });
+        ],
+      },
+      stream,
+    );
 
     expect(attempt.failure).toBeDefined();
     expect(attempt.output ?? "").not.toContain("the shifty answer ran");

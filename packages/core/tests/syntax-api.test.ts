@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
 import { type Api, createApi } from "@effectionx/context-api";
 import { call, ensure, scoped, until } from "effection";
@@ -25,6 +26,11 @@ import { executeInstalled, useSyntax, Structural } from "../host.ts";
 import { inspectSyntax } from "../src/inspect.ts";
 import { syntaxReference } from "../src/syntax-reference.ts";
 import { selecting } from "./support/generated-selection.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+  captureTestJournal,
+} from "@executablemd/test-support/failure-journal";
 
 function symbolsOf(...names: string[]): SyntaxSymbols {
   return {
@@ -65,7 +71,9 @@ function without(symbols: SyntaxSymbols, name: string): SyntaxSymbols {
   };
 }
 
-function* run(text: string, stream = new InMemoryStream()): Operation<string> {
+const OWNER = "packages/core/tests/syntax-api.test.ts";
+
+function* run(text: string, stream: InMemoryStream): Operation<string> {
   return String(
     yield* collect(
       yield* executeInstalled({ ...inlineSource(text), stream, includes: [] }, [
@@ -139,6 +147,7 @@ describe("1178 reference specialization", () => {
 });
 
 describe("Tier SA — contextual Syntax", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SA: structural availability compares complete installed identity and keeps enclosing references", function* () {
     const declaration = Structural({
       name: "Banner",
@@ -263,6 +272,7 @@ describe("Tier SA — contextual Syntax", () => {
   });
 
   it("SA4: moving named occurrences resolve one basis each and record the final transformed answer", function* () {
+    const stream = yield* useJournalStream("<eval>");
     let reads = 0;
     let symbols = 0;
     yield* useSyntax(function* () {
@@ -277,7 +287,6 @@ describe("Tier SA — contextual Syntax", () => {
         return `${yield* next(names)}\nFINAL NAMED`;
       },
     });
-    const stream = new InMemoryStream();
     const source = '<Syntax names={["Marker1"]} />\n<Syntax names={["Marker2"]} />\n';
     const output = yield* run(source, stream);
     expect(output).toContain("Marker1");
@@ -340,29 +349,48 @@ describe("Tier SA — contextual Syntax", () => {
     expect(yield* run(source, partial)).toBe(first);
   });
 
-  it("SA6: generated descriptions retain host-only metadata and never grant execution", function* () {
-    let reads = 0;
-    yield* useSyntax(function* () {
-      reads += 1;
-      return symbolsOf("HostOnly");
-    });
-    const output = yield* run(
-      "<Evaluate text={'<Syntax names={[\"HostOnly\"]} />'} />\n<Syntax />\n",
-    );
-    expect(output).toContain("### `<HostOnly>`");
-    expect(output).toContain("**Available in this evaluation:** no");
-    expect(reads).toBe(2);
-    yield* Syntax.around({
-      *symbols() {
-        return symbolsOf("HostOnly");
+  const generatedSyntax =
+    "SA6: generated descriptions retain host-only metadata and never grant execution";
+  it(generatedSyntax, function* () {
+    yield* captureTestJournal(
+      { owner: OWNER, name: generatedSyntax },
+      "<eval>",
+      function* (stream) {
+        let reads = 0;
+        yield* useSyntax(function* () {
+          reads += 1;
+          return symbolsOf("HostOnly");
+        });
+        const output = yield* run(
+          "<Evaluate text={'<Syntax names={[\"HostOnly\"]} />'} />\n<Syntax />\n",
+          stream,
+        );
+        expect(output).toContain("### `<HostOnly>`");
+        expect(output).toContain("**Available in this evaluation:** no");
+        expect(reads).toBe(2);
+        yield* Syntax.around({
+          *symbols() {
+            return symbolsOf("HostOnly");
+          },
+        });
+        yield* captureTestJournal(
+          { owner: OWNER, name: generatedSyntax },
+          "<eval>",
+          function* (refusedStream) {
+            const refused = yield* run(
+              "<PrintErrors><Evaluate text={'<HostOnly />'} /></PrintErrors>\n",
+              refusedStream,
+            );
+            expect(refused).toContain("a component this host did not admit");
+            expect(refused).not.toContain("No long-form documentation");
+          },
+        );
       },
-    });
-    const refused = yield* run("<PrintErrors><Evaluate text={'<HostOnly />'} /></PrintErrors>\n");
-    expect(refused).toContain("a component this host did not admit");
-    expect(refused).not.toContain("No long-form documentation");
+    );
   });
 
   it("SA7: a descriptive filter cannot disable an admitted generated component", function* () {
+    const stream = yield* useJournalStream("<eval>");
     yield* Syntax.around({
       *symbols() {
         return symbolsOf();
@@ -373,35 +401,42 @@ describe("Tier SA — contextual Syntax", () => {
         return "ADMITTED SYNTAX RAN";
       },
     });
-    expect(yield* run("<Evaluate text={'<Syntax />'} />\n")).toContain("ADMITTED SYNTAX RAN");
+    expect(yield* run("<Evaluate text={'<Syntax />'} />\n", stream)).toContain(
+      "ADMITTED SYNTAX RAN",
+    );
   });
 
-  it("SA8: canonical unknown names are safe records; provider-thrown UnknownComponentError is terminal", function* () {
-    const stream = new InMemoryStream();
-    yield* useSyntax(function* () {
-      return symbolsOf("HostOnly");
-    });
-    yield* run('<PrintErrors><Syntax names={["Missing"]} /></PrintErrors>\n', stream);
-    const record = stream
-      .snapshot()
-      .find((event) => event.type === "yield" && event.description.type === "syntax_symbols");
-    expect(record?.type === "yield" ? record.result.status : "absent").toBe("ok");
-    expect(JSON.stringify(record)).toContain('"refused"');
-    yield* scoped(function* () {
-      yield* useSyntax(function* (): Operation<SyntaxSymbols> {
-        throw new UnknownComponentError("provider failure");
+  const unknownNames =
+    "SA8: canonical unknown names are safe records; provider-thrown UnknownComponentError is terminal";
+  it(unknownNames, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: unknownNames }, "<eval>", function* (stream) {
+      yield* useSyntax(function* () {
+        return symbolsOf("HostOnly");
       });
-      const failed = new InMemoryStream();
-      yield* run('<PrintErrors><Syntax names={["HostOnly"]} /></PrintErrors>\n', failed);
-      const retained = failed
+      yield* run('<PrintErrors><Syntax names={["Missing"]} /></PrintErrors>\n', stream);
+      const record = stream
         .snapshot()
         .find((event) => event.type === "yield" && event.description.type === "syntax_symbols");
-      expect(retained?.type === "yield" ? retained.result.status : "absent").toBe("err");
-      expect(JSON.stringify(retained)).toContain("provider failure");
+      expect(record?.type === "yield" ? record.result.status : "absent").toBe("ok");
+      expect(JSON.stringify(record)).toContain('"refused"');
+      yield* captureTestJournal({ owner: OWNER, name: unknownNames }, "<eval>", function* (failed) {
+        yield* scoped(function* () {
+          yield* useSyntax(function* (): Operation<SyntaxSymbols> {
+            throw new UnknownComponentError("provider failure");
+          });
+          yield* run('<PrintErrors><Syntax names={["HostOnly"]} /></PrintErrors>\n', failed);
+          const retained = failed
+            .snapshot()
+            .find((event) => event.type === "yield" && event.description.type === "syntax_symbols");
+          expect(retained?.type === "yield" ? retained.result.status : "absent").toBe("err");
+          expect(JSON.stringify(retained)).toContain("provider failure");
+        });
+      });
     });
   });
 
   it("SA9: independently constructed same-name descriptors share ordinary middleware", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const other: Api<SyntaxApi> = createApi<SyntaxApi>("executablemd.core.syntax", {
       symbols: call(function* (): Operation<SyntaxSymbols> {
         throw new Error("foreign default must not run");
@@ -418,6 +453,6 @@ describe("Tier SA — contextual Syntax", () => {
         return "OTHER DESCRIPTOR";
       },
     });
-    expect(yield* run("<Syntax />\n")).toContain("OTHER DESCRIPTOR");
+    expect(yield* run("<Syntax />\n", stream)).toContain("OTHER DESCRIPTOR");
   });
 });

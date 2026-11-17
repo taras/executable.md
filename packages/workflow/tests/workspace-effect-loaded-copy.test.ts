@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { createApi } from "@effectionx/context-api";
@@ -55,6 +56,7 @@ import type {
   GitHostCompletion,
   GitHostObservation,
 } from "@executablemd/git/api";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 /**
  * The admissions the Git Plugin contributes, as a host installing it receives
@@ -418,10 +420,13 @@ describe("Tier DLC — physical Workspace package composition", () => {
  * copy buys a place in the middleware chain and nothing else: no credential, no
  * capability, no answer, and no route to the invocation's own terminal.
  */
+const OWNER = "packages/workflow/tests/workspace-effect-loaded-copy.test.ts";
+
 describe("Tier DLG — physical Git-host package composition", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("DLG1: one copy's provider serves the other copy's reconciliation", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const copy = yield* physicalGitHostCopy();
-    const stream = new InMemoryStream();
     const observed: unknown[] = [];
     const captured: unknown[] = [];
     const refused: unknown[] = [];
@@ -502,8 +507,8 @@ describe("Tier DLG — physical Git-host package composition", () => {
   });
 
   it("DLG2: the other copy's reconciliation runs under this copy's provider", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const copy = yield* physicalGitHostCopy();
-    const stream = new InMemoryStream();
     const observed: unknown[] = [];
     const seen = gitHostAttempt();
 
