@@ -1977,6 +1977,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
       yield* useTransport(() => ({ status: 200, body: "response-body-marker" }));
       return yield* evaluate(
         request(`<Fetch url="${URL_ONE}?query=url-marker" />\n`, [pinnedFetch()]),
+        { stream: new InMemoryStream() },
       );
     });
 
@@ -2005,6 +2006,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     const attempt = yield* scoped(function* () {
       return yield* evaluate(
         request(`token ${CANARY}\n\n<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]),
+        { stream: new InMemoryStream() },
       );
     });
 
@@ -2019,7 +2021,9 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
     const element = `<Fetch url="${URL_ONE}" headers={{ authorization: "${CANARY}" }} />`;
 
-    const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch()]));
+    const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch()]), {
+      stream: new InMemoryStream(),
+    });
 
     expect(attempt.failure).toContain("secret detection rejected content");
     expect(persisted(attempt.events)).not.toContain(CANARY);
