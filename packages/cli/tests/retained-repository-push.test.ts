@@ -21,7 +21,8 @@
  * delivery-4 matrix.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
@@ -83,6 +84,7 @@ import { currentRepository } from "@executablemd/git/api";
 
 /** The owner the CLI derives for an entry, as this suite states one. */
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-push","1"]';
+const JOURNAL_OWNER = "packages/cli/tests/retained-repository-push.test.ts";
 
 interface Fixture {
   /** The scenario's own directory: checkouts, managed root and HOME. */
@@ -366,7 +368,7 @@ function left(
   options: RunOptions = {},
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = options.stream ?? new InMemoryStream();
+    const stream = options.stream ?? (yield* useJournalStream(join(fixture.root, "entry.md")));
     const reached = withResolvers<void>();
     const task = yield* spawn(() =>
       run(fixture, source, stream, counted, {
@@ -413,7 +415,7 @@ function interrupted(
   options: RunOptions = {},
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const reached = withResolvers<void>();
     const task = yield* spawn(() =>
       run(fixture, source, stream, counted, {
@@ -595,10 +597,11 @@ const QUESTION = [
 ].join("\n");
 
 describe("one entry's publication", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("P1: publishes once, and answers a completed publication with no Git at all", function* () {
     const fixture = yield* useFixture();
     const first = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
 
     const ran = yield* run(fixture, publishing(fixture, "review/push", "notes.md"), stream, first);
     expect(ran.refusal).toBe(undefined);
@@ -725,7 +728,7 @@ describe("one entry's publication", () => {
 
     // One publication, then a second commit on the same branch in the same
     // managed checkout: the destination holds an ancestor of what is published.
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const first = yield* run(
       fixture,
       publishing(fixture, "review/advance", "one.md"),
@@ -735,7 +738,7 @@ describe("one entry's publication", () => {
     expect(first.refusal).toBe(undefined);
     const base = yield* remoteCommit(fixture, "review/advance");
 
-    const advanced = new InMemoryStream();
+    const advanced = yield* useJournalStream(join(fixture.root, "entry.md"));
     const second = yield* run(
       fixture,
       publishing(fixture, "review/advance", "two.md"),
@@ -757,7 +760,7 @@ describe("one entry's publication", () => {
     const theirs = yield* remoteCommit(fixture, "review/advance");
 
     const refused = counters();
-    const conflicted = new InMemoryStream();
+    const conflicted = yield* useJournalStream(join(fixture.root, "entry.md"));
     const third = yield* run(
       fixture,
       publishing(fixture, "review/advance", "three.md"),
@@ -793,7 +796,7 @@ describe("one entry's publication", () => {
     // A handler that answers without delegating has answered the document.
     // Nothing is written down and nothing is contacted.
     const synthetic = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const answered = yield* run(
       fixture,
       publishing(fixture, "review/synthetic", "synthetic.md"),
@@ -823,7 +826,7 @@ describe("one entry's publication", () => {
     // A handler that transforms and delegates is retained as both readings: the
     // question the invocation asked, and what the dispatch received.
     const transformed = counters();
-    const delegated = new InMemoryStream();
+    const delegated = yield* useJournalStream(join(fixture.root, "entry.md"));
     const published = yield* run(
       fixture,
       publishing(fixture, "review/delegated", "delegated.md"),
@@ -857,7 +860,7 @@ describe("one entry's publication", () => {
     // A second delegation of one invocation is refused, and the first one's
     // acknowledged work stands.
     const doubled = counters();
-    const twice = new InMemoryStream();
+    const twice = yield* useJournalStream(join(fixture.root, "entry.md"));
     const refused = yield* run(
       fixture,
       publishing(fixture, "review/doubled", "doubled.md"),
@@ -1050,7 +1053,7 @@ describe("one entry's publication", () => {
     // decided before the request exists, so nothing is written down.
     const slot = repositorySlot(fixture.managed, fixture.origin, "project");
     const contended = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const refused = yield* scoped(function* (): Operation<Run> {
       yield* useForeignSlot(fixture.managed, slot, "repository");
       return yield* run(
@@ -1067,7 +1070,7 @@ describe("one entry's publication", () => {
     // A publication from a checkout whose own configuration names another
     // destination and another program. The transport runs in a repository this
     // run created, so neither is read.
-    const published = new InMemoryStream();
+    const published = yield* useJournalStream(join(fixture.root, "entry.md"));
     const counted = counters();
     const first = yield* run(
       fixture,
@@ -1087,7 +1090,7 @@ describe("one entry's publication", () => {
     );
     yield* until(chmod(join(checkout, ".git/hooks/pre-push"), 0o755));
 
-    const second = new InMemoryStream();
+    const second = yield* useJournalStream(join(fixture.root, "entry.md"));
     const after = yield* run(
       fixture,
       publishing(fixture, "review/hostile2", "second.md"),
@@ -1214,7 +1217,7 @@ describe("one entry's publication", () => {
   it("P12: publishes while another entry holds only the mutation lease", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
 
     // A publication reads authenticated objects and changes a branch on a
     // remote. It changes nothing in the repository, so the lease that says
@@ -1229,7 +1232,7 @@ describe("one entry's publication", () => {
     expect(first.refusal).toBe(undefined);
     const common = join(managedCheckout(yield* stream.readAll()), ".git");
 
-    const second = new InMemoryStream();
+    const second = yield* useJournalStream(join(fixture.root, "entry.md"));
     const held = counters();
     const published = yield* scoped(function* (): Operation<Run> {
       yield* useCommonDirectoryLease(common);
@@ -1368,7 +1371,7 @@ describe("one entry's publication", () => {
     const source = ["<All>", branch("alpha"), branch("beta"), "</All>", ""].join("\n");
 
     const prefix = yield* scoped(function* (): Operation<readonly DurableEvent[]> {
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
       const waiting = withResolvers<void>();
       let asked = 0;
       const task = yield* spawn(() =>
@@ -1457,7 +1460,7 @@ describe("one entry's publication", () => {
   it("P17: one authored site evaluated twice is two publications", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
 
     const ran = yield* run(
       fixture,
@@ -1501,7 +1504,7 @@ describe("one entry's publication", () => {
     // stands; the second use reaches a revoked default.
     const kept: ((invocation: GitPushInvocation) => Operation<GitPushOutcome>)[] = [];
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const reused = yield* run(
       fixture,
       [
@@ -1553,7 +1556,7 @@ describe("one entry's publication", () => {
     // A handler that delegates and then throws cannot replace the receipt the
     // worker already published.
     const raising = counters();
-    const second = new InMemoryStream();
+    const second = yield* useJournalStream(join(fixture.root, "entry.md"));
     const thrown = yield* run(
       fixture,
       publishing(fixture, "review/raised", "raised.md"),
@@ -1581,7 +1584,7 @@ describe("one entry's publication", () => {
     // A handler that delegates and then answers with something else of its own
     // cannot replace the receipt either: a return value is not evidence.
     const replaced = counters();
-    const fourth = new InMemoryStream();
+    const fourth = yield* useJournalStream(join(fixture.root, "entry.md"));
     const answered = yield* run(
       fixture,
       publishing(fixture, "review/replaced", "replaced.md"),
@@ -1610,7 +1613,7 @@ describe("one entry's publication", () => {
     // And a dispatch made outside the trusted invocation reaches the ordinary
     // missing-provider refusal, retaining nothing.
     const standalone = counters();
-    const third = new InMemoryStream();
+    const third = yield* useJournalStream(join(fixture.root, "entry.md"));
     const direct = yield* run(
       fixture,
       [
@@ -1721,7 +1724,7 @@ describe("one entry's publication", () => {
       yield* suspend();
     };
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     yield* scoped(function* (): Operation<void> {
       const task = yield* spawn(() =>
         run(fixture, publishing(fixture, "review/scratch", "notes.md"), stream, counted, {
@@ -1773,7 +1776,7 @@ describe("one entry's publication", () => {
     // The cut is after the provider really observed its destination and before
     // any outcome, so what it releases is a resource the attempt had already
     // received rather than one it was still waiting for.
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     yield* scoped(function* (): Operation<void> {
       const task = yield* spawn(() =>
         run(fixture, publishing(fixture, "review/scratch2", "notes.md"), stream, counted, {
@@ -1856,7 +1859,7 @@ describe("one entry's publication", () => {
     // That the native child this contact spawns is genuinely running and is
     // joined before the attempt settles is proved where the invocation is, by
     // `git-host-owned.test.ts`'s OW15.
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     yield* scoped(function* (): Operation<void> {
       const task = yield* spawn(() =>
         run(fixture, publishing(fixture, "review/blocked", "notes.md"), stream, counted, {
@@ -1900,7 +1903,7 @@ describe("one entry's publication", () => {
   it("P10: an entry with no managed root refuses to publish anything", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
 
     const ran = yield* run(
       fixture,

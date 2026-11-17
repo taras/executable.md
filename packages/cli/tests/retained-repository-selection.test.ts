@@ -19,7 +19,8 @@
  * because what most of them assert is what a *second* open of one history does.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand } from "@executablemd/test-support/launch";
 import {
@@ -80,6 +81,8 @@ import {
 import type { ReplPlacementRecord } from "../src/repl/repositories/placement-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
 import { repositorySlot, worktreeSlot } from "@executablemd/git/deno";
+
+const JOURNAL_OWNER = "packages/cli/tests/retained-repository-selection.test.ts";
 
 interface Fixture {
   /** The scenario's own directory: source repository, managed root and HOME. */
@@ -374,7 +377,7 @@ function left(
   options: RunOptions = {},
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const reached = withResolvers<void>();
     const task = yield* spawn(() =>
       run(fixture, source, stream, counted, {
@@ -464,6 +467,7 @@ function answered(count: { asked: number } = { asked: 0 }): Operation<void> {
 }
 
 describe("one entry's managed Repository and Worktree selections", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("E2: replays acknowledged placements and results with no selector work", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
@@ -672,7 +676,12 @@ describe("one entry's managed Repository and Worktree selections", () => {
       "</Repository>",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), live);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      live,
+    );
     expect(ran.refusal).toBe(undefined);
 
     const recorded = placements(ran.events);
@@ -734,7 +743,12 @@ describe("one entry's managed Repository and Worktree selections", () => {
       "</All>",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), live);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      live,
+    );
     expect(ran.refusal).toBe(undefined);
 
     // Neither record was suppressed, and neither branch raced the other into
@@ -852,7 +866,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
     const source = ["<All>", branch("alpha"), branch("beta"), "</All>"].join("\n");
 
     const prefix = yield* scoped(function* () {
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
       const waiting = withResolvers<void>();
       let asked = 0;
       const task = yield* spawn(() =>
@@ -967,7 +981,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
     const ran = yield* run(
       fixture,
       '<Worktree name="nowhere" branch="nowhere" as="tree" />',
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       live,
       { cwd: outside },
     );
