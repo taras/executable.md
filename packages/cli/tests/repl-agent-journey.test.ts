@@ -1229,7 +1229,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     chosen = standingRoute.session;
     expect(standingRoute.draft).toBe(TYPED);
     expect(standingRoute.surface).toBe("entries");
-    expect(standingRoute.scopes).toEqual([]);
+    expect(standingRoute.scopes).toEqual(["entry-1"]);
     expect(standingRoute.at).toBeUndefined();
     expect(standingRoute.inspect).toBe(false);
     expect(live.prompts).toHaveLength(3);
