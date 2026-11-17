@@ -5098,7 +5098,7 @@ describe("resume retention and mounted retained recovery corrections", () => {
         "the saved fallback and new chat action",
         (one) => one.shows("could not be resumed") && one.shows("[Start new chat]"),
       );
-      expect(page.screen().shows("Release the active writer.")).toBe(false);
+      expect(page.screen().shows("Release the active writer.")).toBe(true);
       expect(page.screen().shows("[Retry]")).toBe(false);
       page.repl.terminal.end();
       yield* awaited("the REPL joining", () => page.repl.outcome() !== undefined);
@@ -5125,7 +5125,10 @@ describe("resume retention and mounted retained recovery corrections", () => {
       host: { ...held.host, profile: held.profile },
       location: held.location,
     });
-    yield* reopened.until("the retained local failure", (one) => one.shows("could not be resumed"));
+    yield* reopened.until(
+      "the retained local failure",
+      (one) => one.shows("Release the active writer.") && one.shows("could not be resumed"),
+    );
     expect(reopened.screen().shows("[Retry]")).toBe(false);
     expect(yield* readSidekickRecords(held.chat.location.sidekick)).toEqual(after);
   });

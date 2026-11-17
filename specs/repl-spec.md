@@ -1068,6 +1068,12 @@ no established request and appears beside the preceding attempt on its own.
 It creates no feedback intent or acknowledgement. A second ordinary outcome
 for the same request still refuses the history.
 
+For a classified resume refusal, chat displays the screened ACP details as
+literal text followed by the saved recovery message. A missing or blank detail
+leaves the recovery message alone. The live exchange, including an original
+continuation refusal, uses the same text as the saved attempt. The entry
+Journal returns the canonical saved fields with their original values.
+
 Activating a Sidekick turn opens the chat that contains it and brings that turn
 into view. It sets `view=sidekick`, `right=sidekick` and that chat's own
 identifier, and preserves the conversation filter, the saved surface, the
