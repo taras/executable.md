@@ -30,10 +30,7 @@
 
 import { beforeAll, describe, it, beforeEach } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { API } from "@executablemd/runtime";
@@ -76,7 +73,6 @@ import type {
   GeneratedXmdRequest,
 } from "../src/generated-xmd.ts";
 import type { FunctionComponent, FunctionComponentDefinition, Json } from "../src/types.ts";
-
 
 const ROOT_PATH = "repl/sidekick.md";
 const ROOT_SOURCE = "The host evaluated a generated root.\n";

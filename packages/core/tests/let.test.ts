@@ -23,10 +23,7 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { execute, executeInstalled } from "../src/execute.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import type { HostExecution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
 import { collect } from "../src/collect.ts";

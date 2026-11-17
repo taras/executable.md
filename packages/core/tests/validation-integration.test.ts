@@ -12,10 +12,7 @@ import { asText } from "./helpers.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { compilePropsSchema } from "../src/validate.ts";
 import type { ComponentDefinition, EvalEnv, Json, Segment } from "../src/types.ts";
-import {
-  journalBeforeEach,
-  useJournalStream,
-} from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 function markdownComponent(name: string, props: Record<string, Json>): ComponentDefinition {
   return {
@@ -108,24 +105,24 @@ describe("`inputs` is not a compatibility alias for `props`", () => {
   it("a component declaring `inputs` declares no props", function* () {
     const journal = yield* useJournalStream("README.md");
     yield* useStubFs({
-    "README.md": '<Legacy name="world" />\n',
-    "Legacy.md": [
-      "---",
-      "inputs:",
-      "  type: object",
-      "  properties:",
-      "    name: { type: string }",
-      "  additionalProperties: false",
-      "---",
-      "Hello, {props.name}",
-      "",
-    ].join("\n"),
+      "README.md": '<Legacy name="world" />\n',
+      "Legacy.md": [
+        "---",
+        "inputs:",
+        "  type: object",
+        "  properties:",
+        "    name: { type: string }",
+        "  additionalProperties: false",
+        "---",
+        "Hello, {props.name}",
+        "",
+      ].join("\n"),
     });
     let message = "";
     try {
-    message = asText(yield* collect(yield* execute({ path: "README.md", stream: journal })));
+      message = asText(yield* collect(yield* execute({ path: "README.md", stream: journal })));
     } catch (error) {
-    message = error instanceof Error ? error.message : String(error);
+      message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain("Prop validation failed");
   });
