@@ -17,7 +17,11 @@ import { asText, completion, failureMessage } from "./helpers.ts";
 import type { Json } from "../src/types.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/eval-bindings.test.ts";
 
@@ -189,11 +193,11 @@ function malformed(value: unknown): ExecutionInitialization {
 
 /** What one run of a document under `initialBindings` did. */
 function* inheriting(
+  stream: InMemoryStream,
   source: string,
   initialBindings: Readonly<Record<string, Json>>,
   installations: readonly ExecutionInstallation[] = [],
 ): Operation<{ output: string; events: DurableEvent[] }> {
-  const stream = new InMemoryStream();
   const output = asText(
     yield* collect(
       yield* executeInstalled({ ...inlineSource(source), stream }, [...installations], {
@@ -205,9 +209,11 @@ function* inheriting(
 }
 
 describe("Tier T5 — initial root bindings a trusted host supplies", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("EB1: copies a nested record before installations run, and document code reads it", function* () {
+    const stream = yield* useJournalStream("<eval>");
     // The caller's own graph, which the second installation rewrites while the
     // run is in flight.
     const held = { plan: { title: "Ship the REPL", steps: 2 }, flags: ["draft", "ready"] };
@@ -219,6 +225,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     };
 
     const { output } = yield* inheriting(
+      stream,
       [
         "```js eval",
         "const read = `${plan.title}/${plan.steps}/${flags[1]}`;",
@@ -254,6 +261,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
   });
 
   it("EB1: the execution may mutate its own copy, and the caller's graph never moves", function* () {
+    const stream = yield* useJournalStream("<eval>");
     // A durable eval value is ordinary mutable data: an entry that inherits a
     // list and appends to it is doing what any block does to any binding. What
     // isolation has to mean is that the *caller's* graph is unreachable from
@@ -261,6 +269,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     const held = { items: ["first"], counts: { runs: 1 } };
 
     const { output } = yield* inheriting(
+      stream,
       [
         "```js eval",
         'items.push("second");',
@@ -340,7 +349,9 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
   });
 
   it("EB1: an authored export replaces an initial value through the ordinary rules", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const { output } = yield* inheriting(
+      stream,
       [
         "```js eval",
         "const inherited = 'authored';",
@@ -393,6 +404,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
   });
 
   it("EB1: a retained `__proto__` binding is installed as an ordinary name", function* () {
+    const stream = yield* useJournalStream("<eval>");
     // Its own enumerable member, which is what `JSON.parse` produces and
     // therefore what a journal read back from a file can hold. Nothing here sets
     // a prototype: an object literal would have, which is why this is defined.
@@ -407,6 +419,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
 
     const { output } = yield* inheriting(
+      stream,
       ["```js eval", "const copied = `${__proto__}`;", "```", "", "Read: {copied}", ""].join("\n"),
       record,
     );
@@ -416,17 +429,22 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     expect(output).toContain("Read: retained");
   });
 
-  it("EB1: ordinary execute() inherits nothing, so the same document fails", function* () {
-    const stream = new InMemoryStream();
-    const source = "```js eval\nconst read = inherited;\n```\n";
+  {
+    const name = "EB1: ordinary execute() inherits nothing, so the same document fails";
+    it(name, function* () {
+      const stream = yield* useJournalStream("<eval>");
+      yield* captureTestJournal({ owner: OWNER, name }, "<eval>", function* (stream2) {
+        const source = "```js eval\nconst read = inherited;\n```\n";
 
-    // The same bytes succeed through the host entrypoint.
-    const { output } = yield* inheriting(source, { inherited: "retained" });
-    expect(output).not.toContain("ERROR");
+        // The same bytes succeed through the host entrypoint.
+        const { output } = yield* inheriting(stream2, source, { inherited: "retained" });
+        expect(output).not.toContain("ERROR");
 
-    const result = yield* completion({ ...inlineSource(source), stream });
+        const result = yield* completion({ ...inlineSource(source), stream });
 
-    expect(result.ok).toBe(false);
-    expect(failureMessage(result)).toContain("inherited");
-  });
+        expect(result.ok).toBe(false);
+        expect(failureMessage(result)).toContain("inherited");
+      });
+    });
+  }
 });

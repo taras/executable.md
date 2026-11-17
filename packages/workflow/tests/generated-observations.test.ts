@@ -26,7 +26,11 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { retainedSource, SOURCE_POSITION_FIELD } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { collect } from "@executablemd/core";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import {
   useWorkflowGenerated,
   workflowGeneratedSelection,
@@ -389,86 +393,88 @@ describe("Tier WGX — what an admitted request may reach is live", () => {
     expect(transport.performed).toHaveLength(0);
   });
 
-  it("WGX9: a bound this host stated cannot be moved by editing what it was given", function* () {
-    const transport = yield* useTransport();
-    const bound = { url: URL_ONE, headers: { "x-bound": "stated" } };
+  {
+    const name = "WGX9: a bound this host stated cannot be moved by editing what it was given";
+    it(name, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
+      yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream2) {
+        yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream3) {
+          yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream4) {
+            const transport = yield* useTransport();
+            const bound = { url: URL_ONE, headers: { "x-bound": "stated" } };
 
-    yield* scoped(function* () {
-      // One installed policy for the whole row. The edit below happens while
-      // this is still the thing deciding requests, which is the only place an
-      // in-place edit could have moved anything.
-      yield* useWorkflowGenerated({ requests: [bound] });
+            yield* scoped(function* () {
+              // One installed policy for the whole row. The edit below happens while
+              // this is still the thing deciding requests, which is the only place an
+              // in-place edit could have moved anything.
+              yield* useWorkflowGenerated({ requests: [bound] });
 
-      const stated = yield* once(fetching(URL_ONE, { "x-bound": "stated" }));
-      expect(stated.failure).toBe(undefined);
-      expect(transport.performed).toHaveLength(1);
+              const stated = yield* once(fetching(URL_ONE, { "x-bound": "stated" }), {}, stream);
+              expect(stated.failure).toBe(undefined);
+              expect(transport.performed).toHaveLength(1);
 
-      // The host still holds the object it passed, and edits it here.
-      bound.url = URL_TWO;
-      bound.headers["x-bound"] = "changed";
+              bound.url = URL_TWO;
+              bound.headers["x-bound"] = "changed";
 
-      // What it stated is still admitted: the policy compares against the copy
-      // it captured, not against the object it was handed.
-      const again = yield* once(fetching(URL_ONE, { "x-bound": "stated" }));
-      expect(again.failure).toBe(undefined);
-      expect(transport.performed).toHaveLength(2);
+              const again = yield* once(fetching(URL_ONE, { "x-bound": "stated" }), {}, stream2);
+              expect(again.failure).toBe(undefined);
+              expect(transport.performed).toHaveLength(2);
 
-      // And what the edit tried to admit was never bounded. Both halves of it
-      // are refused — the destination and the header value.
-      const moved = yield* once(fetching(URL_TWO, { "x-bound": "changed" }));
-      expect(moved.failure).toContain("not permitted in this scope");
-      const changed = yield* once(fetching(URL_ONE, { "x-bound": "changed" }));
-      expect(changed.failure).toContain("not permitted in this scope");
-      expect(transport.performed).toHaveLength(2);
-    });
-  });
-
-  it("WGX13: a header a transformation added is compared as the transport will send it", function* () {
-    // The real terminal and a real server, because this row is about the
-    // difference between the request a policy read and the request that goes
-    // out. Nothing substitutes `API.Fetch`: the terminal asks `Permissions`
-    // itself, after every transformation and immediately before transport.
-    const server = yield* useLoopback();
-    const url = `${server.origin}/bounded`;
-
-    // Positive control: the request the host bounded, unchanged, reaches the
-    // server carrying exactly the header that was stated.
-    const allowed = yield* run(fetching(url, { "x-bound": "admitted" }), {
-      generated: { requests: [{ url, headers: { "x-bound": "admitted" } }] },
-    });
-    expect(allowed.failure).toBe(undefined);
-    expect(server.received).toEqual(["admitted"]);
-    expect(fetches(allowed.events)).toHaveLength(1);
-
-    // The same bound, with middleware that adds a differently cased spelling of
-    // the bounded name. A transport joins the two into one sent header, so the
-    // value that would go out is neither the bounded one nor anything this host
-    // stated — and the request is refused before transport starts.
-    const transformed = yield* scoped(function* () {
-      yield* API.Fetch.around({
-        *fetch([input, init], next) {
-          return yield* next(input, {
-            ...init,
-            headers: { "X-Bound": "EXTRA", ...(init?.headers ?? {}) },
+              const moved = yield* once(fetching(URL_TWO, { "x-bound": "changed" }), {}, stream3);
+              expect(moved.failure).toContain("not permitted in this scope");
+              const changed = yield* once(fetching(URL_ONE, { "x-bound": "changed" }), {}, stream4);
+              expect(changed.failure).toContain("not permitted in this scope");
+              expect(transport.performed).toHaveLength(2);
+            });
           });
-        },
-      });
-      return yield* run(fetching(url, { "x-bound": "admitted" }), {
-        generated: { requests: [{ url, headers: { "x-bound": "admitted" } }] },
+        });
       });
     });
+  }
 
-    // Asked first, because it is the whole question: the server was asked once
-    // in this row, by the control, and the transformed request reached it not
-    // at all. A comparator that read a collapsed copy of the headers would let
-    // this one through carrying `EXTRA, admitted`.
-    expect(server.received).toEqual(["admitted"]);
-    expect(transformed.failure).toContain("not permitted in this scope");
-    // What it retained is the refusal, not an observation: the request was
-    // refused where it would have been sent, so there is no response here to
-    // restore from.
-    expect(statuses(fetches(transformed.events))).toEqual(["err"]);
-  });
+  {
+    const name = "WGX13: a header a transformation added is compared as the transport will send it";
+    it(name, function* () {
+      const stream = yield* useJournalStream(ROOT_PATH);
+      yield* captureTestJournal({ owner: OWNER, name }, ROOT_PATH, function* (stream2) {
+        const server = yield* useLoopback();
+        const url = `${server.origin}/bounded`;
+
+        const allowed = yield* run(
+          fetching(url, { "x-bound": "admitted" }),
+          {
+            generated: { requests: [{ url, headers: { "x-bound": "admitted" } }] },
+          },
+          stream,
+        );
+        expect(allowed.failure).toBe(undefined);
+        expect(server.received).toEqual(["admitted"]);
+        expect(fetches(allowed.events)).toHaveLength(1);
+
+        const transformed = yield* scoped(function* () {
+          yield* API.Fetch.around({
+            *fetch([input, init], next) {
+              return yield* next(input, {
+                ...init,
+                headers: { "X-Bound": "EXTRA", ...(init?.headers ?? {}) },
+              });
+            },
+          });
+          return yield* run(
+            fetching(url, { "x-bound": "admitted" }),
+            {
+              generated: { requests: [{ url, headers: { "x-bound": "admitted" } }] },
+            },
+            stream2,
+          );
+        });
+
+        expect(server.received).toEqual(["admitted"]);
+        expect(transformed.failure).toContain("not permitted in this scope");
+        expect(statuses(fetches(transformed.events))).toEqual(["err"]);
+      });
+    });
+  }
 
   it("WGX14: a bound naming one header twice is refused where it is stated", function* () {
     const transport = yield* useTransport();
