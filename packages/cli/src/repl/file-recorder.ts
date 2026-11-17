@@ -1,4 +1,4 @@
-import { Err, Ok } from "effection";
+import { createContext, Err, Ok, scoped, useScope } from "effection";
 import type { Operation, Result } from "effection";
 import {
   FilesInvariantError,
@@ -9,13 +9,28 @@ import {
   parseFileWriteSuccess,
 } from "@executablemd/runtime";
 import type {
+  FileCopyInput,
   FilesHandler,
   FilesOperation,
   FilesPhase,
   FilePathInput,
   FileWriteSuccess,
 } from "@executablemd/runtime";
-import { registerFileRecorder, assembleFileCall } from "@executablemd/runtime/files-host";
+import {
+  registerFileRecorder,
+  assembleFileCall,
+  withHostCopyRoute,
+} from "@executablemd/runtime/files-host";
+import {
+  checkCopyPublication,
+  copyReplayContext,
+  recordedLocalOperation,
+  retainedCopyAhead,
+  ReplLocalRecordError,
+  retainedSelectionAhead,
+  failCopy,
+} from "./repositories/deno/local.ts";
+import type { LocalOperation } from "./repositories/deno/local.ts";
 import type { Around } from "@effectionx/context-api";
 import type { AuthoredFileOperation } from "@executablemd/core/host";
 import type {
@@ -34,7 +49,85 @@ export interface EntryFileCalls {
   read(authored: AuthoredFileOperation, input: FilePathInput): Operation<Result<string>>;
   ensure(authored: AuthoredFileOperation, input: FilePathInput): Operation<Result<void>>;
 }
-function recordingBody(route: FileRecordingRoute) {
+interface CopyRouting {
+  guard(): Operation<void>;
+  restoreSelection?(): Operation<unknown>;
+  route(source: string, destination: string): Operation<Operation<void> | undefined>;
+}
+
+function copyRecorder(routing: CopyRouting) {
+  const nextOrdinal = new Map<string, number>();
+  return function* (
+    input: FileCopyInput,
+    perform: () => Operation<Result<void>>,
+  ): Operation<Result<void>> {
+    const context = yield* copyReplayContext();
+    const ordinal = nextOrdinal.get(context.coroutineId) ?? 0;
+    nextOrdinal.set(context.coroutineId, ordinal + 1);
+    const identity: Pick<LocalOperation, "operation" | "ordinal" | "request"> = {
+      operation: "file-copy",
+      ordinal,
+      request: { cwd: input.cwd, source: input.source, path: input.destination },
+    };
+    yield* routing.guard();
+    if (routing.restoreSelection !== undefined && (yield* retainedSelectionAhead())) {
+      yield* routing.restoreSelection();
+    }
+    if (yield* retainedCopyAhead(ordinal)) {
+      const result = yield* recordedLocalOperation({
+        ...identity,
+        *perform() {
+          throw new ReplLocalRecordError("Cannot perform a retained file-copy occurrence live.");
+        },
+      });
+      return result.ok ? Ok(undefined) : result;
+    }
+
+    let covered = false;
+    let result: Result<ReplLocalValue>;
+    try {
+      result = yield* scoped(() =>
+        withHostCopyRoute(
+          function* (source, destination) {
+            try {
+              yield* copyReplayContext();
+              const hold = yield* routing.route(source, destination);
+              if (hold !== undefined) {
+                yield* checkCopyPublication();
+                yield* hold;
+                covered = true;
+              }
+              yield* copyReplayContext();
+            } catch (error) {
+              // A delegating layer may recover before the composed call settles.
+              throw yield* failCopy(error);
+            }
+          },
+          (function* () {
+            return yield* unitOutcome(perform(), { operation: "copy", phase: "access" });
+          })(),
+        ),
+      );
+    } catch (error) {
+      throw yield* failCopy(error);
+    }
+    yield* copyReplayContext();
+    if (covered) {
+      result = yield* recordedLocalOperation({
+        ...identity,
+        perform: function* () {
+          return result;
+        },
+      });
+    }
+    return result.ok ? Ok(undefined) : result;
+  };
+}
+
+function recordingBody(
+  route: FileRecordingRoute,
+  copy: ReturnType<typeof copyRecorder> | undefined,
+) {
   return {
     *read(
       input: FilePathInput,
@@ -71,6 +164,11 @@ function recordingBody(route: FileRecordingRoute) {
           const result = yield* route("file-write", { ...input }, () => writeOutcome(next(input)));
           return result.ok ? Ok(expectWritten(result.value)) : result;
         },
+        ...(copy === undefined
+          ? {}
+          : {
+              copyFile: ([input], next) => copy(input, () => next(input)),
+            }),
         *deleteFile([input], next) {
           const result = yield* route("file-delete", { ...input }, () =>
             unitOutcome(next(input), { operation: "delete", phase: "access" }),
@@ -81,8 +179,17 @@ function recordingBody(route: FileRecordingRoute) {
     },
   };
 }
-export function* useEntryFileRecorder(route: FileRecordingRoute): Operation<EntryFileCalls> {
-  const body = recordingBody(route);
+const entryCopyInstalled = createContext<boolean>("executablemd.repl.entry-copy-installed");
+
+export function* useEntryFileRecorder(
+  route: FileRecordingRoute,
+  copy: CopyRouting,
+): Operation<EntryFileCalls> {
+  // Repository initialization can precede mount fallback in the same execution.
+  const scope = yield* useScope();
+  const alreadyInstalled = scope.hasOwn(entryCopyInstalled);
+  scope.set(entryCopyInstalled, true);
+  const body = recordingBody(route, alreadyInstalled ? undefined : copyRecorder(copy));
   const handle = yield* registerFileRecorder(body.boundary());
   const read = assembleFileCall(handle, "readTextFile");
   const ensure = assembleFileCall(handle, "ensureDirectory");

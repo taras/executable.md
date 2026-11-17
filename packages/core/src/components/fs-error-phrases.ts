@@ -28,6 +28,7 @@ import type { FilesReason } from "@executablemd/runtime";
  * directory or a special file, and a pattern that cannot be compiled.
  */
 const PHRASES: ReadonlyMap<string, string> = new Map<FilesReason, string>([
+  ["occupied", "the destination already exists"],
   ["missing", "no such file or directory"],
   ["not-directory", "a component of the path is not a directory"],
   ["directory", "it is a directory"],

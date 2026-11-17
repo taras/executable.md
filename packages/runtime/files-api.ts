@@ -123,6 +123,7 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
       checkFilePath: call(terminal.checkFilePath, (layer) => layer.checkFilePath),
       readTextFile: call(terminal.readTextFile, (layer) => layer.readTextFile),
       writeTextFile: call(terminal.writeTextFile, (layer) => layer.writeTextFile),
+      copyFile: call(terminal.copyFile, (layer) => layer.copyFile),
       deleteFile: call(terminal.deleteFile, (layer) => layer.deleteFile),
       ensureDirectory: call(terminal.ensureDirectory, (layer) => layer.ensureDirectory),
       globFiles: call(terminal.globFiles, (layer) => layer.globFiles),
