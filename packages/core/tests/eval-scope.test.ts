@@ -4,19 +4,28 @@
  * Tests that eval scopes are properly scoped to components and
  * that child/parent scope relationships work correctly.
  */
-import { describe, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { Stdio } from "@effectionx/process";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { asText } from "./helpers.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "../../test-support/failure-journal.ts";
+import type { Operation } from "effection";
 
-const journalCase = journalCases("packages/core/tests/eval-scope.test.ts");
+const OWNER = "packages/core/tests/eval-scope.test.ts";
+
+function journalCase(name: string, source: string, body: (stream: InMemoryStream) => Operation<void>): void {
+  it(name, function* () {
+    yield* body(yield* useJournalStream(source));
+  });
+}
 
 describe("Tier T10 — eval-scope hierarchy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   // T61: Document with eval blocks — scope created per document
   journalCase("T61: eval blocks run within document scope", "test.md", function* (stream) {

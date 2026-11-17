@@ -4,7 +4,7 @@
  * Tests cross-block binding sharing, shadowing, empty blocks,
  * undeclared references, and syntax errors.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -17,11 +17,18 @@ import { asText, completion, failureMessage } from "./helpers.ts";
 import type { Json } from "../src/types.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "../../test-support/failure-journal.ts";
 
-const journalCase = journalCases("packages/core/tests/eval-bindings.test.ts");
+const OWNER = "packages/core/tests/eval-bindings.test.ts";
+
+function journalCase(name: string, source: string, body: (stream: InMemoryStream) => Operation<void>): void {
+  it(name, function* () {
+    yield* body(yield* useJournalStream(source));
+  });
+}
 
 describe("Tier T5 — Binding environment", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   // T38: Block 2 reads binding exported by Block 1 via env preamble
   journalCase("T38: block 2 reads binding from block 1", "test.md", function* (stream) {

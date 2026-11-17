@@ -5,18 +5,26 @@
  * that value becomes the block's rendered output. output() takes
  * precedence over return. Null/undefined returns produce no output.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "../../test-support/failure-journal.ts";
+import type { Operation } from "effection";
 
-const journalCase = journalCases("packages/core/tests/eval-return.test.ts");
+const OWNER = "packages/core/tests/eval-return.test.ts";
+
+function journalCase(name: string, source: string, body: (stream: InMemoryStream) => Operation<void>): void {
+  it(name, function* () {
+    yield* body(yield* useJournalStream(source));
+  });
+}
 
 describe("Eval block return value", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   // ER1: return string → rendered output
   journalCase("ER1: return string → rendered output", "test.md", function* (stream) {

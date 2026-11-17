@@ -9,16 +9,24 @@
  * the block projects.
  */
 
-import { beforeAll, describe } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { DocumentationError } from "../src/errors.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "../../test-support/failure-journal.ts";
+import type { Operation } from "effection";
 
-const journalCase = journalCases("packages/core/tests/eval-error-mode.test.ts");
+const OWNER = "packages/core/tests/eval-error-mode.test.ts";
+
+function journalCase(name: string, source: string, body: (stream: InMemoryStream) => Operation<void>): void {
+  it(name, function* () {
+    yield* body(yield* useJournalStream(source));
+  });
+}
 
 const PROJECTING_BLOCK = [
   "```ts persist eval",
@@ -28,6 +36,7 @@ const PROJECTING_BLOCK = [
 ];
 
 describe("Tier O — Eval scope hierarchy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   // O23: the block sits in documentation, so its projection settles under the
