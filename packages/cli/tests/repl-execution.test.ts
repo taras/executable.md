@@ -29,7 +29,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
 import { partitionEntrySegments, ROOT_IMPORT } from "../src/repl/entries.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import type { DeliverySink } from "../src/stdout-delivery.ts";
 
 import { useTempDirectory } from "@executablemd/test-support/temp";

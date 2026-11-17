@@ -7,7 +7,7 @@
  * `installAgentComponents`'s `rootProvider` seam — no real provider,
  * subprocess, or provider selection.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensure, scoped } from "effection";
@@ -28,7 +28,9 @@ import type { AgentProviderFactory } from "../src/provider-api.ts";
 import { installAgentComponents } from "../src/components.ts";
 import { Component } from "../../core/src/component-api.ts";
 import type { Json } from "@executablemd/core";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/agent/tests/agent-components.test.ts";
 
 interface StubResponse {
   status?: "completed" | "failed" | "cancelled";
@@ -103,7 +105,11 @@ function createStubStream(
         sessionKey: `stub:${typeof options?.session === "string" ? options.session : "default"}`,
         cwd: "/stub",
       };
-      const call: StubPromptCall = { content, agent, sessionKey: session.sessionKey };
+      const call: StubPromptCall = {
+        content,
+        agent,
+        sessionKey: session.sessionKey,
+      };
       if (options?.timeout !== undefined) {
         call.timeout = options.timeout;
       }
@@ -147,7 +153,7 @@ function* installStub(stub: Stub): Operation<void> {
 
 function* runDoc(
   doc: string,
-  stream: InMemoryStream,
+  providedStream?: InMemoryStream,
   dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`),
 ): Operation<{ output: string; result: Result<Json> }> {
   yield* ensureDir(dir);
@@ -156,6 +162,7 @@ function* runDoc(
 
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
+    const stream = providedStream ?? (yield* useJournalStream(docPath));
     // `<Session>` names durable work after its own invocation, so the host
     // declares it to the execution rather than registering it.
     const execution = yield* executeInstalled({ path: docPath, stream }, [
@@ -177,17 +184,13 @@ function agentCase(
   name: string,
   body: (run: (doc: string) => ReturnType<typeof runDoc>) => Operation<void>,
 ): void {
-  it(name, () => {
-    const dir = path.join(os.tmpdir(), `xmd-ac-test-${randomUUID()}`);
-    return captureTestJournal(
-      { owner: "packages/agent/tests/agent-components.test.ts", suite: SUITE, name },
-      path.join(dir, "doc.md"),
-      (stream) => body((doc) => runDoc(doc, stream, dir)),
-    );
+  it(name, function* () {
+    yield* body((doc) => runDoc(doc));
   });
 }
 
 describe(SUITE, () => {
+  beforeEach(journalBeforeEach(OWNER));
   agentCase(
     "AC1: wrapper <Prompt> always sends rendered children, untrimmed",
     function* (runFresh) {
@@ -358,7 +361,11 @@ describe(SUITE, () => {
     function* (runFresh) {
       const stub = createStubProvider((content) => {
         if (content.includes("first-fail")) {
-          return { status: "failed", stopReason: "max_tokens", deltas: ["partial-one "] };
+          return {
+            status: "failed",
+            stopReason: "max_tokens",
+            deltas: ["partial-one "],
+          };
         }
         if (content.includes("second-fail")) {
           return { status: "failed", stopReason: "refusal", deltas: [] };
@@ -399,7 +406,10 @@ describe(SUITE, () => {
   );
 
   agentCase("AC8: throwOnError aborts the document immediately", function* (runFresh) {
-    const stub = createStubProvider(() => ({ status: "failed", stopReason: "refusal" }));
+    const stub = createStubProvider(() => ({
+      status: "failed",
+      stopReason: "refusal",
+    }));
     yield* installStub(stub);
     const { output, result } = yield* runFresh(
       '<Prompt text="boom" throwOnError />\n\nnever reached\n',
@@ -532,7 +542,11 @@ describe(SUITE, () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root.0",
-      description: { type: "agent_prompt", name: "prompt:doc.md:1:1#0", input: "a" },
+      description: {
+        type: "agent_prompt",
+        name: "prompt:doc.md:1:1#0",
+        input: "a",
+      },
       result: {
         status: "ok",
         value: {
@@ -550,7 +564,11 @@ describe(SUITE, () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root.1",
-      description: { type: "agent_prompt", name: "prompt:doc.md:2:1#0", input: "b" },
+      description: {
+        type: "agent_prompt",
+        name: "prompt:doc.md:2:1#0",
+        input: "b",
+      },
       result: {
         status: "ok",
         value: {

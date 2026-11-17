@@ -20,7 +20,7 @@ import type { Operation } from "effection";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import { issueYields, runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 
 /** The scenarios, in the order a reader meets them. */
 const SCENARIOS = [
