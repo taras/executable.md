@@ -466,7 +466,7 @@ describe("how a REPL entry gets its repository behavior", () => {
     const source = [
       `<Repository name="project" url=${JSON.stringify(origin)}>`,
       '<File path="original.md">original</File>',
-      '<File.Copy source="original.md" destination="copy.md" />',
+      '<File.Copy from="original.md" to="copy.md" />',
       "</Repository>",
     ].join("\n");
     const events = yield* submit(fixture, source, execution(), { initialized: 0 });
@@ -555,9 +555,9 @@ describe("how a REPL entry gets its repository behavior", () => {
       );
       const source = [
         '<Dir path="/reference">',
-        '<File.Copy source="checkout/seed.md" destination="destination/..notes.md" />',
+        '<File.Copy from="checkout/seed.md" to="destination/..notes.md" />',
         "</Dir>",
-        '<File.Copy source="checkout/seed.md" destination="uncovered.md" />',
+        '<File.Copy from="checkout/seed.md" to="uncovered.md" />',
       ].join("\n");
       return String(
         yield* collect(

@@ -1337,7 +1337,7 @@ describe("Tier WGAC — the standard write table", () => {
         return yield* runDocument(
           database,
           evaluates(
-            '<File.Delete path="obsolete.md" />\n\n<File.Copy source="obsolete.md" destination="copy.md" />',
+            '<File.Delete path="obsolete.md" />\n\n<File.Copy from="obsolete.md" to="copy.md" />',
             ["write"],
           ),
         );

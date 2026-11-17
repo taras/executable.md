@@ -1920,7 +1920,7 @@ describe("workflow document filesystem — permission", () => {
 });
 
 describe("Workspace file copy", () => {
-  const doc = '<File.Copy source="source.bin" destination="destination.bin" />';
+  const doc = '<File.Copy from="source.bin" to="destination.bin" />';
   const target = JSON.stringify(["/source.bin", "/destination.bin"]);
   const bytes = Uint8Array.of(0, 255, 128);
 

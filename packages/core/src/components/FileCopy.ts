@@ -7,10 +7,10 @@ import { reason } from "./fs-error-phrases.ts";
 export const props = {
   type: "object",
   properties: {
-    source: { type: "string", minLength: 1 },
-    destination: { type: "string", minLength: 1 },
+    from: { type: "string", minLength: 1 },
+    to: { type: "string", minLength: 1 },
   },
-  required: ["source", "destination"],
+  required: ["from", "to"],
   additionalProperties: false,
 };
 
@@ -20,8 +20,8 @@ export const form: FormDeclaration = {
   fn: printErrors(function* (props) {
     const result = yield* copyFile({
       cwd: yield* cwd(),
-      source: String(props.source),
-      destination: String(props.destination),
+      source: String(props.from),
+      destination: String(props.to),
     });
     if (!result.ok) {
       throw new Error(`Cannot copy file: ${reason(parseFilesFailure(result.error)?.reason)}.`);

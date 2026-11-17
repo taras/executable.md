@@ -567,10 +567,10 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     const named = yield* runCli(["syntax", "File.Copy"], { cwd: "." }).expect();
     for (const text of [
       "**Forms:** `<File.Copy />`",
-      "| `source` | `string` | yes |",
-      "| `destination` | `string` | yes |",
+      "| `from` | `string` | yes |",
+      "| `to` | `string` | yes |",
       "Copy a file into an existing directory.",
-      '<File.Copy source="report.bin" destination="evidence/report.bin" />',
+      '<File.Copy from="reports/test.log" to="evidence/test.log" />',
     ]) {
       expect(named.stdout).toContain(text);
     }

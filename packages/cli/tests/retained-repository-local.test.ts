@@ -1462,7 +1462,7 @@ describe("marked workspace mount initialization", () => {
 });
 
 describe("retained File.Copy", () => {
-  const source = '<File.Copy source="seed.md" destination="copy.md" />';
+  const source = '<File.Copy from="seed.md" to="copy.md" />';
 
   it("replays success and occupied refusal before current permissions and routing", function* () {
     for (const occupied of [false, true]) {
@@ -1507,7 +1507,7 @@ describe("retained File.Copy", () => {
 
   it("rejects either changed operand before routing and leaves uncovered copy live", function* () {
     const fixture = yield* useFixture();
-    const doc = '<File.Copy source="checkout/seed.md" destination="checkout/copy.md" />';
+    const doc = '<File.Copy from="checkout/seed.md" to="checkout/copy.md" />';
     const placement = { cwd: fixture.root, projectCwd: fixture.checkout };
     const first = yield* run(fixture, doc, new InMemoryStream(), counters(), placement);
     expect(localRecords(first.events).map((record) => record.operation)).toEqual(["file-copy"]);
@@ -1687,13 +1687,13 @@ describe("retained File.Copy", () => {
 
   it("distinguishes equal received pairs in one coroutine and starts each child at zero", function* () {
     const fixture = yield* useFixture();
-    const one = '<File.Copy source="seed.md" destination="equal.md" />';
+    const one = '<File.Copy from="seed.md" to="equal.md" />';
     const doc = [
       one,
       one,
       "<All>",
-      '<Spawn><File.Copy source="seed.md" destination="left.md" /></Spawn>',
-      '<Spawn><File.Copy source="seed.md" destination="right.md" /></Spawn>',
+      '<Spawn><File.Copy from="seed.md" to="left.md" /></Spawn>',
+      '<Spawn><File.Copy from="seed.md" to="right.md" /></Spawn>',
       "</All>",
     ].join("\n");
     const first = yield* run(fixture, doc, new InMemoryStream(), counters());

@@ -235,7 +235,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   ),
   core("File.Copy", fileCopyForm, parseJsonObject(fileCopyProps), {
     description:
-      'Copy a file into an existing directory. `<File.Copy source="report.bin" destination="evidence/report.bin" />`',
+      'Copy a file into an existing directory. `<File.Copy from="reports/test.log" to="evidence/test.log" />`',
     as: null,
     context: null,
   }),

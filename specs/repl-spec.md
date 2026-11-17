@@ -2288,7 +2288,7 @@ Start the REPL inside a Git checkout and an entry's file work is retained too,
 under the ordinary physical records. The prospective mapped class above uses its
 closed association record. The physical records keep a self-closing `<File path="…" as="…" />` text read; a paired
 `<File path="…">…</File>` write, after its content has expanded; a self-closing
-`<File.Delete path="…" />`; a self-closing `<File.Copy source="…" destination="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
+`<File.Delete path="…" />`; a self-closing `<File.Copy from="…" to="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
 ensures, before its content is entered. The reads, writes and deletions an
 admitted `<Evaluate>` fragment performs are kept on the same terms, because a
 fragment's operations go to the same document filesystem an authored one does.
