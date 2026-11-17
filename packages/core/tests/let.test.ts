@@ -23,11 +23,13 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { execute, executeInstalled } from "../src/execute.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/let.test.ts");
+const OWNER = "packages/core/tests/let.test.ts";
+const journalCase = journalCases(OWNER);
 import type { HostExecution } from "../src/execute.ts";
-import { inlineSource } from "../src/root-source.ts";
+import { INLINE_SOURCE_PATH, inlineSource } from "../src/root-source.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText, completion, failureMessage } from "./helpers.ts";
@@ -150,94 +152,114 @@ describe("Tier LET — passive source", () => {
     }
   });
 
-  it("LET15: saved source runs with fresh inputs and its mismatch arm really fails", function* () {
+  const savedVerifier =
+    "LET15: saved source runs with fresh inputs and its mismatch arm really fails";
+  it(savedVerifier, function* () {
     yield* useHostFiles();
     const temporary = yield* API.Files.operations.temporaryDirectory();
     if (!temporary.ok) {
       throw temporary.error;
     }
     const directory = temporary.value;
-    yield* API.Env.around(
-      {
-        *cwd() {
-          return directory;
+    const installCwd = () =>
+      API.Env.around(
+        {
+          *cwd() {
+            return directory;
+          },
         },
-      },
-      { at: "min" },
-    );
-    const program = [
-      "---",
-      "props:",
-      "  type: object",
-      "  properties:",
-      "    sourcePath: { type: string }",
-      "    copyPath: { type: string }",
-      "  required: [sourcePath, copyPath]",
-      "  additionalProperties: false",
-      "---",
-      '<File path={props.sourcePath} as="source" />',
-      '<File path={props.copyPath} as="copied" />',
-      "```ts eval",
-      "const matches = source === copied;",
-      "```",
-      "<Output>",
-      "<If condition={matches}>MATCHED {source}<Else>",
-      '<Fail message="SAVED_VERIFIER_MISMATCH_1050" />',
-      "</Else></If>",
-      "</Output>",
-    ].join("\n");
-    const capture = yield* executeInstalled(
-      {
-        ...inlineSource(
-          [
-            '<Let as="matches" value={true} />',
-            '<Let as="source" value="CAPTURE_TIME_SOURCE" />',
-            '<Let as="copied" value="CAPTURE_TIME_SOURCE" />',
-            '<Let as="props" value={{ sourcePath: "old.txt", copyPath: "old-copy.txt" }} />',
-            '<Let as="program" select="code">',
-            "````xmd",
-            program,
-            "````",
-            "</Let>",
-            '<File path="verifier.md">{program}</File>',
-            '<File path="verifier.md" as="readback" />',
-          ].join("\n"),
-        ),
-        stream: new InMemoryStream(),
-      },
-      [],
-    );
-    expect((yield* capture).ok).toBe(true);
-    const bindings = yield* capture.bindings();
-    if (!bindings.ok) {
-      throw bindings.error;
-    }
-    expect(bindings.value.program).toBe(program);
-    expect(bindings.value.readback).toBe(program);
-    expect(yield* readTextFile(join(directory, "verifier.md"))).toBe(program);
-
-    for (const data of [
-      { source: "FIRST_1050", copied: "FIRST_1050", passes: true },
-      { source: "CHANGED_1050", copied: "CHANGED_1050", passes: true },
-      { source: "CHANGED_1050", copied: "DELIBERATE_MISMATCH", passes: false },
-    ]) {
-      yield* writeTextFile(join(directory, "source.txt"), data.source);
-      yield* writeTextFile(join(directory, "copy.txt"), data.copied);
-      const result = yield* scoped(function* () {
-        yield* useNormalizedOutput();
-        return yield* completion({
-          path: join(directory, "verifier.md"),
-          stream: new InMemoryStream(),
-          props: { sourcePath: "source.txt", copyPath: "copy.txt" },
+        { at: "min" },
+      );
+    yield* captureTestJournal(
+      { owner: OWNER, name: savedVerifier, suite: "program producer" },
+      INLINE_SOURCE_PATH,
+      function* (producerStream) {
+        yield* scoped(function* () {
+          yield* installCwd();
+          const program = [
+            "---",
+            "props:",
+            "  type: object",
+            "  properties:",
+            "    sourcePath: { type: string }",
+            "    copyPath: { type: string }",
+            "  required: [sourcePath, copyPath]",
+            "  additionalProperties: false",
+            "---",
+            '<File path={props.sourcePath} as="source" />',
+            '<File path={props.copyPath} as="copied" />',
+            "```ts eval",
+            "const matches = source === copied;",
+            "```",
+            "<Output>",
+            "<If condition={matches}>MATCHED {source}<Else>",
+            '<Fail message="SAVED_VERIFIER_MISMATCH_1050" />',
+            "</Else></If>",
+            "</Output>",
+          ].join("\n");
+          const capture = yield* executeInstalled(
+            {
+              ...inlineSource(
+                [
+                  '<Let as="matches" value={true} />',
+                  '<Let as="source" value="CAPTURE_TIME_SOURCE" />',
+                  '<Let as="copied" value="CAPTURE_TIME_SOURCE" />',
+                  '<Let as="props" value={{ sourcePath: "old.txt", copyPath: "old-copy.txt" }} />',
+                  '<Let as="program" select="code">',
+                  "````xmd",
+                  program,
+                  "````",
+                  "</Let>",
+                  '<File path="verifier.md">{program}</File>',
+                  '<File path="verifier.md" as="readback" />',
+                ].join("\n"),
+              ),
+              stream: producerStream,
+            },
+            [],
+          );
+          expect((yield* capture).ok).toBe(true);
+          const bindings = yield* capture.bindings();
+          if (!bindings.ok) {
+            throw bindings.error;
+          }
+          expect(bindings.value.program).toBe(program);
+          expect(bindings.value.readback).toBe(program);
+          expect(yield* readTextFile(join(directory, "verifier.md"))).toBe(program);
         });
-      });
-      expect(result.ok).toBe(data.passes);
-      if (result.ok) {
-        expect(asText(result.value).trim()).toBe(`MATCHED ${data.source}`);
-      } else {
-        expect(failureMessage(result)).toContain("SAVED_VERIFIER_MISMATCH_1050");
-      }
-    }
+
+        let variant = 0;
+        for (const data of [
+          { source: "FIRST_1050", copied: "FIRST_1050", passes: true },
+          { source: "CHANGED_1050", copied: "CHANGED_1050", passes: true },
+          { source: "CHANGED_1050", copied: "DELIBERATE_MISMATCH", passes: false },
+        ]) {
+          yield* captureTestJournal(
+            { owner: OWNER, name: savedVerifier, suite: `verifier ${++variant}` },
+            join(directory, "verifier.md"),
+            function* (stream) {
+              yield* installCwd();
+              yield* writeTextFile(join(directory, "source.txt"), data.source);
+              yield* writeTextFile(join(directory, "copy.txt"), data.copied);
+              const result = yield* scoped(function* () {
+                yield* useNormalizedOutput();
+                return yield* completion({
+                  path: join(directory, "verifier.md"),
+                  stream,
+                  props: { sourcePath: "source.txt", copyPath: "copy.txt" },
+                });
+              });
+              expect(result.ok).toBe(data.passes);
+              if (result.ok) {
+                expect(asText(result.value).trim()).toBe(`MATCHED ${data.source}`);
+              } else {
+                expect(failureMessage(result)).toContain("SAVED_VERIFIER_MISMATCH_1050");
+              }
+            },
+          );
+        }
+      },
+    );
   });
 });
 
@@ -501,52 +523,55 @@ describe("Tier LET — a whole document", () => {
     },
   );
 
-  it("LET11: a partial replay rebinds by reference and records nothing of its own", function* () {
-    const document = [
-      "```ts eval",
-      "const source = { id: 7 };",
-      "```",
-      "",
-      '<Let as="alias" value={source} />',
-      "",
-      "```ts eval",
-      'return alias === source ? "identical" : "different";',
-      "```",
-    ].join("\n");
+  journalCase(
+    "LET11: a partial replay rebinds by reference and records nothing of its own",
+    "README.md",
+    function* (stream) {
+      const document = [
+        "```ts eval",
+        "const source = { id: 7 };",
+        "```",
+        "",
+        '<Let as="alias" value={source} />',
+        "",
+        "```ts eval",
+        'return alias === source ? "identical" : "different";',
+        "```",
+      ].join("\n");
 
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": document });
+      yield* useStubFs({ "README.md": document });
 
-    const golden = asText(yield* collect(yield* execute({ path: "README.md", stream })));
-    expect(golden).toContain("identical");
+      const golden = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+      expect(golden).toContain("identical");
 
-    const full = stream.snapshot();
-    const evals = full.filter((e) => e.type === "yield" && e.description.type === "eval");
-    expect(evals.length).toBe(2);
+      const full = stream.snapshot();
+      const evals = full.filter((e) => e.type === "yield" && e.description.type === "eval");
+      expect(evals.length).toBe(2);
 
-    // The crash: everything through the producing eval is on the record, and
-    // the consuming eval and the root Close are not.
-    const prefix = full.slice(0, full.indexOf(evals[1]));
-    expect(prefix.map(kindOf)).toEqual(["import_component", "eval"]);
+      // The crash: everything through the producing eval is on the record, and
+      // the consuming eval and the root Close are not.
+      const prefix = full.slice(0, full.indexOf(evals[1]));
+      expect(prefix.map(kindOf)).toEqual(["import_component", "eval"]);
 
-    const resumedStream = new InMemoryStream(prefix);
-    const resumed = asText(
-      yield* collect(yield* execute({ path: "README.md", stream: resumedStream })),
-    );
+      const resumedStream = new InMemoryStream(prefix);
+      const resumed = asText(
+        yield* collect(yield* execute({ path: "README.md", stream: resumedStream })),
+      );
 
-    // The alias is the reconstructed object, not a copy of it.
-    expect(resumed).toContain("identical");
-    expect(resumed).not.toContain("different");
+      // The alias is the reconstructed object, not a copy of it.
+      expect(resumed).toContain("identical");
+      expect(resumed).not.toContain("different");
 
-    // The producing eval, the consuming eval, the root import and the Close —
-    // and nothing the `<Let>` between them wrote.
-    expect(resumedStream.snapshot().map(kindOf)).toEqual([
-      "import_component",
-      "eval",
-      "eval",
-      "close",
-    ]);
-  });
+      // The producing eval, the consuming eval, the root import and the Close —
+      // and nothing the `<Let>` between them wrote.
+      expect(resumedStream.snapshot().map(kindOf)).toEqual([
+        "import_component",
+        "eval",
+        "eval",
+        "close",
+      ]);
+    },
+  );
 
   journalCase(
     "LET12: Let is the syntax; Capture is an ordinary component",
@@ -725,18 +750,21 @@ function* readBindings(execution: HostExecution): Operation<JsonObject> {
 describe("Tier LET — the ordinary inventory, and which values are eligible", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("C9: ordinary execution records the exact LET11 inventory and no binding effect", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": EVERY_KIND });
+  journalCase(
+    "C9: ordinary execution records the exact LET11 inventory and no binding effect",
+    "README.md",
+    function* (stream) {
+      yield* useStubFs({ "README.md": EVERY_KIND });
 
-    // Every one of those values binds by reference and is usable here, and the
-    // run records the import, the eval and its close. Handing computed data
-    // back is not a durable effect, so a `<Let>` still adds no journal entry.
-    const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
-    expect(output).toContain("Cycle self");
-    expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
-    expect(stream.snapshot().map(kindOf)).toEqual(["import_component", "eval", "close"]);
-  });
+      // Every one of those values binds by reference and is usable here, and the
+      // run records the import, the eval and its close. Handing computed data
+      // back is not a durable effect, so a `<Let>` still adds no journal entry.
+      const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+      expect(output).toContain("Cycle self");
+      expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
+      expect(stream.snapshot().map(kindOf)).toEqual(["import_component", "eval", "close"]);
+    },
+  );
 
   journalCase(
     "C7: the eligible data is the JSON subset of the same document's root",
@@ -768,146 +796,159 @@ describe("Tier LET — the ordinary inventory, and which values are eligible", (
 describe("Tier LET — the computed root data an execution hands back", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("C1: the owner reports every actual root capture, and output and value stay separate", function* () {
-    const counted: Produced = { calls: 0 };
-    const stream = new InMemoryStream();
-    const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_ROOT), stream }, [
-      readingComponent(counted),
-    ]);
-    const rendered = String(yield* collect(execution));
-    const settled = yield* execution;
-    expect(settled.ok).toBe(true);
-    expect(counted.calls).toBe(1);
-
-    // Every actual root binding, whichever construct wrote it — not a
-    // whitelist of capture producers.
-    expect(yield* readBindings(execution)).toEqual({
-      direct: { answer: 42 },
-      paired: "beta",
-      functionJson: { answer: 42 },
-    });
-
-    // Three separate channels: the rendered body, the public return value and
-    // the computed data. None of them is wrapped around another.
-    expect(rendered).toContain("Rendered body.");
-    expect(settled.ok ? settled.value : undefined).toBe(rendered);
-    expect(Object.hasOwn(yield* readBindings(execution), "props")).toBe(false);
-
-    // The journal holds the ordinary inventory and no per-binding effect.
-    expect(stream.snapshot().map(kindOf)).toEqual([
-      "import_component",
-      "import_component",
-      "close",
-    ]);
-  });
-
-  it("C1: a value root's typed return is distinct from its computed data", function* () {
-    const stream = new InMemoryStream();
-    const execution = yield* executeInstalled({ ...inlineSource(VALUE_ROOT), stream }, []);
-    const settled = yield* execution;
-    expect(settled.ok).toBe(true);
-    expect(settled.ok ? settled.value : undefined).toEqual({ verdict: "settled" });
-    const held = yield* readBindings(execution);
-    expect(held["noted"]).toEqual({ answer: 42 });
-    expect(held["verdict"]).toBe(undefined);
-  });
-
-  it("C5: a halted execution's own handle refuses the root it was reading", function* () {
-    const stream = new InMemoryStream();
-    const arrived = withResolvers<void>();
-    const reached = { open: () => arrived.resolve() };
-    let retained: HostExecution | undefined;
-
-    yield* scoped(function* () {
-      const execution = yield* executeInstalled({ ...inlineSource(HOLDS_AFTER_CAPTURE), stream }, [
-        holdingComponent(reached),
+  journalCase(
+    "C1: the owner reports every actual root capture, and output and value stay separate",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      const counted: Produced = { calls: 0 };
+      const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_ROOT), stream }, [
+        readingComponent(counted),
       ]);
-      // Kept past this scope on purpose: the question is what the handle a host
-      // is still holding answers once the run behind it is gone.
-      retained = execution;
-      yield* arrived.operation;
+      const rendered = String(yield* collect(execution));
+      const settled = yield* execution;
+      expect(settled.ok).toBe(true);
+      expect(counted.calls).toBe(1);
 
-      // While it is unfinished the handle reads, and reads the real thing —
-      // which is what makes the refusal below a refusal rather than an owner
-      // that never had anything.
-      expect(yield* readBindings(execution)).toEqual({ held: { answer: 42 } });
-    });
+      // Every actual root binding, whichever construct wrote it — not a
+      // whitelist of capture producers.
+      expect(yield* readBindings(execution)).toEqual({
+        direct: { answer: 42 },
+        paired: "beta",
+        functionJson: { answer: 42 },
+      });
 
-    // Leaving that scope halts the execution and joins its teardown. The
-    // document settled nothing, so there is no result to read and no live
-    // environment left to read instead: the same handle refuses, with no map.
-    if (retained === undefined) {
-      throw new Error("this run never produced a handle to retain");
-    }
-    const after = yield* retained.bindings();
-    expect(after.ok).toBe(false);
-    expect(after.ok ? undefined : after.error).toBeInstanceOf(Error);
-    expect(Object.hasOwn(after, "value")).toBe(false);
-    // And halting it acknowledged nothing of its own.
-    expect(stream.snapshot().some((event) => event.type === "close")).toBe(false);
-  });
+      // Three separate channels: the rendered body, the public return value and
+      // the computed data. None of them is wrapped around another.
+      expect(rendered).toContain("Rendered body.");
+      expect(settled.ok ? settled.value : undefined).toBe(rendered);
+      expect(Object.hasOwn(yield* readBindings(execution), "props")).toBe(false);
 
-  it("C2: an ordinary failure keeps its computed data, and a cold reader finds both", function* () {
-    const counted: Produced = { calls: 0 };
-    const stream = new InMemoryStream();
-    const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_THEN_FAILS), stream }, [
-      readingComponent(counted),
-    ]);
-    const settled = yield* execution;
+      // The journal holds the ordinary inventory and no per-binding effect.
+      expect(stream.snapshot().map(kindOf)).toEqual([
+        "import_component",
+        "import_component",
+        "close",
+      ]);
+    },
+  );
 
-    // The public outcome is the failure it was, and the live error survives.
-    expect(settled.ok).toBe(false);
-    expect(settled.ok ? "" : settled.error.message).toContain("stopped on purpose");
-    // And the data computed before the failure is still the execution's own.
-    const answered = yield* readBindings(execution);
-    expect(answered).toEqual({
-      direct: { answer: 42 },
-      functionJson: { answer: 42 },
-    });
-    expect(counted.calls).toBe(1);
+  journalCase(
+    "C1: a value root's typed return is distinct from its computed data",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      const execution = yield* executeInstalled({ ...inlineSource(VALUE_ROOT), stream }, []);
+      const settled = yield* execution;
+      expect(settled.ok).toBe(true);
+      expect(settled.ok ? settled.value : undefined).toEqual({ verdict: "settled" });
+      const held = yield* readBindings(execution);
+      expect(held["noted"]).toEqual({ answer: 42 });
+      expect(held["verdict"]).toBe(undefined);
+    },
+  );
 
-    // C4: the answer is the reader's own graph. Writing through it is allowed
-    // and reaches nothing: the accepted result is what the execution decided,
-    // and a consumer editing its copy cannot edit that.
-    const nested = answered["direct"];
-    if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
-      throw new Error("this control needs a nested object to write through");
-    }
-    nested["answer"] = 999;
-    expect(yield* readBindings(execution)).toEqual({
-      direct: { answer: 42 },
-      functionJson: { answer: 42 },
-    });
-    expect(counted.calls).toBe(1);
+  journalCase(
+    "C5: a halted execution's own handle refuses the root it was reading",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      const arrived = withResolvers<void>();
+      const reached = { open: () => arrived.resolve() };
+      let retained: HostExecution | undefined;
 
-    const records = stream.snapshot();
-    // Three imports — the root, the producer and `<Fail>` itself — and one
-    // ordinary close. Handing the byproduct back adds no effect of its own.
-    expect(records.map(kindOf)).toEqual([
-      "import_component",
-      "import_component",
-      "import_component",
-      "close",
-    ]);
+      yield* scoped(function* () {
+        const execution = yield* executeInstalled(
+          { ...inlineSource(HOLDS_AFTER_CAPTURE), stream },
+          [holdingComponent(reached)],
+        );
+        // Kept past this scope on purpose: the question is what the handle a host
+        // is still holding answers once the run behind it is gone.
+        retained = execution;
+        yield* arrived.operation;
 
-    // Cold: a fresh owner over the same retained bytes reads the recorded
-    // result's data, runs no producer and appends nothing.
-    const cold: Produced = { calls: 0 };
-    const reread = new InMemoryStream(records);
-    const reopened = yield* executeInstalled(
-      { ...inlineSource(COMPUTES_THEN_FAILS), stream: reread },
-      [readingComponent(cold)],
-    );
-    const again = yield* reopened;
-    expect(again.ok).toBe(false);
-    expect(yield* readBindings(reopened)).toEqual({
-      direct: { answer: 42 },
-      functionJson: { answer: 42 },
-    });
-    expect(cold.calls).toBe(0);
-    expect(reread.snapshot().length).toBe(records.length);
-    // Neither the bytes the mutation was made against nor a separate execution
-    // over them moved: the same records, and the same accepted data.
-    expect(stream.snapshot()).toEqual(records);
-  });
+        // While it is unfinished the handle reads, and reads the real thing —
+        // which is what makes the refusal below a refusal rather than an owner
+        // that never had anything.
+        expect(yield* readBindings(execution)).toEqual({ held: { answer: 42 } });
+      });
+
+      // Leaving that scope halts the execution and joins its teardown. The
+      // document settled nothing, so there is no result to read and no live
+      // environment left to read instead: the same handle refuses, with no map.
+      if (retained === undefined) {
+        throw new Error("this run never produced a handle to retain");
+      }
+      const after = yield* retained.bindings();
+      expect(after.ok).toBe(false);
+      expect(after.ok ? undefined : after.error).toBeInstanceOf(Error);
+      expect(Object.hasOwn(after, "value")).toBe(false);
+      // And halting it acknowledged nothing of its own.
+      expect(stream.snapshot().some((event) => event.type === "close")).toBe(false);
+    },
+  );
+
+  journalCase(
+    "C2: an ordinary failure keeps its computed data, and a cold reader finds both",
+    INLINE_SOURCE_PATH,
+    function* (stream) {
+      const counted: Produced = { calls: 0 };
+      const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_THEN_FAILS), stream }, [
+        readingComponent(counted),
+      ]);
+      const settled = yield* execution;
+
+      // The public outcome is the failure it was, and the live error survives.
+      expect(settled.ok).toBe(false);
+      expect(settled.ok ? "" : settled.error.message).toContain("stopped on purpose");
+      // And the data computed before the failure is still the execution's own.
+      const answered = yield* readBindings(execution);
+      expect(answered).toEqual({
+        direct: { answer: 42 },
+        functionJson: { answer: 42 },
+      });
+      expect(counted.calls).toBe(1);
+
+      // C4: the answer is the reader's own graph. Writing through it is allowed
+      // and reaches nothing: the accepted result is what the execution decided,
+      // and a consumer editing its copy cannot edit that.
+      const nested = answered["direct"];
+      if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
+        throw new Error("this control needs a nested object to write through");
+      }
+      nested["answer"] = 999;
+      expect(yield* readBindings(execution)).toEqual({
+        direct: { answer: 42 },
+        functionJson: { answer: 42 },
+      });
+      expect(counted.calls).toBe(1);
+
+      const records = stream.snapshot();
+      // Three imports — the root, the producer and `<Fail>` itself — and one
+      // ordinary close. Handing the byproduct back adds no effect of its own.
+      expect(records.map(kindOf)).toEqual([
+        "import_component",
+        "import_component",
+        "import_component",
+        "close",
+      ]);
+
+      // Cold: a fresh owner over the same retained bytes reads the recorded
+      // result's data, runs no producer and appends nothing.
+      const cold: Produced = { calls: 0 };
+      const reread = new InMemoryStream(records);
+      const reopened = yield* executeInstalled(
+        { ...inlineSource(COMPUTES_THEN_FAILS), stream: reread },
+        [readingComponent(cold)],
+      );
+      const again = yield* reopened;
+      expect(again.ok).toBe(false);
+      expect(yield* readBindings(reopened)).toEqual({
+        direct: { answer: 42 },
+        functionJson: { answer: 42 },
+      });
+      expect(cold.calls).toBe(0);
+      expect(reread.snapshot().length).toBe(records.length);
+      // Neither the bytes the mutation was made against nor a separate execution
+      // over them moved: the same records, and the same accepted data.
+      expect(stream.snapshot()).toEqual(records);
+    },
+  );
 });
