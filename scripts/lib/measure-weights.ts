@@ -72,7 +72,7 @@ export function* measureRuntime(
 
   for (const file of applicable) {
     const started = performance.now();
-    const code = yield* runOneFile(runtime, file, root);
+    const code = yield* runOneFile(runtime, file, root, { compactReport: true });
     // The schema admits positive integers only, and a file that finishes in
     // under half a millisecond would otherwise round to a weight of zero.
     const ms = Math.max(1, Math.round(performance.now() - started));

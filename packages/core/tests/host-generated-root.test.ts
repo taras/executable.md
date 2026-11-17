@@ -53,7 +53,10 @@ import { exists, readdir, readTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { execPath } from "node:process";
+import { fileURLToPath } from "node:url";
+import { cliRuntime, runShell, shellQuote } from "@executablemd/test-support/launch";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 
 import { contributeDocumentation, Documentation } from "../src/documentation-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -144,6 +147,96 @@ describe("held host failure journal", () => {
       ok: true,
       value: { type: "close", coroutineId: "root" },
     });
+  });
+});
+
+describe("held host suite journal", () => {
+  it("saves only failed cases after the BDD runner joins", function* () {
+    const root = yield* useTempDirectory("xmd-held-suite-journal-");
+    const cwd = fileURLToPath(new URL("../../../", import.meta.url));
+    const owner = "packages/core/tests/fixtures/held-host-journal.ts";
+    const runtime = cliRuntime();
+    const flags = {
+      deno: ["test", "--allow-all", "--frozen"],
+      node: ["--import", "tsx", "--test", "--test-reporter=spec"],
+      bun: ["test", "--timeout=30000"],
+    }[runtime];
+    const command = [execPath, ...flags, "./" + owner].map(shellQuote).join(" ");
+    const result = yield* runShell("exec " + command, {
+      cwd,
+      env: {
+        XMD_TEST_ARTIFACTS: root,
+        TSX_TSCONFIG_PATH: join(cwd, "tsconfig.node.json"),
+        NO_COLOR: "1",
+      },
+    }).join();
+    const output = result.stdout + result.stderr;
+    if (result.code !== 1) {
+      throw new Error(`Expected the fixture to exit with 1, received ${result.code}.\n${output}`);
+    }
+    expect(output).toMatch(/(?:✔|\(pass\)).*passing roots|passing roots \.\.\. ok/);
+    expect(output).toContain('Expected: "deliberate held-host late assertion"');
+    expect(output).toContain('Received: "both held roots joined"');
+    expect(output).toMatch(
+      /^\s*(?:error: (?:Error: )?|Error: )deliberate held-host case teardown$/m,
+    );
+    expect(yield* exists(join(root, "passing roots"))).toBe(false);
+
+    for (const [name, sources] of [
+      ["late assertion", ["host/first.md", "host/second.md"]],
+      ["rejected finalizer", ["host/teardown.md"]],
+    ] as const) {
+      const artifacts = join(root, name);
+      const invocations = yield* readdir(artifacts);
+      expect(invocations).toHaveLength(1);
+      const directory = join(artifacts, invocations[0]);
+      expect((yield* readdir(directory)).sort()).toEqual(
+        sources.flatMap((_, index) => [`root-${index + 1}.case.json`, `root-${index + 1}.jsonl`]),
+      );
+      const actualSources: string[] = [];
+      for (const [index] of sources.entries()) {
+        const ordinal = index + 1;
+        const stem = join(directory, `root-${ordinal}`);
+        const sidecar: unknown = JSON.parse(yield* readTextFile(stem + ".case.json"));
+        const lines = (yield* readTextFile(stem + ".jsonl")).trimEnd().split("\n");
+        const imported = parseDurableEvent(lines[0]);
+        expect(imported).toMatchObject({
+          ok: true,
+          value: { description: { type: "import_component", name: "__root__" } },
+        });
+        if (
+          !imported.ok ||
+          imported.value.type !== "yield" ||
+          imported.value.result.status !== "ok"
+        ) {
+          throw new Error("The held root journal has no successful import.");
+        }
+        const value = imported.value.result.value;
+        if (
+          value === null ||
+          typeof value !== "object" ||
+          !("path" in value) ||
+          typeof value.path !== "string"
+        ) {
+          throw new Error("The held root import has no source path.");
+        }
+        const source = value.path;
+        actualSources.push(source);
+        expect(sidecar).toEqual({
+          owner,
+          name,
+          suite: "held host journal " + name,
+          kind: "root",
+          ordinal,
+          source,
+        });
+        expect(parseDurableEvent(lines.at(-1) ?? "")).toMatchObject({
+          ok: true,
+          value: { type: "close", coroutineId: "root" },
+        });
+      }
+      expect(actualSources.sort()).toEqual(sources);
+    }
   });
 });
 
