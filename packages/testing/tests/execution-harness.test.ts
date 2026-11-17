@@ -15,15 +15,14 @@ import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
-import { readdir } from "@effectionx/fs";
+import { readdir, readTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
-import { useTestDiagnostics } from "../../cli/src/test-diagnostics.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import type { DeliverySink } from "../../cli/src/stdout-delivery.ts";
 import { readRecords } from "../../cli/src/repl/journal-records.ts";
-import { withFailureJournal } from "../src/failure-journal.ts";
 import { useStubFs } from "@executablemd/runtime/test";
 import {
   Component,
@@ -103,30 +102,33 @@ function* runHarness(
   });
 }
 
+const OWNER = "packages/testing/tests/execution-harness.test.ts";
+const RUN_SUITE = '<Execution host="run">';
+
 function captureHarness(
+  name: string,
   files: Record<string, string>,
   check: (run: HarnessRun) => void,
   sink: DeliverySink = process.stderr,
   onTeardown?: StubHostOptions["onTeardown"],
 ): Operation<void> {
-  return scoped(function* () {
-    const diagnostics = yield* useTestDiagnostics(sink);
-    yield* withFailureJournal(
-      diagnostics.execution("root", "README.md").journal(() => false),
-      function* (stream) {
-        check(
-          yield* runHarness(files, {
-            stream,
-            childJournal: (source) =>
-              diagnostics
-                .execution("child", source)
-                .journal(({ outcome }) => outcome.kind === "settled" && !outcome.result.ok),
-            ...(onTeardown === undefined ? {} : { onTeardown }),
-          }),
-        );
-      },
-    );
-  });
+  return captureTestJournal(
+    { owner: OWNER, suite: RUN_SUITE, name },
+    "README.md",
+    function* (stream, diagnostics) {
+      check(
+        yield* runHarness(files, {
+          stream,
+          childJournal: (source) =>
+            diagnostics
+              .execution("child", source)
+              .journal(({ outcome }) => outcome.kind === "settled" && !outcome.result.ok),
+          ...(onTeardown === undefined ? {} : { onTeardown }),
+        }),
+      );
+    },
+    { sink },
+  );
 }
 
 /** What ended a run that produced no test result. */
@@ -160,9 +162,11 @@ const CHILD_WITH_PROPS = doc(
   "hello {props.who}",
 );
 
-describe('<Execution host="run">', () => {
-  it("runs a referenced document as a root, with root props and text return", function* () {
+describe(RUN_SUITE, () => {
+  const referenced = "runs a referenced document as a root, with root props and text return";
+  it(referenced, function* () {
     yield* captureHarness(
+      referenced,
       {
         "README.md": doc(
           '<Test name="child">',
@@ -184,7 +188,9 @@ describe('<Execution host="run">', () => {
     );
   });
 
-  it("attributes bound child failures and post-run root failures to joined, separate executions", function* () {
+  const witnessCase =
+    "attributes bound child failures and post-run root failures to joined, separate executions";
+  it(witnessCase, function* () {
     const artifacts = join(yield* useTempDirectory("xmd-nested-journals-"), "journals");
     yield* API.Env.around({
       *env([name], next) {
@@ -204,6 +210,7 @@ describe('<Execution host="run">', () => {
       let caught: unknown;
       try {
         yield* captureHarness(
+          witnessCase,
           {
             "README.md": doc(
               '<Test name="bound child failure">',
@@ -238,11 +245,22 @@ describe('<Execution host="run">', () => {
 
       expect(order[0]).toBe("child teardown");
       const invocations = yield* readdir(artifacts);
-      const invocation = invocations.find((name) =>
-        order[1]?.includes(join(artifacts, name, "child-1.jsonl")),
-      );
+      const attribution = { owner: OWNER, suite: RUN_SUITE, name: witnessCase, ordinal: 1 };
+      const childCase = { ...attribution, kind: "child", source: target };
+      let invocation: string | undefined;
+      for (const candidate of invocations) {
+        const file = join(artifacts, candidate, "child-1.case.json");
+        if ((yield* readdir(join(artifacts, candidate))).includes("child-1.case.json")) {
+          const metadata = JSON.parse(yield* readTextFile(file));
+          if (metadata.source === target) {
+            expect(metadata).toEqual(childCase);
+            invocation = candidate;
+            break;
+          }
+        }
+      }
       if (invocation === undefined) {
-        throw new Error(`no child artifact for ${target}: ${order.join("")}`);
+        throw new Error(`no child artifact for ${target}`);
       }
       const directory = join(artifacts, invocation);
       const child = join(directory, "child-1.jsonl");
@@ -258,13 +276,20 @@ describe('<Execution host="run">', () => {
           : []),
       ]);
       expect((yield* readdir(directory)).sort()).toEqual(
-        failRoot ? ["child-1.jsonl", "root-1.jsonl"] : ["child-1.jsonl"],
+        failRoot
+          ? ["child-1.case.json", "child-1.jsonl", "root-1.case.json", "root-1.jsonl"]
+          : ["child-1.case.json", "child-1.jsonl"],
       );
       const childEvents = yield* readRecords(child);
       const isExec = (event: (typeof childEvents)[number]) =>
         event.type === "yield" && event.description.type === "exec";
       expect(childEvents.some(isExec)).toBe(true);
       if (failRoot) {
+        expect(JSON.parse(yield* readTextFile(join(directory, "root-1.case.json")))).toEqual({
+          ...attribution,
+          kind: "root",
+          source: "README.md",
+        });
         const rootEvents = yield* readRecords(root);
         expect(rootEvents.some(isExec)).toBe(false);
         expect(rootEvents.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
@@ -280,39 +305,52 @@ describe('<Execution host="run">', () => {
     expect((yield* readdir(artifacts)).sort()).toEqual([...directories].sort());
   });
 
-  it("selects one target inside a document without component addressability", function* () {
-    const run = yield* runHarness({
-      "README.md": doc(
-        '<Test name="target">',
-        '<Execution host="run" target="guide.md#Second" as="child">',
-        '<CollectOutput as="output" />',
-        "",
-        "<AssertEquals actual={child.result.ok} expected={true} />",
-        '<AssertStringIncludes actual={output} expected="second body" />',
-        "</Execution>",
-        "</Test>",
-      ),
-      "guide.md": doc("# First", "", "first body", "", "# Second", "", "second body"),
-    });
-    expect(only(run).status).toBe("pass");
-    expect(run.output).not.toContain("first body");
+  const selectedTarget = "selects one target inside a document without component addressability";
+  it(selectedTarget, function* () {
+    yield* captureHarness(
+      selectedTarget,
+      {
+        "README.md": doc(
+          '<Test name="target">',
+          '<Execution host="run" target="guide.md#Second" as="child">',
+          '<CollectOutput as="output" />',
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          '<AssertStringIncludes actual={output} expected="second body" />',
+          "</Execution>",
+          "</Test>",
+        ),
+        "guide.md": doc("# First", "", "first body", "", "# Second", "", "second body"),
+      },
+      (run) => {
+        expect(only(run).status).toBe("pass");
+        expect(run.output).not.toContain("first body");
+      },
+    );
   });
 
-  it("carries a text root's rendered markdown as the settled value", function* () {
-    const run = yield* runHarness({
-      "README.md": doc(
-        '<Test name="text">',
-        '<Execution host="run" target="child.md" as="child">',
-        '<AssertStringIncludes actual={child.result.value} expected="child body" />',
-        "</Execution>",
-        "</Test>",
-      ),
-      "child.md": doc("child body"),
-    });
-    expect(only(run).status).toBe("pass");
+  const textRoot = "carries a text root's rendered markdown as the settled value";
+  it(textRoot, function* () {
+    yield* captureHarness(
+      textRoot,
+      {
+        "README.md": doc(
+          '<Test name="text">',
+          '<Execution host="run" target="child.md" as="child">',
+          '<AssertStringIncludes actual={child.result.value} expected="child body" />',
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child body"),
+      },
+      (run) => {
+        expect(only(run).status).toBe("pass");
+      },
+    );
   });
 
-  it("runs inline source under the <eval> identity, with no authored file", function* () {
+  const inline = "runs inline source under the <eval> identity, with no authored file";
+  it(inline, function* () {
     const files = { "README.md": "" };
     files["README.md"] = doc(
       '<Test name="inline">',
@@ -323,7 +361,7 @@ describe('<Execution host="run">', () => {
       "</Execution>",
       "</Test>",
     );
-    yield* captureHarness(files, (run) => {
+    yield* captureHarness(inline, files, (run) => {
       expect(only(run).status).toBe("pass");
       // The identity the child reports is the inline one, and the harness named
       // no file for it to have come from. That production takes the same path is

@@ -19,6 +19,8 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { rm, writeTextFile } from "@effectionx/fs";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import type { JournalCase } from "../../cli/src/test-diagnostics.ts";
 
 import { FormAssets } from "../src/assets.ts";
 import type { Json } from "../src/json.ts";
@@ -74,6 +76,20 @@ export interface DocRun {
   completion: Result<DurableJson>;
   effects: Effects;
   stream: DurableStream;
+}
+
+export function withWebFormDocument(
+  testCase: JournalCase,
+  source: string,
+  options: Omit<RunOptions, "stream">,
+  check: (run: DocRun) => void | Operation<void>,
+): Operation<void> {
+  return captureTestJournal(testCase, options.realFiles ? source : "README.md", function* (stream) {
+    const assertions = check(yield* runWebFormDoc(source, { ...options, stream }));
+    if (assertions !== undefined) {
+      yield* assertions;
+    }
+  });
 }
 
 /**

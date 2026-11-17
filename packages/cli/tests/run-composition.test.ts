@@ -35,6 +35,9 @@ import { installPlugins } from "../src/plugin-host.ts";
 import type { CommandPlugins } from "../src/plugin-host.ts";
 import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { DEFAULT_REPOSITORY_ROOT } from "../src/run-repositories.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/cli/tests/run-composition.test.ts");
 
 /** Every element an author can write that needs a repository provider. */
 const OPERATIONS: readonly { readonly name: string; readonly source: string }[] = [
@@ -187,21 +190,25 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
     expect(yield* readdir(managed)).toEqual([]);
   });
 
-  it("leaves every repository operation unprovided after inspection", function* () {
-    // Registering the declarations installs no provider: the Apis still answer
-    // with their own defaults, which is what a catalog is allowed to leave
-    // behind.
-    // Assembled rather than bootstrapped: the vocabulary belongs to the
-    // bundled Plugin, and installing it is what a run profile does. Installing
-    // it still installs no provider, which is the claim.
-    yield* gitProfile("run");
-    const failure = yield* raisedValue(
-      collect(yield* execute({ ...inlineSource(`<Git.Push />`), stream: new InMemoryStream() })),
-    );
-    // `<Git.Push />` has no lexical Repository, so the first thing it asks for
-    // is the ambient one — and that is the Api reporting absence.
-    expect(String(failure)).toContain("no Repository composition provider is installed");
-  });
+  journalCase(
+    "leaves every repository operation unprovided after inspection",
+    "<eval>",
+    function* (stream) {
+      // Registering the declarations installs no provider: the Apis still answer
+      // with their own defaults, which is what a catalog is allowed to leave
+      // behind.
+      // Assembled rather than bootstrapped: the vocabulary belongs to the
+      // bundled Plugin, and installing it is what a run profile does. Installing
+      // it still installs no provider, which is the claim.
+      yield* gitProfile("run");
+      const failure = yield* raisedValue(
+        collect(yield* execute({ ...inlineSource(`<Git.Push />`), stream })),
+      );
+      // `<Git.Push />` has no lexical Repository, so the first thing it asks for
+      // is the ambient one — and that is the Api reporting absence.
+      expect(String(failure)).toContain("no Repository composition provider is installed");
+    },
+  );
 });
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {

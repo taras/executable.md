@@ -55,6 +55,7 @@ import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.t
 import { Elicitation } from "@executablemd/core";
 import { useObservationFixture, writeFixtureFile } from "../../git/tests/support/observations.ts";
 import {
+  captureObservationEntry,
   entryCounters,
   methodsCalled,
   readKinds,
@@ -583,79 +584,93 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
 });
 
 describe("ROB3 — ordinary middleware keeps its ordinary meaning", () => {
-  it("creates no record when a replacement answers above the provider", function* () {
+  const replacement = "creates no record when a replacement answers above the provider";
+  it(replacement, function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
     const counted = entryCounters();
     const answered: string[] = [];
 
-    const run = yield* runEntry(
+    yield* captureObservationEntry(
+      { owner: "packages/cli/tests/retained-repository-observations.test.ts", name: replacement },
       place,
-      ['<Git.Diff compare="unstaged" as="diff" />', "", "<Json value={diff} />", ""].join("\n"),
-      new InMemoryStream(),
-      counted,
-      {
-        *between(): Operation<void> {
-          yield* GitQuery.around({
-            // deno-lint-ignore require-yield
-            *diff([invocation]: [GitDiffInvocation]): Operation<GitDiffResult> {
-              answered.push(invocation.request.kind);
-              return {
-                comparison: { compare: "unstaged" },
-                text: "answered above",
-                offset: 0,
-                length: 14,
-                next: null,
-              };
+      function* (stream) {
+        const run = yield* runEntry(
+          place,
+          ['<Git.Diff compare="unstaged" as="diff" />', "", "<Json value={diff} />", ""].join("\n"),
+          stream,
+          counted,
+          {
+            *between(): Operation<void> {
+              yield* GitQuery.around({
+                // deno-lint-ignore require-yield
+                *diff([invocation]: [GitDiffInvocation]): Operation<GitDiffResult> {
+                  answered.push(invocation.request.kind);
+                  return {
+                    comparison: { compare: "unstaged" },
+                    text: "answered above",
+                    offset: 0,
+                    length: 14,
+                    next: null,
+                  };
+                },
+              });
             },
-          });
-        },
+          },
+        );
+
+        expect(run.refusal).toBe(undefined);
+        expect(answered).toEqual(["diff"]);
+        expect(run.output).toContain("answered above");
+        // Answered entirely above the provider, so no provider was reached: no
+        // native read, no scratch directory and no observation record.
+        expect(observations(run.events)).toEqual([]);
+        // Ambient discovery still happened — the component asks which repository is
+        // in scope before it asks anything of it — but not one native *read* ran.
+        expect(readKinds(counted)).toEqual([]);
       },
     );
-
-    expect(run.refusal).toBe(undefined);
-    expect(answered).toEqual(["diff"]);
-    expect(run.output).toContain("answered above");
-    // Answered entirely above the provider, so no provider was reached: no
-    // native read, no scratch directory and no observation record.
-    expect(observations(run.events)).toEqual([]);
-    // Ambient discovery still happened — the component asks which repository is
-    // in scope before it asks anything of it — but not one native *read* ran.
-    expect(readKinds(counted)).toEqual([]);
   });
 
-  it("records the request a delegating replacement actually passed down", function* () {
+  const delegation = "records the request a delegating replacement actually passed down";
+  it(delegation, function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
     const counted = entryCounters();
 
-    const run = yield* runEntry(
+    yield* captureObservationEntry(
+      { owner: "packages/cli/tests/retained-repository-observations.test.ts", name: delegation },
       place,
-      ['<Git.Diff compare="unstaged" as="diff" />', ""].join("\n"),
-      new InMemoryStream(),
-      counted,
-      {
-        *between(): Operation<void> {
-          yield* GitQuery.around({
-            diff: ([invocation]: [GitDiffInvocation], next): Operation<GitDiffResult> =>
-              next({ ...invocation, request: { ...invocation.request, limit: 7 } }),
-          });
-        },
+      function* (stream) {
+        const run = yield* runEntry(
+          place,
+          ['<Git.Diff compare="unstaged" as="diff" />', ""].join("\n"),
+          stream,
+          counted,
+          {
+            *between(): Operation<void> {
+              yield* GitQuery.around({
+                diff: ([invocation]: [GitDiffInvocation], next): Operation<GitDiffResult> =>
+                  next({ ...invocation, request: { ...invocation.request, limit: 7 } }),
+              });
+            },
+          },
+        );
+
+        expect(run.refusal).toBe(undefined);
+        const recorded = observations(run.events);
+        expect(recorded).toHaveLength(1);
+        // The request the provider received, not the one the document wrote.
+        expect(recorded[0]?.record.request.query).toEqual({
+          kind: "diff",
+          comparison: { compare: "unstaged" },
+          paths: null,
+          offset: 0,
+          limit: 7,
+          cursor: null,
+        });
       },
     );
-
-    expect(run.refusal).toBe(undefined);
-    const recorded = observations(run.events);
-    expect(recorded).toHaveLength(1);
-    // The request the provider received, not the one the document wrote.
-    expect(recorded[0]?.record.request.query).toEqual({
-      kind: "diff",
-      comparison: { compare: "unstaged" },
-      paths: null,
-      offset: 0,
-      limit: 7,
-      cursor: null,
-    });
   });
 });
 

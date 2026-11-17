@@ -5,13 +5,22 @@ import { when } from "@effectionx/converge";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation, Subscription } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import { exists, readdir, readTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { join } from "node:path";
 import { useStubFs } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
 import { execute, Execution, registerComponents } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { Test, TestFailureError, testing } from "../src/test-api.ts";
 import { useTesting } from "../src/use-testing.ts";
-import { failureOf, runDoc } from "./helpers.ts";
+import { documentCases, failureOf, runDoc, withFreshDocument } from "./helpers.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const OWNER = "packages/testing/tests/use-testing.test.ts";
+const documentCase = documentCases(OWNER);
+const journalCase = journalCases(OWNER);
 
 function* drain(
   subscription: Subscription<string, string>,
@@ -27,29 +36,87 @@ function* drain(
 
 describe("useTesting composition", () => {
   beforeAll(() => useTempFileCompiler());
-  it("composes around core execute and returns session results", function* () {
-    const outcome = yield* scoped(function* () {
-      yield* useStubFs({
-        "README.md": '<Test name="one"><Assert expr={true} /></Test>\n',
+
+  const journalWitness = "attributes a fresh document when its caller fails after execution";
+  it(journalWitness, function* () {
+    const root = yield* useTempDirectory("xmd-testing-fresh-document-");
+    const failure = new Error("outer assertion");
+    function attempt(directory: string, check: () => void): Operation<void> {
+      return scoped(function* () {
+        yield* API.Env.around({
+          *env([variable], next) {
+            return variable === "XMD_TEST_ARTIFACTS" ? directory : yield* next(variable);
+          },
+        });
+        yield* withFreshDocument(OWNER, journalWitness, function* (runFresh) {
+          const result = yield* runFresh(
+            { "README.md": "<Test><Assert expr={false} /></Test>\n" },
+            { testing: true },
+          );
+          expect(result.completion.ok).toBe(false);
+          check();
+        });
       });
-      const tests = yield* useTesting();
-      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
-      const result = yield* execution;
-      const results = yield* tests.results;
-      return { result, results };
+    }
+
+    const passed = join(root, "passed");
+    yield* attempt(passed, () => undefined);
+    expect(yield* exists(passed)).toBe(false);
+
+    const failed = join(root, "failed");
+    let caught: unknown;
+    try {
+      yield* attempt(failed, () => {
+        throw failure;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    const invocations = yield* readdir(failed);
+    expect(invocations).toHaveLength(1);
+    const directory = join(failed, invocations[0]);
+    expect(JSON.parse(yield* readTextFile(join(directory, "root-1.case.json")))).toEqual({
+      owner: OWNER,
+      name: journalWitness,
+      kind: "root",
+      ordinal: 1,
+      source: "README.md",
     });
-    expect(outcome.result.ok).toBe(true);
-    expect(outcome.results.map((r) => [r.name, r.status])).toEqual([["one", "pass"]]);
-    expect(Object.isFrozen(outcome.results)).toBe(true);
+    const lines = (yield* readTextFile(join(directory, "root-1.jsonl"))).trimEnd().split("\n");
+    expect(parseDurableEvent(lines.at(-1) ?? "")).toMatchObject({
+      ok: true,
+      value: { type: "close", coroutineId: "root" },
+    });
   });
 
-  it("keeps results available after a testing failure", function* () {
+  journalCase(
+    "composes around core execute and returns session results",
+    "README.md",
+    function* (stream) {
+      const outcome = yield* scoped(function* () {
+        yield* useStubFs({
+          "README.md": '<Test name="one"><Assert expr={true} /></Test>\n',
+        });
+        const tests = yield* useTesting();
+        const execution = yield* execute({ path: "README.md", stream });
+        const result = yield* execution;
+        const results = yield* tests.results;
+        return { result, results };
+      });
+      expect(outcome.result.ok).toBe(true);
+      expect(outcome.results.map((r) => [r.name, r.status])).toEqual([["one", "pass"]]);
+      expect(Object.isFrozen(outcome.results)).toBe(true);
+    },
+  );
+
+  journalCase("keeps results available after a testing failure", "README.md", function* (stream) {
     const outcome = yield* scoped(function* () {
       yield* useStubFs({
         "README.md": '<Test name="bad"><Assert expr={false} /></Test>\n',
       });
       const tests = yield* useTesting();
-      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
+      const execution = yield* execute({ path: "README.md", stream });
       const result = yield* execution;
       const results = yield* tests.results;
       return { result, results };
@@ -112,7 +179,7 @@ describe("useTesting composition", () => {
     expect(error?.message).toContain("one session per execution scope");
   });
 
-  it("removes all session middleware with its scope", function* () {
+  documentCase("removes all session middleware with its scope", function* (runFresh) {
     yield* scoped(function* () {
       yield* useStubFs({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
       yield* useTesting();
@@ -124,7 +191,7 @@ describe("useTesting composition", () => {
     // Outside the session scope: activation, collectors, and policy are gone.
     expect(yield* testing).toBe(false);
     expect(yield* Test.operations.results()).toEqual([]);
-    const second = yield* runDoc({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
+    const second = yield* runFresh({ "README.md": "<Test><Assert expr={true} /></Test>\n" });
     expect(second.completion.ok).toBe(true);
     expect(second.output).not.toContain("Assert");
     expect(second.results).toEqual([]);
@@ -204,69 +271,77 @@ describe("useTesting composition", () => {
     expect(thrown?.message).toBe("pre-handle setup exploded");
   });
 
-  it("a late subscriber still receives all chunks and the close value", function* () {
-    const { late, value } = yield* scoped(function* () {
-      yield* useStubFs({ "README.md": "hello world\n" });
-      yield* useTesting();
-      const execution = yield* execute({
-        path: "README.md",
-        stream: new InMemoryStream(),
-      });
-      const result = yield* execution;
-      const drained = yield* scoped(function* () {
-        return yield* drain(yield* execution.output);
-      });
-      return { late: drained, value: result };
-    });
-    // No tests in the doc — the session rejects, but output is intact.
-    expect(value.ok).toBe(false);
-    expect(late.close).toContain("hello world");
-    expect(late.chunks.join("")).toContain("hello world");
-  });
-
-  it("an early caller-scope halt tears down the document and leased eval scope", function* () {
-    Reflect.deleteProperty(globalThis, "__useTestingHaltMarker");
-    yield* API.Process.around({
-      *exec(_args, _next) {
-        yield* sleep(10_000);
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
-    });
-    const doc = [
-      "<Testing>",
-      '<Test name="hangs">',
-      "```js persist eval",
-      "globalThis.__useTestingHaltMarker = true;",
-      "yield* spawn(function* () { try { yield* suspend(); } finally { globalThis.__useTestingHaltMarker = false; } });",
-      "```",
-      "```bash exec",
-      "sleep 600",
-      "```",
-      "</Test>",
-      "</Testing>",
-      "",
-    ].join("\n");
-    yield* useStubFs({ "README.md": doc });
-
-    yield* scoped(function* () {
-      yield* useTesting();
-      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
-      yield* spawn(function* () {
-        yield* scoped(function* () {
-          yield* drain(yield* execution.output);
+  journalCase(
+    "a late subscriber still receives all chunks and the close value",
+    "README.md",
+    function* (stream) {
+      const { late, value } = yield* scoped(function* () {
+        yield* useStubFs({ "README.md": "hello world\n" });
+        yield* useTesting();
+        const execution = yield* execute({
+          path: "README.md",
+          stream,
         });
+        const result = yield* execution;
+        const drained = yield* scoped(function* () {
+          return yield* drain(yield* execution.output);
+        });
+        return { late: drained, value: result };
       });
-      // Converge on the document having run the eval block and spawned its
-      // effect, then leave the scope — halting everything mid-test. A fixed
-      // sleep races variable startup cost (#335).
-      yield* when(
-        function* () {
-          return Reflect.get(globalThis, "__useTestingHaltMarker") === true;
-        },
-        { timeout: 10_000 },
-      );
-    });
+      // No tests in the doc — the session rejects, but output is intact.
+      expect(value.ok).toBe(false);
+      expect(late.close).toContain("hello world");
+      expect(late.chunks.join("")).toContain("hello world");
+    },
+  );
 
-    expect(Reflect.get(globalThis, "__useTestingHaltMarker")).toBe(false);
-  });
+  journalCase(
+    "an early caller-scope halt tears down the document and leased eval scope",
+    "README.md",
+    function* (stream) {
+      Reflect.deleteProperty(globalThis, "__useTestingHaltMarker");
+      yield* API.Process.around({
+        *exec(_args, _next) {
+          yield* sleep(10_000);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+      const doc = [
+        "<Testing>",
+        '<Test name="hangs">',
+        "```js persist eval",
+        "globalThis.__useTestingHaltMarker = true;",
+        "yield* spawn(function* () { try { yield* suspend(); } finally { globalThis.__useTestingHaltMarker = false; } });",
+        "```",
+        "```bash exec",
+        "sleep 600",
+        "```",
+        "</Test>",
+        "</Testing>",
+        "",
+      ].join("\n");
+      yield* useStubFs({ "README.md": doc });
+
+      yield* scoped(function* () {
+        yield* useTesting();
+        const execution = yield* execute({ path: "README.md", stream });
+        yield* spawn(function* () {
+          yield* scoped(function* () {
+            yield* drain(yield* execution.output);
+          });
+        });
+        // Converge on the document having run the eval block and spawned its
+        // effect, then leave the scope — halting everything mid-test. A fixed
+        // sleep races variable startup cost (#335).
+        yield* when(
+          function* () {
+            return Reflect.get(globalThis, "__useTestingHaltMarker") === true;
+          },
+          { timeout: 10_000 },
+        );
+      });
+
+      expect(Reflect.get(globalThis, "__useTestingHaltMarker")).toBe(false);
+    },
+  );
 });

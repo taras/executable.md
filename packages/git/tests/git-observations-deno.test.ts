@@ -36,7 +36,7 @@ import process from "node:process";
 import type { Json } from "@executablemd/durable-streams";
 import { capturingProbe, writeFixtureFile } from "./support/observations.ts";
 import {
-  runOrdinaryDocument,
+  ordinaryDocumentCases,
   useHostCheckout,
   useManagedRoot,
   useOriginlessCheckout,
@@ -44,6 +44,8 @@ import {
 import { useBareRemote } from "./support/git-remotes.ts";
 import { REMOTE } from "./support/run-composition-tier.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+
+const ordinaryCase = ordinaryDocumentCases("packages/git/tests/git-observations-deno.test.ts");
 import type {
   GitBytes,
   GitInvocation,
@@ -68,58 +70,61 @@ function paths(value: Json | undefined): string[] {
 }
 
 describe("GO9 — which checkout answers, through a managed selection", () => {
-  it("reads the ambient checkout, a lexical Repository, a Worktree and a Dir inside one", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const ambient = yield* useHostCheckout(remote.locator);
-    yield* writeFixtureFile(ambient.root, "only-here.txt", "ambient\n");
-    ambient.run("add", "--", "only-here.txt");
-    ambient.run("commit", "-m", "ambient only");
-    const seen: Json[] = [];
+  ordinaryCase(
+    "reads the ambient checkout, a lexical Repository, a Worktree and a Dir inside one",
+    function* (runFresh) {
+      const remote = yield* useBareRemote(REMOTE);
+      const root = yield* useManagedRoot();
+      const ambient = yield* useHostCheckout(remote.locator);
+      yield* writeFixtureFile(ambient.root, "only-here.txt", "ambient\n");
+      ambient.run("add", "--", "only-here.txt");
+      ambient.run("commit", "-m", "ambient only");
+      const seen: Json[] = [];
 
-    yield* runOrdinaryDocument(
-      [
-        '<Git.Files limit={100} as="here" />',
-        "",
-        "<Captured value={here} />",
-        "",
-        `<Repository name="project" url="${remote.locator}">`,
-        "",
-        '<Git.Files limit={100} as="managed" />',
-        "",
-        "<Captured value={managed} />",
-        "",
-        '<Worktree name="side" branch="side">',
-        "",
-        '<Git.Changes compare="unstaged" as="inSide" />',
-        "",
-        "<Captured value={inSide} />",
-        "",
-        '<Dir path="deeper">',
-        "",
-        '<Git.Files limit={100} as="fromDir" />',
-        "",
-        "<Captured value={fromDir} />",
-        "",
-        "</Dir>",
-        "",
-        "</Worktree>",
-        "",
-        "</Repository>",
-        "",
-      ].join("\n"),
-      { root, cwd: ambient.root, components: [capturingProbe(seen)] },
-    );
+      yield* runFresh(
+        [
+          '<Git.Files limit={100} as="here" />',
+          "",
+          "<Captured value={here} />",
+          "",
+          `<Repository name="project" url="${remote.locator}">`,
+          "",
+          '<Git.Files limit={100} as="managed" />',
+          "",
+          "<Captured value={managed} />",
+          "",
+          '<Worktree name="side" branch="side">',
+          "",
+          '<Git.Changes compare="unstaged" as="inSide" />',
+          "",
+          "<Captured value={inSide} />",
+          "",
+          '<Dir path="deeper">',
+          "",
+          '<Git.Files limit={100} as="fromDir" />',
+          "",
+          "<Captured value={fromDir} />",
+          "",
+          "</Dir>",
+          "",
+          "</Worktree>",
+          "",
+          "</Repository>",
+          "",
+        ].join("\n"),
+        { root, cwd: ambient.root, components: [capturingProbe(seen)] },
+      );
 
-    // The ambient checkout holds a path the managed clone never received, which
-    // is how a read that answered from the wrong one would say so.
-    expect(paths(seen[0])).toContain("only-here.txt");
-    expect(paths(seen[1])).toEqual(["which.txt"]);
-    expect(object(seen[2]).changes).toEqual([]);
-    // A `<Dir>` beneath a Worktree stays inside that checkout, and the answer
-    // is still relative to its repository root.
-    expect(paths(seen[3])).toEqual(["which.txt"]);
-  });
+      // The ambient checkout holds a path the managed clone never received, which
+      // is how a read that answered from the wrong one would say so.
+      expect(paths(seen[0])).toContain("only-here.txt");
+      expect(paths(seen[1])).toEqual(["which.txt"]);
+      expect(object(seen[2]).changes).toEqual([]);
+      // A `<Dir>` beneath a Worktree stays inside that checkout, and the answer
+      // is still relative to its repository root.
+      expect(paths(seen[3])).toEqual(["which.txt"]);
+    },
+  );
 });
 
 /** What a watched `git` child reported about its own lifetime. */
@@ -222,57 +227,60 @@ function watchingHost(
 }
 
 describe("GO9 — what an interrupted native read leaves behind", () => {
-  it("joins the read's own child and removes its scratch before settling", function* () {
-    const checkout = yield* useOriginlessCheckout();
-    const root = yield* useManagedRoot();
-    yield* writeFixtureFile(checkout.root, "src/a.ts", "export const a = 1;\n");
-    checkout.run("add", "--", "src/a.ts");
-    checkout.run("commit", "-m", "a");
-    yield* writeFixtureFile(checkout.root, "src/a.ts", "export const a = 11;\n");
+  ordinaryCase(
+    "joins the read's own child and removes its scratch before settling",
+    function* (runFresh) {
+      const checkout = yield* useOriginlessCheckout();
+      const root = yield* useManagedRoot();
+      yield* writeFixtureFile(checkout.root, "src/a.ts", "export const a = 1;\n");
+      checkout.run("add", "--", "src/a.ts");
+      checkout.run("commit", "-m", "a");
+      yield* writeFixtureFile(checkout.root, "src/a.ts", "export const a = 11;\n");
 
-    const watched = watchChildren();
-    const scratch: string[] = [];
-    const marker = join(checkout.home, "read-ran");
-    const script = join(checkout.home, "waiting-fsmonitor");
-    yield* waitingScript(script, marker);
+      const watched = watchChildren();
+      const scratch: string[] = [];
+      const marker = join(checkout.home, "read-ran");
+      const script = join(checkout.home, "waiting-fsmonitor");
+      yield* waitingScript(script, marker);
 
-    // The comparison refreshes the index before it answers, and a file-system
-    // monitor is consulted while it does. This one reports that it ran and then
-    // waits, holding the pipes the parent inherited — which is what makes the
-    // cut land on a real child rather than between commands.
-    const intercept = (invocation: GitInvocation): Partial<GitInvocation> | undefined =>
-      invocation.args.includes("diff")
-        ? {
-            args: ["-c", `core.fsmonitor=${script}`, ...invocation.args],
-            observe: watched.observe,
-          }
-        : undefined;
+      // The comparison refreshes the index before it answers, and a file-system
+      // monitor is consulted while it does. This one reports that it ran and then
+      // waits, holding the pipes the parent inherited — which is what makes the
+      // cut land on a real child rather than between commands.
+      const intercept = (invocation: GitInvocation): Partial<GitInvocation> | undefined =>
+        invocation.args.includes("diff")
+          ? {
+              args: ["-c", `core.fsmonitor=${script}`, ...invocation.args],
+              observe: watched.observe,
+            }
+          : undefined;
 
-    yield* scoped(function* () {
-      const task = yield* spawn(() =>
-        runOrdinaryDocument(
-          [
-            '<Git.Diff compare="unstaged" as="diff" />',
-            '<File path="sentinel.md">sentinel</File>',
-          ].join("\n"),
-          { root, cwd: checkout.root, host: watchingHost(scratch, intercept) },
-        ),
-      );
-      // The marker says the descendant really ran and is holding the pipes.
-      yield* appears(marker);
-      yield* watched.spawned;
-      yield* task.halt();
-    });
+      yield* scoped(function* () {
+        const task = yield* spawn(() =>
+          runFresh(
+            [
+              '<Git.Diff compare="unstaged" as="diff" />',
+              '<File path="sentinel.md">sentinel</File>',
+            ].join("\n"),
+            { root, cwd: checkout.root, host: watchingHost(scratch, intercept) },
+          ),
+        );
+        // The marker says the descendant really ran and is holding the pipes.
+        yield* appears(marker);
+        yield* watched.spawned;
+        yield* task.halt();
+      });
 
-    // The child is gone and both its pipes have ended; the scratch the read
-    // owned is gone with it; and nothing after the read ran.
-    expect(watched.observed() > 0).toBe(true);
-    expect(watched.closed()).toBe(true);
-    expect(watched.alive()).toBe(false);
-    expect(scratch.length > 0).toBe(true);
-    for (const directory of scratch) {
-      expect(yield* exists(directory)).toBe(false);
-    }
-    expect(yield* exists(join(checkout.root, "sentinel.md"))).toBe(false);
-  });
+      // The child is gone and both its pipes have ended; the scratch the read
+      // owned is gone with it; and nothing after the read ran.
+      expect(watched.observed() > 0).toBe(true);
+      expect(watched.closed()).toBe(true);
+      expect(watched.alive()).toBe(false);
+      expect(scratch.length > 0).toBe(true);
+      for (const directory of scratch) {
+        expect(yield* exists(directory)).toBe(false);
+      }
+      expect(yield* exists(join(checkout.root, "sentinel.md"))).toBe(false);
+    },
+  );
 });

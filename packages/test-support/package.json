@@ -6,6 +6,7 @@
   "exports": {
     "./bdd": "./bdd.ts",
     "./expect": "./expect.ts",
+    "./failure-journal": "./failure-journal.ts",
     "./host-boundary": "./host-boundary.ts",
     "./journal": "./journal.ts",
     "./launch": "./launch.ts",
@@ -19,6 +20,7 @@
     "@effectionx/timebox": "0.4.3",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/testing": "workspace:*",
     "effection": "4.1.0",
     "expect": "^30.0.0"
   }

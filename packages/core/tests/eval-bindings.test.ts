@@ -17,12 +17,14 @@ import { asText, completion, failureMessage } from "./helpers.ts";
 import type { Json } from "../src/types.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/eval-bindings.test.ts");
 
 describe("Tier T5 — Binding environment", () => {
   beforeAll(() => useTempFileCompiler());
   // T38: Block 2 reads binding exported by Block 1 via env preamble
-  it("T38: block 2 reads binding from block 1", function* () {
-    const stream = new InMemoryStream();
+  journalCase("T38: block 2 reads binding from block 1", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md":
         "```js eval\nconst port = 8080;\n```\n\n```js eval\nconst url = 'http://localhost:' + port;\n```\n",
@@ -46,30 +48,32 @@ describe("Tier T5 — Binding environment", () => {
   });
 
   // T39: Block 3 shadowing Block 1's binding — downstream sees Block 3's value
-  it("T39: shadowing — later block overrides earlier binding", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({
-      "test.md":
-        "```js eval\nconst x = 1;\n```\n\n```js eval\nconst x = 2;\n```\n\n```js eval\nconst y = x;\n```\n",
-    });
-    yield* useEchoExec();
+  journalCase(
+    "T39: shadowing — later block overrides earlier binding",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({
+        "test.md":
+          "```js eval\nconst x = 1;\n```\n\n```js eval\nconst x = 2;\n```\n\n```js eval\nconst y = x;\n```\n",
+      });
+      yield* useEchoExec();
 
-    // Should succeed — x is 2 in block 3 (shadowed by block 2)
-    const output = asText(
-      yield* collect(
-        yield* execute({
-          path: "test.md",
-          stream,
-        }),
-      ),
-    );
+      // Should succeed — x is 2 in block 3 (shadowed by block 2)
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            path: "test.md",
+            stream,
+          }),
+        ),
+      );
 
-    expect(output).not.toContain("ERROR");
-  });
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
   // T40: Empty block — no exports, no error
-  it("T40: empty eval block — no exports, no error", function* () {
-    const stream = new InMemoryStream();
+  journalCase("T40: empty eval block — no exports, no error", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md": "```js eval\n\n```\n",
     });
@@ -89,8 +93,7 @@ describe("Tier T5 — Binding environment", () => {
 
   // T41: Block referencing undeclared binding not in env — nothing recovers it,
   // so the run's outcome is that failure.
-  it("T41: undeclared reference → the run fails", function* () {
-    const stream = new InMemoryStream();
+  journalCase("T41: undeclared reference → the run fails", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md": "```js eval\nconst y = undeclaredVar + 1;\n```\n",
     });
@@ -103,8 +106,7 @@ describe("Tier T5 — Binding environment", () => {
   });
 
   // T42: Syntax error in block — parse-time error before execution
-  it("T42: syntax error → the run fails", function* () {
-    const stream = new InMemoryStream();
+  journalCase("T42: syntax error → the run fails", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md": "```js eval\nconst x = ;\n```\n",
     });

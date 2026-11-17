@@ -13,7 +13,8 @@
 
 import { main } from "effection";
 import process from "node:process";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { Buffer } from "node:buffer";
+import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
@@ -28,14 +29,16 @@ export interface ChildOutcome {
   /** The fixed word a managed-checkout refusal is reported under. */
   readonly reason?: string;
   readonly message?: string;
+  readonly journal?: readonly string[];
 }
 
 await main(function* () {
-  const [root, cwd, source] = process.argv.slice(2);
+  const [root, cwd, source, capture] = process.argv.slice(2);
   if (root === undefined || cwd === undefined || source === undefined) {
     throw new Error("the child needs a managed root, a starting directory and a document");
   }
 
+  const stream = new InMemoryStream();
   let outcome: ChildOutcome;
   try {
     const rendered = yield* (function* () {
@@ -51,9 +54,7 @@ await main(function* () {
       yield* useHostFiles();
       yield* useCompositionComponents();
       yield* useRunComposition({ root, cwd });
-      return yield* collect(
-        yield* execute({ ...inlineSource(source), stream: new InMemoryStream() }),
-      );
+      return yield* collect(yield* execute({ ...inlineSource(source), stream }));
     })();
     outcome = { kind: "selected", bound: String(rendered).trim() };
   } catch (error) {
@@ -64,7 +65,15 @@ await main(function* () {
         : { kind: "refused", reason: refusal.reason, message: refusal.message };
   }
 
-  process.stdout.write(`${JSON.stringify(outcome)}\n`);
+  let line = `${JSON.stringify(outcome)}\n`;
+  if (capture === "--capture-journal") {
+    const journal = (yield* stream.readAll()).map(serializeDurableEvent);
+    const enriched = `${JSON.stringify({ ...outcome, journal })}\n`;
+    if (Buffer.byteLength(enriched) <= 64 * 1024) {
+      line = enriched;
+    }
+  }
+  process.stdout.write(line);
 });
 
 /** The managed-checkout refusal in this error's chain, if there is one. */

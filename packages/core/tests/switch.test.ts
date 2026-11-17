@@ -22,6 +22,9 @@ import type { SourceOrigin } from "../src/scanner.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
+import { journalCases } from "../../test-support/journal-cases.ts";
+
+const journalCase = journalCases("packages/core/tests/switch.test.ts");
 
 interface SwitchRun {
   segments: Segment[];
@@ -833,55 +836,59 @@ describe("Tier SWITCH / CASE — provider boundary", () => {
 describe("Tier SWITCH / CASE — document execution", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("SW55: a <Return> in the selected case satisfies the value body that owns it", function* () {
-    yield* useStubFs({
-      "Verdict.md": [
-        "---",
-        "returns:",
-        "  type: string",
-        "---",
-        "",
-        '<Switch value="ship">',
-        '<Case value="hold"><Return value="held" /></Case>',
-        '<Case value="ship"><Return value="picked" /></Case>',
-        "</Switch>",
-        "",
-      ].join("\n"),
-      "test.md": '<Verdict as="v" />\n\nGot {v}\n',
-    });
-    yield* useEchoExec();
+  journalCase(
+    "SW55: a <Return> in the selected case satisfies the value body that owns it",
+    "test.md",
+    function* (journal) {
+      yield* useStubFs({
+        "Verdict.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          '<Switch value="ship">',
+          '<Case value="hold"><Return value="held" /></Case>',
+          '<Case value="ship"><Return value="picked" /></Case>',
+          "</Switch>",
+          "",
+        ].join("\n"),
+        "test.md": '<Verdict as="v" />\n\nGot {v}\n',
+      });
+      yield* useEchoExec();
 
-    const output = asText(
-      yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
-    );
-    expect(output).toContain("Got picked");
-    expect(output).not.toContain("held");
-  });
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream: journal })));
+      expect(output).toContain("Got picked");
+      expect(output).not.toContain("held");
+    },
+  );
 
-  it("SW56: a <Switch> projected through <Content /> reads the caller's bindings", function* () {
-    yield* useStubFs({
-      "components/Wrap.md": "<Content />",
-      "test.md": [
-        "```js eval",
-        "const state = 'waiting';",
-        "```",
-        "<Wrap>",
-        "<Switch value={state}>",
-        "<Case value={'ready'}>READY</Case>",
-        "<Case value={'waiting'}>WAITING</Case>",
-        "</Switch>",
-        "</Wrap>",
-      ].join("\n"),
-    });
-    yield* useEchoExec();
+  journalCase(
+    "SW56: a <Switch> projected through <Content /> reads the caller's bindings",
+    "test.md",
+    function* (journal) {
+      yield* useStubFs({
+        "components/Wrap.md": "<Content />",
+        "test.md": [
+          "```js eval",
+          "const state = 'waiting';",
+          "```",
+          "<Wrap>",
+          "<Switch value={state}>",
+          "<Case value={'ready'}>READY</Case>",
+          "<Case value={'waiting'}>WAITING</Case>",
+          "</Switch>",
+          "</Wrap>",
+        ].join("\n"),
+      });
+      yield* useEchoExec();
 
-    const output = asText(
-      yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
-    );
-    expect(output).toContain("WAITING");
-    expect(output).not.toContain("READY");
-    expect(output).not.toContain("ERROR");
-  });
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream: journal })));
+      expect(output).toContain("WAITING");
+      expect(output).not.toContain("READY");
+      expect(output).not.toContain("ERROR");
+    },
+  );
 
   it("SW57: only the selected case reaches the journal", function* () {
     const stream = new InMemoryStream();
