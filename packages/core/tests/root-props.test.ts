@@ -5,8 +5,11 @@
  * validated and defaulted before any body effect, then available through
  * `{props.name}`, bare binding interpolation, and eval blocks.
  */
-
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -82,8 +85,12 @@ const NESTED_CONCISE = [
   "",
 ].join("\n");
 
-function* runPath(path: string, props?: Record<string, Json>, stream = new InMemoryStream()) {
-  const execution = yield* execute({ path, stream, props });
+function* runPath(path: string, props?: Record<string, Json>, stream?: InMemoryStream) {
+  const execution = yield* execute({
+    path,
+    stream: stream ?? (yield* useJournalStream(path)),
+    props,
+  });
   const output = yield* forEach(function* () {}, execution.output);
   const result = yield* execution;
   return { output, result };
@@ -96,7 +103,7 @@ function* runDoc(
   stream?: InMemoryStream,
 ) {
   yield* useStubFs(files);
-  return yield* runPath(path, props, stream);
+  return yield* runPath(path, props);
 }
 
 const OWNER = "packages/core/tests/root-props.test.ts";
@@ -104,16 +111,10 @@ const OWNER = "packages/core/tests/root-props.test.ts";
 describe("Tier RP — root document properties", () => {
   beforeEach(journalBeforeEach(OWNER));
   it("RP1: supplied props reach interpolation without bare prop bindings", function* () {
-    const stream = yield* useJournalStream("hello.md");
-    const { output, result } = yield* runDoc(
-      { "hello.md": GREETING },
-      "hello.md",
-      {
-        name: "Ada",
-        loud: true,
-      },
-      stream,
-    );
+    const { output, result } = yield* runDoc({ "hello.md": GREETING }, "hello.md", {
+      name: "Ada",
+      loud: true,
+    });
     expect(result.ok).toBe(true);
     expect(output).toContain("Hello, Ada!");
     expect(output).toContain("loud=true");
@@ -121,52 +122,32 @@ describe("Tier RP — root document properties", () => {
   });
 
   it("RP2: schema defaults apply to the root", function* () {
-    const stream = yield* useJournalStream("hello.md");
-    const { output } = yield* runDoc({ "hello.md": GREETING }, "hello.md", { name: "Ada" }, stream);
+    const { output } = yield* runDoc({ "hello.md": GREETING }, "hello.md", { name: "Ada" });
     expect(output).toContain("loud=false");
   });
 
   it("RP3: a missing required property prevents every body effect", function* () {
-    const stream = yield* useJournalStream("doc.md");
-    const { output, result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", {}, stream);
+    const { output, result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", {});
     expect(result.ok).toBe(false);
     expect(output).not.toContain("SIDE_EFFECT_MARKER");
   });
 
   it("RP4: an invalid property prevents every body effect", function* () {
-    const stream = yield* useJournalStream("doc.md");
-    const { output, result } = yield* runDoc(
-      { "doc.md": SIDE_EFFECT },
-      "doc.md",
-      { name: 12 },
-      stream,
-    );
+    const { output, result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", { name: 12 });
     expect(result.ok).toBe(false);
     expect(output).not.toContain("SIDE_EFFECT_MARKER");
   });
 
   it("RP5: an undeclared property is rejected by the root schema", function* () {
-    const stream = yield* useJournalStream("doc.md");
-    const { result } = yield* runDoc(
-      { "doc.md": SIDE_EFFECT },
-      "doc.md",
-      {
-        name: "Ada",
-        nope: 1,
-      },
-      stream,
-    );
+    const { result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", {
+      name: "Ada",
+      nope: 1,
+    });
     expect(result.ok).toBe(false);
   });
 
   it("RP6: a document without props keeps its existing behavior", function* () {
-    const stream = yield* useJournalStream("plain.md");
-    const { output, result } = yield* runDoc(
-      { "plain.md": NO_PROPS },
-      "plain.md",
-      undefined,
-      stream,
-    );
+    const { output, result } = yield* runDoc({ "plain.md": NO_PROPS }, "plain.md", undefined);
     expect(result.ok).toBe(true);
     expect(output).toContain("PLAIN_MARKER");
   });
@@ -237,7 +218,8 @@ describe("Tier RI — document inspection", () => {
     expect(failed).toBe(true);
   });
 
-  it("RI6: inspection and execution agree on which roots are markdown", function* () {
+  const extensions = "RI6: inspection and execution agree on which roots are markdown";
+  it(extensions, function* () {
     // Execution parses any non-TypeScript root as markdown, so inspection
     // must not require a `.md` suffix.
     const names = ["README", "notes.markdown", "doc.md"];
@@ -247,15 +229,17 @@ describe("Tier RI — document inspection", () => {
       const info = yield* inspectDocument({ path: name });
       expect(info.props).toMatchObject({ required: ["name"] });
 
-      const execution = yield* execute({
-        path: name,
-        stream: new InMemoryStream(),
-        props: { name: "Ada" },
+      yield* captureTestJournal({ owner: OWNER, name: extensions }, name, function* (stream) {
+        const execution = yield* execute({
+          path: name,
+          stream,
+          props: { name: "Ada" },
+        });
+        const output = yield* forEach(function* () {}, execution.output);
+        const result = yield* execution;
+        expect(result.ok).toBe(true);
+        expect(output).toContain("Hello, Ada!");
       });
-      const output = yield* forEach(function* () {}, execution.output);
-      const result = yield* execution;
-      expect(result.ok).toBe(true);
-      expect(output).toContain("Hello, Ada!");
     }
   });
 });
@@ -263,84 +247,71 @@ describe("Tier RI — document inspection", () => {
 describe("Tier RS — concise props declarations", () => {
   beforeEach(journalBeforeEach(OWNER));
   it("RS1: a concise root receives props and applies defaults", function* () {
-    const stream = yield* useJournalStream("hello.md");
-    const { output, result } = yield* runDoc(
-      { "hello.md": GREETING_CONCISE },
-      "hello.md",
-      {
-        name: "Ada",
-      },
-      stream,
-    );
+    const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
+      name: "Ada",
+    });
     expect(result.ok).toBe(true);
     expect(output).toContain("Hello, Ada!");
     expect(output).toContain("loud=false");
     expect(output).toContain("bare={name}");
   });
 
-  it("RS2: the concise and full spellings behave identically", function* () {
+  const comparison = "RS2: the concise and full spellings behave identically";
+  it(comparison, function* () {
     yield* useStubFs({ "concise.md": GREETING_CONCISE, "full.md": GREETING });
-    const concise = yield* runPath("concise.md", { name: "Ada", loud: true });
-    const full = yield* runPath("full.md", { name: "Ada", loud: true });
-    expect(concise.output).toBe(full.output);
+    const label = { owner: OWNER, name: comparison };
+    yield* captureTestJournal(label, "concise.md", function* (conciseStream) {
+      const concise = yield* runPath("concise.md", { name: "Ada", loud: true }, conciseStream);
+      yield* captureTestJournal(label, "full.md", function* (fullStream) {
+        const full = yield* runPath("full.md", { name: "Ada", loud: true }, fullStream);
+        expect(concise.output).toBe(full.output);
+      });
+    });
   });
 
   it("RS3: a missing required property prevents every body effect", function* () {
-    const stream = yield* useJournalStream("hello.md");
-    const { output, result } = yield* runDoc(
-      { "hello.md": GREETING_CONCISE },
-      "hello.md",
-      {},
-      stream,
-    );
+    const { output, result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {});
     expect(result.ok).toBe(false);
     expect(output).not.toContain("Hello");
   });
 
   it("RS4: the implicit closed object rejects an undeclared property", function* () {
-    const stream = yield* useJournalStream("hello.md");
-    const { result } = yield* runDoc(
-      { "hello.md": GREETING_CONCISE },
-      "hello.md",
-      {
-        name: "Ada",
-        nope: 1,
-      },
-      stream,
-    );
+    const { result } = yield* runDoc({ "hello.md": GREETING_CONCISE }, "hello.md", {
+      name: "Ada",
+      nope: 1,
+    });
     expect(result.ok).toBe(false);
   });
 
   it("RS5: object defaults fill recursively", function* () {
-    const stream = yield* useJournalStream("nested.md");
-    const { output, result } = yield* runDoc(
-      { "nested.md": NESTED_CONCISE },
-      "nested.md",
-      {},
-      stream,
-    );
+    const { output, result } = yield* runDoc({ "nested.md": NESTED_CONCISE }, "nested.md", {});
     expect(result.ok).toBe(true);
     expect(output).toContain("port=8080");
   });
 
-  it("RS6: an imported concise component validates props like the root", function* () {
+  const imported = "RS6: an imported concise component validates props like the root";
+  it(imported, function* () {
     yield* useStubFs({
       "supplied.md": '<Greeting name="Ada" />\n',
       "omitted.md": "<Greeting />\n",
       "Greeting.md": GREETING_CONCISE,
     });
-    const supplied = yield* runPath("supplied.md");
-    expect(supplied.result.ok).toBe(true);
-    expect(supplied.output).toContain("Hello, Ada!");
-
-    // Nothing recovers the component's prop failure, so it is the run's own
-    // outcome and the component renders nothing.
-    const omitted = yield* runPath("omitted.md");
-    expect(omitted.result.ok).toBe(false);
-    const reported = omitted.result.ok ? "" : omitted.result.error.message;
-    expect(reported).toContain("Prop validation failed for <Greeting />");
-    expect(reported).toContain("must have required property 'name'");
-    expect(omitted.output).not.toContain("Hello, ");
+    const label = { owner: OWNER, name: imported };
+    yield* captureTestJournal(label, "supplied.md", function* (stream) {
+      const supplied = yield* runPath("supplied.md", undefined, stream);
+      expect(supplied.result.ok).toBe(true);
+      expect(supplied.output).toContain("Hello, Ada!");
+    });
+    yield* captureTestJournal(label, "omitted.md", function* (stream) {
+      // Nothing recovers the component's prop failure, so it is the run's own
+      // outcome and the component renders nothing.
+      const omitted = yield* runPath("omitted.md", undefined, stream);
+      expect(omitted.result.ok).toBe(false);
+      const reported = omitted.result.ok ? "" : omitted.result.error.message;
+      expect(reported).toContain("Prop validation failed for <Greeting />");
+      expect(reported).toContain("must have required property 'name'");
+      expect(omitted.output).not.toContain("Hello, ");
+    });
   });
 
   it("RS7: inspection returns the normalized schema", function* () {

@@ -1,6 +1,6 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { forEach } from "@effectionx/stream-helpers";
@@ -9,8 +9,12 @@ import { beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { Operation, Result } from "effection";
 import { Stdio } from "@effectionx/process";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/core/tests/props-binding.test.ts";
 
 function* runDocument(
+  stream: InMemoryStream | undefined,
   files: Record<string, string>,
   props?: Record<string, Json>,
 ): Operation<OperationResult> {
@@ -25,7 +29,11 @@ function* runDocument(
       displayed += decoder.decode(bytes);
     },
   });
-  const execution = yield* execute({ path: "root.md", stream: new InMemoryStream(), props });
+  const execution = yield* execute({
+    path: "root.md",
+    stream: stream ?? (yield* useJournalStream("root.md")),
+    props,
+  });
   const output = yield* forEach(function* () {}, execution.output);
   const result = yield* execution;
   return { output, displayed, result };
@@ -60,9 +68,11 @@ const ROOT_PROPS = [
 ].join("\n");
 
 describe("props binding", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   it("installs root props for text, eval, expression, and executable interpolation", function* () {
     const { output, displayed, result } = yield* runDocument(
+      undefined,
       {
         "root.md": [
           ROOT_PROPS,
@@ -92,6 +102,7 @@ describe("props binding", () => {
 
   it("keeps eval-created locals independent from props", function* () {
     const { output, displayed } = yield* runDocument(
+      undefined,
       {
         "root.md": [
           ROOT_PROPS,
@@ -113,6 +124,7 @@ describe("props binding", () => {
 
   it("does not begin body effects for invalid root props", function* () {
     const { output, displayed, result } = yield* runDocument(
+      undefined,
       {
         "root.md": [ROOT_PROPS, "", "```bash exec", "echo BODY_EFFECT", "```", ""].join("\n"),
       },
@@ -125,6 +137,7 @@ describe("props binding", () => {
 
   it("uses caller props for projected content and callee props for authored content", function* () {
     const { output, displayed, result } = yield* runDocument(
+      undefined,
       {
         "root.md": [
           ROOT_PROPS,
@@ -201,6 +214,7 @@ describe("props binding", () => {
 
   it("restores the enclosing props binding after scoped and nested expansion", function* () {
     const { output, displayed, result } = yield* runDocument(
+      undefined,
       {
         "root.md": [
           ROOT_PROPS,
@@ -250,7 +264,7 @@ describe("props binding", () => {
   });
 
   it("uses one validated object for the props binding and text interpolation", function* () {
-    const { output, displayed, result } = yield* runDocument({
+    const { output, displayed, result } = yield* runDocument(undefined, {
       "root.md": '<Mutator nested={{ value: "original" }} />\n',
       "Mutator.md": [
         "---",
@@ -279,7 +293,7 @@ describe("props binding", () => {
   });
 
   it("uses defaults before root and Markdown-component body effects", function* () {
-    const { output, displayed, result } = yield* runDocument({
+    const { output, displayed, result } = yield* runDocument(undefined, {
       "root.md": [
         "---",
         "props:",
@@ -319,7 +333,7 @@ describe("props binding", () => {
   });
 
   it("does not begin a Markdown-component body effect for invalid props", function* () {
-    const { output, displayed, result } = yield* runDocument({
+    const { output, displayed, result } = yield* runDocument(undefined, {
       "root.md": "<Invalid name={42} />\n",
       "Invalid.md": [
         "---",
@@ -348,6 +362,7 @@ describe("props binding", () => {
 
   it("uses one shadowed props binding for text, eval, and exec, then restores it", function* () {
     const { output, displayed, result } = yield* runDocument(
+      undefined,
       {
         "root.md": [ROOT_PROPS, "", "<Shadow />", "after={props.name}", ""].join("\n"),
         "Shadow.md": [
@@ -384,6 +399,7 @@ describe("props binding", () => {
 
   it("allows an authored props binding to shadow the namespace locally", function* () {
     const { output, displayed, result } = yield* runDocument(
+      undefined,
       {
         "root.md": [ROOT_PROPS, "", '<Let as="props">shadowed</Let>{props} {props.name}', ""].join(
           "\n",

@@ -471,6 +471,7 @@ function rendered(answer: Result<GeneratedXmdRootResult>): GeneratedXmdRootResul
 
 describe("Tier E1 — only a live trusted handle evaluates a root", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("E1a: a handle evaluates from its caller with no conversation and no durable context", function* () {
     const stream = new InMemoryStream();
@@ -576,7 +577,7 @@ describe("Tier E1 — only a live trusted handle evaluates a root", () => {
   });
 
   it("E1c: a completed handle refuses without component work or reopening", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const invoked: string[] = [];
     const held: { execution?: HostExecution } = {};
     const run = yield* withHeldHost(
@@ -689,7 +690,7 @@ describe("Tier E3 — the documentation this execution captured", () => {
   beforeAll(() => useTempFileCompiler());
 
   it("E3a: a named lookup renders a package chapter the root does not admit", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const counted = { reads: 0 };
     const marked: string[] = [];
     const invoked: string[] = [];
@@ -1014,9 +1015,10 @@ function holding(
 
 describe("Tier E5 — cancelling joins before anything else starts", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("E5a: a cancelled evaluation holds the caller's halt until its cleanup joins", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const order: string[] = [];
     const invoked: string[] = [];
     const reached = withResolvers<void>();
@@ -1090,8 +1092,8 @@ describe("Tier E5 — cancelling joins before anything else starts", () => {
     ).toBe(false);
   });
 
-  it("E5b: closing the execution joins a held evaluation before closure completes", () =>
-    captureTestJournal(
+  it("E5b: closing the execution joins a held evaluation before closure completes", function* () {
+    yield* captureTestJournal(
       {
         owner: OWNER,
         name: "E5b: closing the execution joins a held evaluation before closure completes",
@@ -1159,7 +1161,8 @@ describe("Tier E5 — cancelling joins before anything else starts", () => {
         expect(after.ok).toBe(false);
         expect(invoked).toEqual([]);
       },
-    ));
+    );
+  });
 });
 
 describe("Tier E6 — reopening without replaying a response", () => {
@@ -1422,9 +1425,10 @@ function failingMain(): NonNullable<ExecutionInstallation["components"]>[number]
 
 describe("Tier E7 — which failures stay the run's", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
-  it("E7a: an ordinary control failure is a Result carrying the real partial render", () =>
-    captureTestJournal(
+  it("E7a: an ordinary control failure is a Result carrying the real partial render", function* () {
+    yield* captureTestJournal(
       {
         owner: OWNER,
         name: "E7a: an ordinary control failure is a Result carrying the real partial render",
@@ -1453,7 +1457,8 @@ describe("Tier E7 — which failures stay the run's", () => {
         expect(error?.partial?.output).toContain("before the failure");
         expect(invoked).toEqual(["boomed"]);
       },
-    ));
+    );
+  });
 
   it("E7b: a persistence failure stays itself, and the run does not succeed", function* () {
     const stream = new InMemoryStream();
@@ -1496,8 +1501,8 @@ describe("Tier E7 — which failures stay the run's", () => {
     expect(invoked).toEqual([]);
   });
 
-  it("E7c: a teardown failure stays itself, and the run does not succeed", () =>
-    captureTestJournal(
+  it("E7c: a teardown failure stays itself, and the run does not succeed", function* () {
+    yield* captureTestJournal(
       { owner: OWNER, name: "E7c: a teardown failure stays itself, and the run does not succeed" },
       HELD_ROOT_PATH,
       function* (stream) {
@@ -1523,7 +1528,8 @@ describe("Tier E7 — which failures stay the run's", () => {
         expect(String((caught.raised as Error).message)).toContain("cleanup");
         expect(caught.completion?.ok).toBe(false);
       },
-    ));
+    );
+  });
 
   it("E7d: a fatal evaluation outranks the ordinary failure the document went on to have", function* () {
     const stream = new InMemoryStream();
@@ -1624,8 +1630,8 @@ describe("Tier E7 — which failures stay the run's", () => {
     expect(run.completion.ok).toBe(false);
   });
 
-  it("E7f: an authoritative evaluation failure of no classified kind is still the run's", () =>
-    captureTestJournal(
+  it("E7f: an authoritative evaluation failure of no classified kind is still the run's", function* () {
+    yield* captureTestJournal(
       {
         owner: OWNER,
         name: "E7f: an authoritative evaluation failure of no classified kind is still the run's",
@@ -1665,10 +1671,11 @@ describe("Tier E7 — which failures stay the run's", () => {
         expect(run.completion.ok).toBe(false);
         expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
       },
-    ));
+    );
+  });
 
-  it("E7g: the same failure is the run's when the document succeeded — by identity", () =>
-    captureTestJournal(
+  it("E7g: the same failure is the run's when the document succeeded — by identity", function* () {
+    yield* captureTestJournal(
       {
         owner: OWNER,
         name: "E7g: the same failure is the run's when the document succeeded — by identity",
@@ -1698,7 +1705,8 @@ describe("Tier E7 — which failures stay the run's", () => {
         expect(run.completion.ok).toBe(false);
         expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
       },
-    ));
+    );
+  });
 });
 
 /**
@@ -1750,6 +1758,7 @@ function occurrences(text: string, needle: string): number {
 }
 
 describe("Tier E8 — the captured selection holds canonical Syntax once", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -1762,7 +1771,7 @@ describe("Tier E8 — the captured selection holds canonical Syntax once", () =>
    * only a real capture produces.
    */
   it("E8a: a host that selected Syntax evaluates, and retains one Syntax row", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const invoked: string[] = [];
     const answered: { output?: string } = {};
     const run = yield* withHeldHost(
@@ -1793,7 +1802,7 @@ describe("Tier E8 — the captured selection holds canonical Syntax once", () =>
   });
 
   it("E8b: a host that selected none of it reaches core's own, also once", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const invoked: string[] = [];
     const answered: { output?: string } = {};
     const run = yield* withHeldHost(
@@ -1834,7 +1843,7 @@ describe("Tier E9 — an availability refusal is the call's answer", () => {
    * failures (E7) keep their authority; these two are not among them.
    */
   it("E9a: a host that selected no generated components refuses, and its document completes", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const answer: { value?: Result<GeneratedXmdRootResult> } = {};
     const run = yield* withHeldHost({ stream }, function* (open) {
       answer.value = yield* open.execution.evaluateGeneratedXmdRoot(
@@ -1854,7 +1863,7 @@ describe("Tier E9 — an availability refusal is the call's answer", () => {
   });
 
   it("E9b: a class this host installed nothing for refuses, and its document completes", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const invoked: string[] = [];
     const answer: { value?: Result<GeneratedXmdRootResult> } = {};
     const run = yield* withHeldHost(
@@ -1878,7 +1887,7 @@ describe("Tier E9 — an availability refusal is the call's answer", () => {
   });
 
   it("E9c: a class this host did install answers, and its document completes", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(HELD_ROOT_PATH);
     const invoked: string[] = [];
     const answer: { value?: Result<GeneratedXmdRootResult> } = {};
     const run = yield* withHeldHost(

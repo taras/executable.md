@@ -12,12 +12,11 @@
  * nothing.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { content, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
@@ -74,6 +73,9 @@ import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./supp
 
 import { filteredRepositoryIdentity } from "../src/composition/selection.ts";
 import { type RepositorySelection } from "@executablemd/git/api";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/git/tests/git-switch.test.ts";
 /**
  * Two branches whose content differs, plus one file that does not.
  *
@@ -489,6 +491,7 @@ describe("workflow Git.Switch", () => {
 });
 
 describe("workflow Git.Switch selection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("selects the enclosing checkout from a directory inside it", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -719,7 +722,7 @@ describe("workflow Git.Switch selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Switch branch="release" />`),
-            stream: new InMemoryStream(),
+            stream: yield* useJournalStream("<eval>"),
           }),
         );
       }),

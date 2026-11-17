@@ -1,3 +1,5 @@
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import { UPGRADE_COMMAND_IDENTITY } from "../src/upgrade.ts";
 /**
  * Tier UG — the packaged upgrade command document, executed as itself.
  *
@@ -20,7 +22,7 @@
  * The include list is empty on purpose. Repository component search must not be
  * able to supply `If`, `Return`, `Fail` or either upgrade component.
  */
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -262,7 +264,7 @@ function* refuseHostCapabilities(): Operation<void> {
   });
 }
 
-function* upgrade(scenario: Scenario): Operation<Run> {
+function* upgrade(scenario: Scenario, stream?: InMemoryStream): Operation<Run> {
   const run: Run = {
     releaseReads: [],
     downloads: [],
@@ -308,7 +310,7 @@ function* upgrade(scenario: Scenario): Operation<Run> {
         allowPrerelease: scenario.allowPrerelease === true,
       },
       assembly,
-      stream: new InMemoryStream(),
+      stream: stream ?? (yield* useJournalStream(UPGRADE_COMMAND_IDENTITY)),
       // deno-lint-ignore require-yield
       *consume(chunk) {
         chunks.push(chunk);
@@ -348,7 +350,10 @@ function transcript(run: Run): string[] {
     .filter((line) => line.length > 0);
 }
 
+const OWNER = "packages/cli/tests/upgrade-command-document.test.ts";
+
 describe("Tier UG — the packaged upgrade command document", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("UG1: an authorized install renders its milestones in source order", function* () {

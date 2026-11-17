@@ -8,11 +8,10 @@
  * says what this provider believes, and only the object says what Git did.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -74,6 +73,9 @@ import { gitPluginAdmissions } from "./support/composition.ts";
 import { dropRootClose } from "./support/replay.ts";
 
 import type { RepositorySelection } from "@executablemd/git/api";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/git/tests/git-commit.test.ts";
 /** One tracked file at the root and one in a subdirectory. */
 const REMOTE = {
   commits: [
@@ -785,6 +787,7 @@ describe("workflow Git.Commit leading content", () => {
 });
 
 describe("workflow Git.Commit selection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("commits in the linked Worktree the working directory selects", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -947,7 +950,7 @@ describe("workflow Git.Commit selection", () => {
         return yield* collect(
           yield* execute({
             ...inlineSource(`<Git.Commit message="nowhere" as="sha" />`),
-            stream: new InMemoryStream(),
+            stream: yield* useJournalStream("<eval>"),
           }),
         );
       }),

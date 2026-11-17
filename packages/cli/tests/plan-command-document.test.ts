@@ -1,3 +1,4 @@
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 /**
  * The packaged plan command document, executed as itself.
  *
@@ -18,7 +19,7 @@
  * so what a row observes is the channel a person actually watches rather than a
  * transcript assembled afterwards.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, sleep, spawn, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -175,7 +176,10 @@ interface RunOptions {
   symbols?: SyntaxSymbols;
 }
 
-function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
+function* runDocument(
+  options: RunOptions = {},
+  stream: InMemoryStream | undefined = undefined,
+): Operation<CommandRun> {
   const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
 
   let value: Json | undefined;
@@ -235,7 +239,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
       const execution = yield* executeInstalled(
         {
           ...retainedSource(PLAN_COMMAND_IDENTITY, source),
-          stream: new InMemoryStream(),
+          stream: stream ?? (yield* useJournalStream(PLAN_COMMAND_IDENTITY)),
           includes: [],
           secretDetection: true,
           props: {
@@ -340,7 +344,10 @@ function unattributed(chunks: readonly string[]): string[] {
   return kept;
 }
 
+const OWNER = "packages/cli/tests/plan-command-document.test.ts";
+
 describe("the packaged plan command document", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("C2: returns the approved candidate's exact bytes and never reaches exhaustion", function* () {
     const run = yield* useWorkingDirectory(function* () {
       return yield* runDocument();
@@ -744,6 +751,7 @@ describe("the packaged plan command document", () => {
  * through the captured operation — there is no other way to reach it.
  */
 describe("Tier PI — read-only information requests", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** One request that binds all three reads and renders a chosen object. */
   const COMPOSED = [
     '<Glob include={["notes.md"]} as="paths" />',
@@ -1015,13 +1023,16 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI1: named documentation comes back, then an ordinary Plan", function* () {
-    const run = yield* runDocument({
-      // Two of the three names this case's vocabulary has, asked for together.
-      // The third is the control: a selection that returned it would be a
-      // catalog injection wearing a selection's clothes.
-      turns: [{ reply: '<Syntax names={["File", "Elicit"]} />\n' }, { reply: CANDIDATE }],
-      symbols: SELECTABLE,
-    });
+    const run = yield* runDocument(
+      {
+        // Two of the three names this case's vocabulary has, asked for together.
+        // The third is the control: a selection that returned it would be a
+        // catalog injection wearing a selection's clothes.
+        turns: [{ reply: '<Syntax names={["File", "Elicit"]} />\n' }, { reply: CANDIDATE }],
+        symbols: SELECTABLE,
+      },
+      undefined,
+    );
 
     expect(run.failure).toBe(undefined);
     const asked = run.prompts[0] ?? "";
@@ -1040,9 +1051,12 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI10: an unknown documented name is one retry, not a stopped invocation", function* () {
-    const run = yield* runDocument({
-      turns: [{ reply: '<Syntax names={["NoSuchComponent"]} />\n' }, { reply: CANDIDATE }],
-    });
+    const run = yield* runDocument(
+      {
+        turns: [{ reply: '<Syntax names={["NoSuchComponent"]} />\n' }, { reply: CANDIDATE }],
+      },
+      undefined,
+    );
 
     // Recoverable: the workflow asked again rather than ending, and the reason
     // quotes only the name the candidate itself wrote.
@@ -1055,14 +1069,17 @@ describe("Tier PI — read-only information requests", () => {
 
   it("PI2: an empty match renders as an empty array", function* () {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
-    const run = yield* runDocument({
-      turns: [
-        { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
-        { reply: CANDIDATE },
-      ],
-      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
-      files,
-    });
+    const run = yield* runDocument(
+      {
+        turns: [
+          { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
+          { reply: CANDIDATE },
+        ],
+        generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
+        files,
+      },
+      undefined,
+    );
 
     expect(run.failure).toBe(undefined);
     // The search ran and found nothing, and nothing is a result rather than a
@@ -1316,11 +1333,14 @@ describe("Tier PI — read-only information requests", () => {
 
   it("PI3: a titled draft is never evaluated", function* () {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
-    const run = yield* runDocument({
-      turns: [{ reply: CANDIDATE }],
-      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
-      files,
-    });
+    const run = yield* runDocument(
+      {
+        turns: [{ reply: CANDIDATE }],
+        generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
+        files,
+      },
+      undefined,
+    );
 
     expect(run.failure).toBe(undefined);
     // One turn, no evaluation, no information phase at all.
