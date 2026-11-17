@@ -68,7 +68,7 @@ import { durabilityFailure } from "../src/errors.ts";
 import { Execution, execute } from "../src/execute.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { heldHostCases, HELD_ROOT_PATH, useHeldHost, withHeldHost } from "./support/held-host.ts";
+import { HELD_ROOT_PATH, useHeldHost, withHeldHost } from "./support/held-host.ts";
 import * as hostModule from "../host.ts";
 import { executeInstalled, HostExecutionError } from "../host.ts";
 // The request and the class it names are taken from the trusted host
@@ -87,7 +87,6 @@ import type { FunctionComponent } from "../src/types.ts";
 import { formDispatcher } from "../src/invocation-identity.ts";
 
 const OWNER = "packages/core/tests/host-generated-root.test.ts";
-const heldHostCase = heldHostCases(OWNER);
 
 describe("held host failure journal", () => {
   const name = "saves the held root after cleanup and an enclosing assertion failure";
@@ -1091,71 +1090,76 @@ describe("Tier E5 — cancelling joins before anything else starts", () => {
     ).toBe(false);
   });
 
-  heldHostCase(
-    "E5b: closing the execution joins a held evaluation before closure completes",
-    function* (stream) {
-      const order: string[] = [];
-      const reached = withResolvers<void>();
-      const release = withResolvers<void>();
-      const saved: { execution?: HostExecution } = {};
-      const interrupted: { answer?: Result<GeneratedXmdRootResult> } = {};
-      const invoked: string[] = [];
+  it("E5b: closing the execution joins a held evaluation before closure completes", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "E5b: closing the execution joins a held evaluation before closure completes",
+      },
+      HELD_ROOT_PATH,
+      function* (stream) {
+        const order: string[] = [];
+        const reached = withResolvers<void>();
+        const release = withResolvers<void>();
+        const saved: { execution?: HostExecution } = {};
+        const interrupted: { answer?: Result<GeneratedXmdRootResult> } = {};
+        const invoked: string[] = [];
 
-      yield* scoped(function* () {
-        const open = yield* useHeldHost({
-          stream,
-          // The latch is resolved by the document element's own cleanup, which
-          // unwinds before the evaluation runner does. So the evaluation's
-          // cleanup is genuinely held at the moment closure begins, and it is the
-          // closing that frees it rather than this case pre-arranging the order.
-          *inside(): Operation<void> {
-            yield* ensure(() => {
-              release.resolve();
-            });
-          },
-          installations: [selecting([...declared(), holding(reached, release.operation, order)])],
+        yield* scoped(function* () {
+          const open = yield* useHeldHost({
+            stream,
+            // The latch is resolved by the document element's own cleanup, which
+            // unwinds before the evaluation runner does. So the evaluation's
+            // cleanup is genuinely held at the moment closure begins, and it is the
+            // closing that frees it rather than this case pre-arranging the order.
+            *inside(): Operation<void> {
+              yield* ensure(() => {
+                release.resolve();
+              });
+            },
+            installations: [selecting([...declared(), holding(reached, release.operation, order)])],
+          });
+          saved.execution = open.execution;
+          const running = yield* spawn(() =>
+            open.execution.evaluateGeneratedXmdRoot({
+              id: "turn-1",
+              source: "<Output>\n<Hold />\n</Output>\n",
+            }),
+          );
+          yield* reached.operation;
+          // Closing the execution: halting the handle's consumer takes the
+          // invocation down with it.
+          const closing = yield* spawn(function* () {
+            yield* open.watched.halt();
+            order.push("closed");
+          });
+          yield* closing;
+          interrupted.answer = yield* running;
         });
-        saved.execution = open.execution;
-        const running = yield* spawn(() =>
-          open.execution.evaluateGeneratedXmdRoot({
-            id: "turn-1",
-            source: "<Output>\n<Hold />\n</Output>\n",
-          }),
+
+        // The held cleanup joined, and only then did closure complete.
+        expect(order).toEqual(["evaluation cleanup", "closed"]);
+        // The caller was told the execution closed rather than left waiting on an
+        // answer nothing was left to produce.
+        expect(interrupted.answer?.ok).toBe(false);
+        expect(interrupted.answer?.ok === false && interrupted.answer.error).toBeInstanceOf(
+          HostExecutionError,
         );
-        yield* reached.operation;
-        // Closing the execution: halting the handle's consumer takes the
-        // invocation down with it.
-        const closing = yield* spawn(function* () {
-          yield* open.watched.halt();
-          order.push("closed");
-        });
-        yield* closing;
-        interrupted.answer = yield* running;
-      });
+        expect(interrupted.answer?.ok === false && interrupted.answer.error.message).toContain(
+          "closed while it was evaluating",
+        );
 
-      // The held cleanup joined, and only then did closure complete.
-      expect(order).toEqual(["evaluation cleanup", "closed"]);
-      // The caller was told the execution closed rather than left waiting on an
-      // answer nothing was left to produce.
-      expect(interrupted.answer?.ok).toBe(false);
-      expect(interrupted.answer?.ok === false && interrupted.answer.error).toBeInstanceOf(
-        HostExecutionError,
-      );
-      expect(interrupted.answer?.ok === false && interrupted.answer.error.message).toContain(
-        "closed while it was evaluating",
-      );
-
-      const execution = saved.execution;
-      if (execution === undefined) {
-        throw new Error("the case never held an execution");
-      }
-      const after = yield* execution.evaluateGeneratedXmdRoot(
-        request("<Output>\n<Probe />\n</Output>\n", invoked),
-      );
-      expect(after.ok).toBe(false);
-      expect(invoked).toEqual([]);
-    },
-  );
+        const execution = saved.execution;
+        if (execution === undefined) {
+          throw new Error("the case never held an execution");
+        }
+        const after = yield* execution.evaluateGeneratedXmdRoot(
+          request("<Output>\n<Probe />\n</Output>\n", invoked),
+        );
+        expect(after.ok).toBe(false);
+        expect(invoked).toEqual([]);
+      },
+    ));
 });
 
 describe("Tier E6 — reopening without replaying a response", () => {
@@ -1419,32 +1423,37 @@ function failingMain(): NonNullable<ExecutionInstallation["components"]>[number]
 describe("Tier E7 — which failures stay the run's", () => {
   beforeAll(() => useTempFileCompiler());
 
-  heldHostCase(
-    "E7a: an ordinary control failure is a Result carrying the real partial render",
-    function* (stream) {
-      const invoked: string[] = [];
-      const answer: { failed?: Result<GeneratedXmdRootResult> } = {};
+  it("E7a: an ordinary control failure is a Result carrying the real partial render", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "E7a: an ordinary control failure is a Result carrying the real partial render",
+      },
+      HELD_ROOT_PATH,
+      function* (stream) {
+        const invoked: string[] = [];
+        const answer: { failed?: Result<GeneratedXmdRootResult> } = {};
 
-      const run = yield* withHeldHost(
-        { stream, installations: [selecting(declared(invoked))] },
-        function* (open) {
-          answer.failed = yield* open.execution.evaluateGeneratedXmdRoot({
-            id: "turn-1",
-            source: "<Output>\nbefore the failure\n\n<Boom />\n</Output>\n",
-          });
-        },
-      );
+        const run = yield* withHeldHost(
+          { stream, installations: [selecting(declared(invoked))] },
+          function* (open) {
+            answer.failed = yield* open.execution.evaluateGeneratedXmdRoot({
+              id: "turn-1",
+              source: "<Output>\nbefore the failure\n\n<Boom />\n</Output>\n",
+            });
+          },
+        );
 
-      // The request's own failure, so the execution is untouched by it.
-      expect(run.completion.ok).toBe(true);
-      expect(answer.failed?.ok).toBe(false);
-      const error: (Error & { partial?: GeneratedXmdRootResult }) | undefined =
-        answer.failed?.ok === false ? answer.failed.error : undefined;
-      expect(error?.message).toContain("the control refused this request");
-      expect(error?.partial?.output).toContain("before the failure");
-      expect(invoked).toEqual(["boomed"]);
-    },
-  );
+        // The request's own failure, so the execution is untouched by it.
+        expect(run.completion.ok).toBe(true);
+        expect(answer.failed?.ok).toBe(false);
+        const error: (Error & { partial?: GeneratedXmdRootResult }) | undefined =
+          answer.failed?.ok === false ? answer.failed.error : undefined;
+        expect(error?.message).toContain("the control refused this request");
+        expect(error?.partial?.output).toContain("before the failure");
+        expect(invoked).toEqual(["boomed"]);
+      },
+    ));
 
   it("E7b: a persistence failure stays itself, and the run does not succeed", function* () {
     const stream = new InMemoryStream();
@@ -1487,32 +1496,34 @@ describe("Tier E7 — which failures stay the run's", () => {
     expect(invoked).toEqual([]);
   });
 
-  heldHostCase(
-    "E7c: a teardown failure stays itself, and the run does not succeed",
-    function* (stream) {
-      const caught: { raised?: unknown; completion?: Result<Json> } = {};
+  it("E7c: a teardown failure stays itself, and the run does not succeed", () =>
+    captureTestJournal(
+      { owner: OWNER, name: "E7c: a teardown failure stays itself, and the run does not succeed" },
+      HELD_ROOT_PATH,
+      function* (stream) {
+        const caught: { raised?: unknown; completion?: Result<Json> } = {};
 
-      yield* scoped(function* () {
-        const open = yield* useHeldHost({ stream, installations: [selecting(declared())] });
-        try {
-          yield* open.execution.evaluateGeneratedXmdRoot({
-            id: "turn-1",
-            source: "<Output>\n<Leak />\n</Output>\n",
-          });
-        } catch (error) {
-          caught.raised = error;
-        }
-        open.release();
-        caught.completion = yield* open.watched;
-      });
+        yield* scoped(function* () {
+          const open = yield* useHeldHost({ stream, installations: [selecting(declared())] });
+          try {
+            yield* open.execution.evaluateGeneratedXmdRoot({
+              id: "turn-1",
+              source: "<Output>\n<Leak />\n</Output>\n",
+            });
+          } catch (error) {
+            caught.raised = error;
+          }
+          open.release();
+          caught.completion = yield* open.watched;
+        });
 
-      // Work the root owned did not finish unwinding, so a rendering reported
-      // beside it would describe a root still running.
-      expect(caught.raised).not.toBe(undefined);
-      expect(String((caught.raised as Error).message)).toContain("cleanup");
-      expect(caught.completion?.ok).toBe(false);
-    },
-  );
+        // Work the root owned did not finish unwinding, so a rendering reported
+        // beside it would describe a root still running.
+        expect(caught.raised).not.toBe(undefined);
+        expect(String((caught.raised as Error).message)).toContain("cleanup");
+        expect(caught.completion?.ok).toBe(false);
+      },
+    ));
 
   it("E7d: a fatal evaluation outranks the ordinary failure the document went on to have", function* () {
     const stream = new InMemoryStream();
@@ -1613,69 +1624,81 @@ describe("Tier E7 — which failures stay the run's", () => {
     expect(run.completion.ok).toBe(false);
   });
 
-  heldHostCase(
-    "E7f: an authoritative evaluation failure of no classified kind is still the run's",
-    function* (stream) {
-      const caught: { raised?: unknown } = {};
+  it("E7f: an authoritative evaluation failure of no classified kind is still the run's", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "E7f: an authoritative evaluation failure of no classified kind is still the run's",
+      },
+      "host/ranking.md",
+      function* (stream) {
+        const caught: { raised?: unknown } = {};
 
-      // A failed evaluation teardown is neither a durability nor a Files
-      // failure, so the classified tiers do not reach it — and the document
-      // fails afterwards for an ordinary reason of its own. Which of the two the
-      // completion reports is decided by occurrence, and the evaluation's came
-      // first.
-      const run = yield* withHeldHost(
-        {
-          stream,
-          root: { path: "host/ranking.md", source: "<Held />\n<Boom />\n" },
-          installations: [{ components: [failingMain()] }, selecting([probe(), failingCleanup()])],
-        },
-        function* (open) {
-          try {
-            yield* open.execution.evaluateGeneratedXmdRoot({
-              id: "turn-1",
-              source: "<Output>\n<Leak />\n</Output>\n",
-            });
-          } catch (error) {
-            caught.raised = error;
-          }
-        },
-      );
+        // A failed evaluation teardown is neither a durability nor a Files
+        // failure, so the classified tiers do not reach it — and the document
+        // fails afterwards for an ordinary reason of its own. Which of the two the
+        // completion reports is decided by occurrence, and the evaluation's came
+        // first.
+        const run = yield* withHeldHost(
+          {
+            stream,
+            root: { path: "host/ranking.md", source: "<Held />\n<Boom />\n" },
+            installations: [
+              { components: [failingMain()] },
+              selecting([probe(), failingCleanup()]),
+            ],
+          },
+          function* (open) {
+            try {
+              yield* open.execution.evaluateGeneratedXmdRoot({
+                id: "turn-1",
+                source: "<Output>\n<Leak />\n</Output>\n",
+              });
+            } catch (error) {
+              caught.raised = error;
+            }
+          },
+        );
 
-      // The object the caller was handed, not a rebuilt one carrying its words.
-      expect(caught.raised).toBeInstanceOf(Error);
-      expect(run.completion.ok).toBe(false);
-      expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
-    },
-    "host/ranking.md",
-  );
+        // The object the caller was handed, not a rebuilt one carrying its words.
+        expect(caught.raised).toBeInstanceOf(Error);
+        expect(run.completion.ok).toBe(false);
+        expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
+      },
+    ));
 
-  heldHostCase(
-    "E7g: the same failure is the run's when the document succeeded — by identity",
-    function* (stream) {
-      const caught: { raised?: unknown } = {};
+  it("E7g: the same failure is the run's when the document succeeded — by identity", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "E7g: the same failure is the run's when the document succeeded — by identity",
+      },
+      HELD_ROOT_PATH,
+      function* (stream) {
+        const caught: { raised?: unknown } = {};
 
-      // The control for E7f. E7c already states that such a run does not report
-      // success; what this adds is that the completion is the *same* failure, so
-      // E7f's row is about ranking rather than about reporting one at all.
-      const run = yield* withHeldHost(
-        { stream, installations: [selecting(declared())] },
-        function* (open) {
-          try {
-            yield* open.execution.evaluateGeneratedXmdRoot({
-              id: "turn-1",
-              source: "<Output>\n<Leak />\n</Output>\n",
-            });
-          } catch (error) {
-            caught.raised = error;
-          }
-        },
-      );
+        // The control for E7f. E7c already states that such a run does not report
+        // success; what this adds is that the completion is the *same* failure, so
+        // E7f's row is about ranking rather than about reporting one at all.
+        const run = yield* withHeldHost(
+          { stream, installations: [selecting(declared())] },
+          function* (open) {
+            try {
+              yield* open.execution.evaluateGeneratedXmdRoot({
+                id: "turn-1",
+                source: "<Output>\n<Leak />\n</Output>\n",
+              });
+            } catch (error) {
+              caught.raised = error;
+            }
+          },
+        );
 
-      expect(caught.raised).toBeInstanceOf(Error);
-      expect(run.completion.ok).toBe(false);
-      expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
-    },
-  );
+        expect(caught.raised).toBeInstanceOf(Error);
+        expect(run.completion.ok).toBe(false);
+        expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
+      },
+    ));
 });
 
 /**
