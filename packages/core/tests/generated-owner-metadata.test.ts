@@ -27,9 +27,10 @@
  * takes its first copy of.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
@@ -56,6 +57,7 @@ import { SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
 import { EVALUATE_PROTECTED } from "../src/components/Evaluate.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
 import type { ComponentRegistry, FunctionComponentDefinition, Json } from "../src/types.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 /** The registry visible in the current scope. */
 function currentRegistry(): Operation<ComponentRegistry> {
@@ -506,6 +508,8 @@ describe("Tier GOM — a shared definition's metadata cannot be edited", () => {
  * a run that admitted the wrong URL and happened to fail later.
  */
 describe("Tier GOM — a declared component's offer survives capture", () => {
+  const OWNER = "packages/core/tests/generated-owner-metadata.test.ts";
+  beforeEach(journalBeforeEach(OWNER));
   const ROOT_PATH = "owner.md";
   /** A document naming the declared component in the spelling it offers. */
   const NAMING_PROBE = `<Evaluate text={'<Probe />\\n'} />\n`;
@@ -631,7 +635,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
   };
 
   it("GOM4: a host's factory declaration runs the spelling it offered", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     const published: FunctionComponentDefinition[] = [];
 
     const output = yield* run([host(declaredProbe(READ_PROBE), published)], stream);
@@ -644,6 +648,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
   });
 
   it("GOM4: capture reads the offer once, and construction uses that reading", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The check/use gap at the installation boundary, where the host also gets
     // to run code in between: the accessor answers the accepted URL the first
     // time and a substituted one afterwards, so a construction that read the
@@ -657,7 +662,6 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
         return reads.length === 1 ? READ_PROBE : SUBSTITUTE;
       },
     };
-    const stream = new InMemoryStream();
     const published: FunctionComponentDefinition[] = [];
 
     const output = yield* run([host(component, published)], stream);
@@ -673,6 +677,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
   });
 
   it("GOM4: an offer replaced from inside install() has replaced nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // A host's installation callback runs before the declared components are
     // built, so this is the window a live reference would be read through.
     const offers: { generated: GeneratedForms } = { generated: READ_PROBE };
@@ -682,7 +687,6 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
         return offers.generated;
       },
     };
-    const stream = new InMemoryStream();
     const published: FunctionComponentDefinition[] = [];
 
     const output = yield* run(
@@ -702,7 +706,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
   });
 
   it("GOM4: an unusable offer refuses the execution, having run nothing", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     const published: FunctionComponentDefinition[] = [];
     const unusable = { "self-closing": { identity: "not-a-url", effect: "read" as const } };
 

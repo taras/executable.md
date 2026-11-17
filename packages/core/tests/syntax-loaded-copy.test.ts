@@ -41,7 +41,8 @@
  * the only one a locally rebuilt definition cannot stand in for.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -49,7 +50,7 @@ import { useSelection } from "./support/generated-selection.ts";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { API, Files, useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +67,11 @@ import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts
 import { form as fileForm, props as fileProps } from "../src/components/File.ts";
 import { parseJsonObject } from "../src/json.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+  captureTestJournal,
+} from "@executablemd/test-support/failure-journal";
 
 const PROTECTION_MODULE = fileURLToPath(new URL("../src/invocation-identity.ts", import.meta.url));
 const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
@@ -256,7 +262,12 @@ function answering(definition: unknown): ExecutionInstallation {
   };
 }
 
+const OWNER = "packages/core/tests/syntax-loaded-copy.test.ts";
+
+const ROOT_PATH = "documents/root.md";
+
 function runRoot(
+  stream: InMemoryStream,
   installations: readonly ExecutionInstallation[],
   source = "<Syntax />\n",
 ): Operation<unknown> {
@@ -264,8 +275,8 @@ function runRoot(
     return yield* collect(
       yield* executeInstalled(
         {
-          ...retainedSource("documents/root.md", source),
-          stream: new InMemoryStream(),
+          ...retainedSource(ROOT_PATH, source),
+          stream,
           includes: [],
         },
         [...installations],
@@ -284,107 +295,128 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
 }
 
 describe("Tier SYN — a separately loaded protected implementation", () => {
-  it("SYN26: an implementation another copy built answers for nothing here", function* () {
-    const copy = yield* useSeparateCopy();
+  const protectedSyntax = "SYN26: an implementation another copy built answers for nothing here";
+  it(protectedSyntax, function* () {
+    yield* captureTestJournal(
+      { owner: OWNER, name: protectedSyntax },
+      ROOT_PATH,
+      function* (stream) {
+        const copy = yield* useSeparateCopy();
 
-    // An installation the other copy performed: it minted the domain, built the
-    // implementation and kept the body in its own table. Nothing here is a fake
-    // — this is that copy's real protected-component path.
-    const installed = copy.installIdentities(
-      [],
-      [],
-      [
-        {
-          name: SYNTAX_COMPONENT,
-          origin: "@executablemd/core",
-          props: syntaxProps,
-          forms: ["self-closing"],
-          // deno-lint-ignore require-yield
-          build: () =>
-            // deno-lint-ignore require-yield
-            function* (): Operation<string> {
-              return "a foreign catalog";
-            },
-        },
-      ],
-    );
-    yield* ensure(() => installed.identities.revoke());
-    installed.activate();
-    const foreign = installed.protected.get(SYNTAX_COMPONENT);
-    if (foreign === undefined) {
-      throw new Error("the bundled copy built no protected implementation");
-    }
-    // The premise, stated as a fact rather than assumed: that copy holds a body
-    // for its own implementation.
-    expect(installed.componentRouting.body(foreign.fn)).toBeDefined();
-
-    const refused = yield* refusal(runRoot([answering(foreign)]));
-    expect(refused).toContain("canonical core owns");
-
-    // The positive control, in the same shape: a handler that delegates and
-    // answers with what came back runs the canonical component.
-    const output = yield* runRoot([
-      {
-        *install() {
-          yield* Component.around(
+        // An installation the other copy performed: it minted the domain, built the
+        // implementation and kept the body in its own table. Nothing here is a fake
+        // — this is that copy's real protected-component path.
+        const installed = copy.installIdentities(
+          [],
+          [],
+          [
             {
-              *importComponent([name, position], next) {
-                return yield* next(name, position);
-              },
+              name: SYNTAX_COMPONENT,
+              origin: "@executablemd/core",
+              props: syntaxProps,
+              forms: ["self-closing"],
+              // deno-lint-ignore require-yield
+              build: () =>
+                // deno-lint-ignore require-yield
+                function* (): Operation<string> {
+                  return "a foreign catalog";
+                },
             },
-            { at: "max" },
-          );
-        },
-      },
-    ]);
-    expect(String(output)).toContain("### `<Syntax>`");
-    expect(String(output)).not.toContain("a foreign catalog");
+          ],
+        );
+        yield* ensure(() => installed.identities.revoke());
+        installed.activate();
+        const foreign = installed.protected.get(SYNTAX_COMPONENT);
+        if (foreign === undefined) {
+          throw new Error("the bundled copy built no protected implementation");
+        }
+        // The premise, stated as a fact rather than assumed: that copy holds a body
+        // for its own implementation.
+        expect(installed.componentRouting.body(foreign.fn)).toBeDefined();
 
-    const forged = function* (): Operation<string> {
-      return "foreign projection";
-    };
-    const projected: unknown[] = [];
-    const observed: string[] = [];
-    const profile: ExecutionInstallation = {
-      *install(): Operation<void> {
-        yield* useSelection({ Syntax: ["self-closing"] });
-      },
-      componentAnswers: [
-        {
-          origin: "test://delegate",
-          *install(registrar) {
-            yield* registrar.around(function* (request, next) {
-              const answer = yield* next();
-              if (request.name === "Syntax" && answer.kind === "function") {
-                observed.push(request.name);
-                projected.push(installed.componentRouting.project(answer.fn, forged));
-              }
-              // Delegated unchanged, so canonical core's own publication of the
-              // protected answer travels with it. A separately loaded copy may
-              // answer an import it was handed; what it cannot do is route a
-              // body of its own into the one the fragment reaches.
-              return answer;
-            });
+        const refused = yield* refusal(runRoot(stream, [answering(foreign)]));
+        expect(refused).toContain("canonical core owns");
+
+        // The positive control, in the same shape: a handler that delegates and
+        // answers with what came back runs the canonical component.
+        yield* captureTestJournal(
+          { owner: OWNER, name: protectedSyntax },
+          ROOT_PATH,
+          function* (secondStream) {
+            const output = yield* runRoot(secondStream, [
+              {
+                *install() {
+                  yield* Component.around(
+                    {
+                      *importComponent([name, position], next) {
+                        return yield* next(name, position);
+                      },
+                    },
+                    { at: "max" },
+                  );
+                },
+              },
+            ]);
+            expect(String(output)).toContain("### `<Syntax>`");
+            expect(String(output)).not.toContain("a foreign catalog");
+
+            const forged = function* (): Operation<string> {
+              return "foreign projection";
+            };
+            const projected: unknown[] = [];
+            const observed: string[] = [];
+            const profile: ExecutionInstallation = {
+              *install(): Operation<void> {
+                yield* useSelection({ Syntax: ["self-closing"] });
+              },
+              componentAnswers: [
+                {
+                  origin: "test://delegate",
+                  *install(registrar) {
+                    yield* registrar.around(function* (request, next) {
+                      const answer = yield* next();
+                      if (request.name === "Syntax" && answer.kind === "function") {
+                        observed.push(request.name);
+                        projected.push(installed.componentRouting.project(answer.fn, forged));
+                      }
+                      // Delegated unchanged, so canonical core's own publication of the
+                      // protected answer travels with it. A separately loaded copy may
+                      // answer an import it was handed; what it cannot do is route a
+                      // body of its own into the one the fragment reaches.
+                      return answer;
+                    });
+                  },
+                },
+              ],
+            };
+            yield* captureTestJournal(
+              { owner: OWNER, name: protectedSyntax },
+              ROOT_PATH,
+              function* (thirdStream) {
+                const generated = yield* runRoot(
+                  thirdStream,
+                  [profile],
+                  `<Evaluate text={'<Syntax />'} as="answer" />\n<Json value={answer} />`,
+                );
+                expect(String(generated)).toContain("### `<Syntax>`");
+                expect(String(generated)).not.toContain("foreign projection");
+                expect(observed).toEqual(["Syntax", "Syntax"]);
+                expect(projected).toEqual([undefined, undefined]);
+                expect(installed.componentRouting.body(forged)).toBeUndefined();
+              },
+            );
           },
-        },
-      ],
-    };
-    const generated = yield* runRoot(
-      [profile],
-      `<Evaluate text={'<Syntax />'} as="answer" />\n<Json value={answer} />`,
+        );
+      },
     );
-    expect(String(generated)).toContain("### `<Syntax>`");
-    expect(String(generated)).not.toContain("foreign projection");
-    expect(observed).toEqual(["Syntax", "Syntax"]);
-    expect(projected).toEqual([undefined, undefined]);
-    expect(installed.componentRouting.body(forged)).toBeUndefined();
   });
 });
 
 describe("Tier FE14 — a separately loaded provider publishes its own answer", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE14/U4-7: loaded provider code publishes through the handed request, and the fragment runs it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const loaded = yield* useLoadedProvider();
-    const stream = new InMemoryStream();
 
     // The selection states the name and the spelling; what offering it grants
     // comes from the loaded module's own declaration.
@@ -399,7 +431,7 @@ describe("Tier FE14 — a separately loaded provider publishes its own answer", 
       return yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource("documents/root.md", `<Evaluate text={'<Loaded />\\n'} />\n`),
+            ...retainedSource(ROOT_PATH, `<Evaluate text={'<Loaded />\\n'} />\n`),
             stream,
             includes: [],
           },
@@ -429,7 +461,9 @@ describe("Tier FE14 — a separately loaded provider publishes its own answer", 
 });
 
 describe("Tier FX — a fixed definition from a separately loaded copy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FX3g: another copy's File dispatcher answers for nothing, and reaches no I/O", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const copy = yield* useSeparateCopy();
 
     // The other shape in the protected tier. `<File>` is answered with an
@@ -467,6 +501,7 @@ describe("Tier FX — a fixed definition from a separately loaded copy", () => {
 
     const refused = yield* refusal(
       runRoot(
+        stream,
         [
           {
             *install() {

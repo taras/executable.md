@@ -6,7 +6,8 @@
  * boundary scanner confirmation, and nested projection points.
  */
 
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
+
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
@@ -26,6 +27,8 @@ import type { Segment, ComponentDefinition, Json, CodeBlockResult } from "../src
 import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import * as path from "node:path";
+import { join } from "node:path";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 function makeComponent(
   name: string,
@@ -667,10 +670,14 @@ describe("Tier NS-D — slot prop reservation", () => {
   });
 });
 
+const OWNER = "packages/core/tests/named-slots.test.ts";
+
 describe("Tier NS-E — renderChildren interaction", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   it("NS-E1: renderChildren includes all slots", function* () {
     const tmpDir = yield* useTempDirectory("named-slots-test-");
+    const stream = yield* useJournalStream(join(tmpDir, "doc.md"));
     const sampleMd = yield* readTextFile(
       path.join(process.cwd(), "packages/core/components/Sample.md"),
     );
@@ -688,7 +695,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "</TestProvider>",
       ].join("\n"),
     });
-    const stream = new InMemoryStream();
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -703,6 +709,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
 
   it("NS-E2: Sample component with slotted content — all content captured", function* () {
     const tmpDir = yield* useTempDirectory("named-slots-test-");
+    const stream = yield* useJournalStream(join(tmpDir, "doc.md"));
     const sampleMd = yield* readTextFile(
       path.join(process.cwd(), "packages/core/components/Sample.md"),
     );
@@ -722,7 +729,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "</TestProvider>",
       ].join("\n"),
     });
-    const stream = new InMemoryStream();
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -737,6 +743,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
 
   it("NS-E3: renderChildren preserves order", function* () {
     const tmpDir = yield* useTempDirectory("named-slots-test-");
+    const stream = yield* useJournalStream(join(tmpDir, "doc.md"));
     const sampleMd = yield* readTextFile(
       path.join(process.cwd(), "packages/core/components/Sample.md"),
     );
@@ -757,7 +764,6 @@ describe("Tier NS-E — renderChildren interaction", () => {
         "</TestProvider>",
       ].join("\n"),
     });
-    const stream = new InMemoryStream();
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -772,6 +778,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
 });
 
 describe("Tier NS-F — Edge cases", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("NS-F1: slot on self-closing component", function* () {
     const layout = makeComponent("Layout", '<Content slot="icon" />\n<Content />');
     const badge = makeComponent("Badge", "BADGE");
@@ -866,6 +873,7 @@ describe("Tier NS-F — Edge cases", () => {
 
   it("NS-F7: journal shape unchanged", function* () {
     const tmpDir = yield* useTempDirectory("named-slots-test-");
+    const stream = yield* useJournalStream(join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/Layout.md": [
         "---",
@@ -878,7 +886,6 @@ describe("Tier NS-F — Edge cases", () => {
         "---\nprops: { type: object, properties: {}, additionalProperties: false }\n---\nHEADER",
       "doc.md": '<Layout>\n<Header slot="header" />\nbody\n</Layout>',
     });
-    const stream = new InMemoryStream();
     yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
@@ -972,6 +979,7 @@ describe("Tier NS-G — Boundary scanner", () => {
 });
 
 describe("Tier NS-H — Nested projection points", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("NS-H1: inside another component invocation", function* () {
     const echo = makeComponent("Echo", "ECHO(<Content />)");
     const host = makeComponent("Host", "<Echo>prefix <Content /> suffix</Echo>");
@@ -1031,6 +1039,7 @@ describe("Tier NS-H — Nested projection points", () => {
 
   it("NS-H7: nested inside a structural construct", function* () {
     const tmpDir = yield* useTempDirectory("named-slots-test-");
+    const stream = yield* useJournalStream(join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/HostCap.md": [
         "---",
@@ -1044,7 +1053,7 @@ describe("Tier NS-H — Nested projection points", () => {
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
-        stream: new InMemoryStream(),
+        stream,
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
@@ -1053,6 +1062,7 @@ describe("Tier NS-H — Nested projection points", () => {
 
   it("NS-H8: nested inside an iterating construct", function* () {
     const tmpDir = yield* useTempDirectory("named-slots-test-");
+    const stream = yield* useJournalStream(join(tmpDir, "doc.md"));
     yield* writeFiles(tmpDir, {
       "components/EachHost.md": [
         "---",
@@ -1067,7 +1077,7 @@ describe("Tier NS-H — Nested projection points", () => {
     const output = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
-        stream: new InMemoryStream(),
+        stream,
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );

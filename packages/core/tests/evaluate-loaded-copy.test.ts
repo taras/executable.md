@@ -19,9 +19,10 @@
  * canonical core owns and a registration for it is refused outright (FE27b).
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
@@ -36,6 +37,13 @@ import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+  captureTestJournal,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/core/tests/evaluate-loaded-copy.test.ts";
 
 const ROOT_PATH = "evaluate.md";
 const NOTE = "the retained note\n";
@@ -66,7 +74,7 @@ function both(files: RecordedFiles): ExecutionInstallation {
 function run(
   source: string,
   installations: readonly ExecutionInstallation[],
-  stream: InMemoryStream = new InMemoryStream(),
+  stream: InMemoryStream,
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
@@ -94,6 +102,7 @@ const READS =
   `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` + `<Json value={answer} />\n`;
 
 describe("Tier FE — nothing replaces the protected implementation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE24: the name cannot be registered at all", function* () {
     const reached: string[] = [];
     const failed = yield* refusal(
@@ -121,54 +130,65 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
   });
 
   it("FE24: a live registration of the name does not exist to be selected", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The positive half of the row above: with the claim refused, an ordinary
     // document still resolves `<Evaluate>` to canonical core's implementation
     // and the fragment runs.
     const files = recordedFiles({ "notes.md": NOTE });
-    const output = yield* run(READS, [reading(files)]);
+    const output = yield* run(READS, [reading(files)], stream);
     expect(String(output)).toContain("the retained note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
-  it("FE24: a middleware answer is refused, and honest delegation is not", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    const substituted = yield* refusal(
-      scoped(function* () {
-        yield* Component.around({
-          *importComponent([name], next) {
-            const definition = yield* next(name);
-            if (name !== "Evaluate" || definition.kind !== "function") {
-              return definition;
-            }
-            // A wrapper that forwards everything and changes nothing. Refused
-            // anyway: only canonical execution answers a protected import.
-            return { ...definition };
-          },
-        });
-        return yield* run(READS, [reading(files)]);
-      }),
-    );
-    expect(substituted).toContain("canonical core owns");
-    expect(files.performed).toEqual([]);
+  const comparison = "FE24: a middleware answer is refused, and honest delegation is not";
+  it(comparison, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: comparison }, ROOT_PATH, function* (stream) {
+      const files = recordedFiles({ "notes.md": NOTE });
+      const substituted = yield* refusal(
+        scoped(function* () {
+          yield* Component.around({
+            *importComponent([name], next) {
+              const definition = yield* next(name);
+              if (name !== "Evaluate" || definition.kind !== "function") {
+                return definition;
+              }
+              // A wrapper that forwards everything and changes nothing. Refused
+              // anyway: only canonical execution answers a protected import.
+              return { ...definition };
+            },
+          });
+          return yield* run(READS, [reading(files)], stream);
+        }),
+      );
+      expect(substituted).toContain("canonical core owns");
+      expect(files.performed).toEqual([]);
 
-    // The same handler, delegating honestly, is still supported.
-    const observed: string[] = [];
-    const clean = recordedFiles({ "notes.md": NOTE });
-    const output = yield* scoped(function* () {
-      yield* Component.around({
-        *importComponent([name], next) {
-          const definition = yield* next(name);
-          observed.push(name);
-          return definition;
+      // The same handler, delegating honestly, is still supported.
+      const observed: string[] = [];
+      const clean = recordedFiles({ "notes.md": NOTE });
+      yield* captureTestJournal(
+        { owner: OWNER, name: comparison },
+        ROOT_PATH,
+        function* (secondStream) {
+          const output = yield* scoped(function* () {
+            yield* Component.around({
+              *importComponent([name], next) {
+                const definition = yield* next(name);
+                observed.push(name);
+                return definition;
+              },
+            });
+            return yield* run(READS, [reading(clean)], secondStream);
+          });
+          expect(observed).toContain("Evaluate");
+          expect(String(output)).toContain("the retained note");
         },
-      });
-      return yield* run(READS, [reading(clean)]);
+      );
     });
-    expect(observed).toContain("Evaluate");
-    expect(String(output)).toContain("the retained note");
   });
 
   it("FE24: a deliberate middleware refusal stays a refusal", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
       scoped(function* () {
@@ -180,7 +200,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
             return yield* next(name);
           },
         });
-        return yield* run(READS, [reading(files)]);
+        return yield* run(READS, [reading(files)], stream);
       }),
     );
 
@@ -190,6 +210,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
   });
 
   it("FE25: a replacement written to ignore `allow` is never invoked", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The replacement's body would write through the widest ambient permission
     // it can reach, under a read-only selection. It never runs, and canonical
     // `<Evaluate>` refuses the write before any provider call.
@@ -235,6 +256,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
         return yield* run(
           `<Evaluate text={'<File path="out.md">x</File>\\n'} allow={["write"]} />\n`,
           [reading(files)],
+          stream,
         );
       }),
     );
@@ -250,32 +272,48 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
 });
 
 describe("Tier FE — ownership is not permission", () => {
-  it("FE26: owning the name adds no class and no identity", function* () {
-    const files = recordedFiles();
-    // A host offering only reads. Canonical `<Evaluate>` cannot add a write
-    // table, and no spelling of `allow` conjures one.
-    expect(
-      yield* refusal(
-        run(`<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`, [
-          reading(files),
-        ]),
-      ),
-    ).toContain("installed no write table");
+  beforeEach(journalBeforeEach(OWNER));
+  const comparison = "FE26: owning the name adds no class and no identity";
+  it(comparison, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: comparison }, ROOT_PATH, function* (stream) {
+      const files = recordedFiles();
+      // A host offering only reads. Canonical `<Evaluate>` cannot add a write
+      // table, and no spelling of `allow` conjures one.
+      expect(
+        yield* refusal(
+          run(
+            `<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`,
+            [reading(files)],
+            stream,
+          ),
+        ),
+      ).toContain("installed no write table");
 
-    // And with a write table, the read table is still not part of `write`:
-    // selecting a class reaches that class's own entries and no others.
-    const mixed = recordedFiles({ "notes.md": NOTE });
-    expect(
-      yield* refusal(
-        run(`<Evaluate text={'<File path="notes.md" />\\n'} allow={["write"]} />\n`, [both(mixed)]),
-      ),
-    ).toContain("admitted only in its paired form");
-    expect(mixed.performed).toEqual([]);
+      // And with a write table, the read table is still not part of `write`:
+      // selecting a class reaches that class's own entries and no others.
+      const mixed = recordedFiles({ "notes.md": NOTE });
+      yield* captureTestJournal(
+        { owner: OWNER, name: comparison },
+        ROOT_PATH,
+        function* (secondStream) {
+          expect(
+            yield* refusal(
+              run(
+                `<Evaluate text={'<File path="notes.md" />\\n'} allow={["write"]} />\n`,
+                [both(mixed)],
+                secondStream,
+              ),
+            ),
+          ).toContain("admitted only in its paired form");
+          expect(mixed.performed).toEqual([]);
+        },
+      );
+    });
   });
 
   it("FE27: a replaceable ordinary component still wins at an authored site", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
     const reached: string[] = [];
     const output = yield* scoped(function* () {
       // `<Glob>` is an ordinary registration, so a repository or host component
@@ -316,6 +354,7 @@ describe("Tier FE — ownership is not permission", () => {
   });
 
   it("FE27b: an admitted name canonical core owns cannot be registered at all", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
 
     // Where this used to prove that a *live* registration for `<File>` could
@@ -345,7 +384,7 @@ describe("Tier FE — ownership is not permission", () => {
     expect(failed).toContain("canonical core owns that name");
 
     const output = yield* scoped(function* () {
-      return yield* run(READS, [reading(files)]);
+      return yield* run(READS, [reading(files)], stream);
     });
     expect(String(output)).toContain("the retained note");
     expect(files.performed).toEqual(["read notes.md"]);

@@ -4,7 +4,8 @@ import { Stdio } from "@effectionx/process";
 import { collect, execute, fileSource, useNormalizedOutput } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+
 import { expect } from "@executablemd/test-support/expect";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { cliRuntime } from "@executablemd/test-support/launch";
@@ -39,6 +40,13 @@ import {
   WARMUP,
   WORKLOADS,
 } from "../lib/typing-latency-report.ts";
+import {
+  journalBeforeEach,
+  useJournalStream,
+  captureTestJournal,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "examples/repl-bench/tests/publish-evidence.test.ts";
 
 const document = fileURLToPath(new URL("../publish-evidence.md", import.meta.url));
 const components = fileURLToPath(new URL("../components", import.meta.url));
@@ -381,6 +389,7 @@ function run(
   host: ReturnType<typeof modeledHost>,
   mode: "dry-run" | "publish" = "publish",
   setup?: { directory: string; install: () => Operation<void>; beforeEdit: () => Operation<void> },
+  stream = new InMemoryStream(),
 ) {
   return scoped(function* () {
     yield* API.Env.around({
@@ -400,7 +409,7 @@ function run(
           ...fileSource(document),
           includes: [components],
           props: { mode, receipt: fixture.path },
-          stream: new InMemoryStream(),
+          stream,
         }),
       ),
     );
@@ -417,57 +426,89 @@ function* preview(fixture: Fixture) {
 }
 
 describe("REPL UI evidence publication", () => {
-  it("reproduces the local preview with the actual entry and only preflights the CLI", function* () {
-    const input = yield* useFixture();
-    const host = modeledHost(() => snapshot(input));
-    yield* writeTextFile(join(input.directory, "preview.md"), afterProse);
-    const one = yield* run(input, host, "dry-run");
-    const two = yield* run(input, host, "dry-run");
-    expect(two).toEqual(one);
-    expect(one.visualSignOff).toBe("pending");
-    const legacyIdentity = sha256(
-      JSON.stringify({
-        version: 1,
-        ...input.pins,
-        acceptance: input.receipt.acceptance.map(({ name, kind, status, revision }) => ({
-          name,
-          kind,
-          status,
-          revision,
-        })),
-        checkpoints: input.receipt.checkpoints,
-        slots: input.receipt.captures.map(({ checkpoint, role, revision, sha256 }) => ({
-          id: `${checkpoint}-${role}`,
-          revision,
-          sha256,
-        })),
-        timingDigest: sha256(JSON.stringify(input.timing)),
-      }),
-    );
-    expect(one.identity).toBe(legacyIdentity);
-    expect(one.markdown).toContain(`<!-- xmd-repl-ui-evidence:v1 ${legacyIdentity} -->`);
-    expect(one.markdown?.endsWith(afterProse)).toBe(true);
-    expect(one.markdown).toContain("| Checkpoint | Fixture | Viewport | Action | Before | After |");
-    expect(one.markdown).toContain("synthetic &#124; composer");
-    expect(one.markdown).toContain("| small | 30 |");
-    expect(one.markdown).not.toContain(input.directory);
-    expect(one.images).toEqual(input.paths);
-    expect(host.events).toEqual(["help", "help"]);
+  beforeEach(journalBeforeEach(OWNER));
+  const previewCase =
+    "reproduces the local preview with the actual entry and only preflights the CLI";
+  it(previewCase, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: previewCase }, document, function* (stream) {
+      const input = yield* useFixture();
+      const host = modeledHost(() => snapshot(input));
+      yield* writeTextFile(join(input.directory, "preview.md"), afterProse);
+      const one = yield* run(input, host, "dry-run", undefined, stream);
+      yield* captureTestJournal(
+        { owner: OWNER, name: previewCase },
+        document,
+        function* (secondStream) {
+          const two = yield* run(input, host, "dry-run", undefined, secondStream);
+          expect(two).toEqual(one);
+          expect(one.visualSignOff).toBe("pending");
+          const legacyIdentity = sha256(
+            JSON.stringify({
+              version: 1,
+              ...input.pins,
+              acceptance: input.receipt.acceptance.map(({ name, kind, status, revision }) => ({
+                name,
+                kind,
+                status,
+                revision,
+              })),
+              checkpoints: input.receipt.checkpoints,
+              slots: input.receipt.captures.map(({ checkpoint, role, revision, sha256 }) => ({
+                id: `${checkpoint}-${role}`,
+                revision,
+                sha256,
+              })),
+              timingDigest: sha256(JSON.stringify(input.timing)),
+            }),
+          );
+          expect(one.identity).toBe(legacyIdentity);
+          expect(one.markdown).toContain(`<!-- xmd-repl-ui-evidence:v1 ${legacyIdentity} -->`);
+          expect(one.markdown?.endsWith(afterProse)).toBe(true);
+          expect(one.markdown).toContain(
+            "| Checkpoint | Fixture | Viewport | Action | Before | After |",
+          );
+          expect(one.markdown).toContain("synthetic &#124; composer");
+          expect(one.markdown).toContain("| small | 30 |");
+          expect(one.markdown).not.toContain(input.directory);
+          expect(one.images).toEqual(input.paths);
+          expect(host.events).toEqual(["help", "help"]);
+        },
+      );
+    });
   });
 
-  it("rejects a generated description over the body limit in preview and numbered publish", function* () {
-    const input = yield* useFixture();
-    const host = modeledHost(() => snapshot(input, oversizedProse));
-    yield* writeTextFile(join(input.directory, "preview.md"), oversizedProse);
-    const diagnostic = "The proposed draft description exceeds the GitHub body limit.";
-    expect(String(yield* raised(run(input, host, "dry-run")))).toContain(diagnostic);
-    expect(host.events).toEqual(["help"]);
-    host.events.length = 0;
-    expect(String(yield* raised(run(input, host)))).toContain(diagnostic);
-    expect(host.events).toEqual(["help", "read"]);
+  const descriptionLimit =
+    "rejects a generated description over the body limit in preview and numbered publish";
+  it(descriptionLimit, function* () {
+    yield* captureTestJournal(
+      { owner: OWNER, name: descriptionLimit },
+      document,
+      function* (stream) {
+        const input = yield* useFixture();
+        const host = modeledHost(() => snapshot(input, oversizedProse));
+        yield* writeTextFile(join(input.directory, "preview.md"), oversizedProse);
+        const diagnostic = "The proposed draft description exceeds the GitHub body limit.";
+        expect(String(yield* raised(run(input, host, "dry-run", undefined, stream)))).toContain(
+          diagnostic,
+        );
+        expect(host.events).toEqual(["help"]);
+        host.events.length = 0;
+        yield* captureTestJournal(
+          { owner: OWNER, name: descriptionLimit },
+          document,
+          function* (secondStream) {
+            expect(
+              String(yield* raised(run(input, host, undefined, undefined, secondStream))),
+            ).toContain(diagnostic);
+            expect(host.events).toEqual(["help", "read"]);
+          },
+        );
+      },
+    );
   });
 
   it("publishes a PNG with final IDAT padding without changing its approved bytes", function* () {
+    const stream = yield* useJournalStream(document);
     const input = yield* useFixture();
     const padded = Uint8Array.from(
       atob(
@@ -485,7 +526,7 @@ describe("REPL UI evidence publication", () => {
       }),
     );
     const host = modeledHost(() => snapshot(input));
-    const result = yield* run(input, host);
+    const result = yield* run(input, host, undefined, undefined, stream);
     expect(result.status).toBe("complete");
     expect(host.edits[0].images[0].sha256).toBe(digest);
     expect(host.bytes.get(urls[0])).toEqual(padded);

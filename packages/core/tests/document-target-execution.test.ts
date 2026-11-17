@@ -91,13 +91,17 @@ function* useProbes(seen: Probes): Operation<void> {
   ]);
 }
 
-/** A directory the contextual cwd points at, removed when the test ends. */
-function* useWorkspace(files: Record<string, string>): Operation<string> {
+/** A fixture directory removed when its owning scope ends. */
+function* createWorkspace(files: Record<string, string>): Operation<string> {
   const root = yield* until(mkdtemp(join(tmpdir(), "xmd-targets-")));
   yield* ensure(() => rm(root, { recursive: true, force: true }));
   for (const [name, content] of Object.entries(files)) {
     yield* writeTextFile(join(root, name), content);
   }
+  return root;
+}
+
+function* useWorkspaceHost(root: string): Operation<void> {
   yield* API.Env.around(
     {
       *cwd() {
@@ -107,6 +111,11 @@ function* useWorkspace(files: Record<string, string>): Operation<string> {
     { at: "min" },
   );
   yield* useHostFiles();
+}
+
+function* useWorkspace(files: Record<string, string>): Operation<string> {
+  const root = yield* createWorkspace(files);
+  yield* useWorkspaceHost(root);
   return root;
 }
 
@@ -256,29 +265,29 @@ describe("Tier TX — targeted execution", () => {
 
   const tx6Name = "TX6: a file root and an inline root behave identically";
   it(tx6Name, function* () {
-    yield* captureTestJournal({ owner: OWNER, name: tx6Name }, "<eval>", function* (secondStream) {
-      const workspace = yield* useWorkspace({ "doc.md": SECTIONS });
-      yield* captureTestJournal(
-        { owner: OWNER, name: tx6Name },
-        formatDocumentReference(join(workspace, "doc.md"), "Beta"),
-        function* (firstStream) {
-          const fromFile: Probes = { names: [], ids: [] };
-          const fromText: Probes = { names: [], ids: [] };
-          const fileText = yield* run(
-            fileSource(formatDocumentReference(join(workspace, "doc.md"), "Beta")),
-            firstStream,
-            fromFile,
-          );
-          const inlineText = yield* run(
-            inlineSource(SECTIONS, { target: "Beta" }),
-            secondStream,
-            fromText,
-          );
-          expect(fromFile.names).toEqual(fromText.names);
-          expect(fileText).toBe(inlineText);
-        },
-      );
-    });
+    const secondStream = yield* useJournalStream("<eval>");
+    const workspace = yield* createWorkspace({ "doc.md": SECTIONS });
+    yield* captureTestJournal(
+      { owner: OWNER, name: tx6Name },
+      formatDocumentReference(join(workspace, "doc.md"), "Beta"),
+      function* (firstStream) {
+        yield* useWorkspaceHost(workspace);
+        const fromFile: Probes = { names: [], ids: [] };
+        const fromText: Probes = { names: [], ids: [] };
+        const fileText = yield* run(
+          fileSource(formatDocumentReference(join(workspace, "doc.md"), "Beta")),
+          firstStream,
+          fromFile,
+        );
+        const inlineText = yield* run(
+          inlineSource(SECTIONS, { target: "Beta" }),
+          secondStream,
+          fromText,
+        );
+        expect(fromFile.names).toEqual(fromText.names);
+        expect(fileText).toBe(inlineText);
+      },
+    );
   });
 
   it("TX7: root props and frontmatter apply to the projected body", function* () {
