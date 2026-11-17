@@ -1378,6 +1378,7 @@ describe("component-declared output — document workflow", () => {
 });
 
 describe("993 nested document execution", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const ready of [true, false]) {
     for (const reusable of [false, true]) {
       it(`W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`, function* () {
@@ -1405,7 +1406,7 @@ describe("993 nested document execution", () => {
           },
         });
         const text = yield* collect(
-          yield* execute({ path: "doc.md", stream: new InMemoryStream() }),
+          yield* execute({ path: "doc.md", stream: yield* useJournalStream("doc.md") }),
         );
         expect(text).toBe(ready ? "Review complete." : "Review pending.");
         expect(writes).toEqual([ready ? "complete" : "pending"]);
@@ -1449,12 +1450,13 @@ describe("993 nested document execution", () => {
       yield* ensureDir(`${directory}/components`);
       yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
       yield* writeTextFile(`${directory}/components/Report.md`, source);
+      const stream = yield* useJournalStream(`${directory}/doc.md`);
       expect(
         yield* collect(
           yield* execute({
             path: `${directory}/doc.md`,
             includes: [`${directory}/components`],
-            stream: new InMemoryStream(),
+            stream,
           }),
         ),
       ).toBe("REPORT");
