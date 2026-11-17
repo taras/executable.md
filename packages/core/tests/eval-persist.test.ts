@@ -7,7 +7,8 @@
  * Note: In v1, persist delegates directly to next() — actual
  * resource retention via evalScope.eval() is deferred to v2.
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { describe, it, beforeAll, beforeEach } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -18,11 +19,14 @@ import { asText } from "./helpers.ts";
 import { unbox } from "effection";
 import type { Result } from "effection";
 
+const owner = "packages/core/tests/eval-persist.test.ts";
+
 describe("Tier T6 — persist modifier", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(owner));
   // T43: eval without persist → block completes normally
   it("T43: eval without persist → block completes", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js eval\nconst x = 42;\n```\n",
     });
@@ -43,7 +47,7 @@ describe("Tier T6 — persist modifier", () => {
 
   // T44: persist eval → block completes normally
   it("T44: persist eval → block completes normally", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js persist eval\nconst server = 'running';\n```\n",
     });
@@ -64,7 +68,7 @@ describe("Tier T6 — persist modifier", () => {
 
   // T45: persist eval followed by eval → bindings available
   it("T45: persist eval followed by eval → bindings available", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md":
         "```js persist eval\nconst server = 'started';\n```\n\n```js eval\nconst status = server;\n```\n",
@@ -135,7 +139,7 @@ describe("Tier T6 — persist modifier", () => {
   // L2: without persist, a resource a block spawns is torn down when the block
   // completes — the negative that gives L3 its meaning.
   it("L2: a non-persist eval block's resource is gone by the next block", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -163,7 +167,7 @@ describe("Tier T6 — persist modifier", () => {
   // L3: a persist resource belongs to the invocation, so a block after the
   // component sees it gone while the document is still running.
   it("L3: a persist resource stops when the invocation completes", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     yield* useStubFs({
       "components/Holder.md": [
         "```js persist eval",
@@ -195,7 +199,7 @@ describe("Tier T6 — persist modifier", () => {
   // retained for itself — even though the component retained that one after
   // projecting, which is the order a single scope would release in reverse.
   it("L8: a projected persist resource stops before the component's own", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     yield* useStubFs({
       "components/Holder.md": [
         "<Content />",
@@ -241,7 +245,7 @@ describe("Tier T6 — persist modifier", () => {
   // A background task spawned in a persist eval block sets status.ready
   // after 10ms. The next eval block uses when() to converge on it.
   it("T49b: persist eval retains spawned resource across blocks", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": [
         "```js persist eval",

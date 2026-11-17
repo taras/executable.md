@@ -1,3 +1,8 @@
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 /**
  * Tier XP — cross-package resolution (issue #202 acceptance).
  *
@@ -15,7 +20,7 @@
  * execution does not reveal.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { executeInstalled } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
@@ -24,7 +29,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import {
   collect,
   Component,
@@ -155,7 +160,7 @@ function* writeStandIns(workspace: string): Operation<void> {
 }
 
 /** Execute a document invoking every registered name, and return its text. */
-function runDocument(workspace: string, order: Order): Operation<string> {
+function runDocument(workspace: string, order: Order, stream: InMemoryStream): Operation<string> {
   return scoped(function* () {
     const path = join(workspace, "doc.md");
     // Self-closing, so nothing is handed content to expand.
@@ -163,7 +168,7 @@ function runDocument(workspace: string, order: Order): Operation<string> {
     yield* useTempFileCompiler();
     yield* installAll(order);
     const output = yield* collect(
-      yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [workspace] }, [
+      yield* executeInstalled({ path, stream, includes: [workspace] }, [
         { components: agentIdentityComponents() },
       ]),
     );
@@ -216,7 +221,10 @@ function describeOrigin(info: ComponentInfo): string {
   }
 }
 
+const OWNER = "packages/test-agent/tests/cross-package-resolution.test.ts";
+
 describe("Tier XP — cross-package resolution", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * The inventory below is what every other case iterates, so a name missing
    * from it is coverage silently not taken. Comparing against the live registry
@@ -237,9 +245,10 @@ describe("Tier XP — cross-package resolution", () => {
 
   it("XP1: a repository component runs in place of every registered default", function* () {
     const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     yield* writeStandIns(workspace);
 
-    const output = yield* runDocument(workspace, "agent-first");
+    const output = yield* runDocument(workspace, "agent-first", stream);
 
     // Rendered output, not a resolver answer: each marker is evidence that the
     // repository file is what executed for that name.
@@ -248,19 +257,29 @@ describe("Tier XP — cross-package resolution", () => {
     }
   });
 
-  it("XP2: which installer ran first changes nothing about what executed", function* () {
+  const orderCase = "XP2: which installer ran first changes nothing about what executed";
+  it(orderCase, function* () {
     const workspace = yield* useWorkspace();
     yield* writeStandIns(workspace);
 
-    const first = yield* runDocument(workspace, "agent-first");
-    const second = yield* runDocument(workspace, "test-agent-first");
+    const source = join(workspace, "doc.md");
+    yield* captureTestJournal({ owner: OWNER, name: orderCase }, source, function* (stream) {
+      const first = yield* runDocument(workspace, "agent-first", stream);
+      yield* captureTestJournal(
+        { owner: OWNER, name: orderCase },
+        source,
+        function* (secondStream) {
+          const second = yield* runDocument(workspace, "test-agent-first", secondStream);
 
-    // Installation order is not a resolution mechanism, so the two runs produce
-    // the same document — not merely the same set of resolved origins.
-    expect(second).toBe(first);
-    for (const name of REGISTERED) {
-      expect(second).toContain(marker(name));
-    }
+          // Installation order is not a resolution mechanism, so the two runs produce
+          // the same document — not merely the same set of resolved origins.
+          expect(second).toBe(first);
+          for (const name of REGISTERED) {
+            expect(second).toContain(marker(name));
+          }
+        },
+      );
+    });
   });
 
   it("XP3: each package's names carry that package's origin, and none is reserved", function* () {
@@ -286,6 +305,7 @@ describe("Tier XP — cross-package resolution", () => {
     const workspace = yield* useWorkspace();
     yield* writeTextFile(join(workspace, "Each.md"), "SHOULD NOT RENDER\n");
     const path = join(workspace, "doc.md");
+    const stream = yield* useJournalStream(path);
     yield* writeTextFile(path, '<Each in={[1, 2]} let="n">[{n}]</Each>\n');
 
     const observed = yield* scoped(function* () {
@@ -295,7 +315,7 @@ describe("Tier XP — cross-package resolution", () => {
         info: yield* inspectComponent({ name: "Each", includes: [workspace] }),
         output: String(
           yield* collect(
-            yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [workspace] }, [
+            yield* executeInstalled({ path, stream, includes: [workspace] }, [
               { components: agentIdentityComponents() },
             ]),
           ),

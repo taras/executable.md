@@ -17,7 +17,7 @@
  * and describes the Plan component under the same refusing boundary.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -26,7 +26,7 @@ import { useRunComposition } from "../src/deno/run-composition/provider.ts";
 import { gitPlugin } from "../src/plugin.ts";
 import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import type { GitHubSource } from "../src/deno/composition/github.ts";
 import { runWorkflowDocument } from "./support/composition.ts";
@@ -37,6 +37,9 @@ import {
   withExecutorRun,
   withRunHost,
 } from "../../workflow/tests/support/storage.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/git/tests/github-workflow-activation.test.ts";
 
 /** A transport factory that refuses to be built at all. */
 function forbidden(): GitHubSource {
@@ -59,21 +62,22 @@ function* refusing(): Operation<void> {
 }
 
 /** One document, executed with the bundled Plugin installed and nothing else. */
-function* document(source: string): Operation<unknown> {
-  const stream = new InMemoryStream();
+function* document(stream: InMemoryStream | undefined, source: string): Operation<unknown> {
   const install = gitPlugin.install;
   if (install === undefined) {
     throw new Error("the Git Plugin installed nothing");
   }
   const contribution = yield* install.call(gitPlugin, { command: "run", args: ["run"] });
   return yield* collect(
-    yield* executeInstalled({ ...inlineSource(source), stream }, [
-      { admissions: [...(contribution?.admissions ?? [])] },
-    ]),
+    yield* executeInstalled(
+      { ...inlineSource(source), stream: stream ?? (yield* useJournalStream("<eval>")) },
+      [{ admissions: [...(contribution?.admissions ?? [])] }],
+    ),
   );
 }
 
 describe("the bundled profile, assembled", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("installs the whole ordinary-run profile without reading any of it", function* () {
     // The real assembly this time, not the adapters alone: `useRunComposition`
     // is what `xmd run` installs, and it brings the repository provider, the
@@ -88,7 +92,7 @@ describe("the bundled profile, assembled", () => {
         gitHubIssues: { host: forbidden },
         gitHubPullRequests: { host: forbidden },
       });
-      return yield* document("a plain document that reaches nothing\n");
+      return yield* document(undefined, "a plain document that reaches nothing\n");
     });
     expect(String(rendered)).toContain("a plain document that reaches nothing");
   });
@@ -105,7 +109,7 @@ describe("the bundled profile, assembled", () => {
         gitHubIssues: { host: forbidden },
         gitHubPullRequests: { host: forbidden },
       });
-      return yield* document('<Dir path="notes">local work only</Dir>\n');
+      return yield* document(undefined, '<Dir path="notes">local work only</Dir>\n');
     });
     expect(String(rendered)).toContain("local work only");
   });
