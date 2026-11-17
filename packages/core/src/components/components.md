@@ -179,20 +179,6 @@ the directories above it as needed.
 
 ## File.Copy
 
-Copy a regular file byte for byte.
-
-```mdx
-<File.Copy source="report.bin" destination="evidence/report.bin" />
-```
-
-Both paths are relative to the working directory. The destination directory
-must already exist. An occupied destination is preserved.
-
-Ordinary hosts and Markdown tests copy live, including partial host replay
-that reaches the copy. Workflow Workspace replay restores a published result.
-Retained REPL replay restores an acknowledged result in covered storage.
-Unrecorded copies run live.
-
 ## File.Delete
 
 Deletes a file, relative to the working directory.
