@@ -12,7 +12,11 @@ const Diagnostic: z.ZodObject<
   {
     provider: z.ZodLiteral<"acp">;
     operation: z.ZodLiteral<"session/prompt">;
-    stage: z.ZodLiteral<"runtime-turn">;
+    stage: z.ZodEnum<{
+      "runtime-turn": "runtime-turn";
+      "prompt-ensure": "prompt-ensure";
+      "held-session-ensure": "held-session-ensure";
+    }>;
     requestId: z.ZodOptional<z.ZodString>;
     code: z.ZodOptional<z.ZodString>;
     detailCode: z.ZodOptional<z.ZodString>;
@@ -36,7 +40,7 @@ const Diagnostic: z.ZodObject<
   .object({
     provider: z.literal("acp"),
     operation: z.literal("session/prompt"),
-    stage: z.literal("runtime-turn"),
+    stage: z.enum(["runtime-turn", "prompt-ensure", "held-session-ensure"]),
     requestId: z.string().optional(),
     code: z.string().min(1).optional(),
     detailCode: z.string().min(1).optional(),
@@ -55,13 +59,21 @@ const Diagnostic: z.ZodObject<
 
 type PromptDiagnostic = z.infer<typeof Diagnostic>;
 
+export const SESSION_RESUME_REQUIRED_ERROR = "SessionResumeRequiredError";
+
 export function readPromptDiagnostic(error: unknown): PromptDiagnostic | undefined {
   return isRecord(error) ? parsePromptDiagnostic(error[PROMPT_DIAGNOSTIC]) : undefined;
 }
 
 function parsePromptDiagnostic(value: unknown): PromptDiagnostic | undefined {
   const parsed = Diagnostic.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  if (
+    !parsed.success ||
+    (parsed.data.stage !== "runtime-turn" && parsed.data.requestId !== undefined)
+  ) {
+    return undefined;
+  }
+  return parsed.data;
 }
 
 export class AgentPromptError extends Error {
@@ -108,7 +120,7 @@ export function serializePromptFailure(
     if (error.name !== "Error") {
       serialized.name = error.name;
     }
-    if (error.cause instanceof Error) {
+    if (error.name !== SESSION_RESUME_REQUIRED_ERROR && error.cause instanceof Error) {
       serialized.cause = error.cause.message;
     }
     if (diagnostic !== undefined) {
@@ -140,7 +152,14 @@ export function parsePromptFailure(value: unknown): SerializedPromptFailure | un
   }
   if (Object.hasOwn(value, "diagnostic")) {
     const diagnostic = parsePromptDiagnostic(value.diagnostic);
-    if (diagnostic === undefined) {
+    if (
+      diagnostic === undefined ||
+      (diagnostic.stage !== "runtime-turn" &&
+        (name !== SESSION_RESUME_REQUIRED_ERROR ||
+          Object.keys(value).some(
+            (key) => key !== "name" && key !== "message" && key !== "diagnostic",
+          )))
+    ) {
       return undefined;
     }
     parsed.diagnostic = diagnostic;

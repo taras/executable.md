@@ -1060,6 +1060,14 @@ refuses a selector supported only by an observation the former owner lost.
 
 ## Reading a previous chat
 
+A retained eager resume refusal appears as one incomplete attempt. An
+explicit message already has a durable request, including a message carrying
+recovered feedback, so that request owns the attempt. Automatic feedback
+records its request at canonical begin. A refusal before that boundary has
+no established request and appears beside the preceding attempt on its own.
+It creates no feedback intent or acknowledgement. A second ordinary outcome
+for the same request still refuses the history.
+
 Activating a Sidekick turn opens the chat that contains it and brings that turn
 into view. It sets `view=sidekick`, `right=sidekick` and that chat's own
 identifier, and preserves the conversation filter, the saved surface, the
@@ -3157,6 +3165,12 @@ keeps the response owner selected through joined cleanup. Ordinary entries
 attach no host invocation observer.
 
 ## Who owns what
+
+When eager ensure refuses to continue the original conversation, the failed
+result still offers **Start new chat** after the attempt is saved. Retry
+remains unavailable for that request while live and after reopening. A
+subscription failure that reached canonical begin keeps its existing
+recovery behavior. The entry Journal reads the canonical saved failure.
 
 The host acquires one protected-input installation before each producing entry’s providers. It keeps that owner until those providers join, safely seals each independent output channel, and then disposes live input and pending text. Output received after disposal refuses instead of falling back to raw forwarding.
 

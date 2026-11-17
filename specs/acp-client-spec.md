@@ -1003,7 +1003,8 @@ anything opens. Resuming it would re-send a prompt the provider may already
 have accepted, and writing a terminal for it would make an unfinished turn look
 complete; reconciling it belongs to the host, with the provider's own account
 of that turn. Because the refusal happens before the execution exists, it
-appends nothing to the history it refused.
+appends nothing to the history it refused. A canonical Prompt value that fails
+validation also refuses opening at this boundary, before provider work.
 
 The history is bound to its conversation by a durable record written on the
 first opening and replayed afterwards. A history established for another `id`
@@ -1170,8 +1171,8 @@ record:
 
 | Field | Meaning |
 | --- | --- |
-| `provider`, `operation`, `stage` | Exactly `acp`, `session/prompt`, `runtime-turn`: receipt of a failed runtime turn. |
-| `requestId` | The actual runtime turn's request ID, when supplied; it need not be the wire JSON-RPC ID. |
+| `provider`, `operation`, `stage` | The fixed provider and operation are `acp` and `session/prompt`. The stage is `runtime-turn`, `prompt-ensure` or `held-session-ensure`. The operation identifies the attempted Prompt and grants no wire receipt. |
+| `requestId` | The actual turn's request ID, when supplied on `runtime-turn`. The ensure stages forbid this field. |
 | `code`, `detailCode` | Supplied nonempty runtime classifications. `RUNTIME` is the normalizer's fallback, not a backend diagnosis. |
 | `retryable` | A supplied boolean hint, including false; it grants no resend. |
 | `origin` | The supplied normalization layer: `cli`, `runtime`, `queue` or `acp`, not a proven root cause. |
@@ -1181,7 +1182,23 @@ Conversation correlation stays in the existing `agent`, `sessionKey` and
 `agentSessionId` fields. No raw protocol payload, prompt, environment or
 unrelated history is added. A plain Error has no diagnostic; stream exceptions,
 cancellation and host permission refusal keep their existing paths. A
-message-only upstream failure remains undiagnosed. Diagnostics establish
+message-only upstream failure remains undiagnosed. An ordinary same-session
+load or resume refusal retains the local fallback and the name
+`SessionResumeRequiredError` without a raw upstream cause. ACP selects the
+same bounded facts when the subscribed Prompt's ensure fails before a runtime
+turn (`prompt-ensure`) or the runtime turn refuses before writing the prompt
+(`runtime-turn`). Identity confirmation, ownership, configuration, permission
+and cancellation keep their existing outcomes.
+
+When a held conversation's eager ensure refuses with that classification,
+Agent waits for successful unwind and publishes one canonical failed Prompt
+using the job's attempted input, resolved agent and next ordinal. This
+`held-session-ensure` stage has empty text and an empty session key and carries
+no native assertion, configuration, stop reason, permissions, checkpoint,
+usage, raised marker or withheld reply. The attempt never begins the canonical
+Prompt terminal, composes the input or emits `started`. The caller receives the
+failure reconstructed from the saved value. Failure to publish retains its
+existing durability precedence. Diagnostics establish
 neither backend acceptance nor a successful retry and never enter the agent's
 reply text.
 
@@ -1191,13 +1208,18 @@ retained JSON representation, omits offending fields, then screens the complete
 selected diagnostic. Unsafe secondary text does not discard a safe protocol
 code. If policy authentication or screening fails, the whole optional
 diagnostic is absent; the original message, name, cause, status and partial
-reply stay unchanged. Cancellation remains cancellation. Explicit host-disabled
+reply stay unchanged. An eager held refusal instead keeps the three fixed
+`provider`, `operation` and `stage` values and drops every optional fact.
+Cancellation remains cancellation. Explicit host-disabled
 detection is respected. The complete event still crosses the unchanged
 rejection gate: upstream selection never repairs an event rejected by that
 gate.
 
 The current reader validates a present diagnostic completely and refuses
-malformed or unknown members. An absent diagnostic preserves
+malformed or unknown members, including a held ensure failure with
+inconsistent surrounding Prompt fields. Deploy the reader and writer together.
+Older readers refuse the new stages. This internal format has no downgrade
+reader. An absent diagnostic preserves
 message/name/cause-only records without a migration or rewrite. Reconstructed
 thrown and aggregated Prompt failures keep the selected diagnostic under
 `executablemd.agent.prompt-diagnostic`. The existing REPL Journal query exposes
@@ -2030,7 +2052,8 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   terminal in `checkpoint.ts` and `events.ts`. Cancellation and failure never
   acquire one, and no local runtime metadata patch remains. The pinned
   in-process runtime preserves normalized origin and selected protocol
-  code/message/details at `failRuntimeTurn`; arbitrary `acp.data` remains
+  code/message/details in the runtime failure projection used for terminal and
+  pre-prompt resume failures. Arbitrary `acp.data` remains
   excluded. The shared/queue result projection is unchanged. The generated correction and its matching declaration are recorded in vendor provenance and offline Tier AV.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before

@@ -39,6 +39,10 @@ function answer(request) {
     reply(id,{sessionId,configOptions:options(),...(mode === "standard" || mode === "standard-wait" ? {} : {_meta:{agentSessionId:native()}})});
   } else if (method === "session/load") {
     sessionId=params.sessionId;
+    if (mode === "distinct-refused") {
+      send({jsonrpc:"2.0",id,error:{code:-32041,message:"Internal error",data:{details:"Release the active writer before reconnecting.",unrelated:"private unrelated marker"}}});
+      return;
+    }
     fs.readFile(file(),"utf8",(error,text) => {
       if (error) { send({jsonrpc:"2.0",id,error:{code:-32603,message:"missing controlled history"}});return; }
       marker=JSON.parse(text).marker;
