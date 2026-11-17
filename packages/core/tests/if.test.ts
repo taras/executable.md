@@ -21,9 +21,22 @@ import { Sample } from "../src/sample-api.ts";
 import { readTextFile } from "@effectionx/fs";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/if.test.ts");
+const OWNER = "packages/core/tests/if.test.ts";
+const journalCase = journalCases(OWNER);
+
+function probeCase(
+  name: string,
+  body: (skipped: InMemoryStream, selected: InMemoryStream) => Operation<void>,
+): void {
+  journalCase(name, "test.md", (skipped) =>
+    captureTestJournal({ owner: OWNER, name, suite: "selected control" }, "test.md", (selected) =>
+      body(skipped, selected),
+    ),
+  );
+}
 
 interface IfRun {
   segments: Segment[];
@@ -445,8 +458,7 @@ describe("Tier IF — printed errors carry source positions", () => {
 describe("Tier IF — document execution", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("IF39: only the selected branch reaches the journal", function* () {
-    const stream = new InMemoryStream();
+  journalCase("IF39: only the selected branch reaches the journal", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -523,52 +535,55 @@ describe("Tier IF — document execution", () => {
     },
   );
 
-  it("IF42: <If> selects the same branch from a restored binding on partial replay", function* () {
-    const REPLAY_DOC = [
-      "```js eval",
-      "const findings = ['stale doc'];",
-      "```",
-      "<If condition={findings.length === 0}>",
-      "```js eval",
-      "output('CLEAN_RAN');",
-      "```",
-      "<Else>",
-      "```js eval",
-      "output('NEEDS_WORK_RAN');",
-      "```",
-      "</Else>",
-      "</If>",
-    ].join("\n");
+  journalCase(
+    "IF42: <If> selects the same branch from a restored binding on partial replay",
+    "test.md",
+    function* (stream) {
+      const REPLAY_DOC = [
+        "```js eval",
+        "const findings = ['stale doc'];",
+        "```",
+        "<If condition={findings.length === 0}>",
+        "```js eval",
+        "output('CLEAN_RAN');",
+        "```",
+        "<Else>",
+        "```js eval",
+        "output('NEEDS_WORK_RAN');",
+        "```",
+        "</Else>",
+        "</If>",
+      ].join("\n");
 
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "test.md": REPLAY_DOC });
-    yield* useEchoExec();
+      yield* useStubFs({ "test.md": REPLAY_DOC });
+      yield* useEchoExec();
 
-    const golden = yield* collect(yield* execute({ path: "test.md", stream }));
-    expect(golden).toContain("NEEDS_WORK_RAN");
-    expect(golden).not.toContain("CLEAN_RAN");
+      const golden = yield* collect(yield* execute({ path: "test.md", stream }));
+      expect(golden).toContain("NEEDS_WORK_RAN");
+      expect(golden).not.toContain("CLEAN_RAN");
 
-    // Cut the journal to the root import plus the eval that binds `findings`.
-    // Replaying a stream that still carries the root Close would return the
-    // stored result without running the document at all, which would prove
-    // nothing about branch selection.
-    const events = stream.snapshot();
-    const bindingEval = events.findIndex(isEvalYield);
-    expect(bindingEval).toBeGreaterThanOrEqual(0);
-    const partial = new InMemoryStream(events.slice(0, bindingEval + 1));
-    expect(partial.snapshot().some((event) => event.type === "close")).toBe(false);
+      // Cut the journal to the root import plus the eval that binds `findings`.
+      // Replaying a stream that still carries the root Close would return the
+      // stored result without running the document at all, which would prove
+      // nothing about branch selection.
+      const events = stream.snapshot();
+      const bindingEval = events.findIndex(isEvalYield);
+      expect(bindingEval).toBeGreaterThanOrEqual(0);
+      const partial = new InMemoryStream(events.slice(0, bindingEval + 1));
+      expect(partial.snapshot().some((event) => event.type === "close")).toBe(false);
 
-    const replayed = yield* collect(yield* execute({ path: "test.md", stream: partial }));
+      const replayed = yield* collect(yield* execute({ path: "test.md", stream: partial }));
 
-    // The branch was reached live: it appended its own eval entry rather than
-    // replaying one, and the restored boolean still selected <Else>.
-    expect(replayed).toBe(golden);
-    expect(partial.appendCount).toBeGreaterThan(0);
+      // The branch was reached live: it appended its own eval entry rather than
+      // replaying one, and the restored boolean still selected <Else>.
+      expect(replayed).toBe(golden);
+      expect(partial.appendCount).toBeGreaterThan(0);
 
-    const evaluated = JSON.stringify(partial.snapshot().filter(isEvalYield));
-    expect(evaluated).toContain("NEEDS_WORK_RAN");
-    expect(evaluated).not.toContain("CLEAN_RAN");
-  });
+      const evaluated = JSON.stringify(partial.snapshot().filter(isEvalYield));
+      expect(evaluated).toContain("NEEDS_WORK_RAN");
+      expect(evaluated).not.toContain("CLEAN_RAN");
+    },
+  );
 
   journalCase(
     "IF43: an <If> projected through <Content /> resolves the caller's binding",
@@ -639,11 +654,10 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
    * The stub records rather than wrapping for the same reason — a recorder
    * layered around a terminal handler never sees the call.
    */
-  function runProbe(condition: boolean): Operation<ProbeRun> {
+  function runProbe(condition: boolean, stream: InMemoryStream): Operation<ProbeRun> {
     return scoped(function* () {
       const reads: string[] = [];
       const commands: string[] = [];
-      const stream = new InMemoryStream();
       const files: Record<string, string> = {
         "components/Probe.md": "PROBE_BODY",
         "test.md": PROBE_DOC(condition),
@@ -686,48 +700,63 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
   // never runs. Its body is the observable: PROBE_BODY appears only when the
   // branch was selected. An expansion log would say the same thing less
   // directly, and only a claim could print one.
-  it("IF44: no component in the unselected branch expands", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.output).not.toContain("PROBE_BODY");
+  probeCase(
+    "IF44: no component in the unselected branch expands",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe(false, skippedStream);
+      expect(skipped.output).not.toContain("PROBE_BODY");
 
-    const selected = yield* runProbe(true);
-    expect(selected.output).toContain("PROBE_BODY");
-  });
+      const selected = yield* runProbe(true, selectedStream);
+      expect(selected.output).toContain("PROBE_BODY");
+    },
+  );
 
-  it("IF45: no component file is looked up or read for the unselected branch", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.reads).toEqual(["test.md"]);
+  probeCase(
+    "IF45: no component file is looked up or read for the unselected branch",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe(false, skippedStream);
+      expect(skipped.reads).toEqual(["test.md"]);
 
-    const selected = yield* runProbe(true);
-    expect(selected.reads).toContain("stat:components/Probe.md");
-    expect(selected.reads).toContain("components/Probe.md");
-  });
+      const selected = yield* runProbe(true, selectedStream);
+      expect(selected.reads).toContain("stat:components/Probe.md");
+      expect(selected.reads).toContain("components/Probe.md");
+    },
+  );
 
-  it("IF46: the process runtime is never invoked for an unselected exec block", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.commands).toHaveLength(0);
+  probeCase(
+    "IF46: the process runtime is never invoked for an unselected exec block",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe(false, skippedStream);
+      expect(skipped.commands).toHaveLength(0);
 
-    const selected = yield* runProbe(true);
-    expect(selected.commands.some((command) => command.includes("THEN_RAN"))).toBe(true);
-  });
+      const selected = yield* runProbe(true, selectedStream);
+      expect(selected.commands.some((command) => command.includes("THEN_RAN"))).toBe(true);
+    },
+  );
 
-  it("IF47: an unselected branch writes no exec or eval durable event", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.events.filter(isExecYield)).toHaveLength(0);
-    expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
+  probeCase(
+    "IF47: an unselected branch writes no exec or eval durable event",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe(false, skippedStream);
+      expect(skipped.events.filter(isExecYield)).toHaveLength(0);
+      expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
 
-    const selected = yield* runProbe(true);
-    expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
-    expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
-  });
+      const selected = yield* runProbe(true, selectedStream);
+      expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
+      expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
+    },
+  );
 
-  it("IF48: an unselected branch creates no binding for later content", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.output).toContain("[{thenBinding}]");
+  probeCase(
+    "IF48: an unselected branch creates no binding for later content",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe(false, skippedStream);
+      expect(skipped.output).toContain("[{thenBinding}]");
 
-    const selected = yield* runProbe(true);
-    expect(selected.output).toContain("[then]");
-  });
+      const selected = yield* runProbe(true, selectedStream);
+      expect(selected.output).toContain("[then]");
+    },
+  );
 });
 
 /**
@@ -842,7 +871,10 @@ describe("Tier IF — error observation", () => {
 describe("Tier IF — provider boundary", () => {
   beforeAll(() => useTempFileCompiler());
 
-  function runSampleProbe(condition: boolean): Operation<{ calls: string[]; output: string }> {
+  function runSampleProbe(
+    condition: boolean,
+    stream: InMemoryStream,
+  ): Operation<{ calls: string[]; output: string }> {
     return scoped(function* () {
       const calls: string[] = [];
       // Read the real component before the stub filesystem replaces it.
@@ -866,23 +898,24 @@ describe("Tier IF — provider boundary", () => {
         },
       });
 
-      const output = asText(
-        yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
-      );
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
       return { calls, output };
     });
   }
 
-  it("IF54: an unselected branch makes zero provider calls", function* () {
-    const skipped = yield* runSampleProbe(false);
-    expect(skipped.calls).toEqual([]);
-    expect(skipped.output).toContain("alternative");
-    expect(skipped.output).not.toContain("[sampled]");
+  probeCase(
+    "IF54: an unselected branch makes zero provider calls",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runSampleProbe(false, skippedStream);
+      expect(skipped.calls).toEqual([]);
+      expect(skipped.output).toContain("alternative");
+      expect(skipped.output).not.toContain("[sampled]");
 
-    // The same probe records a call when the branch is selected, so the empty
-    // result above is non-execution rather than a probe that stopped working.
-    const selected = yield* runSampleProbe(true);
-    expect(selected.calls).toEqual(["BRANCH_PROMPT"]);
-    expect(selected.output).toContain("[sampled]");
-  });
+      // The same probe records a call when the branch is selected, so the empty
+      // result above is non-execution rather than a probe that stopped working.
+      const selected = yield* runSampleProbe(true, selectedStream);
+      expect(selected.calls).toEqual(["BRANCH_PROMPT"]);
+      expect(selected.output).toContain("[sampled]");
+    },
+  );
 });

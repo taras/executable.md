@@ -22,9 +22,22 @@ import type { SourceOrigin } from "../src/scanner.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
 import { journalCases } from "../../test-support/journal-cases.ts";
 
-const journalCase = journalCases("packages/core/tests/switch.test.ts");
+const OWNER = "packages/core/tests/switch.test.ts";
+const journalCase = journalCases(OWNER);
+
+function probeCase(
+  name: string,
+  body: (skipped: InMemoryStream, selected: InMemoryStream) => Operation<void>,
+): void {
+  journalCase(name, "test.md", (skipped) =>
+    captureTestJournal({ owner: OWNER, name, suite: "selected control" }, "test.md", (selected) =>
+      body(skipped, selected),
+    ),
+  );
+}
 
 interface SwitchRun {
   segments: Segment[];
@@ -689,11 +702,10 @@ describe("Tier SWITCH / CASE — only the selected body works", () => {
    * Each run gets its own scope: `useStubFs` installs a terminal Fs handler, so
    * two runs in one scope would leave the first document answering for both.
    */
-  function runProbe(selector: string): Operation<ProbeRun> {
+  function runProbe(selector: string, stream: InMemoryStream): Operation<ProbeRun> {
     return scoped(function* () {
       const reads: string[] = [];
       const commands: string[] = [];
-      const stream = new InMemoryStream();
       const files: Record<string, string> = {
         "components/Probe.md": "PROBE_BODY",
         "test.md": PROBE_DOC(selector),
@@ -732,49 +744,64 @@ describe("Tier SWITCH / CASE — only the selected body works", () => {
     });
   }
 
-  it("SW49: no component in an unselected case expands", function* () {
-    const skipped = yield* runProbe("other");
-    expect(skipped.output).not.toContain("PROBE_BODY");
-    expect(skipped.output).toContain("alternative");
+  probeCase(
+    "SW49: no component in an unselected case expands",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe("other", skippedStream);
+      expect(skipped.output).not.toContain("PROBE_BODY");
+      expect(skipped.output).toContain("alternative");
 
-    const selected = yield* runProbe("work");
-    expect(selected.output).toContain("PROBE_BODY");
-  });
+      const selected = yield* runProbe("work", selectedStream);
+      expect(selected.output).toContain("PROBE_BODY");
+    },
+  );
 
-  it("SW50: no component file is looked up or read for an unselected case", function* () {
-    const skipped = yield* runProbe("other");
-    expect(skipped.reads).toEqual(["test.md"]);
+  probeCase(
+    "SW50: no component file is looked up or read for an unselected case",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe("other", skippedStream);
+      expect(skipped.reads).toEqual(["test.md"]);
 
-    const selected = yield* runProbe("work");
-    expect(selected.reads).toContain("stat:components/Probe.md");
-    expect(selected.reads).toContain("components/Probe.md");
-  });
+      const selected = yield* runProbe("work", selectedStream);
+      expect(selected.reads).toContain("stat:components/Probe.md");
+      expect(selected.reads).toContain("components/Probe.md");
+    },
+  );
 
-  it("SW51: the process runtime is never invoked for an unselected exec block", function* () {
-    const skipped = yield* runProbe("other");
-    expect(skipped.commands).toHaveLength(0);
+  probeCase(
+    "SW51: the process runtime is never invoked for an unselected exec block",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe("other", skippedStream);
+      expect(skipped.commands).toHaveLength(0);
 
-    const selected = yield* runProbe("work");
-    expect(selected.commands.some((command) => command.includes("CASE_RAN"))).toBe(true);
-  });
+      const selected = yield* runProbe("work", selectedStream);
+      expect(selected.commands.some((command) => command.includes("CASE_RAN"))).toBe(true);
+    },
+  );
 
-  it("SW52: an unselected case writes no exec or eval durable event", function* () {
-    const skipped = yield* runProbe("other");
-    expect(skipped.events.filter(isExecYield)).toHaveLength(0);
-    expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
+  probeCase(
+    "SW52: an unselected case writes no exec or eval durable event",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe("other", skippedStream);
+      expect(skipped.events.filter(isExecYield)).toHaveLength(0);
+      expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
 
-    const selected = yield* runProbe("work");
-    expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
-    expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
-  });
+      const selected = yield* runProbe("work", selectedStream);
+      expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
+      expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
+    },
+  );
 
-  it("SW53: an unselected case creates no binding for later content", function* () {
-    const skipped = yield* runProbe("other");
-    expect(skipped.output).toContain("[{caseBinding}]");
+  probeCase(
+    "SW53: an unselected case creates no binding for later content",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runProbe("other", skippedStream);
+      expect(skipped.output).toContain("[{caseBinding}]");
 
-    const selected = yield* runProbe("work");
-    expect(selected.output).toContain("[worked]");
-  });
+      const selected = yield* runProbe("work", selectedStream);
+      expect(selected.output).toContain("[worked]");
+    },
+  );
 });
 
 /**
@@ -786,7 +813,10 @@ describe("Tier SWITCH / CASE — only the selected body works", () => {
 describe("Tier SWITCH / CASE — provider boundary", () => {
   beforeAll(() => useTempFileCompiler());
 
-  function runSampleProbe(selector: string): Operation<{ calls: string[]; output: string }> {
+  function runSampleProbe(
+    selector: string,
+    stream: InMemoryStream,
+  ): Operation<{ calls: string[]; output: string }> {
     return scoped(function* () {
       const calls: string[] = [];
       // Read the real component before the stub filesystem replaces it.
@@ -812,25 +842,26 @@ describe("Tier SWITCH / CASE — provider boundary", () => {
         },
       });
 
-      const output = asText(
-        yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
-      );
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
       return { calls, output };
     });
   }
 
-  it("SW54: an unselected case makes zero provider calls", function* () {
-    const skipped = yield* runSampleProbe("other");
-    expect(skipped.calls).toEqual([]);
-    expect(skipped.output).toContain("alternative");
-    expect(skipped.output).not.toContain("[sampled]");
+  probeCase(
+    "SW54: an unselected case makes zero provider calls",
+    function* (skippedStream, selectedStream) {
+      const skipped = yield* runSampleProbe("other", skippedStream);
+      expect(skipped.calls).toEqual([]);
+      expect(skipped.output).toContain("alternative");
+      expect(skipped.output).not.toContain("[sampled]");
 
-    // The same probe records a call when the case is selected, so the empty
-    // result above is non-execution rather than a probe that stopped working.
-    const selected = yield* runSampleProbe("ask");
-    expect(selected.calls).toEqual(["CASE_PROMPT"]);
-    expect(selected.output).toContain("[sampled]");
-  });
+      // The same probe records a call when the case is selected, so the empty
+      // result above is non-execution rather than a probe that stopped working.
+      const selected = yield* runSampleProbe("ask", selectedStream);
+      expect(selected.calls).toEqual(["CASE_PROMPT"]);
+      expect(selected.output).toContain("[sampled]");
+    },
+  );
 });
 
 describe("Tier SWITCH / CASE — document execution", () => {
@@ -890,8 +921,7 @@ describe("Tier SWITCH / CASE — document execution", () => {
     },
   );
 
-  it("SW57: only the selected case reaches the journal", function* () {
-    const stream = new InMemoryStream();
+  journalCase("SW57: only the selected case reaches the journal", "test.md", function* (stream) {
     yield* useStubFs({
       "test.md": [
         "```js eval",
@@ -952,72 +982,78 @@ describe("Tier SWITCH / CASE — replay", () => {
     "```",
   ].join("\n");
 
-  it("SW58: a truncated journal restores the selected effect and continues live", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "test.md": REPLAY_DOC });
-    yield* useEchoExec();
+  journalCase(
+    "SW58: a truncated journal restores the selected effect and continues live",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({ "test.md": REPLAY_DOC });
+      yield* useEchoExec();
 
-    const golden = yield* collect(yield* execute({ path: "test.md", stream }));
-    expect(golden).toContain("SELECTED_EFFECT");
-    expect(golden).toContain("AFTER_SWITCH");
-    expect(golden).not.toContain("FIRST_RAN");
+      const golden = yield* collect(yield* execute({ path: "test.md", stream }));
+      expect(golden).toContain("SELECTED_EFFECT");
+      expect(golden).toContain("AFTER_SWITCH");
+      expect(golden).not.toContain("FIRST_RAN");
 
-    // Cut the journal to the root import, the binding eval and the selected
-    // case's own eval. A stream still carrying the root Close would return the
-    // stored result without expanding the document, which would prove nothing
-    // about selection.
-    const events = stream.snapshot();
-    const evals = events
-      .map((event, index) => ({ event, index }))
-      .filter(({ event }) => isEvalYield(event));
-    expect(evals.length).toBeGreaterThanOrEqual(3);
-    const partial = new InMemoryStream(events.slice(0, evals[1].index + 1));
-    expect(partial.snapshot().some((event) => event.type === "close")).toBe(false);
+      // Cut the journal to the root import, the binding eval and the selected
+      // case's own eval. A stream still carrying the root Close would return the
+      // stored result without expanding the document, which would prove nothing
+      // about selection.
+      const events = stream.snapshot();
+      const evals = events
+        .map((event, index) => ({ event, index }))
+        .filter(({ event }) => isEvalYield(event));
+      expect(evals.length).toBeGreaterThanOrEqual(3);
+      const partial = new InMemoryStream(events.slice(0, evals[1].index + 1));
+      expect(partial.snapshot().some((event) => event.type === "close")).toBe(false);
 
-    const replayed = yield* collect(yield* execute({ path: "test.md", stream: partial }));
+      const replayed = yield* collect(yield* execute({ path: "test.md", stream: partial }));
 
-    expect(replayed).toBe(golden);
-    // The switch appended no event of its own: selection was rebuilt by
-    // ordinary expansion, and only the work after the restored effect is new.
-    expect(partial.appendCount).toBeGreaterThan(0);
-    const evaluated = JSON.stringify(partial.snapshot().filter(isEvalYield));
-    expect(evaluated).toContain("SELECTED_EFFECT");
-    expect(evaluated).toContain("AFTER_SWITCH");
-    expect(evaluated).not.toContain("FIRST_RAN");
-  });
+      expect(replayed).toBe(golden);
+      // The switch appended no event of its own: selection was rebuilt by
+      // ordinary expansion, and only the work after the restored effect is new.
+      expect(partial.appendCount).toBeGreaterThan(0);
+      const evaluated = JSON.stringify(partial.snapshot().filter(isEvalYield));
+      expect(evaluated).toContain("SELECTED_EFFECT");
+      expect(evaluated).toContain("AFTER_SWITCH");
+      expect(evaluated).not.toContain("FIRST_RAN");
+    },
+  );
 
-  it("SW59: completed replay performs no selector, matcher, import or block", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "test.md": REPLAY_DOC });
-    yield* useEchoExec();
-    const golden = yield* collect(yield* execute({ path: "test.md", stream }));
+  journalCase(
+    "SW59: completed replay performs no selector, matcher, import or block",
+    "test.md",
+    function* (stream) {
+      yield* useStubFs({ "test.md": REPLAY_DOC });
+      yield* useEchoExec();
+      const golden = yield* collect(yield* execute({ path: "test.md", stream }));
 
-    const completed = new InMemoryStream(stream.snapshot());
-    expect(completed.snapshot().some((event) => event.type === "close")).toBe(true);
+      const completed = new InMemoryStream(stream.snapshot());
+      expect(completed.snapshot().some((event) => event.type === "close")).toBe(true);
 
-    const reads: string[] = [];
-    const replayed = yield* scoped(function* () {
-      yield* API.Fs.around({
-        // deno-lint-ignore require-yield
-        *readTextFile([path], _next): Operation<string> {
-          reads.push(path);
-          throw new Error(`ENOENT: no such file: ${path}`);
-        },
-        // deno-lint-ignore require-yield
-        *stat([path], _next): Operation<StatResult> {
-          reads.push(`stat:${path}`);
-          return { exists: false, isFile: false, isDirectory: false };
-        },
-        // deno-lint-ignore require-yield
-        *glob(_args, _next) {
-          throw new Error("glob not stubbed");
-        },
+      const reads: string[] = [];
+      const replayed = yield* scoped(function* () {
+        yield* API.Fs.around({
+          // deno-lint-ignore require-yield
+          *readTextFile([path], _next): Operation<string> {
+            reads.push(path);
+            throw new Error(`ENOENT: no such file: ${path}`);
+          },
+          // deno-lint-ignore require-yield
+          *stat([path], _next): Operation<StatResult> {
+            reads.push(`stat:${path}`);
+            return { exists: false, isFile: false, isDirectory: false };
+          },
+          // deno-lint-ignore require-yield
+          *glob(_args, _next) {
+            throw new Error("glob not stubbed");
+          },
+        });
+        return yield* collect(yield* execute({ path: "test.md", stream: completed }));
       });
-      return yield* collect(yield* execute({ path: "test.md", stream: completed }));
-    });
 
-    expect(replayed).toBe(golden);
-    expect(reads).toHaveLength(0);
-    expect(completed.appendCount).toBe(0);
-  });
+      expect(replayed).toBe(golden);
+      expect(reads).toHaveLength(0);
+      expect(completed.appendCount).toBe(0);
+    },
+  );
 });
