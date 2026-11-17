@@ -853,13 +853,22 @@ function established(
  * is chat, and what belongs in chat is a sentence.
  */
 function incompleteFailure(record: PromptRecord): string {
-  if (record.error?.message !== undefined) {
-    return record.error.message;
+  if (record.error !== undefined) {
+    return sidekickFailureText(record.error);
   }
   if (record.stopReason !== undefined) {
     return `the agent stopped early (${record.stopReason}).`;
   }
   return `the agent's turn ${record.status}.`;
+}
+
+export function sidekickFailureText(failure: NonNullable<PromptRecord["error"]>): string {
+  const detail = failure.diagnostic?.acp?.details;
+  return failure.name === "SessionResumeRequiredError" &&
+    detail !== undefined &&
+    detail.trim() !== ""
+    ? `${detail}\n${failure.message}`
+    : failure.message;
 }
 
 /**

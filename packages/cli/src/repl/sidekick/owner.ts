@@ -110,10 +110,15 @@ import {
   AGENT_PROMPT,
   AgentReplyWithheldError,
   parsePromptRecord,
+  readPromptDiagnostic,
   useAgentPromptPublisher,
 } from "@executablemd/agent/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
-import type { AgentPromptHandle, AgentPromptPublisher } from "@executablemd/agent/host";
+import type {
+  AgentPromptHandle,
+  AgentPromptPublisher,
+  PromptRecord,
+} from "@executablemd/agent/host";
 import { serializeError } from "@executablemd/durable-streams";
 import { useAgentConversation } from "@executablemd/agent/host";
 import type { AgentConversation } from "@executablemd/agent/host";
@@ -136,6 +141,7 @@ import {
   projectSidekick,
   recoveryRequired,
   requestsFromHistory,
+  sidekickFailureText,
 } from "./model.ts";
 import type { ProjectedHistory, SidekickReading } from "./model.ts";
 import { controlJournal } from "./admission.ts";
@@ -2855,6 +2861,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           });
         }
         const attempted = withheld ?? (yield* turnForRequest(paired, began, conversation));
+        const failure = sidekickFailureText(
+          attempted?.error ?? {
+            message: replied.error.message,
+            name: replied.error.name,
+            diagnostic: readPromptDiagnostic(replied.error),
+          },
+        );
         // Kept as an attempt that did not finish, told which turn this
         // request's own records say it became. With none, it claims no turn, no
         // acceptance and no recorded failure; with one, the saved account of
@@ -2867,9 +2880,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           !live.begun &&
           (attempted === undefined || attempted.resumeRefused)
         ) {
-          return Err(
-            new SidekickContinuationUnavailable(replied.error.message, { cause: replied.error }),
-          );
+          return Err(new SidekickContinuationUnavailable(failure, { cause: replied.error }));
         }
         return Ok({
           held: {
@@ -2880,7 +2891,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             response,
             output: attempted?.text ?? "",
             hasOutput: false,
-            failure: replied.error.message,
+            failure,
           },
           answered: false,
           next: undefined,
@@ -3246,6 +3257,7 @@ function* turnForRequest(
       readonly text: string;
       readonly withheld: boolean;
       readonly resumeRefused: boolean;
+      readonly error: PromptRecord["error"];
     }
   | undefined
 > {
@@ -3287,6 +3299,7 @@ function* turnForRequest(
         text: saved.text,
         withheld: saved.withheld === true,
         resumeRefused: held.resumeRefused === true,
+        error: saved.error,
       };
     }
   }

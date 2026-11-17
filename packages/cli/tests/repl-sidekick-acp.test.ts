@@ -81,11 +81,13 @@ import {
 } from "./support/screen-journeys.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
-import { awaitedFact } from "./support/mounted-repl.ts";
+import { awaited, awaitedFact } from "./support/mounted-repl.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
-import { AGENT_PROMPT } from "@executablemd/agent/host";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/agent/host";
+import { encodeLocation } from "../src/repl/route.ts";
+import { initialState } from "../src/repl/application.ts";
 import {
   Descriptor,
   Request,
@@ -3648,6 +3650,147 @@ describe("ACP82: the file this publication keeps open", () => {
     yield* until(unlink(stagePath));
     yield* until(rmdir(directory!));
   });
+});
+
+describe("resume presentation in mounted Sidekick chat", () => {
+  const actionable = "Release <writer> first.";
+  const credential = ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
+  const remedy = "could not be resumed";
+
+  for (const [mode, detail] of [
+    ["actionable", actionable],
+    ["absent", undefined],
+    ["blank", "  "],
+    ["screened", credential],
+  ] as const) {
+    it(`shows the same ${mode} refusal live and after passive reopen`, function* () {
+      yield* usePosixSidekickTransport(process.platform);
+      const home = yield* publishingHome("xmd-resume-presentation-");
+      const path = join(home, "attachment.json");
+      const host = yield* useMountedHost();
+      host.fake.script({ reply: "<Output>Established chat.</Output>" });
+      const original = yield* scoped(function* () {
+        const page = yield* useReplPage({ host, sidekickAcp: path });
+        const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+        const baseline = yield* settledReading(page.repl);
+        page.repl.terminal.end();
+        yield* awaited("the first REPL joining", () => page.repl.outcome() !== undefined);
+        return { descriptor, baseline };
+      });
+      const opening = host.fake.turns[0]?.handle;
+      if (opening === undefined) {
+        throw new Error("The original provider session was not established");
+      }
+      const route = initialState(original.descriptor.execution).route;
+      const location = encodeLocation({ ...route, view: "sidekick", right: "sidekick" });
+      host.fake.refuseSessionResume(opening.sessionKey, detail);
+      const beforeEnsures = host.fake.ensured.length;
+      const after = yield* scoped(function* () {
+        const page = yield* useReplPage({ host, location, sidekickAcp: path });
+        yield* page.resize({ columns: 145, rows: 36 });
+        const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+        expect(descriptor.conversation).toBe(original.descriptor.conversation);
+        expect(host.fake.ensured).toHaveLength(beforeEnsures);
+        expect((yield* settledReading(page.repl)).chat).toEqual(original.baseline.chat);
+        const attached = attachResult.parse(
+          yield* requestAttachment(path, { method: "attach", cwd: descriptor.cwd }),
+        );
+        const result = exchangeSchema.parse(
+          yield* requestAttachment(path, {
+            method: "prompt",
+            attachment: attached.attachment,
+            text: "Cold reconnect attempt.",
+          }),
+        );
+        const visible = yield* page.until(
+          "one failed chat attempt and its recovery message",
+          (one) =>
+            one.occurrences("(unfinished):") === 1 &&
+            one.shows(remedy) &&
+            (mode !== "actionable" || one.shows(`(unfinished): ${actionable}`)),
+        );
+        expect(visible.shows(actionable)).toBe(mode === "actionable");
+        expect(visible.shows(credential)).toBe(false);
+        expect(visible.shows("Internal error")).toBe(false);
+        expect(visible.shows("unrelated synthetic RPC payload")).toBe(false);
+        expect(host.fake.prompts).toHaveLength(1);
+        const retained = yield* settledReading(page.repl);
+        const delta = retained.chat.slice(original.baseline.chat.length);
+        expect(
+          delta.some(
+            (one) => one.kind === "response" || one.kind === "control" || one.kind === "feedback",
+          ),
+        ).toBe(false);
+        const attempts = delta.flatMap((one) =>
+          one.kind === "event"
+            ? parseEntryRecords(one.event).flatMap((event) =>
+                event.type === "yield" &&
+                event.description.type === AGENT_PROMPT &&
+                event.result.status === "ok"
+                  ? [parsePromptRecord(event.result.value)]
+                  : [],
+              )
+            : [],
+        );
+        expect(attempts).toHaveLength(1);
+        const saved = attempts[0]?.error;
+        if (saved === undefined) {
+          throw new Error("Expected a canonical resume failure");
+        }
+        expect(saved).toEqual({
+          name: "SessionResumeRequiredError",
+          message: expect.stringContaining(remedy),
+          diagnostic: {
+            provider: "acp",
+            operation: "session/prompt",
+            stage: "held-session-ensure",
+            code: "RUNTIME",
+            detailCode: "SESSION_RESUME_REQUIRED",
+            origin: "runtime",
+            acp: {
+              code: -32041,
+              message: "Internal error",
+              ...(mode === "actionable" || mode === "blank" ? { details: detail } : {}),
+            },
+          },
+        });
+        expect(JSON.stringify(delta)).not.toContain(credential);
+        expect(JSON.stringify(delta)).not.toContain("unrelated synthetic RPC payload");
+        expect(result.ending).toMatchObject({
+          joined: true,
+          outcome: "failed",
+          error: mode === "actionable" ? actionable + "\n" + saved.message : saved.message,
+        });
+        expect(result.output).toBe("");
+        page.repl.terminal.end();
+        yield* awaited("the failed REPL joining", () => page.repl.outcome() !== undefined);
+        return retained;
+      });
+      const settledEnsures = host.fake.ensured.length;
+      const page = yield* useReplPage({ host, location });
+      yield* page.resize({ columns: 145, rows: 36 });
+      const reopened = yield* page.until(
+        "one reopened failure and its recovery message",
+        (one) =>
+          one.occurrences("(unfinished):") === 1 &&
+          one.shows(remedy) &&
+          (mode !== "actionable" || one.shows(`(unfinished): ${actionable}`)),
+      );
+      expect(reopened.shows(actionable)).toBe(mode === "actionable");
+      expect(reopened.shows(credential)).toBe(false);
+      expect(reopened.shows("unrelated synthetic RPC payload")).toBe(false);
+      expect(host.fake.ensured).toHaveLength(settledEnsures);
+      expect(host.fake.prompts).toHaveLength(1);
+      expect((yield* settledReading(page.repl)).chat).toEqual(after.chat);
+      host.fake.script({ reply: "<Output>Later explicit Send succeeded.</Output>" });
+      yield* sendMessage(page, "Fresh request after release.");
+      yield* page.until("the new reply", (one) => one.shows("Later explicit Send succeeded."));
+      expect(host.fake.prompts).toHaveLength(2);
+      expect(host.fake.prompts[1]).toContain("Fresh request after release.");
+      expect(host.fake.prompts[1]).not.toContain("Cold reconnect attempt.");
+      expect(host.fake.turns.at(-1)?.handle.sessionKey).toBe(opening.sessionKey);
+    });
+  }
 });
 
 describe("Follow: joined mixed-origin queue handoff", () => {

@@ -105,3 +105,4 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/journal.ts";
 export type { PromptRecord } from "./src/journal.ts";
+export { readPromptDiagnostic } from "./src/errors.ts";
