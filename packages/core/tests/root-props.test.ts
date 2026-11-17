@@ -5,9 +5,13 @@
  * validated and defaulted before any body effect, then available through
  * `{props.name}`, bare binding interpolation, and eval blocks.
  */
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { journalCases } from "../../test-support/journal-cases.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -82,8 +86,12 @@ const NESTED_CONCISE = [
   "",
 ].join("\n");
 
-function* runPath(path: string, props?: Record<string, Json>, stream = new InMemoryStream()) {
-  const execution = yield* execute({ path, stream, props });
+function* runPath(path: string, props?: Record<string, Json>, stream?: InMemoryStream) {
+  const execution = yield* execute({
+    path,
+    stream: stream ?? (yield* useJournalStream(path)),
+    props,
+  });
   const output = yield* forEach(function* () {}, execution.output);
   const result = yield* execution;
   return { output, result };
@@ -96,90 +104,55 @@ function* runDoc(
   stream?: InMemoryStream,
 ) {
   yield* useStubFs(files);
-  return yield* runPath(path, props, stream);
+  return yield* runPath(path, props);
 }
 
 const OWNER = "packages/core/tests/root-props.test.ts";
 const rootCase = journalCases(OWNER);
 
 describe("Tier RP — root document properties", () => {
-  rootCase(
-    "RP1: supplied props reach interpolation without bare prop bindings",
-    "hello.md",
-    function* (stream) {
-      const { output, result } = yield* runDoc(
-        { "hello.md": GREETING },
-        "hello.md",
-        {
-          name: "Ada",
-          loud: true,
-        },
-        stream,
-      );
-      expect(result.ok).toBe(true);
-      expect(output).toContain("Hello, Ada!");
-      expect(output).toContain("loud=true");
-      expect(output).toContain("bare={name}");
-    },
-  );
+  beforeEach(journalBeforeEach(OWNER));
+  it("RP1: supplied props reach interpolation without bare prop bindings", function* () {
+    const { output, result } = yield* runDoc({ "hello.md": GREETING }, "hello.md", {
+      name: "Ada",
+      loud: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(output).toContain("Hello, Ada!");
+    expect(output).toContain("loud=true");
+    expect(output).toContain("bare={name}");
+  });
 
-  rootCase("RP2: schema defaults apply to the root", "hello.md", function* (stream) {
-    const { output } = yield* runDoc({ "hello.md": GREETING }, "hello.md", { name: "Ada" }, stream);
+  it("RP2: schema defaults apply to the root", function* () {
+    const { output } = yield* runDoc({ "hello.md": GREETING }, "hello.md", { name: "Ada" });
     expect(output).toContain("loud=false");
   });
 
-  rootCase(
-    "RP3: a missing required property prevents every body effect",
-    "doc.md",
-    function* (stream) {
-      const { output, result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", {}, stream);
-      expect(result.ok).toBe(false);
-      expect(output).not.toContain("SIDE_EFFECT_MARKER");
-    },
-  );
-
-  rootCase("RP4: an invalid property prevents every body effect", "doc.md", function* (stream) {
-    const { output, result } = yield* runDoc(
-      { "doc.md": SIDE_EFFECT },
-      "doc.md",
-      { name: 12 },
-      stream,
-    );
+  it("RP3: a missing required property prevents every body effect", function* () {
+    const { output, result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", {});
     expect(result.ok).toBe(false);
     expect(output).not.toContain("SIDE_EFFECT_MARKER");
   });
 
-  rootCase(
-    "RP5: an undeclared property is rejected by the root schema",
-    "doc.md",
-    function* (stream) {
-      const { result } = yield* runDoc(
-        { "doc.md": SIDE_EFFECT },
-        "doc.md",
-        {
-          name: "Ada",
-          nope: 1,
-        },
-        stream,
-      );
-      expect(result.ok).toBe(false);
-    },
-  );
+  it("RP4: an invalid property prevents every body effect", function* () {
+    const { output, result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", { name: 12 });
+    expect(result.ok).toBe(false);
+    expect(output).not.toContain("SIDE_EFFECT_MARKER");
+  });
 
-  rootCase(
-    "RP6: a document without props keeps its existing behavior",
-    "plain.md",
-    function* (stream) {
-      const { output, result } = yield* runDoc(
-        { "plain.md": NO_PROPS },
-        "plain.md",
-        undefined,
-        stream,
-      );
-      expect(result.ok).toBe(true);
-      expect(output).toContain("PLAIN_MARKER");
-    },
-  );
+  it("RP5: an undeclared property is rejected by the root schema", function* () {
+    const { result } = yield* runDoc({ "doc.md": SIDE_EFFECT }, "doc.md", {
+      name: "Ada",
+      nope: 1,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("RP6: a document without props keeps its existing behavior", function* () {
+    const { output, result } = yield* runDoc({ "plain.md": NO_PROPS }, "plain.md", undefined);
+    expect(result.ok).toBe(true);
+    expect(output).toContain("PLAIN_MARKER");
+  });
 });
 
 describe("Tier RI — document inspection", () => {
