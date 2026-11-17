@@ -11,7 +11,7 @@
  * journal, because those three can agree while the number of requests is wrong.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -19,6 +19,7 @@ import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { API, Config } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,6 +37,7 @@ import type { Definition } from "./invocation-harness.ts";
 import type { FunctionComponentDefinition, Segment } from "../src/types.ts";
 
 const URL_ONE = "https://api.example.test/one";
+const OWNER = "packages/core/tests/fetch-component.test.ts";
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
@@ -169,7 +171,7 @@ function run(
   return scoped(function* () {
     const path = join(workspace, "doc.md");
     yield* writeTextFile(path, source);
-    const stream = options.stream ?? new InMemoryStream();
+    const stream = options.stream ?? (yield* useJournalStream(path));
     try {
       const output = yield* collect(
         yield* execute({
@@ -216,6 +218,7 @@ function partial(events: DurableEvent[]): InMemoryStream {
 }
 
 describe("Tier FT — what a request has to be before it is sent", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const REFUSED: Array<[string, string]> = [
@@ -297,6 +300,7 @@ describe("Tier FT — what a request has to be before it is sent", () => {
 });
 
 describe("Tier FT — what bounds the request", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const ACCEPTED: Array<[string, number]> = [
@@ -380,6 +384,7 @@ describe("Tier FT — what bounds the request", () => {
 });
 
 describe("Tier FT — the response a document keeps", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const MIXED: Answer = {
@@ -485,6 +490,7 @@ describe("Tier FT — the response a document keeps", () => {
 });
 
 describe("Tier FT — what a status means", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("FT15: a captured non-2xx binds the same shape as a captured 2xx", function* () {
@@ -650,6 +656,7 @@ describe("Tier FT — the binding-mode seam", () => {
 });
 
 describe("Tier FT — a failure never becomes data", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("FT21: a transport failure binds nothing and records no result", function* () {
@@ -759,6 +766,7 @@ describe("Tier FT — a failure never becomes data", () => {
 });
 
 describe("Tier FT — who is allowed to perform the request", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** A trusted host that refuses one destination and performs nothing. */
@@ -903,6 +911,7 @@ describe("Tier FT — who is allowed to perform the request", () => {
 });
 
 describe("Tier FT — what a later run finds", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const REPLAYED = doc(
@@ -997,6 +1006,7 @@ describe("Tier FT — what a later run finds", () => {
 });
 
 describe("Tier FT — the secret gate covers the whole event", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -1141,6 +1151,7 @@ describe("Tier FT — the secret gate covers the whole event", () => {
 });
 
 describe("Tier FT — invocations stay independent", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("FT35: cancelling one request leaves the other's response untouched", function* () {
