@@ -15,7 +15,9 @@
  * observable.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -40,6 +42,8 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 const SCHEMA =
   '{"type":"object","properties":{"decision":{"type":"string"}},"required":["decision"],' +
   '"additionalProperties":false}';
+
+const OWNER = "packages/core/tests/answers-component.test.ts";
 
 function useWorkspace(): Operation<string> {
   return resource(function* (provide) {
@@ -178,8 +182,10 @@ function reported(result: Run): string {
 }
 
 describe("Answers: choosing by template", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("answers a nested component's elicitation with no host provider installed", function* () {
     const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     yield* writeGate(workspace);
 
     const result = yield* run(
@@ -192,6 +198,7 @@ describe("Answers: choosing by template", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toBe(undefined);
@@ -200,7 +207,7 @@ describe("Answers: choosing by template", () => {
 
   it("matches anything when the matcher has no template", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -214,6 +221,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: catch-all");
@@ -221,7 +229,7 @@ describe("Answers: choosing by template", () => {
 
   it("reads a multiline template from children", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -237,6 +245,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: deployed");
@@ -245,7 +254,7 @@ describe("Answers: choosing by template", () => {
   /** `{?name}` constrains position but carries nothing into the answer. */
   it("uses a wildcard hole to constrain without binding", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -259,6 +268,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: yes");
@@ -266,7 +276,7 @@ describe("Answers: choosing by template", () => {
 
   it("does not match when the literal text around a hole differs", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -278,6 +288,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toContain("no matcher for this elicitation");
@@ -286,7 +297,7 @@ describe("Answers: choosing by template", () => {
   /** A `{binding}` in the prop form reaches the engine intact and constrains. */
   it("interpolates a binding in the template prop", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -304,6 +315,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: bound");
@@ -311,7 +323,7 @@ describe("Answers: choosing by template", () => {
 
   it("does not match when the interpolated binding differs", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -327,6 +339,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toContain("no matcher for this elicitation");
@@ -335,6 +348,7 @@ describe("Answers: choosing by template", () => {
   /** A string answer is JSON text like any other, so it is written quoted. */
   it("round-trips a string answer written as quoted JSON", function* () {
     const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const stringSchema = '{"type":"string"}';
 
     const result = yield* run(
@@ -353,6 +367,7 @@ describe("Answers: choosing by template", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toBe(undefined);
@@ -361,7 +376,7 @@ describe("Answers: choosing by template", () => {
 
   it("reads a value written as captured JSON text", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -375,6 +390,7 @@ describe("Answers: choosing by template", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: from-text");
@@ -382,13 +398,14 @@ describe("Answers: choosing by template", () => {
 });
 
 describe("Answers: selection", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * First declared wins, and the consequence is the point: a broad template
    * above a narrow one shadows it permanently.
    */
   it("takes the first declared matching matcher", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -403,6 +420,7 @@ describe("Answers: selection", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: broad");
@@ -410,7 +428,7 @@ describe("Answers: selection", () => {
 
   it("lets a narrower matcher win when it is declared first", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -426,6 +444,7 @@ describe("Answers: selection", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: narrow then broad");
@@ -434,7 +453,7 @@ describe("Answers: selection", () => {
   /** A matcher is not consumed by answering: it answers every match it sees. */
   it("reuses one matcher across several elicitations", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -450,6 +469,7 @@ describe("Answers: selection", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toBe(undefined);
@@ -458,7 +478,7 @@ describe("Answers: selection", () => {
 
   it("does not mind a matcher that never fires", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -473,6 +493,7 @@ describe("Answers: selection", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toBe(undefined);
@@ -481,7 +502,7 @@ describe("Answers: selection", () => {
 
   it("still judges a matched value against the asking component's schema", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -493,6 +514,7 @@ describe("Answers: selection", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toContain("<Elicit />");
@@ -501,9 +523,10 @@ describe("Answers: selection", () => {
 });
 
 describe("Answers: unmatched elicitations", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("names the message and every template tried", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -516,6 +539,7 @@ describe("Answers: unmatched elicitations", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toContain("Something nobody wrote a matcher for");
@@ -525,7 +549,7 @@ describe("Answers: unmatched elicitations", () => {
 
   it("passes an unmatched elicitation outward when delegate is set", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -540,8 +564,8 @@ describe("Answers: unmatched elicitations", () => {
           "</Answers>",
           "",
         ].join("\n"),
-      // deno-lint-ignore require-yield
       {
+        stream,
         outer: function* () {
           return { decision: "from-host" };
         },
@@ -560,7 +584,7 @@ describe("Answers: unmatched elicitations", () => {
 
   it("does not reach the outer provider without delegate", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -572,8 +596,8 @@ describe("Answers: unmatched elicitations", () => {
           "</Answers>",
           "",
         ].join("\n"),
-      // deno-lint-ignore require-yield
       {
+        stream,
         outer: function* () {
           return { decision: "from-host" };
         },
@@ -586,9 +610,10 @@ describe("Answers: unmatched elicitations", () => {
 });
 
 describe("Answers: nesting", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("lets the nearest region answer first", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -606,6 +631,7 @@ describe("Answers: nesting", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.output).toContain("Got: inner");
@@ -613,7 +639,7 @@ describe("Answers: nesting", () => {
 
   it("reaches the enclosing region when the inner one delegates", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -632,6 +658,7 @@ describe("Answers: nesting", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toBe(undefined);
@@ -640,7 +667,7 @@ describe("Answers: nesting", () => {
 
   it("stops at the inner region when it does not delegate", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -656,6 +683,7 @@ describe("Answers: nesting", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toContain("no matcher for this elicitation");
@@ -664,7 +692,7 @@ describe("Answers: nesting", () => {
   /** The region ends with its body, so a later sibling is not answered by it. */
   it("stops answering once its body is over", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       SCHEMA_BLOCK +
@@ -678,6 +706,7 @@ describe("Answers: nesting", () => {
           elicits("b", "Outside?"),
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toContain("no elicitation provider configured");
@@ -685,12 +714,14 @@ describe("Answers: nesting", () => {
 });
 
 describe("Answers: configuration printed errors", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("refuses an <Answer> outside an <Answers>", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       '<Answer template="Approve?" value={{ decision: "a" }} />\n',
+      { stream },
     );
 
     expect(reported(result)).toContain("<Answer> must be a direct child of <Answers>");
@@ -717,7 +748,7 @@ describe("Answers: configuration printed errors", () => {
 
   it("refuses both template forms at once", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       [
@@ -728,6 +759,7 @@ describe("Answers: configuration printed errors", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).toContain(
@@ -737,7 +769,7 @@ describe("Answers: configuration printed errors", () => {
 
   it("refuses a template that cannot be parsed", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       [
@@ -748,6 +780,7 @@ describe("Answers: configuration printed errors", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).toContain("adjacent capture holes");
@@ -755,10 +788,11 @@ describe("Answers: configuration printed errors", () => {
 
   it("refuses a matcher with no value", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       ["<Answers>", '<Answer template="Approve?" />', "", "body", "</Answers>", ""].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).toContain('requires a "value" prop');
@@ -771,7 +805,7 @@ describe("Answers: configuration printed errors", () => {
    */
   it("refuses a template written as an expression", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       [
@@ -786,6 +820,7 @@ describe("Answers: configuration printed errors", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).toContain("template must be a literal string prop");
@@ -794,7 +829,7 @@ describe("Answers: configuration printed errors", () => {
 
   it("refuses a value that is not JSON", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       [
@@ -805,6 +840,7 @@ describe("Answers: configuration printed errors", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).toContain("value text is not JSON");
@@ -817,7 +853,7 @@ describe("Answers: configuration printed errors", () => {
    */
   it("points a bare string value at the JSON-quoted spelling", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       [
@@ -828,6 +864,7 @@ describe("Answers: configuration printed errors", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).toContain("captured JSON text");
@@ -840,7 +877,7 @@ describe("Answers: configuration printed errors", () => {
    */
   it("does not expand the body when a matcher is malformed", function* () {
     const workspace = yield* useWorkspace();
-
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     const result = yield* run(
       workspace,
       [
@@ -851,6 +888,7 @@ describe("Answers: configuration printed errors", () => {
         "</Answers>",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(reported(result)).not.toContain("a body nobody should see");
@@ -858,6 +896,7 @@ describe("Answers: configuration printed errors", () => {
 });
 
 describe("Answers: reservation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * Repository files named after both constructs, in the directory `run()`
    * searches — so the only thing keeping them out of the document is the names
@@ -875,6 +914,7 @@ describe("Answers: reservation", () => {
 
   it("does not let a repository Answers.md stand in for the construct", function* () {
     const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     yield* writeStandIns(workspace);
 
     const result = yield* run(
@@ -890,6 +930,7 @@ describe("Answers: reservation", () => {
           "</Answers>",
           "",
         ].join("\n"),
+      { stream },
     );
 
     expect(result.failure).toBe(undefined);
@@ -934,11 +975,13 @@ describe("Answers: reservation", () => {
 
   it("does not let a repository Answer.md rescue a stray matcher", function* () {
     const workspace = yield* useWorkspace();
+    const stream = yield* useJournalStream(join(workspace, "doc.md"));
     yield* writeStandIns(workspace);
 
     const result = yield* run(
       workspace,
       '<Answer template="Approve?" value={{ decision: "a" }} />\n',
+      { stream },
     );
 
     // A reserved name resolves to nothing else wherever it is written, so the

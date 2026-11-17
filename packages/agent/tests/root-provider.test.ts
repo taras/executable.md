@@ -7,15 +7,16 @@
  * fake provider is an Effection resource whose finalizer is driven by scope
  * teardown — never a manual teardown call or a Promise.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ensure, Ok, scoped } from "effection";
 import type { Operation, Result, Stream } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import * as os from "node:os";
 import { execute } from "../../core/src/execute.ts";
 import { Agent } from "../src/agent-api.ts";
 import { sessionOf } from "../src/session-use.ts";
@@ -130,15 +131,20 @@ function stubStream(
   };
 }
 
-function* runDoc(doc: string): Operation<{ output: string; result: Result<Json> }> {
-  const dir = path.join(os.tmpdir(), `xmd-rp-test-${randomUUID()}`);
+const OWNER = "packages/agent/tests/root-provider.test.ts";
+
+function* runDoc(
+  doc: string,
+  stream: InMemoryStream,
+  dir: string,
+): Operation<{ output: string; result: Result<Json> }> {
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
-    const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+    const execution = yield* execute({ path: docPath, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -152,10 +158,13 @@ function* runDoc(doc: string): Operation<{ output: string; result: Result<Json> 
 const OPTIONS: AgentProviderOptions = { defaultAgent: "a", permissionMode: "deny-all" };
 
 describe("Tier RP — root-provider lifecycle", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("RP1: provider is active during execution; its finalizer runs once, before completion settles", function* () {
+    const directory = yield* useTempDirectory("xmd-rp-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const { factory, state } = createProvider();
     yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
-    const { output, result } = yield* runDoc('<Prompt text="hi" />\n');
+    const { output, result } = yield* runDoc('<Prompt text="hi" />\n', stream, directory);
     expect(result.ok).toBe(true);
     expect(output).toContain("[hi]");
     expect(state.activeDuringPrompt).toBe(true);
@@ -165,10 +174,12 @@ describe("Tier RP — root-provider lifecycle", () => {
   });
 
   it("RP2: a teardown failure still closes rendered output but makes completion an Err", function* () {
+    const directory = yield* useTempDirectory("xmd-rp-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const boom = new Error("teardown boom");
     const { factory } = createProvider({ teardownError: boom });
     yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
-    const { output, result } = yield* runDoc('<Prompt text="hi" />\n');
+    const { output, result } = yield* runDoc('<Prompt text="hi" />\n', stream, directory);
     expect(output).toContain("[hi]");
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -181,6 +192,8 @@ describe("Tier RP — root-provider lifecycle", () => {
   // the caller receives is the failure the document earned, because a completion
   // policy adds and never replaces.
   it("RP5: a failed document keeps its own failure even when cleanup also fails", function* () {
+    const directory = yield* useTempDirectory("xmd-rp-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const boom = new Error("teardown boom");
     const { factory, state } = createProvider({ teardownError: boom, extraFinalizer: true });
     yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
@@ -190,6 +203,8 @@ describe("Tier RP — root-provider lifecycle", () => {
     // having failed.
     const { result } = yield* runDoc(
       ["<Output>", "", "```bash exec", "exit 3", "```", "", "</Output>", ""].join("\n"),
+      stream,
+      directory,
     );
 
     expect(result.ok).toBe(false);
@@ -204,6 +219,8 @@ describe("Tier RP — root-provider lifecycle", () => {
   });
 
   it("RP3: a prompt failure plus a teardown failure aggregate — primary first, every cleanup runs", function* () {
+    const directory = yield* useTempDirectory("xmd-rp-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const boom = new Error("teardown boom");
     const { factory, state } = createProvider({
       teardownError: boom,
@@ -211,7 +228,7 @@ describe("Tier RP — root-provider lifecycle", () => {
       fail: true,
     });
     yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
-    const { result } = yield* runDoc('<Prompt text="hi" />\n');
+    const { result } = yield* runDoc('<Prompt text="hi" />\n', stream, directory);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(AggregateError);

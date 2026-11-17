@@ -60,7 +60,7 @@ export interface TestDiagnostics {
    * the file each execution saves is named by its own position in this
    * command, so two executions never share one.
    */
-  execution(kind: "root" | "child", source: string): ExecutionDiagnostics;
+  execution(kind: "root" | "child", source: string, profile?: string): ExecutionDiagnostics;
   /** The first failure to deliver a progress line, or `Ok` when none failed. */
   delivery(): Result<void>;
   /** Counts recorded by root documents. Nested execution results are evidence. */
@@ -160,12 +160,12 @@ function testDiagnosticsAt(
     const counts = { root: 0, child: 0 };
     const results = { pass: 0, fail: 0 };
     yield* provide({
-      execution(kind, source) {
+      execution(kind, source, profile) {
         const ordinal = ++counts[kind];
         const stem = join(directory, `${kind}-${ordinal}`);
         const file = `${stem}.jsonl`;
         const displayedSource = shown(source);
-        const named = `${kind} ${ordinal} ${displayedSource}`;
+        const named = `${kind} ${ordinal} ${displayedSource}${profile === undefined ? "" : ` (${profile})`}`;
         const context = kind === "root" ? "" : `${named}: `;
         return {
           observe: () =>
@@ -195,6 +195,7 @@ function testDiagnosticsAt(
                     kind,
                     ordinal,
                     source: displayedSource,
+                    profile,
                   }) + "\n",
                 );
               }

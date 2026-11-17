@@ -7,8 +7,11 @@
  * path, replay without a provider, and direct calls that retain nothing.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { ensure, scoped, spawn, withResolvers } from "effection";
@@ -261,6 +264,8 @@ function always(plan: TurnPlan): () => TurnPlan {
   return () => ({ ...plan });
 }
 
+const OWNER = "packages/agent/tests/agent-usage.test.ts";
+
 function* runDocument(
   doc: string,
   stream: InMemoryStream,
@@ -270,8 +275,8 @@ function* runDocument(
     direct?: boolean;
     scanner?: () => SecretScanner;
   } = {},
+  dir = path.join(os.tmpdir(), `xmd-pu-test-${randomUUID()}`),
 ): Operation<{ result: Result<Json>; events: DurableEvent[] }> {
-  const dir = path.join(os.tmpdir(), `xmd-pu-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -359,6 +364,7 @@ function* consume(stream: Stream<AgentPromptEvent, string>): Operation<string> {
 }
 
 describe("Tier PU — subscription-local receiver", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PU-B1: a sealed destination ignores reports; an unreadable report keeps only its provenance", function* () {
     const destination = promptUsageDestination();
     destination.report(versioned("first"));
@@ -436,6 +442,8 @@ describe("Tier PU — subscription-local receiver", () => {
   });
 
   it("PU-B3: a direct Agent.prompt() gets an ephemeral receiver and lends nothing to the next Prompt", function* () {
+    const directory = yield* useTempDirectory("xmd-pu-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const trace = newTrace();
     const receivers: (PromptUsageReporter | undefined)[] = [];
     const plans: TurnPlan[] = [
@@ -451,9 +459,10 @@ describe("Tier PU — subscription-local receiver", () => {
     ];
     const { result, events } = yield* runDocument(
       "<Direct />\n\n<Prompt>silent</Prompt>\n\n<Prompt>measured</Prompt>\n",
-      new InMemoryStream(),
+      stream,
       stubFactory(trace, () => plans.shift() ?? {}),
       { direct: true },
+      directory,
     );
     expect(result.ok).toBe(true);
     expect(receivers.length).toBe(3);
@@ -468,12 +477,15 @@ describe("Tier PU — subscription-local receiver", () => {
   });
 
   it("PU-B4: a registered provider's delivered coordinator keeps the optional receiver", function* () {
+    const directory = yield* useTempDirectory("xmd-pu-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const trace = newTrace();
     const { result, events } = yield* runDocument(
       '<AgentProvider name="usage-stub">\n\n<Prompt>one</Prompt>\n\n</AgentProvider>\n',
-      new InMemoryStream(),
+      stream,
       stubFactory(trace, always({ usage: () => versioned("registered") })),
       { register: true },
+      directory,
     );
     expect(result.ok).toBe(true);
     expect(trace.acquisitions).toBe(1);
@@ -484,6 +496,7 @@ describe("Tier PU — subscription-local receiver", () => {
 });
 
 describe("Tier PU — canonical retention and replay", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PU-P1: an authored Prompt retains usage, and a completed replay restores it without a turn", function* () {
     const stream = new InMemoryStream();
     const live = newTrace();
@@ -512,6 +525,8 @@ describe("Tier PU — canonical retention and replay", () => {
   });
 
   it("PU-P2: an acknowledged failed turn keeps what it reported, and no checkpoint", function* () {
+    const directory = yield* useTempDirectory("xmd-pu-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const failing = sampleUsage("failed");
     const partial: PromptUsage = {
       ...failing,
@@ -523,8 +538,10 @@ describe("Tier PU — canonical retention and replay", () => {
     };
     const { events } = yield* runDocument(
       "<Prompt>fails</Prompt>\n",
-      new InMemoryStream(),
+      stream,
       stubFactory(newTrace(), always({ status: "failed", usage: () => partial })),
+      {},
+      directory,
     );
     const record = parsePromptRecord(promptValues(events)[0]);
     expect(record?.status).toBe("failed");

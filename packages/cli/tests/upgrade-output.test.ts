@@ -11,7 +11,7 @@
  * runner and the document's shape, not the host: Tier UH owns the real lock,
  * bytes and rename.
  */
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
@@ -31,8 +31,16 @@ import {
   UPGRADE_REPLACE_RETURNS,
   UPGRADE_VERIFY_RETURNS,
 } from "../src/compiled-upgrade.ts";
-import { runUpgrade } from "../src/upgrade.ts";
+import { runUpgrade, UPGRADE_COMMAND_IDENTITY } from "../src/upgrade.ts";
 import type { UpgradeAssembly, UpgradeConsumer } from "../src/upgrade.ts";
+
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/cli/tests/upgrade-output.test.ts";
 
 const INSTALLED = "0.10.2";
 const RELEASE = "v0.11.0";
@@ -147,7 +155,7 @@ function assemblyFor(phases: Phases): UpgradeAssembly {
   };
 }
 
-function install(consume: UpgradeConsumer, phases: Phases = {}) {
+function install(stream: InMemoryStream, consume: UpgradeConsumer, phases: Phases = {}) {
   return runUpgrade({
     command: {
       requestedTag: null,
@@ -156,15 +164,17 @@ function install(consume: UpgradeConsumer, phases: Phases = {}) {
       allowPrerelease: false,
     },
     assembly: assemblyFor(phases),
-    stream: new InMemoryStream(),
+    stream,
     consume,
   });
 }
 
 describe("Tier UO — the upgrade transcript", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("UO1: each milestone reaches the reader before the next phase begins", function* () {
+    const stream = yield* useJournalStream(UPGRADE_COMMAND_IDENTITY);
     // The decisive case. A run that buffered everything and wrote it at the end
     // produces byte-identical output, so the only way to tell streaming from
     // buffering is to look at what has already arrived while a later phase has
@@ -175,6 +185,7 @@ describe("Tier UO — the upgrade transcript", () => {
     let atReplace = "";
 
     const outcome = yield* install(
+      stream,
       // deno-lint-ignore require-yield
       function* (chunk) {
         arrived.push(chunk);
@@ -217,41 +228,53 @@ describe("Tier UO — the upgrade transcript", () => {
     expect(soFar().endsWith("\n\n")).toBe(false);
   });
 
-  it("UO2: every consumer drains the same stream, and nothing is printed twice", function* () {
+  const identical = "UO2: every consumer drains the same stream, and nothing is printed twice";
+  it(identical, function* () {
+    const stream = yield* useJournalStream(UPGRADE_COMMAND_IDENTITY);
     // The three shapes the command supports: a terminal writing as it goes, a
     // pipe writing once at the end, and a test observing. All read the same
     // `execution.output`, so the bytes cannot differ between them.
     const streamed: string[] = [];
     const first = yield* install(
+      stream,
       // deno-lint-ignore require-yield
       function* (chunk) {
         streamed.push(chunk);
       },
     );
 
-    const buffered: string[] = [];
-    const second = yield* install(
-      // deno-lint-ignore require-yield
-      function* (chunk) {
-        buffered.push(chunk);
+    yield* captureTestJournal(
+      { owner: OWNER, name: identical },
+      UPGRADE_COMMAND_IDENTITY,
+      function* (otherStream) {
+        const buffered: string[] = [];
+        const second = yield* install(
+          otherStream,
+          // deno-lint-ignore require-yield
+          function* (chunk) {
+            buffered.push(chunk);
+          },
+        );
+
+        expect(first.ok).toBe(true);
+        expect(second.ok).toBe(true);
+        expect(streamed.join("")).toBe(buffered.join(""));
+        // More than one chunk, or the progressive claim above would be vacuous.
+        expect(streamed.length).toBeGreaterThan(1);
+
+        // The completion value is never handed back for printing: a text root's
+        // value is the text the consumer already has, and returning it would invite
+        // the caller to say everything twice.
+        expect(first.ok ? first.value : "unreachable").toBe(undefined);
       },
     );
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    expect(streamed.join("")).toBe(buffered.join(""));
-    // More than one chunk, or the progressive claim above would be vacuous.
-    expect(streamed.length).toBeGreaterThan(1);
-
-    // The completion value is never handed back for printing: a text root's
-    // value is the text the consumer already has, and returning it would invite
-    // the caller to say everything twice.
-    expect(first.ok ? first.value : "unreachable").toBe(undefined);
   });
 
   it("UO3: a consumer that fails cancels the run and reports rather than hanging", function* () {
+    const stream = yield* useJournalStream(UPGRADE_COMMAND_IDENTITY);
     let replaced = false;
     const outcome = yield* install(
+      stream,
       // deno-lint-ignore require-yield
       function* (chunk) {
         if (chunk.includes("Downloaded binary:")) {

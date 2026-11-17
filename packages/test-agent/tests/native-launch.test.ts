@@ -14,7 +14,8 @@
  * asserts "no hidden prompt" by the answer that later prompt gets, not by an
  * absence.
  */
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempFileCompiler } from "@executablemd/core";
 import { agentIdentityComponents } from "@executablemd/agent/host";
@@ -60,12 +61,17 @@ interface RunOptions {
   hostLauncher?: (request: NativeLaunchRequest) => void;
 }
 
-function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
-  const dir = path.join(os.tmpdir(), `xmd-tl-${randomUUID()}`);
+const owner = "packages/test-agent/tests/native-launch.test.ts";
+
+function* runDoc(
+  doc: string,
+  options: RunOptions = {},
+  dir = path.join(os.tmpdir(), `xmd-tl-${randomUUID()}`),
+): Operation<Run> {
   yield* ensureDir(dir);
   const launches: NativeLaunchRequest[] = [];
   const sessions: NativeSessionReport[] = [];
-  const stream = options.stream ?? new InMemoryStream();
+  const stream = options.stream ?? (yield* useJournalStream(path.join(dir, "doc.md")));
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     yield* writeTextFile(path.join(dir, "scenario.md"), SCENARIO);
@@ -189,6 +195,7 @@ describe(
   },
   () => {
     beforeAll(() => useTempFileCompiler());
+    beforeEach(journalBeforeEach(owner));
 
     it("TL1: the rendered body installs as the agent's session instruction layer", function* () {
       const run = yield* runDoc(testDoc(LAUNCH_BODY));

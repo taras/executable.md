@@ -13,7 +13,7 @@
  * rather than following them.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
@@ -22,6 +22,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { collect } from "../src/collect.ts";
 import { GlobError } from "../src/components/Glob.ts";
 import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
@@ -66,18 +67,22 @@ function* useCwd(directory: string): Operation<void> {
   );
 }
 
-function run(fixture: Fixture, source: string): Operation<Json> {
-  return runWith(fixture, source, new InMemoryStream());
+function fixtureDocument(fixture: Fixture): string {
+  return join(fixture.workspace, "..", "doc.md");
+}
+
+function run(fixture: Fixture, source: string, stream = new InMemoryStream()): Operation<Json> {
+  return runWith(fixture, source, stream);
 }
 
 /**
  * What one run said: its rendered text, or the diagnostic it reported. A
  * refusal nothing recovers is the run's own outcome.
  */
-function said(fixture: Fixture, source: string): Operation<string> {
+function said(fixture: Fixture, source: string, stream?: InMemoryStream): Operation<string> {
   return (function* () {
     try {
-      return String(yield* run(fixture, source));
+      return String(yield* run(fixture, source, stream));
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
@@ -101,7 +106,7 @@ function runWith(
   return scoped(function* () {
     // The document lives beside the workspace, not inside it, so it is never
     // itself a match — a `**/*` in a test means only what the test laid out.
-    const path = join(fixture.workspace, "..", "doc.md");
+    const path = fixtureDocument(fixture);
     if (source !== undefined) {
       yield* writeTextFile(path, source);
     }
@@ -202,7 +207,11 @@ const ADVERSARIAL: Array<{ name: string; error: () => unknown }> = [
   },
 ];
 
-describe("Tier GB — Glob component", () => {
+const SUITE = "Tier GB — Glob component";
+const OWNER = "packages/core/tests/glob-component.test.ts";
+
+describe(SUITE, () => {
+  beforeEach(journalBeforeEach(OWNER));
   // GB1: props are validated like any component's — no name-specific check.
   it("GB1: include is required and undeclared props are rejected", function* () {
     const fixture = yield* useFixture();
@@ -218,8 +227,8 @@ describe("Tier GB — Glob component", () => {
   // that forgot to say anything, and the schema is where that is caught.
   it("GB2: an empty include list is rejected", function* () {
     const fixture = yield* useFixture();
-
-    const output = yield* said(fixture, '<Glob include={[]} as="found" />');
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
+    const output = yield* said(fixture, '<Glob include={[]} as="found" />', stream);
 
     expect(output).toContain('"/include" must NOT have fewer than 1 items');
   });
@@ -244,8 +253,8 @@ describe("Tier GB — Glob component", () => {
   // contract, not a rule of its own.
   it("GB4: invoking without as fails", function* () {
     const fixture = yield* useFixture();
-
-    const output = yield* said(fixture, '<Glob include={["*.md"]} />');
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
+    const output = yield* said(fixture, '<Glob include={["*.md"]} />', stream);
 
     expect(output).toContain("must be invoked with `as`");
   });
@@ -253,9 +262,10 @@ describe("Tier GB — Glob component", () => {
   // GB5: `exclude` is optional, and omitting it excludes nothing.
   it("GB5: exclude defaults to empty", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
     yield* plant(fixture, ["a.md", "nested/b.md"]);
 
-    const output = text(yield* run(fixture, FIND_ALL));
+    const output = text(yield* run(fixture, FIND_ALL, stream));
 
     expect(output).toContain(found("a.md", "nested/b.md"));
   });
@@ -316,8 +326,8 @@ describe("Tier GB — Glob component", () => {
   // authoring mistake as an absolute one.
   it("GB8: an empty pattern fails", function* () {
     const fixture = yield* useFixture();
-
-    const output = text(yield* run(fixture, '<Glob include={["*.md", ""]} as="found" />'));
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
+    const output = text(yield* run(fixture, '<Glob include={["*.md", ""]} as="found" />', stream));
 
     expect(output).toContain("empty pattern");
   });
@@ -485,10 +495,11 @@ describe("Tier GB — Glob component", () => {
   // to judge a destination.
   it("GB15b: a directory symlink inside the workspace is not traversed either", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
     yield* plant(fixture, ["real/a.md"]);
     yield* until(symlink(join(fixture.workspace, "real"), join(fixture.workspace, "alias")));
 
-    const output = text(yield* run(fixture, FIND_ALL));
+    const output = text(yield* run(fixture, FIND_ALL, stream));
 
     expect(output).toContain(found("real/a.md"));
     expect(output).not.toContain("alias/");
@@ -498,11 +509,12 @@ describe("Tier GB — Glob component", () => {
   // unbounded walk if it were followed; the search finishes.
   it("GB15c: a symlink cycle does not hang the search", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
     yield* plant(fixture, ["a.md"]);
     yield* until(symlink(fixture.workspace, join(fixture.workspace, "loop")));
 
     const output = text(
-      yield* race([run(fixture, FIND_ALL), timeout("GB15c: the search did not finish")]),
+      yield* race([run(fixture, FIND_ALL, stream), timeout("GB15c: the search did not finish")]),
     );
 
     expect(output).toContain(found("a.md"));
@@ -512,10 +524,11 @@ describe("Tier GB — Glob component", () => {
   // when its destination is an ordinary file inside the workspace.
   it("GB16: a symlink to a file is not a result", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(fixtureDocument(fixture));
     yield* plant(fixture, ["a.md"]);
     yield* until(symlink(join(fixture.workspace, "a.md"), join(fixture.workspace, "link.md")));
 
-    const output = text(yield* run(fixture, FIND_ALL));
+    const output = text(yield* run(fixture, FIND_ALL, stream));
 
     expect(output).toContain(found("a.md"));
     expect(output).not.toContain("link.md");

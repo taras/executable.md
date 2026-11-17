@@ -6,15 +6,16 @@
  * provider factories — no subprocess, no real provider. CLI precedence is
  * not established here; it is asserted at the CLI boundary.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import * as os from "node:os";
 import { execute } from "../../core/src/execute.ts";
 import { registerComponents } from "../../core/src/components/registration.ts";
 import { Agent } from "../src/agent-api.ts";
@@ -55,11 +56,14 @@ function recordingFactory(seen: AgentProviderOptions[]): AgentProviderFactory {
   };
 }
 
+const OWNER = "packages/agent/tests/agent-stack.test.ts";
+
 function* runDoc(
   doc: string,
   install: () => Operation<void>,
+  stream: InMemoryStream,
+  dir: string,
 ): Operation<{ output: string; result: Result<Json> }> {
-  const dir = path.join(os.tmpdir(), `xmd-ag-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -67,7 +71,7 @@ function* runDoc(
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
     yield* install();
-    const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+    const execution = yield* execute({ path: docPath, stream });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -129,6 +133,7 @@ const PROVIDER_OPTIONS: AgentProviderOptions = {
 };
 
 describe("Tier AG — provider registry and permission policies", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("AG1: a registered name installs and receives the options; an unknown name refuses", function* () {
     const seen: AgentProviderOptions[] = [];
     yield* registerAgentProvider("stub", recordingFactory(seen));
@@ -212,6 +217,8 @@ describe("Tier AG — provider registry and permission policies", () => {
   });
 
   it("AG7: <ApproveAll> approves inside its body under an enclosing deny", function* () {
+    const directory = yield* useTempDirectory("xmd-ag-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const outcomes: string[] = [];
     const { result } = yield* runDoc(
       ["<Ask />", "", "<ApproveAll>", "<Ask />", "</ApproveAll>", "", "<Ask />", ""].join("\n"),
@@ -219,12 +226,16 @@ describe("Tier AG — provider registry and permission policies", () => {
         yield* installAskComponent(outcomes);
         yield* installAgentComponents();
       },
+      stream,
+      directory,
     );
     expect(result.ok).toBe(true);
     expect(outcomes).toEqual(["reject-once", "allow-once", "reject-once"]);
   });
 
   it("AG8: <AskPermission> denies inside its body under an enclosing approve-all", function* () {
+    const directory = yield* useTempDirectory("xmd-ag-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const outcomes: string[] = [];
     const { result } = yield* runDoc(
       ["<Ask />", "", "<AskPermission>", "<Ask />", "</AskPermission>", "", "<Ask />", ""].join(
@@ -235,25 +246,36 @@ describe("Tier AG — provider registry and permission policies", () => {
         yield* installApproveAll();
         yield* installAgentComponents();
       },
+      stream,
+      directory,
     );
     expect(result.ok).toBe(true);
     expect(outcomes).toEqual(["allow-once", "reject-once", "allow-once"]);
   });
 
   it("AG9: installAgentComponents seeds the default agent and permission mode", function* () {
+    const directory = yield* useTempDirectory("xmd-ag-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const seen: AgentProviderOptions[] = [];
-    const { result } = yield* runDoc('<AgentProvider name="rec" />\n', function* () {
-      yield* registerAgentProvider("rec", recordingFactory(seen));
-      yield* installAgentComponents({
-        defaultAgent: "seeded-agent",
-        permissionMode: "approve-reads",
-      });
-    });
+    const { result } = yield* runDoc(
+      '<AgentProvider name="rec" />\n',
+      function* () {
+        yield* registerAgentProvider("rec", recordingFactory(seen));
+        yield* installAgentComponents({
+          defaultAgent: "seeded-agent",
+          permissionMode: "approve-reads",
+        });
+      },
+      stream,
+      directory,
+    );
     expect(result.ok).toBe(true);
     expect(seen).toEqual([{ defaultAgent: "seeded-agent", permissionMode: "approve-reads" }]);
   });
 
   it("AG10: <AgentProvider defaultAgent> overrides inside its body and restores after", function* () {
+    const directory = yield* useTempDirectory("xmd-ag-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const seen: AgentProviderOptions[] = [];
     const { result } = yield* runDoc(
       [
@@ -270,6 +292,8 @@ describe("Tier AG — provider registry and permission policies", () => {
           permissionMode: "deny-all",
         });
       },
+      stream,
+      directory,
     );
     expect(result.ok).toBe(true);
     expect(seen.map((options) => options.defaultAgent)).toEqual(["scoped-agent", "seeded-agent"]);
@@ -278,6 +302,8 @@ describe("Tier AG — provider registry and permission policies", () => {
   });
 
   it("AG11: an unknown <AgentProvider> fails the execution; no body or later content renders", function* () {
+    const directory = yield* useTempDirectory("xmd-ag-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const seen: AgentProviderOptions[] = [];
     const { output, result } = yield* runDoc(
       [
@@ -291,6 +317,8 @@ describe("Tier AG — provider registry and permission policies", () => {
         yield* registerAgentProvider("rec", recordingFactory(seen));
         yield* installAgentComponents({ defaultAgent: "seeded-agent" });
       },
+      stream,
+      directory,
     );
     expect(result.ok).toBe(false);
     expect(output).not.toContain("INSIDE_MARKER");
@@ -299,6 +327,8 @@ describe("Tier AG — provider registry and permission policies", () => {
   });
 
   it("AG12: <AgentProvider> without any default agent fails before its body expands", function* () {
+    const directory = yield* useTempDirectory("xmd-ag-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const seen: AgentProviderOptions[] = [];
     const { output, result } = yield* runDoc(
       ['<AgentProvider name="rec">', "INSIDE_MARKER", "</AgentProvider>", ""].join("\n"),
@@ -306,6 +336,8 @@ describe("Tier AG — provider registry and permission policies", () => {
         yield* registerAgentProvider("rec", recordingFactory(seen));
         yield* installAgentComponents();
       },
+      stream,
+      directory,
     );
     expect(result.ok).toBe(false);
     const message = result.ok ? "" : result.error.message;

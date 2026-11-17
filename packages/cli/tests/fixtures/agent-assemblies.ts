@@ -1,4 +1,4 @@
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import { rm } from "@effectionx/fs";
 import { main, scoped, useScope } from "effection";
 import { useHostFiles } from "@executablemd/runtime";
@@ -14,8 +14,12 @@ import { planWriterDependencies } from "../../src/plan-writer-profile.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
 import { NO_PLUGINS } from "../../src/plugin-host.ts";
 import { createFakeAcp, makeStore, makeRegistry } from "../support/fake-acp.ts";
+import { boundedJournalResult } from "../../../test-support/subprocess-journal.ts";
+import { ASSEMBLY_PROFILES, ASSEMBLY_SOURCE } from "../support/assembly-profiles.ts";
+
 const root = process.argv[2]!;
 const agent = process.argv[3] === "codex" ? "codex" : "claude";
+const capture = process.argv[4] === "--capture-journal";
 const variable = agent === "codex" ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE";
 const environment = { ...process.env };
 main(function* () {
@@ -35,9 +39,16 @@ main(function* () {
       command: ReturnType<AcpRuntimeOptions["agentRegistry"]["resolve"]>;
     }[];
   }[] = [];
-  for (const profile of ["run", "plan", "repl", "custom", "other"]) {
+  const journals: string[][] = [];
+  for (const profile of ASSEMBLY_PROFILES) {
     const fake = createFakeAcp();
-    fake.script({ reply: "assembled" });
+    fake.script({
+      reply:
+        capture && process.argv[5] === "--oversized-plan" && profile === "plan"
+          ? "assembled ".repeat(2_000)
+          : "assembled",
+    });
+    const stream = new InMemoryStream();
     yield* scoped(function* () {
       const host = yield* useScope();
       if (profile === "custom") {
@@ -70,8 +81,8 @@ main(function* () {
       yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource("assembly.md", "<Prompt>assembly</Prompt>"),
-            stream: new InMemoryStream(),
+            ...retainedSource(ASSEMBLY_SOURCE, "<Prompt>assembly</Prompt>"),
+            stream,
           },
           [],
         ),
@@ -84,9 +95,13 @@ main(function* () {
         })),
       });
     });
+    if (capture) {
+      journals.push((yield* stream.readAll()).map(serializeDurableEvent));
+    }
   }
   const environmentPreserved = [
     ...new Set([...Object.keys(environment), ...Object.keys(process.env)]),
   ].every((key) => environment[key] === process.env[key]);
-  console.log(JSON.stringify({ results, environmentPreserved }));
+  const result = { results, environmentPreserved };
+  console.log(capture ? boundedJournalResult(result, journals) : JSON.stringify(result));
 });

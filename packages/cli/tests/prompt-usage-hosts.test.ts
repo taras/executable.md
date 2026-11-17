@@ -9,7 +9,9 @@
  * actually retains and reads back, not that a dependency was constructed.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
@@ -43,6 +45,9 @@ import { createRun, useStorageRoot, withStorage } from "./support/workflow-run.t
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { sleep } from "effection";
+
+const OWNER = "packages/cli/tests/prompt-usage-hosts.test.ts";
+const PROMPT_SOURCE = "hosts.md";
 
 const HOST: PromptUsageHost = { host: "deno-source", xmd: { version: "0.0.0-hosts" } };
 
@@ -110,7 +115,7 @@ function usageIn(events: readonly DurableEvent[]): (PromptUsage | undefined)[] {
 function* promptOnce(stream: DurableStream): Operation<void> {
   yield* collect(
     yield* executeInstalled(
-      { ...retainedSource("hosts.md", "<Prompt>measure me</Prompt>"), stream },
+      { ...retainedSource(PROMPT_SOURCE, "<Prompt>measure me</Prompt>"), stream },
       [{ components: agentIdentityComponents() }],
     ),
   );
@@ -132,12 +137,13 @@ function expectRetained(usage: PromptUsage | undefined, adapterVersion: string):
 }
 
 describe("Tier HU — Prompt usage through the host assemblies", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("HU1: an ordinary run's agent stack retains usage in the run's own history", function* () {
+    const stream = yield* useJournalStream(PROMPT_SOURCE);
     yield* useHostFiles();
     const root = yield* useRoot();
     const fake = createFakeAcp();
     fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       const stack = stackAt(root);
       yield* installAgentProviderStack(stack, leaf(stack, fake));
@@ -148,11 +154,11 @@ describe("Tier HU — Prompt usage through the host assemblies", () => {
   });
 
   it("HU2: the Plan writer's dependencies retain usage the same way", function* () {
+    const stream = yield* useJournalStream(PROMPT_SOURCE);
     yield* useHostFiles();
     const root = yield* useRoot();
     const fake = createFakeAcp();
     fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       const stack = stackAt(root);
       const host = yield* useScope();
@@ -166,11 +172,11 @@ describe("Tier HU — Prompt usage through the host assemblies", () => {
   });
 
   it("HU3: the REPL profile, through its headless wrapper, retains usage", function* () {
+    const stream = yield* useJournalStream(PROMPT_SOURCE);
     yield* useHostFiles();
     const root = yield* useRoot();
     const fake = createFakeAcp();
     fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       const stack = stackAt(root);
       yield* assembleReplProfile(stack, NO_PLUGINS, {
@@ -251,11 +257,11 @@ describe("Tier HU — Prompt usage through the host assemblies", () => {
   });
 
   it("HU6: a host that states no usage facts collects none, and runs the same turn", function* () {
+    const stream = yield* useJournalStream(PROMPT_SOURCE);
     yield* useHostFiles();
     const root = yield* useRoot();
     const fake = createFakeAcp();
     fake.script({ reply: "ok", usage: RETAINED });
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       const stack: AgentStack = {
         ...stackAt(root),

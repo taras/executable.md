@@ -15,7 +15,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useTempFileCompiler } from "@executablemd/core";
+import { INLINE_SOURCE_PATH, useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { createContext, ensure, race, scoped, sleep, spawn, until } from "effection";
@@ -245,9 +245,19 @@ function captureReferenceEntry(
   sink: DeliverySink = process.stderr,
   suite = SUBMIT_SUITE,
 ): Operation<void> {
+  return captureEntry(suite, name, REFERENCE_PATH, body, sink);
+}
+
+function captureEntry(
+  suite: string,
+  name: string,
+  source: string,
+  body: (holder: ReplExecution) => Operation<void>,
+  sink: DeliverySink = process.stderr,
+): Operation<void> {
   return captureTestJournal(
     { owner: OWNER, suite, name },
-    REFERENCE_PATH,
+    source,
     (stream) => body({ id: "kf39sla2", stream }),
     {
       sink,
@@ -257,7 +267,7 @@ function captureReferenceEntry(
           throw partition.error;
         }
         if (partition.value.length > 1) {
-          throw new Error("reference execution holds more than one admitted entry");
+          throw new Error("fixture execution holds more than one admitted entry");
         }
         return partition.value[0]?.events ?? [];
       },
@@ -1161,7 +1171,9 @@ describe("REPL execution: one execution's file", () => {
   });
 });
 
-describe("REPL execution: the selection each entry reads", () => {
+const SELECTION_SUITE = "REPL execution: the selection each entry reads";
+
+describe(SELECTION_SUITE, () => {
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -1173,30 +1185,34 @@ describe("REPL execution: the selection each entry reads", () => {
    */
   const DESCRIBING = '<Evaluate text="<Syntax />" allow={["read"]} />\n';
 
-  it("X1: the session's selection is the entry's default, and a host's own is not replaced", function* () {
+  const selection =
+    "X1: the session's selection is the entry's default, and a host's own is not replaced";
+  it(selection, function* () {
     // Control: no host states a selection, so the entry runs under the one the
     // command supplies and the fragment is admitted.
-    const ordinary = opened(
-      yield* submitReplEntry({ ...options(execution()), source: DESCRIBING }),
-    );
-    const settled = yield* ordinary.join();
-    expect(settled.ok).toBe(true);
-    expect(ordinary.model.terminal?.status).toBe("ok");
+    yield* captureEntry(SELECTION_SUITE, selection, INLINE_SOURCE_PATH, function* (holder) {
+      const ordinary = opened(yield* submitReplEntry({ ...options(holder), source: DESCRIBING }));
+      const settled = yield* ordinary.join();
+      expect(settled.ok).toBe(true);
+      expect(ordinary.model.terminal?.status).toBe("ok");
+    });
 
     // The same entry, where a host installation states its own. It is defined,
     // narrower, and nearer than the session's default — so it is what core
     // reads, and the same fragment is refused for the name it writes.
-    const narrowed = opened(
-      yield* submitReplEntry({
-        ...options(execution()),
-        source: DESCRIBING,
-        installations: [selecting({ Glob: ["self-closing"] })],
-      }),
-    );
-    const refused = yield* narrowed.join();
-    expect(refused.ok).toBe(false);
-    expect(refused.ok ? "" : refused.error.message).toContain("did not admit");
-    expect(narrowed.model.terminal?.status).toBe("err");
+    yield* captureEntry(SELECTION_SUITE, selection, INLINE_SOURCE_PATH, function* (holder) {
+      const narrowed = opened(
+        yield* submitReplEntry({
+          ...options(holder),
+          source: DESCRIBING,
+          installations: [selecting({ Glob: ["self-closing"] })],
+        }),
+      );
+      const refused = yield* narrowed.join();
+      expect(refused.ok).toBe(false);
+      expect(refused.ok ? "" : refused.error.message).toContain("did not admit");
+      expect(narrowed.model.terminal?.status).toBe("err");
+    });
   });
 
   it("X1: a host's defined empty selection refuses the entry before its body", function* () {

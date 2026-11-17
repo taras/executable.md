@@ -18,11 +18,13 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, type Operation } from "effection";
 import { exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
-import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { withFailureJournal } from "@executablemd/testing";
-import { useTestDiagnostics } from "../../cli/src/test-diagnostics.ts";
+import {
+  checkSubprocessJournals,
+  parseSubprocessJournal,
+  readSubprocessSnapshot,
+} from "../../test-support/subprocess-journal.ts";
 import { join } from "node:path";
 import { git, useBareRemote } from "./support/git-remotes.ts";
 import { spawnSync } from "node:child_process";
@@ -529,24 +531,6 @@ describe("ORC11 — an interrupted creation", () => {
 const ORC12_SUITE = "ORC12 — exclusive ownership across processes";
 const OWNER = "packages/git/tests/run-composition-managed.test.ts";
 
-function parseJournal(value: unknown): DurableEvent[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const events: DurableEvent[] = [];
-  for (const record of value) {
-    if (typeof record !== "string") {
-      return [];
-    }
-    const parsed = parseDurableEvent(record);
-    if (!parsed.ok) {
-      return [];
-    }
-    events.push(parsed.value);
-  }
-  return events;
-}
-
 describe(ORC12_SUITE, () => {
   /** One second process, run to completion, and what it reported. */
   function* elsewhere(
@@ -554,7 +538,7 @@ describe(ORC12_SUITE, () => {
     cwd: string,
     source: string,
     capture = false,
-  ): Operation<Omit<ChildOutcome, "journal"> & { events: DurableEvent[] }> {
+  ): Operation<ChildOutcome & { snapshot: ReturnType<typeof readSubprocessSnapshot> }> {
     const outcome = spawnSync(
       process.execPath,
       [
@@ -595,7 +579,7 @@ describe(ORC12_SUITE, () => {
       reason: "reason" in result && typeof result.reason === "string" ? result.reason : undefined,
       message:
         "message" in result && typeof result.message === "string" ? result.message : undefined,
-      events: capture && "journal" in result ? parseJournal(result.journal) : [],
+      snapshot: readSubprocessSnapshot("journals" in result ? result.journals : undefined, 0),
     };
   }
 
@@ -640,7 +624,7 @@ describe(ORC12_SUITE, () => {
     expect(refused.kind).toBe("refused");
     expect(refused.reason).toBe("in-use");
     expect(refused.message).toContain("another process is working in");
-    expect(refused.events).toEqual([]);
+    expect(refused.snapshot).toBe("snapshot absent");
     // And nothing under the slot moved.
     expect(yield* fingerprintTree(held.slot)).toEqual(bytes);
 
@@ -693,22 +677,15 @@ describe(ORC12_SUITE, () => {
           },
         });
       }
-      const diagnostics = yield* useTestDiagnostics(process.stderr, {
-        owner: OWNER,
-        suite: ORC12_SUITE,
-        name,
-      });
-      yield* withFailureJournal(
-        diagnostics.execution("child", "<eval>").journal(() => false),
-        function* (buffer) {
-          // The real second process takes the same checkout. Its result is available after exit.
-          const later = yield* elsewhere(root, checkout.root, document, true);
-          for (const event of later.events) {
-            yield* buffer.append(event);
-          }
+      // The real second process takes the same checkout. Its result is available after exit.
+      const later = yield* elsewhere(root, checkout.root, document, true);
+      yield* checkSubprocessJournals(
+        { owner: OWNER, suite: ORC12_SUITE, name },
+        [{ source: "<eval>", snapshot: later.snapshot }],
+        function* () {
           expect(later.kind).toBe("selected");
           expect(later.bound).toBe(slot.checkout);
-          yield* check(slot, later.events);
+          yield* check(slot, typeof later.snapshot === "string" ? [] : later.snapshot);
         },
       );
     });
@@ -760,7 +737,7 @@ describe(ORC12_SUITE, () => {
       source: "<eval>",
     });
     const lines = (yield* readTextFile(join(directory, "child-1.jsonl"))).trimEnd().split("\n");
-    const events = parseJournal(lines);
+    const events = parseSubprocessJournal(lines);
     expect(events).toEqual(received);
     expect(events.at(-1)).toMatchObject({ type: "close", coroutineId: "root" });
   });

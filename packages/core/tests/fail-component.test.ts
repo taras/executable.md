@@ -15,7 +15,9 @@
  * sentinel message being nowhere in the failure.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -53,6 +55,8 @@ interface Run {
   observed: ErrorSegment[];
   events: DurableEvent[];
 }
+
+const OWNER = "packages/core/tests/fail-component.test.ts";
 
 function useDir(): Operation<string> {
   return resource<string>(function* (provide) {
@@ -172,8 +176,10 @@ const MISSING_RETURN = "The root document declares `returns` but produced no <Re
 const VALUE_ROOT = ["---", "returns:", "  type: string", "---", ""].join("\n");
 
 describe("Tier FAIL — stopping a document deliberately", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FAIL1: ends a plain root with the authored message and runs no later sibling", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -184,6 +190,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
         '<Ran mark="after" />',
         "",
       ].join("\n"),
+      { stream },
     );
 
     // The authored sentence is the outcome, unprefixed and unclassified.
@@ -197,6 +204,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
 
   it("FAIL2: fails a value root instead of reporting a missing <Return>", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -206,6 +214,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
         '<Return value={"late"} />',
         "",
       ].join("\n"),
+      { stream },
     );
 
     const failure = failureOf(result);
@@ -241,6 +250,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
 
   it("FAIL4: names loop exhaustion after the loop reached its own max", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -254,6 +264,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
         '<Return value={"approved"} />',
         "",
       ].join("\n"),
+      { stream },
     );
 
     // The loop finished normally; the failure is the sibling chosen after it.
@@ -267,6 +278,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
 
   it("FAIL5: is recovered by an authored <PrintErrors> in a text root, once", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -278,6 +290,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
         "tail",
         "",
       ].join("\n"),
+      { stream },
     );
 
     expect(result.outcome.ok).toBe(true);
@@ -294,6 +307,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
 
   it("FAIL6: is not recovered by <PrintErrors> in a value root", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const result = yield* run(
       dir,
       [
@@ -305,6 +319,7 @@ describe("Tier FAIL — stopping a document deliberately", () => {
         '<Return value={"late"} />',
         "",
       ].join("\n"),
+      { stream },
     );
 
     const failure = failureOf(result);
@@ -374,8 +389,10 @@ describe("Tier FAIL — invocations that never raise the authored message", () =
 });
 
 describe("Tier FAIL — position, durability and precedence", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FAIL8: positions the failure at the opening tag it was written on", function* () {
     const dir = yield* useDir();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const lines = [
       "# Review",
       "",
@@ -385,7 +402,7 @@ describe("Tier FAIL — position, durability and precedence", () => {
       "",
     ];
     const source = lines.join("\n");
-    const result = yield* run(dir, source);
+    const result = yield* run(dir, source, { stream });
 
     const failure = offeredByFail(result);
     expect(failure.name).toBe("Fail");
