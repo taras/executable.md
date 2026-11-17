@@ -54,13 +54,6 @@ import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 
 const OWNER = "packages/core/tests/invocation-identity.test.ts";
-function rootCase(name: string, body: (stream: InMemoryStream) => Operation<void>): void {
-  it(name, function* () {
-    const stream = yield* useJournalStream("<eval>");
-    yield* body(stream);
-  });
-}
-
 /**
  * The engine's expansion context, addressed by the name it publishes under.
  *
@@ -281,7 +274,8 @@ function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }>
 
 describe("Tier CIV — the identity a host's component names its work after", () => {
   beforeEach(journalBeforeEach(OWNER));
-  rootCase("CIV1: two sites are handed two identities", function* (stream) {
+  it("CIV1: two sites are handed two identities", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen = record();
     yield* run("<Probe />\n\n<Probe />\n", [probe(seen)], nothing, undefined, stream);
     expect(seen.taken).toHaveLength(2);
@@ -291,31 +285,29 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     expect(seen.taken).toEqual(seen.context);
   });
 
-  rootCase(
-    "CIV2: a contextual Api answer is replaceable, so a durable name may not come from one",
-    function* (stream) {
-      const seen = record();
-      // `hasContent()` stands for every Component Api answer: a handler installed
-      // outside the invocation answers ahead of the engine's own.
-      yield* run(
-        "<Probe />\n",
-        [probe(seen)],
-        function* () {
-          yield* Component.around({
-            // deno-lint-ignore require-yield
-            *hasContent(_args, _next) {
-              return true;
-            },
-          });
-        },
-        undefined,
-        stream,
-      );
-      expect(seen.api).toEqual([true]);
-      expect(seen.taken).toHaveLength(1);
-      expect(seen.taken[0]).not.toBe(FORGED);
-    },
-  );
+  it("CIV2: a contextual Api answer is replaceable, so a durable name may not come from one", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    // `hasContent()` stands for every Component Api answer: a handler installed
+    // outside the invocation answers ahead of the engine's own.
+    yield* run(
+      "<Probe />\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *hasContent(_args, _next) {
+            return true;
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
+    expect(seen.api).toEqual([true]);
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.taken[0]).not.toBe(FORGED);
+  });
 
   it("CIV3: the expansion Context is bindable, so a durable name may not come from one either", function* () {
     const observed = yield* scoped(function* () {
@@ -327,228 +319,218 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     expect(observed?.id).toBe(FORGED);
   });
 
-  rootCase(
-    "CIV4: middleware cannot build an invocation the claimant will answer for",
-    function* (stream) {
-      const seen = record();
-      yield* run(
-        "<Probe />\n\n<Probe />\n",
-        [probe(seen)],
-        function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              if (name !== "Probe" || definition.kind !== "function") {
-                return definition;
-              }
-              const original = definition.fn;
-              if (typeof original !== "function") {
-                return definition;
-              }
-              return {
-                ...definition,
-                *fn(props: Record<string, Json>, _invocation: ComponentInvocation) {
-                  // A structural stand-in, which is what a wrapper would mint to
-                  // give both sites one durable name. It answers the authored form
-                  // too — implementing the whole public shape is exactly what a
-                  // forger would do, and identity is the private field rather than
-                  // the shape.
-                  return yield* original(props, { hasContent: () => false });
-                },
-              };
-            },
-          });
-        },
-        undefined,
-        stream,
-      );
+  it("CIV4: middleware cannot build an invocation the claimant will answer for", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    yield* run(
+      "<Probe />\n\n<Probe />\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Probe" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, _invocation: ComponentInvocation) {
+                // A structural stand-in, which is what a wrapper would mint to
+                // give both sites one durable name. It answers the authored form
+                // too — implementing the whole public shape is exactly what a
+                // forger would do, and identity is the private field rather than
+                // the shape.
+                return yield* original(props, { hasContent: () => false });
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
 
-      expect(seen.taken).toEqual([]);
-      expect(seen.refusals).toHaveLength(2);
-      for (const refusal of seen.refusals) {
-        expect(refusal).toContain("not an invocation the engine issued");
-      }
-    },
-  );
+    expect(seen.taken).toEqual([]);
+    expect(seen.refusals).toHaveLength(2);
+    for (const refusal of seen.refusals) {
+      expect(refusal).toContain("not an invocation the engine issued");
+    }
+  });
 
-  rootCase(
-    "CIV5: middleware may forward the genuine issuance, and each site keeps its own",
-    function* (stream) {
-      const seen = record();
-      yield* run(
-        "<Probe />\n\n<Probe />\n",
-        [probe(seen)],
-        function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              if (name !== "Probe" || definition.kind !== "function") {
-                return definition;
-              }
-              const original = definition.fn;
-              if (typeof original !== "function") {
-                return definition;
-              }
-              return {
-                ...definition,
-                *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-                  // Ordinary delegation, and it stays supported.
+  it("CIV5: middleware may forward the genuine issuance, and each site keeps its own", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    yield* run(
+      "<Probe />\n\n<Probe />\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Probe" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                // Ordinary delegation, and it stays supported.
+                return yield* original(props, invocation);
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
+
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(2);
+    expect(new Set(seen.taken).size).toBe(2);
+  });
+
+  it("CIV6: a live ancestor's issuance cannot be spent inside its content", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    let parent: ComponentInvocation | undefined;
+    // One `<Probe>` inside another: the same component, the same domain, so the
+    // projection is the only thing that can refuse the nested claim.
+    yield* run(
+      "<Probe>\n<Probe />\n</Probe>\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Probe" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                if (parent === undefined) {
+                  parent = invocation;
                   return yield* original(props, invocation);
-                },
-              };
-            },
-          });
-        },
-        undefined,
-        stream,
-      );
+                }
+                return yield* original(props, parent);
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
 
-      expect(seen.refusals).toEqual([]);
-      expect(seen.taken).toHaveLength(2);
-      expect(new Set(seen.taken).size).toBe(2);
-    },
-  );
+    // The outer element named itself before it projected. The nested claim was
+    // refused rather than answered with the ancestor's identity.
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("expanding its own content");
+  });
 
-  rootCase(
-    "CIV6: a live ancestor's issuance cannot be spent inside its content",
-    function* (stream) {
-      const seen = record();
-      let parent: ComponentInvocation | undefined;
-      // One `<Probe>` inside another: the same component, the same domain, so the
-      // projection is the only thing that can refuse the nested claim.
-      yield* run(
-        "<Probe>\n<Probe />\n</Probe>\n",
-        [probe(seen)],
-        function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              if (name !== "Probe" || definition.kind !== "function") {
-                return definition;
-              }
-              const original = definition.fn;
-              if (typeof original !== "function") {
-                return definition;
-              }
-              return {
-                ...definition,
-                *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-                  if (parent === undefined) {
-                    parent = invocation;
-                    return yield* original(props, invocation);
-                  }
-                  return yield* original(props, parent);
-                },
-              };
-            },
-          });
-        },
-        undefined,
-        stream,
-      );
+  it("CIV7: an issuance kept from the first site cannot be spent at the second", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    let kept: ComponentInvocation | undefined;
+    yield* run(
+      "<Probe />\n\n<Probe />\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Probe" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                if (kept === undefined) {
+                  kept = invocation;
+                  return yield* original(props, invocation);
+                }
+                // The first site's issuance, routed at the second.
+                return yield* original(props, kept);
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
 
-      // The outer element named itself before it projected. The nested claim was
-      // refused rather than answered with the ancestor's identity.
-      expect(seen.taken).toHaveLength(1);
-      expect(seen.refusals).toHaveLength(1);
-      expect(seen.refusals[0]).toContain("expanding its own content");
-    },
-  );
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toMatch(/already been taken|has finished|another invocation/);
+  });
 
-  rootCase(
-    "CIV7: an issuance kept from the first site cannot be spent at the second",
-    function* (stream) {
-      const seen = record();
-      let kept: ComponentInvocation | undefined;
-      yield* run(
-        "<Probe />\n\n<Probe />\n",
-        [probe(seen)],
-        function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              if (name !== "Probe" || definition.kind !== "function") {
-                return definition;
-              }
-              const original = definition.fn;
-              if (typeof original !== "function") {
-                return definition;
-              }
-              return {
-                ...definition,
-                *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-                  if (kept === undefined) {
-                    kept = invocation;
-                    return yield* original(props, invocation);
-                  }
-                  // The first site's issuance, routed at the second.
-                  return yield* original(props, kept);
-                },
-              };
-            },
-          });
-        },
-        undefined,
-        stream,
-      );
+  it("CIV8: an implementation kept from one component names nothing at another", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    let kept: unknown;
+    // Two components, each declared with a domain of its own, so a refusal here
+    // is a mismatch rather than an absence.
+    yield* run(
+      "<Probe />\n\n<Elsewhere />\n",
+      [probe(seen), probe(seen, "Elsewhere")],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            if (name === "Probe") {
+              kept = original;
+              return definition;
+            }
+            if (name !== "Elsewhere") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                const borrowed = kept;
+                return typeof borrowed === "function"
+                  ? yield* borrowed(props, invocation)
+                  : yield* original(props, invocation);
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
 
-      expect(seen.taken).toHaveLength(1);
-      expect(seen.refusals).toHaveLength(1);
-      expect(seen.refusals[0]).toMatch(/already been taken|has finished|another invocation/);
-    },
-  );
-
-  rootCase(
-    "CIV8: an implementation kept from one component names nothing at another",
-    function* (stream) {
-      const seen = record();
-      let kept: unknown;
-      // Two components, each declared with a domain of its own, so a refusal here
-      // is a mismatch rather than an absence.
-      yield* run(
-        "<Probe />\n\n<Elsewhere />\n",
-        [probe(seen), probe(seen, "Elsewhere")],
-        function* () {
-          yield* Component.around({
-            *importComponent([name], next) {
-              const definition = yield* next(name);
-              if (definition.kind !== "function") {
-                return definition;
-              }
-              const original = definition.fn;
-              if (typeof original !== "function") {
-                return definition;
-              }
-              if (name === "Probe") {
-                kept = original;
-                return definition;
-              }
-              if (name !== "Elsewhere") {
-                return definition;
-              }
-              return {
-                ...definition,
-                *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-                  const borrowed = kept;
-                  return typeof borrowed === "function"
-                    ? yield* borrowed(props, invocation)
-                    : yield* original(props, invocation);
-                },
-              };
-            },
-          });
-        },
-        undefined,
-        stream,
-      );
-
-      // `<Probe />` named itself; `<Elsewhere />` refused rather than admitting
-      // `<Probe>`'s work under its identity.
-      expect(seen.taken).toHaveLength(1);
-      expect(seen.refusals).toHaveLength(1);
-      expect(seen.refusals[0]).toContain("this claimant answers for <Probe />");
-    },
-  );
+    // `<Probe />` named itself; `<Elsewhere />` refused rather than admitting
+    // `<Probe>`'s work under its identity.
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("this claimant answers for <Probe />");
+  });
 
   it("CIV9: an implementation kept from one execution names nothing in another", function* () {
     const first = record();
@@ -668,7 +650,8 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     expect(second.refusals).toEqual([]);
   });
 
-  rootCase("CIV11: a nested registration of the same name borrows nothing", function* (stream) {
+  it("CIV11: a nested registration of the same name borrows nothing", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen = record();
     let kept: unknown;
     let shadowed: RegistryEntry | undefined;
@@ -915,27 +898,25 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     expect(seen.refusals).toHaveLength(1);
   });
 
-  rootCase(
-    "CIV13: a refused registration leaves a claimant that answers for nothing",
-    function* (stream) {
-      const seen = record();
-      let refusal: string | undefined;
-      // `as` is the engine's own prop, so declaring it as a capture is refused
-      // where the registration is validated — after the factory was called with
-      // this execution's claimant and before anything activated it.
-      const invalid: IdentityComponent = {
-        ...probe(seen),
-        captures: ["as"],
-      };
-      try {
-        yield* run("<Probe />\n", [invalid], nothing, undefined, stream);
-      } catch (error) {
-        refusal = error instanceof Error ? error.message : String(error);
-      }
-      expect(refusal).toContain("as");
-      expect(seen.taken).toEqual([]);
-    },
-  );
+  it("CIV13: a refused registration leaves a claimant that answers for nothing", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    let refusal: string | undefined;
+    // `as` is the engine's own prop, so declaring it as a capture is refused
+    // where the registration is validated — after the factory was called with
+    // this execution's claimant and before anything activated it.
+    const invalid: IdentityComponent = {
+      ...probe(seen),
+      captures: ["as"],
+    };
+    try {
+      yield* run("<Probe />\n", [invalid], nothing, undefined, stream);
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("as");
+    expect(seen.taken).toEqual([]);
+  });
 });
 
 /**
@@ -980,26 +961,24 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     expect(seen.taken).toEqual(direct.taken);
   });
 
-  rootCase(
-    "CIV26: nested imports shadow and restore, each through its own terminal",
-    function* (stream) {
-      // The outer probe expands a body that imports the inner one, so two imports
-      // are open at once in one scope. Each dispatch owns its terminal, so neither
-      // needs a stack to find its own frame.
-      const seen = record();
-      yield* run(
-        "<Outer>\n<Probe />\n</Outer>\n",
-        [probe(seen, "Outer"), probe(seen, "Probe")],
-        undefined,
-        undefined,
-        stream,
-      );
+  it("CIV26: nested imports shadow and restore, each through its own terminal", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    // The outer probe expands a body that imports the inner one, so two imports
+    // are open at once in one scope. Each dispatch owns its terminal, so neither
+    // needs a stack to find its own frame.
+    const seen = record();
+    yield* run(
+      "<Outer>\n<Probe />\n</Outer>\n",
+      [probe(seen, "Outer"), probe(seen, "Probe")],
+      undefined,
+      undefined,
+      stream,
+    );
 
-      expect(seen.refusals).toEqual([]);
-      expect(seen.taken).toHaveLength(2);
-      expect(new Set(seen.taken).size).toBe(2);
-    },
-  );
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(2);
+    expect(new Set(seen.taken).size).toBe(2);
+  });
 
   const multipleDelegations = "CIV26: delegating twice, or delegating another name, names nothing";
   it(multipleDelegations, function* () {
@@ -1119,7 +1098,8 @@ describe("Tier CIV — the import's own terminal is the association", () => {
   ];
 
   for (const { what, report, says } of NOT_THIS_CALL) {
-    rootCase(`CIV29: ${what} is somebody else's failure`, function* (stream) {
+    it(`CIV29: ${what} is somebody else's failure`, function* () {
+      const stream = yield* useJournalStream("<eval>");
       // The same arrangement, with the foreign terminal raising something that
       // carries the mark without being this call's report of it. Ordinary
       // resolution answers imports nothing answered, not unrelated failures, so
@@ -1457,7 +1437,8 @@ describe("Tier CIV — the authored form on the invocation", () => {
   ];
 
   for (const [what, source, expected] of FORMS) {
-    rootCase(`CIV19: a ${what} element reports its own form`, function* (stream) {
+    it(`CIV19: a ${what} element reports its own form`, function* () {
+      const stream = yield* useJournalStream("<eval>");
       const seen = record();
       yield* run(source, [probe(seen)], undefined, undefined, stream);
 
@@ -1469,7 +1450,8 @@ describe("Tier CIV — the authored form on the invocation", () => {
     });
   }
 
-  rootCase("CIV19: asking the form projects nothing and suspends on nothing", function* (stream) {
+  it("CIV19: asking the form projects nothing and suspends on nothing", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const ran: string[] = [];
     const seen = record();
     // A component that reads the form and returns without projecting. The
@@ -1517,7 +1499,8 @@ describe("Tier CIV — the authored form on the invocation", () => {
     expect(ran).toEqual([]);
   });
 
-  rootCase("CIV20: reading the form leaves the durable identity unspent", function* (stream) {
+  it("CIV20: reading the form leaves the durable identity unspent", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen = record();
     const taking: IdentityComponent = {
       name: "Taking",
@@ -1548,28 +1531,27 @@ describe("Tier CIV — the authored form on the invocation", () => {
     expect(seen.taken).toHaveLength(1);
   });
 
-  rootCase(
-    "CIV21: a component that imports nothing still reads the canonical form",
-    function* (stream) {
-      yield* useComponentModuleLoader();
-      const directory = fileURLToPath(new URL("./fixtures/invocation-identity/", import.meta.url));
+  it("CIV21: a component that imports nothing still reads the canonical form", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    yield* useComponentModuleLoader();
+    const directory = fileURLToPath(new URL("./fixtures/invocation-identity/", import.meta.url));
 
-      // A repository `.ts` component with no imports at all: no helper of its own
-      // copy to ask, no context of its own copy to read, only the object the
-      // engine handed it.
-      const both = yield* rendered(
-        "<LoadedForm />\n\n<LoadedForm>written</LoadedForm>\n",
-        [],
-        [directory],
-        stream,
-      );
+    // A repository `.ts` component with no imports at all: no helper of its own
+    // copy to ask, no context of its own copy to read, only the object the
+    // engine handed it.
+    const both = yield* rendered(
+      "<LoadedForm />\n\n<LoadedForm>written</LoadedForm>\n",
+      [],
+      [directory],
+      stream,
+    );
 
-      expect(both).toContain("loaded:false");
-      expect(both).toContain("loaded:true");
-    },
-  );
+    expect(both).toContain("loaded:false");
+    expect(both).toContain("loaded:true");
+  });
 
-  rootCase("CIV21: the form is on the invocation and nowhere a name reaches", function* (stream) {
+  it("CIV21: the form is on the invocation and nowhere a name reaches", function* () {
+    const stream = yield* useJournalStream("<eval>");
     const seen = record();
     let reachable: string[] = [];
 
@@ -1703,56 +1685,52 @@ describe("Tier CIV — the authored form on the invocation", () => {
  */
 describe("Tier PA10b — concurrent capability-backed identity", () => {
   beforeEach(journalBeforeEach(OWNER));
-  rootCase(
-    "PA10b: two concurrent sites each claim their own identity, exactly once",
-    function* (stream) {
-      const seen = record();
-      yield* run(
-        ["<All>", "<Spawn><Probe /></Spawn>", "<Spawn><Probe /></Spawn>", "</All>"].join("\n"),
-        [probe(seen)],
-        nothing,
-        undefined,
-        stream,
-      );
+  it("PA10b: two concurrent sites each claim their own identity, exactly once", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    yield* run(
+      ["<All>", "<Spawn><Probe /></Spawn>", "<Spawn><Probe /></Spawn>", "</All>"].join("\n"),
+      [probe(seen)],
+      nothing,
+      undefined,
+      stream,
+    );
 
-      // Both claimed, neither refused, and neither received the other's.
-      expect(seen.refusals).toEqual([]);
-      expect(seen.taken).toHaveLength(2);
-      expect(new Set(seen.taken).size).toBe(2);
-      // The engine's own identity for each invocation, which is what
-      // `getExpansion()` reports when nothing has interfered.
-      expect(seen.taken).toEqual(seen.context);
-    },
-  );
+    // Both claimed, neither refused, and neither received the other's.
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(2);
+    expect(new Set(seen.taken).size).toBe(2);
+    // The engine's own identity for each invocation, which is what
+    // `getExpansion()` reports when nothing has interfered.
+    expect(seen.taken).toEqual(seen.context);
+  });
 
-  rootCase(
-    "PA10b: a nested <All> inside a spawn claims its own identities too",
-    function* (stream) {
-      const seen = record();
-      yield* run(
-        [
-          "<All>",
-          "<Spawn>",
-          "<All>",
-          "<Spawn><Probe /></Spawn>",
-          "<Spawn><Probe /></Spawn>",
-          "</All>",
-          "</Spawn>",
-          "<Spawn><Probe /></Spawn>",
-          "</All>",
-        ].join("\n"),
-        [probe(seen)],
-        nothing,
-        undefined,
-        stream,
-      );
+  it("PA10b: a nested <All> inside a spawn claims its own identities too", function* () {
+    const stream = yield* useJournalStream("<eval>");
+    const seen = record();
+    yield* run(
+      [
+        "<All>",
+        "<Spawn>",
+        "<All>",
+        "<Spawn><Probe /></Spawn>",
+        "<Spawn><Probe /></Spawn>",
+        "</All>",
+        "</Spawn>",
+        "<Spawn><Probe /></Spawn>",
+        "</All>",
+      ].join("\n"),
+      [probe(seen)],
+      nothing,
+      undefined,
+      stream,
+    );
 
-      // Three sites, three identities, no refusal: a spawn nested inside a
-      // spawn owns its own frames as much as a top-level one does.
-      expect(seen.refusals).toEqual([]);
-      expect(seen.taken).toHaveLength(3);
-      expect(new Set(seen.taken).size).toBe(3);
-      expect(seen.taken).toEqual(seen.context);
-    },
-  );
+    // Three sites, three identities, no refusal: a spawn nested inside a
+    // spawn owns its own frames as much as a top-level one does.
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(3);
+    expect(new Set(seen.taken).size).toBe(3);
+    expect(seen.taken).toEqual(seen.context);
+  });
 });
