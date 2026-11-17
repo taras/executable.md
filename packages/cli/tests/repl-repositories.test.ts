@@ -17,7 +17,7 @@
  * one's are.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -101,6 +101,7 @@ interface Fixture {
 }
 
 import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { INLINE_SOURCE_PATH } from "@executablemd/core";
 
 const OWNER = "packages/cli/tests/repl-repositories.test.ts";
@@ -302,10 +303,10 @@ function* submit(
 }
 
 describe("how a REPL entry gets its repository behavior", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("retains an admitted fragment's write and delete, and replays them", function* () {
     const fixture = yield* useFixture();
     const counted: Counted = { initialized: 0 };
-    const run = execution();
     // A fragment that writes, a fragment that deletes, and a question nobody
     // answers — which is what leaves the entry unfinished, so reopening it is a
     // continuation rather than a reading of a settled history.
@@ -314,6 +315,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       `<Evaluate text={${JSON.stringify('<File.Delete path="seed.md" />\n')}} allow={["write"]} />`,
       '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>',
     ].join("\n");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
 
     const events = yield* scoped(function* () {
       yield* useNodeReplHost("execution-1");
@@ -477,8 +479,8 @@ describe("how a REPL entry gets its repository behavior", () => {
   it("E7: keeps two entries' equal records in their own segments", function* () {
     const fixture = yield* useFixture();
     const counted: Counted = { initialized: 0 };
-    const run = execution();
     const source = '<File path="same.md">same</File>';
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
 
     yield* submit(fixture, source, run, counted);
     // Removed between the two entries, so whether the second one performed its
@@ -504,7 +506,6 @@ describe("how a REPL entry gets its repository behavior", () => {
   it("E6: retains a generated read's text, and answers it after the file changes", function* () {
     const fixture = yield* useFixture();
     const counted: Counted = { initialized: 0 };
-    const run = execution();
     // A fragment reads a file in the checkout, then the entry stops at a
     // question — so the read is completed and the entry is not. The fragment
     // binds the text rather than interpolating it: a generated fragment may not
@@ -513,6 +514,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       `<Evaluate text={${JSON.stringify('<File path="seed.md" as="held" />\n')}} allow={["read"]} />`,
       '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>',
     ].join("\n");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
 
     const events = yield* scoped(function* () {
       yield* useNodeReplHost("execution-1");
@@ -603,7 +605,7 @@ describe("how a REPL entry gets its repository behavior", () => {
   it("prepares nothing for a settled history nobody is continuing", function* () {
     const fixture = yield* useFixture();
     const counted: Counted = { initialized: 0 };
-    const run = execution();
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     const events = yield* submit(fixture, SETTLED_ENTRY, run, counted);
     expect(counted.initialized).toBe(1);
 
@@ -631,12 +633,12 @@ describe("how a REPL entry gets its repository behavior", () => {
   it("E7: refuses a history whose own record it cannot read, before new work", function* () {
     const fixture = yield* useFixture();
     const counted: Counted = { initialized: 0 };
-    const run = execution();
     const source = [
       '<File path="recorded.md">recorded</File>',
       '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>',
       '<File path="after.md">after</File>',
     ].join("\n");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
 
     const events = yield* scoped(function* () {
       yield* useNodeReplHost("execution-1");

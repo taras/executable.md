@@ -13,7 +13,7 @@
  * session, a screenshot for a frame, or a bare `<Prompt>` for a conversation.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { race, scoped, sleep, until as untilResolved, useScope, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
@@ -115,6 +115,7 @@ import {
 import { readScreen } from "./support/terminal-screen.ts";
 import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import { INLINE_SOURCE_PATH } from "@executablemd/core";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/cli/tests/repl-agent-interface.test.ts";
 
@@ -474,8 +475,8 @@ function installations(): readonly ExecutionInstallation[] {
   return [{ components: agentIdentityComponents() }];
 }
 
-function execution(): ReplExecution {
-  return { id: "agent-interface", stream: new InMemoryStream([]) };
+function execution(stream: InMemoryStream = new InMemoryStream([])): ReplExecution {
+  return { id: "agent-interface", stream };
 }
 
 /** The session, or the refusal that means there is nothing to drive. */
@@ -935,24 +936,25 @@ function* asking(
   script: Record<string, Script>,
   permissionMode: PermissionMode = "approve-reads",
   source: string = THREE_SPAWNS,
-  holder = execution(),
+  holder?: ReplExecution,
 ): Operation<{
   readonly session: ReplSession;
   readonly stub: Stub;
   readonly holder: ReplExecution;
 }> {
+  const actualHolder = holder ?? execution(yield* useJournalStream(INLINE_SOURCE_PATH));
   const stub = createStub(script);
   yield* useStub(stub);
   const session = granted(
     yield* submitReplEntry({
-      execution: holder,
+      execution: actualHolder,
       installations: installations(),
       generated: ordinaryGeneratedSelection(),
       permissionMode,
       source,
     }),
   );
-  return { session, stub, holder };
+  return { session, stub, holder: actualHolder };
 }
 
 describe("U1 — one chronology, filtered, undisturbed by the background", () => {
@@ -3570,11 +3572,12 @@ describe("U1 — a row's rectangle does not bound its text (#875 R1)", () => {
 
 describe("U9 — two entries whose Prompts share one durable name", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("U9: each entry's turn shows once and resolves to its own record", function* () {
     const stub = createStub({ two: { unrecorded: true } });
     yield* useStub(stub);
-    const holder = execution();
+    const holder = execution(yield* useJournalStream(INLINE_SOURCE_PATH));
     const session = granted(
       yield* submitReplEntry({
         execution: holder,
@@ -3668,6 +3671,7 @@ function* catalogLabel(view: ReplView, entry: string): Operation<string> {
 
 describe("EU1 — selecting an entry moves the transcript locus and nothing else", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   /** Two entries, each with one recorded turn in one provider conversation. */
   function* twoRecordedEntries(): Operation<{
@@ -3677,7 +3681,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
   }> {
     const stub = createStub({ two: { unrecorded: true } });
     yield* useStub(stub);
-    const holder = execution();
+    const holder = execution(yield* useJournalStream(INLINE_SOURCE_PATH));
     const session = granted(
       yield* submitReplEntry({
         execution: holder,
@@ -4041,6 +4045,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
  */
 describe("U2 — a pending permission announces itself without taking the screen", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("UI14: the frame says a permission waits in Sessions, and changes no route or focus", function* () {
     const { session } = yield* asking({
@@ -4273,6 +4278,7 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
  * Both profiles, because wide-only evidence is what let the medium case through.
  */
 describe("Tier BP4 — the widened sidebar holds its longest rows whole", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** The longest state this product writes for a turn, and the widest control. */
   const LONGEST_STATE = "completed, not recorded yet";
   const FILTERED = "All conversations (filtered)";
@@ -4353,6 +4359,7 @@ describe("Tier BP4 — the widened sidebar holds its longest rows whole", () => 
 
 describe("PV2: Transcript groups and logical reveal", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
   it("choices and a permission child contain arrows; hidden turns mount only when revealed", function* () {
     const scripts = Object.fromEntries(
       Array.from({ length: 10 }, (_, at): [string, Script] => [
