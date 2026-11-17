@@ -220,46 +220,43 @@ describe("ROB5 — cancellation, persistence and ownership, on a native host", (
     expect(methodsCalled(counted)).toContain("add");
   });
 
-  {
-    const name = "answers while another holder has the checkout's mutation lease";
-    it(name, function* () {
-      const fixture = yield* useObservationFixture();
-      const place = yield* useEntryPlace(fixture);
-      const stream = yield* useJournalStream(join(place.root, "entry.md"));
-      const common = commonDirectoryOf({
-        root: fixture.root,
-        home: fixture.home,
-        run: fixture.run,
-      });
-      const counted = entryCounters();
-      yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 23;\n");
-
-      const source = [
-        '<Git.Changes compare="unstaged" as="changes" />',
-        "",
-        "<Json value={changes} />",
-        "",
-      ].join("\n");
-
-      // Held for the whole of both runs by somebody else. A read that took one
-      // would be refused by the operating system on the second descriptor.
-      const live = yield* scoped(function* () {
-        yield* useCommonDirectoryLease(common);
-        return yield* runEntry(place, source, stream, counted);
-      });
-      expect(live.refusal).toBe(undefined);
-      expect(readKinds(counted)).toContain("changes");
-
-      // And a completed replay takes neither the lease nor anything else: it
-      // answers with the lease still held and the checkout gone.
-      const replayed = entryCounters();
-      const again = yield* scoped(function* () {
-        yield* useCommonDirectoryLease(common);
-        yield* repoint(place, place.root);
-        return yield* runEntry(place, source, new InMemoryStream([...live.events]), replayed);
-      });
-      expect(again.output).toBe(live.output);
-      expect(methodsCalled(replayed)).toEqual([]);
+  it("answers while another holder has the checkout's mutation lease", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const stream = yield* useJournalStream(join(place.root, "entry.md"));
+    const common = commonDirectoryOf({
+      root: fixture.root,
+      home: fixture.home,
+      run: fixture.run,
     });
-  }
+    const counted = entryCounters();
+    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 23;\n");
+
+    const source = [
+      '<Git.Changes compare="unstaged" as="changes" />',
+      "",
+      "<Json value={changes} />",
+      "",
+    ].join("\n");
+
+    // Held for the whole of both runs by somebody else. A read that took one
+    // would be refused by the operating system on the second descriptor.
+    const live = yield* scoped(function* () {
+      yield* useCommonDirectoryLease(common);
+      return yield* runEntry(place, source, stream, counted);
+    });
+    expect(live.refusal).toBe(undefined);
+    expect(readKinds(counted)).toContain("changes");
+
+    // And a completed replay takes neither the lease nor anything else: it
+    // answers with the lease still held and the checkout gone.
+    const replayed = entryCounters();
+    const again = yield* scoped(function* () {
+      yield* useCommonDirectoryLease(common);
+      yield* repoint(place, place.root);
+      return yield* runEntry(place, source, new InMemoryStream([...live.events]), replayed);
+    });
+    expect(again.output).toBe(live.output);
+    expect(methodsCalled(replayed)).toEqual([]);
+  });
 });
