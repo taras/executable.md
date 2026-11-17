@@ -849,7 +849,7 @@ describe("Tier SYN — the named form", () => {
       scoped(function* () {
         yield* useMarkerDocumentation({ supplies: ["Marker", "Other"], text: PAIR_PROSE });
         yield* useMarkerDocumentation({ supplies: ["Other", "Marker"], text: PAIR_PROSE });
-        return yield* run(source, [marker]);
+        return yield* run(source, [marker], yield* useJournalStream(ROOT_PATH));
       });
 
     // Named, bare, and a document that writes no `<Syntax>` at all. Collection
@@ -893,7 +893,7 @@ describe("Tier SYN — the named form", () => {
             yield* useMarkerDocumentation(reversed ? {} : changed);
             // No `<Syntax>` at all: the refusal is the execution's, before its
             // root ran, not something an occurrence discovered.
-            return yield* run("nothing here\n", [marker]);
+            return yield* run("nothing here\n", [marker], yield* useJournalStream(ROOT_PATH));
           }),
         );
         expect([
@@ -950,7 +950,7 @@ describe("Tier SYN — the named form", () => {
         scoped(function* () {
           yield* useMarkerDocumentation();
           yield* useMarkerDocumentation({ text: "## Marker\n\nCONFLICTING.\n" });
-          return yield* run("nothing here\n", [marker]);
+          return yield* run("nothing here\n", [marker], yield* useJournalStream(ROOT_PATH));
         }),
       ),
     );
@@ -958,7 +958,11 @@ describe("Tier SYN — the named form", () => {
     const beside = String(
       yield* scoped(function* () {
         yield* useMarkerDocumentation();
-        return yield* run('<Syntax names={["Marker"]} />\n', [marker]);
+        return yield* run(
+          '<Syntax names={["Marker"]} />\n',
+          [marker],
+          yield* useJournalStream(ROOT_PATH),
+        );
       }),
     );
     expect(beside).toContain("MARKER PROSE.");
