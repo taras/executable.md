@@ -240,6 +240,7 @@ describe("Tier CB — the fence the value cannot close", () => {
 });
 
 describe("Tier CB — the value is not read for anything else", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CB3: removing the envelope recovers the source code units exactly", function* () {
     const value = [
       "   leading spaces",
