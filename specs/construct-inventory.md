@@ -61,6 +61,7 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>Elicit</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
 | <code>Fail</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>message: string</code> | <code>text: string</code> |
 | <code>Fetch</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>url: string; method?: string; headers?: object; timeout?: string</code> | <code>text: string</code> |
+| <code>File.Copy</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>from: string; to: string</code> | <code>text: string</code> |
 | <code>Glob</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>include: array; exclude?: array</code> | <code>value: array</code> |
 | <code>Json</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
 | <code>Parse</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
