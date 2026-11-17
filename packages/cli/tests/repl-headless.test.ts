@@ -1,10 +1,14 @@
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import { API } from "@executablemd/runtime";
@@ -29,6 +33,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import { makeRegistry, makeStore } from "./support/fake-acp.ts";
 import { chmod, mkdtemp, realpath } from "node:fs/promises";
+
+const OWNER = "packages/cli/tests/repl-headless.test.ts";
 
 describe("parent-owned headless REPL", () => {
   const creatorCut =
@@ -824,7 +830,7 @@ function* useManagedRecoveryChild(publicationFailure: { armed: boolean }) {
     path,
     '<Agent name="xmd"><Session><XMD.Session as="child" /><Json value={child} /></Session></Agent>',
   );
-  const execution = yield* executeInstalled({ path, stream: new InMemoryStream() }, [
+  const execution = yield* executeInstalled({ path, stream: yield* useJournalStream(path) }, [
     children.installation,
     {
       components: agentIdentityComponents(),
@@ -851,6 +857,8 @@ function* useManagedRecoveryChild(publicationFailure: { armed: boolean }) {
 }
 
 describe("987 — owned reference disposition", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   for (const cut of ["publication", "active-unwind"]) {
     it(`keeps authoritative selection and reference lifetime at ${cut}`, function* () {
       const publication = { armed: false };
@@ -928,6 +936,8 @@ describe("987 — owned reference disposition", () => {
 });
 
 describe("987 — original child input ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("keeps an entry question through inspection, UI detach and same-original recovery", function* () {
     const held = yield* useManagedRecoveryChild({ armed: false });
     held.host.fake.script({ reply: "<REPL.Bindings />" });
