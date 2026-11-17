@@ -1,17 +1,18 @@
 import { createAcpRuntime, createAcpxProvider, createAcpxSessionStore } from "@executablemd/acp";
 import { AgentProviders, registerAgentProvider } from "@executablemd/agent/api";
 import { Component, Plugin } from "@executablemd/core/api";
-import { API, command, env, readTextFile } from "@executablemd/runtime";
+import { API, command, cwd, env, readTextFile } from "@executablemd/runtime";
 import { useTestAgentController } from "@executablemd/test-agent";
 import { writeTextFile } from "@effectionx/fs";
 import { ensure } from "effection";
+import { installGitHub } from "./github-comments.ts";
 import { actorEnv, actorSchema, fableFailure, overlapEnv, waitForFile } from "./receipts.ts";
 import type { PromptReceipt } from "./receipts.ts";
 
 export default Plugin({
   name: "delivery-acp-overlap",
-  *install(request) {
-    if (request.command !== "run") {
+  *install(invocation) {
+    if (invocation.command !== "run") {
       throw new Error("Delivery ACP workers require a run invocation.");
     }
     const directory = yield* env(overlapEnv);
@@ -19,6 +20,7 @@ export default Plugin({
     if (!directory?.startsWith("/")) {
       throw new Error("Delivery ACP workers require an absolute fixture directory.");
     }
+    yield* installGitHub(directory, yield* cwd(), actor);
     const receipts: PromptReceipt[] = [];
     yield* ensure(() =>
       writeTextFile(`${directory}/${actor}-prompts.json`, JSON.stringify(receipts)),
@@ -89,10 +91,10 @@ export default Plugin({
                   return [...worker, "--connect", scenario.route];
                 },
               },
-              createRuntime(options) {
+              createRuntime(runtimeOptions) {
                 const pending = new Map<unknown, PromptReceipt>();
                 return createAcpRuntime({
-                  ...options,
+                  ...runtimeOptions,
                   onAcpMessage(direction, message) {
                     if (
                       direction === "outbound" &&

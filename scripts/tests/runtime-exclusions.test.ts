@@ -179,6 +179,7 @@ describe("the applicable corpus", () => {
       "ArtifactReturnRecovery",
       "DecisionResolution",
       "Delivery",
+      "DeliveryPublication",
       "Friction",
       "Implementation",
       "LaunchPolicy",

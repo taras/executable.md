@@ -248,8 +248,8 @@ xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-impleme
   --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
 
-`status` starts no model. It reads the saved joined review, the current PR and
-GitHub's CI workflow runs. Its `nextAction` is computed from the same facts as
+`status` starts no model. It reads the saved joined review, its published comment,
+the current PR and GitHub's CI workflow runs. Its `nextAction` is computed from the same facts as
 its `status` and `remaining` fields. When it requests `review`, select
 `--props-action review` on that command to perform the independent review with
 the provider, model, effort and session recorded at launch. The review uses
@@ -295,10 +295,11 @@ feedback ready   -> independent review pending -> joined exact-commit verdict
                       | Fable unavailable/refused  -> one Astra review (review)
                       | no reviewer completed      -> review_held: answer via review
                       | incomplete/uncertain       -> reconcile original call
-                      | blocking finding           -> request approved repair
-                      | pass + required CI + main   -> finish PR metadata
-                      | all passed + PR ready       -> await authorized merge
-                      | confirmed merge             -> delivered
+                      | comment pending            -> publish-review
+                      | published changes required -> request approved repair
+                      | published pass + checks    -> finish PR metadata
+                      | all passed + PR ready      -> await authorized merge
+                      | confirmed merge            -> delivered
 ```
 
 Independent review summaries allow 1500 characters; detailed observations belong
@@ -340,6 +341,28 @@ and saves a raw reply the execution joined but never wrote. It never shortens te
 a model call or overwrites a contradictory receipt. Missing or uncertain execution
 continues to hold. Status uses this same validation boundary to read receipts.
 
+`review` and `reconcile` publish each validated verdict as a comment on the
+current pull request, including findings that require repair. The comment
+names the exact reviewed commit and the reviewer who supplied the result.
+Delivery uses `<PullRequest.Comments>` to reconcile and verify the comment. With
+the native GitHub provider, include the repository URL in the host's
+`XMD_WORKFLOW_GITHUB_PULL_REQUESTS` allowlist. For a host that reads one repository:
+
+```sh
+export XMD_WORKFLOW_GITHUB_PULL_REQUESTS='{"allowed":["https://github.com/owner/repository"]}'
+```
+
+Once GitHub returns the matching comment, the workflow saves its URL with the
+reviewed SHA. A new head has its own comment.
+
+If `nextAction` is `publish_review`, use `--props-action publish-review` with
+the same record and PR number. It checks for the matching comment before any
+write and adopts it if GitHub already accepted it. Concurrent calls with the
+same delivery record share one write reservation per PR and reviewed SHA.
+If a write could have reached GitHub and no matching comment is visible, the
+reservation stays in place for reconciliation. `status` and `closeout` only
+read GitHub. A pending comment holds readiness and the repair handoff.
+
 Reconciliation is limited to independent review from a work item launched under
 the same response contract. Its assignment retains the exact response schema; a
 missing or different schema refuses rather than reinterpreting an old reply. It validates only corrections recorded under the original review assignment.
@@ -377,8 +400,9 @@ Main health reuses the repository's authoritative selection
 rule for a push to main's exact current head. Pending, cancelled, skipped and
 failed runs cannot pass. The maintainer-applied `ci-main-red-fix` exception keeps
 the repository's CI contract: it substitutes composability for the main lookup
-inside CI. A draft PR remains `publication_pending`; only a confirmed merge with
-a merge commit reports `delivered`. Refresh status before acting on readiness.
+inside CI. A draft with a verified passing review and passing checks reports
+`publication_pending` with `finish_pr_metadata`. A confirmed merge with a
+merge commit reports `delivered`. Refresh status before acting on readiness.
 
 The saved `status.json` is the last observation, not a second execution state.
 Use the command for a current answer. Local records are trusted workflow
