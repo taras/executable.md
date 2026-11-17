@@ -19,7 +19,7 @@ import {
  * binding in a scope that never published it.
  */
 
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Component, useTempFileCompiler } from "@executablemd/core";

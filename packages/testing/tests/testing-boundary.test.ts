@@ -8,15 +8,16 @@
  * component replace `<Testing>` entirely.
  */
 
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { registerComponents, useTempFileCompiler } from "@executablemd/core";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { documentCases, runDoc } from "./helpers.ts";
 
-const documentCase = documentCases("packages/testing/tests/testing-boundary.test.ts");
+const documentCase = documentCases();
 import type { DocRun } from "./helpers.ts";
 
 /** Every journalled boundary entry, by the name it recorded. */
@@ -125,6 +126,7 @@ describe("Tier TB — a boundary that never finished", () => {
 });
 
 describe("Tier TB — a repository component replaces <Testing>", () => {
+  beforeEach(journalBeforeEach("packages/testing/tests/testing-boundary.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   documentCase(

@@ -17,7 +17,7 @@ import type { Operation, Result } from "effection";
 import * as path from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import type { DeliverySink } from "../../cli/src/stdout-delivery.ts";
 import { installTestAgentComponents } from "../src/components.ts";
 import { NativeSessionObserver } from "../src/controller.ts";
