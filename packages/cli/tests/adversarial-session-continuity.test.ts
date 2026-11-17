@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { expect } from "@executablemd/test-support/expect";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
@@ -35,6 +36,7 @@ import PhaseSession, {
 } from "../../../examples/adversarial-implementation/components/Phase/Session.ts";
 
 const pair = z.strictObject({ kind: z.string(), value: z.string() });
+const OWNER = "packages/cli/tests/adversarial-session-continuity.test.ts";
 const receipt = z.strictObject({
   schema: z.literal("phase-session.v2"),
   agent: z.string(),
@@ -377,7 +379,11 @@ interface ReviewWorld {
   store: FakeStore;
   delivery: Record<string, Json>;
   asked: unknown[];
-  run(source: string, props: Record<string, Json>): Operation<{ ok: boolean; text: string }>;
+  run(
+    source: string,
+    props: Record<string, Json>,
+    stream?: InMemoryStream,
+  ): Operation<{ ok: boolean; text: string }>;
 }
 
 function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorld> {
@@ -398,7 +404,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
     inputs: [{ path: "accepted.md", content: "The original accepted behavior." }],
     required: ["independent-review", "required-ci", "main-health"],
   };
-  function run(source: string, props: Record<string, Json>) {
+  function run(source: string, props: Record<string, Json>, stream?: InMemoryStream) {
     return scoped(function* () {
       yield* useHostFiles();
       yield* useComponentModuleLoader();
@@ -430,7 +436,12 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
       const doc = join(root, `document-${randomUUID()}.md`);
       yield* writeTextFile(doc, `---\nprops: {type: object}\n---\n${source}`);
       const executed = yield* executeInstalled(
-        { path: doc, stream: new InMemoryStream(), includes: [components], props },
+        {
+          path: doc,
+          stream: stream ?? (yield* useJournalStream(doc)),
+          includes: [components],
+          props,
+        },
         [{ components: agentIdentityComponents(), *install() {} }],
       );
       try {
@@ -467,6 +478,8 @@ const continuedRoleSource =
   '<Phase.Role role="implementor" session="controlled-owner" assignment={{...props.assignment,sessionEstablished:true}} />';
 
 describe("production workflow provider scope", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("applies controls through each actual Claude role and retains them across cold reentry", function* () {
     for (const role of ["phase", "foundation", "preparation", "delivery"]) {
       const fake = createFakeAcp();
@@ -637,6 +650,8 @@ describe(
   "production independent review over the registered acpx factory",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach(OWNER));
+
     it("configures the advertised exact Fable model and effort, and omits a null effort", function* () {
       for (const effort of ["high", null]) {
         const fake = createFakeAcp();
@@ -699,18 +714,22 @@ describe(
         );
         const harness = yield* reviewWorld(fake);
         const attempt = join(harness.root, "delivery", "attempt");
-        const ran = yield* harness.run(roleSource, {
-          delivery: harness.delivery,
-          revision,
-          reviewer: {
-            provider: "claude",
-            model: "fable",
-            effort: variant === "refused" ? "high" : null,
-            session: "independent",
+        const ran = yield* harness.run(
+          roleSource,
+          {
+            delivery: harness.delivery,
+            revision,
+            reviewer: {
+              provider: "claude",
+              model: "fable",
+              effort: variant === "refused" ? "high" : null,
+              session: "independent",
+            },
+            choices: ["fable"],
+            attempt,
           },
-          choices: ["fable"],
-          attempt,
-        });
+          new InMemoryStream(),
+        );
         expect(ran.ok).toBe(true);
         const settled = outcome.parse(
           JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))),
@@ -742,7 +761,7 @@ describe(
       const gate = closeGate(fake);
       const harness = yield* reviewWorld(fake, gate.create);
       const task = yield* spawn(() =>
-        harness.run(reviewSource, { delivery: harness.delivery, revision }),
+        harness.run(reviewSource, { delivery: harness.delivery, revision }, new InMemoryStream()),
       );
       yield* gate.reached.operation;
       expect(fake.turns).toHaveLength(1);
@@ -791,7 +810,7 @@ describe(
         const gate = closeGate(fake);
         const harness = yield* reviewWorld(fake, gate.create);
         const task = yield* spawn(() =>
-          harness.run(reviewSource, { delivery: harness.delivery, revision }),
+          harness.run(reviewSource, { delivery: harness.delivery, revision }, new InMemoryStream()),
         );
         yield* gate.reached.operation;
         expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
@@ -849,7 +868,11 @@ describe(
       fake.configuration(catalog(["fable", "gpt-6-astra"]));
       fake.script({ reply: "", cancelled: true });
       const harness = yield* reviewWorld(fake);
-      const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
+      const ran = yield* harness.run(
+        reviewSource,
+        { delivery: harness.delivery, revision },
+        new InMemoryStream(),
+      );
       expect(ran.ok).toBe(true);
       expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
       const attempt = join(harness.delivery.directory as string, `review-${revision}`);
@@ -881,13 +904,17 @@ describe(
       );
       function* reviewAt(sha: string) {
         const attempt = join(harness.delivery.directory as string, `review-${sha}`);
-        const ran = yield* harness.run(roleSource, {
-          delivery: harness.delivery,
-          revision: sha,
-          reviewer,
-          choices: ["fable"],
-          attempt,
-        });
+        const ran = yield* harness.run(
+          roleSource,
+          {
+            delivery: harness.delivery,
+            revision: sha,
+            reviewer,
+            choices: ["fable"],
+            attempt,
+          },
+          new InMemoryStream(),
+        );
         return { ran, attempt };
       }
       fake.configuration(catalog(["claude-opus"]));
@@ -932,7 +959,11 @@ describe(
       });
       fake.closeFailure = new Error("the review provider would not close");
       const harness = yield* reviewWorld(fake);
-      const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
+      const ran = yield* harness.run(
+        reviewSource,
+        { delivery: harness.delivery, revision },
+        new InMemoryStream(),
+      );
       expect(ran.ok).toBe(false);
       expect(ran.text).toContain("agent provider teardown failed");
       expect(fake.closes).toContain("scope teardown");

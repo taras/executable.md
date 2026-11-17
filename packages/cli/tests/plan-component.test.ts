@@ -13,7 +13,8 @@
  * created. No live agent, browser, or network belongs in this evidence.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -64,6 +65,7 @@ function* raised<T>(operation: Operation<T>): Operation<string> {
 }
 
 const ROOT = "document.md";
+const OWNER = "packages/cli/tests/plan-component.test.ts";
 
 /** A Plan the coding agent replies with, and that admission accepts. */
 const PLAN = ["# Say hello", "", "This document greets you.", "", "Hello.", ""].join("\n");
@@ -149,7 +151,7 @@ function* runDocument(options: {
   normalized?: boolean;
 }): Operation<Run> {
   const root = options.root ?? (yield* planWriterRoot());
-  const stream = options.stream ?? new InMemoryStream();
+  const stream = options.stream ?? (yield* useJournalStream(ROOT));
   const harness =
     options.harness ??
     (yield* planDeclarationHarness({
@@ -262,6 +264,8 @@ function isPrompt(event: DurableEvent): boolean {
 }
 
 describe("Tier PC — <Plan> in an ordinary document", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("PC1: the body is the Prompt, and the approved bytes arrive under `as`", function* () {
     yield* useWorkingDirectory(function* (dir) {
       // A file only the caller's permissions can read, written into the Prompt.
@@ -379,6 +383,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         source: ['<Plan as="approved">   </Plan>', ""].join("\n"),
         root,
         reviews: [],
+        stream: new InMemoryStream(),
       });
 
       expect(run.failure).toContain("<Plan> requires its body to render a non-empty Prompt.");
@@ -414,6 +419,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
         root,
         reviews: [],
+        stream: new InMemoryStream(),
         stack: {
           provider: "not-acpx",
           defaultAgent: AGENT,
@@ -447,6 +453,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const run = yield* runDocument({
           source: [`<${name} as="x" />`, ""].join("\n"),
           reviews: [],
+          stream: new InMemoryStream(),
         });
         expect(run.failure).toContain(`Cannot resolve component: ${name}`);
       }
@@ -456,6 +463,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       const open = yield* runDocument({
         source: ['<Syntax as="x" />', "{x}", ""].join("\n"),
         reviews: [],
+        stream: new InMemoryStream(),
       });
       expect(open.failure).toBeUndefined();
       expect(open.output).toContain("### `<File>`");
@@ -625,6 +633,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
               files: ([operation], next) => (operation === "read" ? false : next(operation)),
             });
           },
+          stream: new InMemoryStream(),
         });
 
         // Authorship finished: the refusal was feedback rather than a failure.
@@ -804,6 +813,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
               reviews: [],
               generated: reading(),
               files,
+              stream: new InMemoryStream(),
             }),
           ),
         );
@@ -961,6 +971,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           reviews: [],
           generated: reading(),
           files: files,
+          stream: new InMemoryStream(),
         });
 
         expect(run.failure).toBe(undefined);
@@ -1229,6 +1240,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         source: ['<CheckDraft source="x" as="check" />', ""].join("\n"),
         includes: [dir],
         reviews: [],
+        stream: new InMemoryStream(),
       });
       expect(run.failure).toContain("Cannot resolve component: CheckDraft");
       expect(run.output).not.toContain("the repository file ran.");
@@ -1388,6 +1400,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
         reply: PLAN,
         reviews: ["Stop"],
+        stream: new InMemoryStream(),
       });
 
       expect(run.failure).toBe("Plan authorship stopped at your request. No Plan was returned.");
@@ -1977,6 +1990,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
  * type either of them shares.
  */
 describe("Tier FE — Plan produces text, Evaluate runs it", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   /** One selected read, over a recorder these rows can count. */
   function profile(): GeneratedSelection {
     return { File: ["self-closing"] };
@@ -2318,6 +2333,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
  * declaration they are — which an execution reads before it admits either.
  */
 describe("Tier MDK — the Plan declarations state their kind", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("MDK2: both constructors state kind component for the same packaged bytes", function* () {
     yield* useWorkingDirectory(function* (dir) {
       const harness = yield* planDeclarationHarness({

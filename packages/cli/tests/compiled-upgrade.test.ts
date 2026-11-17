@@ -19,7 +19,8 @@
  * runtime and raced against a real Deno child, and no other runtime has one.
  * The portable half — every branch of the policy — is Tier UG.
  */
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { call, createContext, ensure, scoped, sleep, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -54,9 +55,8 @@ import type {
   UpgradeResponse,
 } from "../src/compiled-upgrade.ts";
 import { releaseTargetFor, RELEASE_TARGETS } from "../src/release-targets.ts";
-import { runUpgrade } from "../src/upgrade.ts";
+import { runUpgrade, UPGRADE_COMMAND_IDENTITY } from "../src/upgrade.ts";
 import type { UpgradeAssembly, UpgradeCommand } from "../src/upgrade.ts";
-import { InMemoryStream } from "@executablemd/durable-streams";
 
 /**
  * The exit continuation `exit()` reaches for. `main()` installs one under this
@@ -78,6 +78,7 @@ const DELIVERY = "https://release-assets.githubusercontent.com/xmd";
  * executed: the candidate this suite stages is a real script the host runs.
  */
 const PLATFORM = { platform: "linux", architecture: "x64" };
+const OWNER = "packages/cli/tests/compiled-upgrade.test.ts";
 const TARGET = "x86_64-unknown-linux-gnu";
 const ASSET = `xmd-${TARGET}`;
 const INSTALLED = "0.10.2";
@@ -244,8 +245,8 @@ function scripted(routes: Record<string, Route>, requested: string[]) {
  * The cases below are about what happens to the installation, not about what
  * the reader sees; Tier UG owns the transcript.
  */
-function upgradeWith(assembly: UpgradeAssembly): Operation<Result<void>> {
-  return runUpgrade({
+function* upgradeWith(assembly: UpgradeAssembly): Operation<Result<void>> {
+  return yield* runUpgrade({
     command: {
       requestedTag: null,
       status: false,
@@ -253,7 +254,7 @@ function upgradeWith(assembly: UpgradeAssembly): Operation<Result<void>> {
       allowPrerelease: false,
     },
     assembly,
-    stream: new InMemoryStream(),
+    stream: yield* useJournalStream(UPGRADE_COMMAND_IDENTITY),
     // deno-lint-ignore require-yield
     *consume() {},
   });
@@ -307,7 +308,7 @@ function* run(options: Attempt, dir: string, exe: string): Operation<Outcome> {
       ...options.command,
     },
     assembly,
-    stream: new InMemoryStream(),
+    stream: yield* useJournalStream(UPGRADE_COMMAND_IDENTITY),
     // deno-lint-ignore require-yield
     *consume(chunk) {
       chunks.push(chunk);
@@ -343,6 +344,7 @@ describe(
   "Tier UH — the compiled upgrade host",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach(OWNER));
     beforeAll(() => useTempFileCompiler());
 
     it("UH1: every platform maps to the exact artifact the release publishes", function* () {
