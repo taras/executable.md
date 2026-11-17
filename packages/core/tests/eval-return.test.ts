@@ -12,22 +12,16 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import { journalBeforeEach, useJournalStream } from "../../test-support/failure-journal.ts";
-import type { Operation } from "effection";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 const OWNER = "packages/core/tests/eval-return.test.ts";
-
-function journalCase(name: string, source: string, body: (stream: InMemoryStream) => Operation<void>): void {
-  it(name, function* () {
-    yield* body(yield* useJournalStream(source));
-  });
-}
 
 describe("Eval block return value", () => {
   beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   // ER1: return string → rendered output
-  journalCase("ER1: return string → rendered output", "test.md", function* (stream) {
+  it("ER1: return string → rendered output", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": '```js eval\nreturn "hello from eval";\n```\n',
     });
@@ -44,7 +38,8 @@ describe("Eval block return value", () => {
   });
 
   // ER2: return number → coerced to string
-  journalCase("ER2: return number → coerced to string", "test.md", function* (stream) {
+  it("ER2: return number → coerced to string", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "```js eval\nreturn 42;\n```\n",
     });
@@ -61,7 +56,8 @@ describe("Eval block return value", () => {
   });
 
   // ER3: return null → no output
-  journalCase("ER3: return null → no output", "test.md", function* (stream) {
+  it("ER3: return null → no output", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "before\n```js eval\nreturn null;\n```\nafter",
     });
@@ -79,7 +75,8 @@ describe("Eval block return value", () => {
   });
 
   // ER4: return undefined → no output
-  journalCase("ER4: return undefined → no output", "test.md", function* (stream) {
+  it("ER4: return undefined → no output", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "before\n```js eval\nreturn undefined;\n```\nafter",
     });
@@ -96,7 +93,8 @@ describe("Eval block return value", () => {
   });
 
   // ER5: output() takes precedence over return
-  journalCase("ER5: output() takes precedence over return", "test.md", function* (stream) {
+  it("ER5: output() takes precedence over return", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": '```js eval\noutput("explicit");\nreturn "ignored";\n```\n',
     });
@@ -114,7 +112,8 @@ describe("Eval block return value", () => {
   });
 
   // ER6: return in persist eval → works same as normal
-  journalCase("ER6: return in persist eval → works same as normal", "test.md", function* (stream) {
+  it("ER6: return in persist eval → works same as normal", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": '```js persist eval\nreturn "persisted output";\n```\n',
     });
@@ -131,7 +130,8 @@ describe("Eval block return value", () => {
   });
 
   // ER7: no return → no output (existing behavior)
-  journalCase("ER7: no return → no output (existing behavior)", "test.md", function* (stream) {
+  it("ER7: no return → no output (existing behavior)", function* () {
+    const stream = yield* useJournalStream("test.md");
     yield* useStubFs({
       "test.md": "before\n```js eval\nconst x = 42;\n```\nafter",
     });
