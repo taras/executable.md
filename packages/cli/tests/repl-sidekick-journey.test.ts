@@ -1941,10 +1941,9 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
         unwrapped(intent.submit?.source ?? "")
           .split(" ")
           .at(-1) ?? "";
-      yield* page.until(
-        "the reserved source restored",
-        (one) => one.found(reserved, DRAFT_VALUE) > 0,
-      );
+      yield* page.until("the reserved source restored", (one) => draftShows(one, reserved));
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("the manual entry running", (one) => one.shows("The manual entry ran."));
       yield* entrySettles(page, 3, "ok");
