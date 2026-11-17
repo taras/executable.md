@@ -1056,17 +1056,23 @@ describe("headless live UI", () => {
     expect(third.terminal.listeners).toBe(0);
     yield* held.task.halt();
   });
+});
 
+describe("numbered attached frames", () => {
   it("H4: applies numbered frames only at matching dimensions and releases an outstanding frame on loss", function* () {
     const held = yield* useHeadlessFixture();
     yield* scoped(function* () {
       const terminal = recordingTerminal();
       const ui = yield* spawn(function* () {
         yield* terminal.install();
-        yield* held.view.connect(yield* useReplScreen());
+        yield* attachChildUi(held.reference.sessionId);
       });
-      yield* visible(terminal.terminal, "+ New Round");
-      pressAt(terminal.terminal, yield* locate(terminal.terminal, "+ New Round"));
+      yield* visible(terminal.terminal, "[detach]");
+      yield* held.input.ready(terminal.terminal);
+      yield* held.input.input(
+        terminal.terminal,
+        pointerPress(yield* locate(terminal.terminal, "+ New Round")),
+      );
       yield* visible(terminal.terminal, "> Round");
       terminal.terminal.end();
       yield* ui;

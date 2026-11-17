@@ -2,9 +2,8 @@
  * The words this product draws, and the keyboard routes a person takes to them.
  *
  * Every helper here is built from `support/repl-page.ts`'s own readings:
- * `shows`, `occurrences`, `found`, `locate` and the three scopes. None of them
- * counts a border, reads a focus cue, names a terminal column or builds a view,
- * and none of them searches for focus at run time: a route is a key count
+ * `shows`, `occurrences`, `found`, `locate`, the three scopes and drawn rows.
+ * None names a fixed terminal column or builds a view. A route is a key count
  * measured on a fresh mount from a named opening state, written down here with
  * the receipt that measured it.
  *
@@ -225,13 +224,8 @@ export function sidekickIdle(reading: ScreenReading): boolean {
 /**
  * The Sidekick pane's own rows, as this screen draws them.
  *
- * Below the tab row and from the Draft heading's own cell rightward. The pane's
- * chat is drawn a couple of cells left of its tab, so the tab's column is too
- * far right to be a floor, while the sidebar's copy of a reply sits far left of
- * the Draft. Both bounds are cells of text this screen draws.
- *
- * It does not separate the Transcript, which shares those columns, so words
- * both readings draw are asked of the whole screen by count instead.
+ * The wide tab row crosses the divider at the pane's left edge. At one outlet
+ * the tab row has no divider before Sidekick and the pane is full width.
  */
 export function paneLines(reading: ScreenReading): string[] {
   // A drawer over this pane covers its tab row, and then the pane draws none
@@ -239,8 +233,8 @@ export function paneLines(reading: ScreenReading): string[] {
   if (!reading.shows(SIDEKICK)) {
     return [];
   }
-  const tabs = reading.locate(SIDEKICK).row;
-  const floor = reading.shows(DRAFT) ? reading.locate(DRAFT).column : 0;
+  const { row: tabs, column } = reading.locate(SIDEKICK);
+  const floor = reading.rows[tabs].lastIndexOf("│", column) + 1;
   return reading.rows.map((row, index) =>
     index > tabs ? row.slice(Math.min(floor, row.length)) : "",
   );
