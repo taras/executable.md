@@ -1738,7 +1738,7 @@ describe(
 );
 
 describe(
-  "1388 — resume retention: a held Codex conversation across a host CLI upgrade",
+  "resume retention: a held Codex conversation across a host CLI upgrade",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     for (const [mode, failure, errorName] of [

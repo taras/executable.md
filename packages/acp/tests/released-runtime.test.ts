@@ -1147,7 +1147,7 @@ describe("released response recovery", () => {
 });
 
 describe(
-  "1388 — resume retention: standard retained-session refusal",
+  "resume retention: standard retained-session refusal",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     for (const [failure, stage, detail] of [

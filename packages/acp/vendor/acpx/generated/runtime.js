@@ -2114,7 +2114,21 @@ var AcpRuntimeManager = class {
 	failRuntimeTurn(task, error) {
 		task.promptStarted.reject(error);
 		task.sessionReady.reject(error);
-		return { status: "failed", error: projectRuntimeError(error) }; // XMD prompt diagnostic:
+		const normalized = normalizeOutputError(error, { origin: "runtime" });
+		// XMD prompt diagnostic: retain the extracted protocol facts, never raw data.
+		const acp = normalized.acp;
+		const details = acp?.data !== null && typeof acp?.data === "object" ? acp.data.details : void 0;
+		return {
+			status: "failed",
+			error: {
+				message: normalized.message,
+				...normalized.origin !== void 0 ? { origin: normalized.origin } : {},
+				...acp ? { acp: { code: acp.code, message: acp.message, ...typeof details === "string" ? { details } : {} } } : {},
+				...normalized.code ? { code: normalized.code } : {},
+				...normalized.detailCode ? { detailCode: normalized.detailCode } : {},
+				...normalized.retryable !== void 0 ? { retryable: normalized.retryable } : {}
+			}
+		};
 	}
 	async finalizeRuntimeTurn(task, turn) {
 		task.state.turnActive = false;
@@ -3071,20 +3085,4 @@ function createAcpRuntime(options) {
 function createRuntimeStore(options) {
 	return createFileSessionStore(options);
 }
-// XMD prompt diagnostic: reuse the bounded turn projection for a refused ensure.
-function projectRuntimeError(error) {
-	const normalized = normalizeOutputError(error, { origin: "runtime" });
-	const acp = normalized.acp;
-	const details = acp?.data !== null && typeof acp?.data === "object" ? acp.data.details : void 0;
-	return {
-		message: normalized.message,
-		...normalized.origin !== void 0 ? { origin: normalized.origin } : {},
-		// XMD prompt diagnostic: only protocol code, message and data.details.
-		...acp ? { acp: { code: acp.code, message: acp.message, ...typeof details === "string" ? { details } : {} } } : {},
-		...normalized.code ? { code: normalized.code } : {},
-		...normalized.detailCode ? { detailCode: normalized.detailCode } : {},
-		...normalized.retryable !== void 0 ? { retryable: normalized.retryable } : {}
-	};
-}
-export { projectRuntimeError }; // XMD prompt diagnostic:
 export { ACPX_BACKEND_ID, AcpRuntimeError, AcpxRuntime, DEFAULT_AGENT_NAME, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, REQUESTED_MODEL_UNSUPPORTED_REASONS, RequestedModelUnsupportedError, SharedAcpRuntime, createAcpRuntime, createAgentRegistry, createFileSessionStore, createRuntimeStore, createSharedAcpRuntime, decodeAcpxRuntimeHandleState, encodeAcpxRuntimeHandleState, inspectAgentModels, isAcpRuntimeError, isRequestedModelUnsupportedError };

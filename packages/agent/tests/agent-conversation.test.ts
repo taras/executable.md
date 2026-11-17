@@ -3109,7 +3109,7 @@ describe("used held conversation continuation", () => {
   });
 });
 
-describe("1388 — resume retention: held setup and recovery readers", () => {
+describe("resume retention: held setup and recovery readers", () => {
   const header = { provider: "acp", operation: "session/prompt", stage: "held-session-ensure" };
   const diagnostic = { ...header, acp: { code: -32041, details: "synthetic adapter detail" } };
   const message = "The retained session could not be resumed.";
@@ -3122,7 +3122,7 @@ describe("1388 — resume retention: held setup and recovery readers", () => {
     const result = yield* withConversation(
       history,
       stub(traffic, {
-        asserts: () => "native-1388",
+        asserts: () => "native-held-conversation",
         refuseSession() {
           if (refuse) {
             const error = new Error(message, { cause: new Error("unselected error envelope") });
