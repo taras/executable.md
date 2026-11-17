@@ -1,4 +1,3 @@
-import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
 /**
  * Tier QRY — `<Query>` (spec §6.22).
  *
@@ -13,7 +12,7 @@ import { workspaceJournalCases } from "../../test-support/journal-cases.ts";
  * the component a document resolves.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -37,6 +36,7 @@ import type {
   FunctionComponentDefinition,
   Json,
 } from "../src/types.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 /** Core's own registered definition, so what runs is what a document resolves. */
 function core(name: string): FunctionComponentDefinition {
@@ -117,11 +117,7 @@ function useFixture(): Operation<string> {
   });
 }
 
-const documentCase = workspaceJournalCases(
-  "packages/core/tests/query-component.test.ts",
-  "doc.md",
-  useFixture,
-);
+const OWNER = "packages/core/tests/query-component.test.ts";
 
 describe("Tier QRY — the two ordinary modes", () => {
   const DATA: Record<string, Json> = {
@@ -419,6 +415,7 @@ describe("Tier QRY — what the engine can reach", () => {
 });
 
 describe("Tier QRY — two producers, each run once, over the page they supplied", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const FIXTURE = JSON.stringify(
     {
       records: [
@@ -451,63 +448,61 @@ describe("Tier QRY — two producers, each run once, over the page they supplied
     });
   }
 
-  documentCase(
-    "Q4: a file read once and a glob listed once answer several queries",
-    function* (stream, dir) {
-      yield* writeTextFile(join(dir, "input.json"), FIXTURE);
-      yield* writeTextFile(
-        join(dir, "doc.md"),
-        [
-          '<File path="input.json" as="text" />',
-          `<Query value={text} yq='from_json | [.records[] | select(.status == "failed") | {"name": .name}]' as="failed" />`,
-          '<Query value={text} yq="from_json | [.records[] | .name]" as="names" />',
-          '<Glob include={["input.json"]} as="paths" />',
-          `<Query value={paths} yq='[.[] | {"path": .}]' as="listed" />`,
-          "<Json value={failed} />",
-          "<Json value={names} />",
-          "<Json value={listed} />",
-          "",
-        ].join("\n\n"),
-      );
+  it("Q4: a file read once and a glob listed once answer several queries", function* () {
+    const dir = yield* useFixture();
+    const path = join(dir, "doc.md");
+    const stream = yield* useJournalStream(path);
+    yield* writeTextFile(join(dir, "input.json"), FIXTURE);
+    yield* writeTextFile(
+      path,
+      [
+        '<File path="input.json" as="text" />',
+        `<Query value={text} yq='from_json | [.records[] | select(.status == "failed") | {"name": .name}]' as="failed" />`,
+        '<Query value={text} yq="from_json | [.records[] | .name]" as="names" />',
+        '<Glob include={["input.json"]} as="paths" />',
+        `<Query value={paths} yq='[.[] | {"path": .}]' as="listed" />`,
+        "<Json value={failed} />",
+        "<Json value={names} />",
+        "<Json value={listed} />",
+        "",
+      ].join("\n\n"),
+    );
 
-      const calls: Calls = { reads: [], globs: [] };
-      const output = yield* scoped(function* () {
-        // The document's own working directory, installed explicitly the way an
-        // entrypoint does: `<File>` and `<Glob>` resolve against `Env.cwd`
-        // rather than against this process's.
-        yield* API.Env.around(
-          {
-            // deno-lint-ignore require-yield
-            *cwd() {
-              return dir;
-            },
+    const calls: Calls = { reads: [], globs: [] };
+    const output = yield* scoped(function* () {
+      // The document's own working directory, installed explicitly the way an
+      // entrypoint does: `<File>` and `<Glob>` resolve against `Env.cwd`
+      // rather than against this process's.
+      yield* API.Env.around(
+        {
+          // deno-lint-ignore require-yield
+          *cwd() {
+            return dir;
           },
-          { at: "min" },
-        );
-        yield* useHostFiles();
-        yield* watched(calls);
-        return yield* collect(
-          yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }),
-        );
-      });
+        },
+        { at: "min" },
+      );
+      yield* useHostFiles();
+      yield* watched(calls);
+      return yield* collect(yield* execute({ path, stream, includes: [dir] }));
+    });
 
-      const rendered = String(output);
-      expect(rendered).toContain('{\n    "name": "b"\n  }');
-      expect(rendered).toContain('[\n  "a",\n  "b"\n]');
-      expect(rendered).toContain('"path": "input.json"');
-      // Each producer crossed its provider exactly once, however many questions
-      // were asked of what it produced.
-      expect(calls.reads).toEqual(["input.json"]);
-      expect(calls.globs).toHaveLength(1);
-      // The next marker is in the value and stays there: nothing followed it and
-      // nothing claimed the records were complete.
-      expect(rendered).not.toContain("cursor-2");
-      expect(
-        yield* scoped(function* () {
-          yield* useHostFiles();
-          return yield* readTextFile(join(dir, "input.json"));
-        }),
-      ).toBe(FIXTURE);
-    },
-  );
+    const rendered = String(output);
+    expect(rendered).toContain('{\n    "name": "b"\n  }');
+    expect(rendered).toContain('[\n  "a",\n  "b"\n]');
+    expect(rendered).toContain('"path": "input.json"');
+    // Each producer crossed its provider exactly once, however many questions
+    // were asked of what it produced.
+    expect(calls.reads).toEqual(["input.json"]);
+    expect(calls.globs).toHaveLength(1);
+    // The next marker is in the value and stays there: nothing followed it and
+    // nothing claimed the records were complete.
+    expect(rendered).not.toContain("cursor-2");
+    expect(
+      yield* scoped(function* () {
+        yield* useHostFiles();
+        return yield* readTextFile(join(dir, "input.json"));
+      }),
+    ).toBe(FIXTURE);
+  });
 });

@@ -23,7 +23,7 @@
  * read still gets its answer.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import { API } from "@executablemd/runtime";
@@ -44,9 +44,9 @@ import type {
 } from "../src/deno/composition/github.ts";
 import { GITHUB_ISSUES_ENV } from "../src/deno/issue/configuration.ts";
 import { fakeGitHubAccess, gitHubStore } from "./support/github.ts";
-import { journalCases } from "../../test-support/journal-cases.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
-const journalCase = journalCases("packages/git/tests/github-activation.test.ts");
+const OWNER = "packages/git/tests/github-activation.test.ts";
 
 /** Where every step this suite watches records itself, in the order it happened. */
 type Step = "configuration" | "source" | "open" | "credential" | "transport";
@@ -156,20 +156,22 @@ function reviewing(steps: Step[]): (endpoint?: string) => GitHubSource {
 }
 
 /** One document, executed with the bundled Plugin installed and nothing else. */
-function* document(stream: InMemoryStream, source: string): Operation<unknown> {
+function* document(stream: InMemoryStream | undefined, source: string): Operation<unknown> {
   const install = gitPlugin.install;
   if (install === undefined) {
     throw new Error("the Git Plugin installed nothing");
   }
   const contribution = yield* install.call(gitPlugin, { command: "run", args: ["run"] });
   return yield* collect(
-    yield* executeInstalled({ ...inlineSource(source), stream }, [
-      { admissions: [...(contribution?.admissions ?? [])] },
-    ]),
+    yield* executeInstalled(
+      { ...inlineSource(source), stream: stream ?? (yield* useJournalStream("<eval>")) },
+      [{ admissions: [...(contribution?.admissions ?? [])] }],
+    ),
   );
 }
 
 describe("what installing the bundled GitHub adapter costs", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("reads no configuration when the Plugin is installed and nothing is invoked", function* () {
     // The whole contribution — declarations and admissions — with every
     // outward boundary refusing. Installation is the thing under test.
@@ -191,25 +193,21 @@ describe("what installing the bundled GitHub adapter costs", () => {
     });
   });
 
-  journalCase(
-    "reads no configuration for a document that writes no GitHub vocabulary",
-    "<eval>",
-    function* (stream) {
-      const rendered = yield* scoped(function* () {
-        yield* refusing();
-        yield* useGitHubIssues({
-          host: () => ({
-            endpoint: "https://api.github.test",
-            *open(): Operation<GitHubAccess> {
-              throw new Error("a credential was obtained");
-            },
-          }),
-        });
-        return yield* document(stream, "nothing here reaches a service\n");
+  it("reads no configuration for a document that writes no GitHub vocabulary", function* () {
+    const rendered = yield* scoped(function* () {
+      yield* refusing();
+      yield* useGitHubIssues({
+        host: () => ({
+          endpoint: "https://api.github.test",
+          *open(): Operation<GitHubAccess> {
+            throw new Error("a credential was obtained");
+          },
+        }),
       });
-      expect(String(rendered)).toContain("nothing here reaches a service");
-    },
-  );
+      return yield* document(undefined, "nothing here reaches a service\n");
+    });
+    expect(String(rendered)).toContain("nothing here reaches a service");
+  });
 
   it("reads no configuration for a destination another provider owns", function* () {
     // Target recognition comes first, and it reads nothing outside the

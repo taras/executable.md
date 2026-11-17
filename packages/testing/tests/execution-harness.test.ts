@@ -8,7 +8,7 @@
  * about production assembly, which is the CLI's contract and is held there.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { all, createContext, scoped, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -20,8 +20,11 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
-import { journalCases } from "../../test-support/journal-cases.ts";
-import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import type { DeliverySink } from "../../cli/src/stdout-delivery.ts";
 import { readRecords } from "../../cli/src/repl/journal-records.ts";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -88,7 +91,7 @@ function* runHarness(
     // The harness is a delivery the host attaches, so these tests are
     // the host: without this, `<Execution>` is recognized and refused.
     const execution = yield* executeInstalled(
-      { path: "README.md", stream: options.stream ?? new InMemoryStream() },
+      { path: "README.md", stream: options.stream ?? (yield* useJournalStream("README.md")) },
       [testHarnessInstallation(stub.provider)],
     );
     const chunks: string[] = [];
@@ -104,11 +107,6 @@ function* runHarness(
 }
 
 const OWNER = "packages/testing/tests/execution-harness.test.ts";
-const registerRootCase = journalCases(OWNER);
-
-function rootCase(name: string, body: (stream: InMemoryStream) => Operation<void>): void {
-  registerRootCase(name, "README.md", body);
-}
 const RUN_SUITE = '<Execution host="run">';
 
 function captureHarness(
@@ -169,6 +167,7 @@ const CHILD_WITH_PROPS = doc(
 );
 
 describe(RUN_SUITE, () => {
+  beforeEach(journalBeforeEach(OWNER));
   const referenced = "runs a referenced document as a root, with root props and text return";
   it(referenced, function* () {
     yield* captureHarness(
@@ -378,18 +377,15 @@ describe(RUN_SUITE, () => {
     });
   });
 
-  rootCase("refuses a run that names both a target and a source", function* (stream) {
-    const run = yield* runHarness(
-      {
-        "README.md": doc(
-          '<Test name="both">',
-          '<Execution host="run" target="child.md" source={"x"} as="child" />',
-          "</Test>",
-        ),
-        "child.md": doc("child"),
-      },
-      { stream },
-    );
+  it("refuses a run that names both a target and a source", function* () {
+    const run = yield* runHarness({
+      "README.md": doc(
+        '<Test name="both">',
+        '<Execution host="run" target="child.md" source={"x"} as="child" />',
+        "</Test>",
+      ),
+      "child.md": doc("child"),
+    });
     expect(only(run).status).toBe("fail");
     expect(only(run).error?.message).toContain("exactly one of");
     expect(run.log.requests).toEqual([]);
@@ -397,67 +393,60 @@ describe(RUN_SUITE, () => {
 });
 
 describe("child failure", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const FAILING = {
     "README.md": "",
     "boom.md": doc("```sh exec", "exit 3", "```"),
   };
 
-  rootCase("is assertable when the outcome is bound", function* (stream) {
-    const run = yield* runHarness(
-      {
-        ...FAILING,
-        "README.md": doc(
-          '<Test name="bound">',
-          '<Execution host="run" target="boom.md" as="child">',
-          "<AssertEquals actual={child.result.ok} expected={false} />",
-          "</Execution>",
-          "</Test>",
-        ),
-      },
-      { stream },
-    );
+  it("is assertable when the outcome is bound", function* () {
+    const run = yield* runHarness({
+      ...FAILING,
+      "README.md": doc(
+        '<Test name="bound">',
+        '<Execution host="run" target="boom.md" as="child">',
+        "<AssertEquals actual={child.result.ok} expected={false} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
     expect(only(run).status).toBe("pass");
   });
 
-  rootCase("fails the owning test when the outcome is not bound", function* (stream) {
-    const run = yield* runHarness(
-      {
-        ...FAILING,
-        "README.md": doc(
-          '<Test name="unbound">',
-          '<Execution host="run" target="boom.md" />',
-          "</Test>",
-        ),
-      },
-      { stream },
-    );
+  it("fails the owning test when the outcome is not bound", function* () {
+    const run = yield* runHarness({
+      ...FAILING,
+      "README.md": doc(
+        '<Test name="unbound">',
+        '<Execution host="run" target="boom.md" />',
+        "</Test>",
+      ),
+    });
     expect(only(run).status).toBe("fail");
     expect(only(run).error?.message).toContain("ran a child that failed");
   });
 
-  rootCase("keeps the output rendered before the failure", function* (stream) {
-    const run = yield* runHarness(
-      {
-        ...FAILING,
-        "README.md": doc(
-          '<Test name="partial">',
-          '<Execution host="run" target="boom.md" as="child">',
-          '<CollectOutput as="output" />',
-          "",
-          '<AssertStringIncludes actual={output} expected="before the failure" />',
-          "</Execution>",
-          "</Test>",
-        ),
-        "boom.md": doc("before the failure", "", "```sh exec", "exit 3", "```"),
-      },
-      { stream },
-    );
+  it("keeps the output rendered before the failure", function* () {
+    const run = yield* runHarness({
+      ...FAILING,
+      "README.md": doc(
+        '<Test name="partial">',
+        '<Execution host="run" target="boom.md" as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertStringIncludes actual={output} expected="before the failure" />',
+        "</Execution>",
+        "</Test>",
+      ),
+      "boom.md": doc("before the failure", "", "```sh exec", "exit 3", "```"),
+    });
     expect(only(run).status).toBe("pass");
   });
 });
 
 describe("display and collection", () => {
-  rootCase("displays each chunk before the child has settled", function* (stream) {
+  beforeEach(journalBeforeEach(OWNER));
+  it("displays each chunk before the child has settled", function* () {
     const displayed = withResolvers<void>();
     const run = yield* runHarness(
       {
@@ -473,7 +462,6 @@ describe("display and collection", () => {
         ),
       },
       {
-        stream,
         // The gate is at the consumer, not on a clock: the second chunk is not
         // produced until the first has been received by this document's own
         // output reader, so a harness that buffered would deadlock rather than
@@ -498,7 +486,7 @@ describe("display and collection", () => {
     expect(run.chunks.join("")).toContain("second");
   });
 
-  rootCase("displays a child that nothing collects", function* (stream) {
+  it("displays a child that nothing collects", function* () {
     const run = yield* runHarness(
       {
         "README.md": doc(
@@ -508,7 +496,6 @@ describe("display and collection", () => {
         ),
       },
       {
-        stream,
         *emit(chunk) {
           yield* chunk("shown anyway\n");
         },
@@ -518,7 +505,7 @@ describe("display and collection", () => {
     expect(run.chunks.join("")).toContain("shown anyway");
   });
 
-  rootCase("leaves <Let> lexical: it never sees the child's stream", function* (stream) {
+  it("leaves <Let> lexical: it never sees the child's stream", function* () {
     const run = yield* runHarness(
       {
         "README.md": doc(
@@ -533,7 +520,6 @@ describe("display and collection", () => {
         ),
       },
       {
-        stream,
         *emit(chunk) {
           yield* chunk("child stream\n");
         },
@@ -544,86 +530,72 @@ describe("display and collection", () => {
 });
 
 describe("journal policy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const CHILD = { "child.md": doc("child body") };
 
-  rootCase("allocates no journal for a transient run", function* (stream) {
-    const run = yield* runHarness(
-      {
-        ...CHILD,
-        "README.md": doc(
-          '<Test name="transient">',
-          '<Execution host="run" target="child.md" as="child" />',
-          "</Test>",
-        ),
-      },
-      { stream },
-    );
+  it("allocates no journal for a transient run", function* () {
+    const run = yield* runHarness({
+      ...CHILD,
+      "README.md": doc(
+        '<Test name="transient">',
+        '<Execution host="run" target="child.md" as="child" />',
+        "</Test>",
+      ),
+    });
     expect(only(run).status).toBe("pass");
     expect(run.log.requests[0]?.journal).toBe("transient");
   });
 
-  rootCase(
-    "refuses <CollectJournal> without a selected journal, before the child runs",
-    function* (stream) {
-      const run = yield* runHarness(
-        {
-          ...CHILD,
-          "README.md": doc(
-            '<Test name="no-journal">',
-            '<Execution host="run" target="child.md" as="child">',
-            '<CollectJournal as="journal" />',
-            "</Execution>",
-            "</Test>",
-          ),
-        },
-        { stream },
-      );
-      expect(only(run).status).toBe("fail");
-      expect(only(run).error?.message).toContain("<CollectJournal>");
-      expect(run.log.requests).toEqual([]);
-    },
-  );
+  it("refuses <CollectJournal> without a selected journal, before the child runs", function* () {
+    const run = yield* runHarness({
+      ...CHILD,
+      "README.md": doc(
+        '<Test name="no-journal">',
+        '<Execution host="run" target="child.md" as="child">',
+        '<CollectJournal as="journal" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    expect(only(run).status).toBe("fail");
+    expect(only(run).error?.message).toContain("<CollectJournal>");
+    expect(run.log.requests).toEqual([]);
+  });
 
-  rootCase("retains and collects a diagnostic run journal", function* (stream) {
-    const run = yield* runHarness(
-      {
-        ...CHILD,
-        "README.md": doc(
-          '<Test name="diagnostic">',
-          '<Execution host="run" target="child.md" as="child">',
-          "<DiagnosticJournal />",
-          '<CollectJournal as="journal" />',
-          "",
-          "<AssertEquals actual={journal.length > 0} expected={true} />",
-          "</Execution>",
-          "</Test>",
-        ),
-      },
-      { stream },
-    );
+  it("retains and collects a diagnostic run journal", function* () {
+    const run = yield* runHarness({
+      ...CHILD,
+      "README.md": doc(
+        '<Test name="diagnostic">',
+        '<Execution host="run" target="child.md" as="child">',
+        "<DiagnosticJournal />",
+        '<CollectJournal as="journal" />',
+        "",
+        "<AssertEquals actual={journal.length > 0} expected={true} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
     expect(only(run).status).toBe("pass");
     expect(run.log.requests[0]?.journal).toBe("diagnostic");
     expect(run.log.requests[0]?.collectJournal).toBe(true);
   });
 
-  rootCase("installs every declaration before the child's root is imported", function* (stream) {
-    const run = yield* runHarness(
-      {
-        ...CHILD,
-        "README.md": doc(
-          '<Test name="before-import">',
-          '<Execution host="run" target="child.md" as="child">',
-          "<DiagnosticJournal />",
-          '<CollectOutput as="output" />',
-          '<CollectJournal as="journal" />',
-          "",
-          "<AssertEquals actual={child.result.ok} expected={true} />",
-          "</Execution>",
-          "</Test>",
-        ),
-      },
-      { stream },
-    );
+  it("installs every declaration before the child's root is imported", function* () {
+    const run = yield* runHarness({
+      ...CHILD,
+      "README.md": doc(
+        '<Test name="before-import">',
+        '<Execution host="run" target="child.md" as="child">',
+        "<DiagnosticJournal />",
+        '<CollectOutput as="output" />',
+        '<CollectJournal as="journal" />',
+        "",
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
     expect(only(run).status).toBe("pass");
     // The profile the terminal settled on is complete at the moment the host is
     // first asked for a child, which is before it imports anything.
@@ -632,51 +604,46 @@ describe("journal policy", () => {
 });
 
 describe("what may run a child", () => {
-  rootCase("refuses <Execution> outside a canonical <Test>", function* (stream) {
-    const run = yield* runHarness(
-      {
-        "README.md": doc("<Testing>", '<Execution host="run" target="child.md" />', "</Testing>"),
-        "child.md": doc("child"),
-      },
-      { stream },
-    );
+  beforeEach(journalBeforeEach(OWNER));
+  it("refuses <Execution> outside a canonical <Test>", function* () {
+    const run = yield* runHarness({
+      "README.md": doc("<Testing>", '<Execution host="run" target="child.md" />', "</Testing>"),
+      "child.md": doc("child"),
+    });
     expect(run.completion.ok).toBe(false);
     expect(failureOf(run)).toContain("canonical <Test>");
     expect(run.log.requests).toEqual([]);
   });
 
-  rootCase("grants nothing to a repository component named Test", function* (stream) {
-    const run = yield* runHarness(
-      {
-        "README.md": doc(
-          "<Testing>",
-          '<Test name="counterfeit">',
-          '<Execution host="run" target="child.md" />',
-          "</Test>",
-          "</Testing>",
-        ),
-        // Chosen ahead of core's default, so core's <Test> never runs and no
-        // harness is minted for what it expands.
-        "components/Test.md": doc(
-          "---",
-          "props:",
-          "  type: object",
-          "  properties:",
-          "    name: { type: string }",
-          "  additionalProperties: false",
-          "---",
-          "",
-          "<Content />",
-        ),
-        "child.md": doc("child"),
-      },
-      { stream },
-    );
+  it("grants nothing to a repository component named Test", function* () {
+    const run = yield* runHarness({
+      "README.md": doc(
+        "<Testing>",
+        '<Test name="counterfeit">',
+        '<Execution host="run" target="child.md" />',
+        "</Test>",
+        "</Testing>",
+      ),
+      // Chosen ahead of core's default, so core's <Test> never runs and no
+      // harness is minted for what it expands.
+      "components/Test.md": doc(
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    name: { type: string }",
+        "  additionalProperties: false",
+        "---",
+        "",
+        "<Content />",
+      ),
+      "child.md": doc("child"),
+    });
     expect(failureOf(run)).toContain("canonical <Test>");
     expect(run.log.requests).toEqual([]);
   });
 
-  rootCase("lets public middleware refuse, and never lets it publish a child", function* (stream) {
+  it("lets public middleware refuse, and never lets it publish a child", function* () {
     const seen: string[] = [];
     const run = yield* runHarness(
       {
@@ -688,7 +655,6 @@ describe("what may run a child", () => {
         "child.md": doc("child"),
       },
       {
-        stream,
         *around() {
           yield* ExecutionHost.around({
             // Answers without delegating: a handler that returns is not a child,
@@ -708,7 +674,7 @@ describe("what may run a child", () => {
     expect(only(run).error?.message).toContain("without delegating");
   });
 
-  rootCase("refuses a second delegation of one request", function* (stream) {
+  it("refuses a second delegation of one request", function* () {
     const run = yield* runHarness(
       {
         "README.md": doc(
@@ -719,7 +685,6 @@ describe("what may run a child", () => {
         "child.md": doc("child"),
       },
       {
-        stream,
         *around() {
           yield* ExecutionHost.around({
             *run([request]: [ExecutionHostRequest], next) {
@@ -737,7 +702,7 @@ describe("what may run a child", () => {
     expect(run.log.requests).toEqual([]);
   });
 
-  rootCase("refuses a request another invocation issued", function* (stream) {
+  it("refuses a request another invocation issued", function* () {
     let stolen: ExecutionHostRequest | undefined;
     const run = yield* runHarness(
       {
@@ -750,7 +715,6 @@ describe("what may run a child", () => {
         "child.md": doc("child"),
       },
       {
-        stream,
         *around() {
           yield* ExecutionHost.around({
             *run([request]: [ExecutionHostRequest], next) {
@@ -769,44 +733,36 @@ describe("what may run a child", () => {
     expect(only(run).error?.message).toContain("another <Execution> issued");
   });
 
-  rootCase("refuses a declaration written outside <Execution>", function* (stream) {
-    const run = yield* runHarness(
-      {
-        "README.md": doc('<Test name="loose">', '<CollectOutput as="output" />', "</Test>"),
-      },
-      { stream },
-    );
+  it("refuses a declaration written outside <Execution>", function* () {
+    const run = yield* runHarness({
+      "README.md": doc('<Test name="loose">', '<CollectOutput as="output" />', "</Test>"),
+    });
     expect(only(run).status).toBe("fail");
     expect(only(run).error?.message).toContain("declaration inside <Execution>");
   });
 
-  rootCase(
-    "gives a repository component named CollectOutput ordinary semantics",
-    function* (stream) {
-      const run = yield* runHarness(
-        {
-          "README.md": doc(
-            '<Test name="shadowed">',
-            '<Execution host="run" target="child.md" as="child">',
-            '<CollectOutput as="output" />',
-            "",
-            '<AssertStringIncludes actual={output} expected="repository" />',
-            "</Execution>",
-            "</Test>",
-          ),
-          // Selected ahead of this package's default, so the scan ends where it is
-          // written and it expands with the assertions as any component would.
-          "components/CollectOutput.md": doc("repository text"),
-          "child.md": doc("child"),
-        },
-        { stream },
-      );
-      expect(only(run).status).toBe("pass");
-    },
-  );
+  it("gives a repository component named CollectOutput ordinary semantics", function* () {
+    const run = yield* runHarness({
+      "README.md": doc(
+        '<Test name="shadowed">',
+        '<Execution host="run" target="child.md" as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertStringIncludes actual={output} expected="repository" />',
+        "</Execution>",
+        "</Test>",
+      ),
+      // Selected ahead of this package's default, so the scan ends where it is
+      // written and it expands with the assertions as any component would.
+      "components/CollectOutput.md": doc("repository text"),
+      "child.md": doc("child"),
+    });
+    expect(only(run).status).toBe("pass");
+  });
 });
 
 describe("the harness path", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const DOC = {
     "README.md": doc(
       '<Test name="no-harness">',
@@ -818,7 +774,6 @@ describe("the harness path", () => {
 
   /** One run, with the host attaching exactly what the case is about. */
   function* runWith(
-    stream: InMemoryStream,
     files: Record<string, string>,
     installations: (provider: ExecutionHostProvider) => readonly ExecutionInstallation[],
     around?: () => Operation<void>,
@@ -833,7 +788,7 @@ describe("the harness path", () => {
       const tests = yield* useTesting();
       const stub = stubExecutionHost({ files });
       const execution = yield* executeInstalled(
-        { path: "README.md", stream },
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
         installations(stub.provider),
       );
       yield* forEach(function* () {}, execution.output);
@@ -846,22 +801,23 @@ describe("the harness path", () => {
     });
   }
 
-  rootCase("refuses inside a real <Test> when the host attached no installer", function* (stream) {
+  it("refuses inside a real <Test> when the host attached no installer", function* () {
     // The capability exists only as the argument of a delivery, so a host that
     // attached no receiver leaves every test without one — including this one,
     // which is a canonical <Test> in every other respect.
-    const run = yield* runWith(stream, DOC, () => []);
+    const run = yield* runWith(DOC, () => []);
     expect(run.results[0]?.status).toBe("fail");
     expect(run.results[0]?.error?.message).toContain("canonical <Test>");
   });
 
-  rootCase("refuses when a harness exists but no trusted host profile does", function* (stream) {
+  it("refuses when a harness exists but no trusted host profile does", function* () {
     const run = yield* scoped(function* () {
       yield* useStubFs(DOC);
       const tests = yield* useTesting();
-      const execution = yield* executeInstalled({ path: "README.md", stream }, [
-        testHarnessInstallation(),
-      ]);
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
+        [testHarnessInstallation()],
+      );
       yield* forEach(function* () {}, execution.output);
       yield* execution;
       return { results: yield* tests.results, failure: "" };
@@ -869,14 +825,13 @@ describe("the harness path", () => {
     expect(run.results[0]?.error?.message).toContain("trusted host profile");
   });
 
-  rootCase("hands nothing to installers planted under the context's name", function* (stream) {
+  it("hands nothing to installers planted under the context's name", function* () {
     const stolen: unknown[] = [];
     // The name is public — it is in the source. What is not public is the value:
     // canonical execution publishes one this module built, and a look-alike is
     // refused rather than delivered to.
     const Planted = createContext<unknown>("core.test.harness-installers", undefined);
     const run = yield* runWith(
-      stream,
       DOC,
       (provider) => [testHarnessInstallation(provider)],
       function* () {
@@ -898,65 +853,56 @@ describe("the harness path", () => {
     expect(run.results[0]?.status).toBe("pass");
   });
 
-  rootCase(
-    "ignores providers planted under the former public provider context",
-    function* (stream) {
-      const called: string[] = [];
-      const FormerProvider = createContext<ExecutionHostProvider | undefined>(
-        "testing.execution-host.provider",
-        undefined,
-      );
-      const run = yield* runWith(
-        stream,
-        DOC,
-        (provider) => [testHarnessInstallation(provider)],
-        function* () {
-          yield* FormerProvider.set({
-            *runChild(_invocation) {
-              called.push("synthetic");
-              return { outcome: { kind: "settled", result: { ok: true, value: "" } }, output: "" };
-            },
-          });
-        },
-      );
-      expect(called).toEqual([]);
-      expect(run.log.roots).toEqual(["child.md"]);
-      expect(run.results[0]?.status).toBe("pass");
-    },
-  );
-
-  rootCase(
-    "does not let Component middleware turn a bound child failure into an unbound failure",
-    function* (stream) {
-      const run = yield* runWith(
-        stream,
-        {
-          "README.md": doc(
-            '<Test name="bound">',
-            '<Execution host="run" target="boom.md" as="child">',
-            "<AssertEquals actual={child.result.ok} expected={false} />",
-            "</Execution>",
-            "</Test>",
-          ),
-          "boom.md": doc("```sh exec", "exit 3", "```"),
-        },
-        (provider) => [testHarnessInstallation(provider)],
-        function* () {
-          yield* Component.around({
-            // deno-lint-ignore require-yield
-            *hasBinding() {
-              return false;
-            },
-          });
-        },
-      );
-      expect(run.results[0]?.status).toBe("pass");
-    },
-  );
-
-  rootCase("does not let Component middleware rescue an unbound child failure", function* (stream) {
+  it("ignores providers planted under the former public provider context", function* () {
+    const called: string[] = [];
+    const FormerProvider = createContext<ExecutionHostProvider | undefined>(
+      "testing.execution-host.provider",
+      undefined,
+    );
     const run = yield* runWith(
-      stream,
+      DOC,
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* FormerProvider.set({
+          *runChild(_invocation) {
+            called.push("synthetic");
+            return { outcome: { kind: "settled", result: { ok: true, value: "" } }, output: "" };
+          },
+        });
+      },
+    );
+    expect(called).toEqual([]);
+    expect(run.log.roots).toEqual(["child.md"]);
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  it("does not let Component middleware turn a bound child failure into an unbound failure", function* () {
+    const run = yield* runWith(
+      {
+        "README.md": doc(
+          '<Test name="bound">',
+          '<Execution host="run" target="boom.md" as="child">',
+          "<AssertEquals actual={child.result.ok} expected={false} />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "boom.md": doc("```sh exec", "exit 3", "```"),
+      },
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *hasBinding() {
+            return false;
+          },
+        });
+      },
+    );
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  it("does not let Component middleware rescue an unbound child failure", function* () {
+    const run = yield* runWith(
       {
         "README.md": doc(
           '<Test name="unbound">',
@@ -983,12 +929,11 @@ describe("the harness path", () => {
     expect("publishBinding" in Component.operations).toBe(false);
   });
 
-  rootCase("freezes the host profile before middleware sees it", function* (stream) {
+  it("freezes the host profile before middleware sees it", function* () {
     let hasReplacement = true;
     let topLevelFrozen = false;
     let propsFrozen = false;
     const run = yield* runWith(
-      stream,
       {
         "README.md": doc(
           '<Test name="immutable">',
@@ -1047,34 +992,30 @@ describe("the harness path", () => {
     expect(run.results[0]?.status).toBe("pass");
   });
 
-  rootCase(
-    "does not carry the capability in what <Test>'s behavior is called with",
-    function* (stream) {
-      const arguments_: unknown[][] = [];
-      const run = yield* runWith(
-        stream,
-        {
-          "README.md": doc('<Test name="behavior">', "body", "</Test>"),
-        },
-        (provider) => [testHarnessInstallation(provider)],
-        function* () {
-          // Public middleware on the behavior hook. It sees what a test was
-          // written with and nothing else: no argument carries a capability, so a
-          // second loaded copy composing here acquires none either.
-          yield* TestBehavior.around({
-            *test(args, next) {
-              arguments_.push([...args]);
-              return yield* next(...args);
-            },
-          });
-        },
-      );
-      expect(run.results[0]?.status).toBe("pass");
-      expect(arguments_.length).toBe(1);
-      expect(arguments_[0]?.length).toBe(1);
-      expect(arguments_[0]?.[0]).toEqual({ name: "behavior" });
-    },
-  );
+  it("does not carry the capability in what <Test>'s behavior is called with", function* () {
+    const arguments_: unknown[][] = [];
+    const run = yield* runWith(
+      {
+        "README.md": doc('<Test name="behavior">', "body", "</Test>"),
+      },
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        // Public middleware on the behavior hook. It sees what a test was
+        // written with and nothing else: no argument carries a capability, so a
+        // second loaded copy composing here acquires none either.
+        yield* TestBehavior.around({
+          *test(args, next) {
+            arguments_.push([...args]);
+            return yield* next(...args);
+          },
+        });
+      },
+    );
+    expect(run.results[0]?.status).toBe("pass");
+    expect(arguments_.length).toBe(1);
+    expect(arguments_[0]?.length).toBe(1);
+    expect(arguments_[0]?.[0]).toEqual({ name: "behavior" });
+  });
 });
 
 /**
@@ -1090,6 +1031,7 @@ describe("the harness path", () => {
  * `execution-host-stub.ts` stands in for the CLI.
  */
 describe("child configuration declarations", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const AGENT_PROPS: PropsSchema = {
     type: "object",
     properties: { agent: { type: "string" } },
@@ -1199,7 +1141,6 @@ describe("child configuration declarations", () => {
   }
 
   function runDeclaring(
-    stream: InMemoryStream,
     files: Record<string, string>,
     options: {
       readonly declarations?: readonly ChildDeclaration[];
@@ -1219,9 +1160,10 @@ describe("child configuration declarations", () => {
       }
       const tests = yield* useTesting();
       const stub = stubExecutionHost({ files });
-      const execution = yield* executeInstalled({ path: "README.md", stream }, [
-        testHarnessInstallation(stub.provider, options.declarations ?? [stubDeclaration()]),
-      ]);
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
+        [testHarnessInstallation(stub.provider, options.declarations ?? [stubDeclaration()])],
+      );
       const output = yield* forEach(function* () {}, execution.output);
       const completion = yield* execution;
       return {
@@ -1246,25 +1188,22 @@ describe("child configuration declarations", () => {
     return first;
   }
 
-  rootCase(
-    "refuses a recognized declaration child's schema error before creating any child",
-    function* (stream) {
-      const run = yield* runDeclaring(stream, {
-        "README.md": doc(
-          '<Test name="invalid props">',
-          '<Execution host="run" source="unused">',
-          "<TestAgent>",
-          "<TestAgent.Scenario src={3} />",
-          "</TestAgent>",
-          "</Execution>",
-          "</Test>",
-        ),
-      });
-      expect(single(run).status).toBe("fail");
-      expect(single(run).error?.message).toContain("must be string");
-      expect(run.log.requests).toEqual([]);
-    },
-  );
+  it("refuses a recognized declaration child's schema error before creating any child", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="invalid props">',
+        '<Execution host="run" source="unused">',
+        "<TestAgent>",
+        "<TestAgent.Scenario src={3} />",
+        "</TestAgent>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    expect(single(run).status).toBe("fail");
+    expect(single(run).error?.message).toContain("must be string");
+    expect(run.log.requests).toEqual([]);
+  });
 
   it("deeply detaches and freezes scenario model and effort catalogs", function* () {
     const effortOptions = ["low", "high"];
@@ -1308,8 +1247,8 @@ describe("child configuration declarations", () => {
     expect(Object.isFrozen(captured?.options[0].efforts?.options)).toBe(true);
   });
 
-  rootCase("carries both declarations to the host as ordered, detached data", function* (stream) {
-    const run = yield* runDeclaring(stream, {
+  it("carries both declarations to the host as ordered, detached data", function* () {
+    const run = yield* runDeclaring({
       "README.md": doc(
         '<Test name="declared">',
         '<Execution host="run" target="child.md" as="child">',
@@ -1343,8 +1282,8 @@ describe("child configuration declarations", () => {
     expect(answers?.kind === "answers" && answers.matchers.length).toBe(1);
   });
 
-  rootCase("reads a declaration once, and not again with the assertions", function* (stream) {
-    const run = yield* runDeclaring(stream, {
+  it("reads a declaration once, and not again with the assertions", function* () {
+    const run = yield* runDeclaring({
       "README.md": doc(
         '<Test name="once">',
         '<Execution host="run" target="child.md" as="child">',
@@ -1365,59 +1304,52 @@ describe("child configuration declarations", () => {
     expect(testAgent?.kind === "test-agent" && testAgent.scenarios.length).toBe(1);
   });
 
-  rootCase(
-    "gives a repository component of the declaration's name ordinary semantics",
-    function* (stream) {
-      const run = yield* runDeclaring(stream, {
+  it("gives a repository component of the declaration's name ordinary semantics", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="shadowed">',
+        '<Execution host="run" target="child.md" as="child">',
+        '<TestAgent as="shadowed" />',
+        "",
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
+        "</Execution>",
+        "</Test>",
+      ),
+      // Chosen ahead of the package's, so the scan ends where it is written and
+      // it expands with the assertions as any component would.
+      "components/TestAgent.md": doc("a repository component"),
+      "child.md": doc("child body"),
+    });
+    expect(single(run).status).toBe("pass");
+    expect(run.log.requests[0]?.configuration).toBe(undefined);
+  });
+
+  it("refuses a repository component shadowing a declaration's own child", function* () {
+    const run = yield* runDeclaring(
+      {
         "README.md": doc(
-          '<Test name="shadowed">',
+          '<Test name="nested shadow">',
           '<Execution host="run" target="child.md" as="child">',
-          '<TestAgent as="shadowed" />',
+          "<TestAgent>",
+          '<TestAgent.Scenario src="review.md" />',
+          "</TestAgent>",
           "",
           "<AssertEquals actual={child.result.ok} expected={true} />",
-          '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
           "</Execution>",
           "</Test>",
         ),
-        // Chosen ahead of the package's, so the scan ends where it is written and
-        // it expands with the assertions as any component would.
-        "components/TestAgent.md": doc("a repository component"),
         "child.md": doc("child body"),
-      });
-      expect(single(run).status).toBe("pass");
-      expect(run.log.requests[0]?.configuration).toBe(undefined);
-    },
-  );
-
-  rootCase(
-    "refuses a repository component shadowing a declaration's own child",
-    function* (stream) {
-      const run = yield* runDeclaring(
-        stream,
-        {
-          "README.md": doc(
-            '<Test name="nested shadow">',
-            '<Execution host="run" target="child.md" as="child">',
-            "<TestAgent>",
-            '<TestAgent.Scenario src="review.md" />',
-            "</TestAgent>",
-            "",
-            "<AssertEquals actual={child.result.ok} expected={true} />",
-            "</Execution>",
-            "</Test>",
-          ),
-          "child.md": doc("child body"),
-        },
-        // The package registered `PackageScenario`, and this declaration accepts
-        // a definition nothing resolves to — the shape a repository
-        // `components/TestAgent/Scenario.md` winning resolution produces.
-        { declarations: [stubDeclaration(RepositoryScenario)] },
-      );
-      expect(single(run).status).toBe("fail");
-      expect(single(run).error?.message).toContain("accepts only its own declarations");
-      expect(run.log.requests.length).toBe(0);
-    },
-  );
+      },
+      // The package registered `PackageScenario`, and this declaration accepts
+      // a definition nothing resolves to — the shape a repository
+      // `components/TestAgent/Scenario.md` winning resolution produces.
+      { declarations: [stubDeclaration(RepositoryScenario)] },
+    );
+    expect(single(run).status).toBe("fail");
+    expect(single(run).error?.message).toContain("accepts only its own declarations");
+    expect(run.log.requests.length).toBe(0);
+  });
 
   const MALFORMED: readonly { name: string; body: readonly string[]; says: string }[] = [
     {
@@ -1505,8 +1437,8 @@ describe("child configuration declarations", () => {
   ];
 
   for (const malformed of MALFORMED) {
-    rootCase(`refuses ${malformed.name} before the child's root is imported`, function* (stream) {
-      const run = yield* runDeclaring(stream, {
+    it(`refuses ${malformed.name} before the child's root is imported`, function* () {
+      const run = yield* runDeclaring({
         "README.md": doc(
           '<Test name="malformed">',
           // No such document, so reaching a root at all would fail differently:
@@ -1526,8 +1458,8 @@ describe("child configuration declarations", () => {
     });
   }
 
-  rootCase('refuses a declaration on host="workflow"', function* (stream) {
-    const run = yield* runDeclaring(stream, {
+  it('refuses a declaration on host="workflow"', function* () {
+    const run = yield* runDeclaring({
       "README.md": doc(
         '<Test name="workflow">',
         "<WorkflowRun>",
@@ -1548,8 +1480,8 @@ describe("child configuration declarations", () => {
     expect(run.log.requests.length).toBe(0);
   });
 
-  rootCase("leaves an <Answers> written after the prefix an ordinary region", function* (stream) {
-    const run = yield* runDeclaring(stream, {
+  it("leaves an <Answers> written after the prefix an ordinary region", function* () {
+    const run = yield* runDeclaring({
       "README.md": doc(
         '<Test name="ordinary">',
         '<Execution host="run" target="child.md" as="child">',
@@ -1576,7 +1508,7 @@ describe("child configuration declarations", () => {
     expect(configurationOf(run).map((entry) => entry.kind)).toEqual(["test-agent"]);
   });
 
-  rootCase("finishes the child's teardown before the assertions expand", function* (stream) {
+  it("finishes the child's teardown before the assertions expand", function* () {
     const order: string[] = [];
     const run = yield* scoped(function* () {
       const files = {
@@ -1597,12 +1529,7 @@ describe("child configuration declarations", () => {
       yield* useStubFs(files);
       yield* registerComponents([
         { name: "TestAgent", origin: "stub", fn: PackageTestAgent, props: AGENT_PROPS },
-        {
-          name: "TestAgent.Scenario",
-          origin: "stub",
-          fn: PackageScenario,
-          props: SCENARIO_PROPS,
-        },
+        { name: "TestAgent.Scenario", origin: "stub", fn: PackageScenario, props: SCENARIO_PROPS },
         {
           name: "Mark",
           origin: "stub",
@@ -1619,9 +1546,10 @@ describe("child configuration declarations", () => {
         files,
         onTeardown: () => order.push("the child's teardown"),
       });
-      const execution = yield* executeInstalled({ path: "README.md", stream }, [
-        testHarnessInstallation(stub.provider, [stubDeclaration()]),
-      ]);
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: yield* useJournalStream("README.md") },
+        [testHarnessInstallation(stub.provider, [stubDeclaration()])],
+      );
       const output = yield* forEach(function* () {}, execution.output);
       const completion = yield* execution;
       return {
@@ -1684,8 +1612,8 @@ describe("child configuration declarations", () => {
   ];
 
   for (const indirect of INDIRECT) {
-    rootCase(`refuses ${indirect.name}`, function* (stream) {
-      const run = yield* runDeclaring(stream, {
+    it(`refuses ${indirect.name}`, function* () {
+      const run = yield* runDeclaring({
         "README.md": doc(
           '<Test name="indirect">',
           // No such document: reaching a root at all would fail differently,
@@ -1706,66 +1634,62 @@ describe("child configuration declarations", () => {
     });
   }
 
-  rootCase(
-    "lets public middleware read the configuration and change none of it",
-    function* (stream) {
-      let probed = 0;
-      const mutable: string[] = [];
-      const run = yield* runDeclaring(
-        stream,
-        {
-          "README.md": doc(
-            '<Test name="frozen">',
-            '<Execution host="run" target="child.md" as="child">',
-            "<TestAgent>",
-            '<TestAgent.Scenario session="review" src="review.md" />',
-            "</TestAgent>",
-            "",
-            "<Answers>",
-            '<Answer template="Approve?" value={{ decision: "approve" }} />',
-            "</Answers>",
-            "",
-            "<AssertEquals actual={child.result.ok} expected={true} />",
-            "</Execution>",
-            "</Test>",
-          ),
-          "child.md": doc("child body"),
-        },
-        {
-          *around() {
-            yield* ExecutionHost.around({
-              *run([request]: [ExecutionHostRequest], next) {
-                const configuration = request.profile.configuration ?? [];
-                const edits: Edit[] = [
-                  ["the request", request.profile, { configuration: [] }],
-                  ["the configuration list", configuration, { 0: undefined, length: 0 }],
-                  ...configuration.flatMap(layersOf),
-                ];
-                // Every nested layer, because a handler that could edit one of
-                // them would change what the child is assembled from after the
-                // chain has unwound.
-                for (const [label, target, edit] of edits) {
-                  probed += 1;
-                  try {
-                    Object.assign(Object(target), edit);
-                    mutable.push(label);
-                  } catch {
-                    // Frozen, which is the whole of what this asks.
-                  }
+  it("lets public middleware read the configuration and change none of it", function* () {
+    let probed = 0;
+    const mutable: string[] = [];
+    const run = yield* runDeclaring(
+      {
+        "README.md": doc(
+          '<Test name="frozen">',
+          '<Execution host="run" target="child.md" as="child">',
+          "<TestAgent>",
+          '<TestAgent.Scenario session="review" src="review.md" />',
+          "</TestAgent>",
+          "",
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "approve" }} />',
+          "</Answers>",
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child body"),
+      },
+      {
+        *around() {
+          yield* ExecutionHost.around({
+            *run([request]: [ExecutionHostRequest], next) {
+              const configuration = request.profile.configuration ?? [];
+              const edits: Edit[] = [
+                ["the request", request.profile, { configuration: [] }],
+                ["the configuration list", configuration, { 0: undefined, length: 0 }],
+                ...configuration.flatMap(layersOf),
+              ];
+              // Every nested layer, because a handler that could edit one of
+              // them would change what the child is assembled from after the
+              // chain has unwound.
+              for (const [label, target, edit] of edits) {
+                probed += 1;
+                try {
+                  Object.assign(Object(target), edit);
+                  mutable.push(label);
+                } catch {
+                  // Frozen, which is the whole of what this asks.
                 }
-                yield* next(request);
-              },
-            });
-          },
+              }
+              yield* next(request);
+            },
+          });
         },
-      );
-      expect(single(run).status).toBe("pass");
-      expect(mutable).toEqual([]);
-      expect(probed).toBe(12);
-      const [testAgent] = configurationOf(run);
-      expect(testAgent?.kind === "test-agent" && testAgent.scenarios[0]?.session).toBe("review");
-    },
-  );
+      },
+    );
+    expect(single(run).status).toBe("pass");
+    expect(mutable).toEqual([]);
+    expect(probed).toBe(12);
+    const [testAgent] = configurationOf(run);
+    expect(testAgent?.kind === "test-agent" && testAgent.scenarios[0]?.session).toBe("review");
+  });
 });
 
 /** One attempted edit: what it is called, what it targets, and what it writes. */
