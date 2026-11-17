@@ -19,7 +19,7 @@ import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenScope } from "./support/repl-page.ts";
 import { awaited } from "./support/mounted-repl.ts";
-import { intoDraft } from "./support/screen-journeys.ts";
+import { draftShows, intoDraft } from "./support/screen-journeys.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
@@ -69,6 +69,36 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("REPL page — Send and its visible scope", () => {
+  it("keeps one outlined editor and its caret while narrow Send hides the heading", function* () {
+    const page = yield* useReplPage({ size: NARROW });
+    yield* intoDraft(page);
+    const opened = page.screen();
+    expect(draftShows(opened, "Executable Markdown")).toBe(true);
+    const source = `${"a".repeat(85)}𐐀tail`;
+    yield* page.type(source);
+    yield* page.until("the tail within the editor", (one) => draftShows(one, "𐐀tail"));
+    yield* page.key("ArrowLeft");
+    yield* page.key("Tab");
+    const send = yield* page.until("narrow Send focused", (one) => one.shows("> Send"));
+    expect(send.shows("· draft")).toBe(false);
+    expect(send.shows("Enter adds a line")).toBe(false);
+    if (!draftShows(send, "𐐀tail")) {
+      throw new Error(page.describe());
+    }
+    yield* page.key("Backtab");
+    yield* page.until("heading and guidance restored", (one) => one.shows("> Round 1 · draft"));
+    yield* page.key("Tab");
+    yield* page.until("Send focused again", (one) => one.shows("> Send"));
+    const wide = yield* page.resize(WIDE);
+    expect(wide.shows("Round 1 · draft")).toBe(true);
+    const narrow = yield* page.resize(NARROW);
+    expect(narrow.shows("· draft")).toBe(false);
+    yield* page.press("𐐀tail");
+    yield* page.until("pointer refocused the editor", (one) => one.shows("> Round 1 · draft"));
+    yield* page.type("X");
+    yield* page.until("the same caret was used", (one) => draftShows(one, "𐐀taiXl"));
+  });
+
   it("opens by pointer and moves focus from the editor directly to Send", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* typed(page, "unsent Message");

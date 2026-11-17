@@ -695,6 +695,23 @@ export function paneContentProps(topGap = 0): ReplBoxProps {
   };
 }
 
+export function roundEditorOutlineProps(): ReplBoxProps {
+  return {
+    layout: {
+      ...paneContentProps().layout,
+      padding: { left: 1, right: 1 },
+    },
+    bg: terminalColour(REPL_PALETTE.draftSurface),
+    border: {
+      color: terminalColour(REPL_PALETTE.chromeEdge),
+      top: 1,
+      bottom: 1,
+      left: 1,
+      right: 1,
+    },
+  };
+}
+
 /**
  * One column of the body, stacked. `undefined` grows into what is left.
  *

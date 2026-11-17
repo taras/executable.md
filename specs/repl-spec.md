@@ -1352,7 +1352,7 @@ works. None of this is in the location: a copied location restores the chat
 somebody selected and promises no scroll position.
 
 Outside drawers, the identity header explains readiness and the next available
-action. The Round editor uses its own heading for editing guidance, including
+action. When visible, the Round editor heading gives editing guidance, including
 Enter for a newline and Tab for Send. Other focus destinations remain available
 through the existing Tab traversal and Ctrl+G hints.
 
@@ -1684,13 +1684,16 @@ shows that entry's exact source, its execution state and its results. Every name
 in that trail except the last one is a way back out to it: the reading is already
 at the last, and choosing an outer name leaves the reading there with the scopes
 beneath it no longer selected — the same thing choosing that scope's row in the
-catalog does. **+ New Round** replaces that reading with an Executable
-Markdown editor, with a gold `Round n · draft` heading, the value below it and
-a round bar at the bottom. Its number follows the most recently admitted
-round, even when an earlier one was selected. At 72×20, the control opens the
-Entries view first. The gold heading stays visible above the focused editor,
-which fills the space down to the round bar. The Sidekick conversation and
-unsent Message stay available when you return to them.
+catalog does. **+ New Round** replaces that reading with an inset, outlined Executable
+Markdown editor and a round bar at the bottom. The gold `Round n · draft`
+heading names the next round after the most recently admitted round, even when
+an earlier one was selected. At 72×20, New Round opens the Entries view first
+and shows the gold heading above the focused editor. At that size, focus on
+Send removes the heading and its key guidance from the frame and gives their
+rows to the editor. Returning focus to the editor restores them. The editor
+fills the available space above the round bar. When the draft is empty its first
+interior row shows the muted `Executable Markdown` placeholder. The Sidekick
+conversation and unsent Message remain available.
 
 The bar shows `✎ draft`, **Send** and **X**. Send is dim and admits nothing
 while the draft is empty. X discards the draft and returns focus to
@@ -1957,7 +1960,7 @@ one, not because some text happens to begin with a brace.
 
 A reading of this screen with the colour thrown away loses nothing it needs. An
 outcome is spelled `[ok]` or `[err]`, a selected row keeps its `*`, a focused
-control keeps its `>`, the Round editor heading says `draft`, and every state the emphasis
+control keeps its `>`, the round bar says `draft` while the editor is open, and every state the emphasis
 distinguishes is also said in words. The emphasis is how the screen is read
 quickly; the text is how it is read at all.
 
@@ -2177,7 +2180,10 @@ including a cleanup wait, which says two things at once — so an element
 settling cannot reflow the document beside it.
 
 The Round editor keeps each source line on one row and scrolls it sideways to
-reveal the caret. A queued message wraps between its origin and its `X`, and its continuation rows line up
+reveal the caret. Measure the outline and inset as part of the pane. Fit the
+source and caret to the remaining interior width and height. The empty
+placeholder occupies the first interior display row and changes neither the
+source nor its caret offsets. A queued message wraps between its origin and its `X`, and its continuation rows line up
 with its text: a wrapped row is the same message, never a new one, and the `X`
 stays one control on its first row.
 

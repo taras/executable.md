@@ -101,6 +101,8 @@ import {
   COMPOSER_VALUE,
   composerHolds,
   draftHolds,
+  draftOpen,
+  draftShows,
   draftText,
   entrySettles,
   DRAFT,
@@ -1730,7 +1732,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(first.model.entries[0]?.terminal?.output).toContain("Hello from the reply.");
     expect(page.screen().shows("Hello from the reply.")).toBe(true);
     // Consumed by the entry it became: the Draft shows none of what was in it.
-    expect(page.screen().found("Hello from the reply.", DRAFT_VALUE)).toBe(0);
+    expect(draftOpen(page.screen())).toBe(false);
 
     // The receipt names this entry, carries no body, and keeps admission order.
     expect(fake.prompts).toHaveLength(2);
@@ -4647,6 +4649,7 @@ describe("993 mounted nested Output journeys", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.text).toBe("Review complete.");
     expect(paneCount(page, "Review complete.")).toBe(1);
+    yield* intoDraft(page);
     expect(draftHolds(page.screen(), "prepared")).toBe(true);
     const prompts = [...repl.fake.prompts];
     const reopened = yield* repl.repository.open(saved.execution);
@@ -4761,7 +4764,10 @@ describe("993 mounted nested Output journeys", () => {
         expect(rows[0]).toMatchObject({ kind: "incomplete", text: "ABC" });
         expect(known.turns[0]?.status).toBe("failed");
       }
-      expect(draftHolds(page.screen(), "never")).toBe(false);
+      expect(draftOpen(page.screen())).toBe(false);
+      yield* intoDraft(page);
+      expect(draftShows(page.screen(), "never")).toBe(false);
+      expect(draftShows(page.screen(), "Executable Markdown")).toBe(true);
       expect(saved.model.entries).toEqual([]);
     });
   }

@@ -72,6 +72,7 @@ import {
   GROWING_STACK_PROPS,
   inlineActionRowProps,
   partsRowProps,
+  roundEditorOutlineProps,
   SPACER_PROPS,
   statedActionRowProps,
   statedPartProps,
@@ -13465,19 +13466,13 @@ function workspaceDraft(view: ReplView, context: ReplPresentationContext): reado
     );
   }
   if (view.state.draftOpen) {
+    const focused = (focusClaim(view) ?? view.focused) === "footer:input";
     items.push(
-      field(
-        "footer:input",
-        ` Round ${nextRound(view)} · draft`,
-        view.state.draft,
-        "draft",
-        styleOf("waiting"),
-        {
-          caret: view.state.draftCaret,
-          here: view.focused,
-          block: true,
-        },
-      ),
+      field("footer:input", "", view.state.draft, "draft", styleOf("waiting"), {
+        caret: view.state.draftCaret,
+        here: view.focused,
+        block: true,
+      }),
       line(
         "draft:status",
         profileFor(view.size) === "wide" && !running ? "✎ draft · user · not sent" : "✎ draft",
@@ -13495,7 +13490,15 @@ function workspaceDraft(view: ReplView, context: ReplPresentationContext): reado
       }),
     );
     for (const [at, own] of (context.draft ?? [""]).entries()) {
-      items.push(line(`draft:value:${at}`, own, styleOf("draft"), sourceRuns(own)));
+      if (at === 0 && view.state.draft.length === 0) {
+        const runs = tokenRuns([
+          ...(focused ? [{ text: " ", token: "caret" } as const] : []),
+          { text: "Executable Markdown", token: "metadata" },
+        ]);
+        items.push(line("draft:placeholder", runText(runs), styleOf("draft"), runs));
+      } else {
+        items.push(line(`draft:value:${at}`, own, styleOf("draft"), sourceRuns(own)));
+      }
     }
   }
   return items;
@@ -14402,6 +14405,8 @@ function workspacePresentation(input: {
     const draft = of("draft");
     const editing = draft.length > 0;
     const room = context.widths?.surfaceBody;
+    const focused = (focusClaim(view) ?? view.focused) === "footer:input";
+    const showHeading = !outlet || (focusClaim(view) ?? view.focused) !== "draft:send";
     if (!editing) {
       contents.push({ region, id: body, kind: "body" });
     }
@@ -14431,19 +14436,73 @@ function workspacePresentation(input: {
     return [
       ...(editing
         ? [
-            ...draft.map((one) => rowBox(one, region, room)),
+            ...(showHeading
+              ? [
+                  box({
+                    id: "box:round-editor:heading",
+                    region,
+                    props: headerRowProps(
+                      room,
+                      focused ? REPL_PALETTE.focusSurface : REPL_PALETTE.paneHeaderSurface,
+                    ),
+                    text: fieldLabel(` Round ${nextRound(view)} · draft`, focused),
+                    style: styleOf("waiting"),
+                    runs: tokenRuns([
+                      { text: focused ? "> " : "  ", token: focused ? "focus-marker" : "waiting" },
+                      {
+                        text: `Round ${nextRound(view)} · draft`,
+                        token: focused ? "markdown-strong" : "waiting",
+                      },
+                    ]),
+                  }),
+                  box({
+                    id: "box:round-editor:help",
+                    region,
+                    props: partsRowProps(1, 0, room),
+                    text: " Enter adds a line · Tab to Send",
+                    style: styleOf("metadata"),
+                  }),
+                ]
+              : []),
             box({
-              id: "box:round-editor:help",
+              id: "box:round-editor:inset",
               region,
-              props: partsRowProps(1, 0, room),
-              text: " Enter adds a line · Tab to Send",
-              style: styleOf("metadata"),
-            }),
-            box({
-              id: ROUND_EDITOR_BODY,
-              region,
-              props: { ...paneContentProps(), bg: terminalColour(REPL_PALETTE.draftSurface) },
-              children: startingWith("draft:value:").map((one) => rowBox(one, region, room)),
+              props: workspaceBodyProps(1, 0, room),
+              children: [
+                box({
+                  id: "box:round-editor:outline",
+                  region,
+                  props: roundEditorOutlineProps(),
+                  children: [
+                    box({
+                      id: ROUND_EDITOR_BODY,
+                      region,
+                      props: {
+                        ...paneContentProps(),
+                        bg: terminalColour(REPL_PALETTE.draftSurface),
+                      },
+                      children: [
+                        box({
+                          id: `${ROUND_EDITOR_BODY}:input`,
+                          key: "footer:input",
+                          control: true,
+                          region,
+                          props: paneContentProps(),
+                          children: [
+                            ...byKey("draft:placeholder"),
+                            ...startingWith("draft:value:"),
+                          ].map((one) =>
+                            box({
+                              ...rowBox(one, region, undefined),
+                              props: fittedRowProps(0),
+                            }),
+                          ),
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ],
             }),
           ]
         : reading),

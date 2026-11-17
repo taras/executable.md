@@ -1085,7 +1085,12 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
       withWorkspace(
         reading(
           editing
-            ? { ...state, draftOpen: true, restore: { kind: "reveal", key: "footer:input" } }
+            ? {
+                ...state,
+                draftOpen: true,
+                draftCaret: { value: state.draft, offset: 0 },
+                restore: { kind: "reveal", key: "footer:input" },
+              }
             : state,
           model,
           live,
@@ -5245,7 +5250,12 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       withWorkspace(
         reading(
           editing
-            ? { ...state, draftOpen: true, restore: { kind: "reveal", key: "footer:input" } }
+            ? {
+                ...state,
+                draftOpen: true,
+                draftCaret: { value: state.draft, offset: 0 },
+                restore: { kind: "reveal", key: "footer:input" },
+              }
             : state,
           model,
           live,
@@ -5368,13 +5378,14 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       );
     }
 
-    // C2: the Draft is the control the frame holds focus on, and the cue is
-    // drawn on that same control: bold on the focused field's first cell and not
-    // on the composer, which is not where the next keystroke lands.
+    // The Draft owns focus across its interior. The gold heading draws the cue
+    // above it without adding another input target.
     expect(focusKeyOf(presenter)).toBe("footer:input");
-    expect(grid.styleAt(input.x, input.y).attrs.includes(BOLD)).toBe(true);
-    expect(grid.styleAt(input.x, input.y).attrs).toContain(4);
-    expect(grid.styleAt(input.x + input.width - 1, input.y).background).toBe(
+    expect(input).toEqual(draftBox);
+    const draftHeading = regionOf(editing, "box:round-editor:heading");
+    expect(textOf(grid, draftHeading)).toContain("> Round");
+    expect(inkOfSpan(grid, draftHeading, "Round").attrs).toContain(BOLD);
+    expect(grid.styleAt(draftHeading.x + draftHeading.width - 1, draftHeading.y).background).toBe(
       REPL_PALETTE.focusSurface,
     );
     const message = placed(editing, "sidekick:message");

@@ -57,6 +57,8 @@ import {
   composerHolds,
   DRAFT,
   draftHolds,
+  draftOpen,
+  draftShows,
   intoComposer,
   intoDraft,
   sendMessage,
@@ -93,6 +95,7 @@ function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Ope
  * not a reason to fail.
  */
 function* draftFromComposer(page: ReplPage): Operation<void> {
+  yield* intoDraft(page);
   yield* intoComposer(page);
   // A token no part of this screen draws: a single letter would collide with
   // ordinary labels like QUEUE and make every stop look like the Draft.
@@ -307,11 +310,12 @@ describe("Sidekick presentation: visible work owns its controls", () => {
 
   it("keeps the composer separate from the Draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
     yield* intoComposer(page);
     yield* typed(page, "a Sidekick question");
     const reading = page.screen();
     expect(composerHolds(reading, "a Sidekick question")).toBe(true);
-    expect(draftHolds(reading, "a Sidekick question")).toBe(false);
+    expect(draftShows(reading, "a Sidekick question")).toBe(false);
     expect(reading.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 
@@ -1631,7 +1635,10 @@ function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
   }
   yield* page.type("ask");
   yield* page.until("the composer reached by keyboard", (one) => composerHolds(one, "ask"));
-  expect(draftHolds(page.screen(), "ask")).toBe(false);
+  const screen = page.screen();
+  if (draftOpen(screen)) {
+    expect(draftShows(screen, "ask")).toBe(false);
+  }
   yield* sendComposed(page);
   yield* page.until("the question notice", (one) => one.shows("[answer sidekick]"));
   yield* openedQuestion(page);

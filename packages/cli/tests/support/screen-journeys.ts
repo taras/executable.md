@@ -161,7 +161,7 @@ export function* pasteDraft(
   if (witness !== "") {
     yield* page.until(
       `the Draft holding ${JSON.stringify(witness)}`,
-      (one) => one.shows(DRAFT) && one.found(witness, DRAFT_VALUE) > 0,
+      (one) => draftOpen(one) && draftShows(one, witness),
     );
   }
 }
@@ -351,9 +351,34 @@ export function* drawnScreen(terminal: Terminal): Operation<Operation<void>> {
   ]);
 }
 
-/** Whether the Draft's own rows hold this text. */
+/** The round bar stays visible while Send temporarily hides the heading. */
+export function draftOpen(reading: ScreenReading): boolean {
+  return reading.rows.some((row) => row.includes("✎ draft") && row.includes("+ New Round"));
+}
+
+/** Whether the open editor's interior holds this text. */
 export function draftShows(reading: ScreenReading, text: string): boolean {
-  return reading.found(text, DRAFT_VALUE) > 0;
+  if (!draftOpen(reading)) {
+    throw new Error("the Round editor is closed");
+  }
+  const bar = reading.locate("✎ draft", { onRow: "+ New Round" }).row;
+  const bottomEdge = /└─+┘/.exec(reading.rows[bar - 1]);
+  if (bottomEdge === null) {
+    throw new Error("the open Round editor has no bottom border");
+  }
+  const { column: left } = reading.locate(bottomEdge[0], { onRow: bottomEdge[0] });
+  const topEdge = `┌${"─".repeat(bottomEdge[0].length - 2)}┐`;
+  const { row: top } = reading.locate(topEdge, { onRow: topEdge });
+  return (
+    reading.found(text, {
+      within: {
+        top: top + 1,
+        bottom: bar - 1,
+        left: left + 2,
+        right: left + bottomEdge[0].length - 2,
+      },
+    }) > 0
+  );
 }
 
 /** Whether the Draft holds this text, and the composer does not. */
