@@ -17,16 +17,19 @@
 
       <Repl.Focus.Draft />
       <Terminal.Key key="Enter" />
-      <Terminal.WaitForText text="> Round" bold={true} />
+      <Terminal.WaitForText text="> Round 1 · draft" />
       <Terminal.Type text="entry-draft" />
-      <Terminal.WaitForText text="entry-draft" />
+      <Terminal.WaitForText text="│ entry-draft" />
+      <Terminal.Key key="Home" />
 
       <Terminal.Key key="Tab" />
       <Terminal.WaitForText text="> Send" bold={true} />
       <Terminal.WaitForText text="message the sidekick" bold={false} />
       <Terminal.Key key="Shift+Tab" />
-      <Terminal.WaitForText text="> Round" bold={true} />
+      <Terminal.WaitForText text="> Round 1 · draft" />
       <Terminal.WaitForText text="> BINDINGS" present={false} />
+      <Terminal.Type text="pre-" />
+      <Terminal.WaitForText text="│ pre-entry-draft" />
 
       <Repl.Focus.Message />
       <Terminal.WaitForText text="message the sidekick" bold={true} />
@@ -49,8 +52,9 @@
       </Terminal.Region>
       <Repl.Focus.Draft />
       <Terminal.Key key="Enter" />
-      <Terminal.WaitForText text="> Round" bold={true} />
+      <Terminal.WaitForText text="> Round 1 · draft" />
       <Terminal.Type text="narrow-draft" />
+      <Terminal.WaitForText text="│ narrow-draft" />
       <Try>
         <Repl.Focus.Tabs />
         <Fail message="The narrow viewport does not offer the Tabs shortcut" />
@@ -61,7 +65,8 @@
       <Terminal.Key key="Escape" />
       <Terminal.WaitForText text="move focus · Esc closes" present={false} />
       <Terminal.Type text="-kept" />
-      <Terminal.WaitForText text="narrow-draft-kept" />
+      <Terminal.WaitForText text="│ narrow-draft-kept" />
+      <Terminal.Key key="Home" />
 
       <Repl.Focus.History />
       <Terminal.WaitForText text="> [history]" bold={true} />
@@ -81,8 +86,9 @@
         <Terminal.WaitForText text="narrow-message-kept" />
       </Terminal.Region>
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="> Round" bold={true} />
-      <Terminal.WaitForText text="narrow-draft-kept" />
+      <Terminal.WaitForText text="> Round 1 · draft" />
+      <Terminal.Type text="^" />
+      <Terminal.WaitForText text="│ ^narrow-draft-kept" />
     </ReplBench>
   </Terminal>
 </Test>

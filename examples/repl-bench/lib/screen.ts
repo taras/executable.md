@@ -137,7 +137,12 @@ export function viewport(backend: TerminalBackend, size: Size) {
     },
     sidekickControl(): Point | undefined {
       const header = { ...full, bottom: Math.min(size.rows, 3) };
-      return matches("SIDEKICK", header).next().value ?? matches("Sidekick", header).next().value;
+      // The identity and notice rows share the chrome surface and can name the Sidekick in prose.
+      const tab = (point: Point) =>
+        background(point.row, point.column) !== REPL_PALETTE.chromeSurface;
+      return (
+        [...matches("SIDEKICK", header)].find(tab) ?? [...matches("Sidekick", header)].find(tab)
+      );
     },
   };
 }
