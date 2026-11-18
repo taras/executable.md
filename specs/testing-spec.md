@@ -985,7 +985,8 @@ The adversarial suites append the following arguments to the source entrypoint:
 --include <root>/examples/adversarial-implementation/tests/components --include
 <root>/examples/adversarial-implementation/components`, with the include paths
 absolute so that a nested `<Dir>` cannot change where components are found.
-`Preparation`, `ProductionRole`, `ProductionRoleSonnet` and `Submission` include
+`Preparation`, `ProductionRole`, `ProductionRoleRepair`, `ProductionRoleSonnet`
+and `Submission` include
 `tests/production-components` in place of `tests/components`. The child's
 environment also receives `XMD_EXAMPLE_COMMAND` and `XMD_EXAMPLE_TEST_COMMAND`.
 Each is the prepared Deno CLI above followed by `run --allow-absolute` or
