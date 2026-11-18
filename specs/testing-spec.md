@@ -1067,6 +1067,13 @@ runner is outside it. Committing that artifact is a deliberate act, which is
 what keeps the provenance true of the run that produced it. Milliseconds are
 never edited by hand.
 
+Each measuring job sets `XMD_TEST_ARTIFACTS` to the absolute workspace path
+`${{ github.workspace }}/.xmd/test-artifacts`. On failure or cancellation it
+uploads the complete saved journal trees, including hidden files, as
+`measure-test-journals-<runtime>-attempt-<attempt>`; missing files are ignored.
+These artifacts follow [Progress and failure journals](#progress-and-failure-journals)
+and remain separate from the measurement records selected for assembly.
+
 Counts are measured rather than chosen. For each runtime the lower bound is
 `floor(sum of applicable weights / 420000) + 1`, and the installed count is the
 smallest for which five consecutive runs on one fixed head keep every shard

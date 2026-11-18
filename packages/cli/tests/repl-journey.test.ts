@@ -1,6 +1,7 @@
 /** The mounted REPL journey, driven by terminal input and visible outcomes. */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ReplClock } from "../src/repl/frame.ts";
 import { ReplHost } from "../src/repl/host.ts";
@@ -52,10 +53,13 @@ import {
   pasteDraft,
 } from "./support/screen-journeys.ts";
 
+const OWNER = "packages/cli/tests/repl-journey.test.ts";
+
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
 
 describe("REPL journey: a person drives the running command", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("submits a Draft through the terminal and sees its settled History mark", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* pasteDraft(page, 'output("one done");');
@@ -164,6 +168,7 @@ const SECOND_COLD =
   '```js eval\nconst carried = `${token}-again`;\n```\n\nTwo: {carried}\n\n<Checklist title="Resize scope" steps={2} />\n';
 
 describe("REPL retained readings across every terminal size", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("TL10: every size and a refusal keep the nested reading, and a cold open restores it", function* () {
     const dataRoot = yield* useTemporary("xmd-tl10-");
     let path = "";
@@ -282,6 +287,7 @@ describe("REPL retained readings across every terminal size", () => {
 });
 
 describe("REPL startup below the minimum terminal size", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: a terminal below the minimum refuses, and recovers when it grows", function* () {
     const terminal = yield* scoped(function* () {
       const page = yield* useReplPage({ size: { columns: 40, rows: 10 } });
@@ -365,6 +371,7 @@ function released(terminal: MountedRepl["terminal"]): void {
 }
 
 describe("REPL original admission and terminal exit claims", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: pasting the reference entry puts all of it in the draft and the location", function* () {
     const page = yield* referencePage();
     const source = yield* referenceSource();
@@ -567,6 +574,7 @@ function* leaveRefusal(page: ReplPage) {
 }
 
 describe("REPL original refusals before replay and terminal ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: Control-C leaves a refusal, and it is still a refusal", function* () {
     const { page } = yield* corruptPage();
     expect(page.screen().shows("cannot read")).toBe(true);
@@ -739,6 +747,7 @@ function* missingEntryRefusal() {
 }
 
 describe("REPL original retained readings and navigation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: a second process reconstructs the view from the URL and the journal alone", function* () {
     const dataRoot = yield* useTemporary("xmd-binding-cold-");
     let path = "";
@@ -906,6 +915,7 @@ function* interactionCost(
 }
 
 describe("REPL original interaction costs and visible exit routes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const lines of [12, 222]) {
     it(`RS3: typing and traversing beside a ${lines}-line entry read the size a fixed number of times`, function* () {
       const page = yield* referencePage();
@@ -1128,6 +1138,7 @@ function* resumeOnce(
 }
 
 describe("REPL original pause-before-admission boundaries", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
     it(`PPA2/PPA5: Pause is offered, requested and applied to the exact entry at ${size.columns}x${size.rows}`, function* () {
       const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
@@ -1478,6 +1489,7 @@ function* answerGo(page: ReplPage): Operation<void> {
 }
 
 describe("REPL original live output and entry lifecycle", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: text the Journal has not settled is drawn while the run is held", function* () {
     const host = yield* useMountedHost();
     const release = withResolvers<void>();
@@ -1643,6 +1655,7 @@ function directions(one: ScreenReading): string {
 }
 
 describe("REPL original first-use paths and question ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [WIDE, NARROW]) {
     it(
       size.columns === 72
@@ -1811,6 +1824,7 @@ describe("REPL original first-use paths and question ownership", () => {
 });
 
 describe("REPL original completed-screen lifecycle", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("reads typing, diffs and every profile off completed presentations", function* () {
     yield* ReplHost.around(
       {
@@ -2042,6 +2056,7 @@ function* fourEntries(page: ReplPage): Operation<void> {
 }
 
 describe("REPL original complete History and cold catalog", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("H5: the drawer reaches them all, and four resizes keep the reading", function* () {
     const page = yield* referencePage();
     yield* fourEntries(page);
@@ -2297,6 +2312,7 @@ function referencePageFor(dataRoot: string): Operation<ReplPage> {
 }
 
 describe("REPL original visible guidance and controlled typing", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("UI1: the visible History controls remain navigable at both sizes", function* () {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {
@@ -2393,6 +2409,7 @@ describe("REPL original visible guidance and controlled typing", () => {
 });
 
 describe("REPL original held reading and canonical startup", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: run, hold at a gate, inspect a prefix, return live, continue, answer, settle", function* () {
     const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
     const gate = preparationGate();
@@ -2453,6 +2470,7 @@ describe("REPL original held reading and canonical startup", () => {
 });
 
 describe("REPL original presentation acknowledgement", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: a frame is not acknowledged until it has been presented", function* () {
     const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
     const pending: Array<() => void> = [];
@@ -2547,6 +2565,7 @@ function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen
 }
 
 describe("REPL original retained schema and generated evidence", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("J1: a recorded question reopens its whole schema and answer without work", function* () {
     const dataRoot = yield* useTemporary("xmd-recorded-answer-cold-");
     const kept = yield* scoped(function* () {
@@ -2655,6 +2674,7 @@ describe("REPL original retained schema and generated evidence", () => {
 });
 
 describe("REPL original question arrival on another reading", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("UI3: a question on Sessions moves nothing, and is reached by activating it", function* () {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {
@@ -2700,6 +2720,7 @@ describe("REPL original question arrival on another reading", () => {
 });
 
 describe("REPL original surface and entry selection marks", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("UI1: the active surface and the selected entry are marked in the frame", function* () {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {

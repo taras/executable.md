@@ -19,7 +19,8 @@
  * association rather than a conversation's agent.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, sleep, spawn } from "effection";
 import type { Operation, Result, Task } from "effection";
@@ -155,6 +156,8 @@ import type { FakeAcp } from "./support/fake-acp.ts";
 import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
 import { AGENT, useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-configuration.test.ts";
 
 /** A second agent, named explicitly rather than defaulted to. */
 const OTHER = "other-sidekick";
@@ -905,6 +908,7 @@ function outside(page: ReplPage): string[] {
 }
 
 describe("Tier CFG — Configure in the Sidekick's pane", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What this agent offers, and what each of its models offers for effort. */
   const ADVERTISED = {
     model: {
@@ -1283,31 +1287,35 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sendMessage(page, "run it");
-    yield* closing.started();
-    yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
-    const asking = repl.fake.configCalls.length;
+    try {
+      yield* sendMessage(page, "run it");
+      yield* closing.started();
+      yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
+      const asking = repl.fake.configCalls.length;
 
-    if (changing) {
-      // Applied while the entry is held. A preference is a record, so this asks
-      // the agent for nothing and stops nothing.
-      yield* openConfigure(page);
-      yield* offeredChoice(page, NAMED["fast"]);
-      yield* chooseNamed(page, "fast");
-      yield* applyConfigure(page);
-      yield* drawerGone(page);
-      expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
-      // Nothing of the agent's was touched by saving, and the entry is still
-      // held: the save coexists with the work rather than interrupting it.
-      expect(repl.fake.configCalls).toHaveLength(asking);
-      expect(closing.released).toBe(false);
+      if (changing) {
+        // Applied while the entry is held. A preference is a record, so this asks
+        // the agent for nothing and stops nothing.
+        yield* openConfigure(page);
+        yield* offeredChoice(page, NAMED["fast"]);
+        yield* chooseNamed(page, "fast");
+        yield* applyConfigure(page);
+        yield* drawerGone(page);
+        expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
+        // Nothing of the agent's was touched by saving, and the entry is still
+        // held: the save coexists with the work rather than interrupting it.
+        expect(repl.fake.configCalls).toHaveLength(asking);
+        expect(closing.released).toBe(false);
+      }
+
+      // Released: the entry settles, the Submit it was waiting for answers, and
+      // the automatic turn that reports it runs.
+      closing.release();
+      yield* page.until("the turn that follows the entry", (one) => one.shows("Both done."));
+      return repl.fake.configCalls.slice(asking);
+    } finally {
+      closing.release();
     }
-
-    // Released: the entry settles, the Submit it was waiting for answers, and
-    // the automatic turn that reports it runs.
-    closing.release();
-    yield* page.until("the turn that follows the entry", (one) => one.shows("Both done."));
-    return repl.fake.configCalls.slice(asking);
   }
 
   it("CFG3: a preference saved while an entry is held is used by the turn after it", function* () {
@@ -1507,6 +1515,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
  * agent's choices goes with the replacement.
  */
 describe("Tier CFG — replacing the Sidekick's agent", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const ADVERTISED = {
     model: {
       selected: "balanced",
@@ -1735,35 +1744,39 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sendMessage(page, "run it");
-    yield* closing.started();
-    yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
+    try {
+      yield* sendMessage(page, "run it");
+      yield* closing.started();
+      yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
 
-    yield* openConfigure(page);
-    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
-    yield* page.until("the control saying it stops first", (one) =>
-      applyReads(one, "[stop and start new conversation"),
-    );
-    yield* applyConfigure(page);
-    yield* page.until("the new agent after the join", (one) =>
-      headerNames(one, OTHER_MOUNTED_AGENT),
-    );
-    // The entry was not cancelled with the conversation that asked for it: it
-    // is the document's work, and it is still waiting to close.
-    expect(closing.released).toBe(false);
+      yield* openConfigure(page);
+      yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
+      yield* page.until("the control saying it stops first", (one) =>
+        applyReads(one, "[stop and start new conversation"),
+      );
+      yield* applyConfigure(page);
+      yield* page.until("the new agent after the join", (one) =>
+        headerNames(one, OTHER_MOUNTED_AGENT),
+      );
+      // The entry was not cancelled with the conversation that asked for it: it
+      // is the document's work, and it is still waiting to close.
+      expect(closing.released).toBe(false);
 
-    closing.release();
-    // It finishes on its own, and its record is in this execution's entries.
-    // The gate records the whole path it let through, so this asks whether an
-    // entries file was written rather than naming one.
-    yield* awaited("the entry closing", () =>
-      gate.reached.some((one) => one.endsWith("entries.jsonl")),
-    );
-    yield* entrySettles(page, 1, "ok");
-    expect(page.screen().shows("the entry ran")).toBe(true);
-    // And the new conversation is the one a message now goes to.
-    yield* page.until("the Sidekick at rest", sidekickIdle);
-    yield* conversed(page, "and you?", "Second agent.");
+      closing.release();
+      // It finishes on its own, and its record is in this execution's entries.
+      // The gate records the whole path it let through, so this asks whether an
+      // entries file was written rather than naming one.
+      yield* awaited("the entry closing", () =>
+        gate.reached.some((one) => one.endsWith("entries.jsonl")),
+      );
+      yield* entrySettles(page, 1, "ok");
+      expect(page.screen().shows("the entry ran")).toBe(true);
+      // And the new conversation is the one a message now goes to.
+      yield* page.until("the Sidekick at rest", sidekickIdle);
+      yield* conversed(page, "and you?", "Second agent.");
+    } finally {
+      closing.release();
+    }
   });
 
   it("CFG4: an unreachable agent keeps the old association and says why", function* () {
@@ -1872,6 +1885,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
  * explicit job does to another.
  */
 describe("Tier CFG — one order for everything this conversation writes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const ADVERTISED = {
     model: {
       selected: "balanced",
@@ -1902,37 +1916,41 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     const writing = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"'),
     );
-    repl.fake.script({ reply: "<Output>And this one.</Output>\n" });
-    yield* sendMessage(page, "again");
-    yield* writing.started();
+    try {
+      repl.fake.script({ reply: "<Output>And this one.</Output>\n" });
+      yield* sendMessage(page, "again");
+      yield* writing.started();
 
-    // A preference applied while that write is in flight. It is admitted —
-    // a save is a record of this history rather than work the conversation
-    // does — and it waits for the writer rather than overtaking it.
-    yield* openConfigure(page);
-    yield* offeredChoice(page, NAMED["fast"]);
-    yield* chooseNamed(page, "fast");
-    yield* applyConfigure(page);
-    yield* lingering();
-    // Nothing of it reached the file while the other append was inside the
-    // host, and the held write is still held.
-    expect(yield* savedPreference(repl)).toBe(undefined);
-    expect(writing.released).toBe(false);
+      // A preference applied while that write is in flight. It is admitted —
+      // a save is a record of this history rather than work the conversation
+      // does — and it waits for the writer rather than overtaking it.
+      yield* openConfigure(page);
+      yield* offeredChoice(page, NAMED["fast"]);
+      yield* chooseNamed(page, "fast");
+      yield* applyConfigure(page);
+      yield* lingering();
+      // Nothing of it reached the file while the other append was inside the
+      // host, and the held write is still held.
+      expect(yield* savedPreference(repl)).toBe(undefined);
+      expect(writing.released).toBe(false);
 
-    writing.release();
-    yield* page.until("the reply that was being written", (one) => one.shows("And this one."));
-    yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
-      return (yield* savedPreference(repl)) !== undefined;
-    });
+      writing.release();
+      yield* page.until("the reply that was being written", (one) => one.shows("And this one."));
+      yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
+        return (yield* savedPreference(repl)) !== undefined;
+      });
 
-    // One order, on disk: the response that was being written, and then the
-    // preference that waited for it. Read back through the projection, so this
-    // is the history as everything else reads it.
-    const read = yield* settledReading(repl);
-    const kinds = read.chat.map((record) => record.kind);
-    expect(kinds.indexOf("preferences")).toBeGreaterThan(kinds.lastIndexOf("response"));
-    expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
-    expect(read.chat.filter((record) => record.kind === "response")).toHaveLength(2);
+      // One order, on disk: the response that was being written, and then the
+      // preference that waited for it. Read back through the projection, so this
+      // is the history as everything else reads it.
+      const read = yield* settledReading(repl);
+      const kinds = read.chat.map((record) => record.kind);
+      expect(kinds.indexOf("preferences")).toBeGreaterThan(kinds.lastIndexOf("response"));
+      expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
+      expect(read.chat.filter((record) => record.kind === "response")).toHaveLength(2);
+    } finally {
+      writing.release();
+    }
   });
 
   it("CFG8: a replacement owns the drawer while it runs, and rebinds what Apply saves", function* () {
@@ -2036,6 +2054,7 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
 });
 
 describe("Tier CFG — Retry for a request whose turn failed", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CFG5: Retry sends the saved request again, not whatever is in the box", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -2223,6 +2242,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
  * exercising every flag and the interactive screen at once is not this row.
  */
 describe("Tier TE — the two configured agents each do their own work", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** One entry asking one Agent, naming no agent: the default is the subject. */
   const ASKING = ['<Session name="planner">', '<Prompt text="ok?" />', "</Session>"].join("\n");
 
@@ -2300,6 +2320,7 @@ describe("Tier TE — the two configured agents each do their own work", () => {
  * field, so these rows drive the width of a notice the way a person does.
  */
 describe("Configure notice fitting", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What the agent in these rows advertises, so the drawer has choices to draw. */
   const ADVERTISED = {
     model: {

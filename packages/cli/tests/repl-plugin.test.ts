@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -12,6 +13,8 @@ import type { HeadlessReplRoot } from "../src/repl/program.ts";
 import { useReplLiveScreen } from "../src/repl/live-screen.ts";
 import { usePluginProgram } from "./support/plugin-program.ts";
 import { useMountedHost } from "./support/mounted-repl.ts";
+
+const OWNER = "packages/cli/tests/repl-plugin.test.ts";
 
 const Session = createContext<{ workspace: string; calls: number }>("test.repl-plugin.session");
 const props = { type: "object", properties: {}, additionalProperties: false };
@@ -75,6 +78,7 @@ function fixture(name: string, events: string[], counts: { factories: number }) 
 }
 
 describe("Selected REPL Plugin contributions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R1/R5: collection and descriptions start no service; ordered setup shares session state", function* () {
     const events: string[] = [];
     const counts = { factories: 0 };
