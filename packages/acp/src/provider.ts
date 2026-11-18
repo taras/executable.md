@@ -4218,7 +4218,8 @@ function* useAcpxProviderState(
     }
     const sessionKey = prepared.sessionKey;
     const held = managed.get(sessionKey);
-    return yield* scoped(function* (): Operation<LaunchFailure | undefined> {
+    const reattached = held === undefined || !isLive(held);
+    const failure = yield* scoped(function* (): Operation<LaunchFailure | undefined> {
       let entry: ManagedSession;
       if (held !== undefined && isLive(held)) {
         entry = held;
@@ -4266,6 +4267,22 @@ function* useAcpxProviderState(
       invocation.configured.add(sessionKey);
       return undefined;
     });
+    if (failure !== undefined) {
+      return failure;
+    }
+    // A release this replay owed that did not settle leaves ACP possibly still
+    // in the conversation. The launch stops here: no detach is recorded and no
+    // native process starts, and a later close that happens to succeed — at
+    // detach or at teardown — authorizes nothing for this attempt.
+    if (reattached && holding(sessionKey)) {
+      return {
+        class: "detach-failed",
+        message:
+          `session "${sessionKey}" could not be released after it was reconfigured, so it is ` +
+          `not handed to a native process`,
+      };
+    }
+    return undefined;
   }
 
   /**

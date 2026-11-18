@@ -5922,6 +5922,81 @@ describe("Tier NR — configured incomplete replay", () => {
     });
   });
 
+  it("NR9: a reconfiguration release that failed stops the replay, whatever a later close does", function* () {
+    // The replay reopens its conversation, puts it back under what it was
+    // prepared with, and then could not give ACP up. A later close of the same
+    // handle may well succeed — at the detach, or at teardown — and none of
+    // that is permission to record a detach or start the native UI.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    const routes = createMemorySessionRouteStore();
+    // This suite's registry leaves `codex` resolving to its own name.
+    const command = "codex";
+    const key = deriveSessionKey(command, CWD);
+    const codex = nativeAdapterFor("codex");
+    if (codex === undefined) {
+      throw new Error("missing the production Codex adapter");
+    }
+    harness.closeFailure = new Error("controlled first replay release failure");
+    const create = harness.create;
+    harness.create = (options) => {
+      const runtime = create(options);
+      return {
+        ...runtime,
+        close(input) {
+          // Only the first close fails; every later one would succeed.
+          return runtime.close(input).catch((error: unknown) => {
+            harness.closeFailure = undefined;
+            throw error;
+          });
+        },
+      };
+    };
+    let reported: Error | undefined;
+    try {
+      yield* scoped(function* () {
+        yield* installLaunchStack(harness, trace, {
+          advertise: ["codex"],
+          adapters: { codex },
+          routeStore: routes,
+          observer: createFakeObserver({ versionOutput: "codex-cli 0.169.1\n" }).observer,
+        });
+        yield* routes.publish({
+          schema: "session-route.v1",
+          route: "acp-first",
+          provider: "acpx",
+          agent: command,
+          sessionKey: key,
+        });
+        trace.replay = {
+          suffix: "prepared",
+          prepared: retainedConfigured({
+            agent: "codex",
+            sessionKey: key,
+            nativeSessionId: `agent-session:${key}`,
+            sessionState: "resumed",
+            instructionReconciliation: "resumed",
+            launcher: "codex",
+          }),
+        };
+        yield* Agent.operations.launch(launchRequest(INSTRUCTIONS, { agent: "codex" }));
+        // The handoff stopped at the detach this replay was about to retain.
+        const detached = trace.records.find((record) => record.phase === "detached");
+        expect(detached?.failure?.class).toBe("detach-failed");
+        expect(trace.launches).toEqual([]);
+        expect(trace.order).not.toContain("spawn");
+        // One release was attempted before the refusal, and it failed.
+        expect(trace.order.filter((event) => event === "close")).toEqual(["close"]);
+      });
+    } catch (error) {
+      reported = error as Error;
+    }
+    // Teardown still owes the cleanup, and it reports the failure it inherited.
+    expect(reported?.message).toBe("controlled first replay release failure");
+    expect(trace.launches).toEqual([]);
+  });
+
   it("NR3: an unconfigured replay reattaches nothing and behaves as it always did", function* () {
     const harness = createFakeRuntime();
     const trace = newTrace();

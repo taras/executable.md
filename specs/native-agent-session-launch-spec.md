@@ -869,10 +869,11 @@ calls a paused process dead and admits two owners. So every advertised
 session, prompt, launch and incomplete replay refuses there with
 `unsupported-capability`, before contacting an agent, while read-only resolution
 and non-advertised ACP work are unaffected. An advertised agent whose adapter
-binds a build also requires a route store and
-executable observer. Missing either refuses before any provider effect,
-whichever side names the session. An adapter that binds no build keeps its
-ordinary behavior without those dependencies.
+carries an executable binding also requires a route store; a host without one
+refuses before any provider effect, whichever side names the session. The
+executable observer is diagnostic and optional: a host without one continues
+and reports the version as undetermined. An adapter that carries no binding
+keeps its ordinary behavior without those dependencies.
 
 
 ### Exact-target ownership inspection and recovery
@@ -1533,10 +1534,10 @@ native-launch capability in the ACPX provider;
 provider-native identity that is either asserted by the provider or allocated by
 the adapter before the provider exists, retained explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
-in a released unbound form and a bound one; the host-owned executable observer
-and the build binding it produces; ACP attachment to a bound client-native
-session under its exact retained identity, through runtime partitions keyed by
-agent command and build;
+in a released unbound form and a bound one; the host-owned diagnostic
+executable observer and the build history it records; ACP attachment to a
+client-native session under its exact retained identity, through runtime
+partitions keyed by agent command and selected environment;
 an inherited foreground-terminal interactive child with cancellation and
 bounded reaping;
 and the controlled TestAgent fixture that proves all of it without starting a
