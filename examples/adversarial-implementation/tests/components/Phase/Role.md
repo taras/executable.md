@@ -4,6 +4,7 @@ props:
   properties:
     plannerProvider: {enum: [claude, codex], default: claude}
     implementationProvider: {enum: [claude, codex], default: claude}
+    implementationModel: {type: string, minLength: 1}
     role: {type: string}
     session: {type: string}
     assignment: {type: object}
@@ -16,7 +17,7 @@ props:
 <Let as="assignment" value={props.assignment} />
 <Let as="handoffCase" value={assignment.request.startsWith("handoff-retention")} />
 <If condition={props.correction !== null}>
-<Dir path={props.assignment.artifactDirectory + "/response-corrections/" + String(props.correction.ordinal).padStart(4,"0")}><File path="called.json"><Json value={{session:props.session,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,initialize:props.initialize,ordinal:props.correction.ordinal,remaining:props.correction.remaining}} /></File></Dir>
+<Dir path={props.assignment.artifactDirectory + "/response-corrections/" + String(props.correction.ordinal).padStart(4,"0")}><File path="called.json"><Json value={{session:props.session,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,implementationModel:props.implementationModel,initialize:props.initialize,ordinal:props.correction.ordinal,remaining:props.correction.remaining}} /></File></Dir>
 <Phase.Extract text={props.correction.rejectedText} as="original" />
 <Parse schema={{type:"object"}} as="reply">{original.json}</Parse>
 <Json value={{...reply,summary:props.assignment.request === "uncorrectable-summary" ? reply.summary : "The saved checks passed.",handoff:"Inspect the saved evidence."}} />
@@ -24,7 +25,7 @@ props:
 <Let as="receipt" value={assignment.artifactDirectory + "/focused.json"} />
 <Let as="revision" value={assignment.revision} />
 <Let as="conflict" value={props.role === "implementor" && assignment.request === "first-consumer"} />
-<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,revision,changedPaths:assignment.changedPaths,initialize:props.initialize,inputPaths:props.inputs.map(input => input.path),inputs:props.inputs,request:assignment.request,phase:assignment.phase,contract:assignment.contract}} /></File></Dir>
+<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,implementationModel:props.implementationModel,revision,changedPaths:assignment.changedPaths,initialize:props.initialize,inputPaths:props.inputs.map(input => input.path),inputs:props.inputs,request:assignment.request,phase:assignment.phase,contract:assignment.contract}} /></File></Dir>
 <If condition={assignment.phase === "discovery"}>
 <Let as="planPath" value={assignment.artifactDirectory + "/plan.md"} />
 <Dir path={assignment.artifactDirectory}><File path="plan.md">Use the existing format API for the remaining consumer. Remove legacy.fixture, run bash consumer.sh, and return its signed feedback commit.</File></Dir>

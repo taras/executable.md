@@ -46,7 +46,7 @@ mkdir -- {recordDirectory}
   <Dir path={call.assignment.repository}>
     <Phase.Run phase={call.assignment.phase} role={call.role} session={call.session}
       assignment={call.assignment} attempt={call.attempt} initialize={call.initialize}
-      inputs={prepared.inputs} plannerProvider={call.provider} implementationProvider={call.provider} maxResponseCorrections={record.manifest.maxResponseCorrections} successor={call.assignment.continuation.phase}
+      inputs={prepared.inputs} plannerProvider={call.provider} implementationProvider={call.provider} implementationModel={record.manifest.roles.implementor.model} maxResponseCorrections={record.manifest.maxResponseCorrections} successor={call.assignment.continuation.phase}
       nextRole={call.assignment.continuation.role} responseProfile={{kind:"ticket",knownDocuments:Object.keys(record.documents)}} as="result" />
   </Dir>
 </Ticket.Capture>

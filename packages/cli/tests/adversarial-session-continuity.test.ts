@@ -550,6 +550,76 @@ describe("production workflow provider scope", () => {
     }
   });
 
+  it("configures an explicit Sonnet Implementor before its prompt and retains it with its identity across cold reentry", function* () {
+    const fake = createFakeAcp();
+    fake.configuration(catalog(["fixture-default", "opus", "sonnet"], ["medium", "high"]));
+    const harness = yield* reviewWorld(fake);
+    const assignment = implementorAssignment(harness);
+    yield* ensureDir(assignment.artifactDirectory);
+    const props = { assignment };
+    const first = `<Dir path={props.assignment.repository}>${sonnetRoleSource}</Dir>`;
+    const continued = `<Dir path={props.assignment.repository}>${sonnetContinuedRoleSource}</Dir>`;
+    for (const text of [first, continued]) {
+      fake.script({ reply: "Completed the assigned work." });
+      const ran = yield* harness.run(text, props);
+      if (!ran.ok) {
+        throw new Error(ran.text);
+      }
+      const ensured = fake.ensured.at(-1)!;
+      expect(ensured.requestedModel).toBe("sonnet");
+      expect(fake.running(ensured.sessionKey)).toEqual({ model: "sonnet", effort: "high" });
+    }
+    expect(fake.configCalls.filter((call) => call.startsWith("set "))).toEqual([
+      "set model=sonnet",
+      "set effort=high",
+    ]);
+    expect(fake.turns).toHaveLength(2);
+    expect(new Set(fake.turns.map((entry) => entry.handle.sessionKey)).size).toBe(1);
+    const saved = receipt.parse(
+      JSON.parse(yield* readTextFile(join(harness.root, "sessions", "sonnet-owner.json"))),
+    );
+    expect(saved).toMatchObject({ agent: "claude", name: "sonnet-owner", attempted: true });
+    expect(saved.identity).not.toBe(null);
+  });
+
+  it("sends no Implementor prompt when Sonnet is unavailable, its write is refused or its readback differs", function* () {
+    for (const variant of ["missing", "refused", "ignored"] as const) {
+      const fake = createFakeAcp();
+      fake.configuration(
+        catalog(
+          variant === "missing" ? ["fixture-default", "opus"] : ["fixture-default", "sonnet"],
+          ["medium", "high"],
+        ),
+      );
+      const harness = yield* reviewWorld(
+        fake,
+        variant === "missing" ? fake.create : configurationFault(fake, variant),
+      );
+      const assignment = implementorAssignment(harness);
+      yield* ensureDir(assignment.artifactDirectory);
+      fake.script({ reply: "This prompt must not be sent." });
+      const ran = yield* harness.run(
+        `<Dir path={props.assignment.repository}>${sonnetRoleSource}</Dir>`,
+        {
+          assignment,
+        },
+      );
+      expect(ran.ok).toBe(false);
+      expect(ran.text).toContain(
+        {
+          missing: 'Unknown model "sonnet"',
+          refused: "The provider refused the model write.",
+          ignored: 'did not apply the model "sonnet"',
+        }[variant],
+      );
+      expect(fake.prompts).toEqual([]);
+      expect(fake.turns).toEqual([]);
+      expect(fake.configCalls.filter((call) => call === "set model=opus")).toEqual([]);
+      const running = fake.ensured.map((entry) => fake.running(entry.sessionKey));
+      expect(running.every((state) => state?.model !== "opus")).toBe(true);
+    }
+  });
+
   it("keeps ordinary acpx unchanged and refuses to retrofit its retained owner", function* () {
     const fake = createFakeAcp();
     fake.configuration(catalog(["opus"], ["high"]));
@@ -572,6 +642,50 @@ describe("production workflow provider scope", () => {
     expect(JSON.stringify([...harness.store.records])).toBe(before);
   });
 });
+
+const sonnetRoleSource =
+  '<Phase.SubmissionGuide repository={props.assignment.repository} directory={props.assignment.artifactDirectory}><Phase.SubmissionInstructions role="implementor" assignment={props.assignment} /></Phase.SubmissionGuide>' +
+  '<Phase.Role role="implementor" session="sonnet-owner" implementationProvider="claude" implementationModel="sonnet" assignment={props.assignment} />';
+const sonnetContinuedRoleSource =
+  '<Phase.Role role="implementor" session="sonnet-owner" implementationProvider="claude" implementationModel="sonnet" assignment={{...props.assignment,sessionEstablished:true}} />';
+
+function implementorAssignment(harness: ReviewWorld) {
+  return {
+    repository: String(harness.delivery.repository),
+    artifactDirectory: join(harness.root, "submission"),
+    identityDirectory: join(harness.root, "sessions"),
+    phase: "implementation",
+    work: "sonnet-selection",
+    revision,
+    request: "Use the saved evidence.",
+    assessment: {
+      mechanical: false,
+      architecture: false,
+      acceptance: true,
+      risk: null,
+      reason: "Inspect the accepted behavior.",
+      evidence: ["accepted.md"],
+    },
+  };
+}
+
+function configurationFault(fake: FakeAcp, fault: "refused" | "ignored") {
+  return (options: AcpRuntimeOptions): ProbeCapableRuntime => {
+    const runtime = fake.create(options);
+    const write = runtime.setConfigOption?.bind(runtime);
+    return {
+      ...runtime,
+      setConfigOption(input: Parameters<NonNullable<ProbeCapableRuntime["setConfigOption"]>>[0]) {
+        if (input.key !== "model") {
+          return write?.(input) ?? Promise.resolve();
+        }
+        return fault === "refused"
+          ? Promise.reject(new Error("The provider refused the model write."))
+          : Promise.resolve();
+      },
+    };
+  };
+}
 
 function catalog(models: string[], efforts: string[] = ["low", "high"]) {
   return {

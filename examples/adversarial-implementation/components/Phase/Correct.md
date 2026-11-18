@@ -10,6 +10,7 @@ props:
     profile: {type: object}
     plannerProvider: {enum: [claude, codex], default: claude}
     implementationProvider: {enum: [claude, codex]}
+    implementationModel: {type: string, minLength: 1}
     inputs: {type: array, items: {type: object}}
     maxResponseCorrections: {type: integer, minimum: 0, maximum: 3, default: 3}
   required: [assignment, role, session, attempt, raw, profile, implementationProvider, inputs]
@@ -18,7 +19,7 @@ returns: {type: object}
 ---
 
 <Phase.Schema as="schemas" />
-<Phase.Profile role={props.role} assessment={props.assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="roleProfile" />
+<Phase.Profile role={props.role} assessment={props.assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} implementationModel={props.implementationModel} as="roleProfile" />
 <Let as="raw" value={props.raw} />
 <Let as="rawPath" value={props.attempt + "/raw.txt"} />
 <Let as="round" value={0} />
@@ -77,7 +78,7 @@ shasum -a 256 -- {quoted}/request.json {quoted}/diagnostic.json {quoted}/origina
 ```
 <If condition={identities.exitCode !== 0}><Fail message="Correction input identities were not established; no correction prompt is admitted." /></If>
 <Dir path={directory}><File path="input-identities.sha256">{identities.stdout}</File></Dir>
-<Phase.Role role={props.role} session={props.session} assignment={props.assignment} initialize={false} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} inputs={[]} correction={packet} as="raw" />
+<Phase.Role role={props.role} session={props.session} assignment={props.assignment} initialize={false} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} implementationModel={props.implementationModel} inputs={[]} correction={packet} as="raw" />
 <Let as="rawPath" value={directory + "/raw.txt"} />
 <Dir path={directory}><File path="raw.txt">{raw}</File></Dir>
 <Phase.SubmissionGuide repository={props.assignment.repository} directory={props.attempt} mode="check"><Phase.SubmissionInstructions role={props.role} assignment={props.assignment} /></Phase.SubmissionGuide>
