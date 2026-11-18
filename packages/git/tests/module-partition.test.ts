@@ -71,6 +71,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/composition/observation-records.ts",
   "src/composition/parse.ts",
   "src/composition/pull-request-api.ts",
+  "src/composition/pull-request-details-page.ts",
   "src/composition/pull-request-operations.ts",
   "src/composition/pull-request-read-execution.ts",
   "src/composition/pull-request-read-records.ts",

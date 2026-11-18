@@ -47,7 +47,10 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import type { PullRequestReadKind, PullRequestReadResult } from "./pull-request-read-records.ts";
+import type {
+  PullRequestReadRequestKind,
+  PullRequestReadResult,
+} from "./pull-request-read-records.ts";
 import type { PullRequestResult } from "./pull-request-records.ts";
 import type { RepositorySelection } from "./selection.ts";
 
@@ -56,8 +59,8 @@ export const PULL_REQUEST_API = "executablemd.git.pull-request";
 
 /** Which collection a read wants, and where it may be sent. */
 export interface PullRequestReadOptions {
-  /** Which of the three collections this read is for. */
-  readonly kind: PullRequestReadKind;
+  /** Which collection this read is for, or the pull request's own record. */
+  readonly kind: PullRequestReadRequestKind;
   /** The explicit discriminator, for a self-hosted or non-standard URL. */
   readonly provider?: string;
 }

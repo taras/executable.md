@@ -2707,7 +2707,7 @@ describe("Tier GXC — a name is not a form", () => {
 
   const EXCLUDED: Array<[string, string]> = [
     ["a local Git push", `<Git.Push remote="origin" />`],
-    ["a Git-host pull request", `<PullRequest title="t" body="b" />`],
+    ["a Git-host pull request", `<PullRequest title="t" body="b"></PullRequest>`],
     ["an issue upsert", `<Issue title="t" body="b" />`],
     ["a repository", `<Repository name="api" />`],
     ["a glob", `<Glob pattern="**/*" />`],

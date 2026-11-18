@@ -86,13 +86,15 @@ import { replObservationMiddleware } from "./observations.ts";
 import type { ReplObservationEntry } from "./observations.ts";
 import { GitQuery } from "@executablemd/git/api";
 import { replPushAdmission, replPushPolicy } from "./push.ts";
-import type { ReplPushEntry } from "./push.ts";
+import type { ReplPushAccess, ReplPushEntry } from "./push.ts";
 import { replIssueAdmission, replIssuePolicy, useEntryIssueTransport } from "./issues.ts";
 import { replPullRequestPolicy } from "./pull-request.ts";
 import { replPullRequestReadAdmission, replPullRequestReadPolicy } from "./pull-request-reads.ts";
 import { pushDeclaration } from "@executablemd/git";
 import { issueDeclaration } from "@executablemd/git";
 import { pullRequestDeclaration } from "@executablemd/git";
+import type { BindOperations } from "@executablemd/git";
+import type { PullRequestOperationsApi } from "@executablemd/git/api";
 import { pullRequestReadDeclaration } from "@executablemd/git";
 import { PULL_REQUEST_READ_KINDS } from "@executablemd/git";
 import { Execution } from "@executablemd/core/api";
@@ -166,6 +168,25 @@ export interface ReplRecordingOptions {
  * working in that one, and a nested execution that composed its own working
  * directory is discovered from that.
  */
+
+/**
+ * This entry's policy for both halves of `<PullRequest>`.
+ *
+ * The authored read is admitted through this entry's own transport, retained under
+ * its owner and site, and the paired write keeps its saved-request admission. Each
+ * is called once per invocation with the site the binding authenticated, so the
+ * read and the upsert never share a counter, a retained record or a route.
+ */
+function replPullRequestOperations(
+  owner: string,
+  access: ReplPushAccess,
+  pullRequests: () => DenoPullRequestOperations,
+): BindOperations<PullRequestOperationsApi> {
+  const upsert = replPullRequestPolicy(owner, access, pullRequests);
+  const read = replPullRequestReadPolicy(owner, pullRequests);
+  return (site: string) => ({ read: read(site), upsert: upsert(site) });
+}
+
 export function useReplRepositoryRecording(options: ReplRecordingOptions = {}): Operation<void> {
   return initializeReplRepository(options);
 }
@@ -254,7 +275,7 @@ export function* replRepositoryInstallation(
   const components: readonly IdentityComponent[] = [
     pushDeclaration(replPushPolicy(owner, access)),
     issueDeclaration(replIssuePolicy(owner)),
-    pullRequestDeclaration(replPullRequestPolicy(owner, access, () => pullRequests)),
+    pullRequestDeclaration(replPullRequestOperations(owner, access, () => pullRequests)),
     ...PULL_REQUEST_READ_KINDS.map((kind) =>
       pullRequestReadDeclaration(
         kind,

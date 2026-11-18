@@ -60,10 +60,10 @@ import { GitCompositionProviderError } from "@executablemd/git";
 import { PULL_REQUEST_ELEMENT } from "@executablemd/git";
 import {
   parseCompletePullRequestReadResult,
-  PULL_REQUEST_READ_KINDS,
+  PULL_REQUEST_READ_REQUEST_KINDS,
   readRequest,
 } from "@executablemd/git";
-import type { PullRequestReadKind, PullRequestReadResult } from "@executablemd/git/api";
+import type { PullRequestReadRequestKind, PullRequestReadResult } from "@executablemd/git/api";
 import type { PullRequestResult } from "@executablemd/git";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "@executablemd/git";
 import type { DenoPullRequestOperations } from "@executablemd/git/deno";
@@ -106,7 +106,7 @@ interface RetainedReadQuestion {
   readonly site: string;
   readonly url: string;
   readonly provider: string | null;
-  readonly kind: PullRequestReadKind;
+  readonly kind: PullRequestReadRequestKind;
 }
 
 export function replPullRequestReadAdmission(owner: string): JournalAdmission {
@@ -208,7 +208,7 @@ function parseRetainedQuestion(value: unknown): RetainedReadQuestion | undefined
     if (typeof url !== "string" || canonicalPullRequestUrl(url) !== url) {
       return undefined;
     }
-    const collection = PULL_REQUEST_READ_KINDS.find((known) => known === kind);
+    const collection = PULL_REQUEST_READ_REQUEST_KINDS.find((known) => known === kind);
     if (collection === undefined) {
       return undefined;
     }

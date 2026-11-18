@@ -38,8 +38,9 @@ import {
   PAGE_LIMIT,
   PAGE_SIZE,
   readJson,
+  readPullRequest,
 } from "./github.ts";
-import type { GitHubAccess, GitHubRepositoryName } from "./github.ts";
+import type { GitHubAccess, GitHubHttpResponse, GitHubRepositoryName } from "./github.ts";
 import {
   CHECK_RUN_CONCLUSIONS,
   CHECK_RUN_STATUSES,
@@ -49,6 +50,7 @@ import {
 import type {
   CheckEvidence,
   CommentEvidence,
+  PullRequestDetails,
   PullRequestEvidence,
   PullRequestReadKind,
   PullRequestReadResult,
@@ -578,4 +580,81 @@ export function* readPullRequestEvidence(
     state: "read",
     result: { kind: "checks", headSha, items: [...runs.value, ...statuses.value] },
   };
+}
+
+/**
+ * The complete record one pull request holds, read with one request or not at all.
+ *
+ * One GET of the pull request, with no collection to walk. The payload must
+ * describe the pull request that was asked for: its own URL names this number in
+ * this repository, and its base repository is that repository. A well-formed
+ * record of another pull request is a protocol failure, not the answer.
+ *
+ * GitHub stores its repositories as SHA-1, so a payload whose commits are not
+ * 40-digit object ids is one this reader cannot describe and refuses.
+ */
+export function* readPullRequestDetails(
+  access: GitHubAccess,
+  name: GitHubRepositoryName,
+  number: number,
+): Operation<EvidenceReading> {
+  const sent = yield* authorizedHeaders(access, false);
+  if (sent === undefined) {
+    return { state: "unavailable" };
+  }
+  const url = `${access.endpoint}/repos/${name.owner}/${name.repository}/pulls/${number}`;
+  let response: GitHubHttpResponse;
+  try {
+    response = yield* access.send({ method: "GET", url, headers: sent });
+  } catch {
+    return { state: "unavailable" };
+  }
+  if (response.status !== 200) {
+    return { state: "unavailable" };
+  }
+  const reading = readPullRequest(readJson(response.body), "sha1");
+  if (reading === undefined) {
+    return { state: "protocol-invalid" };
+  }
+  if (
+    reading.number !== number ||
+    !namesPullRequest(reading.url, name, number) ||
+    !same(reading.baseRepository, `${name.owner}/${name.repository}`)
+  ) {
+    return { state: "protocol-invalid" };
+  }
+  const details: PullRequestDetails = {
+    providerId: reading.providerId,
+    number: reading.number,
+    url: reading.url,
+    state: reading.state,
+    title: reading.title,
+    body: reading.body,
+    draft: reading.draft,
+    headBranch: reading.headBranch,
+    headSha: reading.headSha,
+    headRepository: reading.headRepository,
+    baseBranch: reading.baseBranch,
+    baseSha: reading.baseSha,
+    baseRepository: reading.baseRepository,
+  };
+  return { state: "read", result: { kind: "details", details } };
+}
+
+/** Whether a pull request's own address is the one this read asked for. */
+function namesPullRequest(url: string, name: GitHubRepositoryName, number: number): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const segments = parsed.pathname.split("/").filter((segment) => segment !== "");
+  return (
+    segments.length === 4 &&
+    same(segments[0] ?? "", name.owner) &&
+    same(segments[1] ?? "", name.repository) &&
+    segments[2] === "pull" &&
+    segments[3] === String(number)
+  );
 }

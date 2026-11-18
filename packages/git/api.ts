@@ -141,7 +141,9 @@ export type {
   PullRequestUpsertOptions,
 } from "./src/composition/pull-request-api.ts";
 export type {
+  PullRequestDetails,
   PullRequestReadKind,
+  PullRequestReadRequestKind,
   PullRequestReadResult,
 } from "./src/composition/pull-request-read-records.ts";
 export type { PullRequestResult } from "./src/composition/pull-request-records.ts";

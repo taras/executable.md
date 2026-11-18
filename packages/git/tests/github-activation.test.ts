@@ -295,7 +295,8 @@ describe("what installing the bundled GitHub adapter costs", () => {
     expect(steps).toEqual(["configuration", "source", "open", "credential", "transport"]);
     // The collection really was read — a refusal would have thrown, and an
     // adapter that answered without asking would record no transport.
-    expect(`${reviews.kind}:${reviews.items.length}`).toBe("reviews:0");
+    expect(reviews.kind).toBe("reviews");
+    expect(reviews.kind === "details" ? undefined : reviews.items).toEqual([]);
   });
 
   it("refuses outside the ceiling without opening a credential", function* () {
