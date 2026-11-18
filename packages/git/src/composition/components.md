@@ -233,20 +233,34 @@ directory, and a file that is not text each refuse and say which it was.
 
 ## PullRequest
 
-Opens a pull request, or updates the one already open.
+Read a pull request, or create or update one after publishing its branch.
 
 ```mdx
-<PullRequest title="Prepare 1.4">
+<PullRequest url={url} as="pr" />
+<PullRequest url={url} yq=".body" as="description" />
+```
+
+The first read binds the complete documented record in pr.value. The second
+binds one page of its exact description in description.value. Both bind the
+standard page {value, next, prev, last}. Follow a navigation value by passing it
+as yq on another read of the same URL. Omit as to render that page as JSON.
+
+A read needs no Repository or Git.Push. The configured provider decides which
+URLs the host permits it to read.
+
+```mdx
+<PullRequest title="Prepare 1.4" as="pullRequest">
 What changed, and why.
 </PullRequest>
 ```
 
-The content is the body. Opening and updating are one element for the same
-reason cloning and reusing are: a document that runs twice should end in the
-state it describes, not with two pull requests.
+The paired form uses its content as the body and requires as. An empty pair is
+an intentional write. Write Git.Push first; the paired form uses this execution's
+own publication evidence to create or update the PR. Its bound result is the
+settled write identity, including the PR number, URL, head and base SHAs.
 
-Push the branch first — `<Git.Push />` — since there is nothing to open a pull
-request against until the branch exists on the remote.
+See workflow-workspace-spec.md §7.5 for the full record, form rules, selection
+and paging contract.
 
 ## PullRequest.Reviews
 

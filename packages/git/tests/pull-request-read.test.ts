@@ -256,7 +256,9 @@ function kinds(reading: EvidenceReading): string[] {
  * produced rather than about which arm of the union it is.
  */
 function items(reading: EvidenceReading): readonly Record<string, unknown>[] {
-  return reading.state === "read" ? reading.result.items.map((item) => ({ ...item })) : [];
+  return reading.state === "read" && reading.result.kind !== "details"
+    ? reading.result.items.map((item) => ({ ...item }))
+    : [];
 }
 
 /** The head a completed checks read names. */

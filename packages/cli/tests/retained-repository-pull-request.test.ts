@@ -1031,7 +1031,7 @@ function collections(
     }
     for (const kind of ["reviews", "comments", "checks"] as const) {
       const parsed = parseCompletePullRequestReadResult(event.result.value, kind);
-      if (parsed !== undefined) {
+      if (parsed !== undefined && parsed.kind !== "details") {
         held.push({ kind, items: parsed.items.length });
       }
     }
@@ -1301,6 +1301,40 @@ describe("one entry's pull request", () => {
     expect(requests(settled)).toHaveLength(1);
     expect(outcomes(settled)).toHaveLength(2);
     expect(reads(settled)).toHaveLength(3);
+  });
+
+  it("A7: a URL-only authored read binds the record with no managed root, and replays it", function* () {
+    const fixture = yield* useFixture();
+    fixture.store.pullRequests.push(
+      stored({ number: 1, title: TITLE, body: BODY, headRef: BRANCH }),
+    );
+    const counted = counters();
+    const stream = new InMemoryStream();
+    // No Repository in scope and no managed root: a read needs neither.
+    const source = [
+      `<PullRequest url="${LOCATOR}/pull/1" yq=".body" as="description" />`,
+      `<PullRequest url="${LOCATOR}/pull/1" as="pr" />`,
+      "",
+      `description {description.value}`,
+      `state {pr.value.state} head {pr.value.headBranch}`,
+      "",
+    ].join("\n");
+
+    const ran = yield* run(fixture, source, stream, counted, { root: undefined });
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.output).toContain(`description ${BODY}`);
+    expect(ran.output).toContain(`state open head ${BRANCH}`);
+    expect(mutations(fixture.store)).toEqual([]);
+
+    // The completed reads restore from the history: no session, no request.
+    const second = counters();
+    const sent = fixture.store.requests.length;
+    const replayed = new InMemoryStream([...ran.events].filter(terminal));
+    const again = yield* run(fixture, source, replayed, second, { root: undefined });
+    expect(again.refusal).toBe(undefined);
+    expect(again.output).toBe(ran.output);
+    expect(methodsCalled(second)).toEqual([]);
+    expect(fixture.store.requests.length).toBe(sent);
   });
 
   it("Q2: a superseding publication of the same branch decides the head", function* () {

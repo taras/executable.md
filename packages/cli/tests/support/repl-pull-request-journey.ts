@@ -206,7 +206,7 @@ function snapshots(
     }
     for (const kind of ["reviews", "comments", "checks"] as const) {
       const parsed = parseCompletePullRequestReadResult(event.result.value, kind);
-      if (parsed !== undefined) {
+      if (parsed !== undefined && parsed.kind !== "details") {
         found.push({ kind, items: parsed.items.length });
       }
     }

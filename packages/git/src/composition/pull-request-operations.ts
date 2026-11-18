@@ -29,7 +29,10 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { PullRequestInput } from "./pull-request-api.ts";
-import type { PullRequestReadKind, PullRequestReadResult } from "./pull-request-read-records.ts";
+import type {
+  PullRequestReadRequestKind,
+  PullRequestReadResult,
+} from "./pull-request-read-records.ts";
 import type { PullRequestResult } from "./pull-request-records.ts";
 import type { RepositorySelection } from "./selection.ts";
 
@@ -40,8 +43,8 @@ export const PULL_REQUEST_OPERATIONS = "executablemd.workflow.composition.pull-r
 export interface PullRequestReadInvocation {
   /** The canonical pull-request URL. */
   readonly url: string;
-  /** Which of the three collections this read is for. */
-  readonly kind: PullRequestReadKind;
+  /** Which collection this read is for, or the pull request's own record. */
+  readonly kind: PullRequestReadRequestKind;
   /** The explicit discriminator, for a self-hosted or non-standard URL. */
   readonly provider: string | undefined;
 }
@@ -92,9 +95,7 @@ export const PullRequestOperations: Api<PullRequestOperationsApi> =
   createApi<PullRequestOperationsApi>(PULL_REQUEST_OPERATIONS, {
     // deno-lint-ignore require-yield
     *read(invocation: PullRequestReadInvocation): Operation<PullRequestReadResult> {
-      throw new PullRequestOperationsProviderError(
-        `a <PullRequest.${collection(invocation.kind)}>`,
-      );
+      throw new PullRequestOperationsProviderError(`a ${readElement(invocation.kind)}`);
     },
     // deno-lint-ignore require-yield
     *upsert(_invocation: PullRequestUpsertInvocation): Operation<PullRequestResult> {
@@ -102,7 +103,10 @@ export const PullRequestOperations: Api<PullRequestOperationsApi> =
     },
   });
 
-/** The element name a read of this collection is written as. */
-function collection(kind: PullRequestReadKind): string {
-  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+/** The element a read of this kind is written as. */
+function readElement(kind: PullRequestReadRequestKind): string {
+  if (kind === "details") {
+    return "<PullRequest>";
+  }
+  return `<PullRequest.${kind.charAt(0).toUpperCase()}${kind.slice(1)}>`;
 }

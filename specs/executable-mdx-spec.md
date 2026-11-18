@@ -11220,7 +11220,7 @@ synthetic handler answer and a failed or pending publication each authorize
 nothing, and each refuses before a request, a credential or contact exists. The
 upsert takes the selected placement's managed slot and no mutation lease.
 
-Its three evidence reads retain the provider's snapshot and nothing above it.
+Its self-closing record read and three evidence reads retain the provider's complete normalized answer and nothing above it.
 Each needs no Repository and no working directory, so an entry with no managed
 root reads an allowed URL and still refuses an upsert for want of local
 capability. Restoration passes the host's current URL admission and the live
@@ -15438,9 +15438,9 @@ user's own `~/.xmd/repositories`.
 | ORC12 | Exclusive ownership | A second process selecting the same slot is refused while the first holds it; another slot succeeds concurrently; normal release permits a later owner and the checkout remains |
 | ORC13 | Live local Git | Switch, Add and Commit keep their authored semantics and make real, non-transactional changes; a failure or a cancellation claims neither rollback nor replay; a commit records the invoking user's own identity, an unresolvable one refuses that component alone, and hooks, monitors, signing and repository helpers stay disabled |
 | ORC14 | Live Push evidence | A performed or already-equal Push stores exact private evidence; a Push of another branch, checkout, origin, destination or commit does not authorize a PullRequest; the latest publication of a destination decides |
-| ORC15 | Evidence cannot cross runs | A PullRequest succeeds only after an exact Push in the same execution; a new run must publish again, and copying a Context value, a result or a previous trace grants nothing |
+| ORC15 | Evidence cannot cross runs | A paired PullRequest succeeds only after an exact Push in the same execution; a new run must publish again, and copying a Context value, a result or a previous trace grants nothing |
 | ORC16 | Live Issues | Configured reads and upserts use the existing normalized contracts and this execution's own identity; absent or out-of-ceiling configuration sends no credential and no request |
-| ORC17 | Live PullRequests | Configured reviews, comments and checks reads, and a Push-authorized upsert, run under ordinary Deno; the read ceiling and the local evidence check both precede credential and network access |
+| ORC17 | Live PullRequests | Configured details, reviews, comments and checks reads, and a Push-authorized upsert, run under ordinary Deno; the read ceiling and the local evidence check both precede credential and network access |
 | ORC18 | The journal is diagnostic | The same fixture without and with `--journal` performs the same live operations once per invocation; the trace is newly created and never consumed as continuation or evidence |
 | ORC19 | Nested run profile | An isolated `host="run"` child receives the declarations and a fresh provider; its evidence and locks reach neither its parent nor a sibling |
 | ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |

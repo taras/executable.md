@@ -350,8 +350,13 @@ export {
 export { members, optionalText, text } from "./src/composition/parse.ts";
 export {
   PULL_REQUEST_READ_KINDS,
+  PULL_REQUEST_READ_REQUEST_KINDS,
   parseCompletePullRequestReadResult,
   readRequest,
+} from "./src/composition/pull-request-read-records.ts";
+export type {
+  PullRequestDetails,
+  PullRequestReadRequestKind,
 } from "./src/composition/pull-request-read-records.ts";
 export { gitHostRequestFingerprint } from "./src/git-host/records.ts";
 export {
