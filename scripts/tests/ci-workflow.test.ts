@@ -723,6 +723,22 @@ describe("the dedicated ReplBench job", () => {
       expect(terminal?.run).toContain(file);
     }
   });
+
+  it("uploads the failed journeys' journals beside their bench evidence", function* () {
+    const bench = (yield* workflow())["repl-bench"];
+    const upload = bench?.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+
+    expect(upload?.if).toBe("github.event_name == 'push' && (failure() || cancelled())");
+    expect(upload?.with?.["include-hidden-files"]).toBe("true");
+    expect(upload?.with?.path?.trim().split("\n")).toEqual([
+      "repl bench checkout/.bench/*/run.json",
+      "repl bench checkout/.bench/*/screen.txt",
+      "repl bench checkout/.bench/*/*.svg",
+      "repl bench checkout/.bench/*/terminal.ansi",
+      "repl bench checkout/.bench/*/closed.json",
+      "repl bench checkout/.xmd/test-artifacts",
+    ]);
+  });
 });
 
 describe("the CI workflow aggregate", () => {
