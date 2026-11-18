@@ -1619,6 +1619,7 @@ describe("Owned narrow guidance and pane navigation routes", () => {
 });
 
 describe("Owned footer, History and single-field inventory", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps the full execution refusal readable from the narrow identity header", function* () {
     // The long search path ends row five with a supplementary letter.
     const cutoff = "\u{10400}";
