@@ -15,9 +15,12 @@ import { usePluginProgram } from "./support/plugin-program.ts";
  * it from any host — which is the whole point, because no shard runs the CLI on
  * Windows.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { classifyPluginSpecifier, resolvePluginSpecifier } from "../src/host-plugin-modules.ts";
+
+const OWNER = "packages/cli/tests/plugin-modules.test.ts";
 
 describe("PM1 — a Windows path is a path, on every host", () => {
   // deno-lint-ignore require-yield
@@ -127,6 +130,7 @@ describe("PM3 — resolution follows the classification", () => {
 });
 
 describe("REPL Plugin author API", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R8: imports the public API and executes the selected author example", function* () {
     const { Repl } = yield* until(import("@executablemd/cli/api"));
     expect(Repl.operations.initialize).toBeDefined();

@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -6,6 +7,8 @@ import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage, ScreenCell } from "./support/repl-page.ts";
 import { draftText, intoComposer, intoDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-wheel-scroll.test.ts";
 
 function* key(page: ReplPage, name: PageKey): Operation<void> {
   const before = page.screen().index;
@@ -75,6 +78,7 @@ function* transcriptThrough(page: ReplPage, last: number): Operation<void> {
 }
 
 describe("wheel real consumers", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("permission explanation is readable in both directions without deciding", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const explanation = [

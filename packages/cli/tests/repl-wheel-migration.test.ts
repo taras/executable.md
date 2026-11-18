@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { sleep } from "effection";
 import type { Operation } from "effection";
@@ -15,6 +16,8 @@ import {
 } from "./support/screen-journeys.ts";
 import { awaitedFact, OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
+
+const OWNER = "packages/cli/tests/repl-wheel-migration.test.ts";
 
 function* key(page: ReplPage, name: PageKey): Operation<void> {
   const before = page.screen().index;
@@ -97,6 +100,7 @@ function absentButtons(page: ReplPage): void {
 }
 
 describe("wheel remaining migration journeys", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps permission focus through scrolling and acknowledges a held presentation", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const explanation = Array.from(

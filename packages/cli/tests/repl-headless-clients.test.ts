@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, spawn, suspend, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -22,6 +23,8 @@ import { Elicitation } from "@executablemd/core";
 import type { Scope } from "effection";
 import type { AgentPromptEvent } from "@executablemd/agent/api";
 
+const OWNER = "packages/cli/tests/repl-headless-clients.test.ts";
+
 const conditional = {
   type: "object",
   additionalProperties: false,
@@ -39,6 +42,7 @@ function entryResponse(source: string): string {
 }
 
 describe("headless presentation lifetime", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("releases more than 64 UI-resolved presentations after callbacks join and preserves an in-flight stale response", function* () {
     const held = yield* useHeadlessFixture();
     const questions = yield* useReplElicitation();
@@ -189,6 +193,7 @@ describe("headless presentation lifetime", () => {
 });
 
 describe("headless child ACP clients", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("H5: every closed response variant closes only its correlated presentation and retirement proves no answer", function* () {
     const issue = {
       instancePath: "/reason",

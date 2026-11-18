@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { useReplPage } from "../../../packages/cli/tests/support/repl-page.ts";
@@ -10,6 +11,8 @@ import {
 import { generateTypingHistory } from "../../../packages/cli/tests/support/typing-history.ts";
 import { EDITS, VIEWPORT, WARMUP, WORKLOADS } from "../lib/typing-latency-report.ts";
 import type { TypingSample } from "../lib/typing-latency-report.ts";
+
+const OWNER = "examples/repl-bench/tests/mounted-typing.test.ts";
 
 const MARKER = "XMD:";
 const CHARACTERS = "abcdefghijklmnopqrstuvwxyz".repeat(2).slice(0, EDITS);
@@ -62,6 +65,7 @@ function* sampleTyping(page: ReplPage): Operation<TypingSample[]> {
 
 if (revision !== undefined) {
   describe("mounted REPL typing latency", () => {
+    beforeEach(journalBeforeEach(OWNER));
     for (const workload of WORKLOADS) {
       it(workload.name, function* () {
         const page = yield* useReplPage({ size: VIEWPORT });

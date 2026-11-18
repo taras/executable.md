@@ -13,7 +13,8 @@
  * is Slice E's turn.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempFileCompiler } from "@executablemd/core";
 import {
@@ -86,6 +87,8 @@ import {
   RAIL,
   railMark,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-terminal.test.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
@@ -1995,6 +1998,7 @@ function framed(text: string): Uint8Array {
 }
 
 describe("REPL bracketed paste", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const payload = "first\n\n\t  é界🙂\nlast\n";
   for (const separator of ["\r", "\n", "\r\n"]) {
     it(`keeps framed ${JSON.stringify(separator)} as text only`, function* () {
@@ -2107,6 +2111,7 @@ describe("REPL newline keys, from recorded terminal bytes", () => {
 });
 
 describe("REPL terminal: what the host normalizes, and what it refuses to guess", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("I1: a key becomes a normalized event and a mouse press becomes a position", function* () {
     const terminal = recordingTerminal();
     yield* terminal.install();
@@ -2597,6 +2602,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
 });
 
 describe("REPL terminal: what a drawer covers, and what it cannot reach", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("TL6: a drawer is visible with its way out while the footer remains readable", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* page.press("[history]");
@@ -3039,6 +3045,7 @@ function* submitPast(page: ReplPage, order: number): Operation<void> {
 }
 
 describe("REPL terminal: History past the row-full point (#1017)", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps every action reachable and preserves results, selection and the draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);

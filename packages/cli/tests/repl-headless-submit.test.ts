@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -25,6 +26,8 @@ import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { recordingTerminal } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
+
+const OWNER = "packages/cli/tests/repl-headless-submit.test.ts";
 
 type Fixture = ReturnType<typeof useHeadlessFixture> extends Operation<infer T> ? T : never;
 function gate() {
@@ -122,6 +125,7 @@ const HOLD =
   '---\nreturns: {type: object}\n---\n<AssertEquals actual={2 + 2} expected={4} />\n<Return value={{status: "hold"}} />';
 
 describe("direct headless submission", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A: transfers a complete large UTF-8 program once, with consumption credit, values and project placement", function* () {
     const directory = yield* useTemporary("xmd-direct-project-");
     yield* API.Env.around(

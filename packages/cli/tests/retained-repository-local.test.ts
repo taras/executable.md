@@ -17,7 +17,8 @@
  * them assert is what a *second* open of one history does.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   allSettled,
@@ -85,6 +86,8 @@ import {
 import { useReplFileRecorder } from "../src/repl/repositories/deno/files.ts";
 import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import type { ReplLocalValue } from "../src/repl/repositories/records.ts";
+
+const OWNER = "packages/cli/tests/retained-repository-local.test.ts";
 
 interface Fixture {
   readonly root: string;
@@ -1297,6 +1300,7 @@ describe("one entry's local file work", () => {
 });
 
 describe("975 — native Git keeps project selection and refuses an outside cwd", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("reads the launch project and refuses native Git outside its selected checkout", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },

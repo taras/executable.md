@@ -21,7 +21,8 @@ import { parseTodo } from "../src/repl/todo/document.ts";
  * chose.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { close, fit, open, text } from "../generated/tty/mod.js";
 import {
@@ -152,6 +153,8 @@ import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { CellStyle, Observed, Presenter, TerminalGrid } from "./fixtures/repl/presentation.ts";
+
+const OWNER = "packages/cli/tests/repl-presentation-style.test.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
@@ -5223,6 +5226,7 @@ function stagedView(model: ReplModel, size: ReplTerminalSize): ReplView {
  * to keep; the archive's own inks are the appearance rows above.
  */
 describe("Checkpoint #971 — the workspace screen at 160x36", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("C1/C2: every surface is placed whole, wraps inside its region and keeps its styles", function* () {
@@ -5751,6 +5755,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
 });
 
 describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("A2: every size places whole controls inside the frame and keeps its routes", function* () {
@@ -5986,6 +5991,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
  * Whether it looks right is the image review's answer, not a test's.
  */
 describe("Checkpoint #971 A4 — current outcomes, work and the waiting question", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A4: every outcome, work identity and the waiting question read from the current screen", function* () {
     const page = yield* reachOutcomes(WIDE);
     const { model } = yield* settledReading(page.repl);
@@ -6086,6 +6092,7 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
  *
  */
 describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R2: current chat traversal reads every outcome and keeps its composer", function* () {
     const page = yield* reachOutcomes(WIDE);
     // The size whose conversation still holds more than it shows.
@@ -6123,6 +6130,7 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
 });
 
 describe("REPL presentation: the screen says what is placed", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps the shell and its readable surfaces at the supported sizes", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);

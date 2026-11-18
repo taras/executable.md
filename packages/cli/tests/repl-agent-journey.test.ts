@@ -1,5 +1,6 @@
 import { installTodoSource } from "../src/node-todo-source.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, suspend, until as untilResolved, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -65,6 +66,8 @@ import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts"
 import { projectRepl } from "../src/repl/model.ts";
 import { REPL_DIRECTORY } from "../src/repl/storage.ts";
 import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
+
+const OWNER = "packages/cli/tests/repl-agent-journey.test.ts";
 
 const STORY = [
   '<Evaluate allow={["write"]}>',
@@ -166,6 +169,7 @@ const WIDE: ReplTerminalSize = { columns: 200, rows: 140 };
 const TALL: ReplTerminalSize = { columns: 200, rows: 60 };
 
 describe("J1 — the Story, from one entry to one README", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("J1: the packaged Plan is reviewed in the drawer, and its program asks, previews and writes", function* () {
@@ -334,6 +338,7 @@ describe("J1 — the Story, from one entry to one README", () => {
 });
 
 describe("C1 — the command line this REPL runs under", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("C1: the five options settle into one immutable profile", function* () {
@@ -528,6 +533,7 @@ function* selectedProfile(
 }
 
 describe("A2–A5 — the selected REPL component environment", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("A2/A5: one detached ordered selection describes vocabulary, protected names and environment", function* () {
@@ -731,6 +737,7 @@ describe("A2–A5 — the selected REPL component environment", () => {
 });
 
 describe("J3 — durable truth, and a cold process over it", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("J3: a fresh command scope reconstructs the whole Story from the Journal alone", function* () {
@@ -1061,6 +1068,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 });
 
 describe("J2 — three conversations at once, through the terminal", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("J2: complete, streaming and queued are one frame, and filtering changes only Sessions", function* () {
@@ -1158,6 +1166,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
 });
 
 describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const TYPED = "and then this one";
@@ -1286,6 +1295,7 @@ function* failing(body: () => Operation<void>): Operation<unknown> {
 }
 
 describe("X1 — how this command ends, with work still in flight", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   function* inFlight(fake: FakeAcp, hostRoot: string, waitingFor: string): Operation<ReplPage> {
