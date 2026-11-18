@@ -5,6 +5,7 @@ props:
   properties:
     record: {type: object}
     proof: {type: string, pattern: '^/'}
+    resume: {type: [string, 'null'], pattern: '^/', default: null}
   required: [record, proof]
   additionalProperties: false
 returns: {type: object}
@@ -23,6 +24,7 @@ happened. This action publishes a separate validated derivative and calls no rol
 <Let as="dispositions" value={state.feedback.filter(path => /\/reconciliations\/[0-9a-f]{64}\/disposition\.json$/.test(path))} />
 <Loop max={1}>
 <If condition={dispositions.length !== 0}>
+<If condition={props.resume !== null}><Fail message="Resumption never adopts a confirmed or potentially published successor." /></If>
 <If condition={dispositions.length !== 1}><Fail message="The confirmed successor has contradictory reconciliation links." /></If>
 <Ticket.Hydrate repository={repository} document={saved.documents[dispositions[0]]} as="dispositionText" />
 <Parse schema={{type:"object"}} as="disposition">{dispositionText.content}</Parse>
@@ -44,7 +46,7 @@ happened. This action publishes a separate validated derivative and calls no rol
 if test -e {quoted} || test -L {quoted}; then printf reserved; else printf none; fi
 ```
 <If condition={existing.exitCode !== 0}><Fail message="Cannot inspect the reconciliation reservation." /></If>
-<If condition={existing.stdout !== "none"}>
+<If condition={existing.stdout !== "none" && props.resume === null}>
 <Return value={{...held,hold:"This original hold already has a reconciliation reservation at " + reservation + ". Preserve its first failure and retained disposition. Only the actual confirmed returned successor permits a confirmed repeat; matching files do not acknowledge publication."}} /><Break />
 </If>
 <Ticket.Read path={call.preparation} limit={1048576} as="preparationText" />
@@ -61,10 +63,23 @@ git -C {workflowQuoted} status --porcelain --untracked-files=no -- examples/adve
 <Fail message="The effective workflow owner is not clean at the original prepared pin." />
 </If>
 <Ticket.JoinedProof path={props.proof} mode="admit" record={envelope} call={call} request="" raw="" as="admitted" />
+<Let as="requestReceipt" value={{schema:"joined-response-request.v1",record:envelope,call:call.id,proof:admitted.file,references:admitted.references,owner}} />
+<Let as="resumption" value={null} />
+<Let as="resumedDescriptor" value={null} />
+<If condition={props.resume !== null}>
+<If condition={existing.stdout === "none"}><Fail message="Resumption requires an existing original reservation." /></If>
+<Ticket.ResumeRequest path={props.resume} reservation={reservation} expected={requestReceipt} as="resumption" />
+<Ticket.ReserveDecision path={reservation + "/resume"} as="reserved" />
+<If condition={!reserved}><Return value={{...held,hold:"This resumption is already reserved; preserve its first effects and acknowledgment uncertainty."}} /><Break /></If>
+<Let as="resumeReceipt" value={{schema:"joined-response-resumption.v1",status:"admitted",original:resumption.request,document:resumption.file,references:resumption.references}} />
+<Ticket.SaveMetadata name="resumeReceipt" repository={repository} path={reservation + "/resume/request.json"} as="resumedDescriptor" />
+<Let as="requestDescriptor" value={resumption.request} />
+<Else>
 <Ticket.ReserveDecision path={reservation} as="reserved" />
 <If condition={!reserved}><Return value={{...held,hold:"Another reconciliation owns " + reservation + "; no second writer or role was started."}} /><Break /></If>
-<Let as="requestReceipt" value={{schema:"joined-response-request.v1",record:envelope,call:call.id,proof:admitted.file,references:admitted.references,owner}} />
 <Ticket.SaveMetadata name="requestReceipt" repository={repository} path={reservation + "/request.json"} as="requestDescriptor" />
+</Else>
+</If>
 <Ticket.Capture as="validation">
 <Ticket.Checkout repository={repository} as="before" />
 <Ticket.Read path={call.record + "/call.json"} limit={1048576} as="originalCallText" />
@@ -146,7 +161,7 @@ git merge-base --is-ancestor {saved.manifest.assignment.revision} {result.revisi
 <Json value={{result,span:extracted.span,raw:call.attempt + "/raw.txt",normalizations:[...Object.keys(checked.value).filter(key => !Object.hasOwn(candidate,key)).map(key => ({field:key,kind:["phase","work","next"].includes(key) ? "assignment_metadata" : "canonical_default",value:checked.value[key]})),...checked.normalizations.map(change => ({kind:"revision_expansion",...change})),...(candidate.next !== undefined && JSON.stringify(candidate.next) !== JSON.stringify(checked.value.next) ? [{field:"next",kind:"actual_policy",original:candidate.next,value:checked.value.next}] : [])],joined,guide,execution,source:{revision:result.revision,checkout:after,ancestry,changes,changedPaths:changes.paths,signature,artifacts:result.artifacts,evidence:result.evidence}}} />
 </Ticket.Capture>
 <If condition={validation.status !== "completed"}>
-<Let as="refusal" value={{schema:"joined-response-disposition.v1",status:"refused",call:call.id,request:requestDescriptor,proof:admitted.file,reason:validation.failure}} />
+<Let as="refusal" value={{schema:"joined-response-disposition.v1",status:"refused",call:call.id,request:requestDescriptor,...(resumedDescriptor === null ? {} : {resumption:resumedDescriptor}),proof:admitted.file,reason:validation.failure}} />
 <Ticket.SaveMetadata name="refusal" repository={repository} path={reservation + "/disposition.json"} as="refusalDescriptor" />
 <Return value={{...held,hold:"Reconciliation refused: " + validation.failure.split("\n")[0] + ". Preserve " + refusalDescriptor.path}} /><Break />
 </If>
@@ -157,12 +172,12 @@ git merge-base --is-ancestor {saved.manifest.assignment.revision} {result.revisi
 <Ticket.SaveMetadata name="observation" repository={repository} path={observation.path} as="sourceDescriptor" />
 <Ticket.Advance pending={{...saved,call,execution:validated.execution,resultPath:derivative.path}} result={result} observation={observation} as="advanced" />
 <If condition={advanced.status !== "paused" || !["architect-review","planner-review"].includes(advanced.gate) || advanced.hold !== null}><Fail message="The owning Advance did not select an original paused feedback gate." /></If>
-<Let as="snapshots" value={[props.proof,call.attempt + "/raw.txt",call.record + "/call.json",call.execution,call.attempt + "/assignment.json",call.attempt + "/submission-guide.md",call.attempt + "/submission-guide.json",call.attempt + "/response-disposition.json",call.attempt + "/response-rejection-0000.json",call.delivery,call.preparation,...admitted.references.map(entry => entry.path),...validated.joined.originals.map(entry => entry.path),requestDescriptor.path,derivative.path,sourceDescriptor.path,...result.artifacts,...(result.assessment?.evidence ?? []),...result.evidence.flatMap(entry => entry.revision === null ? [entry.artifact,entry.candidate] : [entry.artifact])]} />
-<Let as="disposition" value={{schema:"joined-response-disposition.v1",status:"accepted",call:call.id,request:requestDescriptor,original:envelope.continuation,proof:admitted.file,raw:validated.joined.raw,span:validated.span,normalizations:validated.normalizations,derivative,source:sourceDescriptor,guide:validated.guide,gate:advanced.gate,snapshots,originalExecution:call.execution,originalCall:call.record + "/call.json"}} />
+<Let as="snapshots" value={[props.proof,call.attempt + "/raw.txt",call.record + "/call.json",call.execution,call.attempt + "/assignment.json",call.attempt + "/submission-guide.md",call.attempt + "/submission-guide.json",call.attempt + "/response-disposition.json",call.attempt + "/response-rejection-0000.json",call.delivery,call.preparation,...admitted.references.map(entry => entry.path),...validated.joined.originals.map(entry => entry.path),...(resumption === null ? [] : [resumption.file.path,...resumption.references.map(entry => entry.path),resumedDescriptor.path]),requestDescriptor.path,derivative.path,sourceDescriptor.path,...result.artifacts,...(result.assessment?.evidence ?? []),...result.evidence.flatMap(entry => entry.revision === null ? [entry.artifact,entry.candidate] : [entry.artifact])]} />
+<Let as="disposition" value={{schema:"joined-response-disposition.v1",status:"accepted",call:call.id,request:requestDescriptor,...(resumedDescriptor === null ? {} : {resumption:resumedDescriptor}),original:envelope.continuation,proof:admitted.file,raw:validated.joined.raw,span:validated.span,normalizations:validated.normalizations,derivative,source:sourceDescriptor,guide:validated.guide,gate:advanced.gate,snapshots,originalExecution:call.execution,originalCall:call.record + "/call.json"}} />
 <Ticket.SaveMetadata name="disposition" repository={repository} path={reservation + "/disposition.json"} as="dispositionDescriptor" />
 <Ticket.Capture as="publicationCheck">
 <Ticket.Documents repository={repository} directory={saved.manifest.directory} paths={[...snapshots,dispositionDescriptor.path]} documents={saved.documents} as="documents" />
-<If condition={[admitted.file,...admitted.references,...validated.joined.originals,requestDescriptor,derivative,sourceDescriptor,dispositionDescriptor].some(expected => documents[expected.path].sha256 !== expected.sha256 || documents[expected.path].utf8Bytes !== expected.utf8Bytes)}><Fail message="A recovery input changed before snapshot publication; preserve the reservation." /></If>
+<If condition={[admitted.file,...admitted.references,...validated.joined.originals,...(resumption === null ? [] : [resumption.file,...resumption.references,resumedDescriptor]),requestDescriptor,derivative,sourceDescriptor,dispositionDescriptor].some(expected => documents[expected.path].sha256 !== expected.sha256 || documents[expected.path].utf8Bytes !== expected.utf8Bytes)}><Fail message="A recovery input changed before snapshot publication; preserve the reservation." /></If>
 <Let as="checkpoint" value={{...advanced,status:"paused",dispatchable:true,hold:null,feedback:[...advanced.feedback,dispositionDescriptor.path,requestDescriptor.path],feedbackInputs:[...new Set([...advanced.feedbackInputs,...admitted.proof.handoffInputs.map(entry => entry.path)])]}} />
 <Let as="successor" value={{...saved,documents,checkpoint}} />
 <Ticket.Gate record={successor} as="next" />
@@ -175,7 +190,7 @@ git merge-base --is-ancestor {saved.manifest.assignment.revision} {result.revisi
 <Json value={successor} />
 </Ticket.Capture>
 <If condition={publicationCheck.status !== "completed"}>
-<Let as="refusal" value={{schema:"joined-response-disposition.v1",status:"refused",call:call.id,request:requestDescriptor,proof:admitted.file,derivative,validatedDisposition:dispositionDescriptor,reason:publicationCheck.failure}} />
+<Let as="refusal" value={{schema:"joined-response-disposition.v1",status:"refused",call:call.id,request:requestDescriptor,...(resumedDescriptor === null ? {} : {resumption:resumedDescriptor}),proof:admitted.file,derivative,validatedDisposition:dispositionDescriptor,reason:publicationCheck.failure}} />
 <Ticket.SaveMetadata name="refusal" repository={repository} path={reservation + "/publication-refusal.json"} as="refused" />
 <Return value={{...held,pending:{result:derivative.path,execution:call.execution,call:call.record + "/call.json"},hold:"Publication validation refused; preserve " + refused.path + ": " + publicationCheck.failure.split("\n")[0]}} /><Break />
 </If>

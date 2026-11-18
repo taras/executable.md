@@ -8,12 +8,14 @@ The explicit native file entry and direct native REPL component invocation. Sele
 
 ## Public interface
 
-File entry `examples/adversarial-implementation/reconcile-response.md` has exactly two required props, with no other props:
+File entry `examples/adversarial-implementation/reconcile-response.md` has two required props and one optional resumption prop:
 
 - `record: string`: absolute path to an existing confirmed Ticket return. Initially this is the original held return. On a confirmed repeat, supply the actual confirmed successor returned by the prior successful action.
 - `proof: string`: absolute path to the proof document below. The first admitted observation is snapshotted. A confirmed repeat hydrates that same recorded proof and evidence; it does not refresh original files.
 
-Component `Ticket.ReconcileResponse` has exactly two required props:
+- `resume: string | null` (default `null`): absolute path to the explicit resumption document below. Omit it for an initial action or a confirmed repeat.
+
+Component `Ticket.ReconcileResponse` has the same optional `resume` prop and two required props:
 
 - `record: object`: the same parsed Ticket envelope, validated by the owning Ticket.Envelope/Load boundary.
 - `proof: string`: the absolute proof-document path.
@@ -89,13 +91,89 @@ The existing Ticket state shape is preserved. New files live under `ticket/recon
 
 The successor is paused and eligible for the original policy-selected feedback. Reconciliation dispatches nothing. Advance it in a separate ordinary owning-pin `continue.md` invocation with steps=1 and no model-selection props. It retains original allocation, conversations, input accounting and all correction allowances.
 
-For a confirmed repeat, invoke reconcile-response with the retained confirmed successor as record and the same proof reference. It returns exactly that envelope with no writes, prompts, source checks or successor dispatch. A different proof identity refuses. Reusing the old held input after reservation is held: supply the actual successful returned successor if it exists, or obtain operator disposition if completion was lost. A result or confirmation file alone cannot replace that returned acknowledgment.
+For a confirmed repeat, invoke reconcile-response with the retained confirmed successor as record and the same proof reference. It returns exactly that envelope with no writes, prompts, source checks or successor dispatch. A different proof identity refuses. Reusing the old held input after reservation is held: supply the actual successful returned successor if it exists, or preserve the uncertain action if completion was lost. The explicit resumption below covers only a proven request-only failure. A result or confirmation file alone cannot replace that returned acknowledgment.
+
+## Resume a proven unpublished reservation
+
+Use `resume` only after the original native invocation has joined with exit 1,
+zero provider prompts, unchanged originals and no returned successor. Its saved
+native observer receipt must establish those facts and identify the original
+hold. Preserve the first output, error, journal and receipt. A journal ending
+before a root close cannot itself establish native completion.
+
+The approved request-only operation adds an admission receipt under
+`reconciliations/<hold-digest>/resume/request.json`, then runs the ordinary full
+source, owner, guide, prompt, reply and publication checks. It never rewrites the
+first `request.json` or relabels the failed invocation. Supply this exact shape,
+with descriptors measured from the retained UTF-8 files:
+
+```json
+{
+  "schema": "joined-response-resume.v1",
+  "request": {"path": "/absolute/ticket/reconciliations/<hold-digest>/request.json", "utf8Bytes": 6495, "sha256": "64 lowercase hexadecimal characters"},
+  "authority": {"path": "/absolute/approved-resumption.json", "utf8Bytes": 1, "sha256": "64 lowercase hexadecimal characters"},
+  "failure": {"path": "/absolute/first-native-receipt.json", "utf8Bytes": 1, "sha256": "64 lowercase hexadecimal characters"}
+}
+```
+
+The three references and the resumption document must have distinct absolute
+paths. Each text is nonempty and bounded to 1 MiB, with current read permission
+and protection checks. Authority records the actual explicit approval; hashing
+it grants no permission. The failure reference binds the original native
+observer receipt, whose required fields are `holdDigest`, `recoveryExitCode: 1`,
+`recoveryProviderPrompts: 0`, `allOriginalsUnchanged: true`,
+`returnedConfirmedSuccessor: false`, `nextWorkflowStepStarted: false`,
+`outcome: "RECOVERY_BLOCKED_BEFORE_PUBLICATION"` and
+`reservationFiles: ["request.json"]`. Other native receipt diagnostics remain
+intact. These facts must come from the joined observer; do not construct them
+from matching files or an incomplete journal.
+
+The action checks the request's exact bytes and complete correspondence to the
+confirmed hold, proof and owner. The reservation must contain only its regular
+`request.json`. Any derivative, disposition, confirmation, previous `resume`
+claim or unexpected entry refuses. Existing publication always writes a
+derivative before publishing, so request-only absence together with the joined
+failure establishes this bounded prepublication case. This relies on the
+repository's retained-history contract: deleted or rewritten publication
+history cannot be certified by this action. If history or native completion is
+uncertain, remain held.
+
+The admission is exclusive and one-use. An interrupted or refused resumption
+stays reserved; another `resume` call cannot overwrite it. Accepted and refused
+dispositions link the admission receipt. Success snapshots its authority and
+failure inputs and returns the actual confirmed feedback successor. Ordinary
+confirmed repeats still use that returned successor without `resume`.
+
+For the original #1400 pilot, start in the **consumer checkout**, use runtime5151's
+absolute CLI and configuration, and select the new recovery overlay before the
+original EDA owner. An absolute `Dir` does not change the ambient Repository
+provider. The consumer owner supplies the measured resumption document and
+fresh output paths:
+
+```bash
+cd /absolute/consumer4c-checkout
+deno run --allow-all --node-modules-dir=manual --frozen --cached-only \
+  --config /absolute/runtime5151/deno.json \
+  /absolute/runtime5151/packages/cli/src/deno.ts run --allow-absolute \
+  /absolute/repaired/examples/adversarial-implementation/reconcile-response.md \
+  --props-record /private/tmp/xmd-pullrequest-1400.4n6d_64v/implementation-return.json \
+  --props-proof /private/tmp/xmd-1415-pilot-1400-t47h58yq/proof.json \
+  --props-resume /absolute/owner/measured-resumption.json \
+  --include /absolute/repaired/examples/adversarial-implementation/recovery/components \
+  --include /absolute/eda-owner/examples/adversarial-implementation/components \
+  --raw
+```
+
+Retain stdout, stderr, journal and terminal status under new paths. Only the
+consumer owner invokes this historical recovery and its later feedback. This
+operation changes no original session, source record, acceptance qualification
+or allowance.
 
 ## Refusals and next action
 
 The held diagnostic names the missing/mismatched proof class and retained path. Missing or changed frozen guide/input/session/source, unjoined provider work, wrong model/routing, substantive schema conflict, competing results or another failure class remain held. Use existing evidence to resolve the stated fact; this action never selects another result or asks another provider.
 
-A reserved partial or uncertain action remains held, including uncertainty in its confirmation write. Preserve it and its first failure for the owner. This repair introduces no automatic operator-disposition path. A completed refusal is retained, not overwritten by a later corrected proof. Independent response-only repair continues through its existing original-owner contract and allowance; it is not added to this action.
+A reserved partial or uncertain action remains held, including uncertainty in its confirmation write. Preserve it and its first failure for the owner. There is no automatic retry. The explicit request-only resumption below cannot resolve uncertain publication. A completed refusal is retained, not overwritten by a later corrected proof. Independent response-only repair continues through its existing original-owner contract and allowance; it is not added to this action.
 
 ## Read next
 

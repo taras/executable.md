@@ -305,10 +305,11 @@ export function* reconcile(
   fixture: RecoveryFixture,
   fileEntry = false,
   recordPath = fixture.recordPath,
+  resume: string | null = null,
 ) {
   if (!fileEntry) {
     const record = object.parse(JSON.parse(yield* readTextFile(recordPath)));
-    const execution = yield* recoveryRoot(fixture, record);
+    const execution = yield* recoveryRoot(fixture, record, resume);
     return {
       command: [],
       exitCode: 0,
@@ -338,6 +339,7 @@ export function* reconcile(
       recordPath,
       "--props-proof",
       fixture.proof,
+      ...(resume === null ? [] : ["--props-resume", resume]),
       "--include",
       overlay,
       "--include",
@@ -375,18 +377,21 @@ export function* reconcile(
 export function recoveryRoot(
   fixture: RecoveryFixture,
   record: Record<string, Json> = fixture.record,
+  resume: string | null = null,
 ) {
   const source =
     "---\nreturns: {type: object}\n---\n<Ticket.ReconcileResponse record={" +
     JSON.stringify(record) +
     "} proof=" +
     JSON.stringify(fixture.proof) +
+    (resume === null ? "" : " resume=" + JSON.stringify(resume)) +
     ' as="recovered" /><Return value={recovered} />';
   return fixture.native.run(source, "original-haiku", [overlay, fixture.ownerComponents]);
 }
 export function* directRecovery(
   fixture: RecoveryFixture,
   record: Record<string, Json> = fixture.record,
+  resume: string | null = null,
 ) {
-  return object.parse((yield* recoveryRoot(fixture, record)).value);
+  return object.parse((yield* recoveryRoot(fixture, record, resume)).value);
 }

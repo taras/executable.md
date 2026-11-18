@@ -6,6 +6,7 @@ props:
   properties:
     record: {type: string, pattern: '^/'}
     proof: {type: string, pattern: '^/'}
+    resume: {type: [string, 'null'], pattern: '^/', default: null}
   required: [record, proof]
   additionalProperties: false
 returns: {type: object}
@@ -14,7 +15,7 @@ returns: {type: object}
 <Ticket.Read path={props.record} limit={65536} as="recordText" />
 <Parse schema={{type:"object"}} as="record">{recordText}</Parse>
 <Ticket.Envelope value={record} as="record" />
-<Ticket.Capture as="reconciliation"><Ticket.ReconcileResponse record={record} proof={props.proof} as="successor" /><Json value={successor} /></Ticket.Capture>
+<Ticket.Capture as="reconciliation"><Ticket.ReconcileResponse record={record} proof={props.proof} resume={props.resume} as="successor" /><Json value={successor} /></Ticket.Capture>
 <If condition={reconciliation.status === "completed"}>
 <Parse schema={{type:"object"}} as="successor">{reconciliation.output}</Parse>
 <Ticket.Outward value={successor} as="bounded" />

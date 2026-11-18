@@ -8,6 +8,7 @@ props:
   properties:
     record: {type: object}
     proof: {type: string, pattern: '^/'}
+    resume: {type: [string, 'null'], pattern: '^/', default: null}
   required: [record, proof]
   additionalProperties: false
 returns: {type: object}
@@ -25,7 +26,7 @@ returns: {type: object}
 </If>
 <Ticket.Capture as="reconciled">
 <If condition={loaded.status !== "completed"}><Fail message={loaded.failure} /></If>
-<Ticket.ReconcileOriginal record={envelope} proof={props.proof} as="result" /><Json value={result} />
+<Ticket.ReconcileOriginal record={envelope} proof={props.proof} resume={props.resume} as="result" /><Json value={result} />
 </Ticket.Capture>
 <If condition={reconciled.status === "completed"}>
 <Parse schema={{type:"object"}} as="result">{reconciled.output}</Parse>

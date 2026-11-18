@@ -17,7 +17,7 @@ import {
   directRecovery,
   recoveryRoot,
 } from "../support/joined-response-recovery.ts";
-import { cliRuntime } from "@executablemd/test-support/launch";
+import { cliRuntime, cliCommand } from "@executablemd/test-support/launch";
 import type { RecoveryFixture } from "../support/joined-response-recovery.ts";
 import { describe as descriptor } from "../../components/Ticket/text-storage.ts";
 
@@ -518,4 +518,147 @@ describe("public diagnosis consumer", () => {
     expect(result.value).toMatchObject({ status: "missing_witness" });
     expect(native.prompts.length).toBe(1);
   });
+});
+
+describe("explicit unpublished reservation resumption", () => {
+  for (const variant of ["resume", "changed-request", "publication-uncertain"]) {
+    it("preserves the first failed request: " + variant, function* () {
+      const f = yield* recoveryFixture({ historical: true });
+      const originals = yield* originalFiles(f.ticket);
+      const prompts = f.native.prompts.length;
+      const launch = cliCommand([]);
+      if (cliRuntime() === "deno") {
+        launch.arguments.splice(1, 0, "--node-modules-dir=manual", "--cached-only", "--frozen");
+      }
+      const stoppedEntry = join(f.directory, "stopped-recovery.md");
+      yield* writeTextFile(
+        stoppedEntry,
+        "---\nreturns: {type: object}\n---\n<Ticket.ReconcileResponse record={" +
+          JSON.stringify(f.record) +
+          "} proof=" +
+          JSON.stringify(f.proof) +
+          ' as="held" /><Fail message="Controlled joined prepublication stop" /><Return value={held} />',
+      );
+      const first = yield* API.Process.operations.exec({
+        command: [
+          launch.command,
+          ...launch.arguments,
+          "run",
+          "--allow-absolute",
+          stoppedEntry,
+          "--plugin",
+          resolve(
+            "examples/adversarial-implementation/tests/fixtures/joined-response-owner/request-failure.ts",
+          ),
+          "--include",
+          resolve("examples/adversarial-implementation/recovery/components"),
+          "--include",
+          f.ownerComponents,
+          "--plugin",
+          resolve(
+            "examples/adversarial-implementation/tests/fixtures/joined-response-owner/no-dispatch.ts",
+          ),
+        ],
+        cwd: resolve("."),
+      });
+      yield* writeTextFile(join(f.directory, "first-native-receipt.json"), JSON.stringify(first));
+      expect(first.exitCode).toBe(1);
+      yield* unchanged(originals);
+      const reservation = join(
+        f.ticket,
+        "reconciliations",
+        z.object({ continuation: z.object({ sha256: z.string() }) }).parse(f.record).continuation
+          .sha256,
+      );
+      expect((yield* API.Fs.operations.readDirectory(reservation)).map((x) => x.name)).toEqual([
+        "request.json",
+      ]);
+      const requestPath = join(reservation, "request.json");
+      const request = yield* readTextFile(requestPath);
+      const failure = join(f.directory, "first-failure.json");
+      yield* writeTextFile(join(f.directory, "first-error.txt"), first.stderr ?? "");
+      yield* writeTextFile(
+        failure,
+        JSON.stringify({
+          holdDigest: z.object({ continuation: z.object({ sha256: z.string() }) }).parse(f.record)
+            .continuation.sha256,
+          recoveryExitCode: first.exitCode,
+          recoveryProviderPrompts: f.native.prompts.length - prompts,
+          allOriginalsUnchanged: true,
+          returnedConfirmedSuccessor: false,
+          nextWorkflowStepStarted: false,
+          outcome: "RECOVERY_BLOCKED_BEFORE_PUBLICATION",
+          reservationFiles: ["request.json"],
+        }),
+      );
+      const authority = join(f.directory, "resume-authority.md");
+      yield* writeTextFile(
+        authority,
+        "Controlled explicit approval for " +
+          descriptor(requestPath, request).sha256 +
+          "; no consumer allowance is changed.\n",
+      );
+      const resumePath = join(f.directory, "resume.json");
+      yield* writeTextFile(
+        resumePath,
+        JSON.stringify({
+          schema: "joined-response-resume.v1",
+          request: descriptor(requestPath, request),
+          authority: descriptor(authority, yield* readTextFile(authority)),
+          failure: descriptor(failure, yield* readTextFile(failure)),
+        }),
+      );
+      if (variant === "changed-request") {
+        yield* writeTextFile(requestPath, request + "\n");
+      }
+      if (variant === "publication-uncertain") {
+        yield* writeTextFile(join(reservation, "result.json"), "{}\n");
+      }
+      const before = yield* originalFiles(f.ticket);
+      let returned;
+      if (variant === "resume") {
+        const resumed = yield* reconcile(f, true, f.recordPath, resumePath);
+        expect(resumed.exitCode).toBe(0);
+        returned = z.record(z.string(), z.json()).parse(JSON.parse(resumed.stdout));
+      } else {
+        returned = yield* directRecovery(f, f.record, resumePath);
+      }
+      yield* unchanged(before);
+      expect(f.native.prompts.length).toBe(prompts);
+      if (variant === "resume") {
+        expect(returned).toMatchObject({ publication: "confirmed", status: "paused" });
+        expect(yield* readTextFile(requestPath)).toBe(request);
+        const state = JSON.parse(
+          yield* readTextFile(
+            z.object({ continuation: z.object({ path: z.string() }) }).parse(returned).continuation
+              .path,
+          ),
+        );
+        const old = JSON.parse(
+          yield* readTextFile(
+            z.object({ continuation: z.object({ path: z.string() }) }).parse(f.record).continuation
+              .path,
+          ),
+        );
+        expect(state.calls).toEqual(old.calls);
+        expect(state.manifest).toEqual(old.manifest);
+        expect(
+          (yield* API.Fs.operations.stat(join(reservation, "resume/request.json"))).exists,
+        ).toBe(true);
+        const repeated = yield* directRecovery(f, f.record, resumePath);
+        expect(repeated).toMatchObject({
+          publication: "held",
+          continuation: f.record.continuation,
+        });
+        const confirmed = yield* directRecovery(f, z.record(z.string(), z.json()).parse(returned));
+        expect(confirmed).toEqual(returned);
+      } else {
+        expect(returned).toMatchObject({
+          publication: "held",
+          continuation: f.record.continuation,
+        });
+        expect((yield* API.Fs.operations.stat(join(reservation, "resume"))).exists).toBe(false);
+      }
+    });
+  }
 });
