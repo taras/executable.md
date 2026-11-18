@@ -96,7 +96,12 @@ function cliEntry(runtime: Runtime): string[] {
 }
 
 /** The suites whose roles are the production ones rather than the general fixture components. */
-const PRODUCTION_SUITES = new Set(["Preparation", "ProductionRole", "Submission"]);
+const PRODUCTION_SUITES = new Set([
+  "Preparation",
+  "ProductionRole",
+  "ProductionRoleSonnet",
+  "Submission",
+]);
 
 /**
  * Each suite's whole-launch deadline, in milliseconds. Implementation has none:
@@ -113,6 +118,7 @@ export const MARKDOWN_DEADLINES: Record<string, number> = {
   LaunchPolicy: 120_000,
   Preparation: 420_000,
   ProductionRole: 120_000,
+  ProductionRoleSonnet: 120_000,
   Submission: 120_000,
   Workflow: 120_000,
 };
