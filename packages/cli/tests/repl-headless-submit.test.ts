@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -23,7 +24,10 @@ import { ReplEntryHost } from "../src/repl-entry-installation.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { recordingTerminal } from "./support/mounted-repl.ts";
+import type { Terminal } from "./support/mounted-repl.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
+
+const OWNER = "packages/cli/tests/repl-headless-submit.test.ts";
 
 type Fixture = ReturnType<typeof useHeadlessFixture> extends Operation<infer T> ? T : never;
 function gate() {
@@ -80,6 +84,16 @@ function command(
     ),
   };
 }
+function* openHumanDraft(fixture: Fixture, terminal: Terminal): Operation<void> {
+  yield* fixture.input.ready(terminal);
+  const rows = terminal.screen?.rows() ?? [];
+  const row = rows.findIndex((text) => text.includes("+ New Round"));
+  const column = rows[row]?.indexOf("+ New Round") ?? -1;
+  expect(row).toBeGreaterThanOrEqual(0);
+  expect(column).toBeGreaterThanOrEqual(0);
+  yield* fixture.input.input(terminal, `\x1b[<0;${column + 2};${row + 1}M`);
+  expect(terminal.screen?.rows().some((row) => /> Round \d+ · draft/.test(row))).toBe(true);
+}
 function child(fixture: Fixture) {
   const root = fixture.children[0];
   if (root === undefined) {
@@ -111,6 +125,7 @@ const HOLD =
   '---\nreturns: {type: object}\n---\n<AssertEquals actual={2 + 2} expected={4} />\n<Return value={{status: "hold"}} />';
 
 describe("direct headless submission", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A: transfers a complete large UTF-8 program once, with consumption credit, values and project placement", function* () {
     const directory = yield* useTemporary("xmd-direct-project-");
     yield* API.Env.around(
@@ -926,8 +941,11 @@ describe("direct headless submission", () => {
       });
       yield* fixture.input.ready(terminal.terminal);
       if (submitter === "person") {
+        yield* openHumanDraft(fixture, terminal.terminal);
         armed = true;
         yield* fixture.input.input(terminal.terminal, "Person draft source.");
+        yield* fixture.input.input(terminal.terminal, "\t");
+        expect(terminal.terminal.screen?.rows().join("\n")).toContain("> Send");
         yield* fixture.input.input(terminal.terminal, "\r");
       } else {
         fixture.host.fake.script({
@@ -948,6 +966,10 @@ describe("direct headless submission", () => {
       armed = false;
       startup.release();
       expect((yield* deadline(root.session.join())).ok).toBe(true);
+      expect(root.session.model.entries).toHaveLength(1);
+      expect(root.session.model.entries[0]?.source).toBe(
+        submitter === "person" ? "Person draft source." : "Sidekick reserved source.",
+      );
       terminal.terminal.end();
       yield* ui;
       expect(yield* deadline(command(fixture, HOLD).run)).toBe(0);
@@ -1002,6 +1024,7 @@ describe("direct headless submission", () => {
       yield* attachChildUi(fixture.reference.sessionId);
     });
     yield* fixture.input.ready(terminal.terminal);
+    yield* openHumanDraft(fixture, terminal.terminal);
     yield* fixture.input.input(terminal.terminal, "Human draft stays.");
     for (const label of ["BINDINGS", "SIDEKICK"]) {
       const rows = terminal.terminal.screen?.rows() ?? [];
@@ -1065,6 +1088,7 @@ describe("direct headless submission", () => {
     const call = command(fixture, "<DirectGate />");
     const task = yield* spawn(() => deadline(call.run));
     yield* preparation.entered;
+    yield* openHumanDraft(fixture, terminal.terminal);
     yield* fixture.input.input(terminal.terminal, "Newer human draft.");
     yield* press("[history]");
     yield* press(pointLabel(point.point, point.ordinal, point.entry));

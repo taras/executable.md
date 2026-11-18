@@ -51,10 +51,11 @@
       <Terminal.WaitForText text="REPL.Environment result" row={currentTurn.row + 1} />
       <Terminal.WaitForText text="linked entry Round 1" />
       <Terminal.Screenshot name="saved-turn-2" />
-      <Terminal.WaitForText text="DRAFT" present={false} />
+      <Terminal.WaitForText text="· draft" present={false} />
       <Repl.Focus.Draft />
+      <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="saved turn 2 of 3" present={false} />
-      <Terminal.WaitForText text="DRAFT" />
+      <Terminal.WaitForText text="· draft" />
       <Terminal.Type text="visible-draft-witness" />
       <Terminal.WaitForText text="visible-draft-witness" />
 
@@ -79,11 +80,14 @@
       <Terminal.WaitForText text="↳ [X] Round 1 result sent" as="narrowFeedback" />
       <Terminal.Click at={narrowFeedback} />
       <Terminal.WaitForText text="Show recorded feedback" />
-      <Terminal.WaitForText text="Outcome · ✓ COMPLETED" />
+      <Terminal.WaitForText text="Outcome · ✓ COMPLETED" as="narrowOutcome" />
       <Terminal.WaitForText text="Output · Checkout output witness." />
-      <Terminal.WaitForText text="Esc closes · Tab moves · PageUp/PageDown in Content" row={18} />
+      <Terminal.WaitForText text="Esc closes" as="narrowGuidance" />
+      <Terminal.WaitForText text="PageUp/PageDown reads more content." />
+      <AssertEquals actual={Math.sign(narrowOutcome.row - narrowGuidance.row)} expected={1} />
       <Terminal.WaitForText text="Entry entry-1 completed." present={false} />
       <Terminal.Screenshot name="narrow-feedback-drawer" />
+      <Terminal.WaitForText text="> Show recorded feedback" />
       <Terminal.WaitForText text="linked entry Round 1" as="linked" />
       <Terminal.Click at={linked} />
       <Terminal.WaitForText text="* Entries" row={1} />

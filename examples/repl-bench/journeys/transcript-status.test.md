@@ -5,7 +5,10 @@
   <Terminal columns={160} rows={36}>
     <XMD.Repl>
       <Repl.Focus.Draft />
+      <Terminal.Key key="Enter" />
       <Terminal.Type text={"<Output>Checkout output witness</Output>"} />
+      <Terminal.Key key="Tab" />
+      <Terminal.WaitForText text="> Send" />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="Checkout output witness" />
       <Terminal.WaitForText text="1 ✓" />
@@ -15,20 +18,26 @@
       <Terminal.Screenshot name="settled-without-completed-label" />
 
       <Repl.Focus.Draft />
+      <Terminal.Key key="Enter" />
       <Terminal.Type text={'<Fail message="Checkout fixture failed" />'} />
+      <Terminal.Key key="Tab" />
+      <Terminal.WaitForText text="> Send" />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="Checkout fixture failed" />
       <Terminal.WaitForText text="2 ×" />
 
       <Repl.Focus.Draft />
+      <Terminal.Key key="Enter" />
       <Terminal.Type text={"\x60\x60\x60sh exec\nprintf '%s\\n' 'Held checkout'\nsleep 25\n\x60\x60\x60"} />
+      <Terminal.Key key="Tab" />
+      <Terminal.WaitForText text="> Send" />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="Held checkout" />
-      <Terminal.WaitForText text="3 ●" />
+      <Terminal.WaitForText text="3 ⠋" />
       <Terminal.WaitForText text="HISTORY" row={35} />
       <Terminal.WaitForText text="Tab regions" present={false} />
       <Terminal.Screenshot name="running" />
-      <Terminal.WaitForText text="[stop]" as="stop" />
+      <Terminal.WaitForText text="Stop" as="stop" />
       <Terminal.Click at={stop} />
       <Terminal.WaitForText text="INTERRUPTED" />
       <Terminal.Screenshot name="interrupted" />

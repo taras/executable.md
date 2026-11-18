@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -33,6 +34,8 @@ import {
   DRAFT_VALUE,
   sidekickIdle,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-dispatch.test.ts";
 
 function service(
   held: Harness,
@@ -78,6 +81,7 @@ function fills(source: string): string {
 }
 
 describe("shared Sidekick dispatch", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const busy of [false, true]) {
     it(`keeps one pasted Message at its caret while ${busy ? "busy" : "idle"}`, function* () {
       const page = yield* useReplPage();
@@ -224,7 +228,7 @@ describe("shared Sidekick dispatch", () => {
     );
     yield* intoComposer(page);
     yield* typed(page, "newer unsent text");
-    yield* draftText(page, "newer held draft", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "newer held draft");
     expect(page.repl.fake.prompts).toHaveLength(1);
     const before = yield* settledReading(page.repl);
     expect(before.chat.filter((one) => one.kind === "message")).toHaveLength(1);

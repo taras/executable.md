@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
@@ -10,7 +11,10 @@ import { settledReading } from "./support/mounted-history.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { todoWakeEligible } from "../src/repl/todo/wake.ts";
 
+const OWNER = "packages/cli/tests/repl-todo-recovery.test.ts";
+
 describe("TODO logical runtime recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("restores only file state and initializes once per open logical runtime", function* () {
     let initialized = 0;
     let cleaned = 0;
@@ -27,8 +31,11 @@ describe("TODO logical runtime recovery", () => {
     yield* intoComposer(first);
     first.repl.fake.script({ reply: "incomplete", stopReason: "max_tokens" });
     yield* first.press("TODO", { onRow: "SIDEKICK" });
-    yield* first.until("add task", (one) => one.shows("+"));
-    yield* first.press("+");
+    yield* first.until(
+      "add task",
+      (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+    );
+    yield* first.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
     yield* first.until("editor", (one) => one.shows("Task:"));
     yield* first.type("saved before failure");
     yield* first.key("Enter");
@@ -139,12 +146,17 @@ describe("TODO logical runtime recovery", () => {
     });
     yield* ensure(() => release.resolve());
     yield* pasteDraft(page, "<Output>entry finished</Output>");
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* cleaning.operation;
     yield* intoComposer(page);
     yield* page.press("TODO", { onRow: "SIDEKICK" });
-    yield* page.until("add task", (one) => one.shows("+"));
-    yield* page.press("+");
+    yield* page.until(
+      "add task",
+      (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+    );
+    yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
     yield* page.until("task editor during entry cleanup", (one) => one.shows("Task:"));
     yield* page.type("pending during cleanup");
     yield* page.key("Enter");

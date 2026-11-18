@@ -11,7 +11,8 @@ Run this acceptance document with the REPL Bench plugin. The expected screens ar
       </Terminal.Region>
 
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="DRAFT" bold={true} />
+      <Terminal.Key key="Enter" />
+      <Terminal.WaitForText text="· draft" bold={true} />
       <Terminal.Type text="unsent-entry" />
       <Terminal.WaitForText text="unsent-entry" />
       <Repl.Focus.Message />
@@ -26,7 +27,7 @@ Run this acceptance document with the REPL Bench plugin. The expected screens ar
       <Terminal.Key key="9" />
       <Terminal.WaitForText text="[1]" bold={true} />
       <Terminal.Key key="4" />
-      <Terminal.WaitForText text="DRAFT" bold={true} />
+      <Terminal.WaitForText text="· draft" bold={true} />
       <Terminal.WaitForText text="[1]" present={false} />
       <Terminal.WaitForText text="unsent-entry" />
 

@@ -152,6 +152,7 @@ describe("REPL caret editing", () => {
     const draft = "a\u0301界👩‍👩‍👧‍👦 kept\n".repeat(40);
     const state = {
       ...initialState("bounded-editor"),
+      draftOpen: true,
       draft,
       draftCaret: { value: draft, offset: draft.length / 2 },
     };
@@ -201,6 +202,7 @@ describe("REPL caret editing", () => {
     }
     expect(found).toBe(true);
     yield* presenter.commit(view);
+    yield* presenter.tree.dispatch({ kind: "key", key: "Focus4" });
     for (const key of ["ArrowUp", "ArrowDown", "Home", "End"] as const) {
       const dispatched = yield* presenter.tree.dispatch({ kind: "key", key });
       if (!dispatched.ok) {

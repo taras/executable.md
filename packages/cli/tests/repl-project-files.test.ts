@@ -8,7 +8,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { replRepositoryInstallation } from "../src/repl/repositories/deno/provider.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensureDir, readTextFile, writeTextFile, exists } from "@effectionx/fs";
 import {
@@ -42,11 +43,14 @@ import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 
+const OWNER = "packages/cli/tests/repl-project-files.test.ts";
+
 function submit(source: string): string {
   return `<Let as="code" value={${JSON.stringify(source)}} /><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`;
 }
 
 describe("1113: project files through the mounted Sidekick", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: submitted work starts in P, scopes session source and assets, and restores sibling cwd", function* () {
     const project = yield* useTemporary("1113-project-");
     const host = yield* useMountedHost({ projectCwd: project, hostFiles: true });
@@ -288,6 +292,7 @@ describe("1113: transformed Files requests", () => {
 });
 
 describe("1113: executable capture teaching", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: runs the complete shipped passive-source response and reads the exact entry output", function* () {
     const project = yield* useTemporary("1113-capture-");
     const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
@@ -323,6 +328,7 @@ describe("1113: executable capture teaching", () => {
 });
 
 describe("1113: session scopes retain their restrictions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113 M1: outer Content keeps AssetDir write denial after middleware redirects into P", function* () {
     const project = yield* useTemporary("1113-asset-redirect-project-");
     const redirects: {
@@ -374,6 +380,8 @@ describe("1113: session scopes retain their restrictions", () => {
       page,
       '<ReadAssets><File path="asset-canary">wrong</File></ReadAssets><File path="sibling-canary">allowed</File>',
     );
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* awaitedFact("manual redirected write entry settles", function* () {
       return (yield* settledReading(page.repl)).model.entries[0]?.settled === true;
@@ -613,6 +621,7 @@ function* reportPagingFailure(
 }
 
 describe("1113: receipt-directed exact output paging", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: follows the receipt's entry and each returned next argument until exact output is complete", function* () {
     const project = yield* useTemporary("1113-output-");
     const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
@@ -781,12 +790,15 @@ describe("1113: receipt-directed exact output paging", () => {
 });
 
 describe("1113: project selection belongs to the actual entry", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: a fresh response and both entry origins observe P while storage is elsewhere", function* () {
     const project = yield* useTemporary("1113-owner-project-");
     const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
     const session = pairedLocation(page.repl.root, yield* mountedExecution(page.repl)).directory;
     expect(session).not.toBe(project);
     yield* pasteDraft(page, "<Cwd />");
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     page.repl.fake.script({
@@ -844,6 +856,8 @@ describe("1113: project selection belongs to the actual entry", () => {
     const page = yield* useReplPage({ host });
     const source = '<Git.Files as="files" /><Output><Json value={files} /></Output>';
     yield* pasteDraft(page, source);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     page.repl.fake.script({ reply: submit(source) });

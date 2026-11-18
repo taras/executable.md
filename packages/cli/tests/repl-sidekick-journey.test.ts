@@ -36,7 +36,8 @@ import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   allSettled,
@@ -101,9 +102,10 @@ import {
   COMPOSER_VALUE,
   composerHolds,
   draftHolds,
+  draftOpen,
+  draftShows,
   draftText,
   entrySettles,
-  DRAFT,
   DRAFT_VALUE,
   intoComposer,
   intoDraft,
@@ -119,6 +121,8 @@ import {
   typed,
   unwrapped,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-journey.test.ts";
 
 /**
  * The orientation an older build left on a conversation it completed a turn of.
@@ -1216,6 +1220,7 @@ function* composedChat(repl: MountedRepl): Operation<readonly string[]> {
  * item then becomes the evaluated reply.
  */
 describe("Tier PV — a response in flight, shown as it arrives", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * A reply whose text arrives in pieces, with candidate controls in it.
    *
@@ -1281,10 +1286,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(during.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(during.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(during.model.entries).toEqual([]);
-    // The screen says the same thing by what it is showing: the catalog holds
-    // no entry, and the draft is still a draft somebody is holding rather than
-    // work that has been admitted.
-    expect(page.screen().shows("No entry yet")).toBe(true);
+    // History shows the empty execution while the editor still holds the draft.
+    expect(page.screen().shows("HEAD · EMPTY")).toBe(true);
     // Both composers keep newer text while the active exchange owns Stop.
     expect(draftHolds(page.screen(), "mine")).toBe(true);
     expect(composerHolds(page.screen(), "later")).toBe(true);
@@ -1293,60 +1296,68 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(sidekickIdle(page.screen())).toBe(false);
     expect(page.screen().found("[stop]", SIDEKICK_PANE)).toBe(1);
     expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(1);
-    expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
 
     // The rest of the text arrives, and the entry the reply submits is held
     // open: generation is over and the response is running its controls.
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    repl.fake.releaseDeltas();
-    // The update, with nothing else going on and still nothing pressed: the
-    // sentence is finished by the piece that just arrived.
-    yield* page.until("the finished sentence", (one) =>
-      one.shows(`${MOUNTED_AGENT} (preview): Half a thought.`),
-    );
-    expect(repl.terminal.fed).toBe(fed);
+    try {
+      repl.fake.releaseDeltas();
+      // The update, with nothing else going on and still nothing pressed: the
+      // sentence is finished by the piece that just arrived.
+      yield* page.until("the finished sentence", (one) =>
+        one.shows(`${MOUNTED_AGENT} (preview): Half a thought.`),
+      );
+      expect(repl.terminal.fed).toBe(fed);
 
-    // The whole candidate has now arrived — the EntryInput and the Submit came
-    // with that second piece — and the provider has not finished. None of it
-    // has run: no control pair, no fill, no entry. This is the boundary the
-    // claim is about, because source nobody completed is not a program.
-    yield* repl.fake.streamingTurns(1);
-    const complete = yield* settledReading(repl);
-    expect(complete.chat.filter((record) => record.kind === "control")).toEqual([]);
-    expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
-    expect(complete.model.entries).toEqual([]);
-    expect(draftHolds(page.screen(), "mine")).toBe(true);
-    expect(page.screen().shows("No entry yet")).toBe(true);
-    expect(repl.terminal.fed).toBe(fed);
+      // The whole candidate has now arrived — the EntryInput and the Submit came
+      // with that second piece — and the provider has not finished. None of it
+      // has run: no control pair, no fill, no entry. This is the boundary the
+      // claim is about, because source nobody completed is not a program.
+      yield* repl.fake.streamingTurns(1);
+      const complete = yield* settledReading(repl);
+      expect(complete.chat.filter((record) => record.kind === "control")).toEqual([]);
+      expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
+      expect(complete.model.entries).toEqual([]);
+      expect(draftHolds(page.screen(), "mine")).toBe(true);
+      expect(page.screen().shows("HEAD · EMPTY")).toBe(true);
+      expect(repl.terminal.fed).toBe(fed);
 
-    repl.fake.releaseDeltas();
-    yield* closing.started();
-    // Still a preview while its controls run: nothing has been evaluated into
-    // a reply.
-    expect(page.screen().shows(`${MOUNTED_AGENT} (preview): Half a thought.`)).toBe(true);
-    const running = yield* settledReading(repl);
-    expect(running.chat.filter((record) => record.kind === "response")).toEqual([]);
+      repl.fake.releaseDeltas();
+      yield* closing.started();
+      // Still a preview while its controls run: nothing has been evaluated into
+      // a reply.
+      expect(page.screen().shows(`${MOUNTED_AGENT} (preview): Half a thought.`)).toBe(true);
+      const running = yield* settledReading(repl);
+      expect(running.chat.filter((record) => record.kind === "response")).toEqual([]);
 
-    // Released: the entry settles, the response is evaluated, and the same item
-    // becomes the reply — the preview is gone, not joined by an answer.
-    closing.release();
-    yield* page.until("the evaluated reply", (one) => saidBySidekick(one, "Half a thought."));
-    yield* page.until("the Sidekick at rest", sidekickIdle);
-    expect(page.screen().shows("(preview)")).toBe(false);
-    const after = yield* settledReading(repl);
-    // One response record for the turn that was being previewed, and exactly
-    // one: the item a person watched arrive is the item they are reading.
-    const answered = after.chat.filter((record) => record.kind === "response" && record.turn === 1);
-    expect(answered).toHaveLength(1);
-    expect(answered[0]).toMatchObject({ output: "Half a thought.", hasOutput: true });
-    // The entry really ran, and its feedback went back as the next turn's
-    // request rather than as chat.
-    expect(after.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
-    yield* page.until("the turn that was told what it did", (one) => one.shows("And the receipt."));
-    expect(repl.fake.prompts[1] ?? "").toContain("## REPL.Submit");
-    expect(page.screen().shows("REPL.Submit")).toBe(false);
+      // Released: the entry settles, the response is evaluated, and the same item
+      // becomes the reply — the preview is gone, not joined by an answer.
+      closing.release();
+      yield* page.until("the evaluated reply", (one) => saidBySidekick(one, "Half a thought."));
+      yield* page.until("the Sidekick at rest", sidekickIdle);
+      expect(page.screen().shows("(preview)")).toBe(false);
+      const after = yield* settledReading(repl);
+      // One response record for the turn that was being previewed, and exactly
+      // one: the item a person watched arrive is the item they are reading.
+      const answered = after.chat.filter(
+        (record) => record.kind === "response" && record.turn === 1,
+      );
+      expect(answered).toHaveLength(1);
+      expect(answered[0]).toMatchObject({ output: "Half a thought.", hasOutput: true });
+      // The entry really ran, and its feedback went back as the next turn's
+      // request rather than as chat.
+      expect(after.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      yield* page.until("the turn that was told what it did", (one) =>
+        one.shows("And the receipt."),
+      );
+      expect(repl.fake.prompts[1] ?? "").toContain("## REPL.Submit");
+      expect(page.screen().shows("REPL.Submit")).toBe(false);
+    } finally {
+      closing.release();
+    }
   });
   it("PV2: what the screen shows a prefix saying is what the pure reader says", function* () {
     const page = yield* useReplPage();
@@ -1710,6 +1721,7 @@ const GATED_ENTRY_REPLY = [
 ].join("\n");
 
 describe("Tier R5 — a mounted message prepares and submits a real entry", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M3: the message a person sends runs its entry, and is answered about it", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -1730,7 +1742,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(first.model.entries[0]?.terminal?.output).toContain("Hello from the reply.");
     expect(page.screen().shows("Hello from the reply.")).toBe(true);
     // Consumed by the entry it became: the Draft shows none of what was in it.
-    expect(page.screen().found("Hello from the reply.", DRAFT_VALUE)).toBe(0);
+    expect(draftOpen(page.screen())).toBe(false);
 
     // The receipt names this entry, carries no body, and keeps admission order.
     expect(fake.prompts).toHaveLength(2);
@@ -1898,7 +1910,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // The draft moves while the submission is being prepared, which is what
       // the start check refuses on: the prepared text is not the text anybody
       // is asking for any more.
-      yield* draftText(page, "!", ["Tab", "Tab", "Tab", "Tab"]);
+      yield* draftText(page, "!");
       allow.resolve();
       yield* page.until("the refused submission going back", (one) =>
         sidekickShows(one, "I did not admit an entry."),
@@ -1939,10 +1951,9 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
         unwrapped(intent.submit?.source ?? "")
           .split(" ")
           .at(-1) ?? "";
-      yield* page.until(
-        "the reserved source restored",
-        (one) => one.found(reserved, DRAFT_VALUE) > 0,
-      );
+      yield* page.until("the reserved source restored", (one) => draftShows(one, reserved));
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("the manual entry running", (one) => one.shows("The manual entry ran."));
       yield* entrySettles(page, 3, "ok");
@@ -2052,6 +2063,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
  * both arms identically.
  */
 describe("Tier TE — a published binding becomes real greetings, and then a real table", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** What the first arm publishes. */
   const FIRST = ["Ada", "Grace", "Linus"];
   /** The same arm with one name replaced, and nothing else changed. */
@@ -2148,6 +2160,8 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     // The seed, as a person's own entry: pasted into the draft and run. The
     // draft shows its own source, so the entry's outcome is what says it ran.
     yield* pasteDraft(page, seed(names));
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     yield* page.until("the seed entry publishing its names", (one) =>
@@ -2164,6 +2178,8 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
 
     yield* sendMessage(page, "greet");
     yield* repl.fake.holdingTurns(1);
+    yield* intoDraft(page);
+    yield* page.key("Home");
     yield* page.until(
       "the draft holding the prepared greetings",
       (one) => one.found("<Each in={names}", DRAFT_VALUE) > 0,
@@ -2301,6 +2317,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
  * authors becomes a second real entry while the first stays exactly as it failed.
  */
 describe("Tier TE — a failed entry is corrected as a new entry", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("TE2: the failure goes back to its owner, which submits a corrected entry", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
@@ -3410,6 +3427,7 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
 });
 
 describe("975 — the shipped session component journey", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("creates, discovers and invokes a component, then reopens without work", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
@@ -3493,13 +3511,8 @@ describe("975 — the shipped session component journey", () => {
       expect(yield* cwd()).toBe(project);
       const sibling = yield* spawn(() => cwd());
       expect(yield* sibling).toBe(project);
-      yield* draftText(page, '<File path="manual.md">project manual</File>', [
-        "Tab",
-        "Tab",
-        "Tab",
-        "Tab",
-      ]);
-      yield* page.key("Enter");
+      yield* draftText(page, '<File path="manual.md">project manual</File>');
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* page.until("the manual successor", (one) =>
         one.rows.some((line) => {
           // The same fact the catalog used to spell as `entry-4 [ok]`: the fourth
@@ -3662,6 +3675,7 @@ describe("975 — entry cwd ends with its actual owner", () => {
 });
 
 describe("975 — configured-first lookup and unchanged permissions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   function submitSource(source: string): string {
     return (
       '<Let as="code" select="code">\n```xmd\n' +
@@ -4001,6 +4015,7 @@ function followSubmission(source: string): string {
 }
 
 describe("Follow: submitted rounds in the running command", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Follow: one mounted Send carries completed, failed and Entry Stop output from exact joined entries", function* () {
     const asking = withResolvers<void>();
     yield* Elicitation.around({
@@ -4036,8 +4051,8 @@ describe("Follow: submitted rounds in the running command", () => {
       "the actual interrupted prefix beside its source",
       (one) => one.occurrences("INTERRUPTED-PREFIX") >= 2,
     );
-    yield* page.until("Entry Stop", (one) => one.found("[stop]", { onRow: DRAFT }) === 1);
-    yield* page.press("[stop]", { onRow: DRAFT });
+    yield* page.until("Entry Stop", (one) => one.found("Stop", { onRow: "+ New Round" }) === 1);
+    yield* page.press("Stop", { onRow: "+ New Round" });
     yield* savedReplies(page.repl, 5);
     yield* page.until("the joined Send", sidekickIdle);
     const prompts = page.repl.fake.prompts;
@@ -4136,8 +4151,8 @@ describe("Follow: submitted rounds in the running command", () => {
     yield* savedReplies(page.repl, 3);
     yield* page.until("ordinary read joined", sidekickIdle);
     expect(page.repl.fake.prompts).toHaveLength(3);
-    yield* draftText(page, "<Output>MANUAL-ONLY</Output>", ["Tab", "Tab", "Tab", "Tab"]);
-    yield* page.press("[send]", { onRow: DRAFT });
+    yield* draftText(page, "<Output>MANUAL-ONLY</Output>");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* awaitedFact("manual entry settles", function* () {
       return (yield* settledReading(page.repl)).model.entries[1]?.terminal?.status === "ok";
     });
@@ -4569,6 +4584,7 @@ Session body ${version}.`,
 });
 
 describe("993 mounted nested Output journeys", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const ready of [true, false]) {
     it(`W1: an actual Draft entry selects branch ${ready} and only that marker`, function* () {
       const workspace = yield* useTemporary("nested-repl-");
@@ -4582,6 +4598,8 @@ describe("993 mounted nested Output journeys", () => {
       const page = yield* useReplPage({ projectCwd: workspace, hostFiles: true });
       const source = `<Let as="ready" value={${ready}} />\n<If condition={ready}>\n<File path="complete">done</File>\n<Output>Review complete.</Output>\n<Else>\n<File path="pending">waiting</File>\n<Output>Review pending.</Output>\n</Else>\n</If>`;
       yield* pasteDraft(page, source);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       const expected = ready ? "Review complete." : "Review pending.";
@@ -4643,6 +4661,7 @@ describe("993 mounted nested Output journeys", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.text).toBe("Review complete.");
     expect(paneCount(page, "Review complete.")).toBe(1);
+    yield* intoDraft(page);
     expect(draftHolds(page.screen(), "prepared")).toBe(true);
     const prompts = [...repl.fake.prompts];
     const reopened = yield* repl.repository.open(saved.execution);
@@ -4757,13 +4776,17 @@ describe("993 mounted nested Output journeys", () => {
         expect(rows[0]).toMatchObject({ kind: "incomplete", text: "ABC" });
         expect(known.turns[0]?.status).toBe("failed");
       }
-      expect(draftHolds(page.screen(), "never")).toBe(false);
+      expect(draftOpen(page.screen())).toBe(false);
+      yield* intoDraft(page);
+      expect(draftShows(page.screen(), "never")).toBe(false);
+      expect(draftShows(page.screen(), "Executable Markdown")).toBe(true);
       expect(saved.model.entries).toEqual([]);
     });
   }
 });
 
 describe("Contributed Sidekick controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps contributed entry-only Cwd authored while omitting generated selection and vocabulary", function* () {
     let calls = 0;
     const plugin = Plugin({
@@ -5155,6 +5178,7 @@ describe("protected Sidekick question feedback", () => {
 });
 
 describe("1183 — a follow-up sent during live automatic feedback", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("A1/A2: queues visibly behind the held feedback and starts once on the same conversation", function* () {
     const page = yield* useReplPage();
     const FOLLOW_UP = "When that finishes, explain the changes.";
@@ -5222,6 +5246,7 @@ describe("1183 — a follow-up sent during live automatic feedback", () => {
  * entry's Output all keep the punctuation around it.
  */
 describe("1342 — written Markdown in the chat and in entry Output", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const WIDE_SIZE = { columns: 160, rows: 36 };
   const NARROW_SIZE = { columns: 72, rows: 20 };
   const ENTRY_MARKDOWN = [

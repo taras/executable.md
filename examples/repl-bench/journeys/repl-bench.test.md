@@ -1,6 +1,7 @@
 <Test name="literal input reaches the focused Sidekick composer and Ctrl+C clears it before exit">
   <ReplBench columns={120} rows={30} expectExit={true} as="closed">
     <Repl.Focus.Draft />
+    <ReplBench.Key key="Enter" />
     <ReplBench.Type text="draft-only" />
     <ReplBench.WaitForText text="draft-only" />
     <ReplBench.Focus target="sidekick-composer" />
@@ -52,8 +53,10 @@
     <File path="repl-fixture.txt">scoped-repl-fixture</File>
     <ReplBench columns={160} rows={36}>
       <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <ReplBench.Type text={'<Cwd as="directory" />\n<Let as="basename" value={directory.split("/").at(-1)} />\n\nDir {basename}\n\n<File path="repl-fixture.txt" />'} />
       <ReplBench.WaitForText text="repl-fixture.txt" />
+      <ReplBench.Key key="Tab" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="scoped-repl-fixture" />
       <ReplBench.WaitForText text={directory.split("/").at(-1)} />
@@ -64,10 +67,12 @@
 <Test name="submitting the Draft shows its result and settled History mark">
   <ReplBench columns={160} rows={36} expectExit={true} as="closed">
     <Repl.Focus.Draft />
-    <ReplBench.WaitForText text="> DRAFT" />
+    <ReplBench.Key key="Enter" />
+    <ReplBench.WaitForText text="> Round" />
     <ReplBench.WaitForText text="HEAD · EMPTY" />
     <ReplBench.Type text={'```js eval\nconst count = 6 * 7;\n```\n\nDraft result {count}'} />
     <ReplBench.WaitForText text="Draft result {count}" />
+    <ReplBench.Key key="Tab" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="HEAD · SETTLED" />
     <ReplBench.WaitForText text="✓ COMPLETED" />
@@ -81,14 +86,12 @@
 <Test name="History takes focus and the Draft survives narrow and wide layouts">
   <ReplBench columns={160} rows={36} expectExit={true} as="closed">
     <Repl.Focus.Draft />
-    <ReplBench.WaitForText text="> DRAFT" />
+    <ReplBench.Key key="Enter" />
+    <ReplBench.WaitForText text="> Round" />
     <ReplBench.Type text="draft survives" />
-    <ReplBench.WaitForText text="draft survives" />
-    <ReplBench.Key key="Shift+Tab" />
-    <ReplBench.WaitForText text="> Entries" />
-    <ReplBench.Key key="Shift+Tab" />
-    <ReplBench.WaitForText text="> All sessions" />
-    <ReplBench.Key key="Shift+Tab" />
+    <ReplBench.WaitForText text="│ draft survives" />
+    <ReplBench.Key key="Home" />
+    <Repl.Focus.History />
     <ReplBench.WaitForText text="> [history]" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="[close]" />
@@ -98,32 +101,38 @@
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="* Entries" row={1} />
     <ReplBench.WaitForText text="[exit]" row={19} />
-    <ReplBench.WaitForText text="DRAFT" as="narrowDraft" />
-    <ReplBench.WaitForText text="draft survives" at={{ row: narrowDraft.row + 1, column: narrowDraft.column - 2 }} />
+    <ReplBench.WaitForText text="· draft" as="narrowDraft" />
+    <ReplBench.WaitForText text="│ draft survives" as="narrowValue" />
+    <AssertEquals actual={Math.sign(narrowValue.row - narrowDraft.row)} expected={1} />
     <ReplBench.Resize columns={160} rows={36} />
     <ReplBench.WaitForText text="TRANSCRIPT" row={1} />
     <ReplBench.WaitForText text="[exit]" row={35} />
-    <ReplBench.WaitForText text="DRAFT" as="wideDraft" />
-    <ReplBench.WaitForText text="draft survives" at={{ row: wideDraft.row + 1, column: wideDraft.column - 2 }} />
+    <ReplBench.WaitForText text="· draft" as="wideDraft" />
+    <ReplBench.WaitForText text="│ draft survives" as="wideValue" />
+    <AssertEquals actual={Math.sign(wideValue.row - wideDraft.row)} expected={1} />
     <ReplBench.WaitForText text="stray input" present={false} />
+    <Repl.Focus.Draft />
+    <ReplBench.Type text="caret " />
+    <ReplBench.WaitForText text="│ caret draft survives" />
+    <ReplBench.Region name="sidekick-composer">
+      <ReplBench.WaitForText text="draft survives" present={false} />
+    </ReplBench.Region>
     <ReplBench.Key key="Ctrl+C" />
   </ReplBench>
   <AssertEquals actual={closed.exitCode} expected={0} />
-  <AssertStringIncludes actual={closed.location} expected="/entries?draft=draft%20survives" />
+  <AssertStringIncludes actual={closed.location} expected="/entries?draft=caret%20draft%20survives" />
 </Test>
 
 <Test name="Enter on the focused exit allows the settled entry to reopen">
   <ReplBench columns={160} rows={36} expectExit={true} as="closed">
     <Repl.Focus.Draft />
+    <ReplBench.Key key="Enter" />
     <ReplBench.Type text="Retained reading" />
     <ReplBench.WaitForText text="Retained reading" />
+    <ReplBench.Key key="Tab" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="1 ✓" />
-    <ReplBench.Key key="Shift+Tab" />
-    <ReplBench.WaitForText text="> Entries" />
-    <ReplBench.Key key="Shift+Tab" />
-    <ReplBench.WaitForText text="> All sessions" />
-    <ReplBench.Key key="Shift+Tab" />
+    <Repl.Focus.History />
     <ReplBench.WaitForText text="> [history]" />
     <ReplBench.Key key="ArrowRight" />
     <ReplBench.WaitForText text="> [exit]" />
@@ -142,25 +151,30 @@
 <Test name="the visible Draft Send submits its entry and leaves Sidekick idle">
   <ReplBench columns={160} rows={36}>
     <Repl.Focus.Draft />
-    <ReplBench.WaitForText text="> DRAFT" as="draft" />
+    <ReplBench.Key key="Enter" />
+    <ReplBench.WaitForText text="> Round" as="draft" />
     <ReplBench.WaitForText text="message the sidekick" as="composer" />
     <ReplBench.WaitForText text="[send]" row={composer.row-1} as="sidekickSend" />
     <ReplBench.WaitForText text="No messages yet." />
     <ReplBench.Type text="Draft Send witness" />
-    <ReplBench.WaitForText text="Draft Send witness" row={draft.row+1} />
+    <ReplBench.WaitForText text="│ Draft Send witness" as="draftValue" />
+    <AssertEquals actual={Math.sign(draftValue.row - draft.row)} expected={1} />
     <ReplBench.Region name="sidekick-composer">
       <ReplBench.WaitForText text="Draft Send witness" present={false} />
     </ReplBench.Region>
-    <ReplBench.WaitForText text="[send]" row={draft.row} as="draftSend" />
+    <ReplBench.WaitForText text="✎ draft" as="bar" />
+    <ReplBench.WaitForText text="Send" row={bar.row} as="draftSend" />
     <ReplBench.Click at={draftSend} />
     <ReplBench.WaitForText text="1 ✓" />
     <ReplBench.WaitForText text="✓ COMPLETED" />
-    <ReplBench.WaitForText text="Draft Send witness" row={draft.row+1} present={false} />
-    <ReplBench.WaitForText text="Draft Send witness" />
+    <ReplBench.WaitForText text="✎ draft" present={false} />
+    <ReplBench.WaitForText text="│ Draft Send witness" present={false} />
+    <ReplBench.WaitForText text="Output" as="sentOutput" />
+    <ReplBench.WaitForText text="Draft Send witness" row={sentOutput.row+1} />
     <ReplBench.WaitForText text="[send]" at={sidekickSend} />
     <ReplBench.WaitForText text="No messages yet." />
     <ReplBench.Region name="transcript">
-      <ReplBench.WaitForText text="(none retained)" />
+      <ReplBench.WaitForText text="── Round 1 ──" />
     </ReplBench.Region>
   </ReplBench>
 </Test>
@@ -168,22 +182,25 @@
 <Test name="the Draft survives all layouts and submits after the minimum-size refusal">
   <ReplBench columns={160} rows={36}>
     <Repl.Focus.Draft />
-    <ReplBench.WaitForText text="> DRAFT" as="beforeResize" />
+    <ReplBench.Key key="Enter" />
+    <ReplBench.WaitForText text="> Round" as="beforeResize" />
     <ReplBench.Type text="Draft kept through resize" />
-    <ReplBench.WaitForText text="Draft kept through resize" />
+    <ReplBench.WaitForText text="│ Draft kept through resize" />
+    <ReplBench.Key key="Home" />
 
     <ReplBench.Resize columns={120} rows={30} />
     <ReplBench.WaitForText text="HISTORY" row={29} />
-    <ReplBench.WaitForText text="> DRAFT" as="medium" />
-    <AssertEquals actual={medium.row < beforeResize.row} expected={true} />
-    <ReplBench.WaitForText text="Draft kept through resize" row={medium.row+1} />
+    <ReplBench.WaitForText text="> Round" as="medium" />
+    <ReplBench.WaitForText text="│ Draft kept through resize" as="mediumValue" />
+    <AssertEquals actual={Math.sign(mediumValue.row - medium.row)} expected={1} />
 
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="* Entries" />
-    <ReplBench.WaitForText text="> DRAFT" as="narrow" />
-    <ReplBench.WaitForText text="Draft kept through resize" row={narrow.row+1} />
-    <ReplBench.WaitForText text="[send]" as="narrowSend" />
-    <ReplBench.WaitForText text="[send]" row={narrow.row} at={narrowSend} />
+    <ReplBench.WaitForText text="> Round" as="narrow" />
+    <ReplBench.WaitForText text="│ Draft kept through resize" as="narrowValue" />
+    <AssertEquals actual={Math.sign(narrowValue.row - narrow.row)} expected={1} />
+    <ReplBench.WaitForText text="✎ draft" as="narrowBar" />
+    <ReplBench.WaitForText text="Send" row={narrowBar.row} />
     <ReplBench.WaitForText text="SIDEKICK" present={false} />
     <ReplBench.WaitForText text="message the sidekick" present={false} />
 
@@ -195,16 +212,21 @@
 
     <ReplBench.Resize columns={160} rows={36} />
     <ReplBench.WaitForText text="> All sessions" />
-    <ReplBench.WaitForText text="DRAFT" as="wide" />
-    <ReplBench.WaitForText text="Draft kept through resize" row={wide.row+1} />
+    <ReplBench.WaitForText text="· draft" as="wide" />
+    <ReplBench.WaitForText text="│ Draft kept through resize" as="wideValue" />
+    <AssertEquals actual={Math.sign(wideValue.row - wide.row)} expected={1} />
+    <Repl.Focus.Draft />
+    <ReplBench.WaitForText text="> Round" />
+    <ReplBench.Type text="Caret: " />
+    <ReplBench.WaitForText text="│ Caret: Draft kept through resize" />
     <ReplBench.Key key="Tab" />
-    <ReplBench.WaitForText text="> Entries" />
-    <ReplBench.Key key="Tab" />
-    <ReplBench.WaitForText text="> DRAFT" />
+    <ReplBench.WaitForText text="> Send" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="HEAD · SETTLED" />
     <ReplBench.WaitForText text="✓ COMPLETED" />
-    <ReplBench.WaitForText text="Draft kept through resize" row={wide.row+1} present={false} />
-    <ReplBench.WaitForText text="Draft kept through resize" />
+    <ReplBench.WaitForText text="✎ draft" present={false} />
+    <ReplBench.WaitForText text="Output" as="sentOutput" />
+    <ReplBench.WaitForText text="Caret: Draft kept through" row={sentOutput.row+1} />
+    <ReplBench.WaitForText text="resize" row={sentOutput.row+2} />
   </ReplBench>
 </Test>

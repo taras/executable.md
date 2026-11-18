@@ -1,5 +1,6 @@
 import type { ScreenReading } from "./support/repl-page.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import { sleep } from "effection";
@@ -28,6 +29,10 @@ import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage } from "./support/repl-page.ts";
 
+import { DRAFT_VALUE, intoDraft } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-focus-regions.test.ts";
+
 const WIDE = { columns: 160, rows: 36 };
 const MEDIUM = { columns: 120, rows: 30 };
 const NARROW = { columns: 72, rows: 20 };
@@ -47,29 +52,28 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 function* draftFocus(page: ReplPage): Operation<void> {
-  yield* page.type("\x074");
-  yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+  yield* intoDraft(page);
 }
 
 describe("REPL focus regions: the normal screen", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [WIDE, MEDIUM]) {
     it(`R1/R2: fixed region entries deliver Draft and Message input at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });
+      yield* draftFocus(page);
       yield* typed(page, "draft-kept");
-      // Draft -> Tabs -> Right reading -> TODO -> Message, independent of child counts.
+      // Draft -> Send -> Tabs -> Right reading -> TODO -> Message.
+      yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* typed(page, "message-kept");
       expect(page.screen().found("message-kept", { after: "message the sidekick" })).toBe(1);
-      expect(page.screen().found("draft-kept", { after: " DRAFT" })).toBe(1);
+      expect(page.screen().found("draft-kept", DRAFT_VALUE)).toBe(1);
       expect(page.repl.fake.prompts).toHaveLength(0);
 
-      // Message -> History -> Transcript -> Selected work -> Draft.
-      for (let step = 0; step < 4; step += 1) {
-        yield* key(page, "Tab");
-      }
+      yield* draftFocus(page);
       yield* typed(page, "-returned");
       expect(page.screen().shows("draft-kept-returned")).toBe(true);
       for (const name of [
@@ -84,7 +88,8 @@ describe("REPL focus regions: the normal screen", () => {
       }
       yield* key(page, "Alt+ArrowDown");
       expect(page.screen().shows("draft-kept-returned")).toBe(true);
-      expect(page.screen().shows("No entry yet")).toBe(true);
+      expect(page.screen().shows("Ready for Entry 1")).toBe(true);
+      yield* draftFocus(page);
       yield* key(page, "Tab");
       yield* key(page, "Backtab");
       yield* typed(page, "-fixed");
@@ -96,6 +101,7 @@ describe("REPL focus regions: the normal screen", () => {
   it("R3: tabs and History arrows move without activation; Enter selects", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* draftFocus(page);
+    yield* key(page, "Tab");
     yield* key(page, "Tab");
     yield* key(page, "ArrowLeft");
     expect(page.screen().shows("> SIDEKICK")).toBe(true);
@@ -121,9 +127,9 @@ describe("REPL focus regions: the normal screen", () => {
     yield* draftFocus(page);
     yield* typed(page, "survives-resize");
     yield* key(page, "Tab");
-    yield* page.resize(NARROW);
-    // The empty routed outlet has no control: recovery is Sessions on the bar.
     yield* key(page, "Tab");
+    yield* page.resize(NARROW);
+    yield* draftFocus(page);
     yield* typed(page, "-narrow");
     expect(page.screen().shows("survives-resize-narrow")).toBe(true);
     yield* page.resize(WIDE);
@@ -133,6 +139,21 @@ describe("REPL focus regions: the normal screen", () => {
 });
 
 describe("REPL focus regions: Unicode caret editing", () => {
+  beforeEach(journalBeforeEach(OWNER));
+  it("reveals both ends of a source line longer than the terminal", function* () {
+    const page = yield* useReplPage({ size: MEDIUM });
+    yield* draftFocus(page);
+    const source = `START ${"界".repeat(100)} END`;
+    yield* page.type(source);
+    yield* page.until("the end of the source", (one) => one.found(" END", DRAFT_VALUE) === 1);
+    expect(page.screen().found("START ", DRAFT_VALUE)).toBe(0);
+    yield* key(page, "Home");
+    expect(page.screen().found("START ", DRAFT_VALUE)).toBe(1);
+    expect(page.screen().found(" END", DRAFT_VALUE)).toBe(0);
+    yield* key(page, "End");
+    expect(page.screen().found(" END", DRAFT_VALUE)).toBe(1);
+  });
+
   it("PV3: Draft and Message edit at independent carets across rows, focus and resize", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
@@ -146,17 +167,13 @@ describe("REPL focus regions: Unicode caret editing", () => {
     yield* page.resize(NARROW);
     yield* typed(page, "!");
     expect(page.screen().shows("é中!界")).toBe(true);
-    yield* key(page, "Alt+ArrowDown");
     yield* key(page, "Tab");
     yield* key(page, "Backtab");
     yield* typed(page, "?");
     expect(page.screen().shows("é中!?界")).toBe(true);
     yield* key(page, "Backspace");
     yield* page.resize(MEDIUM);
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
+    yield* page.type("\x071");
     yield* page.type(" m界\nXYZ");
     yield* page.until("both Message rows", (one) => one.shows(" m界") && one.shows("XYZ"));
     yield* key(page, "Home");
@@ -175,20 +192,22 @@ describe("REPL focus regions: Unicode caret editing", () => {
     yield* page.until("Message preserved caret", (one) => one.shows("X中!YZ"));
     expect(page.screen().shows("é中!界")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(0);
-    expect(page.screen().shows("No entry yet")).toBe(true);
+    expect(page.screen().shows("Ready for Entry 1")).toBe(true);
   });
 });
 
 describe("REPL focus regions: reading and narrow recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV5: the selected reading reaches both boundaries without activating or editing", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
     yield* page.type(Array.from({ length: 50 }, (_, at) => `Reading row ${at}`).join("\n"));
     yield* page.until("the complete source", (one) => one.shows("Reading row 49"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the entry settled", (one) => one.shows("Ready for Entry 2"));
+    yield* draftFocus(page);
     yield* typed(page, "kept-draft");
-    yield* key(page, "Backtab");
+    yield* page.type("\x073");
     yield* key(page, "Alt+ArrowDown");
     yield* key(page, "Alt+ArrowDown");
     yield* key(page, "End");
@@ -202,6 +221,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* key(page, "PageDown");
     yield* key(page, "ArrowUp");
     yield* key(page, "Enter");
+    yield* draftFocus(page);
     expect(page.screen().shows("kept-draft")).toBe(true);
     expect(page.screen().shows("Ready for Entry 2")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(0);
@@ -213,21 +233,16 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* page.type(
       '<Elicit as="response" schema={{type:"object",properties:{response:{type:"string"}},required:["response"],additionalProperties:false}}>Waiting for your answer.</Elicit>',
     );
-    yield* page.until("the source ready", (one) => one.shows("</Elicit>"));
-    yield* page.key("Enter");
+    yield* page.until("the source ready", (one) => one.shows("Waiting for your answer."));
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the entry waiting", (one) => one.shows("[answer]"));
+    yield* draftFocus(page);
     yield* typed(page, "next-draft");
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
+    yield* page.type("\x071");
     yield* typed(page, "next-message");
     yield* page.resize(MEDIUM);
     yield* page.resize(NARROW);
-    yield* key(page, "Backtab");
-    yield* key(page, "ArrowRight");
-    yield* key(page, "ArrowRight");
-    yield* page.key("Enter");
+    yield* page.type("\x071");
     yield* page.until("narrow Sidekick", (one) => one.shows("message the sidekick"));
     expect(page.screen().shows("* Sidekick")).toBe(true);
     expect(page.screen().shows("* Entries")).toBe(false);
@@ -238,8 +253,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* page.until("the minimum-size refusal", (one) => one.shows("needs at least 72x20"));
     yield* page.resize(NARROW);
     yield* page.until("the routed reading recovered", (one) => one.shows("message the sidekick"));
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
+    yield* page.type("\x071");
     yield* page.type("-recovered");
     yield* page.until("the recovered Message", (one) => one.shows("next-message-narrow-recovered"));
     yield* page.resize(WIDE);
@@ -249,26 +263,28 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     );
     expect(page.screen().shows("next-draft")).toBe(true);
     expect(page.screen().shows("[answer]")).toBe(true);
-    expect(page.screen().shows("[stop]")).toBe(true);
+    yield* draftFocus(page);
+    expect(page.screen().shows("next-draft")).toBe(true);
+    expect(page.screen().found("Stop", { onRow: "✎ draft" })).toBe(1);
     expect(page.repl.fake.prompts).toHaveLength(0);
   });
 });
 
 describe("REPL focus regions: the catalog drawer at the narrow size", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R5: nested arrows reveal hidden entries, fixed Content entry and modal close restore", function* () {
     const page = yield* useReplPage({ size: NARROW, includes: [REFERENCE_DIRECTORY] });
-    yield* draftFocus(page);
     for (let order = 1; order <= 6; order += 1) {
+      yield* draftFocus(page);
       yield* typed(page, `<Checklist title="Plan ${order}" steps={1} />`);
-      yield* page.key("Enter");
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* page.until(`entry ${order} settled`, (one) => one.shows(`${order} ✓`));
       yield* page.until(`ready for entry ${order + 1}`, (one) =>
         one.shows(`Ready for Entry ${order + 1}`),
       );
     }
-    // Draft -> History -> Surface bar, then Entries. Arrows do not open it.
-    yield* key(page, "Tab");
-    yield* key(page, "Tab");
+    // Surface bar, then Entries. Arrows do not open the catalog.
+    yield* page.type("\x079");
     yield* key(page, "ArrowRight");
     expect(page.screen().shows("[close]")).toBe(false);
     yield* page.key("Enter");
@@ -366,10 +382,9 @@ describe("REPL focus regions: owned composition invariants", () => {
     const shown = yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
     expect(shown.keys).toContain("reading:anchor");
     expect(shown.keys.some((key) => key.startsWith("work:crumb:"))).toBe(false);
-    expect(focused(presenter)).toBe("footer:input");
-    for (let step = 0; step < 3; step += 1) {
-      yield* dispatched(presenter, "Tab");
-    }
+    expect(focused(presenter)).toBe("reading:anchor");
+    yield* dispatched(presenter, "Tab");
+    yield* dispatched(presenter, "Focus3");
     expect(focused(presenter)).toBe("reading:anchor");
   });
 
@@ -382,7 +397,7 @@ describe("REPL focus regions: owned composition invariants", () => {
       throw before.error;
     }
     yield* presenter.commit(withWorkspace(before.value, workspaceOf(model)));
-    yield* dispatched(presenter, "Tab");
+    yield* dispatched(presenter, "Focus5");
     expect(focused(presenter)).toBe("tab:bindings");
     const below = { columns: 71, rows: 19 };
     presenter.resize(below);
@@ -422,7 +437,8 @@ describe("REPL focus regions: owned composition invariants", () => {
       }
       const presenter = yield* usePresenter(size);
       yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
-      expect(focused(presenter)).toBe("footer:input");
+      yield* dispatched(presenter, "Focus4");
+      expect(focused(presenter)).toBe("draft:new");
       const entries = [
         "tab:bindings",
         "sidekick:anchor",
@@ -430,7 +446,7 @@ describe("REPL focus regions: owned composition invariants", () => {
         "footer:history",
         "transcript:selector",
         "entries:heading",
-        "footer:input",
+        "draft:new",
       ];
       const walked: (string | undefined)[] = [];
       for (const _entry of entries) {
@@ -450,7 +466,7 @@ describe("REPL focus regions: owned composition invariants", () => {
         "sidekick:message",
         "sidekick:anchor",
         "tab:bindings",
-        "footer:input",
+        "draft:new",
       ]);
     });
   }
@@ -460,6 +476,7 @@ describe("REPL focus regions: owned composition invariants", () => {
     const presenter = yield* usePresenter(MEDIUM);
     let state: ReplState = {
       ...initialState("caret"),
+      draftOpen: true,
       draft: "first\nsecond\nthird\nfourth\nfifth",
     };
     function* commit() {
@@ -469,6 +486,8 @@ describe("REPL focus regions: owned composition invariants", () => {
       }
       return yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
     }
+    yield* commit();
+    yield* dispatched(presenter, "Focus4");
     yield* commit();
     const moved = yield* dispatched(presenter, "Home");
     if (moved.outcome !== "action") {
@@ -518,8 +537,7 @@ describe("REPL focus regions: owned composition invariants", () => {
       yield* commit();
     }
     yield* commit();
-    yield* send("Tab");
-    yield* send("Tab");
+    yield* send("Focus9");
     yield* send("ArrowRight");
     yield* send("Enter");
     expect(focused(presenter)).toBe("entry:entry-1");
@@ -617,16 +635,88 @@ describe("REPL focus regions: logical drawer reveal", () => {
     ).state;
     expect(state.route.at).toBe(model.checkpoints.at(-1)?.marker);
   });
+
+  it("a revealed feedback toggle and its linked entry stay in place after focus settles", function* () {
+    const model = yield* journalModel(["# Round result\n\nResult output."]);
+    const entry = model.entries[0];
+    if (entry === undefined) {
+      throw new Error("the journal recorded no entry");
+    }
+    expect(entry.terminal?.output).toBeDefined();
+    const presenter = yield* usePresenter(NARROW);
+    let state = reduceRepl(
+      initialState("feedback"),
+      { kind: "select-pane", pane: "sidekick" },
+      model,
+      IDLE,
+    ).state;
+    function* commit() {
+      const resolved = viewFor(state, model, IDLE, NARROW, focused(presenter));
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const view = withWorkspace(resolved.value, {
+        ...workspaceOf(model),
+        feedback: [
+          {
+            conversation: "owned",
+            response: "r1",
+            turn: 1,
+            source: 1,
+            text: "results",
+            key: "owned:r1:1",
+            label: "Round 1 result sent to Sidekick",
+            controls: ["REPL.EntryInput", "REPL.Submit"],
+            entries: [{ key: entry.key, round: entry.order }],
+          },
+        ],
+      });
+      const shown = yield* presenter.commit(view);
+      state = focusSettled(view, focused(presenter), shown.committed.admission);
+      return shown;
+    }
+    yield* commit();
+    state = reduceRepl(
+      state,
+      { kind: "inspect-sidekick", target: "feedback", key: "owned:r1:1" },
+      model,
+      IDLE,
+    ).state;
+    const toggle = "drawer:inspection:feedback";
+    const link = `drawer:inspection:entry:${entry.key}`;
+    // The toggle is the sixth content row of a five-row window, so the frame
+    // answering the request can only show it by starting one row down.
+    const opened = yield* commit();
+    const first = {
+      from: windowOf(opened.committed.admission, DRAWER_WINDOW).from,
+      focused: focused(presenter),
+      toggle: opened.boundsOf(toggle),
+      link: opened.boundsOf(link),
+    };
+    expect(first.from).toBe(1);
+    expect(first.focused).toBe(toggle);
+    expect(first.toggle).toBeDefined();
+    expect(first.link).toBeDefined();
+    expect(presenter.grid.rows()[first.toggle?.y ?? -1]).toContain("Show recorded feedback");
+    expect(state.inspection?.offset).toBe(1);
+    expect(state.restore).toBeUndefined();
+
+    const settled = yield* commit();
+    expect(windowOf(settled.committed.admission, DRAWER_WINDOW).from).toBe(first.from);
+    expect(focused(presenter)).toBe(toggle);
+    expect(settled.boundsOf(toggle)).toEqual(first.toggle);
+    expect(settled.boundsOf(link)).toEqual(first.link);
+    expect(presenter.grid.rows()[first.toggle?.y ?? -1]).toContain("> Show recorded feedback");
+  });
 });
 
 describe("REPL focus regions: background input ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV7: a reply and question leave a middle Message caret and Draft untouched", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
     yield* typed(page, "kept draft");
-    for (let at = 0; at < 4; at += 1) {
-      yield* key(page, "Tab");
-    }
+    yield* page.type("\x071");
     page.repl.fake.script({
       held: true,
       reply:
@@ -656,13 +746,12 @@ describe("REPL focus regions: background input ownership", () => {
 });
 
 describe("REPL focus regions: Sidekick reading keys", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PV5: Home/End and pages preserve an unsent Message while output arrives", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* draftFocus(page);
     yield* typed(page, "draft kept");
-    for (let at = 0; at < 4; at += 1) {
-      yield* key(page, "Tab");
-    }
+    yield* page.type("\x071");
     const first = Array.from({ length: 30 }, (_, at) => `Chat row ${at}`).join("\n");
     const last = Array.from({ length: 30 }, (_, at) => `Chat row ${at + 30}`).join("\n");
     page.repl.fake.script({ deltas: [`<Output>${first}`, `\n${last}</Output>`], holdAfter: 1 });
@@ -686,7 +775,7 @@ describe("REPL focus regions: Sidekick reading keys", () => {
     yield* key(page, "ArrowUp");
     expect(page.screen().shows("message kept")).toBe(true);
     expect(page.screen().shows("draft kept")).toBe(true);
-    expect(page.screen().shows("No entry yet")).toBe(true);
+    expect(page.screen().shows("Ready for Entry 1")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(1);
   });
 });

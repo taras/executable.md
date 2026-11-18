@@ -1,8 +1,11 @@
 <Test name="Permission wheel preserves focus and keyboard reaches the final choice" timeout="60s">
   <ReplBench columns={120} rows={30} entryPermissionFixture={true}>
     <Repl.Focus.Draft />
+    <ReplBench.Key key="Enter" />
     <ReplBench.Type text={'<AgentProvider name="wheel-permission-fixture" defaultAgent="fixture"><Session name="permission"><Prompt text="many choices" /></Session></AgentProvider>'} />
-    <ReplBench.WaitForText text="many choices" />
+    <ReplBench.WaitForText text="</AgentProvider>" />
+    <ReplBench.Key key="Tab" />
+    <ReplBench.WaitForText text="> Send" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="asks:" as="permission" />
     <ReplBench.Click at={permission} />
@@ -21,14 +24,21 @@
     <Each in={[1,2,3,4,5,6,7,8]} let="page">
       <ReplBench.Key key="PageUp" />
     </Each>
+    <ReplBench.WaitForText text="Enter does nothing" />
     <ReplBench.WaitForText text="Permission prose 01" as="prose" />
     <ReplBench.WaitForText text="Permission prose 00" at={{row:prose.row-1,column:prose.column}} />
     <ReplBench.Scroll delta={1} at={prose} />
-    <ReplBench.WaitForText text="Permission prose 01" at={prose} present={false} />
-    <ReplBench.WaitForText text="Permission prose 03" />
+    <ReplBench.WaitForText text="Permission prose 04" at={prose} />
+    <ReplBench.WaitForText text="Permission prose 03" at={{row:prose.row-1,column:prose.column}} />
+    <ReplBench.Scroll delta={1} at={prose} />
+    <ReplBench.WaitForText text="Permission prose 07" at={prose} />
+    <ReplBench.Scroll delta={-1} at={prose} />
+    <ReplBench.WaitForText text="Permission prose 04" at={prose} />
     <ReplBench.Scroll delta={-1} at={prose} />
     <ReplBench.WaitForText text="Permission prose 01" at={prose} />
     <ReplBench.WaitForText text="Permission prose 00" at={{row:prose.row-1,column:prose.column}} />
+    <ReplBench.WaitForText text="Enter does nothing" />
+    <ReplBench.WaitForText text="Enter decides" present={false} />
     <Each in={[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]} let="page">
       <ReplBench.Key key="PageDown" />
     </Each>

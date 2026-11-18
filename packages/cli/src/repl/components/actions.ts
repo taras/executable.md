@@ -56,6 +56,8 @@ export type ReplAction =
       readonly key: "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End";
     }
   | { readonly kind: "noop" }
+  | { readonly kind: "open-round-draft" }
+  | { readonly kind: "close-round-draft" }
   | { readonly kind: "retry-restore" }
   | { readonly kind: "show-restore-error" }
   | {

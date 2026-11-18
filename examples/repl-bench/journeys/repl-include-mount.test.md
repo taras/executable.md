@@ -21,27 +21,39 @@ External-only rendered.
 
     <ReplBench include={includes} expectExit={true} as="closed">
       <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <ReplBench.Type text={"<Greeting />\n<ExternalOnly />"} />
       <ReplBench.WaitForText text="<ExternalOnly />" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="Ready for Entry 2" />
       <ReplBench.WaitForText text="First greeting rendered." />
       <ReplBench.WaitForText text="External-only rendered." />
       <ReplBench.WaitForText text="Second greeting rendered." present={false} />
 
+      <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
+      <ReplBench.WaitForText text="> Round 2 · draft" />
       <ReplBench.Type text="<WorkspaceOnly />" />
       <ReplBench.WaitForText text="<WorkspaceOnly />" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="Cannot resolve component: WorkspaceOnly" />
       <ReplBench.WaitForText text="Local default rendered." present={false} />
+      <Repl.Focus.Draft />
       <Each in={"<WorkspaceOnly />".split("")} let="character"><ReplBench.Key key="Backspace" /></Each>
       <ReplBench.WaitForText text="<WorkspaceOnly />" present={false} />
 
       <ReplBench.Type text="<RootOnly />" />
       <ReplBench.WaitForText text="<RootOnly />" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="Cannot resolve component: RootOnly" />
       <ReplBench.WaitForText text="Root default rendered." present={false} />
+      <Repl.Focus.Draft />
       <Each in={"<RootOnly />".split("")} let="character"><ReplBench.Key key="Backspace" /></Each>
       <ReplBench.WaitForText text="<RootOnly />" present={false} />
       <ReplBench.WaitForText text="Ready for Entry 2" />
@@ -74,8 +86,11 @@ External-only rendered.
     <Dir path="second"><File path="Greeting.md">Second greeting rendered.</File></Dir>
     <ReplBench include={[root+"/second","first"]}>
       <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <ReplBench.Type text="<Greeting />" />
       <ReplBench.WaitForText text="<Greeting />" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="Ready for Entry 2" />
       <ReplBench.WaitForText text="Second greeting rendered." />
@@ -84,8 +99,11 @@ External-only rendered.
 
     <ReplBench>
       <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <ReplBench.Type text={"<WorkspaceOnly />\n<RootOnly />"} />
       <ReplBench.WaitForText text="<RootOnly />" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="Ready for Entry 2" />
       <ReplBench.WaitForText text="Local default rendered." />
@@ -140,8 +158,11 @@ pwd -P | tr -d '\n' > process-cwd.txt
     </Let>
     <ReplBench mount={initialMounts} allowAbsolute={true} expectExit={true} as="held">
       <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <ReplBench.Type text={"<Dir path="+JSON.stringify(fixtureTarget)+">\n"+fixtureBody+"\n</Dir>\n\n<Dir path="+path+">\n"+body+"\n</Dir>"} />
       <ReplBench.WaitForText text="</Dir>" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="waiting for an answer" />
       <ReplBench.WaitForText text="[exit]" as="exit" />
@@ -195,8 +216,11 @@ fresh is {fresh}
 ```
       </Let>
       <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <ReplBench.Type text={"<Dir path="+path+">\n"+freshBody+"\n</Dir>"} />
       <ReplBench.WaitForText text="</Dir>" />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text="Ready for Entry 3" />
       <ReplBench.WaitForText text="Entries" row={1} as="catalog" />

@@ -72,17 +72,16 @@ import {
   GROWING_STACK_PROPS,
   inlineActionRowProps,
   partsRowProps,
+  roundEditorOutlineProps,
   SPACER_PROPS,
   statedActionRowProps,
   statedPartProps,
   WORKSPACE_DRAFT_GAP,
-  WORKSPACE_DRAFT_ROWS,
   WORKSPACE_LIST_GUTTER,
   workspaceQueueRows,
   workspaceBodyRows,
   TAB_GAP,
   workspaceBlockProps,
-  bandBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
   workspaceConversationWidth,
@@ -1103,6 +1102,8 @@ export interface ReplState {
   };
   readonly heldHistory?: true;
   readonly draftCaret?: ReplCaret;
+  readonly draftOpen?: boolean;
+  readonly humanRound?: string;
   readonly messageCaret?: ReplCaret;
   readonly route: ReplRoute;
   /**
@@ -1136,6 +1137,7 @@ export interface ReplState {
   readonly recovering?: ReplRecovering;
   /** Why the last action changed nothing, or none. */
   readonly refusal: string | undefined;
+  readonly refusalPosition?: { readonly reason: string; readonly from: number } | undefined;
   /**
    * The pending permission request this screen has selected, or none.
    *
@@ -1885,6 +1887,7 @@ export function stateFor(location: string): Result<ReplState> {
     Object.freeze({
       route: decoded.value,
       draft: decoded.value.draft ?? "",
+      draftOpen: decoded.value.draft !== undefined,
       form: EMPTY_FORM,
       asking: undefined,
       configuring: NOT_CONFIGURING,
@@ -2274,6 +2277,12 @@ export function reduceRepl(
       if (next === window.from) {
         return settled(given);
       }
+      if (action.window === HEADER_REFUSAL_WINDOW && given.refusal !== undefined) {
+        return settled({
+          ...given,
+          refusalPosition: { reason: given.refusal, from: next },
+        });
+      }
       if (action.window === "todo") {
         return settled({ ...state, todoOffset: next });
       }
@@ -2347,6 +2356,32 @@ export function reduceRepl(
       return editCaret(state, live, action, configuring, asking, answering, presented);
     case "reveal":
       return settled({ ...state, restore: Object.freeze({ kind: "reveal", key: action.key }) });
+    case "open-round-draft": {
+      const routed = navigate(
+        hidingAsking(state),
+        model,
+        { ...state.route, surface: "entries", drawers: [], view: undefined },
+        live,
+      );
+      return {
+        ...routed,
+        state: Object.freeze({
+          ...routed.state,
+          draftOpen: true,
+          restore: Object.freeze<NonNullable<ReplState["restore"]>>({
+            kind: "reveal",
+            key: "footer:input",
+          }),
+        }),
+      };
+    }
+    case "close-round-draft":
+      return settled({
+        ...drafting(state, "").state,
+        draftOpen: false,
+        draftCaret: undefined,
+        restore: { kind: "reveal", key: "draft:new" },
+      });
     case "submit": {
       // The one gate, over the part of its facts this reduction can see.
       // Inspection freezes durable state, not the draft, and submitting from a
@@ -2512,7 +2547,12 @@ export function reduceRepl(
       return chosen.state.refusal === undefined
         ? {
             ...chosen,
-            state: Object.freeze({ ...chosen.state, catalog: false, inspection: undefined }),
+            state: Object.freeze({
+              ...chosen.state,
+              catalog: false,
+              inspection: undefined,
+              draftOpen: false,
+            }),
           }
         : chosen;
     }
@@ -4027,7 +4067,7 @@ function settled(state: ReplState): ReplTransition {
 }
 
 function refuse(state: ReplState, reason: string): ReplTransition {
-  return { state: Object.freeze({ ...state, refusal: reason }), intent: { kind: "none" } };
+  return settled({ ...state, refusal: reason, refusalPosition: undefined });
 }
 
 /**
@@ -5332,6 +5372,12 @@ export function focusSettled(
         return Object.freeze({
           ...state,
           restore: undefined,
+          inspection:
+            open === undefined &&
+            presentedInspection(view) !== undefined &&
+            state.inspection !== undefined
+              ? { ...state.inspection, offset: from }
+              : state.inspection,
           viewports: {
             ...viewports,
             configure: presentedConfiguring(view) === undefined ? viewports.configure : from,
@@ -5631,6 +5677,9 @@ function primaryAction(view: ReplView, narrow: boolean): string {
   if (focused === "footer:exit" || focused === "footer:top:exit") {
     return "Enter exits";
   }
+  if (focused === "drawer:configure:agent" || focused === "drawer:configure:apply") {
+    return "Enter applies";
+  }
   if (focused === "drawer:close") {
     return "Enter closes";
   }
@@ -5717,56 +5766,21 @@ function requiredLength(parts: readonly GuidancePart[]): number {
     .join(GUIDANCE_SEPARATOR).length;
 }
 
-/**
- * What the guidance says, whole, before any width has cut it into rows.
- *
- * Every part it has to say, in the one order it says them: the state, then what
- * focus actually does, then the way out, then movement. Nothing is dropped and
- * nothing is shortened to fit a row, because the block is as many rows as its
- * words need — a direction a reader cannot see is a direction they do not have,
- * and the Transcript sharing its column is not a reason to stop giving it.
- *
- * The vocabulary is the profile's: the long phrases where there is a Transcript
- * column, and the short ones a narrow frame already says. There is no third.
- */
-/**
- * Whether this frame says its refusal in the footer's own band.
- *
- * The staged composition keeps every footer control on one compact History row,
- * which leaves a reason a handful of cells and an ellipsis — and a refusal
- * truncated before its meaning is a keystroke that appeared to do nothing. The
- * band above it is the full width of the frame and already pays a sentence out
- * over as many rows as its words need, so that is where the reason goes.
- *
- * The standing hint waits while it does. A hint describes what a person could
- * do; a refusal answers what they just did, and only one of those is news.
- */
-function refusalInBand(view: ReplView): boolean {
-  return shownRefusal(view) !== undefined && staged(view) !== undefined;
+export function executionRefusal(view: ReplView): string | undefined {
+  const refusal = shownRefusal(view);
+  return refusal === undefined ? undefined : `! ${refusal.replaceAll("\n", " ")}`;
 }
 
-/**
- * What the footer's own sentence says on this frame: the refusal, or the hint.
- *
- * One function for both, asked by the pass that fits the words and by the pass
- * that describes the rows — a second answer is how a band comes to be measured
- * for one sentence and drawn with another.
- */
-export function footerSentence(view: ReplView): string {
-  if (refusalInBand(view)) {
-    return `! ${(shownRefusal(view) ?? "").split("\n").join(" ")}`;
-  }
-  if (profileFor(view.size) === "narrow" && presentedInspection(view) !== undefined) {
-    return "Esc closes · Tab moves · PageUp/PageDown in Content";
-  }
-  if (staged(view) !== undefined && !modalOpen(view)) {
-    const readiness = readinessOf(view);
-    const narrow = profileFor(view.size) === "narrow";
-    const state = statePhrase(readiness, narrow);
-    const advice = stateAdvice(readiness, narrow, !narrow);
-    return advice === undefined ? state : `${state}${GUIDANCE_SEPARATOR}${advice}`;
-  }
-  return guidanceSentence(view);
+export function drawerGuidance(view: ReplView): string {
+  return [
+    primaryAction(view, profileFor(view.size) === "narrow"),
+    "Esc closes",
+    "Tab regions Alt↑↓",
+    (focusClaim(view) ?? view.focused)?.endsWith(":anchor")
+      ? "Up/Down reads one row; PageUp/PageDown reads a page; Home/End reaches the bounds."
+      : "In Content: PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
+    "Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.",
+  ].join(GUIDANCE_SEPARATOR);
 }
 
 export function guidanceSentence(view: ReplView): string {
@@ -5851,12 +5865,12 @@ function guidanceParts(
     // works. The draft row below is visibly holding their text either way.
     return [...said, move];
   }
-  // Focus is in the draft. Only here is Enter a submission, and only when the
-  // readiness would take one — a row promising it in any other state is the one
-  // thing this slice exists to stop saying.
-  const enter: GuidancePart[] = admitsSubmission(readiness)
-    ? [{ text: "Enter submits", required: true }]
-    : [];
+  const enter: GuidancePart[] =
+    staged(view) !== undefined
+      ? [{ text: "Enter adds a line · Tab to Send", required: true }]
+      : admitsSubmission(readiness)
+        ? [{ text: "Enter submits", required: true }]
+        : [];
   return [...said, ...enter, { text: "Type here" }, move];
 }
 
@@ -6723,20 +6737,14 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // sentence is as long as the state it describes, and the medium profile's
   // transcript column is narrower than the longest of them — a row wider than
   // its column is one the column beside it loses space to.
-  if (surface !== undefined) {
+  if (surface !== undefined && workspace === undefined) {
     // One inert block, in the rows this frame fitted its words into. Without a
     // fitted list — the pass still asking how wide the surface is — it is the
     // one row that pass describes, so its own geometry question stays askable.
-    const said = context.guidance ?? [footerSentence(view)];
-    // A refusal in this band reads as the refusal it is, not as a hint.
-    const refusing = refusalInBand(view);
+    const said = context.guidance ?? [guidanceSentence(view)];
     for (const [at, own] of said.entries()) {
       items.push(
-        line(
-          at === 0 ? "guidance" : `guidance:row:${at}`,
-          own,
-          refusing ? styleOf("failed-outcome", { inspected }) : styleOf("status", { inspected }),
-        ),
+        line(at === 0 ? "guidance" : `guidance:row:${at}`, own, styleOf("status", { inspected })),
       );
     }
   }
@@ -6744,7 +6752,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
   // refusal nobody can read is a keystroke that appeared to do nothing.
   const refusal = shownRefusal(view);
-  if (refusal !== undefined && !refusalInBand(view) && offering("footer:refused")) {
+  if (refusal !== undefined && workspace === undefined && offering("footer:refused")) {
     // One line: the footer is seven rows and the controls live in them, so a
     // refusal that wrapped would push the draft off the screen it is about.
     //
@@ -6798,8 +6806,13 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   if (workspace !== undefined) {
     // With the selected work, which is the surface it is part of. A narrow
     // frame showing the Transcript or the Sidekick has no region to draw it in.
+    items.push(
+      row("draft:new", "+ New Round", { select: "open-round-draft" }, styleOf("action"), {
+        here: view.focused,
+      }),
+    );
     if (showEntry) {
-      items.push(...workspaceDraft(view, context, claiming));
+      items.push(...workspaceDraft(view, context));
     }
   } else {
     items.push(
@@ -7300,6 +7313,10 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
     materialize: materializeSessionRow,
     prepare(view, width) {
       const turns = chronology(view.model, view.live);
+      const human =
+        view.state.route.at === undefined && view.state.route.session === undefined
+          ? view.model.entries.find((one) => one.key === view.state.humanRound)?.order
+          : undefined;
       const sidekick = view.live.sidekick;
       const compact = staged(view) !== undefined;
       const facts: (string | number | boolean | null | undefined)[] = [
@@ -7314,6 +7331,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
         view.state.route.surface,
         view.state.filtering,
         turns.length,
+        human,
       ];
       for (const turn of turns) {
         facts.push(
@@ -7404,6 +7422,7 @@ function createSessionPreparationStore(): ReplSessionPreparationStore {
         sidekick,
         compact,
         view.workspace?.feedback ?? [],
+        human,
       );
       const sequence = { rows, positions: new Map(rows.map((one, at) => [one.key, at])) };
       held = { facts, sequence };
@@ -7444,6 +7463,7 @@ function sessionRows(
    */
   compact = false,
   feedback: readonly ReplRecordedFeedback[] = [],
+  human?: number,
 ): readonly ReplSessionRow[] {
   const items: ReplSessionRow[] = [];
   const filter = state.route.session;
@@ -7500,6 +7520,11 @@ function sessionRows(
     items.push(sessionLine("sessions:section:entries", "  Entry agents", styleOf("pane-heading")));
   }
   const entries: ReplSessionRow[] = [];
+  if (compact && human !== undefined) {
+    entries.push(
+      sessionLine(`sessions:round:${human}`, `── Round ${human} ──`, styleOf("pane-heading")),
+    );
+  }
   let named: string | undefined;
   for (const turn of turns) {
     if (filter !== undefined && turn.sessionKey !== filter) {
@@ -8136,10 +8161,10 @@ function inspectionRect(size: ReplTerminalSize): ReplBounds {
   const x = workspaceTranscriptWidth(size);
   const width = workspaceWorkWidth(size);
   if (x !== undefined && width !== undefined) {
-    return { x, y: 1, width, height: size.rows - 3 };
+    return { x, y: 1, width, height: size.rows - 2 };
   }
   const height = Math.floor(size.rows * 0.6);
-  return { x: 0, y: size.rows - height - 2, width: size.columns, height };
+  return { x: 0, y: size.rows - height - 1, width: size.columns, height };
 }
 
 /**
@@ -8160,31 +8185,9 @@ export function modalOpen(view: ReplView): boolean {
   );
 }
 
-/**
- * The rectangle whichever drawer is presented occupies.
- *
- * One calculation for both, read back by measurement, admission, description,
- * drawing and hit testing: the entry's covers the body, and the Sidekick's
- * covers the pane that owns its question.
- *
- * A route drawer's is the envelope the preparation settled once it had measured
- * the guidance this layer must stay clear of. Taken from the frame's own context
- * rather than recomputed here, so there is one answer to where it is: a second
- * calculation is how a drawer's cells and its targets come to disagree. Before
- * that block has been fitted there is nothing to clear, and the rectangle the
- * size states is what those passes measure.
- *
- * Staged drawers also clear the extra fitted footer rows. Pane-local drawers
- * keep their own origin; route drawers keep their existing inset.
- */
+/** The active drawer's rectangle, shared by placement and hit testing. */
 function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
-  // Which body this layer covers: the staged composition keeps three rows
-  // around its body where the ordinary one keeps seven, so a rectangle derived
-  // from the other budget would hang off the bottom of this screen.
   const workspace = staged(view) !== undefined;
-  // The catalog floats over the body, exactly where a route drawer does: it is
-  // a reading of the whole execution rather than of one pane, so a pane-local
-  // rectangle would put the list of every entry inside the Sidekick's column.
   const rect =
     view.selection.drawers.length > 0 || presentedCatalog(view)
       ? (context.drawer ?? drawerRect(view.size, workspace))
@@ -8196,10 +8199,8 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   if (rect === undefined || !workspace) {
     return rect;
   }
-  return Object.freeze({
-    ...rect,
-    height: Math.max(0, rect.height - Math.max(0, (context.guidance?.length ?? 1) - 1)),
-  });
+  const top = Math.max(rect.y, 1 + (context.headerRefusal?.length ?? 0));
+  return { ...rect, y: top, height: Math.max(0, rect.y + rect.height - top) };
 }
 
 /**
@@ -8375,7 +8376,13 @@ function drawerFor(
     input: { window: DRAWER_WINDOW },
     children: viewportRows.map((one) => one.description),
   });
-  const viewportChildren = [viewport, ...fixedRows.map((one) => one.description)];
+  const viewportChildren = [
+    viewport,
+    ...fixedRows.map((one) => one.description),
+    // The header stays visible outside the drawer's rectangle. Its wheel
+    // target belongs to the active modal while that modal owns input.
+    ...(context.headerRefusalWindow !== undefined && !inline ? [refusalViewport()] : []),
+  ];
   const children = overHeld
     ? [
         covered(history),
@@ -10205,8 +10212,19 @@ export const DRAWER_WINDOW = "drawer";
 export const QUEUE_WINDOW = "queue";
 /** The entry reading's window: output and source together, in the transcript. */
 export const READING_WINDOW = "reading";
+
 /** The Bindings pane's window, over the selected scope's values and answers. */
 const BINDINGS_WINDOW = "bindings";
+
+const HEADER_REFUSAL_WINDOW = "header-refusal";
+
+function refusalViewport(): ReplDescription<ReplAction> {
+  return describeNode({
+    key: `viewport:${HEADER_REFUSAL_WINDOW}`,
+    component: VIEWPORT,
+    input: { window: HEADER_REFUSAL_WINDOW },
+  });
+}
 /** The action row's own structural id, which admission measures against. */
 export const ACTION_ROW = "box:footer:actions";
 /** The right pane's tab row, which is also that column's header. */
@@ -10288,8 +10306,6 @@ export interface ReplMeasuredWidths {
    * control. Zero where the frame draws no queue.
    */
   readonly queue?: number;
-  /** The row the guidance is drawn in, where a frame draws it apart from the work. */
-  readonly guidance?: number;
 }
 
 /**
@@ -10395,6 +10411,9 @@ export interface ReplPresentationContext {
    * row, which is the geometry question it is asking.
    */
   readonly guidance: readonly string[] | undefined;
+  readonly headerRefusal?: readonly string[];
+  readonly headerRefusalWindow?: ReplWindow | undefined;
+  readonly drawerHelp?: readonly string[];
   /**
    * The rows this frame is drawing a refusal's own explanation in, or none.
    *
@@ -10446,7 +10465,6 @@ export interface ReplPresentationContext {
    * from a label's characters. Absent before that measurement, where the field
    * grows and the pass is only answering widths.
    */
-  readonly draftField?: number | undefined;
   /**
    * How wide a queued message's text is, once its control has been measured.
    *
@@ -10814,10 +10832,8 @@ function slotOf(key: string): ReplSlot | undefined {
     key.startsWith("work:crumb:") ||
     key === "work:state" ||
     key === "work:compact" ||
-    key === "draft:stop" ||
-    key === "draft:send" ||
+    key.startsWith("draft:") ||
     key === "follow" ||
-    key.startsWith("draft:value:") ||
     key.startsWith("todo:") ||
     key === "queue-overflow" ||
     key.startsWith("queue:") ||
@@ -11182,6 +11198,9 @@ export function presentationFor(
         children: [],
       }),
     );
+  }
+  if (context.headerRefusalWindow !== undefined && !modalOpen(view)) {
+    composed.push(refusalViewport());
   }
   // Placed only where the tree will hold them: a measuring pass mounts nothing.
   const placedDescriptions = context.measuring
@@ -11981,6 +12000,7 @@ export function admissionFor(input: {
   /** The drawer's notices, fitted, which its own window admits rows of. */
   readonly notices?: ReplPreparedNotices | undefined;
   readonly details?: readonly ReplFittedLine[] | undefined;
+  readonly headerRefusalWindow?: ReplWindow | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
   const { view, manifest, widths, reading, preview, queue, notices, details, boundsOf, sessions } =
@@ -11993,6 +12013,12 @@ export function admissionFor(input: {
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
+    if (slot.window === HEADER_REFUSAL_WINDOW) {
+      if (input.headerRefusalWindow !== undefined && capacity > 0) {
+        windows.set(slot.window, input.headerRefusalWindow);
+      }
+      continue;
+    }
     if (slot.window === "todo") {
       const rows = input.todo ?? [];
       let from = Math.max(0, Math.min(view.state.todoOffset ?? 0, rows.length - capacity));
@@ -13421,67 +13447,78 @@ function workspaceControls(
   return items;
 }
 
-/**
- * The selected work's Draft: one field whose heading carries its own Send, or
- * Stop while an entry is running, and whose value takes the rows beneath it.
- *
- * Send asks for exactly what Enter in the field asks for — the same submission
- * action, through the same gate, against the same draft revision — so the two
- * ways of submitting one text are one decision rather than two. Stop carries
- * the key of the entry this frame is actually drawing it for, so what it stops
- * is that entry and not whatever is running by the time the key is pressed. It
- * is offered only at the live head — a frozen reading is of an entry this
- * process may no longer be running, and a Stop there would be aimed at history.
- */
-function workspaceDraft(
-  view: ReplView,
-  context: ReplPresentationContext,
-  claiming: boolean,
-): readonly Described[] {
+function workspaceDraft(view: ReplView, context: ReplPresentationContext): readonly Described[] {
+  const open = view.model.entries.at(-1);
+  const running = view.live.running && view.state.route.at === undefined && open !== undefined;
   const items: Described[] = [];
-  items.push(
-    field("footer:input", " DRAFT", view.state.draft, "draft", styleOf("field-label"), {
-      caret: view.state.draftCaret,
-      here: view.focused,
-      block: true,
-      ...(claiming ? { focus: true } : {}),
-    }),
-  );
-  // The entry a Stop here would be aimed at: the last one the live head
-  // admitted. Entries are serial, so only the last one can still be running —
-  // the same rule the entry reading uses to decide whose live output it is
-  // showing. A reading with no entry at all has nothing to aim a Stop at, and
-  // a frozen position is excluded below, because an entry read there may not be
-  // the one this process is running.
-  const open = view.model.entries[view.model.entries.length - 1]?.key;
-  items.push(
-    view.live.running && view.state.route.at === undefined && open !== undefined
-      ? row(
-          "draft:stop",
-          "[stop]",
-          { select: "stop-entry", entry: open },
-          styleOf("failed-outcome"),
-          { here: view.focused },
-        )
-      : row("draft:send", "[send]", { select: "submit-draft" }, styleOf("action"), {
-          here: view.focused,
-        }),
-  );
-  const rows = context.draft ?? ["", "", ""];
-  for (const [at, own] of rows.entries()) {
-    items.push(line(`draft:value:${at}`, own, styleOf("draft"), sourceRuns(own)));
+  if (running) {
+    items.push(
+      ...(view.state.draftOpen
+        ? []
+        : [
+            line(
+              "draft:running",
+              open.key === view.state.humanRound ? "● running · user" : "● running",
+              styleOf("lifecycle-active"),
+            ),
+          ]),
+      row(
+        "draft:stop",
+        "Stop",
+        { select: "stop-entry", entry: open.key },
+        styleOf("failed-outcome"),
+        { here: view.focused },
+      ),
+    );
+  }
+  if (view.state.draftOpen) {
+    const focused = (focusClaim(view) ?? view.focused) === "footer:input";
+    items.push(
+      field("footer:input", "", view.state.draft, "draft", styleOf("waiting"), {
+        caret: view.state.draftCaret,
+        here: view.focused,
+        block: true,
+      }),
+      line(
+        "draft:status",
+        profileFor(view.size) === "wide" && !running ? "✎ draft · user · not sent" : "✎ draft",
+        styleOf("waiting"),
+      ),
+      row(
+        "draft:send",
+        "Send",
+        view.state.draft.length === 0 ? {} : { select: "submit-draft" },
+        styleOf(view.state.draft.length === 0 ? "metadata" : "action"),
+        { here: view.focused },
+      ),
+      row("draft:close", "X", { select: "close-round-draft" }, styleOf("action"), {
+        here: view.focused,
+      }),
+    );
+    for (const [at, own] of (context.draft ?? [""]).entries()) {
+      if (at === 0 && view.state.draft.length === 0) {
+        const runs = tokenRuns([
+          ...(focused ? [{ text: " ", token: "caret" } as const] : []),
+          { text: "Executable Markdown", token: "metadata" },
+        ]);
+        items.push(line("draft:placeholder", runText(runs), styleOf("draft"), runs));
+      } else {
+        items.push(line(`draft:value:${at}`, own, styleOf("draft"), sourceRuns(own)));
+      }
+    }
   }
   return items;
+}
+
+function nextRound(view: ReplView): number {
+  return (numbered(view.navigation).at(-1)?.entry ?? 0) + 1;
 }
 
 /** The text column of the staged queue's first message, which its width is read from. */
 export const QUEUE_TEXT = "box:queue:text:0";
 
-/** The staged guidance row's inside, which the guidance is fitted to. */
-export const GUIDANCE_ROW = "box:guidance:body";
-
-/** The Draft's heading row, whose measured width its field is derived from. */
-export const DRAFT_HEADING = "box:draft:heading";
+/** The measured editor body below the Round heading. */
+export const ROUND_EDITOR_BODY = "box:round-editor:body";
 
 /**
  * How wide a queued message's text is left beside its control.
@@ -13505,31 +13542,6 @@ export function queueTextWidth(
     return undefined;
   }
   return Math.max(0, room - button - WORKSPACE_DRAFT_GAP);
-}
-
-/**
- * How wide the Draft's field is left, for this exact measured frame.
- *
- * The heading row's own measured width, less the width the engine gave the
- * control beside it, less the gap that row declares. None where this frame drew
- * no Draft, or where the measurement has answered for neither box yet.
- */
-export function draftFieldWidth(
-  manifest: ReplLayoutManifest,
-  widthOf: (id: string) => number | undefined,
-): number | undefined {
-  const control = flatten(manifest.root).find(
-    (one) => one.key === "draft:stop" || one.key === "draft:send",
-  );
-  if (control === undefined) {
-    return undefined;
-  }
-  const heading = widthOf(DRAFT_HEADING);
-  const button = widthOf(control.id);
-  if (heading === undefined || button === undefined || heading < 1 || button < 1) {
-    return undefined;
-  }
-  return Math.max(0, heading - button - WORKSPACE_DRAFT_GAP);
 }
 
 /** The staged History row's map, which is drawn rather than mounted. */
@@ -13740,17 +13752,29 @@ export function historyMapWidth(
  * Read from the route, so it names nothing this reading does not hold.
  */
 function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
+  const readiness = readinessOf(view);
+  const narrow = profileFor(view.size) === "narrow";
+  const state = statePhrase(readiness, narrow);
+  const advice =
+    readiness.kind === "history"
+      ? "Send unavailable · use Live"
+      : stateAdvice(readiness, narrow, !narrow || view.state.route.surface === "sessions")?.replace(
+          "Enter unavailable",
+          "Send unavailable",
+        );
+  const status = ` ${state}${advice === undefined ? "" : GUIDANCE_SEPARATOR + advice}`;
   const title = " XMD REPL";
-  const label = profileFor(view.size) === "narrow" ? " session " : "  session ";
-  const id = fitLine(
-    [{ text: view.state.route.execution, elide: true }],
-    width - title.length - label.length,
-  );
-  return tokenRuns([
-    { text: title, token: "output" },
-    { text: label, token: "field-label" },
-    { text: id, token: "source" },
-  ]);
+  const label = narrow ? " session " : "  session ";
+  const room = width - status.length - title.length - label.length;
+  const runs: ReplTokenRun[] = [{ text: title, token: "output" }];
+  if (room > 0) {
+    runs.push(
+      { text: label, token: "field-label" },
+      { text: fitLine([{ text: view.state.route.execution, elide: true }], room), token: "source" },
+    );
+  }
+  runs.push({ text: status, token: "field-label" });
+  return tokenRuns(runs);
 }
 
 /**
@@ -13762,10 +13786,16 @@ function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
  * Every exact position, an entry's and every minor one, is reached through the
  * History drawer, which is what the action beside this map opens.
  */
-function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
-  const runs: { text: string; token: ReplPresentationRole }[] = [
-    { text: ` ${COMPACT_HISTORY_TITLE}`, token: "history-title" },
-  ];
+function compactHistoryRuns(view: ReplView, width?: number): readonly ReplTokenRun[] {
+  const title: ReplTokenRun = { text: ` ${COMPACT_HISTORY_TITLE}`, token: "history-title" };
+  const marks: ReplTokenRun[][] = [];
+  const editing = roundEditorVisible(view);
+  const running =
+    view.live.running &&
+    view.state.route.at === undefined &&
+    view.model.entries.at(-1)?.key === view.state.humanRound &&
+    view.state.humanRound !== undefined;
+  const entryByOrder = new Map(view.model.entries.map((entry) => [entry.order, entry]));
   const points = numbered(view.navigation);
   const at = view.state.route.at;
   const selectedOrdinal =
@@ -13774,14 +13804,16 @@ function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
     selectedOrdinal === undefined
       ? undefined
       : points.filter((one) => one.ordinal <= selectedOrdinal).pop()?.entry;
+  const selected = selectedEntry ?? workspaceEntry(view)?.order;
   for (const one of points) {
     if (one.point.kind !== "entry") {
       continue;
     }
-    const entry = view.model.entries.find((candidate) => candidate.order === one.entry);
-    const chosen = selectedEntry === one.entry;
-    runs.push({ text: "  ", token: "history" });
-    runs.push({
+    const entry = entryByOrder.get(one.entry);
+    const chosen = !editing && selected === one.entry;
+    const markRuns: ReplTokenRun[] = [{ text: "  ", token: "history" }];
+    marks.push(markRuns);
+    markRuns.push({
       text: String(one.entry),
       token: chosen
         ? "history-selected"
@@ -13793,7 +13825,31 @@ function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
       continue;
     }
     const state = workState(entry, view.model, view.live);
-    runs.push({ text: ` ${state.word.slice(0, 1)}`, token: state.style.role });
+    const mark =
+      state.style.role === "lifecycle-active" && entry.key === view.state.humanRound
+        ? "⠋"
+        : state.word.slice(0, 1);
+    markRuns.push({ text: ` ${mark}`, token: state.style.role });
+  }
+  if (editing) {
+    marks.push([{ text: `  ${nextRound(view)} ✎`, token: "waiting" }]);
+  }
+  const runs = [title];
+  const markWidths = marks.map((mark) => runText(mark).length);
+  let first = 0;
+  if (width !== undefined && (running || editing)) {
+    const room = width - title.text.length;
+    let used = markWidths.reduce((sum, cells) => sum + cells, 0);
+    if (used > room) {
+      const omitted: ReplTokenRun = { text: "  …", token: "history" };
+      while (first < marks.length - 1 && used + omitted.text.length > room) {
+        used -= markWidths[first++];
+      }
+      runs.push(omitted);
+    }
+  }
+  for (const mark of marks.slice(first)) {
+    runs.push(...mark);
   }
   const head = view.navigation.head;
   runs.push({ text: "  ── ", token: "history-rail" });
@@ -14128,7 +14184,7 @@ export function workspaceHeaderLines(
  * The staged workspace composition's boxes, from the same classified rows.
  *
  * One identity row, the body, and below it one compact History row carrying the
- * contextual actions and a measured guidance block. The wide and medium profiles give
+ * contextual actions. The wide and medium profiles give
  * the body three columns — the Transcript of agent work, the selected work with
  * its Draft, and Bindings/Sidekick with the tray above its composer. The narrow
  * profile routes one outlet instead, under the two surface controls, exactly as
@@ -14212,9 +14268,11 @@ function workspacePresentation(input: {
    * the name — the label is fitted to what is left once they have theirs.
    */
   const statedCells = (one: ReplCandidate): number | undefined =>
-    one.key === "transcript:selector" && context.selector !== undefined
-      ? context.selector.cells + FOCUS_MARKER
-      : undefined;
+    one.key.startsWith("draft:") && typeof one.text === "string"
+      ? one.text.length
+      : one.key === "transcript:selector" && context.selector !== undefined
+        ? context.selector.cells + FOCUS_MARKER
+        : undefined;
   const parts = (keys: readonly string[], region: ReplRegion, surface?: number): ReplBox[] =>
     keys.flatMap((key) =>
       byKey(key).map((one) => {
@@ -14349,12 +14407,16 @@ function workspacePresentation(input: {
     ];
   };
 
-  /** The selected work: its breadcrumbs and state, its reading, and the Draft. */
   const workColumn = (region: ReplRegion, body: string, inside?: number): readonly ReplBox[] => {
-    contents.push({ region, id: body, kind: "body" });
     const draft = of("draft");
-    const value = startingWith("draft:value:");
-    return [
+    const editing = draft.length > 0;
+    const room = context.widths?.surfaceBody;
+    const focused = (focusClaim(view) ?? view.focused) === "footer:input";
+    const showHeading = !outlet || (focusClaim(view) ?? view.focused) !== "draft:send";
+    if (!editing) {
+      contents.push({ region, id: body, kind: "body" });
+    }
+    const reading = [
       ...headerRows("work", region, header),
       box({
         id: `${body}:gutter`,
@@ -14376,60 +14438,89 @@ function workspacePresentation(input: {
           }),
         ],
       }),
-      ...(draft.length === 0 && value.length === 0
-        ? []
-        : [
+    ];
+    return [
+      ...(editing
+        ? [
+            ...(showHeading
+              ? [
+                  box({
+                    id: "box:round-editor:heading",
+                    region,
+                    props: headerRowProps(
+                      room,
+                      focused ? REPL_PALETTE.focusSurface : REPL_PALETTE.paneHeaderSurface,
+                    ),
+                    text: fieldLabel(` Round ${nextRound(view)} · draft`, focused),
+                    style: styleOf("waiting"),
+                    runs: tokenRuns([
+                      { text: focused ? "> " : "  ", token: focused ? "focus-marker" : "waiting" },
+                      {
+                        text: `Round ${nextRound(view)} · draft`,
+                        token: focused ? "markdown-strong" : "waiting",
+                      },
+                    ]),
+                  }),
+                  box({
+                    id: "box:round-editor:help",
+                    region,
+                    props: partsRowProps(1, 0, room),
+                    text: " Enter adds a line · Tab to Send",
+                    style: styleOf("metadata"),
+                  }),
+                ]
+              : []),
             box({
-              id: "box:draft",
+              id: "box:round-editor:inset",
               region,
-              props: workspaceBlockProps(
-                WORKSPACE_DRAFT_ROWS,
-                REPL_PALETTE.draftSurface,
-                BODY_GUTTER,
-              ),
+              props: workspaceBodyProps(1, 0, room),
               children: [
                 box({
-                  id: DRAFT_HEADING,
+                  id: "box:round-editor:outline",
                   region,
-                  props: partsRowProps(1, WORKSPACE_DRAFT_GAP, context.widths?.surfaceBody),
+                  props: roundEditorOutlineProps(),
                   children: [
-                    ...draft.map((one) =>
-                      box({
-                        id: `box:${region}:${one.key}`,
-                        key: one.key,
-                        region,
-                        // What this row has left once the engine has measured
-                        // the control beside it. Grown instead, the engine
-                        // divides that remainder itself and the division is not
-                        // always whole — measured, it left this field
-                        // 52.00732421875 wide and put the control on a fraction
-                        // of a cell. The control is still measured by its own
-                        // label, so its hit box is still the label somebody
-                        // aims at; only what is left over is stated.
-                        props:
-                          context.draftField === undefined
-                            ? SPACER_PROPS
-                            : statedPartProps(context.draftField),
-                        text: one.text,
-                        control: one.control,
-                        style: one.style,
-                        // No stretches: this row is drawn in one ink, which is
-                        // what the reviewed screen shows — its marker and the
-                        // composer's below it both take their own row's style,
-                        // bolded where the focus is. Stating a width is what
-                        // makes the builder apply a row's stretches, and the
-                        // marker would otherwise take the focus ink here; the
-                        // width the engine had already divided is the only
-                        // thing this was meant to settle.
-                      }),
-                    ),
-                    ...parts(["draft:stop", "draft:send"], region),
+                    box({
+                      id: ROUND_EDITOR_BODY,
+                      region,
+                      props: {
+                        ...paneContentProps(),
+                        bg: terminalColour(REPL_PALETTE.draftSurface),
+                      },
+                      children: [
+                        box({
+                          id: `${ROUND_EDITOR_BODY}:input`,
+                          key: "footer:input",
+                          control: true,
+                          region,
+                          props: paneContentProps(),
+                          children: [
+                            ...byKey("draft:placeholder"),
+                            ...startingWith("draft:value:"),
+                          ].map((one) =>
+                            box({
+                              ...rowBox(one, region, undefined),
+                              props: fittedRowProps(0),
+                            }),
+                          ),
+                        }),
+                      ],
+                    }),
                   ],
                 }),
-                ...value.map((one) => rowBox(one, region, context.widths?.surfaceBody)),
               ],
             }),
-          ]),
+          ]
+        : reading),
+      box({
+        id: "box:round-bar",
+        region,
+        props: partsRowProps(1, WORKSPACE_DRAFT_GAP, room),
+        children: parts(
+          ["draft:status", "draft:running", "draft:new", "draft:send", "draft:close", "draft:stop"],
+          region,
+        ),
+      }),
     ];
   };
 
@@ -14673,7 +14764,12 @@ function workspacePresentation(input: {
       region: "content",
       props: workspaceHeaderProps(header, TAB_GAP),
       children: parts(
-        ["sessions:heading", "entries:heading", "surface:sidekick"],
+        [
+          "sessions:heading",
+          "entries:heading",
+          "surface:sidekick",
+          ...(showingSidekick(view) || routed === "sessions" ? ["draft:new"] : []),
+        ],
         "content",
         header,
       ),
@@ -14770,7 +14866,7 @@ function workspacePresentation(input: {
     const retry = parts(["notice:retry"], "inspection");
     const width = sidekickNoticeWidth(size) - 4;
     const headRows = headerRows("conversation", "inspection", header).length;
-    const top = 1 + (outlet ? 1 : 0) + headRows;
+    const top = 1 + (context.headerRefusal?.length ?? 0) + (outlet ? 1 : 0) + headRows;
     columns.push(
       box({
         id: "box:sidekick:notice",
@@ -14815,6 +14911,15 @@ function workspacePresentation(input: {
         props: drawerLayerProps(rect, context.capture),
         children: [
           rowBox(title, "drawer", context.widths?.drawer),
+          ...(context.drawerHelp ?? []).map((text, at) =>
+            box({
+              id: `box:drawer:help:${at}`,
+              region: "drawer",
+              props: partsRowProps(1, 0, context.widths?.drawer),
+              text,
+              style: styleOf("metadata"),
+            }),
+          ),
           box({
             id,
             region: "drawer",
@@ -14831,10 +14936,24 @@ function workspacePresentation(input: {
   const placed = offered.filter(
     (candidate) => context.measuring || context.admission.actions.has(candidate.key),
   );
-  const map = compactHistoryRuns(view);
+  const map = compactHistoryRuns(
+    view,
+    accepted ? context.wideHistoryMap : context.historySplit?.map,
+  );
   const inspected = view.state.route.at !== undefined;
   const usageToggle = byKey("identity:usage");
   const identity = identityRuns(view, size.columns - (usageToggle[0]?.text.length ?? 0));
+  const refusalRows = context.headerRefusal ?? [];
+  const refusalWindow = context.headerRefusalWindow;
+  const refusalId = "box:identity:refusal";
+  if (refusalWindow !== undefined) {
+    viewports.push({
+      id: refusalId,
+      region: "refusal",
+      window: HEADER_REFUSAL_WINDOW,
+      owner: `viewport:${HEADER_REFUSAL_WINDOW}`,
+    });
+  }
   regions.push({ region: "footer", id: "box:footer" });
   return {
     descriptions,
@@ -14847,42 +14966,49 @@ function workspacePresentation(input: {
         children: [
           box({
             id: "box:identity",
-            props: bandRowProps(REPL_PALETTE.chromeSurface),
+            props: stackProps(1 + refusalRows.length),
             children: [
               box({
-                id: "box:identity:text",
-                props: fittedPartProps(),
-                text: runText(identity),
-                runs: identity,
-                style: styleOf("metadata"),
+                id: "box:identity:line",
+                props: bandRowProps(REPL_PALETTE.chromeSurface),
+                children: [
+                  box({
+                    id: "box:identity:text",
+                    props: statedPartProps(runText(identity).length),
+                    text: runText(identity),
+                    runs: identity,
+                    style: styleOf("metadata"),
+                  }),
+                  box({ id: "box:identity:space", props: SPACER_PROPS }),
+                  ...usageToggle.map((one) => part(one, undefined)),
+                ],
               }),
-              box({ id: "box:identity:space", props: SPACER_PROPS }),
-              ...usageToggle.map((one) => part(one, undefined)),
+              ...(refusalRows.length === 0
+                ? []
+                : [
+                    box({
+                      id: refusalId,
+                      props: stackProps(refusalRows.length),
+                      children: refusalRows.map((text, at) =>
+                        box({
+                          id: `${refusalId}:${at}`,
+                          props: bandRowProps(REPL_PALETTE.chromeSurface),
+                          text,
+                          style: styleOf(
+                            at === refusalWindow?.count ? "metadata" : "failed-outcome",
+                          ),
+                        }),
+                      ),
+                    }),
+                  ]),
             ],
           }),
           box({ id: "box:body", props: bodyProps(false), children: columns }),
           box({
             id: "box:footer",
             region: "footer",
-            // State the fitted row count: intrinsic stack sizing can place this
-            // footer on fractional cells, invalidating every input rectangle.
-            props: stackProps(1 + (context.guidance?.length ?? 1)),
+            props: stackProps(1),
             children: [
-              box({
-                id: "box:guidance",
-                region: "footer",
-                props: bandBlockProps(REPL_PALETTE.chromeSurface, WORKSPACE_LIST_GUTTER),
-                children: [
-                  box({
-                    id: GUIDANCE_ROW,
-                    region: "footer",
-                    props: GROWING_STACK_PROPS,
-                    children: of("located").map((one) =>
-                      rowBox(one, "footer", context.widths?.guidance),
-                    ),
-                  }),
-                ],
-              }),
               box({
                 id: "box:history",
                 region: "footer",
@@ -14974,9 +15100,6 @@ function workspacePresentation(input: {
   };
 }
 
-/** How many rows of the draft's own value the staged Draft shows. */
-const DRAFT_VALUE_ROWS = WORKSPACE_DRAFT_ROWS - 1;
-
 /** The staged queue's messages as the lines its text column fits, or none. */
 export function queueLinesOf(
   view: ReplView,
@@ -14991,55 +15114,15 @@ export function queueLinesOf(
   }));
 }
 
-/**
- * The draft's own lines as the staged Draft fits them, or none.
- *
- * The newest ones, because those are the ones drawn. See below.
- */
-export function draftLinesOf(view: ReplView):
-  | readonly {
-      readonly key: string;
-      readonly text: string;
-      readonly runs: readonly ReplTokenRun[];
-    }[]
-  | undefined {
-  if (staged(view) === undefined) {
-    return undefined;
-  }
-  const lines = view.state.draft.split("\n");
-  // Only the lines this block can draw. Every line is fitted on its own and
-  // every one of them is at least one row — a blank line included — so the last
-  // `DRAFT_VALUE_ROWS` lines already hold at least as many rows as the Draft
-  // shows, and the newest rows of those are the newest rows of the whole draft.
-  // The lines above them are measured through the engine only to be dropped:
-  // typing into a three-hundred-line draft cost 61.9ms a key at 160x36 against
-  // 12.2ms before this block existed, almost all of it in cuts nothing drew.
-  const drawn = lines.slice(Math.max(0, lines.length - DRAFT_VALUE_ROWS));
-  const from = lines.length - drawn.length;
-  // Keyed by where the line is in the draft, not by where it is in this list:
-  // the key names the line somebody is editing.
-  return drawn.map((text, at) => ({
-    key: `draft:${from + at}`,
-    text,
-    runs: sourceRuns(text),
-  }));
+export function roundEditorVisible(view: ReplView): boolean {
+  return (
+    staged(view) !== undefined &&
+    view.state.draftOpen === true &&
+    (profileFor(view.size) !== "narrow" ||
+      (view.state.route.surface === "entries" && !showingSidekick(view)))
+  );
 }
 
-/**
- * The Draft's rows this frame draws: the newest that fit, then blank rows.
- *
- * The newest, because the end is where somebody is typing. Always exactly as
- * many rows as the Draft has, so the block's height is the same whatever the
- * draft holds.
- */
-export function draftRowsOf(fitted: readonly ReplFittedLine[]): readonly string[] {
-  const drawn = fitted.map((one) => `${" ".repeat(one.indent)}${one.text}`);
-  const newest = drawn.slice(Math.max(0, drawn.length - DRAFT_VALUE_ROWS));
-  return Object.freeze([
-    ...newest,
-    ...Array.from({ length: DRAFT_VALUE_ROWS - newest.length }, () => ""),
-  ]);
-}
 export type { ReplDrawerRef };
 
 export function queueStatusLinesOf(

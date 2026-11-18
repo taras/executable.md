@@ -442,6 +442,41 @@ describe("the measurement workflow", () => {
     );
   });
 
+  it("retains failure journals separately from measurement records", function* () {
+    const workflow = yield* document(WORKFLOW);
+    const jobs = object(workflow.jobs, "workflow.jobs");
+    const raw = object(jobs.measure, "workflow.jobs.measure");
+    expect(strings(raw.env, "workflow.jobs.measure.env").XMD_TEST_ARTIFACTS).toEqual(
+      "${{ github.workspace }}/.xmd/test-artifacts",
+    );
+    const { measure: measuring, assemble } = yield* workflowJobs();
+    const [measurement, journals] = uploads(measuring);
+    if (measurement === undefined || journals === undefined) {
+      throw new Error("measurement and journal uploads are required");
+    }
+    const measure = stepRunning(measuring, "weights:measure");
+    expect(measuring.steps.indexOf(measurement)).toBeGreaterThan(measuring.steps.indexOf(measure));
+    expect(measuring.steps.indexOf(journals)).toBeGreaterThan(measuring.steps.indexOf(measurement));
+    expect(measurement.with.path).toEqual(
+      "${{ runner.temp }}/measurements/test-weights-${{ matrix.runtime }}.json",
+    );
+    expect(journals.uses).toEqual(
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    );
+    expect(journals.if).toEqual("${{ failure() || cancelled() }}");
+    expect(journals.with).toEqual({
+      name: "measure-test-journals-${{ matrix.runtime }}-attempt-${{ github.run_attempt }}",
+      path: "${{ env.XMD_TEST_ARTIFACTS }}",
+      "if-no-files-found": "ignore",
+      "include-hidden-files": "true",
+    });
+    const download = assemble.steps.find((step) =>
+      step.uses?.startsWith("actions/download-artifact"),
+    );
+    expect(download?.with.pattern).toEqual("test-weights-*-attempt-${{ github.run_attempt }}");
+    expect(journals.with.name?.startsWith("test-weights-")).toBe(false);
+  });
+
   it("assembles only after every runtime's job succeeded", function* () {
     const { measure: measuring, assemble } = yield* workflowJobs();
 

@@ -695,6 +695,23 @@ export function paneContentProps(topGap = 0): ReplBoxProps {
   };
 }
 
+export function roundEditorOutlineProps(): ReplBoxProps {
+  return {
+    layout: {
+      ...paneContentProps().layout,
+      padding: { left: 1, right: 1 },
+    },
+    bg: terminalColour(REPL_PALETTE.draftSurface),
+    border: {
+      color: terminalColour(REPL_PALETTE.chromeEdge),
+      top: 1,
+      bottom: 1,
+      left: 1,
+      right: 1,
+    },
+  };
+}
+
 /**
  * One column of the body, stacked. `undefined` grows into what is left.
  *
@@ -1102,9 +1119,6 @@ const WORKSPACE_WIDE_CONVERSATION = 70;
 const WORKSPACE_MEDIUM_TRANSCRIPT = 24;
 const WORKSPACE_MEDIUM_CONVERSATION = 56;
 
-/** The selected work's Draft: its heading row and three value rows. */
-export const WORKSPACE_DRAFT_ROWS = 4;
-
 /**
  * The cells between the Draft's field and the control beside it.
  *
@@ -1127,9 +1141,9 @@ export function workspaceQueueRows(size: ReplTerminalSize): number {
  * below — three, where the ordinary composition's footer is seven. Stated here
  * so the drawer rectangles and the body are measured against the same budget.
  */
-export const WORKSPACE_CHROME_ROWS = 3;
+export const WORKSPACE_CHROME_ROWS = 2;
 
-/** How many rows the staged body has: everything those three rows leave. */
+/** How many rows the staged body has between identity and History. */
 export function workspaceBodyRows(size: ReplTerminalSize): number {
   return Math.max(0, size.rows - WORKSPACE_CHROME_ROWS);
 }
@@ -1195,33 +1209,6 @@ export const WORKSPACE_LIST_GUTTER = 1;
  * child against its content rather than against the row, so each part states
  * its own width instead.
  */
-/**
- * The band of prose below the body: as many rows as its words need, read in
- * from the left edge the same one cell as the row above it.
- *
- * Inset on one side only, where a list is inset on both. A list is read beside
- * its column's edge and wants the breathing room at each end; this band is one
- * sentence paid out across the whole frame, and a gutter held back at its
- * trailing edge reserves a column no reader ever sees. Measured, that reserved
- * column is what a 72-cell frame could not spare: the narrow directions come to
- * 71 cells with every fact in them, the band offered 70, and the fitter did
- * what it is supposed to do with a sentence longer than its room — it moved the
- * last words to a second row, which this two-row footer has nowhere to put. So
- * the one thing the row exists to say last, the way back to the draft, was the
- * thing that went.
- */
-export function bandBlockProps(surface: number, indent: number): ReplBoxProps {
-  return {
-    layout: {
-      width: grow(),
-      height: fit(),
-      direction: "ttb",
-      padding: { left: Math.max(0, indent), right: 0 },
-    },
-    bg: terminalColour(surface),
-  };
-}
-
 export function bandRowProps(surface: number): ReplBoxProps {
   return {
     layout: { width: grow(), height: fixed(1), direction: "ltr" },

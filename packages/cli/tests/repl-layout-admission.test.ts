@@ -18,7 +18,8 @@ import { parseTodo } from "../src/repl/todo/document.ts";
  * told and from nothing else.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Elicitation, collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -33,6 +34,7 @@ import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { EntrySegmentStream } from "../src/repl/entries.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
+import { decodeLocation } from "../src/repl/route.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplActionCandidate, ReplBounds } from "../src/repl/layout.ts";
 import { admitActions } from "../src/repl/layout-admission.ts";
@@ -62,10 +64,12 @@ import { usePresenter, viewportBounds, windowOf } from "./fixtures/repl/presenta
 import type { Observed, Presenter } from "./fixtures/repl/presentation.ts";
 import { journalModel, projected } from "./fixtures/repl/journals.ts";
 import { referenceEvents, agentReferenceEvents } from "./fixtures/repl/reference.ts";
-import { awaited } from "./support/mounted-repl.ts";
+import { awaited, mountedReading } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import { entrySettles, intoDraft, pasteDraft } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-layout-admission.test.ts";
 
 /**
  * The two cells in front of a control's label that its focus marker draws in.
@@ -174,6 +178,8 @@ function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }
@@ -334,7 +340,7 @@ describe("REPL layout: what an empty measurement describes", () => {
       for (const [key, label] of [
         ["footer:history", "[history]"],
         ["footer:exit", "[exit]"],
-        ["draft:send", "[send]"],
+        ["draft:new", "+ New Round"],
       ]) {
         expect(observed.cells.get(key)?.trim()).toBe(label);
         expect(observed.boundsOf(key)?.width).toBe(label.length + CONTROL_ROOM.length);
@@ -585,6 +591,7 @@ describe("REPL layout: what an action row admits", () => {
 });
 
 describe("REPL layout: what a shrinking reading leaves behind", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** One journal whose whole reading is the long one, and one that is short. */
   function* readings(): Operation<{ long: ReplModel; short: ReplModel }> {
     return {
@@ -650,7 +657,7 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
 });
 
 describe("REPL layout: the profiles this product supports", () => {
-  it("TL1: every supported size keeps its columns and its two footer rows", function* () {
+  it("TL1: every supported size keeps its columns and its final History row", function* () {
     const model = yield* referenceModel();
     for (const { size, profile } of [
       { size: WIDE, profile: "wide" },
@@ -672,14 +679,9 @@ describe("REPL layout: the profiles this product supports", () => {
         x: 0,
         y: 1,
         width: size.columns,
-        height: size.rows - 3,
+        height: size.rows - 2,
       });
-      expect(bounds("box:guidance")).toEqual({
-        x: 0,
-        y: size.rows - 2,
-        width: size.columns,
-        height: 1,
-      });
+      expect(bounds("box:guidance")).toBeUndefined();
       expect(bounds("box:history")).toEqual({
         x: 0,
         y: size.rows - 1,
@@ -688,29 +690,28 @@ describe("REPL layout: the profiles this product supports", () => {
       });
       expect(presenter.grid.rows()[size.rows - 1]).toContain("HISTORY");
       expect(within(bounds("box:history"), observed.boundsOf("footer:history"))).toBe(true);
-      expect(within(bounds("box:draft"), observed.boundsOf("footer:input"))).toBe(true);
+      expect(bounds("box:round-bar")?.y).toBe(size.rows - 2);
+      expect(observed.boundsOf("footer:input")).toBeUndefined();
     }
 
     const presenter = yield* usePresenter(WIDE);
     const wide = yield* presenter.commit(viewOf(model, WIDE));
-    // The first composition gives the columns 36, 66 and 58 cells, dividers
-    // included, the body 33 rows and the Draft four of the centre's.
     expect(wide.regionOf("box:sidebar")).toMatchObject({
       x: 0,
       width: 36,
-      height: 33,
+      height: 34,
     });
     expect(wide.regionOf("box:transcript")).toMatchObject({
       x: 36,
       width: 54,
-      height: 33,
+      height: 34,
     });
     expect(wide.regionOf("box:inspection")).toMatchObject({
       x: 90,
       width: 70,
-      height: 33,
+      height: 34,
     });
-    expect(wide.regionOf("box:draft")?.height).toBe(4);
+    expect(wide.regionOf("box:round-bar")?.height).toBe(1);
   });
 });
 
@@ -1183,8 +1184,11 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
       IDLE,
     ).state;
     const presenter = yield* usePresenter(WIDE);
-    yield* presenter.commit(viewOf(model, WIDE, { state: selected }));
-    yield* presenter.tree.dispatch({ kind: "key", key: "Backtab" });
+    yield* presenter.commit(
+      viewOf(model, WIDE, {
+        state: { ...selected, restore: { kind: "reveal", key: "entries:heading" } },
+      }),
+    );
     yield* presenter.tree.dispatch({ kind: "key", key: "ArrowRight" });
     expect(focusedKey(presenter)).toBe("work:crumb:0");
     const entered = yield* presenter.tree.dispatch({ kind: "key", key: "Enter" });
@@ -1242,7 +1246,7 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
     expect(owned(after.keys)).toEqual(owned(before.keys));
   });
 
-  it("Q-P1: four Backtabs reach the default composer without activating a pane", function* () {
+  it("Q-P1: Backtab from New Round reaches the composer without activating a pane", function* () {
     const model = yield* entriesModel(0);
     const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
     const view = viewFor(initialState("owned"), model, live, WIDE);
@@ -1250,10 +1254,18 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
       throw view.error;
     }
     const presenter = yield* usePresenter(WIDE);
-    yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
-    expect(focusedKey(presenter)).toBe("footer:input");
+    yield* presenter.commit(
+      withWorkspace(
+        {
+          ...view.value,
+          state: { ...view.value.state, restore: { kind: "reveal", key: "draft:new" } },
+        },
+        workspaceOf(model),
+      ),
+    );
+    expect(focusedKey(presenter)).toBe("draft:new");
     const walked = yield* ring(presenter, "Backtab");
-    expect(walked.indexOf("sidekick:message")).toBe(4);
+    expect(walked.indexOf("sidekick:message")).toBeGreaterThan(0);
     expect(view.value.state.route.view).toBeUndefined();
   });
 
@@ -1419,8 +1431,8 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
       const open = yield* presenter.commit(viewOf(model, size, { state }));
       const layer = open.regionOf("box:drawer:layer");
       const exit = open.boundsOf("footer:exit");
-      const draft = open.boundsOf("footer:input");
-      if (layer === undefined || exit === undefined || draft === undefined) {
+      const identity = open.regionOf("box:identity");
+      if (layer === undefined || exit === undefined || identity === undefined) {
         throw new Error("the drawer lost its layer or footer");
       }
       const covered = before
@@ -1442,7 +1454,7 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
         }
       }
       expect(exit.y).toBeGreaterThanOrEqual(layer.y + layer.height);
-      expect(draft.y).toBeGreaterThanOrEqual(layer.y + layer.height);
+      expect(layer.y).toBeGreaterThanOrEqual(identity.y + identity.height);
     }
   });
 
@@ -1495,11 +1507,11 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
 });
 
 describe("Owned narrow guidance and pane navigation routes", () => {
-  it("UI10: the narrow readiness row stays concise across focus changes", function* () {
+  it("UI10: the narrow readiness header stays concise across focus changes", function* () {
     const model = yield* entriesModel(0);
     const presenter = yield* usePresenter(NARROW);
     const state = initialState("owned");
-    for (const key of ["footer:input", "sessions:heading", "footer:exit", "footer:history"]) {
+    for (const key of ["draft:new", "sessions:heading", "footer:exit", "footer:history"]) {
       yield* presenter.commit(
         viewOf(model, NARROW, {
           state: { ...state, restore: { kind: "reveal", key } },
@@ -1509,7 +1521,7 @@ describe("Owned narrow guidance and pane navigation routes", () => {
       yield* presenter.commit(viewOf(model, NARROW, { state, focused: focusedKey(presenter) }));
       expect(focusedKey(presenter)).toBe(key);
       const rows = presenter.grid.rows();
-      expect(rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+      expect(rows[0]).toContain("Ready for Entry 1");
       expect(rows.at(-1)).toContain("HISTORY");
     }
   });
@@ -1528,7 +1540,7 @@ describe("Owned narrow guidance and pane navigation routes", () => {
         message: "Go?",
         schema: {
           type: "object",
-          properties: { decision: { type: "string", enum: ["go"] } },
+          properties: { decision: { type: "string" } },
           required: ["decision"],
           additionalProperties: false,
         },
@@ -1566,15 +1578,18 @@ describe("Owned narrow guidance and pane navigation routes", () => {
         throw selected.error;
       }
       yield* presenter.commit(withWorkspace(selected.value, workspaceOf(model)));
-      yield* presenter.commit(view(focusedKey(presenter)));
-      const row = presenter.grid
-        .rows()
-        .find((one) => one.includes("Tab regions Alt↑↓"))
-        ?.trim();
-      expect(
-        row?.startsWith(`Entry 1 question · Enter ${action} · Esc closes · Tab regions Alt↑↓`),
-      ).toBe(true);
-      expect(row?.length ?? 999).toBeLessThanOrEqual(72);
+      expect(focusedKey(presenter)).toBe(key);
+      const current = yield* presenter.commit(view(focusedKey(presenter)));
+      const layer = current.regionOf("box:drawer:layer");
+      if (layer === undefined) {
+        throw new Error("the active question has no drawer");
+      }
+      const help = presenter.grid
+        .textIn(layer)
+        .map((row) => row.trim())
+        .join(" ");
+      expect(help).toContain(`Enter ${action} · Esc closes · Tab regions Alt↑↓`);
+      expect(presenter.grid.rows()[0]).toContain("Entry 1 question");
     }
   });
 
@@ -1586,10 +1601,15 @@ describe("Owned narrow guidance and pane navigation routes", () => {
       throw resolved.error;
     }
     const presenter = yield* usePresenter(WIDE);
-    yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
-    for (let step = 0; step < 3; step += 1) {
-      yield* presenter.tree.dispatch({ kind: "key", key: "Tab" });
-    }
+    yield* presenter.commit(
+      withWorkspace(
+        {
+          ...resolved.value,
+          state: { ...resolved.value.state, restore: { kind: "reveal", key: "sidekick:message" } },
+        },
+        workspaceOf(model),
+      ),
+    );
     expect(focusedKey(presenter)).toBe("sidekick:message");
     const walked = yield* ring(presenter, "Backtab");
     expect(walked.slice(0, 3)).toEqual(["sidekick:message", "sidekick:anchor", "tab:bindings"]);
@@ -1599,14 +1619,71 @@ describe("Owned narrow guidance and pane navigation routes", () => {
 });
 
 describe("Owned footer, History and single-field inventory", () => {
-  it("UI1/UI5: the Draft and readiness precede the last History row", function* () {
+  beforeEach(journalBeforeEach(OWNER));
+  it("keeps the full execution refusal readable from the narrow identity header", function* () {
+    // The long search path ends row five with a supplementary letter.
+    const cutoff = "\u{10400}";
+    const source = "<Nowhere />";
+    const recovery = "/try-this-component-directory";
+    const page = yield* useReplPage({
+      size: NARROW,
+      includes: [`/${"a".repeat(215)}/${"b".repeat(70)}${cutoff}continued`, recovery],
+    });
+    const scroll = "Wheel here to read the refusal";
+    yield* pasteDraft(page, source);
+    yield* page.key("Tab");
+    yield* page.until("Send focused", (one) => one.shows("> Send"));
+    yield* page.key("Enter");
+    const refusal = yield* page.until("document refused", (one) =>
+      one.shows("Cannot resolve component:"),
+    );
+    expect(refusal.rows[0]).toContain("Ready for Entry 1");
+    expect(refusal.rows[0]).toContain("[ ] Show token usage");
+    expect(refusal.shows(recovery)).toBe(false);
+    expect(refusal.rows[5]).toContain(`${scroll} · 1–4 of `);
+    expect(refusal.rows.at(-2)).toContain("> Send");
+    expect(refusal.rows.at(-1)).toContain("HISTORY");
+
+    yield* page.wheel("down", refusal.locate("Cannot resolve component:"));
+    const tail = yield* page.until("the tail of the diagnostic", (one) => one.shows(recovery));
+    const from = Number(/· (\d+)–/.exec(tail.rows[5])?.[1]);
+    expect(tail.rows[6 - from]?.trimEnd()).toBe(`/${"b".repeat(70)}${cutoff}`);
+    expect(tail.rows.at(-2)).toContain("> Send");
+    expect(tail.rows.at(-1)).toContain("HISTORY");
+    yield* page.wheel("up", tail.locate(scroll));
+    yield* page.until("the start of the refusal again", (one) =>
+      one.shows("Cannot resolve component:"),
+    );
+
+    const resized = yield* page.resize(MEDIUM);
+    expect(resized.shows(recovery)).toBe(true);
+    expect(resized.rows.at(-2)).toContain("> Send");
+    expect(resized.rows.at(-1)).toContain("HISTORY");
+    yield* page.press("Show token usage");
+    yield* page.until("the usage toggle responding", (one) => one.shows("[x] Show token usage"));
+
+    expect((yield* mountedReading(page.repl)).model.entries).toEqual([]);
+    page.repl.terminal.end();
+    yield* awaited("the command ending", () => page.repl.outcome() !== undefined);
+    const outcome = page.repl.outcome();
+    if (outcome === undefined || !outcome.ok) {
+      throw new Error("the REPL did not return its location");
+    }
+    const location = decodeLocation(outcome.value.location);
+    if (!location.ok) {
+      throw location.error;
+    }
+    expect(location.value.draft).toBe(source);
+  });
+
+  it("UI1/UI5: the round bar touches History and readiness stays in the header", function* () {
     const model = yield* entriesModel(1);
     const presenter = yield* usePresenter(NARROW);
     const observed = yield* presenter.commit(viewOf(model, NARROW));
     const exit = observed.boundsOf("footer:exit");
-    const input = observed.boundsOf("footer:input");
+    const input = observed.regionOf("box:round-bar");
     const history = observed.boundsOf("footer:history");
-    const guidance = observed.boundsOf("guidance");
+    const guidance = observed.regionOf("box:identity");
     if (
       exit === undefined ||
       input === undefined ||
@@ -1615,7 +1692,7 @@ describe("Owned footer, History and single-field inventory", () => {
     ) {
       throw new Error("the footer lost one of its surfaces");
     }
-    expect(input.y).toBeLessThan(exit.y);
+    expect(input.y + input.height).toBe(exit.y);
     expect(history.y).toBe(exit.y);
     expect(guidance.y).toBeLessThan(exit.y);
     expect(exit.y).toBe(NARROW.rows - 1);
@@ -1623,7 +1700,7 @@ describe("Owned footer, History and single-field inventory", () => {
     for (const word of ["HISTORY", "─", "[history]", "[exit]"]) {
       expect(rows[exit.y]).toContain(word);
     }
-    expect(rows[guidance.y]?.trim()).toBe("Ready for Entry 2");
+    expect(rows[guidance.y]).toContain("Ready for Entry 2");
     expect(rows.join(" ")).not.toContain("Tab regions");
     for (const checkpoint of model.checkpoints) {
       expect(rows[0]).not.toContain(checkpoint.label);
@@ -1666,7 +1743,7 @@ describe("Owned footer, History and single-field inventory", () => {
       withWorkspace(resolved.value, workspaceOf(projection.value)),
     );
     const layer = observed.regionOf("box:drawer:layer");
-    const guidance = observed.boundsOf("guidance");
+    const guidance = observed.regionOf("box:identity");
     if (layer === undefined || guidance === undefined) {
       throw new Error("no History layer or guidance");
     }
@@ -1754,6 +1831,7 @@ describe("Owned Transcript control geometry", () => {
 });
 
 describe("accepted rendered scrolling guidance", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [MEDIUM, NARROW]) {
     it(`Content and reading help fit whole at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });
@@ -1772,6 +1850,8 @@ describe("accepted rendered scrolling guidance", () => {
         `<Elicit as="answer" schema={${JSON.stringify(schema)}}>${preview}</Elicit>`,
       );
       yield* page.until("source", (one) => one.shows("</Elicit>"));
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("question waiting", (one) => one.shows("[answer]"));
       yield* page.press("[answer]");
@@ -1780,12 +1860,17 @@ describe("accepted rendered scrolling guidance", () => {
         (one) => one.shows("[submit]") && one.shows("PageUp/PageDown reads"),
       );
       yield* sleep(30);
-      const words = () =>
-        page
-          .screen()
-          .rows.map((row) => row.trim())
+      const words = () => {
+        const { rows } = page.screen();
+        const border = rows.map((row) => /─{20,}/.exec(row)).find((match) => match !== null);
+        if (border === undefined) {
+          throw new Error("question drawer has no border");
+        }
+        return rows
+          .map((row) => row.slice(border.index, border.index + border[0].length).trim())
           .join(" ")
           .replace(/\s+/g, " ");
+      };
       const wheelHelp =
         "Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.";
       expect(words()).toContain(

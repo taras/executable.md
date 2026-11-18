@@ -1,6 +1,7 @@
 import { sleep } from "effection";
 import type { Operation } from "effection";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -11,6 +12,8 @@ import { awaitedFact } from "./support/mounted-repl.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { TODO_WAKE } from "../src/repl/todo/wake.ts";
+
+const OWNER = "packages/cli/tests/repl-todo-journey.test.ts";
 
 /**
  * Whether the inert last task is the focused one, by its own row and rows.
@@ -173,6 +176,7 @@ for (const size of [
   { columns: 72, rows: 20 },
 ]) {
   describe(`Shared TODO terminal at ${size.columns}x${size.rows}`, () => {
+    beforeEach(journalBeforeEach(OWNER));
     it("creates a shared task and keeps it when switching tabs", function* () {
       const page = yield* useReplPage({ size });
       if (size.columns < 120) {
@@ -184,8 +188,11 @@ for (const size of [
       yield* page.press("TODO", { onRow: "SIDEKICK" });
       capture(page, "empty");
       page.repl.fake.script({ reply: "<Output>Reviewed task.</Output>" });
-      yield* page.until("Add task is visible", (one) => one.shows("+"));
-      yield* page.press("+");
+      yield* page.until(
+        "Add task is visible",
+        (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+      );
+      yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
       yield* page.until("task editor", (one) => one.shows("Task:"));
       const start = performance.now();
       yield* page.type("**one** `code` [label](https://example.com)");
@@ -210,8 +217,11 @@ for (const size of [
       capture(page, "sidekick-selected");
       expect(page.screen().shows("Remove task")).toBe(false);
       yield* page.press("TODO", { onRow: "SIDEKICK" });
-      yield* page.until("Add task is visible", (one) => one.shows("+"));
-      yield* page.press("+");
+      yield* page.until(
+        "Add task is visible",
+        (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+      );
+      yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
       yield* page.until("checklist editor", (one) => one.shows("Task:"));
 
       yield* page.key("Escape");
@@ -458,6 +468,7 @@ for (const size of [
 }
 
 describe("TODO human semantic actions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("adds, renames, completes, reopens, reorders and removes through mounted controls", function* () {
     const page = yield* useReplPage();
     let inputCount = 0;
@@ -465,8 +476,11 @@ describe("TODO human semantic actions", () => {
     yield* page.press("TODO", { onRow: "SIDEKICK" });
     page.repl.fake.script({ reply: "<Output>review complete</Output>", held: true });
     inputCount++;
-    yield* page.until("Add task is visible", (one) => one.shows("+"));
-    yield* page.press("+");
+    yield* page.until(
+      "Add task is visible",
+      (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+    );
+    yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
     yield* page.until("new task editor", (one) => one.shows("Task:"));
     inputCount++;
     yield* page.type("**rich** `code` [label](https://example.com)");
@@ -482,8 +496,11 @@ describe("TODO human semantic actions", () => {
     for (const text of inputs) {
       const start = performance.now();
       inputCount++;
-      yield* page.until("Add task is visible", (one) => one.shows("+"));
-      yield* page.press("+");
+      yield* page.until(
+        "Add task is visible",
+        (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+      );
+      yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
       yield* page.until("append editor", (one) => one.shows("Task:"));
       inputCount++;
       yield* page.type(text);
@@ -635,6 +652,7 @@ describe("TODO human semantic actions", () => {
 });
 
 describe("TODO background task focus", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps the surviving target and its local actions after an external prepend", function* () {
     const page = yield* useReplPage();
     yield* intoComposer(page);

@@ -1,5 +1,6 @@
 import { installTodoSource } from "../src/node-todo-source.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, suspend, until as untilResolved, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -17,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { decodeLocation } from "../src/repl/route.ts";
+import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
 import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
@@ -65,6 +66,8 @@ import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts"
 import { projectRepl } from "../src/repl/model.ts";
 import { REPL_DIRECTORY } from "../src/repl/storage.ts";
 import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
+
+const OWNER = "packages/cli/tests/repl-agent-journey.test.ts";
 
 const STORY = [
   '<Evaluate allow={["write"]}>',
@@ -166,6 +169,7 @@ const WIDE: ReplTerminalSize = { columns: 200, rows: 140 };
 const TALL: ReplTerminalSize = { columns: 200, rows: 60 };
 
 describe("J1 — the Story, from one entry to one README", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("J1: the packaged Plan is reviewed in the drawer, and its program asks, previews and writes", function* () {
@@ -334,6 +338,7 @@ describe("J1 — the Story, from one entry to one README", () => {
 });
 
 describe("C1 — the command line this REPL runs under", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("C1: the five options settle into one immutable profile", function* () {
@@ -528,6 +533,7 @@ function* selectedProfile(
 }
 
 describe("A2–A5 — the selected REPL component environment", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("A2/A5: one detached ordered selection describes vocabulary, protected names and environment", function* () {
@@ -731,6 +737,7 @@ describe("A2–A5 — the selected REPL component environment", () => {
 });
 
 describe("J3 — durable truth, and a cold process over it", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("J3: a fresh command scope reconstructs the whole Story from the Journal alone", function* () {
@@ -871,7 +878,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
     const cold = createFakeAcp();
     yield* scoped(function* (): Operation<void> {
-      const at = `${location.split("?")[0]}/${selected.key}`;
+      const at = encodeLocation({ ...routeOf(location), scopes: [selected.key] });
       const { page } = yield* beginJourney({ fake: cold, hostRoot, size: WIDE, location: at });
 
       yield* entrySettles(page, 1, "ok");
@@ -889,7 +896,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
       const transcript = page
         .screen()
-        .rows.map((row) => row.slice(page.screen().locate(DRAFT_HEADING).column))
+        .rows.map((row) => row.slice(page.screen().locate("Entries ›").column))
         .join("\n");
       expect(transcript).toContain("TWO-DONE");
       expect(transcript).not.toContain("ONE-DONE");
@@ -1016,7 +1023,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     expect(route.at).toBe("yield:root:3");
     expect(route.inspect).toBe(true);
     expect(route.surface).toBe("entries");
-    expect(route.scopes).toEqual([]);
+    expect(route.scopes).toEqual(["entry-1"]);
   });
 
   it("J3: a location this host cannot read refuses before any replay", function* () {
@@ -1061,6 +1068,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 });
 
 describe("J2 — three conversations at once, through the terminal", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("J2: complete, streaming and queued are one frame, and filtering changes only Sessions", function* () {
@@ -1158,6 +1166,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
 });
 
 describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const TYPED = "and then this one";
@@ -1212,19 +1221,19 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
 
       yield* draftText(page, TYPED);
       expect(conversationFilter(page.screen())).toBe(filtered);
-      expect(page.screen().found(TYPED, { after: "DRAFT" })).toBe(1);
+      expect(page.screen().found(TYPED, DRAFT_VALUE)).toBe(1);
       expect(childrenShown(page.screen())).toHaveLength(1);
 
       const narrow = yield* page.resize({ columns: 72, rows: 20 });
       expect(narrow.rows.length).toBe(20);
-      expect(page.screen().found(TYPED, { after: "DRAFT" })).toBe(1);
+      expect(page.screen().found(TYPED, DRAFT_VALUE)).toBe(1);
       expect(narrow.rows.filter((line) => line.trimEnd().length > 72)).toEqual([]);
       expect(narrow.shows("Entries")).toBe(true);
 
       const back = yield* page.resize(WIDE);
       expect(back.rows.length).toBe(140);
       expect(conversationFilter(back)).toBe(filtered);
-      expect(page.screen().found(TYPED, { after: "DRAFT" })).toBe(1);
+      expect(page.screen().found(TYPED, DRAFT_VALUE)).toBe(1);
       expect(childrenShown(back)).toHaveLength(1);
 
       location = yield* leave(page);
@@ -1237,7 +1246,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     chosen = standingRoute.session;
     expect(standingRoute.draft).toBe(TYPED);
     expect(standingRoute.surface).toBe("entries");
-    expect(standingRoute.scopes).toEqual([]);
+    expect(standingRoute.scopes).toEqual(["entry-1"]);
     expect(standingRoute.at).toBeUndefined();
     expect(standingRoute.inspect).toBe(false);
     expect(live.prompts).toHaveLength(3);
@@ -1286,6 +1295,7 @@ function* failing(body: () => Operation<void>): Operation<unknown> {
 }
 
 describe("X1 — how this command ends, with work still in flight", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   function* inFlight(fake: FakeAcp, hostRoot: string, waitingFor: string): Operation<ReplPage> {
@@ -1581,12 +1591,12 @@ function* beginJourney(options: {
 
 function* submitted(page: ReplPage, text: string, order: number): Operation<void> {
   yield* pasteDraft(page, text);
+  yield* page.key("Tab");
+  yield* page.until("Send focused", (frame) => frame.shows("> Send"));
   yield* page.key("Enter");
   yield* page.until(
     `the draft becoming entry ${order}`,
-    (frame) =>
-      railMark(frame, order) !== undefined &&
-      frame.found(text.trimEnd().split(/\s+/).at(-1) ?? text, DRAFT_VALUE) === 0,
+    (frame) => railMark(frame, order) !== undefined && !frame.shows("✎ draft"),
   );
 }
 

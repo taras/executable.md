@@ -1,5 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal, journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { cliCommand, cliRuntime } from "@executablemd/test-support/launch";
 import { expect } from "@executablemd/test-support/expect";
 import {
@@ -513,6 +513,7 @@ function* delegatedRepositoryWitness() {
 }
 
 describe(REPOSITORY_SUITE, () => {
+  beforeEach(journalBeforeEach(OWNER));
   it(REPOSITORY_TEST, function* () {
     if (cliRuntime() === "deno") {
       // E3's real subdirectory control and the fatal witness own separate roots.
@@ -526,6 +527,7 @@ describe(REPOSITORY_SUITE, () => {
 });
 
 describe("joined entry diagnostics", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E3/E4/E5: exact earlier outcomes coexist with a live idle entry and joined Stop cleanup", function* () {
     const cleanup = gate();
     yield* ensure(cleanup.release);

@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -7,6 +8,7 @@ import {
   intoComposer,
   typed,
   draftText,
+  draftShows,
   openHistory,
   selectPane,
   openConfigure,
@@ -40,9 +42,12 @@ import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { generateTypingHistory, typingView } from "./support/typing-history.ts";
 
+const OWNER = "packages/cli/tests/repl-sidekick-typing.test.ts";
+
 const WIDE = { columns: 160, rows: 36 };
 
 describe("1048 — prepare only admitted chat descriptions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("constructs the admitted range over all passes independently of off-screen history", function* () {
     const counts: number[] = [];
     for (const rounds of [2, 12]) {
@@ -114,6 +119,7 @@ describe("1048 — prepare only admitted chat descriptions", () => {
 });
 
 describe("1048 — selected chat preparation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("matches fresh preparation after changed source facts and keeps one geometry", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const read = yield* generateTypingHistory(page, 2, 32);
@@ -265,6 +271,7 @@ describe("1048 — selected chat preparation", () => {
 });
 
 describe("1048 — generated retained output", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("reads early, middle and tail output after resizing without consuming either draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const read = yield* generateTypingHistory(page, 2, 32, true);
@@ -317,13 +324,18 @@ describe("1048 — generated retained output", () => {
     yield* page.resize(WIDE);
     yield* page.type("!");
     yield* page.until("the saved middle Message caret", (one) => one.shows("ab!界"));
-    yield* draftText(page, "draft", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "draft");
+    yield* page.until("the editor holding the draft", (one) => draftShows(one, "draft"));
     yield* completedKey(page, "ArrowLeft");
+    yield* page.type("!");
+    yield* page.until("the middle Draft caret before History", (one) => draftShows(one, "draf!t"));
+    yield* page.key("Backspace");
+    yield* page.until("the Draft probe erased", (one) => draftShows(one, "draft"));
     yield* openHistory(page);
     yield* page.key("Escape");
     yield* page.until("History closed", (one) => !one.shows("[close]"));
     yield* page.type("!");
-    yield* page.until("the saved middle Draft caret", (one) => one.shows("draf!t"));
+    yield* page.until("the saved middle Draft caret", (one) => draftShows(one, "draf!t"));
     const after = yield* settledReading(page.repl);
     expect(after).toEqual(read);
     expect(page.repl.fake.prompts).toHaveLength(4);
@@ -374,6 +386,7 @@ describe("1048 — generated retained output", () => {
 });
 
 describe("1048 — reuse Transcript facts", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("invalidates consumed source facts while retaining only the current sequence", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const read = yield* generateTypingHistory(page, 2, 32);
@@ -633,6 +646,7 @@ describe("1048 — reuse Transcript facts", () => {
  * again — which a count of renders or a warm machine could not show.
  */
 describe("1342 — formatted bodies are kept for the frames that ask again", () => {
+  beforeEach(journalBeforeEach(OWNER));
   function spied() {
     const real = createMarkdownStore();
     const answers: { readonly source: string; readonly lines: readonly ReplMarkdownLine[] }[] = [];

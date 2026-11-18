@@ -86,11 +86,14 @@
 
 <Test name="History wheel and keyboard preserve a held Sidekick answer and reach its final outcome" timeout="120s">
   <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-held-history.md" columns={120} rows={30}>
-    <Repl.Focus.Draft />
     <Each in={[0,1,2,3,4,5,6,7,8,9,10,11]} let="index">
+      <Repl.Focus.Draft />
+      <ReplBench.Key key="Enter" />
       <Let as="source" value={index===11 ? Array.from({length:70},(_,row)=>"Bg row "+row).join("\n") : '<Let as="history'+index+'" value={'+index+'} />'} />
       <ReplBench.Type text={source} />
       <ReplBench.WaitForText text={index===11 ? "Bg row 69" : "value={"+index+"}"} />
+      <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="> Send" />
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text={"Ready for Entry "+(index+2)} />
     </Each>
@@ -117,6 +120,7 @@
     <ReplBench.WaitForText text="[submit]" present={false} />
     <ReplBench.Region name="history">
       <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="Enter closes" />
       <ReplBench.WaitForText text="1 · Entry 1 admitted" as="marker" />
       <ReplBench.Scroll delta={1} at={marker} />
       <ReplBench.WaitForText text="1 · Entry 1 admitted" present={false} />

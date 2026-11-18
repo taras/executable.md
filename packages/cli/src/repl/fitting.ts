@@ -1252,10 +1252,14 @@ export function* fitEditor(
   focused: boolean,
   store?: ReplPlainFitStore,
   classify: (text: string) => readonly ReplTokenRun[] = (text) => [{ text, token: "field-value" }],
+  mode?: "horizontal",
 ): Operation<Result<ReplEditor>> {
   const lines = caret.value.split("\n").map((text, at) => ({ key: `edit:${at}`, text }));
   // Reserve a blank cell for a caret after the last grapheme of a fitted row.
-  const fitted = yield* fitPlain(renderer, size, lines, Math.max(1, room - 1), store);
+  const fitted =
+    mode === "horizontal"
+      ? Ok(lines.map(({ key, text }) => ({ text, line: key, indent: 0 })))
+      : yield* fitPlain(renderer, size, lines, Math.max(1, room - 1), store);
   if (!fitted.ok) {
     return fitted;
   }
@@ -1273,19 +1277,28 @@ export function* fitEditor(
     let geometry = store?.heldCaret(line.text, line.indent, Math.max(1, room - 1), size);
     if (geometry === undefined) {
       const stops = boundaries(line.text);
+      // The engine caps the width of a prefix at the terminal width.
       const measured = yield* widths(
         renderer,
         size,
-        stops.map((at) => line.text.slice(0, at)),
+        stops.map((at, index) =>
+          mode === "horizontal"
+            ? line.text.slice(stops[index - 1] ?? 0, at)
+            : line.text.slice(0, at),
+        ),
       );
       if (!measured.ok) {
         return measured;
       }
+      let column = line.indent;
       geometry = {
-        stops: stops.map((offset, index) => ({
-          offset,
-          column: line.indent + measured.value[index],
-        })),
+        stops: stops.map((offset, index) => {
+          column =
+            mode === "horizontal"
+              ? column + measured.value[index]
+              : line.indent + measured.value[index];
+          return { offset, column };
+        }),
       };
     }
     retained.push({ text: line.text, indent: line.indent, row: geometry });
@@ -1318,6 +1331,42 @@ export function* fitEditor(
         ),
       ]),
     };
+  }
+  if (mode === "horizontal") {
+    const activeStops = rows[active]?.stops ?? [];
+    const caretIndex = activeStops.findIndex((stop) => stop.offset === caret.offset);
+    const activeColumn = activeStops[caretIndex]?.column ?? 0;
+    const caretEnd = activeStops[caretIndex + 1]?.column ?? activeColumn + 1;
+    const left = Math.max(0, Math.max(activeColumn + 1, caretEnd) - room);
+    for (const [at, one] of display.entries()) {
+      const stops = rows[at].stops;
+      const first = stops[0]?.offset ?? 0;
+      const last = stops.at(-1);
+      const start = stops.find((stop) => stop.column >= left);
+      let end: (typeof stops)[number] | undefined;
+      for (const stop of stops) {
+        if (stop.column > left + room) {
+          break;
+        }
+        end = stop;
+      }
+      if (start === undefined || end === undefined || end.offset < start.offset) {
+        display[at] = { text: "", runs: [] };
+        continue;
+      }
+      const from = start.offset - first;
+      const to =
+        end.offset -
+        first +
+        (focused &&
+        at === active &&
+        end === last &&
+        end.column < left + room &&
+        end.offset === caret.offset
+          ? 1
+          : 0);
+      display[at] = { text: one.text.slice(from, to), runs: slicedRuns(one.runs, from, to) };
+    }
   }
   return Ok({ caret, rows, display, active });
 }

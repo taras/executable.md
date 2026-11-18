@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep } from "effection";
 import type { Operation } from "effection";
@@ -6,6 +7,8 @@ import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenReading } from "./support/repl-page.ts";
 import { draftHolds, intoComposer, intoDraft, paneLines } from "./support/screen-journeys.ts";
 import { generateTypingHistory } from "./support/typing-history.ts";
+
+const OWNER = "packages/cli/tests/repl-wheel-burst.test.ts";
 
 const SIZE = { columns: 160, rows: 36 };
 
@@ -82,6 +85,7 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("wheel bursts in one input chunk", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Sidekick chat reaches the sequential endpoint and keeps follow", function* () {
     const page = yield* useReplPage({ size: SIZE });
     yield* intoComposer(page);
@@ -140,7 +144,7 @@ describe("wheel bursts in one input chunk", () => {
     // Each dotted segment is one probed path segment, so each stays within a file name.
     const name = ["Unknown", "Missing", "Absent"].map((at) => at + "Component".repeat(27));
     const request = `<${name.join(".")} />`;
-    const footer = "! this entry cannot run here: Cannot resolve component:";
+    const refusal = "! this entry cannot run here: Cannot resolve component:";
     const cell = { column: 140, row: 13 };
 
     function* endpoints(move: typeof burst) {
@@ -155,13 +159,13 @@ describe("wheel bursts in one input chunk", () => {
           draftHolds(one, "/>"),
         );
         const before = tailLines(drafted);
-        yield* page.key("Enter");
-        const refused = yield* page.until("the staged refusal", (one) => one.shows(footer));
+        yield* page.press("Send", { onRow: "✎ draft" });
+        const refused = yield* page.until("the staged refusal", (one) => one.shows(refusal));
         const start = tailLines(refused);
-        expect(start.length + 3).toBeLessThan(before.length);
+        expect(start.length + 2).toBeLessThan(before.length);
 
         yield* move(page, "up", cell, 2);
-        expect(page.screen().shows(footer)).toBe(false);
+        expect(page.screen().shows(refusal)).toBe(false);
         const end = tailLines(page.screen());
         expect(end.length).toBeGreaterThan(start.length);
         expect(end[0]).not.toBe(start[0]);

@@ -11,7 +11,8 @@ import { runXmd } from "../src/cli.ts";
 import { Elicitation } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
 import { unsupportedWorkflowHost } from "../src/workflow.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile, exists, rm, ensureDir } from "@effectionx/fs";
 import { API, cwd, Permissions } from "@executablemd/runtime";
@@ -34,6 +35,8 @@ import {
 } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { pasteDraft, sendMessage } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-project-recovery.test.ts";
 
 function columnOf(cells: readonly string[], label: string): number {
   const offset = cells.join("").indexOf(label);
@@ -86,6 +89,8 @@ function* saved(sidekick = false) {
       yield* sendMessage(page, "start the held entry");
     } else {
       yield* pasteDraft(page, source);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
     }
     yield* waiting.operation;
@@ -103,6 +108,7 @@ function* saved(sidekick = false) {
 }
 
 describe("1113: project placement before live recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: records the strict pair and needs no answer at the original root or an alias", function* () {
     const held = yield* saved();
     const reopened = yield* held.host.repository.open(held.id);
@@ -409,7 +415,18 @@ describe("1113: project placement before live recovery", () => {
       expect(model.ok && model.value.entries[0]?.terminal?.output).toBe(held.project);
       expect(yield* readTextFile(join(held.project, "acknowledged"))).toBe("external edit");
       expect(mountSources).toEqual([join(held.project, "mapped")]);
-      screen.terminal.feed('<Where /><File path="new-work">denied</File>\r');
+      const shows = (text: string) =>
+        screen.terminal.screen?.rows().some((row) => row.includes(text)) === true;
+      yield* awaited("the next entry becoming ready", () => shows("Ready for Entry 2"));
+      screen.terminal.feed("\x074");
+      yield* awaited("New Round focused", () => shows("> + New Round"));
+      screen.terminal.feed("\r");
+      yield* awaited("Round editor focused", () => shows("> Round 2"));
+      screen.terminal.feed('<Where /><File path="new-work">denied</File>');
+      yield* awaited("the successor source in the editor", () => shows("denied</File>"));
+      screen.terminal.feed("\t");
+      yield* awaited("Round Send focused", () => shows("> Send"));
+      screen.terminal.feed("\r");
       yield* awaitedFact("new entry in A", function* () {
         const reopened = yield* held.host.repository.open(held.id);
         const model = projectRepl(yield* reopened.stream.readAll());
@@ -530,6 +547,7 @@ describe("1113: project placement before live recovery", () => {
 });
 
 describe("1113: unavailable access and conflicting placement", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: diagnoses an access refusal without offering another path", function* () {
     const directory = yield* useTemporary("1113-inaccessible-");
     let accessed = "";

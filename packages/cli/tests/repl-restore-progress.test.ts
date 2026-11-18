@@ -2,7 +2,8 @@ import process from "node:process";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { Agent, AgentProviders } from "@executablemd/agent/api";
 import { API } from "@executablemd/runtime";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, race, scoped, sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -17,6 +18,8 @@ import { recordingTerminal, useMountedHost } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
 import { invalidRestoreEntries, savedRestoreFixture } from "./support/restore-progress.ts";
 import type { RetainedRestoreFixture } from "./support/restore-progress.ts";
+
+const OWNER = "packages/cli/tests/repl-restore-progress.test.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const MEDIUM = { columns: 120, rows: 30 };
@@ -221,6 +224,7 @@ function settled(
 }
 
 describe("#1037 cold restore progress", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("draws projected rounds, resizes, then waits for Sidekick before opening the original view", function* () {
     const held = yield* savedRestoreFixture(yield* useMountedHost(), 155);
     const rounds = gate();
@@ -263,10 +267,14 @@ describe("#1037 cold restore progress", () => {
     yield* shown(terminal, "Saved round 155 witness.");
     yield* shown(terminal, "Saved Sidekick reply witness.");
     yield* shown(terminal, "Restored 155 rounds in ");
+    terminal.feed("\x074");
+    yield* shown(terminal, "> + New Round");
+    terminal.feed("\r");
+    yield* shown(terminal, "> Round 156");
     terminal.feed("reopened-draft");
     const live = yield* shown(terminal, "reopened-draft");
     const draft = live.map((row) => row.slice(36, 90));
-    const heading = draft.findIndex((row) => row.includes("DRAFT"));
+    const heading = draft.findIndex((row) => row.includes("· draft"));
     expect(heading).toBeGreaterThanOrEqual(0);
     expect(draft.slice(heading + 1).some((row) => row.includes("reopened-draft"))).toBe(true);
     expect(live.some((row) => row.slice(90).includes("reopened-draft"))).toBe(false);

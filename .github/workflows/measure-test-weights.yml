@@ -36,6 +36,8 @@ jobs:
         runtime: [deno, node, bun]
     runs-on: ubuntu-latest
     timeout-minutes: 165
+    env:
+      XMD_TEST_ARTIFACTS: ${{ github.workspace }}/.xmd/test-artifacts
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -93,6 +95,15 @@ jobs:
           name: test-weights-${{ matrix.runtime }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/measurements/test-weights-${{ matrix.runtime }}.json
           if-no-files-found: warn
+
+      - name: Upload the ${{ matrix.runtime }} failure journals
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: measure-test-journals-${{ matrix.runtime }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.XMD_TEST_ARTIFACTS }}
+          if-no-files-found: ignore
+          include-hidden-files: true
 
   # Runs only when every runtime's job succeeded: a failed, cancelled or
   # timed-out runtime skips it, so no `test-weights` artifact exists for a run

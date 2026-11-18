@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exists, writeTextFile } from "@effectionx/fs";
@@ -15,9 +16,12 @@ import { useMountedHost } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import { awaitedFact, mountedReading } from "./support/mounted-repl.ts";
-import { intoComposer, pasteDraft, sidekickIdle } from "./support/screen-journeys.ts";
+import { intoComposer, intoDraft, pasteDraft, sidekickIdle } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-exec-output.test.ts";
 
 describe("E3 retained command output", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("retains captured control bytes in output, bindings, and command records", function* () {
     const received = "PROBE\x1b[2JTAIL\rEND";
     yield* API.Process.around({
@@ -58,13 +62,14 @@ describe("E3 retained command output", () => {
 
 function* submit(page: ReplPage, source: string, order = 1): Operation<void> {
   yield* pasteDraft(page, source);
-  yield* page.press("[send]", { onRow: " DRAFT" });
+  yield* page.press("Send", { onRow: "✎ draft" });
   yield* page.until(`entry ${order} admitted`, (one) =>
-    ["●", "✓", "×"].some((status) => one.shows(`${order} ${status}`)),
+    ["●", "⠋", "✓", "×"].some((status) => one.shows(`${order} ${status}`)),
   );
 }
 
 describe("REPL foreground command presentation E1", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E1: contains both real child streams in the producing entry before exit", function* () {
     const directory = yield* useTempDirectory("repl-output-");
     const release = join(directory, "release");
@@ -100,8 +105,10 @@ describe("REPL foreground command presentation E1", () => {
     );
     yield* awaitedFact("the child holding after both writes", () => exists(ready));
     expect(yield* exists(release)).toBe(false);
-    yield* page.type("unsent entry draft");
+    yield* page.until("the admitted editor closes", (one) => !one.shows("✎ draft"));
+    yield* pasteDraft(page, "unsent entry draft");
     yield* page.until("the unsent draft", (one) => one.shows("unsent entry draft"));
+    yield* page.type("\x073");
     const during = yield* page.until(
       "both command channels inside the owning reading",
       (one) =>
@@ -111,10 +118,14 @@ describe("REPL foreground command presentation E1", () => {
         one.shows("Command stderr"),
     );
     expect(leaks).toEqual([]);
-    expect(during.shows("unsent entry draft")).toBe(true);
+    expect(during.shows("unsent entry draft")).toBe(false);
     expect(during.shows("No messages yet")).toBe(true);
+    yield* intoDraft(page);
     yield* page.type(" still focused");
-    yield* page.until("the draft retaining focus", (one) => one.shows("still focused"));
+    yield* page.until("the draft retaining focus", (one) =>
+      one.shows("unsent entry draft still focused"),
+    );
+    yield* page.type("\x073");
     yield* writeTextFile(release, "release");
     yield* page.until("entry 1 settling", (one) => one.shows("1 ✓"));
     expect(page.screen().shows("live-stdout")).toBe(true);
@@ -128,6 +139,7 @@ describe("REPL foreground command presentation E1", () => {
 });
 
 describe("REPL command routing, containment and history E2–E5", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E2: retains bound, captured, and silent command results", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 52 } });
     yield* submit(
@@ -208,15 +220,14 @@ describe("REPL command routing, containment and history E2–E5", () => {
       page,
       '```sh exec\ncontrolled-output\n```\n\n```sh exec as="captured"\ncontrolled-bound\n```\n{captured.stdout}',
     );
-    yield* page.until(
-      "the admitted draft clearing",
-      (one) => one.found("{captured.stdout}", { after: " DRAFT" }) === 0,
-    );
-    yield* page.type("draft stays");
+    yield* page.until("the admitted draft clearing", (one) => !one.shows("✎ draft"));
+    yield* pasteDraft(page, "draft stays");
     yield* page.until("the preserved draft", (one) => one.shows("draft stays"));
     yield* intoComposer(page);
     yield* page.type("message stays");
     yield* page.until("the preserved message", (one) => one.shows("message stays"));
+    yield* page.type("\x073");
+    yield* intoComposer(page);
     const paneColumn = page.screen().locate("SIDEKICK").column;
     const neighbor = page.screen().rows.map((row) => row.slice(paneColumn));
     start.resolve();
@@ -229,16 +240,19 @@ describe("REPL command routing, containment and history E2–E5", () => {
     expect(shown.shows("\\x0d\\x09")).toBe(true);
     expect(shown.shows("\\x07")).toBe(true);
     expect(shown.shows("\\x9b")).toBe(true);
-    expect(shown.shows("draft stays")).toBe(true);
+    expect(shown.shows("draft stays")).toBe(false);
     expect(shown.rows.map((row) => row.slice(paneColumn))).toEqual(neighbor);
     yield* page.type(" focused");
     yield* page.until("the message retaining focus", (one) => one.shows("message stays focused"));
     yield* page.resize({ columns: 72, rows: 24 });
     yield* page.resize({ columns: 160, rows: 44 });
+    yield* intoDraft(page);
     yield* page.until(
       "the restored drafts",
       (one) => one.shows("draft stays") && one.shows("message stays focused"),
     );
+    yield* page.type("\x073");
+    yield* intoComposer(page);
     // Wheel movement reads the whole fitted line without moving the composer.
     const at = page.screen().locate("interleaved-stderr");
     let tail = false;
@@ -426,7 +440,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
     yield* page.until("cleanup displayed after root Close", (one) =>
       one.shows("cleanup-before-history"),
     );
-    yield* page.type("entry draft remains");
+    yield* pasteDraft(page, "entry draft remains");
     yield* page.until("the entry draft", (one) => one.shows("entry draft remains"));
     yield* page.press("[history]");
     yield* page.until("the history checkpoints", (one) => one.shows("Entry 1 admitted"));
@@ -434,6 +448,8 @@ describe("REPL command routing, containment and history E2–E5", () => {
     yield* page.until("the frozen earlier entry", (one) => one.shows("[live]"));
     yield* page.press("[close]");
     yield* page.until("the checkpoint drawer closing", (one) => !one.shows("[close]"));
+    yield* page.type("\x073");
+    yield* page.until("the frozen reading", (one) => one.shows("Entry 1") && !one.shows("✎ draft"));
     page.repl.fake.script({ reply: "<Output>background-answer</Output>" });
     yield* intoComposer(page);
     yield* page.type("background-request");
@@ -455,7 +471,10 @@ describe("REPL command routing, containment and history E2–E5", () => {
     );
     expect(frozen.shows("[live]")).toBe(true);
     expect(frozen.shows("Entry 1")).toBe(true);
-    expect(frozen.shows("entry draft remains")).toBe(true);
+    yield* intoDraft(page);
+    expect(page.screen().shows("entry draft remains")).toBe(true);
+    yield* page.type("\x073");
+    yield* page.until("the retained reading resumes", (one) => !one.shows("✎ draft"));
     expect(frozen.shows("cleanup-after-history")).toBe(false);
     expect(frozen.shows("Command stderr")).toBe(false);
     yield* page.press("[live]");

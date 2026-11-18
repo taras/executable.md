@@ -12,21 +12,25 @@
  * actually draws; nothing here asks the command where it put something.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenScope } from "./support/repl-page.ts";
 import { awaited } from "./support/mounted-repl.ts";
-import { intoDraft } from "./support/screen-journeys.ts";
+import { draftShows, intoDraft } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-page.test.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
 const BELOW = { columns: 60, rows: 15 };
 
 /** The Draft's own heading, which its Send shares a row with. */
-const DRAFT = " DRAFT";
+const DRAFT = "· draft";
+const ROUND_BAR = { onRow: "✎ draft" };
 
 /** The Sidekick tab, which its own Send is drawn below and right of. */
 const SIDEKICK = "SIDEKICK";
@@ -67,62 +71,85 @@ function* typed(page: ReplPage, text: string): Operation<void> {
   yield* page.until(`the screen showing ${JSON.stringify(text)}`, (one) => one.shows(text));
 }
 
-describe("REPL page — two Sends, told apart by what is drawn beside them", () => {
-  it("resolves each Send within its scope and refuses an ambiguous Send", function* () {
+describe("REPL page — Send and its visible scope", () => {
+  beforeEach(journalBeforeEach(OWNER));
+  it("keeps one outlined editor and its caret while narrow Send hides the heading", function* () {
+    const page = yield* useReplPage({ size: NARROW });
+    yield* intoDraft(page);
+    const opened = page.screen();
+    expect(draftShows(opened, "Executable Markdown")).toBe(true);
+    const source = `${"a".repeat(85)}𐐀tail`;
+    yield* page.type(source);
+    yield* page.until("the tail within the editor", (one) => draftShows(one, "𐐀tail"));
+    yield* page.key("ArrowLeft");
+    yield* page.key("Tab");
+    const send = yield* page.until("narrow Send focused", (one) => one.shows("> Send"));
+    expect(send.shows("· draft")).toBe(false);
+    expect(send.shows("Enter adds a line")).toBe(false);
+    if (!draftShows(send, "𐐀tail")) {
+      throw new Error(page.describe());
+    }
+    yield* page.key("Backtab");
+    yield* page.until("heading and guidance restored", (one) => one.shows("> Round 1 · draft"));
+    yield* page.key("Tab");
+    yield* page.until("Send focused again", (one) => one.shows("> Send"));
+    const wide = yield* page.resize(WIDE);
+    expect(wide.shows("Round 1 · draft")).toBe(true);
+    const narrow = yield* page.resize(NARROW);
+    expect(narrow.shows("· draft")).toBe(false);
+    yield* page.press("𐐀tail");
+    yield* page.until("pointer refocused the editor", (one) => one.shows("> Round 1 · draft"));
+    yield* page.type("X");
+    yield* page.until("the same caret was used", (one) => draftShows(one, "𐐀taiXl"));
+  });
+
+  it("opens by pointer and moves focus from the editor directly to Send", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* typed(page, "unsent Message");
+    yield* page.press("+ New Round");
+    const opened = yield* page.until("focused Round editor", (one) =>
+      one.shows("> Round 1 · draft"),
+    );
+    expect(opened.found("Send", ROUND_BAR)).toBe(1);
+    expect(opened.found("[send]", SIDEKICK_SEND)).toBe(1);
 
-    // The screen really does draw this label twice, which is what makes the
-    // scope necessary rather than decorative.
-    const shown = page.screen();
-    expect(shown.occurrences("[send]")).toBe(2);
-    expect(shown.found("[send]", { onRow: DRAFT })).toBe(1);
-    expect(shown.found("[send]", SIDEKICK_SEND)).toBe(1);
+    yield* tab(page);
+    yield* page.until("focused Send", (one) => one.shows("> Send"));
+    yield* page.key("Enter");
+    yield* page.until("empty Send leaving the editor open", (one) => one.shows("Round 1 · draft"));
+    yield* page.key("Backtab");
+    yield* typed(page, "first line");
+    yield* page.key("Enter");
+    yield* typed(page, "second line");
+    const draft = page.screen();
+    expect(draft.locate("second line").row).toBe(draft.locate("first line").row + 1);
+    expect(draft.shows("1 ✓")).toBe(false);
 
-    // Unscoped, the locator refuses rather than taking the first of the two.
-    const ambiguous = yield* refusal(page.press("[send]"));
-    expect(ambiguous).toContain("is shown 2 times in the whole screen");
-
-    // The composer begins between the Sidekick and Bindings tab labels.
-    expect(shown.found(COMPOSER, SIDEKICK_SEND)).toBe(1);
-    expect(shown.found(COMPOSER, { rightOf: "BINDINGS" })).toBe(0);
-    expect(shown.occurrences(COMPOSER)).toBe(1);
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until("the entry settling", (one) => one.shows("1 ✓"));
+    expect(page.screen().shows("unsent Message")).toBe(true);
   });
 
   it("survives content that echoes a control's label, and refuses one never drawn", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
-
-    // A draft that quotes the control's own label. The echo is drawn on the
-    // Draft's value rows, below its heading, so the screen now shows the label
-    // three times and an unscoped press is refused with every cell named.
-    yield* page.type("[send]");
-    // Waited for by the count, because the label this types is already drawn
-    // twice as a control: showing it is not evidence the Draft took it.
-    const echoing = yield* page.until(
-      "the Draft holding the label it quoted",
-      (one) => one.occurrences("[send]") === 3,
-    );
-    const ambiguous = yield* refusal(page.press("[send]"));
+    yield* typed(page, "Send appears in this draft");
+    const ambiguous = yield* refusal(page.press("Send"));
     expect(ambiguous).toContain("is shown 3 times in the whole screen");
 
-    // Both scopes still resolve, because each names a row the echo is not on:
-    // the heading row carries the Draft's own control, and the echo sits under
-    // it rather than beside it.
-    expect(echoing.found("[send]", { onRow: DRAFT })).toBe(1);
-    expect(echoing.found("[send]", SIDEKICK_SEND)).toBe(1);
+    expect(page.screen().found("Send", ROUND_BAR)).toBe(1);
+    yield* page.press("Send", ROUND_BAR);
+    yield* page.until("the echoed draft being submitted", (one) => one.shows("1 ✓"));
 
-    // And the scoped press still reaches the control rather than the echo.
-    yield* page.press("[send]", { onRow: DRAFT });
-    yield* page.until("the echoed draft being submitted", (one) => one.shows("1 \u2713"));
-
-    // A label this product never draws is refused by name, with the rows read.
-    const absent = yield* refusal(page.press("[submit]", { onRow: DRAFT }));
+    const absent = yield* refusal(page.press("[submit]"));
     expect(absent).toContain('"[submit]" is shown 0 times');
     expect(absent).toContain("rows=");
   });
 });
 
 describe("REPL page — resize, a modal, and writes that never land", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps the draft across every size and refuses a pane the size removed", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
@@ -131,14 +158,15 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     // Narrow routes one surface: no tab row, no composer, one Send.
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("keep this draft")).toBe(true);
-    expect(narrow.occurrences("[send]")).toBe(1);
+    expect(narrow.found("Send", ROUND_BAR)).toBe(1);
+    expect(narrow.locate("HISTORY").row).toBe(narrow.locate("Send", ROUND_BAR).row + 1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(narrow.shows(COMPOSER)).toBe(false);
     // The scope that named the Sidekick's Send is refused here, saying which
     // visible text it could not find rather than pressing the Draft's instead.
     const gone = yield* refusal(page.press("[send]", SIDEKICK_SEND));
     expect(gone).toContain(`exactly one row showing ${JSON.stringify(SIDEKICK)}`);
-    expect(narrow.found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(narrow.found("Send", ROUND_BAR)).toBe(1);
 
     // Below the minimum the screen is its own refusal and offers nothing.
     const refused = yield* page.resize(BELOW);
@@ -149,7 +177,7 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     const recovered = yield* page.resize(WIDE);
     expect(recovered.shows("keep this draft")).toBe(true);
     expect(recovered.found("keep this draft", { after: DRAFT })).toBe(1);
-    expect(recovered.occurrences("[send]")).toBe(2);
+    expect(recovered.occurrences("[send]")).toBe(1);
   });
 
   it("publishes no reading for a write that is held, and resumes when it lands", function* () {
@@ -174,6 +202,7 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
 });
 
 describe("REPL page — a column is a terminal cell, not a string offset", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("locates a label after a wide glyph at the cell it is really drawn in", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
@@ -194,9 +223,9 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
 
     // The Draft's own Send, on a row the glyphs are not on, is unmoved and
     // still submits what was typed.
-    const draftSend = reading.locate("[send]", { onRow: DRAFT });
-    expect(cellOf(page, "[send]").filter((one) => one.row === draftSend.row)).toEqual([draftSend]);
-    yield* page.press("[send]", { onRow: DRAFT });
+    const draftSend = reading.locate("Send", ROUND_BAR);
+    expect(cellOf(page, "Send").filter((one) => one.row === draftSend.row)).toEqual([draftSend]);
+    yield* page.press("Send", ROUND_BAR);
     yield* page.until("the wide entry settling", (one) => one.shows("1 \u2713"));
   });
 
@@ -210,8 +239,8 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
     // and still excludes the Draft's.
     const reading = page.screen();
     expect(reading.found("[send]", SIDEKICK_SEND)).toBe(1);
-    expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
-    expect(reading.occurrences("[send]")).toBe(2);
+    expect(reading.found("Send", ROUND_BAR)).toBe(1);
+    expect(reading.occurrences("[send]")).toBe(1);
 
     // And the glyphs themselves are read where they are drawn: the first is on
     // the Draft's value row, two cells wide, with nothing of it left behind.
@@ -222,7 +251,7 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
   });
 });
 
-const DRAFT_FOCUS = "> DRAFT";
+const DRAFT_FOCUS = "> Round";
 
 /** What a question form asks for, so its second field is a real text field. */
 const REVIEW = {
@@ -264,6 +293,7 @@ function* asked(page: ReplPage, text: string, shown: string): Operation<void> {
 }
 
 describe("REPL page — reaching a field the claim names, by keyboard", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("puts a person's own entry in the Draft after a Sidekick exchange", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<Output>AUTHORED</Output>\n" });
@@ -271,10 +301,7 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
 
     expect(page.screen().shows(DRAFT_FOCUS)).toBe(false);
 
-    // Message -> History -> Transcript -> Selected work -> Draft.
-    for (let press = 0; press < 4; press += 1) {
-      yield* tab(page);
-    }
+    yield* intoDraft(page);
     expect(page.screen().shows(DRAFT_FOCUS)).toBe(true);
 
     yield* typed(page, "<Output>the first entry</Output>");
@@ -282,6 +309,7 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
     expect(drafted.found("the first entry", { after: DRAFT })).toBe(1);
     expect(drafted.found("the first entry", SIDEKICK_SEND)).toBe(0);
 
+    yield* tab(page);
     yield* page.key("Enter");
     yield* page.until("entry 1 settling", (one) => one.shows("1 ✓"));
     expect(page.screen().shows("the first entry")).toBe(true);

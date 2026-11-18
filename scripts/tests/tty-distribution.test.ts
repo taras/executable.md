@@ -174,7 +174,7 @@ describe("the prepared terminal runtime in the canonical host binary", () => {
     yield* focusPtyDraft(first, 60_000);
     yield* first.type(`${SHORT}\n\n${LONG}`);
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
     yield* settledEntry(first, 1, "ok", 60_000);
     yield* showing(first, "01fda4", 60_000);
     yield* click(first, "[exit]");

@@ -430,7 +430,20 @@ function* showing(pty: Pty, what: string, within: number): Operation<void> {
 /** Move to Draft and wait for its focus cue before sending entry text. */
 export function* focusPtyDraft(pty: Pty, within: number): Operation<void> {
   yield* pty.type("\x074");
-  yield* showing(pty, "> DRAFT", within);
+  const deadline = Date.now() + within;
+  while (Date.now() <= deadline) {
+    const screen = yield* pty.shows();
+    if (screen.some((row) => row.includes("> Round"))) {
+      return;
+    }
+    if (screen.some((row) => row.includes("> + New Round"))) {
+      yield* pty.type("\r");
+      yield* showing(pty, "> Round", within);
+      return;
+    }
+    yield* sleep(150);
+  }
+  throw new Error("The Draft shortcut did not reach New Round or the editor.");
 }
 
 /**

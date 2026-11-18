@@ -19,7 +19,8 @@
  * because what most of them assert is what a *second* open of one history does.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand } from "@executablemd/test-support/launch";
 import {
@@ -80,6 +81,8 @@ import {
 import type { ReplPlacementRecord } from "../src/repl/repositories/placement-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
 import { repositorySlot, worktreeSlot } from "@executablemd/git/deno";
+
+const OWNER = "packages/cli/tests/retained-repository-selection.test.ts";
 
 interface Fixture {
   /** The scenario's own directory: source repository, managed root and HOME. */
@@ -1191,6 +1194,7 @@ function* slotBytes(path: string): Operation<unknown> {
 }
 
 describe("1113: repositories use the selected project and configured managed root", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("acquires, reads, reopens and reuses saved source with different repository inputs", function* () {
     const fixture = yield* useFixture();
     const chapter = yield* readGuideChapter("Entries");

@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { Elicitation, INLINE_SOURCE_PATH } from "@executablemd/core";
@@ -27,7 +28,9 @@ import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { awaited, useMountedHost } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
-import { DRAFT_VALUE, pasteDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
+import { pasteDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-paged-history.test.ts";
 
 function admission(content: string): DurableEvent {
   return {
@@ -77,6 +80,7 @@ function* useWriter(): Operation<void> {
 }
 
 describe("Paged REPL history", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("matches the whole projection at each position and finds older binding publishers", function* () {
     const path = join(yield* useTempDirectory("xmd-pages-"), "entries.jsonl");
     const records: DurableEvent[] = [
@@ -280,13 +284,18 @@ describe("Paged REPL history", () => {
       page,
       '<Elicit schema={{type:"object",properties:{answer:{type:"string",enum:["continue"]}},required:["answer"],additionalProperties:false}} as="answer">Hold for navigation.</Elicit>',
     );
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* waiting.operation;
     yield* page.until(
       "the running third entry with its submitted Draft cleared",
-      (screen) =>
-        screen.shows("Entry 3 running") && screen.found("Hold for navigation.", DRAFT_VALUE) === 0,
+      (screen) => screen.shows("Entry 3 running") && !screen.shows("✎ draft"),
     );
+    yield* page.press("Entries", { onRow: "Entries" });
+    yield* page.until("the Entries catalog", (screen) => screen.shows("[close]"));
+    yield* page.press("entry-1");
+    yield* page.until("the first entry selected", (screen) => screen.shows("Entries › Entry 1"));
     yield* page.press("BINDINGS");
     yield* page.until("the first entry Input", (screen) => screen.shows("entry-1 Input"));
     yield* page.press("Output", SIDEKICK_PANE);
