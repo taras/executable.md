@@ -69,7 +69,8 @@ export function* publicRoots(directory: string, includes: string[]) {
   let ordinal = 0;
   function run(source: string, session = "original-haiku", selectedIncludes = includes) {
     return scoped(function* () {
-      const path = join(directory, "root-" + ordinal++ + ".md");
+      const invocation = ordinal++;
+      const path = join(directory, "root-" + invocation + ".md");
       yield* writeTextFile(path, source);
       const stream = new InMemoryStream();
       const result = yield* scoped(function* () {
@@ -186,10 +187,10 @@ export function* publicRoots(directory: string, includes: string[]) {
           }
         }
       }
-      const journal = join(directory, "root-" + (ordinal - 1) + ".jsonl");
+      const journal = join(directory, "root-" + invocation + ".jsonl");
       yield* writeTextFile(journal, stream.snapshot().map(serializeDurableEvent).join(""));
       journals.push(journal);
-      const settlement = join(directory, "root-" + (ordinal - 1) + "-settlement.json");
+      const settlement = join(directory, "root-" + invocation + "-settlement.json");
       yield* writeTextFile(
         settlement,
         JSON.stringify({

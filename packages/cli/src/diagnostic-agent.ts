@@ -51,7 +51,6 @@ export function diagnosticAgent(
       ...dependencies,
       coordinator: undefined,
       routeStore: undefined,
-      executableObserver: undefined,
       advertiseNativeLaunch: [],
       advertiseClientNativeAttachment: [],
       adapterBuild(agent) {

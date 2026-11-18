@@ -38,6 +38,8 @@ The workflow enters the prepared checkout and artifact directory through absolut
 `Dir` paths. Enable `--allow-absolute` for these runs; the flag retains existing
 read/write restrictions.
 
+For an ordinary ticket, pass `--props-max-steps 1` to finish one role call and inspect its next gate. Each step joins the role, its settlement and continuation publication before returning. Omitting the limit preserves the normal run. An explicit `maxSteps` on a foundation/migration launch holds before the foundation; that route does not expose this Ticket step boundary.
+
 ## Select role providers and budgets
 
 The launch task requires `providers` for all three original roles and explicit
@@ -53,11 +55,19 @@ work, select:
 }
 ```
 
-Planner and Implementor can independently select `claude` instead. The fixed
-profiles below determine model and effort; provider selection never substitutes
-another provider when one refuses. Architect uses `codex`. Missing or invalid
-allocation or budget fields hold before paid work. The resolved Ticket manifest
-retains the selected providers and all three budgets through continuation.
+Planner and Implementor can independently select `claude` instead. Architect uses `codex`. Omit `implementationModel` to keep the default profile in Responsibilities and models. To select a different Implementor model, set `implementationModel` to an exact model ID advertised by the selected provider. For example:
+
+```json
+{
+  "providers": {"architect":"codex","planner":"codex","implementor":"claude"},
+  "implementationModel": "sonnet",
+  "maxCorrections": 3,
+  "maxApiRepairs": 3,
+  "maxResponseCorrections": 0
+}
+```
+
+The explicit model applies only to the Implementor. It preserves that provider's existing effort policy and all other role profiles. Missing or invalid allocation or budget fields hold before paid work. Session verifies the provider's advertised model and effort before prompting. A refused or unavailable selection never substitutes another model, provider or conversation. The resolved Ticket manifest retains the model selection, role providers and all three budgets through continuation and correction.
 
 `maxCorrections` bounds source corrections and `maxApiRepairs` bounds
 consumer-driven API repairs, each from zero through ten. `maxResponseCorrections`
@@ -197,7 +207,7 @@ Session resolution retains its existing provider setup behavior.
 
 This candidate writes `phase-session.v2` receipts. Older receipts refuse without
 changes; they are not migrated. Existing tickets keep their pinned workflow and
-original receipts.
+original receipts. An explicitly prepared model amendment uses a new pinned workflow source only after the prior host entry has joined. It preserves the saved Ticket source and identity receipts. It changes no active entry's includes or running role.
 
 Ordinary Tickets and API foundation/migration work share their original identity
 directory across attempts. For standalone `phase.md` requests, retain
@@ -513,6 +523,8 @@ raw reply, result, status and acceptance receipt beneath the request's attempt.
 Source and role checks run before a prompt. Reusing an occupied attempt refuses;
 inspect its saved effects before selecting another attempt.
 
+A standalone role request can likewise supply `implementationModel`; it applies only when that request runs the Implementor. Omission keeps the default. Response-format corrections reuse the same selected model and original conversation.
+
 Set `maxResponseCorrections` to zero to validate the reply without another model
 prompt. A valid reply saves its canonical result. A rejected reply saves
 the raw text, rejection and `response-disposition.json`, then fails without a
@@ -544,6 +556,24 @@ deno task xmd run --allow-absolute examples/adversarial-implementation/continue.
   --props-record /absolute/path/to/ticket-record.json --props-steps 1 \
   --include examples/adversarial-implementation/components --raw
 ```
+
+To select Sonnet for an original Claude Implementor that has never been dispatched, first join the prior host entry and inspect the confirmed paused `implementation` handoff. Supply the user's authorization as readable text under a fresh reference, then continue with both options:
+
+```bash
+xmd run --allow-absolute /absolute/path/to/pinned-workflow/examples/adversarial-implementation/continue.md \
+  --props-record /absolute/path/to/ticket-record.json --props-steps 1 \
+  --props-implementation-model sonnet \
+  --props-implementation-model-evidence /absolute/path/to/sonnet-approval.md \
+  --include /absolute/path/to/pinned-workflow/examples/adversarial-implementation/components --raw
+```
+
+In a native REPL, keep the lexical Repository and Worktree around the entry. Select the pinned workflow components for that new entry; do not change the includes of work still running.
+
+The amendment requires both original Implementor initialization flags to be false, no prior Implementor call or identity receipt and an unused next call reservation. Other gates, held or completed records, uncertain attempts and previously dispatched Implementors refuse before a role starts. Both options are required together. The selected provider stays the original provider; this operation does not change it.
+
+The authorization text is retained through the existing document snapshots. The workflow publishes a new continuation with the selected model and an `implementationModelSelection` receipt linking its prior continuation, previous model, selected model and authorization snapshot. It preserves prior bytes, sessions, captured inputs, call ordinals and consumed allowances. Only a confirmed publication can advance through the same requested step limit. Omit both options for an ordinary continuation.
+
+A model field or session name is selection evidence. Actual model use requires the production Session confirmation and canonical Prompt configuration for that attempt. The normal `delivery.json` profile and saved call profile retain the selected model after a successful raw reply; they do not turn a refused model request into a provider acknowledgement.
 
 The envelope names a confirmed continuation by path, UTF-8 byte length and SHA-256.
 The protected continuation retains the original manifest, sessions, call ordinals,
@@ -687,12 +717,12 @@ determine the work's outcome.
 | Owner | Work | Model and effort |
 | --- | --- | --- |
 | Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Selected Codex `gpt-6.1-sol` or Claude `opus`; ordinary planning uses medium, high for a concrete recorded risk; migration foundation design uses high |
-| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `opus`, high |
+| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Default: selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `opus`, high. Explicit `implementationModel` selects the advertised model of that same provider and preserves its effort policy. |
 | Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same selected provider and original Planner session, medium; high for a concrete recorded risk |
 | Architect | Answer a concrete structural question or review structural impact | Codex `gpt-6.1-sol`, medium; high for a concrete recorded risk |
 | Sidekick running Codex | Author and apply issue/PR titles and descriptions; own publication and delivery | Existing coordinating Sidekick |
 
-Aliases select the provider's available Opus model. Coding roles
+Default aliases select the provider's available Opus model. An explicit model uses the provider's exact advertised ID. Coding roles
 do not draft or edit issue/PR titles or descriptions. The phase runner
 refuses editorial assignments; technical handoffs and API documentation remain
 part of the roles' work.

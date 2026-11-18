@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensureDir, readTextFile, writeTextFile, rm } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
-import { Ok, scoped, spawn, withResolvers } from "effection";
+import { Ok, scoped, spawn, withResolvers, ensure } from "effection";
 import { publicRoots } from "../support/public-root.ts";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { z } from "zod";
@@ -330,7 +330,10 @@ const refusals: Refusal[] = [
       const original = yield* readTextFile(
         "examples/adversarial-implementation/components/Ticket/Schema.md",
       );
-      yield* writeTextFile(join(f.ownerComponents, "Ticket/Schema.md"), original);
+      yield* writeTextFile(
+        join(f.ownerComponents, "Ticket/Schema.md"),
+        original + "\n<!-- deliberately different owning schema -->\n",
+      );
     },
   },
   {
@@ -891,4 +894,85 @@ describe("workflow-owned diagnosis consumer", () => {
       expect(returned.status).toBe(kind === "incidental-array" ? "missing_witness" : "hold");
     });
   }
+});
+
+describe("concurrent public root evidence", () => {
+  it("retains each concurrent root independently", function* () {
+    const directory = yield* useTempDirectory("concurrent-roots-");
+    const host = yield* publicRoots(directory, []);
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    let firstCleanup = true;
+    host.hooks.cleanup = function* () {
+      if (firstCleanup) {
+        firstCleanup = false;
+        reached.resolve();
+        yield* release.operation;
+      }
+    };
+    const source = (name: string) =>
+      "---\nreturns: {type: object}\n---\n<Return value={{" + name + ":true}} />";
+    const first = yield* spawn(() => host.run(source("first")));
+    yield* reached.operation;
+    let second;
+    let savedJournal = "";
+    let savedSettlement = "";
+    try {
+      second = yield* host.run(source("second"));
+      savedJournal = yield* readTextFile(second.journal);
+      savedSettlement = yield* readTextFile(second.settlement);
+    } finally {
+      release.resolve();
+    }
+    const one = yield* first;
+    expect(one.journal).not.toBe(second.journal);
+    expect(one.settlement).not.toBe(second.settlement);
+    const paths: string[] = [];
+    for (const [result, name] of [
+      [one, "first"],
+      [second, "second"],
+    ] as const) {
+      const receipt = JSON.parse(yield* readTextFile(result.settlement));
+      paths.push(receipt.root.path);
+      expect(yield* readTextFile(receipt.root.path)).toBe(source(name));
+      expect(receipt.root).toEqual(descriptor(receipt.root.path, source(name)));
+      const journal = yield* readTextFile(result.journal);
+      expect(receipt.journal).toEqual(descriptor(result.journal, journal));
+      expect(receipt.outcome).toEqual({
+        kind: "settled",
+        result: { ok: true, value: { [name]: true } },
+      });
+      const events = journal
+        .trimEnd()
+        .split("\n")
+        .map((line) => {
+          const parsed = parseDurableEvent(line);
+          if (!parsed.ok) {
+            throw parsed.error;
+          }
+          return parsed.value;
+        });
+      const roots = events.filter(
+        (event) =>
+          event.type === "yield" &&
+          event.description.type === "import_component" &&
+          event.description.name === "__root__",
+      );
+      expect(roots.length).toBe(1);
+      expect(roots[0]).toMatchObject({
+        result: { status: "ok", value: { path: receipt.root.path, content: source(name) } },
+      });
+      const closes = events.filter(
+        (event) => event.type === "close" && event.coroutineId === "root",
+      );
+      expect(closes.length).toBe(1);
+      expect(closes[0]).toMatchObject({
+        result: { status: "ok", value: { status: "ok", value: { [name]: true } } },
+      });
+    }
+    expect(paths[0]).not.toBe(paths[1]);
+    expect(yield* readTextFile(second.journal)).toBe(savedJournal);
+    expect(yield* readTextFile(second.settlement)).toBe(savedSettlement);
+  });
 });

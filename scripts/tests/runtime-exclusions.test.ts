@@ -187,6 +187,7 @@ describe("the applicable corpus", () => {
       "LaunchPolicy",
       "Preparation",
       "ProductionRole",
+      "ProductionRoleSonnet",
       "Submission",
       "Workflow",
     ].map((name) => `examples/adversarial-implementation/tests/${name}.test.md`);
@@ -337,7 +338,7 @@ describe("the one-file Markdown commands", () => {
   });
 
   it("gives the production-role suites their production components", function* () {
-    for (const name of ["Preparation", "ProductionRole", "Submission"]) {
+    for (const name of ["Preparation", "ProductionRole", "ProductionRoleSonnet", "Submission"]) {
       const file = `examples/adversarial-implementation/tests/${name}.test.md`;
       expect(oneFileCommand("bun", file, ROOT).arguments.slice(-4)).toEqual([
         "--include",
@@ -396,6 +397,7 @@ describe("the one-file Markdown commands", () => {
       LaunchPolicy: 120_000,
       Preparation: 420_000,
       ProductionRole: 120_000,
+      ProductionRoleSonnet: 120_000,
       Submission: 120_000,
       Workflow: 120_000,
     });

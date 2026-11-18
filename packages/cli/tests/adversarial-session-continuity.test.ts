@@ -16,6 +16,7 @@ import type { Json } from "@executablemd/core";
 import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { Permissions, useHostFiles } from "@executablemd/runtime";
+import { Stdio } from "@effectionx/process";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { AcpRuntimeOptions, ProbeCapableRuntime } from "@executablemd/acp";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
@@ -63,20 +64,44 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
     strong?: boolean;
     guard?: boolean;
     receiptDirectory?: string;
+    /** A carried agent, run through this host-selected executable, in its own invocation. */
+    agent?: "codex" | "claude";
+    executable?: string;
   }) {
     return scoped(function* () {
+      const warned: string[] = [];
+      yield* Stdio.around({
+        // deno-lint-ignore require-yield
+        *stderr([bytes]) {
+          warned.push(...new TextDecoder().decode(bytes).split("\n").filter(Boolean));
+        },
+      });
       yield* useHostFiles();
       yield* Permissions.around({ files: () => true });
       yield* useNormalizedOutput();
+      const agentName = options.agent ?? "scribe";
       yield* installAgentComponents({
-        defaultAgent: "scribe",
+        defaultAgent: agentName,
         rootProvider: {
-          options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+          options: { defaultAgent: agentName, permissionMode: "deny-all" },
           factory: createAcpxProvider({
             sessionStore: current.store,
             agentRegistry: current.registry,
             advertiseNativeLaunch: [],
             advertiseClientNativeAttachment: [],
+            ...(options.agent === undefined
+              ? {}
+              : {
+                  // The host's own selection, through the seam its carried-adapter
+                  // selector fills: today's executable reaches the adapter child.
+                  // deno-lint-ignore require-yield
+                  *agentProcessEnv() {
+                    return {
+                      [agentName === "codex" ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE"]:
+                        options.executable ?? `/selected/${agentName}`,
+                    };
+                  },
+                }),
             ...(options.strong
               ? {
                   nativeAdapters: {
@@ -145,7 +170,7 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
       const doc = join(current.dir, "guard.md");
       yield* writeTextFile(
         doc,
-        `<Agent name="scribe"><Session name="review" model="selected" effort="xhigh">${body}</Session></Agent>`,
+        `<Agent name="${agentName}"><Session name="review" model="selected" effort="xhigh">${body}</Session></Agent>`,
       );
       const journal = new InMemoryStream();
       const execution = yield* executeInstalled({ path: doc, stream: journal }, [
@@ -174,7 +199,14 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
       ]);
       const output = yield* execution.output;
       while (!(yield* output.next()).done) {}
-      return { result: yield* execution, history: journal.snapshot(), started, resolved, content };
+      return {
+        result: yield* execution,
+        history: journal.snapshot(),
+        started,
+        resolved,
+        content,
+        warned,
+      };
     });
   }
   function* methods() {
@@ -186,6 +218,83 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
   }
   return { ...current, run, methods };
 }
+
+describe(
+  "E1 ordinary workflow Session continuity across a CLI release (#891)",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const agent of ["codex", "claude"] as const) {
+      const before = `/selected/${agent}-0.167.1`;
+      const after = `/selected/${agent}-0.169.1`;
+      it(`${agent}: a changed executable quietly continues the configured conversation and its original-only context`, function* () {
+        const peer = yield* guardPeer(AGENT_SOURCE);
+        const first = yield* peer.run({ text: "marker", agent, executable: before });
+        expect(first.result.ok).toBe(true);
+        expect(first.warned).toEqual([]);
+        const asserted = first.resolved?.identity;
+        expect(asserted?.kind).toBe("acpx.agentSessionId");
+
+        const continued = yield* peer.run({
+          existing: true,
+          text: "recall",
+          agent,
+          executable: after,
+        });
+        expect(continued.result.ok).toBe(true);
+        // Context only the original conversation held, through today's executable.
+        expect(JSON.stringify(continued.history)).toContain("answer:recall:marker");
+        expect(continued.resolved?.identity).toEqual(asserted);
+        // Quiet: a changed executable is not news, here or anywhere else.
+        expect(continued.warned).toEqual([]);
+        const methods = (yield* peer.methods()).map((entry) => entry.method);
+        expect(methods.filter((method) => method === "session/new")).toHaveLength(1);
+        const reopened = methods.lastIndexOf("session/load");
+        expect(reopened).toBeGreaterThan(methods.indexOf("session/prompt"));
+        expect(reopened).toBeLessThan(methods.lastIndexOf("session/set_config_option"));
+        expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
+          methods.lastIndexOf("session/prompt"),
+        );
+
+        // Another native conversation, or none asserted at all on an unchanged
+        // build: refused before any setting or prompt, with nothing created.
+        for (const refusal of ["different", "missing"] as const) {
+          const prompts = (yield* peer.methods()).filter(
+            (entry) => entry.method === "session/prompt",
+          ).length;
+          if (refusal === "different") {
+            yield* writeTextFile(join(peer.dir, "different-native-identity"), "");
+          } else {
+            yield* writeTextFile(peer.agent, STANDARD_AGENT_SOURCE);
+          }
+          const refused = yield* peer.run({
+            existing: true,
+            text: "recall",
+            agent,
+            executable: after,
+          });
+          expect([refusal, refused.result.ok]).toEqual([refusal, false]);
+          const now = yield* peer.methods();
+          expect(now.filter((entry) => entry.method === "session/prompt")).toHaveLength(prompts);
+          expect(now.filter((entry) => entry.method === "session/new")).toHaveLength(1);
+          if (refusal === "different") {
+            yield* rm(join(peer.dir, "different-native-identity"));
+          } else {
+            yield* writeTextFile(peer.agent, AGENT_SOURCE);
+          }
+        }
+        // A later explicit attempt reaches the same conversation.
+        const retried = yield* peer.run({
+          existing: true,
+          text: "recall",
+          agent,
+          executable: after,
+        });
+        expect(retried.result.ok).toBe(true);
+        expect(retried.resolved?.identity).toEqual(asserted);
+      });
+    }
+  },
+);
 
 describe("workflow Session continuity", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("retains the real ACP-only started pair through close/load and a failed continuation", function* () {
@@ -550,6 +659,76 @@ describe("production workflow provider scope", () => {
     }
   });
 
+  it("configures an explicit Sonnet Implementor before its prompt and retains it with its identity across cold reentry", function* () {
+    const fake = createFakeAcp();
+    fake.configuration(catalog(["fixture-default", "opus", "sonnet"], ["medium", "high"]));
+    const harness = yield* reviewWorld(fake);
+    const assignment = implementorAssignment(harness);
+    yield* ensureDir(assignment.artifactDirectory);
+    const props = { assignment };
+    const first = `<Dir path={props.assignment.repository}>${sonnetRoleSource}</Dir>`;
+    const continued = `<Dir path={props.assignment.repository}>${sonnetContinuedRoleSource}</Dir>`;
+    for (const text of [first, continued]) {
+      fake.script({ reply: "Completed the assigned work." });
+      const ran = yield* harness.run(text, props);
+      if (!ran.ok) {
+        throw new Error(ran.text);
+      }
+      const ensured = fake.ensured.at(-1)!;
+      expect(ensured.requestedModel).toBe("sonnet");
+      expect(fake.running(ensured.sessionKey)).toEqual({ model: "sonnet", effort: "high" });
+    }
+    expect(fake.configCalls.filter((call) => call.startsWith("set "))).toEqual([
+      "set model=sonnet",
+      "set effort=high",
+    ]);
+    expect(fake.turns).toHaveLength(2);
+    expect(new Set(fake.turns.map((entry) => entry.handle.sessionKey)).size).toBe(1);
+    const saved = receipt.parse(
+      JSON.parse(yield* readTextFile(join(harness.root, "sessions", "sonnet-owner.json"))),
+    );
+    expect(saved).toMatchObject({ agent: "claude", name: "sonnet-owner", attempted: true });
+    expect(saved.identity).not.toBe(null);
+  });
+
+  it("sends no Implementor prompt when Sonnet is unavailable, its write is refused or its readback differs", function* () {
+    for (const variant of ["missing", "refused", "ignored"] as const) {
+      const fake = createFakeAcp();
+      fake.configuration(
+        catalog(
+          variant === "missing" ? ["fixture-default", "opus"] : ["fixture-default", "sonnet"],
+          ["medium", "high"],
+        ),
+      );
+      const harness = yield* reviewWorld(
+        fake,
+        variant === "missing" ? fake.create : configurationFault(fake, variant),
+      );
+      const assignment = implementorAssignment(harness);
+      yield* ensureDir(assignment.artifactDirectory);
+      fake.script({ reply: "This prompt must not be sent." });
+      const ran = yield* harness.run(
+        `<Dir path={props.assignment.repository}>${sonnetRoleSource}</Dir>`,
+        {
+          assignment,
+        },
+      );
+      expect(ran.ok).toBe(false);
+      expect(ran.text).toContain(
+        {
+          missing: 'Unknown model "sonnet"',
+          refused: "The provider refused the model write.",
+          ignored: 'did not apply the model "sonnet"',
+        }[variant],
+      );
+      expect(fake.prompts).toEqual([]);
+      expect(fake.turns).toEqual([]);
+      expect(fake.configCalls.filter((call) => call === "set model=opus")).toEqual([]);
+      const running = fake.ensured.map((entry) => fake.running(entry.sessionKey));
+      expect(running.every((state) => state?.model !== "opus")).toBe(true);
+    }
+  });
+
   it("keeps ordinary acpx unchanged and refuses to retrofit its retained owner", function* () {
     const fake = createFakeAcp();
     fake.configuration(catalog(["opus"], ["high"]));
@@ -572,6 +751,50 @@ describe("production workflow provider scope", () => {
     expect(JSON.stringify([...harness.store.records])).toBe(before);
   });
 });
+
+const sonnetRoleSource =
+  '<Phase.SubmissionGuide repository={props.assignment.repository} directory={props.assignment.artifactDirectory}><Phase.SubmissionInstructions role="implementor" assignment={props.assignment} /></Phase.SubmissionGuide>' +
+  '<Phase.Role role="implementor" session="sonnet-owner" implementationProvider="claude" implementationModel="sonnet" assignment={props.assignment} />';
+const sonnetContinuedRoleSource =
+  '<Phase.Role role="implementor" session="sonnet-owner" implementationProvider="claude" implementationModel="sonnet" assignment={{...props.assignment,sessionEstablished:true}} />';
+
+function implementorAssignment(harness: ReviewWorld) {
+  return {
+    repository: String(harness.delivery.repository),
+    artifactDirectory: join(harness.root, "submission"),
+    identityDirectory: join(harness.root, "sessions"),
+    phase: "implementation",
+    work: "sonnet-selection",
+    revision,
+    request: "Use the saved evidence.",
+    assessment: {
+      mechanical: false,
+      architecture: false,
+      acceptance: true,
+      risk: null,
+      reason: "Inspect the accepted behavior.",
+      evidence: ["accepted.md"],
+    },
+  };
+}
+
+function configurationFault(fake: FakeAcp, fault: "refused" | "ignored") {
+  return (options: AcpRuntimeOptions): ProbeCapableRuntime => {
+    const runtime = fake.create(options);
+    const write = runtime.setConfigOption?.bind(runtime);
+    return {
+      ...runtime,
+      setConfigOption(input: Parameters<NonNullable<ProbeCapableRuntime["setConfigOption"]>>[0]) {
+        if (input.key !== "model") {
+          return write?.(input) ?? Promise.resolve();
+        }
+        return fault === "refused"
+          ? Promise.reject(new Error("The provider refused the model write."))
+          : Promise.resolve();
+      },
+    };
+  };
+}
 
 function catalog(models: string[], efforts: string[] = ["low", "high"]) {
   return {

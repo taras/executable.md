@@ -25,7 +25,7 @@ import type {
 } from "@executablemd/acp";
 import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
-import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
+import type { AgentSessionCoordinator } from "@executablemd/runtime";
 
 /**
  * The name `<TestAgent>` registers its partition-selecting factory under.
@@ -75,8 +75,6 @@ export interface TestAgentProviderOptions {
   coordinator?: AgentSessionCoordinator;
   /** How this partition's sessions were constructed. Its own, like the rest. */
   routeStore?: AgentSessionRouteStore;
-  /** Which build this partition observes. Its own controlled one. */
-  executableObserver?: ExecutableObserver;
   dependencies?: AcpxProviderDependencies;
   inspection?: {
     agent: string;
@@ -122,9 +120,6 @@ export const TEST_AGENT_NATIVE_ADAPTER: NativeAdapter = {
  * can be authored in Markdown without a real Claude.
  */
 export const TEST_AGENT_CLIENT_NATIVE = "test-agent-client-native";
-
-/** The version this partition's controlled build reports. Shaped like a real one. */
-export const TEST_AGENT_BUILD_VERSION = "9.9.9 (Test Agent)";
 
 /** A controlled adapter that names its own sessions, in the test agent's dialect. */
 export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
@@ -301,7 +296,6 @@ export function* useTestAgentProvider(
       }),
     ...(options.coordinator ? { coordinator: options.coordinator } : {}),
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
-    ...(options.executableObserver ? { executableObserver: options.executableObserver } : {}),
     ...(options.dependencies?.createRuntime
       ? { createRuntime: options.dependencies.createRuntime }
       : {}),

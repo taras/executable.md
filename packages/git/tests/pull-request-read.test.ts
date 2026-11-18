@@ -10,7 +10,12 @@
  * contacts a network host, and no case reads a developer's real credential.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   call,
@@ -67,6 +72,8 @@ import type {
   GitHubHttpResponse,
   GitHubRepositoryName,
 } from "../src/deno/composition/github.ts";
+
+const OWNER = "packages/git/tests/pull-request-read.test.ts";
 
 const ENDPOINT = "https://api.github.test";
 
@@ -505,6 +512,7 @@ function retainedItems(events: DurableEvent[]): Json {
 }
 
 describe("Tier PRR — pull-request evidence", () => {
+  beforeEach(journalBeforeEach("packages/git/tests/pull-request-read.test.ts"));
   it("PRR3: every body and every check survives normalization byte for byte", function* () {
     const body = "  Two  spaces, a\ttab, and a trailing newline.\n";
     const host = server({
@@ -1049,7 +1057,7 @@ describe("Tier PRR — pull-request evidence", () => {
   });
 
   it("PRR13: an ordinary run resolves none of the three", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     const failure = yield* raised(
       collect(
         yield* execute({
@@ -1669,7 +1677,8 @@ describe("Tier PRR — pull-request evidence", () => {
    * are measured, because a refusal is published through the same boundary a
    * success is.
    */
-  it("PRR24a: an admitted read is appended only after its session has closed", function* () {
+  const publicationOrder = "PRR24a: an admitted read is appended only after its session has closed";
+  it(publicationOrder, function* () {
     for (const outcome of ["success", "refusal"] as const) {
       const host =
         outcome === "success"
@@ -1677,39 +1686,44 @@ describe("Tier PRR — pull-request evidence", () => {
           : server({ [REVIEWS]: { status: 500, body: "{}" } });
       const order: string[] = [];
       const gate = gatedAccess(host.access, order);
-      const stream = new InMemoryStream();
-      noteAppends(stream, order);
+      yield* captureTestJournal(
+        { owner: OWNER, name: publicationOrder },
+        "<eval>",
+        function* (stream) {
+          noteAppends(stream, order);
 
-      let returned = false;
-      const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+          let returned = false;
+          const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
 
-      try {
-        const task = yield* spawn(function* () {
-          yield* raised(retainedRead(stream, document, gate.source));
-          returned = true;
-        });
+          try {
+            const task = yield* spawn(function* () {
+              yield* raised(retainedRead(stream, document, gate.source));
+              returned = true;
+            });
 
-        yield* gate.closing;
-        // Held: the transport is over, and nothing has been acknowledged.
-        expect(order).toEqual(["open", "closing"]);
-        expect(returned).toBe(false);
-        expect(readYields(stream.snapshot())).toEqual([]);
+            yield* gate.closing;
+            // Held: the transport is over, and nothing has been acknowledged.
+            expect(order).toEqual(["open", "closing"]);
+            expect(returned).toBe(false);
+            expect(readYields(stream.snapshot())).toEqual([]);
 
-        gate.release();
-        yield* task;
-      } finally {
-        // Released whatever happened, so a failed assertion fails rather than
-        // leaving a suite waiting on a gate nobody will open.
-        gate.release();
-      }
+            gate.release();
+            yield* task;
+          } finally {
+            // Released whatever happened, so a failed assertion fails rather than
+            // leaving a suite waiting on a gate nobody will open.
+            gate.release();
+          }
 
-      expect(order).toEqual(["open", "closing", "closed", "appended"]);
-      expect(returned).toBe(true);
+          expect(order).toEqual(["open", "closing", "closed", "appended"]);
+          expect(returned).toBe(true);
 
-      // One read either way, and the outcome the collection actually had.
-      const retained = readYields(stream.snapshot());
-      expect(retained).toHaveLength(1);
-      expect(retained[0]?.result?.status).toBe(outcome === "success" ? "ok" : "err");
+          // One read either way, and the outcome the collection actually had.
+          const retained = readYields(stream.snapshot());
+          expect(retained).toHaveLength(1);
+          expect(retained[0]?.result?.status).toBe(outcome === "success" ? "ok" : "err");
+        },
+      );
     }
   });
 
@@ -1783,51 +1797,53 @@ describe("Tier PRR — pull-request evidence", () => {
    * rather than merely started. The gate supplies both: the halt does not
    * settle while cleanup is held, and no read reaches the journal at all.
    */
-  it("PRR26a: a cancelled read joins its held cleanup and publishes nothing", function* () {
-    const entered = withResolvers<void>();
-    const order: string[] = [];
-    const access: GitHubAccess = {
-      endpoint: ENDPOINT,
-      // deno-lint-ignore require-yield
-      *token(): Operation<string | undefined> {
-        return "t";
-      },
-      *send(): Operation<GitHubHttpResponse> {
-        entered.resolve();
-        yield* suspend();
-        throw new Error("unreachable");
-      },
-    };
-    const gate = gatedAccess(access, order);
-    const stream = new InMemoryStream();
-    noteAppends(stream, order);
-    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`;
+  const cancelledRead = "PRR26a: a cancelled read joins its held cleanup and publishes nothing";
+  it(cancelledRead, function* () {
+    yield* captureTestJournal({ owner: OWNER, name: cancelledRead }, "<eval>", function* (stream) {
+      const entered = withResolvers<void>();
+      const order: string[] = [];
+      const access: GitHubAccess = {
+        endpoint: ENDPOINT,
+        // deno-lint-ignore require-yield
+        *token(): Operation<string | undefined> {
+          return "t";
+        },
+        *send(): Operation<GitHubHttpResponse> {
+          entered.resolve();
+          yield* suspend();
+          throw new Error("unreachable");
+        },
+      };
+      const gate = gatedAccess(access, order);
+      noteAppends(stream, order);
+      const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`;
 
-    let halted = false;
-    try {
-      const task = yield* spawn(() => raised(retainedRead(stream, document, gate.source)));
-      yield* entered.operation;
+      let halted = false;
+      try {
+        const task = yield* spawn(() => raised(retainedRead(stream, document, gate.source)));
+        yield* entered.operation;
 
-      const halting = yield* spawn(function* () {
-        yield* task.halt();
-        halted = true;
-      });
+        const halting = yield* spawn(function* () {
+          yield* task.halt();
+          halted = true;
+        });
 
-      yield* gate.closing;
-      // The halt has reached this session's teardown and is waiting on it.
-      expect(halted).toBe(false);
-      expect(order).toEqual(["open", "closing"]);
+        yield* gate.closing;
+        // The halt has reached this session's teardown and is waiting on it.
+        expect(halted).toBe(false);
+        expect(order).toEqual(["open", "closing"]);
 
-      gate.release();
-      yield* halting;
-    } finally {
-      gate.release();
-    }
+        gate.release();
+        yield* halting;
+      } finally {
+        gate.release();
+      }
 
-    expect(halted).toBe(true);
-    expect(order).toEqual(["open", "closing", "closed"]);
-    // Cancellation stays cancellation: no success, and no failed read either.
-    expect(readYields(stream.snapshot())).toEqual([]);
+      expect(halted).toBe(true);
+      expect(order).toEqual(["open", "closing", "closed"]);
+      // Cancellation stays cancellation: no success, and no failed read either.
+      expect(readYields(stream.snapshot())).toEqual([]);
+    });
   });
 
   it("PRR32: a received envelope carrying one member more retains the failure", function* () {

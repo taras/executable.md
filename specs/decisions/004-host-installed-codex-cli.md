@@ -43,9 +43,11 @@ Updating the host CLI can change ordinary availability and the advertised model
 and effort catalog while the adapter digest stays the same. A session offers
 whatever the selected host CLI reports.
 
-Native launch and attachment keep strict build equality. For a held Codex
-conversation over ACP, the [ACP client contract](../acp-client-spec.md#acpx-provider)
-requires live confirmation of the original native identity after a host upgrade.
+A session continues quietly on whichever host CLI is selected today, under the
+provider's live confirmation of its original native identity, for every
+operation including native launch and attachment. The strict build equality
+this record first kept for native work was replaced by
+[decision record 005](005-current-executable-session-continuation.md).
 
 The repacked snapshot has a new digest. It neither migrates saved records nor
 equates the old and new snapshot identities.

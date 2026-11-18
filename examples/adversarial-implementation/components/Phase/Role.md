@@ -55,6 +55,7 @@ props:
     implementationProvider:
       enum: [claude, codex]
       default: claude
+    implementationModel: {type: string, minLength: 1}
   required:
     - role
     - session
@@ -62,7 +63,7 @@ props:
   additionalProperties: false
 ---
 
-<Phase.Profile role={props.role} assessment={props.assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="profile" />
+<Phase.Profile role={props.role} assessment={props.assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} implementationModel={props.implementationModel} as="profile" />
 <If condition={props.correction !== null && (props.initialize || props.correction.role !== props.role || props.correction.session !== props.session || props.correction.revision !== props.assignment.revision || props.correction.phase !== props.assignment.phase || props.correction.work !== props.assignment.work || props.correction.provider !== profile.provider)}>
 <Fail message="Response correction must select the same initialized original owner, source and routing." />
 </If>

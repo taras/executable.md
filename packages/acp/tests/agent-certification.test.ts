@@ -1,5 +1,9 @@
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
-import { describe, it } from "@executablemd/test-support/bdd";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Stream } from "effection";
@@ -50,7 +54,7 @@ function* document(
   documentSource: string,
   report: Report,
   failures: unknown[] = [],
-  journal = new InMemoryStream(),
+  journal?: InMemoryStream,
 ): Operation<{ ok: boolean; output: string }> {
   return yield* scoped(function* () {
     const command = mode === "strong" ? "codex" : f.command(mode);
@@ -109,7 +113,8 @@ function* document(
     yield* useNormalizedOutput();
     const path = join(f.dir, "document.md");
     yield* writeTextFile(path, documentSource);
-    const execution = yield* executeInstalled({ path, stream: journal }, [
+    const stream = journal ?? (yield* useJournalStream(path));
+    const execution = yield* executeInstalled({ path, stream }, [
       { components: agentIdentityComponents() },
     ]);
     const subscription = yield* execution.output;
@@ -126,6 +131,7 @@ describe(
   "production local-agent qualification controls",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach("packages/acp/tests/agent-certification.test.ts"));
     it("recovers a private marker in sequential Prompts and keeps another Session independent", function* () {
       yield* withCertificationFixture(function* (f) {
         const marker = randomUUID();
@@ -262,109 +268,119 @@ describe(
         expect((yield* f.methods()).filter((method) => method === "session/prompt").length).toBe(1);
       });
     });
-    it("attributes the owned still-active turn to HostExecution.stop without certifying native cleanup", function* () {
+    const cancellationCase =
+      "attributes the owned still-active turn to HostExecution.stop without certifying native cleanup";
+    it(cancellationCase, function* () {
       yield* withCertificationFixture(function* (f) {
         const command = f.command("standard-wait");
         const report = reportFor(command);
         report.capabilities.cancellation.selected = true;
         let closed = 0;
-        yield* scoped(function* () {
-          yield* installAgentComponents({
-            defaultAgent: command,
-            rootProvider: {
-              options: { defaultAgent: command, permissionMode: "deny-all" },
-              factory: createAcpxProvider({
-                sessionStore: createAcpxSessionStore(join(f.dir, "store")),
-                createRuntime(options) {
-                  const runtime = createAcpRuntime(options);
-                  const close = runtime.close.bind(runtime);
-                  runtime.close = (input) =>
-                    close(input).then(() => {
-                      closed++;
-                    });
-                  return runtime;
+        const path = join(f.dir, "cancel.md");
+        yield* captureTestJournal(
+          {
+            owner: "packages/acp/tests/agent-certification.test.ts",
+            suite: "production local-agent qualification controls",
+            name: cancellationCase,
+          },
+          path,
+          (journal) =>
+            scoped(function* () {
+              yield* installAgentComponents({
+                defaultAgent: command,
+                rootProvider: {
+                  options: { defaultAgent: command, permissionMode: "deny-all" },
+                  factory: createAcpxProvider({
+                    sessionStore: createAcpxSessionStore(join(f.dir, "store")),
+                    createRuntime(options) {
+                      const runtime = createAcpRuntime(options);
+                      const close = runtime.close.bind(runtime);
+                      runtime.close = (input) =>
+                        close(input).then(() => {
+                          closed++;
+                        });
+                      return runtime;
+                    },
+                    *agentCwd() {
+                      return f.dir;
+                    },
+                  }),
                 },
-                *agentCwd() {
-                  return f.dir;
-                },
-              }),
-            },
-          });
-          const started = withResolvers<void>();
-          const waiting = withResolvers<void>();
-          let terminal = false;
-          yield* Agent.around({
-            *prompt(args, next) {
-              const source = yield* next(...args);
-              const observed: Stream<AgentPromptEvent, string> = {
-                *[Symbol.iterator]() {
-                  const subscription = yield* source;
-                  return {
-                    *next() {
-                      const event = yield* subscription.next();
-                      if (!event.done && event.value.type === "started") {
-                        started.resolve();
-                      }
-                      if (
-                        !event.done &&
-                        event.value.type === "text_delta" &&
-                        event.value.text === "WAITING"
-                      ) {
-                        waiting.resolve();
-                      }
-                      if (!event.done && event.value.type === "terminal") {
-                        terminal = true;
-                      }
-                      return event;
+              });
+              const started = withResolvers<void>();
+              const waiting = withResolvers<void>();
+              let terminal = false;
+              yield* Agent.around({
+                *prompt(args, next) {
+                  const source = yield* next(...args);
+                  const observed: Stream<AgentPromptEvent, string> = {
+                    *[Symbol.iterator]() {
+                      const subscription = yield* source;
+                      return {
+                        *next() {
+                          const event = yield* subscription.next();
+                          if (!event.done && event.value.type === "started") {
+                            started.resolve();
+                          }
+                          if (
+                            !event.done &&
+                            event.value.type === "text_delta" &&
+                            event.value.text === "WAITING"
+                          ) {
+                            waiting.resolve();
+                          }
+                          if (!event.done && event.value.type === "terminal") {
+                            terminal = true;
+                          }
+                          return event;
+                        },
+                      };
                     },
                   };
+                  return observed;
                 },
-              };
-              return observed;
-            },
-          });
-          const path = join(f.dir, "cancel.md");
-          yield* writeTextFile(
-            path,
-            '<Session name="owned-test-turn"><Prompt text="wait for suite cancellation" /></Session>',
-          );
-          const journal = new InMemoryStream();
-          const execution = yield* executeInstalled({ path, stream: journal }, [
-            { components: agentIdentityComponents() },
-          ]);
-          const subscription = yield* execution.output;
-          const draining = yield* spawn(function* () {
-            while (!(yield* subscription.next()).done) {}
-          });
-          yield* started.operation;
-          // Transport submission can precede the peer installing its cancellable request.
-          yield* waiting.operation;
-          const activeAtStop = !terminal;
-          const stop = yield* execution.stop();
-          const completion = yield* execution;
-          yield* draining;
-          expect(stop.ok).toBe(true);
-          expect(completion.ok).toBe(false);
-          expect(closed).toBe(1);
-          const events = journal.snapshot();
-          const interrupted = events.some(
-            (event) => event.type === "close" && event.result.status === "cancelled",
-          );
-          expect(interrupted).toBe(true);
-          recordCancellation(report, {
-            requestedStop: true,
-            activeAtStop,
-            attributed: stop.ok && interrupted,
-            completed: terminal,
-            ownerJoined: true,
-            nativeCleanupVerified: false,
-          });
-          expect(report.capabilities.cancellation.observations.attributed).toBe(true);
-          expect(report.capabilities.cancellation.reason).toBe("cleanup-unverified");
-          const methods = yield* f.methods();
-          expect(methods.filter((method) => method === "session/prompt").length).toBe(1);
-          expect(methods.includes("session/cancel")).toBe(true);
-        });
+              });
+              yield* writeTextFile(
+                path,
+                '<Session name="owned-test-turn"><Prompt text="wait for suite cancellation" /></Session>',
+              );
+              const execution = yield* executeInstalled({ path, stream: journal }, [
+                { components: agentIdentityComponents() },
+              ]);
+              const subscription = yield* execution.output;
+              const draining = yield* spawn(function* () {
+                while (!(yield* subscription.next()).done) {}
+              });
+              yield* started.operation;
+              // Transport submission can precede the peer installing its cancellable request.
+              yield* waiting.operation;
+              const activeAtStop = !terminal;
+              const stop = yield* execution.stop();
+              const completion = yield* execution;
+              yield* draining;
+              expect(stop.ok).toBe(true);
+              expect(completion.ok).toBe(false);
+              expect(closed).toBe(1);
+              const events = journal.snapshot();
+              const interrupted = events.some(
+                (event) => event.type === "close" && event.result.status === "cancelled",
+              );
+              expect(interrupted).toBe(true);
+              recordCancellation(report, {
+                requestedStop: true,
+                activeAtStop,
+                attributed: stop.ok && interrupted,
+                completed: terminal,
+                ownerJoined: true,
+                nativeCleanupVerified: false,
+              });
+              expect(report.capabilities.cancellation.observations.attributed).toBe(true);
+              expect(report.capabilities.cancellation.reason).toBe("cleanup-unverified");
+              const methods = yield* f.methods();
+              expect(methods.filter((method) => method === "session/prompt").length).toBe(1);
+              expect(methods.includes("session/cancel")).toBe(true);
+            }),
+        );
       });
     });
     it("observes eager configuration refusal on the established Session", function* () {
@@ -436,6 +452,7 @@ describe(
 );
 
 describe("standard completed replay", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeEach(journalBeforeEach("packages/acp/tests/agent-certification.test.ts"));
   it("completed standard output replays without provider requests", function* () {
     yield* withCertificationFixture(function* (f) {
       const journal = new InMemoryStream();
@@ -465,6 +482,7 @@ describe("standard completed replay", { sanitizeOps: false, sanitizeResources: f
 });
 
 describe("strong qualification evidence", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeEach(journalBeforeEach("packages/acp/tests/agent-certification.test.ts"));
   it("reports declared acceptance and asserted identity independently", function* () {
     yield* withCertificationFixture(function* (f) {
       const report = reportFor("codex");

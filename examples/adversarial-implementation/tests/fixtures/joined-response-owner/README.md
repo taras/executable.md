@@ -29,7 +29,7 @@ Run the discovered owner with:
 
 ```bash
 deno task test examples/adversarial-implementation/tests/JoinedResponseRecovery.test.md
-pnpm exec tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 examples/adversarial-implementation/tests/runtime/joined-response-recovery.test.ts
+pnpm exec tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 examples/adversarial-implementation/tests/runtime/joined-response-recovery-suite.ts
 ```
 
 Ordinary workflow assertions execute in public in-process roots. Only the named native-entry probes launch the CLI. The explicit Node probe also uses a real Node child when its test runner is Deno. Deno launch vectors force manual dependency layout, cached inputs and a frozen lock so checks do not perform preparation.

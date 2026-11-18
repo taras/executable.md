@@ -16,6 +16,7 @@ conformance belong to [the language specification](executable-mdx-spec.md).
 | Main health and verification ownership | [DEC-013](#dec-013-a-red-main-is-reported-as-an-issue-and-gates-pull-requests-no-merge-queue), [DEC-014](#dec-014-composability-proves-ownership-not-correctness-a-second-time), and [contribution verification](../AGENTS.md#verification). |
 | Withdrawn terminal-grid surface | [DEC-016](#dec-016-withdraw-the-unimplemented-terminal-grid-surface); [installed structural syntax](../architecture.md#the-installed-structural-syntax-boundary) remains the extension boundary. |
 | Host-installed Codex CLI for the carried adapter | [Decision record 004](decisions/004-host-installed-codex-cli.md); [ACP Availability](acp-client-spec.md#availability), [Adapter snapshots](acp-client-spec.md#adapter-snapshots) and [the maintained Codex adapter](release-process-spec.md#maintained-codex-adapter) own current behavior. |
+| Session continuation across agent CLI releases | [Decision record 005](decisions/005-current-executable-session-continuation.md); [ACP client sessions](acp-client-spec.md#sessions-ownership-routes-and-attachment) and [native launch executable binding](native-agent-session-launch-spec.md#executable-build-binding) own current behavior. |
 
 ---
 

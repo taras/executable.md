@@ -39,11 +39,11 @@ import {
   createMemorySessionRouteStore,
 } from "@executablemd/acp";
 import type { AgentSessionRouteStore, NativeAdapter, NativeBinding } from "@executablemd/acp";
-import type { ExecutableObserver, NativeLaunchRequest } from "@executablemd/runtime";
-import { createFakeObserver } from "../../acp/tests/helpers.ts";
+import type { NativeLaunchRequest } from "@executablemd/runtime";
+import { createFakeSelection } from "../../acp/tests/helpers.ts";
+import type { FakeSelectionHarness } from "../../acp/tests/helpers.ts";
 import {
   sessionCoordinatorRoot,
-  useExecutableObserver,
   useMachineSessions,
   useSessionCoordinator,
 } from "../src/session-coordinator.ts";
@@ -74,7 +74,14 @@ interface RuntimeProbe {
   closes: number;
 }
 
-function probeRuntime(probe: RuntimeProbe) {
+/**
+ * A runtime that counts what reaches it.
+ *
+ * `confirms` lets it answer exactly one kind of work: an exact load of a named
+ * conversation, asserting that same identity — what a fresh client-native
+ * launch asks after its native child has exited. Everything else is refused.
+ */
+function probeRuntime(probe: RuntimeProbe, confirms = false) {
   return () => {
     probe.runtimes += 1;
     return {
@@ -82,8 +89,16 @@ function probeRuntime(probe: RuntimeProbe) {
         probe.doctors += 1;
         return Promise.resolve({ ok: true, agents: [] } as never);
       },
-      ensureSession() {
+      ensureSession(input: { sessionKey: string; resumeSessionId?: string }) {
         probe.ensures += 1;
+        if (confirms && input.resumeSessionId !== undefined) {
+          return Promise.resolve({
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: input.sessionKey,
+            agentSessionId: input.resumeSessionId,
+          });
+        }
         return Promise.reject(new Error("this test's provider must not reach a runtime"));
       },
       startTurn() {
@@ -267,7 +282,7 @@ function* launchUnder(
     launched?: NativeLaunchRequest[];
     agent?: string;
     /** The build this host would observe. Absent means it can observe none. */
-    observer?: ExecutableObserver;
+    selection?: FakeSelectionHarness;
     /** Drive every phase, not only preparation. */
     perform?: boolean;
   } = {},
@@ -284,7 +299,7 @@ function* launchUnder(
       record: (request) => options.launched?.push(request),
     });
     const factory = createAcpxProvider({
-      createRuntime: probeRuntime(probe),
+      createRuntime: probeRuntime(probe, options.perform === true),
       sessionStore: {
         load: () => Promise.resolve(undefined),
         save: () => Promise.resolve(),
@@ -302,7 +317,7 @@ function* launchUnder(
           }),
       ...(coordinator ? { coordinator } : {}),
       ...(options.routeStore ? { routeStore: options.routeStore } : {}),
-      ...(options.observer ? { executableObserver: options.observer } : {}),
+      ...(options.selection ? { agentProcessEnv: options.selection.agentProcessEnv() } : {}),
     });
     yield* factory(
       { defaultAgent: agent, permissionMode: "deny-all" },
@@ -385,7 +400,7 @@ describe("Tier HC — host session ownership", () => {
         : undefined,
       records,
       probe,
-      { adapter: CLIENT_ALLOCATED, observer: createFakeObserver().observer },
+      { adapter: CLIENT_ALLOCATED, selection: createFakeSelection() },
     );
 
     const failure = records.find((record) => record.failure)?.failure;
@@ -444,9 +459,9 @@ describe("Tier HC — host session ownership", () => {
     // Only this host assembles both halves. Node and Bun build neither, which
     // is what makes the same call refuse there.
     const routeStore = onDeno() ? createDenoSessionRouteStore(root) : undefined;
-    // A controlled observation, because the subject is the host assembly rather
+    // A controlled selection, because the subject is the host assembly rather
     // than which Claude happens to be installed on the machine running this.
-    const observer = createFakeObserver();
+    const selection = createFakeSelection();
 
     yield* launchUnder(
       onDeno() ? createDenoAgentSessionCoordinator(root) : undefined,
@@ -456,7 +471,7 @@ describe("Tier HC — host session ownership", () => {
         defaults: true,
         perform: true,
         launched,
-        observer: observer.observer,
+        selection,
         ...(routeStore ? { routeStore } : {}),
       },
     );
@@ -476,15 +491,18 @@ describe("Tier HC — host session ownership", () => {
     }
 
     // The whole way to the launcher, and nothing was created through ACP on the
-    // way: a session Claude names is materialized by the native process.
+    // way: a session Claude names is materialized by the native process. Only
+    // once that process exited was its allocated identity loaded over ACP, and
+    // confirmed, before the launch reported success.
     expect(records.find((record) => record.failure)).toBe(undefined);
-    expect(probe.runtimes).toBe(0);
-    expect(probe.ensures).toBe(0);
+    expect(probe.runtimes).toBe(1);
+    expect(probe.ensures).toBe(1);
+    expect(probe.closes).toBe(1);
     expect(launched.length).toBe(1);
     const command = launched[0]!.command;
-    // The exact file that was observed, not the launcher name: the name is what
-    // the durable record carries, and this is what the run spawns.
-    expect(command[0]).toBe(observer.observation.path);
+    // The exact file the host selected, not the launcher name: the name is
+    // what the durable record carries, and this is what the run spawns.
+    expect(command[0]).toBe(selection.path);
     expect(command[1]).toBe("--session-id");
     expect(command[3]).toBe("--system-prompt-file");
     // The prepared text crossed as a path, so it is in neither surface another
@@ -531,30 +549,6 @@ describe("Tier HC — host session ownership", () => {
     }
   });
 
-  it("HC11: an agent that names its own sessions needs an observer too", function* () {
-    // The third half of fail-closed. A host that can say who owns the session
-    // and how it was constructed still cannot act on one whose build it has no
-    // way to recognize.
-    const records: LaunchRecord[] = [];
-    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
-    yield* launchUnder(
-      onDeno()
-        ? createDenoAgentSessionCoordinator(join(tmpdir(), `xmd-hc11-${randomUUID()}`))
-        : undefined,
-      records,
-      probe,
-      { adapter: CLIENT_ALLOCATED, routeStore: createMemorySessionRouteStore() },
-    );
-
-    const failure = records.find((record) => record.failure)?.failure;
-    expect(failure?.class).toBe("unsupported-capability");
-    if (onDeno()) {
-      expect(failure?.message).toContain("executable build observation");
-    }
-    expect(probe.runtimes).toBe(0);
-    expect(probe.ensures).toBe(0);
-  });
-
   it("HC12: the two advertised sets are separate, and this host states both", function* () {
     // What a host actually assembles. Native launch and ACP attachment are
     // different proofs, so they are different lists — and the ordinary profile
@@ -569,8 +563,6 @@ describe("Tier HC — host session ownership", () => {
     // Built from the same trusted root as the coordinator beside it.
     expect(assembly.coordinator === undefined).toBe(!onDeno());
     expect(assembly.routeStore === undefined).toBe(!onDeno());
-    expect(assembly.executableObserver === undefined).toBe(!onDeno());
-    expect(useExecutableObserver() === undefined).toBe(!onDeno());
   });
 });
 

@@ -55,11 +55,17 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { createAgentRegistry, resolveAgentCommand } from "../../src/acpx-runtime.ts";
-import { agentSessionKeyDigest, createDenoExecutableObserver } from "@executablemd/runtime";
-import { allocatesIdentity, nativeAdapterFor } from "../../src/native-launch.ts";
 import { createDenoSessionRouteStore } from "../../src/session-route.ts";
-import { deriveSessionKey } from "../../src/session-key.ts";
+import { createEmbeddedAdapters } from "../../src/adapter-snapshots.ts";
+import { claudeKeyPaths, nativeUiInvocations } from "./claude-proof-evidence.ts";
+import { createDenoExecutableObserver } from "@executablemd/runtime";
+import { allocatesIdentity, nativeAdapterFor } from "../../src/native-launch.ts";
+import {
+  claudeRouteKey,
+  prepareAbsentRoute,
+  readProofArrangement,
+  submittedModelTurns,
+} from "./claude-proof-evidence.ts";
 
 /** Opting in at all. Absent, this refuses before a provider child. */
 const PROOF_ENV = "XMD_CLAUDE_ATTACHMENT_PROOF";
@@ -820,7 +826,7 @@ interface JourneyVerdict {
   consentSurfaces: string[];
   exitControlBytes: string;
   /** The bound ACP adapter this attachment is proven against. */
-  adapterCommand: string;
+  adapterIdentity: string;
   /** How many markers of an enclosing agent session were kept out. */
   inheritedAgentMarkersRemoved: number;
   markerStored: boolean;
@@ -856,11 +862,16 @@ interface JourneyVerdict {
     present: boolean;
     agentSessionId: string;
   };
-  /** The build this run observed, reobserved after the whole journey. */
+  /**
+   * The build this run observed after the whole journey.
+   *
+   * Recorded evidence of what ran. It decides nothing: a fresh route keeps no
+   * executable history to compare it with, and a release absent from earlier
+   * evidence is what this opt-in regression exists to exercise.
+   */
   observed: {
     version: string;
     digestPresent: boolean;
-    matchesRoute: boolean;
   };
   /** The independent case: a route naming a conversation nobody ever had. */
   absent: {
@@ -875,7 +886,7 @@ interface JourneyVerdict {
   privateStateInspected: boolean;
 }
 
-function blankJourney(mode: Mode): JourneyVerdict {
+export function blankJourney(mode: Mode): JourneyVerdict {
   return {
     mode,
     verdict: "HARNESS_FAILED",
@@ -913,7 +924,7 @@ function blankJourney(mode: Mode): JourneyVerdict {
     consentInputBytes: "",
     consentSurfaces: [],
     exitControlBytes: "",
-    adapterCommand: "",
+    adapterIdentity: "",
     inheritedAgentMarkersRemoved: 0,
     markerStored: false,
     markerRecovered: false,
@@ -943,7 +954,7 @@ function blankJourney(mode: Mode): JourneyVerdict {
       failureClasses: [],
     },
     arrangement: { present: false, agentSessionId: "" },
-    observed: { version: "", digestPresent: false, matchesRoute: false },
+    observed: { version: "", digestPresent: false },
     absent: {
       ran: false,
       xmdExitCode: -1,
@@ -970,18 +981,10 @@ const REPO_ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
 const XMD_BINARY = join(REPO_ROOT, "dist", "xmd");
 const SESSION_COORDINATOR_ROOT = join(homedir(), ".acpx", "xmd-native-sessions", "v1");
 
-/** The exact absolute paths one natural key owns, and nothing else. */
-function keyPaths(agentCommand: string, sessionKey: string): string[] {
-  const digest = agentSessionKeyDigest({ provider: "acpx", agent: agentCommand, sessionKey });
-  return [
-    join(SESSION_COORDINATOR_ROOT, "routes", `${digest}.json`),
-    join(SESSION_COORDINATOR_ROOT, "ownership", `${digest}.json`),
-    join(SESSION_COORDINATOR_ROOT, "leases", `${digest}.lease`),
-  ];
-}
+const adapters = createEmbeddedAdapters(join(homedir(), ".xmd", "adapters"));
 
 /** Where the ACP client keeps its own arrangement for one session key. */
-const ACPX_SESSION_DIR = join(homedir(), ".acpx", "sessions");
+const ACP_STATE_DIR = join(homedir(), ".acpx");
 
 /**
  * The one arrangement record this run's session key owns.
@@ -992,7 +995,7 @@ const ACPX_SESSION_DIR = join(homedir(), ".acpx", "sessions");
  * opened anywhere in this fixture.
  */
 function arrangementPath(sessionKey: string): string {
-  return join(ACPX_SESSION_DIR, `${encodeURIComponent(sessionKey)}.json`);
+  return join(ACP_STATE_DIR, "sessions", `${encodeURIComponent(sessionKey)}.json`);
 }
 
 /**
@@ -1037,7 +1040,7 @@ interface Invocation {
   argv: string[];
 }
 
-function parseObservations(text: string): Invocation[] {
+export function parseObservations(text: string): Invocation[] {
   const invocations: Invocation[] = [];
   let current: Invocation | undefined;
   for (const line of text.split("\n")) {
@@ -1065,8 +1068,26 @@ function valueOf(invocation: Invocation, flag: string): string | undefined {
   return index >= 0 ? invocation.argv[index + 1] : undefined;
 }
 
+export function recordNativeInvocations(observed: Invocation[], verdict: JourneyVerdict): void {
+  const ui = nativeUiInvocations(observed);
+  const opening = ui[0];
+  if (opening) {
+    verdict.firstCommand = filtered(opening);
+  }
+  const allocated = new Set(
+    ui
+      .map((invocation) => valueOf(invocation, "--session-id"))
+      .filter((value): value is string => typeof value === "string"),
+  );
+  verdict.identityAllocations = allocated.size;
+  // Nothing after the native launch may start a Claude of its own: an ACP turn
+  // that spawned one would be a native UI, not an attachment.
+  verdict.substitutedIdentity = ui.length > 1;
+  verdict.freshFallback = allocated.size > 1;
+}
+
 /** The command shape a verdict may carry: the private path is never in it. */
-function filtered(invocation: Invocation): string[] {
+export function filtered(invocation: Invocation): string[] {
   const argv = ["claude", ...invocation.argv];
   const index = argv.indexOf("--system-prompt-file");
   if (index >= 0 && index + 1 < argv.length) {
@@ -1330,7 +1351,7 @@ function* invoke(
   verdict: JourneyVerdict,
   plan: TurnPlan,
 ): Operation<InvocationOutcome> {
-  const before = (yield* observedInvocations(journey)).length;
+  const before = nativeUiInvocations(yield* observedInvocations(journey)).length;
   const channels: PtyChannels = {
     charged(bytes) {
       verdict.conversationInputByteCount += bytes;
@@ -1372,7 +1393,7 @@ function* invoke(
     },
   );
 
-  outcome.children = (yield* observedInvocations(journey)).length - before;
+  outcome.children = nativeUiInvocations(yield* observedInvocations(journey)).length - before;
   return outcome;
 }
 
@@ -1469,20 +1490,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     .filter((entry): entry is string => typeof entry === "string");
 
   const observed = yield* observedInvocations(journey);
-  const opening = observed[0];
-  if (opening) {
-    verdict.firstCommand = filtered(opening);
-  }
-  const allocated = new Set(
-    observed
-      .map((invocation) => valueOf(invocation, "--session-id"))
-      .filter((value): value is string => typeof value === "string"),
-  );
-  verdict.identityAllocations = allocated.size;
-  // Nothing after the native launch may start a Claude of its own: an ACP turn
-  // that spawned one would be a native UI, not an attachment.
-  verdict.substitutedIdentity = observed.length > 1;
-  verdict.freshFallback = allocated.size > 1;
+  recordNativeInvocations(observed, verdict);
 
   // The prepared text, held here and nowhere else. It answers the two questions
   // about where it travelled, and reaches no rendered field.
@@ -1501,11 +1509,11 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
   // artifact here that holds the operator's whole environment.
   yield* rm(journey.environmentDump, { recursive: false, force: true });
 
-  const agentCommand = resolveAgentCommand(createAgentRegistry(), "claude");
+  const agentCommand = adapters.command("claude");
   const sessionKey = head?.sessionKey;
   let removed = true;
   if (typeof sessionKey === "string" && sessionKey.length > 0) {
-    const paths = keyPaths(agentCommand, sessionKey);
+    const paths = claudeKeyPaths(SESSION_COORDINATOR_ROOT, agentCommand, sessionKey);
     const [route] = paths;
     if (route !== undefined && (yield* exists(route))) {
       const parsed: unknown = JSON.parse(yield* until(readFile(route, "utf8")));
@@ -1526,13 +1534,10 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     // means the attachment reached the client at all; what it asserts is which
     // conversation the client was told to open.
     const arrangement = arrangementPath(sessionKey);
-    if (yield* exists(arrangement)) {
-      const parsed: unknown = JSON.parse(yield* until(readFile(arrangement, "utf8")));
-      if (isRecord(parsed)) {
-        verdict.arrangement.present = true;
-        verdict.arrangement.agentSessionId =
-          typeof parsed.agentSessionId === "string" ? parsed.agentSessionId : "";
-      }
+    const record = yield* readProofArrangement(ACP_STATE_DIR, sessionKey);
+    if (record) {
+      verdict.arrangement.present = true;
+      verdict.arrangement.agentSessionId = record.agentSessionId ?? "";
     }
     for (const path of [...paths, arrangement]) {
       yield* rm(path, { recursive: false, force: true });
@@ -1543,9 +1548,14 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     verdict.cleanup.providerArrangementRemoved = true;
   }
   // The absent-identity case published a route of its own, under its own key.
-  for (const path of keyPaths(agentCommand, journey.absentKey)) {
-    yield* rm(path, { recursive: false, force: true });
-    removed &&= !(yield* exists(path));
+  if (journey.absentKey) {
+    for (const path of [
+      ...claudeKeyPaths(SESSION_COORDINATOR_ROOT, agentCommand, journey.absentKey),
+      arrangementPath(journey.absentKey),
+    ]) {
+      yield* rm(path, { recursive: false, force: true });
+      removed &&= !(yield* exists(path));
+    }
   }
   verdict.cleanup.routeRecordsRemoved = removed;
   verdict.routeConverted = verdict.route.kind !== "" && verdict.route.kind !== "client-native";
@@ -1588,21 +1598,13 @@ function bindingDigestPresent(value: unknown): boolean {
   return isRecord(digest) && typeof digest.value === "string" && digest.value.length === 64;
 }
 
-function* claudeVersion(journey: Journey): Operation<string> {
-  const reported = yield* bounded("claude-version", VERSION_MS, () =>
-    runChild("claude", ["--version"], { cwd: journey.root, live: journey.live }),
-  );
-  return reported.code === 0 ? reported.stdout.trim() : "";
-}
-
 /** Everything both journeys establish before they are allowed to launch. */
-function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
+function ready(journey: Journey, verdict: JourneyVerdict): boolean {
   if (journey.realClaude.length === 0) {
     verdict.verdict = "ENVIRONMENT_BLOCKED";
     verdict.detail = "no installed claude executable was found on PATH";
     return false;
   }
-  verdict.claudeVersion = yield* claudeVersion(journey);
   if (!verdict.projectCopyVerified) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the project copy is not byte-identical to the checked-in role document";
@@ -1620,10 +1622,10 @@ function* runAttachment(
   verdict: JourneyVerdict,
   marker: string,
 ): Operation<void> {
-  if (!(yield* ready(journey, verdict))) {
+  if (!ready(journey, verdict)) {
     return;
   }
-  verdict.adapterCommand = boundAdapterCommand();
+  verdict.adapterIdentity = adapters.identity("claude");
   verdict.acpDocumentCarriesMarker = (yield* until(readFile(ACP_DOCUMENT, "utf8"))).includes(
     marker,
   );
@@ -1659,7 +1661,7 @@ function* runAttachment(
   // The second command: the checked-in document, verbatim, through the same
   // built binary in the same directory. No terminal, no consent, no native
   // child — an ordinary ACP turn against the session the native process made.
-  const before = (yield* observedInvocations(journey)).length;
+  const before = nativeUiInvocations(yield* observedInvocations(journey)).length;
   const acp = yield* bounded("acp-prompt", ANSWER_MS, () =>
     runChild(XMD_BINARY, xmdArguments(ACP_DOCUMENT, journey.journals[1]), {
       cwd: journey.project,
@@ -1669,45 +1671,34 @@ function* runAttachment(
   );
   verdict.modelTurns += 1;
   verdict.acpXmdExitCode = acp.code ?? -1;
-  verdict.acpInvocationChildren = (yield* observedInvocations(journey)).length - before;
+  verdict.acpInvocationChildren =
+    nativeUiInvocations(yield* observedInvocations(journey)).length - before;
   // The one thing that crosses out of the answer is whether the marker came
   // back behind a prefix that appears in no earlier turn. The answer itself
   // stays here.
   verdict.markerRecovered = squeeze(acp.stdout).includes(`${RECOVER_PREFIX}${marker}`);
   verdict.outcome = verdict.markerRecovered ? "same-conversation" : "unresolved";
 
-  // Reobserved after the whole journey, against what the route retained. A
-  // build that moved is the same build; a build that changed is not.
-  const reobserved = yield* observeBuild(journey);
-  verdict.observed.version = reobserved.version;
-  verdict.observed.digestPresent = reobserved.digest.length === 64;
-
   yield* runAbsentIdentity(journey, verdict);
+  yield* observeBuild(verdict);
 }
 
-/** The exact ACP adapter command a bound Claude attachment is proven against. */
-function boundAdapterCommand(): string {
-  const adapter = nativeAdapterFor("claude");
-  if (!adapter || !allocatesIdentity(adapter)) {
-    return "";
+/** Record only the build evidence available after both cases finish. */
+function* observeBuild(verdict: JourneyVerdict): Operation<void> {
+  try {
+    const observer = createDenoExecutableObserver();
+    if (observer) {
+      const found = yield* observer.observe("claude");
+      const adapter = nativeAdapterFor("claude");
+      if (adapter && allocatesIdentity(adapter)) {
+        verdict.observed.version = adapter.binding.version(found.versionOutput) ?? "";
+        verdict.claudeVersion = verdict.observed.version;
+      }
+      verdict.observed.digestPresent = found.digest.value.length === 64;
+    }
+  } catch {
+    // An unavailable observation leaves the evidence fields at their defaults.
   }
-  return adapter.binding.adapterCommand ?? "";
-}
-
-/** What this run's own observer says the installed Claude build is. */
-function* observeBuild(journey: Journey): Operation<{ version: string; digest: string }> {
-  const observer = createDenoExecutableObserver();
-  if (!observer) {
-    return { version: "", digest: "" };
-  }
-  const found = yield* observer.observe("claude");
-  const adapter = nativeAdapterFor("claude");
-  const version =
-    adapter && allocatesIdentity(adapter)
-      ? adapter.binding.version(found.versionOutput)
-      : undefined;
-  void journey;
-  return { version: version ?? "", digest: found.digest.value };
 }
 
 /**
@@ -1723,35 +1714,18 @@ function* observeBuild(journey: Journey): Operation<{ version: string; digest: s
  * instead of refusing would answer the prompt and fail this.
  */
 function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operation<void> {
-  const agentCommand = resolveAgentCommand(createAgentRegistry(), "claude");
-  const sessionKey = deriveSessionKey(agentCommand, journey.absentProject, "implementer");
-  journey.absentKey = sessionKey;
+  const key = claudeRouteKey(adapters, journey.absentProject);
+  const { sessionKey } = key;
   const store = createDenoSessionRouteStore(SESSION_COORDINATOR_ROOT);
-  const observed = yield* observeBuild(journey);
-  if (!store || observed.version.length === 0 || observed.digest.length !== 64) {
-    verdict.verdict = "HARNESS_FAILED";
-    verdict.detail = "the absent-identity case could not name a build to bind to";
-    return;
+  if (!store) {
+    throw new Error("the absent-identity proof requires the session route store");
   }
-  yield* store.publish({
-    schema: "session-route.v2",
-    route: "client-native",
-    provider: "acpx",
-    agent: agentCommand,
-    sessionKey,
-    nativeSessionId: randomUUID(),
-    identityProvenance: "client-allocated",
-    instructionsDigest: createHash("sha256").update(sessionKey).digest("hex"),
-    launcher: "claude",
-    executableBinding: {
-      schema: "executable-build.v1",
-      reportedVersion: observed.version,
-      executableDigest: { algorithm: "sha256", value: observed.digest },
-    },
-  });
-
-  const before = (yield* observedInvocations(journey)).length;
-  const turnsBefore = verdict.modelTurns;
+  if (yield* readProofArrangement(ACP_STATE_DIR, sessionKey)) {
+    throw new Error("the absent identity already has an ACP arrangement");
+  }
+  journey.absentKey = sessionKey;
+  yield* prepareAbsentRoute(store, key, randomUUID());
+  const before = nativeUiInvocations(yield* observedInvocations(journey)).length;
   const attempt = yield* bounded("absent-identity", ANSWER_MS, () =>
     runChild(XMD_BINARY, xmdArguments(ACP_DOCUMENT, journey.journals[2]), {
       cwd: journey.absentProject,
@@ -1761,8 +1735,9 @@ function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operatio
   );
   verdict.absent.ran = true;
   verdict.absent.xmdExitCode = attempt.code ?? -1;
-  verdict.absent.nativeChildren = (yield* observedInvocations(journey)).length - before;
-  verdict.absent.modelTurns = verdict.modelTurns - turnsBefore;
+  verdict.absent.nativeChildren =
+    nativeUiInvocations(yield* observedInvocations(journey)).length - before;
+  verdict.absent.modelTurns = yield* submittedModelTurns(ACP_STATE_DIR, sessionKey);
   // An answer at all would mean history was created for an identity nobody
   // ever had. The failure class is the product's own, filtered.
   verdict.absent.answered = squeeze(attempt.stdout).includes(RECOVER_PREFIX);
@@ -1793,13 +1768,13 @@ function refusalClass(output: string): string {
   if (output.includes("could not open")) {
     return "identity-unavailable";
   }
-  if (output.includes("before XMD recorded which build") || output.includes("would use")) {
+  if (output.includes("is unavailable")) {
     return "executable-binding-refused";
   }
   return "";
 }
 
-function decideAttachment(verdict: JourneyVerdict): void {
+export function decideAttachment(verdict: JourneyVerdict): void {
   if (verdict.acpDocumentCarriesMarker) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the ACP document carries the marker, so recovering it would prove nothing";
@@ -1826,14 +1801,12 @@ function decideAttachment(verdict: JourneyVerdict): void {
     verdict.detail = "the route, the journal and the ACP arrangement do not name one conversation";
     return;
   }
-  verdict.observed.matchesRoute =
-    verdict.observed.version.length > 0 && verdict.observed.version === verdict.route.buildVersion;
-  if (
-    !verdict.observed.matchesRoute ||
-    verdict.journal.buildVersion !== verdict.route.buildVersion
-  ) {
+  // A fresh route and its journal record no executable history. Whatever the
+  // two original accounts say about a build, they must say the same thing; the
+  // build this run used is never compared with either.
+  if (verdict.journal.buildVersion !== verdict.route.buildVersion) {
     verdict.verdict = "PRODUCT_FAILED";
-    verdict.detail = "the retained build and the build this run would use are not the same";
+    verdict.detail = "the route and the journal describe the session's build differently";
     return;
   }
   if (verdict.substitutedIdentity || verdict.freshFallback || verdict.routeConverted) {
@@ -1848,8 +1821,8 @@ function decideAttachment(verdict: JourneyVerdict): void {
   }
   verdict.verdict = "PASS";
   verdict.detail =
-    "a marker-free ACP prompt recovered the native turn's history under the same identity " +
-    "and the same build, and an absent identity refused without a turn";
+    "a marker-free ACP prompt recovered the native turn's history under the same identity, " +
+    "and the provider refused an absent identity before a turn";
 }
 
 /**
@@ -1921,7 +1894,7 @@ function render(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-main(function* () {
+function* runProof(): Operation<void> {
   // Planted only in the first native user turn and held here. It reaches no
   // instruction file, no argument vector, no environment, no session key, no
   // durable record, no document this run executes, and no rendered field.
@@ -1939,4 +1912,8 @@ main(function* () {
     verdict.detail = "the verdict carried the history marker";
   }
   render(verdict);
-});
+}
+
+if (import.meta.main) {
+  main(runProof);
+}

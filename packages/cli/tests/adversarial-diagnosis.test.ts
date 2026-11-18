@@ -613,7 +613,10 @@ describe("adversarial problem-solver phase", () => {
     const calls = test.fake.prompts.length;
     expect(
       JSON.parse(yield* test.run(join(test.root, "third"), join(second, "fable"))),
-    ).toMatchObject({ status: "hold", reason: expect.stringContaining("identity changed") });
+    ).toMatchObject({
+      status: "hold",
+      reason: expect.stringContaining("reopened a different native conversation"),
+    });
     expect(test.fake.prompts).toHaveLength(calls);
   });
 

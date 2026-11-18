@@ -17,7 +17,7 @@ deno {caseArguments}
 
 <Test name="workflow-owned recovery runtime suite" timeout="1200s">
 ```bash exec as="runtime"
-deno test --allow-all --frozen --node-modules-dir=manual --cached-only examples/adversarial-implementation/tests/runtime/joined-response-recovery.test.ts
+deno test --allow-all --frozen --node-modules-dir=manual --cached-only examples/adversarial-implementation/tests/runtime/joined-response-recovery-suite.ts
 ```
 <If condition={runtime.exitCode !== 0}><Fail message={runtime.stdout + "\n" + runtime.stderr} /></If>
 </Test>
