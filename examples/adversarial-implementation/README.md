@@ -84,6 +84,7 @@ initial packet within 64000 characters; retain full logs as references.
 | `implementation.ready`, `implementation.evidence` | Whether accepted scope and focused checks suffice for direct implementation through existing interfaces. A separate plan document is optional. |
 | `sharedApi.needed`, `sharedApi.evidence` | Whether accepted behavior requires shared API work. Necessary API work excludes simple; it alone does not justify a migration split. |
 | `migration` | `null` declares no worthwhile separate migration split. A record requires `evidence`, `representativeConsumers` and `remainingConsumers`: repeated production friction, representative validation and substantial identified conversion remaining. Both consumer lists are nonempty, distinct, disjoint repository-relative committed production paths. No file-count threshold applies. |
+| `migrationProgram` | Absolute path to the shared parent program for a repetitive migration. Every batch uses it, including batches that use the ordinary route. A non-null `migration` requires it. |
 
 `assessment` is the existing ReviewPolicy impact assessment, independent of
 scope. Its evidence and optional risk evidence also select `inputs`. Routing
@@ -97,6 +98,7 @@ The table is ordered. Missing or unknown facts never become false or null.
 | --- | --- |
 | Missing/invalid/unknown member, unavailable evidence/source, occupied fresh-work directory, conflicting identities or contradictory migration record | Actionable hold before paid roles; identify what to correct or which existing record to continue |
 | Any `decisions.openQuestions` item | Hold before paid roles; show the unanswered question and evidence |
+| Parent migration meets the [design cutoff](#assess-a-repetitive-migration) | Obtain or verify the shared Problem Solver design. A held, uncertain or invalid assessment holds the batch before implementation. |
 | Valid non-null migration record and `sharedApi.needed=true` | Existing Planner foundation and representative validation, then remaining consumer implementation, selected review and retirement |
 | `migration=null`, `sharedApi.needed=false`, `implementation.ready=true` | Direct Implementor, then existing impact-selected independent review |
 | `migration=null`, `sharedApi.needed=false`, `implementation.ready=false` | Ordinary Planner plan/evidence, with original Architect discovery when requested, then the same Planner handoff to Implementor and selected review |
@@ -113,6 +115,10 @@ Valid facts, evidence, source and fresh-work prerequisites?
 Any unresolved material question?
         | yes -----------------------> HOLD: show question and evidence
         | no
+        v
+Parent migration meets design cutoff?
+        | yes -> obtain or verify shared Problem Solver design
+        |        hold if the result cannot be verified
         v
 Justified migration record?  (requires sharedApi.needed=true)
         | yes -----------------------> MIGRATION
@@ -178,6 +184,71 @@ and include version. Keep the original session identities and recorded inputs.
 The roles use the normal agent permission policy. Running this example invokes
 paid coding agents and permits the assigned implementation work. Publication,
 issue/PR metadata and delivery remain with the Sidekick running Codex.
+
+## Assess a repetitive migration
+
+Use one parent program for all tickets, branches and PRs that make the same
+repetitive change. The Planner keeps the program and its supporting query or
+inventory outside individual batch checkouts and work directories. Set
+`scope.migrationProgram` to the same absolute program path for every batch.
+Count comparable sites across the full parent, including completed work.
+Count a batch once when it also has a PR. Update the parent record when a
+later ticket reveals more sites or changes the rollout.
+
+A program looks like this:
+
+```json
+{
+  "schema": "migration-program.v1",
+  "parent": "taras/executable.md#1171",
+  "unit": "one test owner that writes a failure journal",
+  "estimatedSites": 19,
+  "plannedBatches": 2,
+  "inventory": "journal-owners.md",
+  "uncertainty": {
+    "additionalSites": 2,
+    "additionalBatches": 0,
+    "reason": "Two candidates still need ownership checks."
+  },
+  "assumptions": "Each test owner belongs to one of the inventoried harnesses."
+}
+```
+
+The inventory is a text file beside the program. It records the source
+revision, query or counting method, and evidence behind the reported totals.
+Use zero for a dimension with no expected additions and `null` for an
+unbounded estimate. The workflow requires design at **20 sites or three
+batches**. It checks the upper end of both estimates, so the example requires
+a design for its 21 possible sites. An unbounded dimension takes the design
+path. Below both cutoffs, the workflow checks the two files and makes no
+Problem Solver call.
+
+Twenty sites gives a repeatable transformation enough applications to justify
+a representative dry run. Three batches catches the fixed planning and
+review work repeated on a rollout with fewer sites. These are initial
+thresholds. The observed rollout had ten open PRs, 75 commits, about 13,400
+non-whitespace changed lines, and 74 test owners pending or partial. A separate
+Fable assessment found that 17 rounds each left their own migration and audit
+scripts. It recommended consolidating them and backtesting the shared recipe
+before delegating routine cases. Token spend was unmeasured.
+[Journal attribution migration](https://github.com/taras/executable.md/issues/1171)
+
+The first batch that reaches a cutoff runs the existing Problem Solver design
+phase. It compares deterministic edits or a shared helper, batches a cheaper
+model can handle, a narrower rollout, and cases that need individual judgment.
+A hybrid XMD approach can inventory and preview deterministically, ask a model
+to classify ambiguous sites against approved recipes, and apply only the
+TypeScript edits whose AST preconditions pass. The assessment recommends a
+small dry run and gives distinct, measurable pass and fail outcomes.
+
+The workflow retains one attempt beside the parent record for the exact
+program and inventory contents. Further batches using those contents reuse
+the verified design and its native session receipt across checkout revisions.
+Changed contents require a new assessment when the cutoff applies. Keep the
+parent records stable while their assumptions hold. If a reserved attempt is still
+running or has no valid result, the batch holds and reports the saved
+attempt for reconciliation. Retrying the batch cannot repeat a reserved design turn.
+An admitted batch keeps its captured design with the existing Ticket inputs.
 
 ## Keep the original conversation
 

@@ -161,6 +161,7 @@ returns: {type: object}
           ],
           "additionalProperties": false
         },
+        "migrationProgram": {type:"string",pattern:"^/"},
         "migration": {
           "anyOf": [
             {

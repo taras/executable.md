@@ -84,6 +84,7 @@ function* fixture() {
           specs?: string[];
         } = {},
     solvers?: { primary: SolverProfile; fallback?: SolverProfile },
+    migration?: { path: string; directory: string },
   ) {
     return scoped(function* () {
       yield* useHostFiles();
@@ -163,7 +164,16 @@ function* fixture() {
         solvers === undefined
           ? `<Entry.Phase request=${JSON.stringify(path)} as="result" />`
           : `<Diagnosis.Run request={${JSON.stringify(request)}} solvers={${JSON.stringify(solvers)}} as="result" />`;
-      const source = entry + "<Json value={result} />";
+      const gate =
+        migration === undefined
+          ? entry
+          : `<Migration.Gate batch={${JSON.stringify({
+              ...migration,
+              repository,
+              revision: expectedRevision,
+              repositoryId: "taras/executable.md",
+            })}} as="result" />`;
+      const source = gate + "<Json value={result} />";
       yield* writeTextFile(doc, source);
       const result = yield* collect(
         yield* executeInstalled(
@@ -181,6 +191,27 @@ function* fixture() {
     revision,
     fake,
     run,
+    gate(path: string, batch: string) {
+      return run(root, undefined, [], {}, undefined, { path, directory: join(root, batch) });
+    },
+    advanceRevision() {
+      git(
+        [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=f@example.test",
+          "commit",
+          "--allow-empty",
+          "-qm",
+          "next batch",
+        ],
+        repository,
+        root,
+      );
+      expectedRevision = git(["rev-parse", "HEAD"], repository, root).trim();
+      return expectedRevision;
+    },
     changeRevision() {
       expectedRevision = "f".repeat(40);
     },
@@ -195,6 +226,90 @@ function offer(fake: ReturnType<typeof createFakeAcp>, models: string[]) {
     ),
   });
 }
+
+describe("parent migration design gate", () => {
+  it("routes across the parent cutoff, reuses a joined design and invalidates changed evidence", function* () {
+    const test = yield* fixture();
+    offer(test.fake, ["fable", "gpt-6-astra"]);
+    const path = join(test.root, "program.json");
+    const program = {
+      schema: "migration-program.v1",
+      parent: "taras/executable.md#1171",
+      unit: "One journal-retaining test owner",
+      estimatedSites: 19,
+      plannedBatches: 2,
+      inventory: "first.log",
+      assumptions: "Each owner uses an existing test harness.",
+      uncertainty: { additionalSites: 0, additionalBatches: 0, reason: "Owners counted." },
+    };
+    const advice = {
+      outcome: "design",
+      revision: test.revision,
+      options: [
+        { option: "AST recipes", tradeoffs: "Mechanical edits use preview and validation." },
+        {
+          option: "Codex Terra batches",
+          tradeoffs: "Keep ambiguous owners for individual review.",
+        },
+      ],
+      observations: [{ source: test.evidence, observation: "Some owners share the same recipe." }],
+      recommendation: "Preview recipes and run two representative owners.",
+      whatWouldChange: "An owner needs a different journal lifecycle.",
+      openQuestions: [],
+      dryRun: {
+        procedure: "Preview and run two test owners.",
+        pass: "Both retain the expected journal and the diff contains only matched edits.",
+        fail: "Either loses a journal or applies an unmatched edit.",
+      },
+    };
+
+    yield* writeTextFile(path, JSON.stringify(program));
+    expect(JSON.parse(yield* test.gate(path, "batch-one"))).toEqual({ result: null });
+    expect(test.fake.prompts).toHaveLength(0);
+
+    yield* writeTextFile(path, JSON.stringify({ ...program, estimatedSites: 20 }));
+    test.fake.script({ reply: JSON.stringify(advice) });
+    const accepted = JSON.parse(yield* test.gate(path, "renamed-second-ticket"));
+    expect(accepted).toMatchObject({ parent: program.parent });
+    expect(accepted.result).toMatch(/\.design-[a-f0-9]{64}\/fable\/result\.json$/);
+    expect(test.fake.prompts[0]).toContain("TypeScript edits guarded by AST preconditions");
+    expect(test.fake.prompts[0]).toContain("Codex Terra");
+    const revised = { ...advice, revision: test.advanceRevision() };
+    expect(JSON.parse(yield* test.gate(path, "another-batch"))).toEqual(accepted);
+    expect(test.fake.prompts).toHaveLength(1);
+
+    const acceptedText = yield* readTextFile(accepted.result);
+    const amended = JSON.parse(acceptedText);
+    amended.result.recommendation = "Unverified modification.";
+    yield* writeTextFile(accepted.result, JSON.stringify(amended));
+    yield* expectRefusal(test.gate(path, "changed-receipt"), "joined reply");
+    expect(test.fake.prompts).toHaveLength(1);
+    yield* writeTextFile(accepted.result, acceptedText);
+
+    yield* writeTextFile(path, JSON.stringify({ ...program, plannedBatches: 3 }));
+    test.fake.script({ reply: JSON.stringify({ ...revised, dryRun: undefined }) });
+    yield* expectRefusal(test.gate(path, "third-batch"), "required dry run");
+    yield* expectRefusal(test.gate(path, "retried-third-batch"), "required dry run");
+    expect(test.fake.prompts).toHaveLength(2);
+
+    yield* writeTextFile(test.evidence, "Updated inventory excludes a false match.");
+    test.fake.script({ reply: JSON.stringify(revised) });
+    const updated = JSON.parse(yield* test.gate(path, "revised-program"));
+    expect(updated.result).not.toBe(accepted.result);
+    expect(test.fake.prompts).toHaveLength(3);
+
+    yield* writeTextFile(
+      path,
+      JSON.stringify({
+        ...program,
+        uncertainty: { ...program.uncertainty, additionalSites: 1 },
+      }),
+    );
+    test.fake.script({ reply: JSON.stringify(revised) });
+    expect(JSON.parse(yield* test.gate(path, "uncertain-inventory")).result).not.toBeNull();
+    expect(test.fake.prompts).toHaveLength(4);
+  });
+});
 
 describe("adversarial problem-solver phase", () => {
   it("records design advice with pinned spec sections and continues with captured evidence", function* () {

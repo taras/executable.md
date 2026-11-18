@@ -79,12 +79,24 @@ test -f {referencePath} -a -r {referencePath}
 </Loop>
 <If condition={unreadable.length !== 0}><Let as="work" value={{status:"hold",reason:"Prepare readable selected evidence and role-guide texts before launch: " + unreadable.join(", "),history:[]}} /><Break /></If>
 <If condition={task.scope.decisions.openQuestions.length !== 0}><Let as="work" value={{status:"hold",reason:"Resolve these material questions before launch: " + task.scope.decisions.openQuestions.join("; ") + ". Evidence: " + task.scope.decisions.evidence.join(", ") + ". Record accepted answers under fresh references and prepare the task again.",history:[]}} /><Break /></If>
+<If condition={task.scope.migration !== null && task.scope.migrationProgram === undefined}><Let as="work" value={{status:"hold",reason:"Record the shared parent migration at scope.migrationProgram before launching the API migration.",history:[]}} /><Break /></If>
 <Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={[...task.inputs,...guidePaths]} as="retained" />
 <Ticket.Selected repository={task.repository} documents={retained} as="documents" />
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
 <Ticket.Capture as="deliveryCheck"><Delivery.Prepare task={task} inputs={inputs} as="delivery" /><Json value={delivery} /></Ticket.Capture>
 <If condition={deliveryCheck.status !== "completed"}><Let as="work" value={{status:"hold",reason:deliveryCheck.failure,history:[]}} /><Break /></If>
 <Parse schema={{type:"object"}} as="delivery">{deliveryCheck.output}</Parse>
+<If condition={task.scope.migrationProgram !== undefined}>
+<Ticket.Capture as="designCheck"><Migration.Gate batch={{path:task.scope.migrationProgram,repository:task.repository,repositoryId:task.delivery.repository,directory:task.directory,revision:task.revision}} as="gate" /><Json value={gate} /></Ticket.Capture>
+<If condition={designCheck.status !== "completed"}><Let as="work" value={{status:"hold",reason:"Parent migration design gate: " + designCheck.failure,history:[]}} /><Break /></If>
+<Parse schema={{type:"object"}} as="gate">{designCheck.output}</Parse>
+<If condition={gate.result !== null}>
+<Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={[gate.result]} documents={retained} as="retained" />
+<Ticket.Selected repository={task.repository} documents={retained} as="documents" />
+<Let as="task" value={{...task,inputs:[...new Set([...task.inputs,gate.result])],request:task.request + "\n\nParent migration " + gate.parent + ". Use the captured Problem Solver recommendation at " + gate.result + ". Start with its dry run if it has not been verified. Resolve material questions through the existing planning gate."}} />
+<Let as="inputs" value={task.inputs.map(path => documents[path])} />
+</If>
+</If>
 <Let as="plannerGuide" value={documents[guidePaths[0]]} />
 <Let as="implementorGuide" value={documents[guidePaths[1]]} />
 <If condition={task.scope.migration !== null}>

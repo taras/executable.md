@@ -22,7 +22,9 @@ Connect your recommendation to those observations. In `whatWouldChange`, name
 the evidence that would change your recommendation. Use `openQuestions` for
 missing evidence or a decision the Architect must make. If a missing fact
 prevents a choice, recommend the next step and explain what it would resolve.
-The Architect owns the implementation contract.
+The Architect owns the implementation contract. When the assignment asks for
+a dry run, fill in `dryRun` with its procedure and distinct, measurable pass
+and fail outcomes.
 
 Return one JSON object. Keep any progress updates in plain prose.
 

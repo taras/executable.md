@@ -113,6 +113,17 @@ Prefer a focused PR stack when independent invariants can be reviewed and
 merged separately. Do not split work at a point that requires a temporary
 architecture or leaves `main` contradicting its specifications.
 
+## Plan a repetitive migration
+
+Prepare the [parent migration program](../examples/adversarial-implementation/README.md#assess-a-repetitive-migration)
+before launching a migration batch. Count one comparable unit across the
+parent issue, including completed and planned batches. Name the query or
+inventory behind the estimate, the expected batch count and uncertainty.
+Refresh the shared record when new evidence changes those facts. If planning
+reveals a larger migration, return to launch preparation with the updated
+program before handing off implementation. Use the accepted design result and
+its representative dry run to settle the rollout in the plan.
+
 ## Validate the API before handoff
 
 Implement the smallest API that removes the identified authoring friction.

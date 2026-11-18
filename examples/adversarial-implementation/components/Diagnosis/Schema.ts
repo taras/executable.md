@@ -77,6 +77,7 @@ const designResult = z.strictObject({
   recommendation: text,
   whatWouldChange: text,
   openQuestions: z.array(text).max(12),
+  dryRun: z.strictObject({ procedure: text, pass: text, fail: text }).optional(),
 });
 const evidence = z.array(
   z.strictObject({
@@ -86,7 +87,7 @@ const evidence = z.array(
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
   }),
 );
-const designInputs = z.array(z.strictObject({ path: text, content: z.string() })).max(12);
+export const designInputs = z.array(z.strictObject({ path: text, content: z.string() })).max(12);
 const inputs = designInputs.min(1);
 const prior = z.strictObject({
   schema: z.literal("diagnosis-attempt.v1"),
@@ -120,7 +121,7 @@ const receipt = z.strictObject({
   identity,
   result,
 });
-const designReceipt = receipt.extend({
+export const designReceipt = receipt.extend({
   assignment: prior.extend({ assignment: design }),
   result: designResult,
 });
