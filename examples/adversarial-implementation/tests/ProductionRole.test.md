@@ -186,3 +186,15 @@ false
 <AssertEquals actual={incidents.map(incident => incident.issue)} expected={[1075,1081]} />
 <AssertEquals actual={incidents.every(incident => incident.validationCode === "metadata-8" && !incident.canonicalResultCreated && !incident.implementationStarted && !incident.rawRewritten && incident.responseCorrections === 0 && incident.source.startsWith("/private/tmp/"))} expected={true} />
 </Test>
+
+<Test name="an established narrated result with an incidental array needs no response correction">
+<TempDir as="attempt" />
+<Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect controlled behavior.",evidence:["accepted.md"]}} />
+<Let as="assignment" value={{phase:"review",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),priorRevision:null,request:"Inspect the controlled verdict.",changedPaths:[],artifacts:[],evidence:[],findings:[],issue:null,assessment,continuation:{phase:"ready",role:null}}} />
+<Let as="result" value={{schema:"phase-result.v2",phase:"review",work:"test",outcome:"pass",revision:assignment.revision,summary:"Verified the controlled behavior.",handoff:"ROOT: retain this independent result.",artifacts:[],evidence:[],findings:[],assessment,next:{phase:"ready",role:null},discoveryRequests:[],discoveryGaps:[]}} />
+<Phase.Correct assignment={assignment} raw={'Reviewed ["title","body"].\n' + JSON.stringify(result)} role="planner" session="never-prompted" attempt={attempt} profile={{kind:"phase",knownDocuments:[]}} inputs={[]} maxResponseCorrections={0} implementationProvider="claude" as="accepted" />
+<AssertEquals actual={accepted.round} expected={0} />
+<AssertEquals actual={accepted.result.outcome} expected="pass" />
+<Dir path={attempt}><Glob include={["response-corrections/**"]} as="written" /></Dir>
+<AssertEquals actual={written} expected={[]} />
+</Test>

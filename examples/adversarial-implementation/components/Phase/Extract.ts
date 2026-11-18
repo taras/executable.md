@@ -28,7 +28,7 @@ export default function* Extract(props: Record<string, Json>): Operation<Json> {
       },
     };
   }
-  return { ok: true, json: JSON.stringify(parsed.value) };
+  return { ok: true, json: JSON.stringify(parsed.value.value), span: parsed.value.span };
 }
 
 function parseText(text: string): Result<Json> {
@@ -48,14 +48,28 @@ function opensRecord(text: string): boolean {
   );
 }
 
-function readResult(input: string): Result<Json> {
-  const whole = parseText(input.trim());
-  if (whole.ok) {
-    return whole;
+type Candidate = { value: Json; span: { start: number; end: number } };
+
+function objectResult(value: Json, start: number, end: number): Result<Candidate> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return Err(new Error("The agent reply contains a non-object JSON result."));
   }
-  const candidates: Json[] = [];
+  return Ok({ value, span: { start, end } });
+}
+
+function readResult(input: string): Result<Candidate> {
+  const trimmed = input.trim();
+  const whole = parseText(trimmed);
+  if (whole.ok) {
+    const start = input.indexOf(trimmed);
+    return objectResult(whole.value, start, start + trimmed.length);
+  }
+  const candidates: Candidate[] = [];
   let outside = "";
-  let fence: { marker: string; json: boolean; unlabeled: boolean; body: string } | undefined;
+  let offset = 0;
+  let fence:
+    | { marker: string; json: boolean; unlabeled: boolean; body: string; start: number }
+    | undefined;
   for (const line of input.split(/(?<=\n)/)) {
     const delimiter =
       fence === undefined
@@ -73,15 +87,23 @@ function readResult(input: string): Result<Json> {
           if (!parsed.ok) {
             return parsed;
           }
-          candidates.push(parsed.value);
+          const start = fence.start + fence.body.length - fence.body.trimStart().length;
+          const result = objectResult(parsed.value, start, start + fence.body.trim().length);
+          if (!result.ok) {
+            return result;
+          }
+          candidates.push(result.value);
         }
         fence = undefined;
       } else {
         fence.body += line;
       }
+      // Preserve physical lines and UTF-16 positions while excluding fence contents.
+      outside += line.replace(/[^\r\n]/g, " ");
     } else if (delimiter) {
       if (delimiter[2].includes(delimiter[1])) {
         outside += line;
+        offset += line.length;
         continue;
       }
       const language = delimiter[2].trim().toLowerCase();
@@ -90,11 +112,14 @@ function readResult(input: string): Result<Json> {
         json: language === "json",
         unlabeled: language === "",
         body: "",
+        start: offset + line.length,
       };
-      outside += line.slice(0, delimiter.index) + "\n";
+      outside +=
+        line.slice(0, delimiter.index) + line.slice(delimiter.index).replace(/[^\r\n]/g, " ");
     } else {
       outside += line;
     }
+    offset += line.length;
   }
   if (fence !== undefined) {
     return Err(new Error("The agent reply contains an unclosed code fence."));
@@ -117,7 +142,18 @@ function readResult(input: string): Result<Json> {
     if (!parsed.ok) {
       return parsed;
     }
-    candidates.push(parsed.value);
+    if (Array.isArray(parsed.value)) {
+      const prefix = outside.slice(outside.lastIndexOf("\n", index - 1) + 1, index);
+      if (prefix.trim() === "") {
+        return Err(new Error("The agent reply contains a result-position JSON array."));
+      }
+    } else {
+      const result = objectResult(parsed.value, index, end.value);
+      if (!result.ok) {
+        return result;
+      }
+      candidates.push(result.value);
+    }
     index = end.value - 1;
   }
   if (candidates.length !== 1) {

@@ -39,7 +39,8 @@ git rev-parse HEAD
 <Dir path={assignment.attempt}><File path="usage.md">Use format to name a real consumer. The API owns formatting; consumers own their scenario.</File></Dir>
 <Let as="examples" value={[{name:"wide",path:"wide.sh",command:"bash wide.sh"},{name:"modal",path:"modal.sh",command:assignment.request === "failed-example" ? "false" : "bash modal.sh"}]} />
 <Json value={{outcome:"complete",revision,summary:assignment.request.startsWith("response-") ? "x".repeat(1201) : "The API and two consumers are committed.",handoff:"Implementor: migrate the remaining consumer and retire legacy.fixture.",artifacts:[guide],evidence:[],assessment,api:{purpose:"Format consumer text.",optimizedFor:"Behavioral consumer authoring.",frictionRemoved:["Manual text setup."],frictionRetained:["Each consumer names its expected output."],maintenance:["Keep ordinary changes in the adapter."],ownedPaths:["api.sh"],guide,examples,migration:{request:assignment.api === null && assignment.request === "api-repair" ? "first-consumer" : assignment.request === "kept-fixture" ? "keep-fixture" : assignment.request === "change-api" ? "change-api" : "migrate-consumer",retirePaths:["legacy.fixture"],acceptance:["The consumer passes and the old factory is absent."]}}}} as="reply" />
-<If condition={assignment.request === "fenced"}>Completed foundation.
+<If condition={assignment.request === "fenced" || assignment.request === "incidental-array"}>Completed foundation.
+<If condition={assignment.request === "incidental-array"}>Selected ["title","body"].</If>
 <CodeBlock value={reply} language="json" />
 <Else>{reply}</Else>
 </If>

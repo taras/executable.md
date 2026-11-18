@@ -63,6 +63,23 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </Each>
 </Test>
 
+<Test name="one object survives incidental arrays with original UTF-16 spans">
+<Each in={["The selection names [\"title\",\"body\"].\n{\"passed\":true}", "The selection names [\"title\",\"body\"].\n```json\n{\"passed\":true}\n```", "The selection names [{\"nested\":[1,{\"escaped\":\"bracket ] and quote \\\"\"}]}].\n{\"passed\":true}", "The selection names [\n\"title\",\n{\"nested\":[1,2]}\n].\n{\"passed\":true}", "🦉 Completed.\n```json\n{\"passed\":true}\n```\nSaved.", "  {\"passed\":true}  "]} let="reply">
+<Phase.Extract text={reply} as="extracted" />
+<AssertEquals actual={extracted.ok} expected={true} />
+<AssertEquals actual={extracted.json} expected={'{"passed":true}'} />
+<AssertEquals actual={extracted.span} expected={{start:reply.indexOf('{"passed":true}'),end:reply.indexOf('{"passed":true}')+'{"passed":true}'.length}} />
+<AssertEquals actual={reply.slice(extracted.span.start,extracted.span.end)} expected={'{"passed":true}'} />
+</Each>
+</Test>
+
+<Test name="result positions, competing objects and malformed boundaries refuse">
+<Each in={["{\"passed\":true}\n{\"passed\":true}", "{\"passed\":true}\n{\"work\":\"wrong\",\"passed\":false}", "Example: {\"example\":true}\n{\"passed\":true}", "[{\"passed\":true}]", "   [\"title\",\"body\"]\n{\"passed\":true}", "```json\n[\"title\",\"body\"]\n```\n{\"passed\":true}", "```\n[\"title\",\"body\"]\n```\n{\"passed\":true}", "Names [\"title\",\n{\"passed\":true}", "Names [\"title\",]\n{\"passed\":true}", "```json\ntrue\n```\n{\"passed\":true}", "```json\n\n```\n{\"passed\":true}", "```json\n{\"a\":1} {\"b\":2}\n```\n{\"passed\":true}", "true", "42", "\"done\"", "null", "```sh\necho done\n{\"passed\":true}"]} let="reply">
+<Phase.Extract text={reply} as="extracted" />
+<AssertEquals actual={extracted.ok} expected={false} />
+</Each>
+</Test>
+
 <Test name="existing SafeParse owns result validation">
 <Phase.Extract text={'Done: {"passed":"true"}'} as="extracted" />
 <AssertEquals actual={extracted.ok} expected={true} />
@@ -140,6 +157,19 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <TempDir>
 <Fixture.Repository as="fixture" />
 <Fixture.Run fixture={fixture} request="fenced" command={runner} root={suiteRoot} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
+<AssertEquals actual={work.status} expected="feedback_ready" />
+<Ticket.Text path={fixture.directory + "/foundation-0/response-acceptance.json"} as="text" />
+<Parse schema={{type:"object"}} as="accepted">{text}</Parse>
+<AssertEquals actual={accepted.round} expected={0} />
+</TempDir>
+</Test>
+
+<Test name="an incidental array preserves the independent foundation contract" timeout="60s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Run fixture={fixture} request="incidental-array" command={runner} root={suiteRoot} as="child" />
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
 <AssertEquals actual={work.status} expected="feedback_ready" />
