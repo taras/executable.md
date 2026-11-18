@@ -150,7 +150,10 @@ export interface WorkflowHost {
   attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T>;
 }
 
-export type HostWorkflowInstaller = () => Operation<WorkflowHost>;
+export type HostWorkflowInstaller = (options?: {
+  /** The sessions this invocation has already warned about. */
+  readonly compatibilityWarnings?: Set<string>;
+}) => Operation<WorkflowHost>;
 
 /** The one sentence a host without workflow support says. */
 export const UNSUPPORTED_WORKFLOW_HOST =

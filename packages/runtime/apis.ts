@@ -905,3 +905,17 @@ export const compile: typeof API.Env.operations.compile = API.Env.operations.com
 export function useQuietProcessOutput(): Operation<void> {
   return Stdio.around({ *stdout() {} }, { at: "min" });
 }
+
+/**
+ * Write one diagnostic line to the contextual standard error.
+ *
+ * Through the same `Stdio` chain a subprocess's stderr travels, so whatever the
+ * enclosing scope installed — a REPL entry's Command stderr, a held
+ * conversation's transient reading, or the process stream itself — receives it
+ * in order with the rest of that scope's diagnostics. Standard output is never
+ * touched, which keeps a machine-readable result intact.
+ */
+export function writeDiagnostic(text: string): Operation<void> {
+  const line = text.endsWith("\n") ? text : `${text}\n`;
+  return Stdio.operations.stderr(new TextEncoder().encode(line));
+}

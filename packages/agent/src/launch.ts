@@ -84,12 +84,11 @@ export type LaunchFailureClass =
  * last owner never proved it stopped, so nothing here can say the session is
  * free, and no elapsed time, pid or released lock changes that.
  *
- * `executable-binding-refused` is the build question: the session was
- * established by one build of a provider executable, and this run could not
- * show it is talking to that same build. Resolution, canonicalization,
- * executable-file validation, version parsing, digesting, schema recognition,
- * equality, and a session established before any build was recorded all end
- * here.
+ * `executable-binding-refused` is the availability question: the executable
+ * the current environment selects is missing or cannot be run. A version that
+ * differs from a session's history, or cannot be determined, is a diagnostic
+ * and never this refusal; whether a conversation continues is decided by its
+ * provider-confirmed identity.
  *
  * `configuration-refused` is the model or effort question: the session could
  * not be put into the configuration the `<Session>` asked for, or the attempt
@@ -127,10 +126,9 @@ export type IdentityProvenance = "provider-returned" | "client-allocated";
 /**
  * Which build of a provider executable a session was established against.
  *
- * A client-allocated session is only meaningful while the build that created
- * it can be reproduced. Two builds of the same provider accept the same
- * identity and disagree silently about what it names, so a session whose build
- * cannot be reproduced is refused rather than resumed.
+ * Diagnostic history: a later run reports when the version it observes
+ * differs, and continues. The record is never rewritten with today's build,
+ * and its absence says nothing.
  *
  * What is retained is deliberately not a path: a path says where a build was,
  * which stops being true, while a version and a digest say which build it was,
@@ -149,7 +147,9 @@ export interface ExecutableBuildBindingV1 {
  * Whether two bindings name the same build.
  *
  * Equality is over what was retained, so the same build reached through a
- * different path is compatible and a different build at the same path is not.
+ * different path is equal and a different build at the same path is not. Used
+ * to check that two original accounts of one session agree, never to admit a
+ * live executable.
  */
 export function sameExecutableBuild(
   left: ExecutableBuildBindingV1,

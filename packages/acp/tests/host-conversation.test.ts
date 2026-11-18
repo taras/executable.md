@@ -24,6 +24,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { Stdio } from "@effectionx/process";
 import { expect } from "@executablemd/test-support/expect";
 import {
   InMemoryStream,
@@ -1334,7 +1335,12 @@ function changingHost(f: CertificationFixture, agent = AGENT): ChangingHost {
   const ownership = owned();
   const runtime = runtimeBoundary();
   const observer = createFakeObserver({
-    versionOutput: agent === "codex" ? "codex-cli 0.163.0\n" : "scribe 1.0.0\n",
+    versionOutput:
+      agent === "codex"
+        ? "codex-cli 0.163.0\n"
+        : agent === "claude"
+          ? "2.1.241 (Claude Code)\n"
+          : "scribe 1.0.0\n",
   });
   return {
     store,
@@ -1574,7 +1580,9 @@ describe(
             expect(attempt).toContain("session/load");
             expect(attempt).not.toContain("session/new");
             expect(attempt).not.toContain("session/prompt");
-            expect(history.snapshot()).toEqual(journal);
+            // The history keeps its prefix; the refused turn is recorded as the
+            // failure it was, with nothing answered in its place.
+            expect(history.snapshot().slice(0, journal.length)).toEqual(journal);
             const unchanged = yield* until(target.store.load(original));
             expect([
               unchanged?.acpSessionId,
@@ -1592,9 +1600,10 @@ describe(
           throw reopened.error;
         }
         expect(reopened.value.refused.ok).toBe(false);
-        // The adapter's own account of the failed load crosses unchanged.
-        expect(!reopened.value.refused.ok && reopened.value.refused.error.message).toContain(
-          "missing controlled history",
+        // The same refusal a held Codex conversation meets: the resume could not
+        // be performed, and nothing replaced it.
+        expect(!reopened.value.refused.ok && reopened.value.refused.error.name).toBe(
+          "SessionResumeRequiredError",
         );
         expect(reopened.value.later).toEqual(Ok("remembered"));
         expect(
@@ -1602,10 +1611,13 @@ describe(
             .filter((call) => call.method === "session/prompt")
             .map((call) => call.kind),
         ).toEqual(["seed", "recall"]);
-        // The refused turn recorded nothing; only the seed and the later turn are recorded.
+        // The refused turn recorded its failure and no answer.
         const keptTurns = turns(history.snapshot());
-        expect(keptTurns).toHaveLength(2);
-        expect(keptTurns.map((turn) => turn.record.status)).toEqual(["completed", "completed"]);
+        expect(keptTurns.map((turn) => turn.record.status)).toEqual([
+          "completed",
+          "failed",
+          "completed",
+        ]);
       });
     });
 
@@ -1737,186 +1749,266 @@ describe(
   },
 );
 
+/** One supported provider's release before and after a host CLI upgrade. */
+const UPGRADES = {
+  codex: {
+    before: "codex-cli 0.163.0",
+    after: "codex-cli 0.167.1\n",
+    variable: "CODEX_PATH",
+    warning:
+      "Codex has changed from 0.163.0 to 0.167.1 since this session was established. " +
+      "Continuing the existing conversation.",
+  },
+  claude: {
+    before: "2.1.241 (Claude Code)",
+    after: "2.1.250 (Claude Code)\n",
+    variable: "CLAUDE_CODE_EXECUTABLE",
+    warning:
+      "Claude has changed from 2.1.241 to 2.1.250 since this session was established. " +
+      "Continuing the existing conversation.",
+  },
+} as const;
+
 describe(
-  "resume retention: a held Codex conversation across a host CLI upgrade",
+  "resume retention: a held conversation across a host CLI upgrade",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    for (const [mode, failure, errorName] of [
-      ["distinct", undefined, undefined],
-      ["normal", "reopened a different native conversation", "AttachmentRefused"],
-      ["standard", "did not confirm the retained native conversation", "AttachmentRefused"],
-      ["missing", "could not be resumed", "SessionResumeRequiredError"],
-      ["distinct-refused", "could not be resumed", "SessionResumeRequiredError"],
-    ] as const) {
-      it(`requires the new build's live identity (${mode})`, function* () {
-        yield* withCertificationFixture(function* (f) {
-          const target = changingHost(f, "codex");
-          const command = f.command("distinct");
-          const key = deriveSessionKey(command, f.dir, "chat-1");
-          const tuple = { provider: "acpx", agent: command, sessionKey: key };
-          const history = new InMemoryStream();
-          expect(
-            answer(
-              yield* withConversation(
-                history,
-                target.installation(command),
-                (chat) => chat.prompt("seed:remembered"),
-                "codex",
+    for (const agent of ["codex", "claude"] as const) {
+      const upgrade = UPGRADES[agent];
+      for (const [mode, failure, errorName] of [
+        ["distinct", undefined, undefined],
+        ["normal", "reopened a different native conversation", "AttachmentRefused"],
+        ["standard", "did not confirm the retained native conversation", "AttachmentRefused"],
+        ["missing", "could not be resumed", "SessionResumeRequiredError"],
+        ["distinct-refused", "could not be resumed", "SessionResumeRequiredError"],
+      ] as const) {
+        it(`${agent}: requires the new build's live identity (${mode})`, function* () {
+          yield* withCertificationFixture(function* (f) {
+            const target = changingHost(f, agent);
+            const command = f.command("distinct");
+            const key = deriveSessionKey(command, f.dir, "chat-1");
+            const tuple = { provider: "acpx", agent: command, sessionKey: key };
+            const history = new InMemoryStream();
+            expect(
+              answer(
+                yield* withConversation(
+                  history,
+                  target.installation(command),
+                  (chat) => chat.prompt("seed:remembered"),
+                  agent,
+                ),
               ),
-            ),
-          ).toBe("READY");
-          const record = yield* until(target.store.load(key));
-          const route = yield* target.ownership.routes.read(tuple);
-          if (!record?.agentSessionId || route?.schema !== "session-route.v3") {
-            throw new Error("The original build did not establish a native conversation");
-          }
-          expect(route.executableBinding.reportedVersion).toBe("codex-cli 0.163.0");
-          const { lines, stream } = yield* reread(history);
-          const before = yield* f.calls();
-          if (mode === "missing") {
-            yield* rm(join(f.dir, `fixture-${record.acpSessionId}.json`));
-          }
-          const runtimeCount = target.runtime.environments.length;
-          target.observer.observation.path = "/opt/builds/codex-0.167.1";
-          target.observer.observation.versionOutput = "codex-cli 0.167.1\n";
-          target.observer.observation.digest = "b".repeat(64);
-          const begun: string[] = [];
-          const published: unknown[] = [];
-          const provider = target.installation(mode === "missing" ? command : f.command(mode));
-          const resumed = yield* withConversation(
-            stream,
-            {
-              ...provider,
-              *install() {
-                if (provider.install !== undefined) {
-                  yield* provider.install();
-                }
-                yield* useAgentPromptPublisher({
-                  *begin(text) {
-                    begun.push(text);
-                    return {};
-                  },
-                  *publish(publication) {
-                    published.push(publication.begun);
-                    yield* publication.append();
-                  },
-                });
-              },
-            },
-            (chat) => chat.prompt("recall", { model: "selected", effort: "high" }),
-            "codex",
-          );
-          const calls = (yield* f.calls()).slice(before.length);
-          const methods = calls.map((call) => call.method);
-          const environments = target.runtime.environments.slice(runtimeCount);
-          expect(environments).toContainEqual({ CODEX_PATH: "/opt/builds/codex-0.167.1" });
-          expect(methods).toContain("session/load");
-          expect(methods).not.toContain("session/new");
-          expect(
-            calls
-              .filter((call) => call.sessionId !== undefined)
-              .every((call) => call.sessionId === record.acpSessionId),
-          ).toBe(true);
-          expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
-          if (failure === undefined) {
-            expect(answer(resumed)).toBe("remembered");
-            expect(methods.indexOf("session/load")).toBeLessThan(
-              methods.indexOf("session/set_config_option"),
-            );
-            expect(methods.indexOf("session/load")).toBeLessThan(methods.indexOf("session/prompt"));
-            expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
-              methods.indexOf("session/prompt"),
-            );
-            const kept = yield* until(target.store.load(key));
-            expect(kept?.agentSessionId).toBe(record.agentSessionId);
-            expect(kept?.messages.slice(0, record.messages.length)).toEqual(record.messages);
-            expect(turns(stream.snapshot()).map((turn) => turn.record.agentSessionId)).toEqual([
-              record.agentSessionId,
-              record.agentSessionId,
-            ]);
-          } else {
-            if (!resumed.ok || resumed.value.ok) {
-              throw new Error("The held conversation did not report a resume refusal");
+            ).toBe("READY");
+            const record = yield* until(target.store.load(key));
+            const route = yield* target.ownership.routes.read(tuple);
+            if (!record?.agentSessionId || route?.schema !== "session-route.v3") {
+              throw new Error("The original build did not establish a native conversation");
             }
-            expect(resumed.value.error.name).toBe(errorName);
-            expect(resumed.value.error.message).toContain(failure);
-            expect(methods).not.toContain("session/set_config_option");
-            expect(methods).not.toContain("session/prompt");
-            expect(yield* until(target.store.load(key))).toEqual(record);
-            if (errorName === "SessionResumeRequiredError") {
-              const after = stream.snapshot();
-              expect(after.slice(0, lines.length).map(serializeDurableEvent)).toEqual(lines);
-              expect(after).toHaveLength(lines.length + 1);
-              const saved = turns(after).at(-1);
-              const expectedError = {
-                message: resumed.value.error.message,
-                name: errorName,
-                diagnostic: {
-                  provider: "acp",
-                  operation: "session/prompt",
-                  stage: "held-session-ensure",
-                  code: "RUNTIME",
-                  detailCode: "SESSION_RESUME_REQUIRED",
-                  origin: "acp",
-                  retryable: true,
-                  acp:
-                    mode === "missing"
-                      ? { code: -32603, message: "missing controlled history" }
-                      : {
-                          code: -32041,
-                          message: "Internal error",
-                          details: "Release the active writer before reconnecting.",
-                        },
+            expect(route.executableBinding.reportedVersion).toBe(upgrade.before);
+            const { lines, stream } = yield* reread(history);
+            const before = yield* f.calls();
+            if (mode === "missing") {
+              yield* rm(join(f.dir, `fixture-${record.acpSessionId}.json`));
+            }
+            const runtimeCount = target.runtime.environments.length;
+            target.observer.observation.path = `/opt/builds/${agent}-next`;
+            target.observer.observation.versionOutput = upgrade.after;
+            target.observer.observation.digest = "b".repeat(64);
+            const begun: string[] = [];
+            const published: unknown[] = [];
+            const warned: string[] = [];
+            const provider = target.installation(mode === "missing" ? command : f.command(mode));
+            const resumed = yield* withConversation(
+              stream,
+              {
+                ...provider,
+                *install() {
+                  if (provider.install !== undefined) {
+                    yield* provider.install();
+                  }
+                  yield* Stdio.around({
+                    // deno-lint-ignore require-yield
+                    *stderr([bytes]) {
+                      warned.push(new TextDecoder().decode(bytes).trim());
+                    },
+                  });
+                  yield* useAgentPromptPublisher({
+                    *begin(text) {
+                      begun.push(text);
+                      return {};
+                    },
+                    *publish(publication) {
+                      published.push(publication.begun);
+                      yield* publication.append();
+                    },
+                  });
                 },
-              };
-              expect(saved?.name).toBe("turn:2");
-              expect(saved?.record).toEqual({
-                sequence: expect.any(Number),
-                agent: "codex",
-                sessionKey: "",
-                status: "failed",
-                text: "",
-                error: expectedError,
-              });
-              const event = after.at(-1);
-              expect(event?.type === "yield" && event.description.input).toBe("recall");
-              expect(begun).toEqual([]);
-              expect(published).toEqual([undefined]);
-              expect(resumed.value.error.cause).toBe(undefined);
-              expect(
-                Reflect.get(resumed.value.error, "executablemd.agent.prompt-diagnostic"),
-              ).toEqual(expectedError.diagnostic);
-              if (mode === "distinct-refused") {
-                const attemptedCalls = (yield* f.calls()).length;
-                const later = yield* withConversation(
-                  stream,
-                  target.installation(f.command("distinct-next")),
-                  (chat) => chat.prompt("recover"),
-                  "codex",
-                );
-                expect(answer(later)).toBe("remembered");
-                const sent = (yield* f.calls()).slice(attemptedCalls);
-                expect(sent.filter((call) => call.method === "session/prompt")).toMatchObject([
-                  { sessionId: record.acpSessionId },
-                ]);
-                expect(sent.map((call) => call.method)).not.toContain("session/new");
-                expect(turns(stream.snapshot()).map((turn) => turn.name)).toEqual([
-                  "turn:1",
-                  "turn:2",
-                  "turn:3",
-                ]);
-                expect((yield* until(target.store.load(key)))?.agentSessionId).toBe(
-                  record.agentSessionId,
-                );
-                expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
-              }
+              },
+              (chat) => chat.prompt("recall", { model: "selected", effort: "high" }),
+              agent,
+            );
+            const calls = (yield* f.calls()).slice(before.length);
+            const methods = calls.map((call) => call.method);
+            const environments = target.runtime.environments.slice(runtimeCount);
+            expect(environments).toContainEqual({
+              [upgrade.variable]: `/opt/builds/${agent}-next`,
+            });
+            // The change is reported once, before the conversation is reached,
+            // whatever happens to the reopening after it.
+            expect(warned).toEqual([upgrade.warning]);
+            expect(methods).toContain("session/load");
+            expect(methods).not.toContain("session/new");
+            expect(
+              calls
+                .filter((call) => call.sessionId !== undefined)
+                .every((call) => call.sessionId === record.acpSessionId),
+            ).toBe(true);
+            expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
+            if (failure === undefined) {
+              expect(answer(resumed)).toBe("remembered");
+              expect(methods.indexOf("session/load")).toBeLessThan(
+                methods.indexOf("session/set_config_option"),
+              );
+              expect(methods.indexOf("session/load")).toBeLessThan(
+                methods.indexOf("session/prompt"),
+              );
+              expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
+                methods.indexOf("session/prompt"),
+              );
+              const kept = yield* until(target.store.load(key));
+              expect(kept?.agentSessionId).toBe(record.agentSessionId);
+              expect(kept?.messages.slice(0, record.messages.length)).toEqual(record.messages);
+              expect(turns(stream.snapshot()).map((turn) => turn.record.agentSessionId)).toEqual([
+                record.agentSessionId,
+                record.agentSessionId,
+              ]);
             } else {
-              expect(stream.snapshot().map(serializeDurableEvent)).toEqual(lines);
+              if (!resumed.ok || resumed.value.ok) {
+                throw new Error("The held conversation did not report a resume refusal");
+              }
+              expect(resumed.value.error.name).toBe(errorName);
+              expect(resumed.value.error.message).toContain(failure);
+              expect(methods).not.toContain("session/set_config_option");
+              expect(methods).not.toContain("session/prompt");
+              expect(yield* until(target.store.load(key))).toEqual(record);
+              if (errorName === "SessionResumeRequiredError") {
+                const after = stream.snapshot();
+                expect(after.slice(0, lines.length).map(serializeDurableEvent)).toEqual(lines);
+                expect(after).toHaveLength(lines.length + 1);
+                const saved = turns(after).at(-1);
+                const expectedError = {
+                  message: resumed.value.error.message,
+                  name: errorName,
+                  diagnostic: {
+                    provider: "acp",
+                    operation: "session/prompt",
+                    stage: "held-session-ensure",
+                    code: "RUNTIME",
+                    detailCode: "SESSION_RESUME_REQUIRED",
+                    origin: "acp",
+                    retryable: true,
+                    acp:
+                      mode === "missing"
+                        ? { code: -32603, message: "missing controlled history" }
+                        : {
+                            code: -32041,
+                            message: "Internal error",
+                            details: "Release the active writer before reconnecting.",
+                          },
+                  },
+                };
+                expect(saved?.name).toBe("turn:2");
+                expect(saved?.record).toEqual({
+                  sequence: expect.any(Number),
+                  agent,
+                  sessionKey: "",
+                  status: "failed",
+                  text: "",
+                  error: expectedError,
+                });
+                const event = after.at(-1);
+                expect(event?.type === "yield" && event.description.input).toBe("recall");
+                expect(begun).toEqual([]);
+                expect(published).toEqual([undefined]);
+                expect(resumed.value.error.cause).toBe(undefined);
+                expect(
+                  Reflect.get(resumed.value.error, "executablemd.agent.prompt-diagnostic"),
+                ).toEqual(expectedError.diagnostic);
+                if (mode === "distinct-refused") {
+                  const attemptedCalls = (yield* f.calls()).length;
+                  const later = yield* withConversation(
+                    stream,
+                    target.installation(f.command("distinct-next")),
+                    (chat) => chat.prompt("recover"),
+                    agent,
+                  );
+                  expect(answer(later)).toBe("remembered");
+                  const sent = (yield* f.calls()).slice(attemptedCalls);
+                  expect(sent.filter((call) => call.method === "session/prompt")).toMatchObject([
+                    { sessionId: record.acpSessionId },
+                  ]);
+                  expect(sent.map((call) => call.method)).not.toContain("session/new");
+                  expect(turns(stream.snapshot()).map((turn) => turn.name)).toEqual([
+                    "turn:1",
+                    "turn:2",
+                    "turn:3",
+                  ]);
+                  expect((yield* until(target.store.load(key)))?.agentSessionId).toBe(
+                    record.agentSessionId,
+                  );
+                  expect(yield* target.ownership.routes.read(tuple)).toEqual(route);
+                }
+              } else {
+                expect(stream.snapshot().map(serializeDurableEvent)).toEqual(lines);
+              }
             }
-          }
+          });
         });
-      });
+      }
     }
+  },
+);
+
+describe(
+  "conformance: a provider that asserts the same identity over empty history",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("E10: marker recovery detects the lost context that identity alone cannot", function* () {
+      yield* withCertificationFixture(function* (f) {
+        const target = changingHost(f, "codex");
+        const command = f.command("distinct");
+        const history = new InMemoryStream();
+        expect(
+          answer(
+            yield* withConversation(
+              history,
+              target.installation(command),
+              (chat) => chat.prompt("seed:remembered"),
+              "codex",
+            ),
+          ),
+        ).toBe("READY");
+        const key = deriveSessionKey(command, f.dir, "chat-1");
+        const record = yield* until(target.store.load(key));
+        // The substitute loads the same ACP target and asserts the same native
+        // identity, so positive confirmation passes — and its history is empty.
+        const before = yield* f.calls();
+        const substituted = yield* withConversation(
+          history,
+          target.installation(f.command("distinct-lost")),
+          (chat) => chat.prompt("recall"),
+          "codex",
+        );
+        const sent = (yield* f.calls()).slice(before.length);
+        expect(sent.map((call) => call.method)).toContain("session/prompt");
+        expect(sent.map((call) => call.method)).not.toContain("session/new");
+        expect((yield* until(target.store.load(key)))?.agentSessionId).toBe(record?.agentSessionId);
+        // Equal identities with replacement history do not pass conformance:
+        // the original-only marker is what proves continuity.
+        expect(answer(substituted)).not.toBe("remembered");
+        expect(answer(substituted)).toBe("WRONG");
+      });
+    });
   },
 );
 

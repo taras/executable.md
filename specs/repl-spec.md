@@ -2078,6 +2078,16 @@ from rendered document Output: forwarding adds nothing to the root result.
 Bound commands display only what the document explicitly renders, a `<Let as>`
 capture still hides stdout, and `silent exec` displays neither channel.
 
+Entry diagnostics appear as Command stderr beside the entry's execution output.
+Held-conversation diagnostics appear as transient stderr beside the Sidekick reply
+and remain visible after the turn settles in this invocation. They do not become
+generated document source, durable chat messages or failed-reply text. The held
+reading is captured in the task that owns the conversation, before it opens,
+because a held conversation's queued work runs there rather than under the
+message that asked for a turn; each line is privacy-projected by that
+conversation's protected-input owner and made inert like Command text. The CLI
+root owns these display copies for the life of the command.
+
 Command text is inert before measurement and drawing. LF separates rows; other
 C0 controls, DEL and C1 controls appear as ASCII `\xNN` escapes. Cursor motion,
 clearing, OSC and terminal mode sequences therefore remain readable text. The

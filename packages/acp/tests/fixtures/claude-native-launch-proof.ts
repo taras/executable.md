@@ -58,9 +58,6 @@ const AUTHORIZED_TURNS = "2";
 /** The production target, exactly as an operator would type it. */
 const TARGET = "AGENTS.md#Implementor";
 
-/** The compatibility point these journeys are only meaningful against. */
-const REQUIRED_CLAUDE_VERSION = "2.1.241 (Claude Code)";
-
 /**
  * The role contract's opening sentence.
  *
@@ -1501,12 +1498,9 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
     verdict.detail = "no installed claude executable was found on PATH";
     return false;
   }
+  // Recorded as evidence of what ran. A release absent from earlier evidence is
+  // what an opt-in regression exists to exercise, so it never blocks the run.
   verdict.claudeVersion = yield* claudeVersion(journey);
-  if (verdict.claudeVersion !== REQUIRED_CLAUDE_VERSION) {
-    verdict.verdict = "ENVIRONMENT_BLOCKED";
-    verdict.detail = `this journey is only meaningful against ${REQUIRED_CLAUDE_VERSION}`;
-    return false;
-  }
   if (!verdict.projectCopyVerified) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the project copy is not byte-identical to the checked-in role document";
@@ -1831,9 +1825,7 @@ function* runPreflight(): Operation<PreflightVerdict> {
   verdict.binaryBuilt = yield* exists(XMD_BINARY);
 
   const established =
-    verdict.claudeVersion === REQUIRED_CLAUDE_VERSION &&
-    verdict.platform === "darwin" &&
-    verdict.architecture === "arm64" &&
+    verdict.claudeVersion.length > 0 &&
     !verdict.claudeConfigDirSet &&
     verdict.sessionIdFlag &&
     verdict.systemPromptFileFlag &&

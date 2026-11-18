@@ -48,6 +48,7 @@ export {
   command,
   compile,
   useQuietProcessOutput,
+  writeDiagnostic,
 } from "./apis.ts";
 export type {
   DirectoryEntry,

@@ -2,28 +2,21 @@
  * Observing which executable build a command actually runs
  * (specs/native-agent-session-launch-spec.md §Executable binding).
  *
- * A provider session whose identity XMD chose itself only means something
- * while the build that established it can be reproduced. Two builds of one
- * provider accept the same session identity and disagree silently about what
- * it names — that is how issue #519's first gate produced a healthy-looking
- * session with no history in it. So before a session crosses an ownership
- * boundary, the exact file about to run is observed, and enough is retained to
- * recognize it later.
- *
  * What is observed is a canonical path, the SHA-256 of that file's bytes, and
  * whatever the file says when asked its version. Only the last two ever become
- * durable: a path stops being true when a build moves, and names host layout
- * besides.
+ * durable, as diagnostic history beside a session XMD constructs: a path stops
+ * being true when a build moves, and names host layout besides. A host asks
+ * this about the file it already selected; the observation reports, and never
+ * decides whether a conversation continues.
  *
  * This is a plain capability the trusted host builds and hands directly to the
- * provider that needs it. It is deliberately not a contextual Api. Executable
- * validation decides which retained history is accepted, and a decision
- * document middleware could replace is not one — a replaceable resolver could
- * point the observation at a different binary than the one that runs.
+ * provider that needs it. It is deliberately not a contextual Api: a
+ * replaceable resolver could point the observation at a different binary than
+ * the one that runs.
  *
  * Provider-specific meaning is not this module's business: which command to
- * run, what a version string looks like, and what to do about a mismatch
- * belong to the adapter that knows the provider.
+ * run and what a version string looks like belong to the adapter that knows the
+ * provider.
  */
 
 import type { Operation } from "effection";

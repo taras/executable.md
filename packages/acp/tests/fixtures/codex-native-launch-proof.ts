@@ -88,17 +88,14 @@ const TARGET = "AGENTS.md#Implementor";
 const ACP_DOCUMENT = fileURLToPath(new URL("./codex-native-to-acp-prompt.md", import.meta.url));
 
 /**
- * The compatibility point these journeys are only meaningful against
- * (`issue-755-codex-materialization-turn-implementor-handoff.md`).
+ * The carried adapter these journeys exercise.
  *
- * Frozen rather than read from the machine, because the proof requires that one
- * exact build was proven. A run against another build is not a weaker pass; it
- * is a different question, and it says so.
+ * The adapter snapshot is part of XMD's own integration, so a change to it is a
+ * change these journeys are meant to catch. The installed Codex release, its
+ * digest and the host platform are recorded as evidence of what ran and never
+ * gate the run: a release absent from earlier evidence is exactly what an
+ * opt-in regression should be able to exercise (#891).
  */
-const REQUIRED_PLATFORM = "darwin";
-const REQUIRED_ARCHITECTURE = "arm64";
-const REQUIRED_CODEX_VERSION = "codex-cli 0.153.2";
-const REQUIRED_CODEX_DIGEST = "195ace4100a634a9df39147f493e730e666b5bd87795f3c9f3251d8542400424";
 const REQUIRED_ADAPTER_PACKAGE = "@agentclientprotocol/codex-acp";
 const REQUIRED_ADAPTER_VERSION = "1.6.2";
 const REQUIRED_ADAPTER_DIGEST = "3ee22bc6b1649d02fcef80b352516f395fe774e63b459193195a41c42930dd8b";
@@ -1691,10 +1688,6 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
   }
   recordAdapter(verdict);
   verdict.compatibilityTupleFrozen =
-    verdict.platform === REQUIRED_PLATFORM &&
-    verdict.architecture === REQUIRED_ARCHITECTURE &&
-    verdict.codexVersion === REQUIRED_CODEX_VERSION &&
-    verdict.codexDigest === REQUIRED_CODEX_DIGEST &&
     verdict.adapterPackage === REQUIRED_ADAPTER_PACKAGE &&
     verdict.adapterVersion === REQUIRED_ADAPTER_VERSION &&
     verdict.adapterDigest === REQUIRED_ADAPTER_DIGEST;
@@ -2250,10 +2243,6 @@ function* runPreflight(): Operation<PreflightVerdict> {
   verdict.adapterVersion = snapshot?.version ?? "";
   verdict.adapterDigest = snapshot?.sha256 ?? "";
   verdict.compatibilityTupleFrozen =
-    verdict.platform === REQUIRED_PLATFORM &&
-    verdict.architecture === REQUIRED_ARCHITECTURE &&
-    verdict.codexVersion === REQUIRED_CODEX_VERSION &&
-    verdict.codexDigest === REQUIRED_CODEX_DIGEST &&
     verdict.adapterPackage === REQUIRED_ADAPTER_PACKAGE &&
     verdict.adapterVersion === REQUIRED_ADAPTER_VERSION &&
     verdict.adapterDigest === REQUIRED_ADAPTER_DIGEST;

@@ -2746,16 +2746,24 @@ provider session key are not identity at all.
 states both ordinary-run native capability sets empty — no native-launch
 advertisement and no client-native ACP attachment advertisement — rather than
 inheriting the provider package's by omission. It supplies no machine session
-coordinator, no construction-route store and no executable observer, and
-consults none of their namespace. `xmd run` owns a machine-wide account of who
-owns a session, how it was constructed and which executable build accepted its
-identity; a workflow session is named by the row below instead, and an agent
-served here is served over ACP alone. Composing the two is a separate design.
+coordinator and no construction-route store, and consults none of their
+namespace. `xmd run` owns a machine-wide account of who owns a session and how
+it was constructed; a workflow session is named by the row below instead, and
+an agent served here is served over ACP alone. Composing the two is a separate
+design. The workflow host may supply an executable observer for diagnostics
+only; it grants no native capability.
 
-The workflow host separately selects its installed Claude launcher and supplies
-its path only through the retained adapter child's transient environment. This
-selection grants no native-session capability and performs no executable-build
-admission.
+The workflow host separately selects its installed Claude or Codex launcher and
+supplies its path only through the retained adapter child's transient
+environment. This selection grants no native-session capability and performs
+no executable-build admission. A retained session of a built-in adapter is
+reopened by its exact loading target under the provider's live confirmation of
+its retained native identity, whichever executable is selected today; a
+missing or differing assertion refuses before settings or a prompt and creates
+no substitute. Because the run keeps no executable history, a release change
+emits no difference warning; a version that cannot be determined is reported
+once per session in the invocation. Partial replay attaches lazily, and
+completed replay performs no selection, observation, warning or live work.
 
 **The mapping lives in the run.** Its database row commits in the run's
 transaction and is part of the initial schema. Provider session stores and empty

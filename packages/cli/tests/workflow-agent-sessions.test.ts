@@ -413,7 +413,15 @@ function* hostClaudeWorkflow(
       env: { PATH: bin, CLAUDE_CODE_EXECUTABLE: selected },
     });
   });
-  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({ exitCode: 0, stderr: "" });
+  // An unfamiliar version is reported once, before the live work it concerns,
+  // and the work continues; completed replay in the same invocation adds
+  // nothing. An unavailable executable is an availability failure instead.
+  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({
+    exitCode: 0,
+    stderr: ["missing", "invalid", "unlaunchable"].includes(mode)
+      ? ""
+      : "The Claude version could not be determined. Continuing.\n",
+  });
   const report = JSON.parse(yield* readTextFile(join(root, "report.json")));
   expect(yield* exists(staleLog)).toBe(false);
   expect(yield* exists(pathLog)).toBe(false);
@@ -501,7 +509,8 @@ type HostCodexMode =
   | "invalid"
   | "unlaunchable"
   | "effort"
-  | "no-selector";
+  | "no-selector"
+  | "versioned";
 
 /**
  * One production workflow Prompt through the carried Codex adapter, with the
@@ -524,7 +533,9 @@ function* hostCodexWorkflow(mode: HostCodexMode): Operation<void> {
       "#!/usr/bin/env node",
       `process.env.FAKE_CODEX_LOG = ${JSON.stringify(log)};`,
       `process.env.FAKE_CODEX_CATALOG = ${JSON.stringify(catalog)};`,
-      'if (process.argv.includes("--version")) { console.log("unfamiliar development build"); process.exit(0); }',
+      `if (process.argv.includes("--version")) { console.log(${JSON.stringify(
+        mode === "versioned" ? "codex-cli 0.169.1" : "unfamiliar development build",
+      )}); process.exit(0); }`,
       `require("node:fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ launched: process.argv.slice(2) }) + "\\n");`,
       fake,
     ].join("\n");
@@ -577,7 +588,14 @@ function* hostCodexWorkflow(mode: HostCodexMode): Operation<void> {
       env: mode === "path" ? { PATH: bin } : { PATH: bin, CODEX_PATH: override ?? "" },
     });
   });
-  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({ exitCode: 0, stderr: "" });
+  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({
+    exitCode: 0,
+    stderr: ["missing", "invalid", "unlaunchable"].includes(mode)
+      ? ""
+      : mode === "versioned"
+        ? ""
+        : "The Codex version could not be determined. Continuing.\n",
+  });
   const report = JSON.parse(yield* readTextFile(join(root, "report.json")));
   expect(report.environmentPreserved).toBe(true);
   const selectedRan = ["explicit", "relative", "bare"].includes(mode);
@@ -646,6 +664,8 @@ describe("H host Codex through the production workflow", () => {
     hostCodexWorkflow("effort"));
   it("H4: a host without the model's effort selector refuses with no turn", () =>
     hostCodexWorkflow("no-selector"));
+  it("H5: a release absent from recorded evidence works and is observed without a warning", () =>
+    hostCodexWorkflow("versioned"));
 });
 
 describe("workflow ACP loading identity", { sanitizeOps: false, sanitizeResources: false }, () => {

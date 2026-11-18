@@ -400,7 +400,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     create(options) {
       const runtimeIndex = harness.createdOptions.length;
       harness.createdOptions.push(options);
-      return {
+      const runtime: ProbeCapableRuntime = {
         doctor() {
           harness.doctorCalls++;
           const report = harness.doctorReports.shift() ?? {
@@ -413,214 +413,253 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           if (harness.ensureFailure) {
             return Promise.reject(harness.ensureFailure);
           }
-          harness.activity?.("ensure");
-          harness.ensureCalls.push(input);
-          harness.modelRequests.push(`ensure ${input.requestedModel ?? "-"}`);
-          const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
-          harness.handleIds.push(handleId);
-          // Deferred materialization: the record occupies the key and asserts
-          // nothing, and the identity the adapter answered with is held here
-          // until the backend accepts a turn.
-          const deferred = input.materialization === "first-turn-acceptance";
-          // ACPX persists a record as it establishes a session, including the
-          // instruction layer the caller asked for; a fake that skipped that
-          // would hide every decision a later launch makes by reading it back.
-          const record: AcpSessionRecord = {
-            ...makeRecord(
-              resolveAgentCommand(options.agentRegistry, input.agent),
-              input.cwd ?? options.cwd,
-            ),
-            acpxRecordId: input.sessionKey,
-            messages: [],
-          };
-          // What the adapter says it opened. An exact resume of a record this fake
-          // already wrote answers with the conversation that record asserts, as
-          // ACPX does when it reuses or reloads its own record; any other exact
-          // resume answers with the conversation it was told to load, and
-          // `assertIdentity` is how a test makes it answer with another one.
-          const resumed =
-            input.resumeSessionId === undefined
-              ? undefined
-              : records.get(`record:${input.sessionKey}`);
-          const asserted =
-            harness.assertIdentity ??
-            (resumed !== undefined && resumed.acpSessionId === input.resumeSessionId
-              ? resumed.agentSessionId
-              : undefined) ??
-            input.resumeSessionId ??
-            `agent-session:${input.sessionKey}`;
-          if (input.sessionOptions?.systemPrompt !== undefined) {
-            record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
+          // An exact resume of a record another runtime wrote is answered from
+          // that record, as ACPX loads it; one this fake wrote is in memory.
+          if (input.resumeSessionId !== undefined && !records.has(`record:${input.sessionKey}`)) {
+            return options.sessionStore
+              .load(input.sessionKey)
+              .then((stored) => establish(input, stored));
           }
-          const handle: AcpRuntimeHandle = {
-            sessionKey: input.sessionKey,
-            backend: "acpx",
-            runtimeSessionName: handleId,
-            cwd: input.cwd,
-            acpxRecordId: `record:${input.sessionKey}`,
-            backendSessionId: `backend:${input.sessionKey}`,
-          };
-          if (deferred) {
-            record.sessionMaterialization = {
-              state: "pending",
-              contract: "executablemd.session-materialization/v1",
-            };
-            withheld.set(handle.acpxRecordId!, harness.omitAgentSessionId ? undefined : asserted);
-          } else if (!harness.omitAgentSessionId) {
-            handle.agentSessionId = asserted;
-            record.agentSessionId = asserted;
-          }
-          const answer = (): AcpRuntimeHandle => {
-            records.set(handle.acpxRecordId!, record);
-            void options.sessionStore.save(record);
-            return handle;
-          };
-          // The gate runs on Effection and `run` bridges it to the acpx Promise
-          // boundary, the same way a manual turn's release does.
-          const gate = harness.ensureGate?.(input);
-          return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
+          return establish(input, undefined);
         },
         startTurn(input) {
-          harness.modelRequests.push(`turn ${input.requestedModel ?? "-"}`);
-          harness.activity?.("turn");
-          const script = scripted.shift() ?? {};
-          const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
-          const awaiting = withheld.has(recordId);
-          // A native promise rather than an Effection future: this is the acpx
-          // boundary, and a turn nobody accepts leaves it unsettled — which as a
-          // root task would be a pending operation the runner refuses to end on.
-          const materialized = promiseWithResolvers<AcpRuntimeMaterialization>();
-          // Observed here as the provider's own deferreds are: a test that only
-          // reads events must not turn an unaccepted turn into an unhandled
-          // rejection.
-          materialized.promise.catch(() => {});
-          const events = script.events ?? DEFAULT_EVENTS;
-          const result: AcpRuntimeTurnResult = script.result ?? {
-            status: "completed",
-            stopReason: "end_turn",
-          };
-
-          let pushEvents = events;
-          // Manual-turn timing runs on Effection Futures; `run` bridges them
-          // to the acpx async-iterable / Promise boundary.
-          const gate = withResolvers<void>();
-          const resultReady = withResolvers<AcpRuntimeTurnResult>();
-
-          const promote = (): void => {
-            if (!withheld.has(recordId)) {
-              return;
-            }
-            const identity = withheld.get(recordId);
-            withheld.delete(recordId);
-            const stored = records.get(recordId);
-            if (stored) {
-              stored.sessionMaterialization = undefined;
-              if (identity !== undefined) {
-                stored.agentSessionId = identity;
-              }
-              void options.sessionStore.save(stored);
-            }
-            materialized.resolve({
-              acpxRecordId: recordId,
-              ...(identity === undefined ? {} : { agentSessionId: identity }),
-            });
-          };
-          const refuse = (): void => {
-            materialized.reject(new Error("this session still awaits first-turn materialization"));
-          };
-          const fake: FakeTurn = {
-            input,
-            cancelled: false,
-            accept: promote,
-            finish(finishEvents, finishResult) {
-              pushEvents = finishEvents;
-              gate.resolve();
-              resultReady.resolve(finishResult);
-              // A turn that ends still awaiting acceptance never got it.
-              refuse();
-            },
-            turn: {
-              promptStarted: Promise.resolve(),
-              requestId: input.requestId,
-              events: {
-                [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
-                  let index = 0;
-                  let gateTask: Task<void> | undefined;
-                  const emit = (): IteratorResult<AcpRuntimeEvent> => {
-                    if (index < pushEvents.length) {
-                      return { done: false, value: pushEvents[index++]! };
-                    }
-                    return { done: true, value: undefined };
-                  };
-                  return {
-                    next(): Promise<IteratorResult<AcpRuntimeEvent>> {
-                      // A manual turn withholds its events until the release
-                      // gate resolves; run() bridges the Effection Future to
-                      // the acpx async-iterator boundary.
-                      if (script.manual && !gateTask) {
-                        gateTask = run(() => gate.operation);
-                        return gateTask.then(emit);
-                      }
-                      return Promise.resolve(emit());
-                    },
-                    return(): Promise<IteratorResult<AcpRuntimeEvent>> {
-                      index = pushEvents.length;
-                      const halted = gateTask?.halt();
-                      gateTask = undefined;
-                      // Observe the halt so no root task is left dangling.
-                      if (halted) {
-                        return halted.then(() => ({ done: true, value: undefined }));
-                      }
-                      return Promise.resolve({ done: true, value: undefined });
-                    },
-                  };
-                },
-              },
-              result: run(() => resultReady.operation),
-              materialized: materialized.promise,
-              cancel() {
-                fake.cancelled = true;
-                fake.finish([], { status: "cancelled" });
-                return Promise.resolve();
-              },
-              closeStream() {
-                return Promise.resolve();
-              },
-            },
-          };
-          if (!awaiting) {
-            // Already asserting. The barrier says the session no longer awaits
-            // its first accepted turn, not that this one was accepted.
-            const stored = records.get(recordId);
-            materialized.resolve({
-              acpxRecordId: recordId,
-              ...(stored?.agentSessionId === undefined
-                ? {}
-                : { agentSessionId: stored.agentSessionId }),
-            });
-          } else if (script.accepted !== false && script.manualAcceptance !== true) {
-            // Acceptance is not the turn's output: a backend takes the turn
-            // before it says anything, so a manual turn — which withholds its
-            // events — still reports acceptance at once unless a case asks it
-            // not to.
-            promote();
-          }
-          if (!script.manual) {
-            fake.finish(events, result);
-          }
-          harness.turns.push(fake);
-          for (const barrier of [...waitingForTurns]) {
-            if (harness.turns.length >= barrier.count) {
-              waitingForTurns.splice(waitingForTurns.indexOf(barrier), 1);
-              barrier.settle();
-            }
-          }
-          return fake.turn;
+          return startTurn(input);
         },
         runTurn(input) {
-          return this.startTurn(input).events;
+          return startTurn(input).events;
         },
-        ...(harness.omitConfiguration
+        ...configuration(),
+        cancel() {
+          return Promise.resolve();
+        },
+        close(input) {
+          return close(input);
+        },
+      };
+      function establish(
+        input: AcpRuntimeEnsureInput,
+        stored: AcpSessionRecord | undefined,
+      ): Promise<AcpRuntimeHandle> {
+        harness.activity?.("ensure");
+        harness.ensureCalls.push(input);
+        harness.modelRequests.push(`ensure ${input.requestedModel ?? "-"}`);
+        const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
+        harness.handleIds.push(handleId);
+        // Deferred materialization: the record occupies the key and asserts
+        // nothing, and the identity the adapter answered with is held here
+        // until the backend accepts a turn.
+        const deferred = input.materialization === "first-turn-acceptance";
+        // ACPX persists a record as it establishes a session, including the
+        // instruction layer the caller asked for; a fake that skipped that
+        // would hide every decision a later launch makes by reading it back.
+        const record: AcpSessionRecord = {
+          ...makeRecord(
+            resolveAgentCommand(options.agentRegistry, input.agent),
+            input.cwd ?? options.cwd,
+          ),
+          acpxRecordId: input.sessionKey,
+          messages: [],
+        };
+        // What the adapter says it opened. An exact resume of a record this fake
+        // already wrote answers with the conversation that record asserts, as
+        // ACPX does when it reuses or reloads its own record; any other exact
+        // resume answers with the conversation it was told to load, and
+        // `assertIdentity` is how a test makes it answer with another one.
+        const resumed =
+          input.resumeSessionId === undefined
+            ? undefined
+            : (records.get(`record:${input.sessionKey}`) ?? stored);
+        const asserted =
+          harness.assertIdentity ??
+          (resumed !== undefined && resumed.acpSessionId === input.resumeSessionId
+            ? resumed.agentSessionId
+            : undefined) ??
+          input.resumeSessionId ??
+          `agent-session:${input.sessionKey}`;
+        if (input.sessionOptions?.systemPrompt !== undefined) {
+          record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
+        }
+        const handle: AcpRuntimeHandle = {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: handleId,
+          cwd: input.cwd,
+          acpxRecordId: `record:${input.sessionKey}`,
+          backendSessionId: `backend:${input.sessionKey}`,
+        };
+        if (deferred) {
+          record.sessionMaterialization = {
+            state: "pending",
+            contract: "executablemd.session-materialization/v1",
+          };
+          withheld.set(handle.acpxRecordId!, harness.omitAgentSessionId ? undefined : asserted);
+        } else if (!harness.omitAgentSessionId) {
+          handle.agentSessionId = asserted;
+          record.agentSessionId = asserted;
+        }
+        // ACPX's verified reopen: the live load must assert the retained
+        // native identity, and a refusal leaves the record as it was.
+        const expected = input.expectedAgentSessionId;
+        const confirmed = expected === undefined || handle.agentSessionId === expected;
+        const answer = (): AcpRuntimeHandle => {
+          if (!confirmed) {
+            throw Object.assign(
+              new Error(
+                handle.agentSessionId === undefined
+                  ? "The provider did not confirm the retained native conversation."
+                  : "The provider reopened a different native conversation.",
+              ),
+              { detailCode: "NATIVE_SESSION_IDENTITY_UNAVAILABLE" },
+            );
+          }
+          records.set(handle.acpxRecordId!, record);
+          void options.sessionStore.save(record);
+          return handle;
+        };
+        // The gate runs on Effection and `run` bridges it to the acpx Promise
+        // boundary, the same way a manual turn's release does.
+        const gate = harness.ensureGate?.(input);
+        return gate ? run(() => gate).then(answer) : Promise.resolve().then(answer);
+      }
+      function startTurn(input: AcpRuntimeTurnInput): AcpRuntimeTurn {
+        harness.modelRequests.push(`turn ${input.requestedModel ?? "-"}`);
+        harness.activity?.("turn");
+        const script = scripted.shift() ?? {};
+        const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
+        const awaiting = withheld.has(recordId);
+        // A native promise rather than an Effection future: this is the acpx
+        // boundary, and a turn nobody accepts leaves it unsettled — which as a
+        // root task would be a pending operation the runner refuses to end on.
+        const materialized = promiseWithResolvers<AcpRuntimeMaterialization>();
+        // Observed here as the provider's own deferreds are: a test that only
+        // reads events must not turn an unaccepted turn into an unhandled
+        // rejection.
+        materialized.promise.catch(() => {});
+        const events = script.events ?? DEFAULT_EVENTS;
+        const result: AcpRuntimeTurnResult = script.result ?? {
+          status: "completed",
+          stopReason: "end_turn",
+        };
+
+        let pushEvents = events;
+        // Manual-turn timing runs on Effection Futures; `run` bridges them
+        // to the acpx async-iterable / Promise boundary.
+        const gate = withResolvers<void>();
+        const resultReady = withResolvers<AcpRuntimeTurnResult>();
+
+        const promote = (): void => {
+          if (!withheld.has(recordId)) {
+            return;
+          }
+          const identity = withheld.get(recordId);
+          withheld.delete(recordId);
+          const stored = records.get(recordId);
+          if (stored) {
+            stored.sessionMaterialization = undefined;
+            if (identity !== undefined) {
+              stored.agentSessionId = identity;
+            }
+            void options.sessionStore.save(stored);
+          }
+          materialized.resolve({
+            acpxRecordId: recordId,
+            ...(identity === undefined ? {} : { agentSessionId: identity }),
+          });
+        };
+        const refuse = (): void => {
+          materialized.reject(new Error("this session still awaits first-turn materialization"));
+        };
+        const fake: FakeTurn = {
+          input,
+          cancelled: false,
+          accept: promote,
+          finish(finishEvents, finishResult) {
+            pushEvents = finishEvents;
+            gate.resolve();
+            resultReady.resolve(finishResult);
+            // A turn that ends still awaiting acceptance never got it.
+            refuse();
+          },
+          turn: {
+            promptStarted: Promise.resolve(),
+            requestId: input.requestId,
+            events: {
+              [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
+                let index = 0;
+                let gateTask: Task<void> | undefined;
+                const emit = (): IteratorResult<AcpRuntimeEvent> => {
+                  if (index < pushEvents.length) {
+                    return { done: false, value: pushEvents[index++]! };
+                  }
+                  return { done: true, value: undefined };
+                };
+                return {
+                  next(): Promise<IteratorResult<AcpRuntimeEvent>> {
+                    // A manual turn withholds its events until the release
+                    // gate resolves; run() bridges the Effection Future to
+                    // the acpx async-iterator boundary.
+                    if (script.manual && !gateTask) {
+                      gateTask = run(() => gate.operation);
+                      return gateTask.then(emit);
+                    }
+                    return Promise.resolve(emit());
+                  },
+                  return(): Promise<IteratorResult<AcpRuntimeEvent>> {
+                    index = pushEvents.length;
+                    const halted = gateTask?.halt();
+                    gateTask = undefined;
+                    // Observe the halt so no root task is left dangling.
+                    if (halted) {
+                      return halted.then(() => ({ done: true, value: undefined }));
+                    }
+                    return Promise.resolve({ done: true, value: undefined });
+                  },
+                };
+              },
+            },
+            result: run(() => resultReady.operation),
+            materialized: materialized.promise,
+            cancel() {
+              fake.cancelled = true;
+              fake.finish([], { status: "cancelled" });
+              return Promise.resolve();
+            },
+            closeStream() {
+              return Promise.resolve();
+            },
+          },
+        };
+        if (!awaiting) {
+          // Already asserting. The barrier says the session no longer awaits
+          // its first accepted turn, not that this one was accepted.
+          const stored = records.get(recordId);
+          materialized.resolve({
+            acpxRecordId: recordId,
+            ...(stored?.agentSessionId === undefined
+              ? {}
+              : { agentSessionId: stored.agentSessionId }),
+          });
+        } else if (script.accepted !== false && script.manualAcceptance !== true) {
+          // Acceptance is not the turn's output: a backend takes the turn
+          // before it says anything, so a manual turn — which withholds its
+          // events — still reports acceptance at once unless a case asks it
+          // not to.
+          promote();
+        }
+        if (!script.manual) {
+          fake.finish(events, result);
+        }
+        harness.turns.push(fake);
+        for (const barrier of [...waitingForTurns]) {
+          if (harness.turns.length >= barrier.count) {
+            waitingForTurns.splice(waitingForTurns.indexOf(barrier), 1);
+            barrier.settle();
+          }
+        }
+        return fake.turn;
+      }
+      function configuration() {
+        return harness.omitConfiguration
           ? {}
           : {
               getStatus() {
@@ -670,22 +709,20 @@ export function createFakeRuntime(): FakeRuntimeHarness {
                 );
                 return gate ? run(() => gate).then(land) : Promise.resolve(land());
               },
-            }),
-        cancel() {
-          return Promise.resolve();
-        },
-        close(input) {
-          harness.activity?.("close");
-          harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
-          harness.closeRuntimeIndexes.push(runtimeIndex);
-          harness.closeCalls.push(input.handle);
-          harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
-          if (harness.closeFailure) {
-            return Promise.reject(harness.closeFailure);
-          }
-          return Promise.resolve();
-        },
-      };
+            };
+      }
+      function close(input: Parameters<ProbeCapableRuntime["close"]>[0]): Promise<void> {
+        harness.activity?.("close");
+        harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
+        harness.closeRuntimeIndexes.push(runtimeIndex);
+        harness.closeCalls.push(input.handle);
+        harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
+        if (harness.closeFailure) {
+          return Promise.reject(harness.closeFailure);
+        }
+        return Promise.resolve();
+      }
+      return runtime;
     },
   };
   return harness;

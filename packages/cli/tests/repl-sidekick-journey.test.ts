@@ -5657,3 +5657,64 @@ describe("1342 — written Markdown in the chat and in entry Output", () => {
     expect(reopened.model.entries.map((entry) => entry.terminal?.output)).toEqual([ENTRY_MARKDOWN]);
   });
 });
+
+describe("E9 — a held conversation's compatibility warning beside its reply", () => {
+  it("E9: the warning is transient stderr in the Sidekick pane, once per invocation, and never history", function* () {
+    const warnings = new Set<string>();
+    const host = yield* useMountedHost({
+      usageAcp: {
+        nativeAdapters: {
+          [MOUNTED_AGENT]: {
+            launcher: MOUNTED_AGENT,
+            identity: "provider-returned",
+            resume: () => [],
+            binding: { command: MOUNTED_AGENT, version: () => undefined, environment: () => ({}) },
+          },
+        },
+        advertiseNativeLaunch: [],
+        advertiseClientNativeAttachment: [],
+        compatibilityWarnings: warnings,
+      },
+    });
+    const line = `The ${MOUNTED_AGENT} version could not be determined. Continuing.`;
+    yield* scoped(function* (): Operation<void> {
+      const page = yield* useReplPage({ host, size: { columns: 160, rows: 60 } });
+      const repl = page.repl;
+      repl.fake.script({ reply: "<Output>First answer.</Output>\n" });
+      yield* sendMessage(page, "first question");
+      yield* page.until("the reply", (one) => saidBySidekick(one, "First answer."));
+      // Beside the reply, and still there once the turn has settled.
+      const settled = yield* page.until("the held warning beside the reply", (one) =>
+        sidekickShows(one, `stderr: ${line}`),
+      );
+      expect(sidekickShows(settled, "First answer.")).toBe(true);
+
+      repl.fake.script({ reply: "<Output>Second answer.</Output>\n" });
+      yield* sendMessage(page, "second question");
+      yield* page.until("the second reply", (one) => saidBySidekick(one, "Second answer."));
+      const later = page.screen();
+      expect(later.occurrences(`stderr: ${line}`)).toBe(1);
+      expect(warnings.size).toBe(1);
+      expect(repl.fake.prompts).toHaveLength(2);
+    });
+    // Display only: nothing durable — no chat record, generated source or
+    // failure — holds the warning.
+    const written: string[] = [];
+    function* readAll(directory: string): Operation<void> {
+      if (!(yield* exists(directory))) {
+        return;
+      }
+      for (const name of yield* until(readdir(directory))) {
+        const path = join(directory, name);
+        if ((yield* until(stat(path))).isDirectory()) {
+          yield* readAll(path);
+        } else {
+          written.push(yield* readTextFile(path));
+        }
+      }
+    }
+    yield* readAll(host.root);
+    expect(written.length).toBeGreaterThan(0);
+    expect(written.join("\n")).not.toContain("could not be determined");
+  });
+});

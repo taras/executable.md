@@ -1793,7 +1793,7 @@ function refusalClass(output: string): string {
   if (output.includes("could not open")) {
     return "identity-unavailable";
   }
-  if (output.includes("before XMD recorded which build") || output.includes("would use")) {
+  if (output.includes("is unavailable")) {
     return "executable-binding-refused";
   }
   return "";

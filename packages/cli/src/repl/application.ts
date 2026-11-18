@@ -464,7 +464,21 @@ export interface ReplSidekickSubmit {
   readonly admitted: boolean;
 }
 
+/** One line a held conversation's own work wrote to its standard error. */
+export interface ReplSidekickDiagnostic {
+  readonly conversation: string;
+  /** Inert and privacy-projected; never source, a chat turn or a failure. */
+  readonly text: string;
+}
+
 export interface ReplSidekickReading {
+  /**
+   * What this invocation's held conversations wrote to standard error.
+   *
+   * Transient and process-local: shown beside the replies and kept on screen
+   * for this invocation, and never part of the chat's history.
+   */
+  readonly diagnostics?: readonly ReplSidekickDiagnostic[];
   readonly feedback?: readonly SidekickFeedback[];
   readonly usageTotal?: string;
   readonly inspectUsage?: boolean;
@@ -4344,6 +4358,9 @@ function sidekickComposedRows(
     );
     metadata();
   }
+  for (const [index, line] of sidekickDiagnostics(reading).entries()) {
+    items.push(text(`sidekick:stderr:${index}`, `  stderr: ${line}`, styleOf("metadata")));
+  }
   if (reading.savedRecovery !== undefined) {
     const saved = reading.savedRecovery;
     items.push(
@@ -4355,6 +4372,13 @@ function sidekickComposedRows(
     );
   }
   return items;
+}
+
+/** The stderr lines the chat being read wrote in this invocation. */
+function sidekickDiagnostics(reading: ReplSidekickReading): string[] {
+  return (reading.diagnostics ?? [])
+    .filter((one) => one.conversation === reading.reading)
+    .flatMap((one) => one.text.split("\n").filter((line) => line.length > 0));
 }
 
 /**
@@ -12724,6 +12748,14 @@ function workspaceChatComposed(
         });
       }
     }
+  }
+  for (const [index, line] of sidekickDiagnostics(reading).entries()) {
+    items.push({
+      kind: "text",
+      key: `sidekick:stderr:${index}`,
+      text: `${MARKER_ROOM}stderr: ${line}`,
+      style: styleOf("metadata"),
+    });
   }
   if (reading.savedRecovery !== undefined) {
     const saved = reading.savedRecovery;

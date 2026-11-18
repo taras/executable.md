@@ -221,6 +221,15 @@ export interface WorkflowAgentProfileOptions {
   readonly adapters?: EmbeddedAdapters;
   /** What this host states about its own build, for the Prompt usage its turns retain. */
   readonly promptUsageHost?: PromptUsageHost;
+  /**
+   * How this host reads the version of the executable a session selected.
+   *
+   * Diagnostic only: it decides no admission and supplies no native capability,
+   * route or ownership. Absent means the version is reported as undetermined.
+   */
+  readonly executableObserver?: AcpxProviderDependencies["executableObserver"];
+  /** The sessions this invocation has already warned about. */
+  readonly compatibilityWarnings?: Set<string>;
 }
 
 /**
@@ -438,12 +447,19 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     ...(options.agentProcessEnv === undefined ? {} : { agentProcessEnv: options.agentProcessEnv }),
     ...(options.promptUsageHost === undefined ? {} : { promptUsageHost: options.promptUsageHost }),
+    ...(options.executableObserver === undefined
+      ? {}
+      : { executableObserver: options.executableObserver }),
+    ...(options.compatibilityWarnings === undefined
+      ? {}
+      : { compatibilityWarnings: options.compatibilityWarnings }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,
     // arranged in the run's own sidecar, and continued by reattaching that row.
     // The ordinary-run capabilities are about a different account entirely —
-    // machine-wide ownership, construction routes, and one observed executable
-    // build — and this profile supplies none of them. Inheriting the package's
+    // machine-wide ownership and construction routes — and this profile
+    // supplies neither. An executable observer, when given, only reports the
+    // selected version for a diagnostic. Inheriting the package's
     // advertised sets by omission would make a workflow Claude prompt demand
     // ownership and a route that this profile has no way to give it.
     advertiseNativeLaunch: [],

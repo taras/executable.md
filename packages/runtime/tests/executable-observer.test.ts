@@ -186,3 +186,42 @@ describe("Tier EO — executable observation", () => {
     expect(Object.keys(observed).sort()).toEqual(["digest", "path", "versionOutput"]);
   });
 });
+
+describe("Tier EO — observing the file a host already selected (#891)", () => {
+  it("EO-S1: a replaced file at one path and identical bytes at another are each what they are", function* () {
+    if (!hasDenoExecutableObserver()) {
+      return;
+    }
+    const root = yield* workspace();
+    const observer = createDenoExecutableObserver();
+    if (observer === undefined) {
+      throw new Error("a Deno host observes executables");
+    }
+    // The host's selection is an exact path; the observer is asked about that
+    // file and searches nothing.
+    const selected = yield* script(root, "codex", "codex-cli 0.167.1");
+    const first = yield* observer.observe(selected);
+    expect(first.path).toBe(yield* canonical(selected));
+
+    // Upgraded in place: the same path, other bytes, another version.
+    yield* writeTextFile(selected, `#!/bin/sh\necho "codex-cli 0.169.1"\n`);
+    const replaced = yield* observer.observe(selected);
+    expect(replaced.path).toBe(first.path);
+    expect(replaced.digest.value).not.toBe(first.digest.value);
+    expect(replaced.versionOutput.trim()).toBe("codex-cli 0.169.1");
+
+    // Identical bytes reached through another path: another path, one digest.
+    const moved = path.join(root, "elsewhere");
+    yield* ensureDir(moved);
+    const copy = yield* script(moved, "codex", "codex-cli 0.169.1");
+    const elsewhere = yield* observer.observe(copy);
+    expect(elsewhere.path).not.toBe(replaced.path);
+    expect(elsewhere.digest).toEqual(replaced.digest);
+
+    // A digest-only change keeps the version it reports.
+    yield* writeTextFile(copy, `#!/bin/sh\n# rebuilt\necho "codex-cli 0.169.1"\n`);
+    const rebuilt = yield* observer.observe(copy);
+    expect(rebuilt.digest.value).not.toBe(elsewhere.digest.value);
+    expect(rebuilt.versionOutput).toBe(elsewhere.versionOutput);
+  });
+});

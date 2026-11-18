@@ -252,11 +252,13 @@ A storage lease belongs to the scope that opened it. The provider owns the under
 
 The workflow executor holds the run’s exclusive executor lock through execution, cleanup, and committed lifecycle settlement. Connection serialization alone does not permit another executor to advance the run.
 
-Native Agent ownership separately protects a logical provider conversation. Construction provenance and executable compatibility do not replace live ownership; release requires evidence that the owner’s work can no longer act.
+Native Agent ownership separately protects a logical provider conversation. Construction provenance and executable metadata do not replace live ownership; release requires evidence that the owner’s work can no longer act.
+
+A conversation continues on the executable the current environment selects. The provider's positive assertion of the retained native identity — not version or digest equality — decides whether it continues; a missing or different assertion refuses without creating a replacement. Executable observations are diagnostic history: kept with the records that first made them, never rewritten to name today's build, and reported once per logical session in an invocation when they differ or cannot be determined. That warning state belongs to the invocation's owning scope, and a held conversation's diagnostics are captured in the task that runs its work.
 
 A released operating-system lock proves a previous local workflow executor is gone. It does not, by itself, prove native Agent backend quiescence or clear an unresolved ownership record.
 
-The [Workflow Workspace specification](specs/workflow-workspace-spec.md) owns executor and storage lifetimes. The [Native Agent session launch specification](specs/native-agent-session-launch-spec.md) owns handoff, build compatibility, and release proof.
+The [Workflow Workspace specification](specs/workflow-workspace-spec.md) owns executor and storage lifetimes. The [Native Agent session launch specification](specs/native-agent-session-launch-spec.md) owns handoff, identity confirmation, and release proof; the [ACP client specification](specs/acp-client-spec.md#availability) owns executable selection and compatibility warnings.
 
 ### Cancellation and attachment
 

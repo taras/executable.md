@@ -19,3 +19,4 @@ do not govern behavior.
 - [002 — Composability scope](002-composability-scope.md)
 - [003 — Frozen lockfile](003-frozen-lockfile.md)
 - [004 — Host-installed Codex CLI](004-host-installed-codex-cli.md)
+- [005 — Sessions continue on the current executable](005-current-executable-session-continuation.md)
