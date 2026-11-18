@@ -407,7 +407,7 @@ interface BoundBuild {
   agentName: string;
   agentCommand: string;
   livePath: string | undefined;
-  environment: Record<string, string>;
+  environment: Record<string, string> | undefined;
   /** The exact ACP adapter command this binding was proven against, if pinned. */
   adapterCommand: string | undefined;
 }
@@ -1307,7 +1307,9 @@ function* useAcpxProviderState(
    * share a child, and the same selection reached twice does.
    */
   function partitionOf(build: BoundBuild): string {
-    const environment = Object.entries(build.environment).sort(([a], [b]) => (a < b ? -1 : 1));
+    const environment = Object.entries(build.environment ?? {}).sort(([a], [b]) =>
+      a < b ? -1 : 1,
+    );
     return [build.agentCommand, build.adapterCommand ?? "", JSON.stringify(environment)].join(
       "\u0000",
     );
@@ -1350,7 +1352,9 @@ function* useAcpxProviderState(
       // Transient by construction: handed to the runtime for the children it
       // spawns, never persisted, exported, or written into a session record.
       // `agentProcessEnv` is the vendored patch's whole purpose.
-      options.agentProcessEnv = build.environment;
+      if (build.environment !== undefined) {
+        options.agentProcessEnv = build.environment;
+      }
       if (build.adapterCommand !== undefined) {
         options.agentRegistry = pinnedRegistry(build.agentName, build.adapterCommand);
       }
@@ -2489,7 +2493,7 @@ function* useAcpxProviderState(
     agentCommand: string,
     binding: NativeBinding,
   ): Operation<BoundBuild> {
-    let environment: Record<string, string> = {};
+    let environment: Record<string, string> | undefined;
     let livePath: string | undefined;
     if (dependencies?.agentProcessEnv !== undefined) {
       let selected: Record<string, string> | undefined;
