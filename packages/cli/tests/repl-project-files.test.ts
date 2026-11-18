@@ -380,6 +380,8 @@ describe("1113: session scopes retain their restrictions", () => {
       page,
       '<ReadAssets><File path="asset-canary">wrong</File></ReadAssets><File path="sibling-canary">allowed</File>',
     );
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* awaitedFact("manual redirected write entry settles", function* () {
       return (yield* settledReading(page.repl)).model.entries[0]?.settled === true;
@@ -795,6 +797,8 @@ describe("1113: project selection belongs to the actual entry", () => {
     const session = pairedLocation(page.repl.root, yield* mountedExecution(page.repl)).directory;
     expect(session).not.toBe(project);
     yield* pasteDraft(page, "<Cwd />");
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     page.repl.fake.script({
@@ -852,6 +856,8 @@ describe("1113: project selection belongs to the actual entry", () => {
     const page = yield* useReplPage({ host });
     const source = '<Git.Files as="files" /><Output><Json value={files} /></Output>';
     yield* pasteDraft(page, source);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     page.repl.fake.script({ reply: submit(source) });

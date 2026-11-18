@@ -1287,31 +1287,35 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sendMessage(page, "run it");
-    yield* closing.started();
-    yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
-    const asking = repl.fake.configCalls.length;
+    try {
+      yield* sendMessage(page, "run it");
+      yield* closing.started();
+      yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
+      const asking = repl.fake.configCalls.length;
 
-    if (changing) {
-      // Applied while the entry is held. A preference is a record, so this asks
-      // the agent for nothing and stops nothing.
-      yield* openConfigure(page);
-      yield* offeredChoice(page, NAMED["fast"]);
-      yield* chooseNamed(page, "fast");
-      yield* applyConfigure(page);
-      yield* drawerGone(page);
-      expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
-      // Nothing of the agent's was touched by saving, and the entry is still
-      // held: the save coexists with the work rather than interrupting it.
-      expect(repl.fake.configCalls).toHaveLength(asking);
-      expect(closing.released).toBe(false);
+      if (changing) {
+        // Applied while the entry is held. A preference is a record, so this asks
+        // the agent for nothing and stops nothing.
+        yield* openConfigure(page);
+        yield* offeredChoice(page, NAMED["fast"]);
+        yield* chooseNamed(page, "fast");
+        yield* applyConfigure(page);
+        yield* drawerGone(page);
+        expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
+        // Nothing of the agent's was touched by saving, and the entry is still
+        // held: the save coexists with the work rather than interrupting it.
+        expect(repl.fake.configCalls).toHaveLength(asking);
+        expect(closing.released).toBe(false);
+      }
+
+      // Released: the entry settles, the Submit it was waiting for answers, and
+      // the automatic turn that reports it runs.
+      closing.release();
+      yield* page.until("the turn that follows the entry", (one) => one.shows("Both done."));
+      return repl.fake.configCalls.slice(asking);
+    } finally {
+      closing.release();
     }
-
-    // Released: the entry settles, the Submit it was waiting for answers, and
-    // the automatic turn that reports it runs.
-    closing.release();
-    yield* page.until("the turn that follows the entry", (one) => one.shows("Both done."));
-    return repl.fake.configCalls.slice(asking);
   }
 
   it("CFG3: a preference saved while an entry is held is used by the turn after it", function* () {
@@ -1451,6 +1455,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // Genuinely below the window before it is scrolled to.
     expect(offered(page.screen(), last)).toBe(false);
     yield* scrollDrawerTo(page, last);
+    yield* page.until("the scrolled Content focus", (one) =>
+      one.rows.some((row) => />\s+\([ x]\) Model \d+\s*$/.test(row)),
+    );
     yield* chooseNamed(page, last);
     // Apply is below the window too, which is the state this is about: the
     // window has been moved a long way, and the way out is still on the screen.
@@ -1737,35 +1744,39 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sendMessage(page, "run it");
-    yield* closing.started();
-    yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
+    try {
+      yield* sendMessage(page, "run it");
+      yield* closing.started();
+      yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
 
-    yield* openConfigure(page);
-    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
-    yield* page.until("the control saying it stops first", (one) =>
-      applyReads(one, "[stop and start new conversation"),
-    );
-    yield* applyConfigure(page);
-    yield* page.until("the new agent after the join", (one) =>
-      headerNames(one, OTHER_MOUNTED_AGENT),
-    );
-    // The entry was not cancelled with the conversation that asked for it: it
-    // is the document's work, and it is still waiting to close.
-    expect(closing.released).toBe(false);
+      yield* openConfigure(page);
+      yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
+      yield* page.until("the control saying it stops first", (one) =>
+        applyReads(one, "[stop and start new conversation"),
+      );
+      yield* applyConfigure(page);
+      yield* page.until("the new agent after the join", (one) =>
+        headerNames(one, OTHER_MOUNTED_AGENT),
+      );
+      // The entry was not cancelled with the conversation that asked for it: it
+      // is the document's work, and it is still waiting to close.
+      expect(closing.released).toBe(false);
 
-    closing.release();
-    // It finishes on its own, and its record is in this execution's entries.
-    // The gate records the whole path it let through, so this asks whether an
-    // entries file was written rather than naming one.
-    yield* awaited("the entry closing", () =>
-      gate.reached.some((one) => one.endsWith("entries.jsonl")),
-    );
-    yield* entrySettles(page, 1, "ok");
-    expect(page.screen().shows("the entry ran")).toBe(true);
-    // And the new conversation is the one a message now goes to.
-    yield* page.until("the Sidekick at rest", sidekickIdle);
-    yield* conversed(page, "and you?", "Second agent.");
+      closing.release();
+      // It finishes on its own, and its record is in this execution's entries.
+      // The gate records the whole path it let through, so this asks whether an
+      // entries file was written rather than naming one.
+      yield* awaited("the entry closing", () =>
+        gate.reached.some((one) => one.endsWith("entries.jsonl")),
+      );
+      yield* entrySettles(page, 1, "ok");
+      expect(page.screen().shows("the entry ran")).toBe(true);
+      // And the new conversation is the one a message now goes to.
+      yield* page.until("the Sidekick at rest", sidekickIdle);
+      yield* conversed(page, "and you?", "Second agent.");
+    } finally {
+      closing.release();
+    }
   });
 
   it("CFG4: an unreachable agent keeps the old association and says why", function* () {
@@ -1905,37 +1916,41 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     const writing = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"'),
     );
-    repl.fake.script({ reply: "<Output>And this one.</Output>\n" });
-    yield* sendMessage(page, "again");
-    yield* writing.started();
+    try {
+      repl.fake.script({ reply: "<Output>And this one.</Output>\n" });
+      yield* sendMessage(page, "again");
+      yield* writing.started();
 
-    // A preference applied while that write is in flight. It is admitted —
-    // a save is a record of this history rather than work the conversation
-    // does — and it waits for the writer rather than overtaking it.
-    yield* openConfigure(page);
-    yield* offeredChoice(page, NAMED["fast"]);
-    yield* chooseNamed(page, "fast");
-    yield* applyConfigure(page);
-    yield* lingering();
-    // Nothing of it reached the file while the other append was inside the
-    // host, and the held write is still held.
-    expect(yield* savedPreference(repl)).toBe(undefined);
-    expect(writing.released).toBe(false);
+      // A preference applied while that write is in flight. It is admitted —
+      // a save is a record of this history rather than work the conversation
+      // does — and it waits for the writer rather than overtaking it.
+      yield* openConfigure(page);
+      yield* offeredChoice(page, NAMED["fast"]);
+      yield* chooseNamed(page, "fast");
+      yield* applyConfigure(page);
+      yield* lingering();
+      // Nothing of it reached the file while the other append was inside the
+      // host, and the held write is still held.
+      expect(yield* savedPreference(repl)).toBe(undefined);
+      expect(writing.released).toBe(false);
 
-    writing.release();
-    yield* page.until("the reply that was being written", (one) => one.shows("And this one."));
-    yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
-      return (yield* savedPreference(repl)) !== undefined;
-    });
+      writing.release();
+      yield* page.until("the reply that was being written", (one) => one.shows("And this one."));
+      yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
+        return (yield* savedPreference(repl)) !== undefined;
+      });
 
-    // One order, on disk: the response that was being written, and then the
-    // preference that waited for it. Read back through the projection, so this
-    // is the history as everything else reads it.
-    const read = yield* settledReading(repl);
-    const kinds = read.chat.map((record) => record.kind);
-    expect(kinds.indexOf("preferences")).toBeGreaterThan(kinds.lastIndexOf("response"));
-    expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
-    expect(read.chat.filter((record) => record.kind === "response")).toHaveLength(2);
+      // One order, on disk: the response that was being written, and then the
+      // preference that waited for it. Read back through the projection, so this
+      // is the history as everything else reads it.
+      const read = yield* settledReading(repl);
+      const kinds = read.chat.map((record) => record.kind);
+      expect(kinds.indexOf("preferences")).toBeGreaterThan(kinds.lastIndexOf("response"));
+      expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
+      expect(read.chat.filter((record) => record.kind === "response")).toHaveLength(2);
+    } finally {
+      writing.release();
+    }
   });
 
   it("CFG8: a replacement owns the drawer while it runs, and rebinds what Apply saves", function* () {
@@ -2069,7 +2084,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // Retry sends, and neither is consumed by it.
     // The send left the keystrokes in the composer, so this needs no route.
     yield* typed(page, "something else");
-    yield* draftText(page, "mine", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "mine");
 
     // A second explicit Retry waits behind the first; it consumes no newer text.
     yield* page.press("[retry]");
@@ -2253,6 +2268,8 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // default is what is under test, and naming it here would bypass it.
     repl.fake.script({ reply: `${ANSWERED}\n` });
     yield* pasteDraft(page, ASKING);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's own Agent answering", (one) => one.shows(ANSWERED));
 

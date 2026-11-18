@@ -473,29 +473,30 @@ alone.
 
 ## One live journey
 
-Run `xmd repl`. The screen shows an empty draft, a Sessions list that says it is
+Run `xmd repl`. The screen shows **+ New Round**, a Sessions list that says it is
 empty, an Entries list with nothing in it yet, and a location of the form
 `xmd://repl/<execution>/entries` — the execution already exists, as an empty history
 file, before you have typed anything.
 
-Type or paste one XMD entry and press Enter. What was in the draft is now the
+Activate **+ New Round**, type or paste one XMD entry, then press Tab and Enter
+to activate **Send**. What was in the draft is now the
 entry, and an admitted entry is immutable. The run begins, and the screen fills
 in as it goes — the scopes the entry admitted, the bindings its `eval` blocks
 published, the source a generated fragment produced before that fragment was
 admitted, and each line the document rendered.
 
-Keep typing. The draft is always the *next* entry's, so it goes on taking
+Open the next draft. It is always the *next* entry's, so it goes on taking
 keystrokes while this entry runs and while you are reading an earlier position:
 an admitted entry is immutable, so there is never one those keystrokes could be
-editing. Press Enter before the entry ahead of it is done and Run says so, and
+editing. Activate Send before the entry ahead of it is done and the REPL says so, and
 what you typed stays exactly as you typed it, character for character. When that
 entry has both settled and finished coming down, the same draft becomes the next
 entry — and only then does it leave the input and the location.
 
-When the entry asks a question, the footer says so on one row and nothing else
-happens: no drawer opens itself, nothing takes focus, the route does not move and
-the Sessions filter does not change. Activate that row — with Enter or a pointer —
-and the question's drawer opens: the whole message, and then
+When the entry asks a question, the identity header says an entry is waiting for
+an answer and the existing Answer action in History remains available. Focus,
+the route and the Sessions filter stay where they were. Activate Answer with
+Enter or a pointer and the question's drawer opens: the whole message, and then
 every field the schema declares, with its title, its description, whether it
 is required, and exactly the values it will accept. All of that is one ordered
 whole, and it is that whole — not the message alone — that scrolls when it is
@@ -1172,14 +1173,14 @@ One private grant ledger belongs to each inherited Prompt scope.
 
 ## Move between regions and edit within them
 
-From Draft, one Tab enters the tabs at Bindings without selecting it. Continue
-with Tab to reach the right reading, Message, History, Transcript, selected work
-and Draft again. Shift+Tab reverses the same cycle. Both directions use each
+From the Round editor, one Tab enters Send without activating it. Continue
+with Tab to reach the tabs, right reading, Message, History, Transcript, selected work
+and the editor again. When the editor is closed, the Draft region enters **+ New Round**. Shift+Tab reverses the same cycle. Both directions use each
 region's fixed entry; an absent region is skipped. Moving focus selects, sends
 and answers nothing.
 
 ```text
-Transcript -> Selected work -> Draft -> Tabs/Configure
+Transcript -> Selected work -> Draft -> Round actions -> Tabs/Configure
     ^                                      |
     |                                      v
  History <- Message <- TODO <- Right reading <-----+
@@ -1196,7 +1197,7 @@ the region at the same fixed control as Tab and dismisses the hints.
 | 1 | Sidekick Message |
 | 2 | Transcript |
 | 3 | Selected work |
-| 4 | Draft |
+| 4 | Round editor, or **+ New Round** when the editor is closed |
 | 5 | Tabs/Configure |
 | 6 | Right reading |
 | 7 | TODO |
@@ -1239,8 +1240,9 @@ paste occur at the caret. Up/Down follows displayed rows and retains the preferr
 visual column; Home/End reaches that row's boundaries. Plain arrows stay in the
 field. Alt+Up/Down reaches its local actions, and Tab leaves its region. Each
 value keeps its own caret through focus departure, modal coverage and resize;
-an explicitly replaced value or a new question starts at its end. Enter keeps
-each field's submission or Apply meaning. Control-J, a shifted Enter and
+an explicitly replaced value or a new question starts at its end. Enter in the
+Round editor inserts a newline. Enter on Send submits; other fields keep their
+submission or Apply meaning. Control-J, a shifted Enter and
 Terminal.app's Shift+Return insert a newline; releasing a key inserts nothing.
 Control-C in a focused Message that holds text clears it, as described under
 Message below.
@@ -1329,14 +1331,13 @@ existing destinations when visible. No background update can issue a late
 restoration. The rows below the body stay where they are — `[history]` and `[exit]` stay
 reachable from inside an open drawer, where they belong to that drawer.
 
-A route drawer begins below the whole contextual guidance block, so the screen
-goes on saying how to close the drawer in front of it. The block is as many rows
-as its words need at that width, and all of them stay visible: the drawer starts
-at the later of its own old top and the row below the last of them. Its columns
-and its bottom edge are unchanged, so the rows it moves down are spent out of
-its own window rather than taken from the footer — a shorter window, still whole
-by scrolling. The narrow outlet keeps its existing drawer, and the Sidekick's
-pane-local question and Configure rectangles are its pane's own and unaffected.
+The drawer is measured within the space between the identity header and History,
+in the rectangle its owner already uses. Its fixed title and actions carry its
+guidance. Above Content, show what Enter does for the focused control, Esc to
+close, Tab to move, and PageUp/PageDown to read more. Keep reading and editing
+directions appropriate to the focused control. Fit this guidance to the measured
+drawer width in as many rows as it takes. Its rows reduce the scrolling Content
+window, and the fixed controls stay reachable.
 
 The right pane's two tabs are its heading: `Bindings` and `Sidekick` side by
 side on one row, in that order, each name said once and neither repeated by a
@@ -1364,17 +1365,13 @@ following, and a previous chat stays where it was put while the current one
 works. None of this is in the location: a copied location restores the chat
 somebody selected and promises no scroll position.
 
-Above the reading, one block says what the execution is doing, what the focused
-control does, the way back to the draft and how to move. It takes as many rows
-as its words need and says all of them: a direction you cannot see is a
-direction you do not have, so nothing is shortened or dropped to keep it on one
-row. The narrow profile uses compact state and action labels; longer reading
-directions wrap at the measured width. A refusal's explanation is paid out over
-rows the same way, at whole words.
+Outside drawers, the identity header explains readiness and the next available
+action. When visible, the Round editor heading gives editing guidance, including
+Enter for a newline and Tab for Send. Other focus destinations remain available
+through the existing Tab traversal and Ctrl+G hints.
 
-Two input destinations, named: `Draft` runs a document as this execution's next
-entry, and `Message Sidekick` asks the Sidekick. Enter in each one means its own
-thing. Typing and Backspace reach whichever holds focus and leave the other
+The Round editor holds this execution's next document. Its Send runs that
+document. Enter in `Message Sidekick` asks the Sidekick. Typing and Backspace reach whichever holds focus and leave the other
 exactly as it was. Both texts survive switching tabs, navigating History and
 resizing; the draft is in the location, and the message is this process's own and
 appears in no location. An empty box sends nothing.
@@ -1650,9 +1647,9 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | an identity row; Transcript (36 columns), selected work and Draft (54 columns at this width), and Sidekick (70 columns); the drawer layer; a readiness row; then compact History |
+| `160x36` and larger | an identity row; Transcript (36 columns), selected work or its Round editor (54 columns at this width), and Sidekick (70 columns); the drawer layer; the round bar at the base of selected work, followed immediately by compact History on the last row |
 | `120x30` and larger | the same three columns, with widths of 24, 40 and 56 at this size |
-| `72x20` and larger | one full-width routed surface below the Sessions, Entries and Sidekick controls. Sidekick shows a compact selected-entry status row above History. Drawer guidance and the readiness row remain available |
+| `72x20` and larger | One full-width routed surface below Sessions, Entries and Sidekick. History is the final row. The Entries round bar and Sidekick's compact selected-entry row, when present, are directly above History. The identity header shows execution status across all three outlets. |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
@@ -1701,10 +1698,25 @@ shows that entry's exact source, its execution state and its results. Every name
 in that trail except the last one is a way back out to it: the reading is already
 at the last, and choosing an outer name leaves the reading there with the scopes
 beneath it no longer selected — the same thing choosing that scope's row in the
-catalog does. Below it is
-the **Draft**: one field whose heading row carries its own Send — or Stop, while
-an entry is running — and whose value takes the rows beneath. The Draft is always
-the next entry's text, and a blank row in it is a row.
+catalog does. **+ New Round** replaces that reading with an inset, outlined Executable
+Markdown editor and a round bar at the bottom. The gold `Round n · draft`
+heading names the next round after the most recently admitted round, even when
+an earlier one was selected. At 72×20, New Round opens the Entries view first
+and shows the gold heading above the focused editor. At that size, focus on
+Send removes the heading and its key guidance from the frame and gives their
+rows to the editor. Returning focus to the editor restores them. The editor
+fills the available space above the round bar. When the draft is empty its first
+interior row shows the muted `Executable Markdown` placeholder. The Sidekick
+conversation and unsent Message remain available.
+
+The bar shows `✎ draft`, **Send** and **X**. Send is dim and admits nothing
+while the draft is empty. X discards the draft and returns focus to
+**+ New Round**. A refused submission leaves the text in the editor. When
+Send admits a round, the live work replaces the editor and the bar shows
+`● running · user` and offers **Stop** for that exact round while it runs.
+History highlights the draft with `✎` while the editor is open and shows
+the running round with a spinner glyph after admission. Unfiltered Transcript
+shows the round's `── Round n ──` separator alongside the conversation rows.
 
 The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO**, and
 **Bindings**. With open tasks, the TODO label includes their count, as in
@@ -1843,21 +1855,21 @@ decides which rows and which controls exist. So what you can see, focus and clic
 are the same set, at every size, and a row the frame has no room for is never
 described as though it had somewhere to be.
 
-A refusal of one action — a submission the entry ahead of it has not made room
-for, a navigation that selects nothing, a pause this process cannot perform —
-appears beside the control that was refused, shortened with an ellipsis when the
-row is too narrow for all of it. It does not replace the screen.
-
-History is the last row. The contextual readiness row above it reports the
-current execution state and any action needed to continue. A refusal of an
-action takes that row while it applies. A presented drawer uses the row for its
-own guidance, including how to leave it and how to reach or scroll its fields.
+Execution action refusals use the identity header. Field refusals stay with their
+fields and Sidekick notices stay in the Sidekick pane. History is the last row
+and follows the round bar directly whenever the bar is visible. History keeps
+its existing map, head or frozen-position label, and admitted actions.
 
 ## What the screen says the execution is doing
 
-The readiness row leads with the execution state, then gives any action needed
-to proceed. It fits the available width and keeps the state readable at every
-supported size.
+The identity header shows execution readiness and any action needed to proceed,
+using compact wording at 72×20. Reserve space for the meaningful state and next
+action before fitting the session identifier. Keep the usage control reachable.
+A visible execution action refusal appears within the header, wrapping at the
+measured width as needed. Keep readiness visible during a refusal. The refusal
+gives the reason and any available recovery. When the refusal exceeds the
+header's available rows, the header shows which rows are visible and wheel
+scrolling over the refusal reveals the remaining rows without moving focus.
 
 **Readiness is read from the file and from this process together.** The durable
 side cannot answer it alone: a root close is recorded the moment a document
@@ -1865,7 +1877,7 @@ settles, while the task that produced it is still coming down, and a submission
 taken in that window has nowhere to go. So there is a state between "settled" and
 "ready" — the close is retained, the entry's task has not been joined, and no
 successor may start yet. It resolves without anybody typing: when the teardown
-finishes, the row says the next entry may start.
+finishes, the header says the next entry may start.
 
 The states a person can tell apart: no entry yet; an entry running; an entry
 waiting for an answer; an entry waiting for a permission; an entry whose close is
@@ -1879,7 +1891,7 @@ starts nothing and appends nothing. When the entry it named finishes, that refus
 goes rather than contradicting the sentence above it. A document that cannot be
 admitted and an answer a schema rejected are refusals of the thing itself: they
 stay until the thing changes, and the schema's complaint stays under the field it
-is about rather than in the row that says what the execution is doing.
+is about rather than with execution readiness.
 
 The session marks readiness refusals when raising them with a namespaced,
 nonenumerable own property carrying its normalized sentence. Across loaded
@@ -1962,7 +1974,7 @@ one, not because some text happens to begin with a brace.
 
 A reading of this screen with the colour thrown away loses nothing it needs. An
 outcome is spelled `[ok]` or `[err]`, a selected row keeps its `*`, a focused
-control keeps its `>`, the draft keeps its `>>`, and every state the emphasis
+control keeps its `>`, the round bar says `draft` while the editor is open, and every state the emphasis
 distinguishes is also said in words. The emphasis is how the screen is read
 quickly; the text is how it is read at all.
 
@@ -2181,12 +2193,13 @@ counts, and the column is wide enough for every reading a badge can hold —
 including a cleanup wait, which says two things at once — so an element
 settling cannot reflow the document beside it.
 
-The Draft's value and a queued message are wrapped the same way. A queued
-message wraps between its origin and its `X`, and its continuation rows line up
+The Round editor keeps each source line on one row and scrolls it sideways to
+reveal the caret. Measure the outline and inset as part of the pane. Fit the
+source and caret to the remaining interior width and height. The empty
+placeholder occupies the first interior display row and changes neither the
+source nor its caret offsets. A queued message wraps between its origin and its `X`, and its continuation rows line up
 with its text: a wrapped row is the same message, never a new one, and the `X`
-stays one control on its first row. The reference this screen follows clips
-source and scrolls the Draft sideways; this screen does neither, because a clip
-hides somebody's source and a control nobody can see is not one to focus.
+stays one control on its first row.
 
 A question's own read-only preview is measured the same way, at the width its
 drawer was given. A drawer row is one row, so a line left unwrapped has nowhere
@@ -3290,8 +3303,8 @@ normalized event is an explicit failure.
 Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
-keystroke never edits a field nobody is looking at, and the row above the surface
-says how to get back to the draft while that is the case. The decoder names
+keystroke never edits a field nobody is looking at. Ctrl+G, then 4 reaches the
+editor or New Round when the Draft destination is offered. The decoder names
 navigation keys, including Alt+Up/Down and the Control-G focus prefix. Unassigned
 Control or Alt chords are discarded as a unit. Control-J,
 Enter carrying only Shift, and Enter carrying both Control and Alt — how

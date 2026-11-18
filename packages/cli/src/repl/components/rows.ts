@@ -498,6 +498,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "session-filter") {
     return { kind: "toggle-session-filter" };
   }
+  if (select === "open-round-draft" || select === "close-round-draft") {
+    return { kind: select };
+  }
   if (select === "submit-draft") {
     return { kind: "submit" };
   }
@@ -583,6 +586,14 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       const purpose = optional(node.input, "purpose");
       const question = optional(node.input, "question");
       if (
+        event.kind === "pointer" &&
+        purpose === "draft" &&
+        fields(node.input)?.["block"] === true &&
+        textOf(node.input, "prompt") === ""
+      ) {
+        return { kind: "reveal", key: "footer:input" };
+      }
+      if (
         purpose !== "todo" &&
         purpose !== "draft" &&
         purpose !== "message" &&
@@ -643,6 +654,9 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
         };
       }
       if (event.key === "Enter") {
+        if (purpose === "draft" && fields(node.input)?.["block"] === true) {
+          return { kind: "type", text: "\n", ...owns };
+        }
         return submission(node.input);
       }
       return undefined;
@@ -706,7 +720,7 @@ function rendered(input: ReplViewData): string {
   const focused = fields(input)?.["focused"] === true;
   const prompt = textOf(input, "prompt");
   if (fields(input)?.["block"] === true) {
-    return fieldLabel(prompt, focused);
+    return prompt === "" ? "" : fieldLabel(prompt, focused);
   }
   return fieldText(prompt, textOf(input, "text"), focused);
 }

@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import { useReplPage } from "../support/repl-page.ts";
 import type { ReplPage } from "../support/repl-page.ts";
 import { appendGate, awaited, mountedExecution, useMountedHost } from "../support/mounted-repl.ts";
-import { asked, intoDraft, sendMessage, typed } from "../support/screen-journeys.ts";
+import { asked, intoDraft, sendMessage, tab, typed } from "../support/screen-journeys.ts";
 import { pairedLocation, SIDEKICK_FILE } from "../../src/repl/sidekick/history.ts";
 import { executionPath } from "../../src/repl/journal.ts";
 import { useTemporary } from "./repl/issue-883/sidekick-harness.ts";
@@ -39,6 +39,13 @@ const CASE_DEADLINE_MS = 500;
  * teardown is demonstrably waiting on it rather than merely not yet reached.
  */
 const HELD_MS = 300;
+
+/**
+ * How long the rescue in the held-message case watches a failed case's hold
+ * before letting it go itself. Its own owner releases it as the failure leaves,
+ * so a rescue that finds it still held is evidence the owner never did.
+ */
+const RESCUE_MS = 500;
 
 /** A session another run left beside this one, under an identifier that is not hex. */
 const SECOND_SESSION = "Second_session-1";
@@ -134,6 +141,8 @@ function* exchange(page: ReplPage, word: string): Operation<void> {
   yield* asked(page, `reply ${word.toLowerCase()}`, word);
   yield* intoDraft(page);
   yield* typed(page, `<Output>entry ${word}</Output>`);
+  // Enter in the Round editor breaks the line; the Round's own Send runs it.
+  yield* tab(page);
   yield* page.key("Enter");
   yield* page.until("the entry settling", (one) => one.shows("1 ✓"));
 }
@@ -229,27 +238,37 @@ describe("mounted journal held append", () => {
     let root = "";
     let closed = false;
     // Owned by the case rather than the host, so the release comes from outside
-    // the scope whose teardown is waiting for it.
+    // the scope whose teardown is waiting for it. A failure before the hold was
+    // reached has nothing to observe, and a halted controller still lets go.
     const controller = yield* spawn(function* () {
-      yield* held.started();
-      yield* failing.operation;
-      yield* sleep(HELD_MS);
-      const observed = { rootWhileHeld: yield* exists(root), closedWhileHeld: closed };
-      held.release();
-      return observed;
+      try {
+        yield* failing.operation;
+        if (!held.inFlight) {
+          return undefined;
+        }
+        yield* sleep(HELD_MS);
+        return { rootWhileHeld: yield* exists(root), closedWhileHeld: closed };
+      } finally {
+        held.release();
+      }
     });
     let failure: unknown;
     try {
       yield* scoped(function* () {
-        const host = yield* useMountedHost({ gate });
-        const { page } = yield* mounted({ host });
-        root = page.repl.root;
-        yield* exchange(page, "BEFORE");
-        page.repl.fake.script({ reply: "<Output>HELD</Output>\n" });
-        yield* sendMessage(page, "reply held");
-        yield* held.started();
-        failing.resolve();
-        throw new Error("deliberate held append cancellation");
+        // Every way out of this body tells the controller, so an interaction
+        // that fails early cannot leave the host draining a hold nobody releases.
+        try {
+          const host = yield* useMountedHost({ gate });
+          const { page } = yield* mounted({ host });
+          root = page.repl.root;
+          yield* exchange(page, "BEFORE");
+          page.repl.fake.script({ reply: "<Output>HELD</Output>\n" });
+          yield* sendMessage(page, "reply held");
+          yield* held.started();
+          throw new Error("deliberate held append cancellation");
+        } finally {
+          failing.resolve();
+        }
       });
     } catch (error) {
       failure = error;
@@ -265,6 +284,75 @@ describe("mounted journal held append", () => {
         reached: gate.reached.filter((path) => path.endsWith(SIDEKICK_FILE)).length,
         rootAfterClose: yield* exists(root),
       }) + "\n",
+    );
+    throw failure;
+  });
+});
+
+describe("mounted journal held message", () => {
+  beforeEach(witnessCase("held message"));
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("held message", function* () {
+    const witness = yield* Witnessed.expect();
+    const gate = appendGate();
+    let record: string | undefined;
+    // This case's own message, not the one the exchange before it sends.
+    const saving = gate.holdNext((path, appended) => {
+      if (
+        !path.endsWith(SIDEKICK_FILE) ||
+        !appended.includes('"kind":"message"') ||
+        !appended.includes("ask held")
+      ) {
+        return false;
+      }
+      record = appended;
+      return true;
+    });
+    let root = "";
+    // Owned by the case rather than the host. It lets the hold go only if the
+    // hold's own owner has not, so the host's teardown stays joinable either way.
+    const rescue = yield* spawn(function* () {
+      try {
+        yield* saving.started();
+        yield* sleep(RESCUE_MS);
+        return { rescueNeeded: !saving.released, rootAtRescue: yield* exists(root) };
+      } finally {
+        saving.release();
+      }
+    });
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        const host = yield* useMountedHost({ gate });
+        const { page } = yield* mounted({ host });
+        root = page.repl.root;
+        yield* exchange(page, "BEFORE");
+        page.repl.fake.script({ reply: "<Output>HELD</Output>\n" });
+        try {
+          yield* sendMessage(page, "ask held");
+          yield* saving.started();
+          expect("the held message").toBe("deliberate held message failure");
+          saving.release();
+          yield* page.until("the held reply", (one) => one.shows("HELD"));
+        } finally {
+          saving.release();
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+    // Joined either way: a hold the case never reached has nothing to rescue.
+    let rescued: { rescueNeeded: boolean; rootAtRescue: boolean } | undefined;
+    if (saving.inFlight) {
+      rescued = yield* rescue;
+    } else {
+      yield* rescue.halt();
+    }
+    yield* writeWitness(
+      witness,
+      "held-message.json",
+      JSON.stringify({ ...rescued, record, rootAfterClose: yield* exists(root) }) + "\n",
     );
     throw failure;
   });

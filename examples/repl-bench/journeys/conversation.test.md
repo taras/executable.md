@@ -51,10 +51,11 @@
       <Terminal.WaitForText text="REPL.Environment result" row={currentTurn.row + 1} />
       <Terminal.WaitForText text="linked entry Round 1" />
       <Terminal.Screenshot name="saved-turn-2" />
-      <Terminal.WaitForText text="DRAFT" present={false} />
+      <Terminal.WaitForText text="· draft" present={false} />
       <Repl.Focus.Draft />
+      <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="saved turn 2 of 3" present={false} />
-      <Terminal.WaitForText text="DRAFT" />
+      <Terminal.WaitForText text="· draft" />
       <Terminal.Type text="visible-draft-witness" />
       <Terminal.WaitForText text="visible-draft-witness" />
 

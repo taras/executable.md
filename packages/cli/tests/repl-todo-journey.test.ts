@@ -188,8 +188,11 @@ for (const size of [
       yield* page.press("TODO", { onRow: "SIDEKICK" });
       capture(page, "empty");
       page.repl.fake.script({ reply: "<Output>Reviewed task.</Output>" });
-      yield* page.until("Add task is visible", (one) => one.shows("+"));
-      yield* page.press("+");
+      yield* page.until(
+        "Add task is visible",
+        (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+      );
+      yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
       yield* page.until("task editor", (one) => one.shows("Task:"));
       const start = performance.now();
       yield* page.type("**one** `code` [label](https://example.com)");
@@ -214,8 +217,11 @@ for (const size of [
       capture(page, "sidekick-selected");
       expect(page.screen().shows("Remove task")).toBe(false);
       yield* page.press("TODO", { onRow: "SIDEKICK" });
-      yield* page.until("Add task is visible", (one) => one.shows("+"));
-      yield* page.press("+");
+      yield* page.until(
+        "Add task is visible",
+        (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+      );
+      yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
       yield* page.until("checklist editor", (one) => one.shows("Task:"));
 
       yield* page.key("Escape");
@@ -470,8 +476,11 @@ describe("TODO human semantic actions", () => {
     yield* page.press("TODO", { onRow: "SIDEKICK" });
     page.repl.fake.script({ reply: "<Output>review complete</Output>", held: true });
     inputCount++;
-    yield* page.until("Add task is visible", (one) => one.shows("+"));
-    yield* page.press("+");
+    yield* page.until(
+      "Add task is visible",
+      (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+    );
+    yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
     yield* page.until("new task editor", (one) => one.shows("Task:"));
     inputCount++;
     yield* page.type("**rich** `code` [label](https://example.com)");
@@ -487,8 +496,11 @@ describe("TODO human semantic actions", () => {
     for (const text of inputs) {
       const start = performance.now();
       inputCount++;
-      yield* page.until("Add task is visible", (one) => one.shows("+"));
-      yield* page.press("+");
+      yield* page.until(
+        "Add task is visible",
+        (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+      );
+      yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
       yield* page.until("append editor", (one) => one.shows("Task:"));
       inputCount++;
       yield* page.type(text);

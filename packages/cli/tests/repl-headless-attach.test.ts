@@ -422,7 +422,13 @@ describe("headless renderer lifetime", () => {
         expect(first).toContain("retained renderer draft");
       }
       if (cycle === 0) {
-        terminal.terminal.feed("retained renderer draft");
+        yield* held.input.ready(terminal.terminal);
+        yield* held.input.input(
+          terminal.terminal,
+          pointerPress(yield* locate(terminal.terminal, "+ New Round")),
+        );
+        yield* visible(terminal.terminal, "· draft");
+        yield* held.input.input(terminal.terminal, "retained renderer draft");
       }
       yield* visible(terminal.terminal, "retained renderer draft");
       const attached = [...live].filter((scope) => !baseline.has(scope));
@@ -512,7 +518,13 @@ describe("headless live UI", () => {
       yield* attachChildUi(held.reference.sessionId);
     });
     yield* visible(second.terminal, "[detach]");
-    second.terminal.feed("usable");
+    yield* held.input.ready(second.terminal);
+    yield* held.input.input(
+      second.terminal,
+      pointerPress(yield* locate(second.terminal, "+ New Round")),
+    );
+    yield* visible(second.terminal, "· draft");
+    yield* held.input.input(second.terminal, "usable");
     yield* visible(second.terminal, "usable");
     second.terminal.end();
     yield* reattached;
@@ -758,7 +770,7 @@ describe("headless live UI", () => {
     yield* click("Entries");
     yield* visible(terminal.terminal, ">   1. [ok]");
     yield* click("1. [ok]");
-    yield* visible(terminal.terminal, "> DRAFT");
+    yield* visible(terminal.terminal, "Entry 1");
     yield* click("BINDINGS");
     // The entry's own result is its Output; the pane opens on its Input.
     yield* visible(terminal.terminal, "entry-1 Input");
@@ -907,6 +919,8 @@ describe("headless live UI", () => {
       yield* held.view.connect(yield* useReplScreen());
     });
     yield* visible(parent.terminal, "[detach]");
+    parent.terminal.feed("\x074\r");
+    yield* visible(parent.terminal, "· draft");
     parent.terminal.feed("parent draft remains");
     yield* visible(parent.terminal, "parent draft remains");
     const baseline = parent.terminal.drawn;
@@ -959,7 +973,7 @@ describe("headless live UI", () => {
       observed.feed(bytes);
       if (index >= baseline) {
         expect(observed.rows().join("\n")).toContain("parent draft remains");
-        expect(observed.rows().join("\n")).toContain("> DRAFT");
+        expect(observed.rows().join("\n")).toContain("> Round");
       }
     }
     parent.terminal.feed(" editable");
@@ -989,7 +1003,13 @@ describe("headless live UI", () => {
       yield* attachChildUi(held.reference.sessionId);
     });
     yield* visible(first.terminal, "[detach]");
-    first.terminal.feed("draft retained");
+    yield* held.input.ready(first.terminal);
+    yield* held.input.input(
+      first.terminal,
+      pointerPress(yield* locate(first.terminal, "+ New Round")),
+    );
+    yield* visible(first.terminal, "· draft");
+    yield* held.input.input(first.terminal, "draft retained");
     yield* visible(first.terminal, "draft retained");
     const second = recordingTerminal();
     const refused = yield* scoped(function* () {
@@ -1042,9 +1062,28 @@ describe("headless live UI", () => {
     expect(third.terminal.listeners).toBe(0);
     yield* held.task.halt();
   });
+});
 
+describe("numbered attached frames", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("H4: applies numbered frames only at matching dimensions and releases an outstanding frame on loss", function* () {
     const held = yield* useHeadlessFixture();
+    yield* scoped(function* () {
+      const terminal = recordingTerminal();
+      const ui = yield* spawn(function* () {
+        yield* terminal.install();
+        yield* attachChildUi(held.reference.sessionId);
+      });
+      yield* visible(terminal.terminal, "[detach]");
+      yield* held.input.ready(terminal.terminal);
+      yield* held.input.input(
+        terminal.terminal,
+        pointerPress(yield* locate(terminal.terminal, "+ New Round")),
+      );
+      yield* visible(terminal.terminal, "> Round");
+      terminal.terminal.end();
+      yield* ui;
+    });
     yield* scoped(function* () {
       const { wire, descriptor } = yield* (yield* SidekickTransport.expect()).connect(held.path);
       yield* wire.send({ id: 0, request: { method: "hello", descriptor } });

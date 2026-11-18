@@ -77,6 +77,8 @@ import {
   closeDrawer,
   DRAFT_VALUE,
   draftShows,
+  draftOpen,
+  intoDraft,
   draftText,
   drawerLines,
   entrySettles,
@@ -206,6 +208,8 @@ function* useApplication(model: ReplModel, size: ReplTerminalSize = WIDE): Opera
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }
@@ -296,7 +300,7 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     expect(frame.committed.manifest.profile).toBe("wide");
     // The spec's first composition: the columns are 36, 66 and 58 cells,
-    // dividers included, the body 33 rows and the Draft four of the centre's.
+    // dividers included, with 34 body rows above History.
     expect(bounds("box:identity")).toEqual({
       x: 0,
       y: 0,
@@ -307,38 +311,34 @@ describe("REPL terminal: responsive semantic frames", () => {
       x: 0,
       y: 1,
       width: 36,
-      height: 33,
+      height: 34,
     });
     expect(bounds("box:transcript")).toEqual({
       x: 36,
       y: 1,
       width: 54,
-      height: 33,
+      height: 34,
     });
     expect(bounds("box:inspection")).toEqual({
       x: 90,
       y: 1,
       width: 70,
-      height: 33,
+      height: 34,
     });
-    expect(bounds("box:draft")?.height).toBe(4);
-    // Full width at every size, with readiness followed by History.
+    expect(bounds("box:round-editor:body")).toBeUndefined();
+    expect(bounds("box:round-bar")?.y).toBe(34);
+    // History spans the full width on the final row.
     expect(bounds("box:history")).toEqual({
       x: 0,
       y: 35,
       width: 160,
       height: 1,
     });
-    expect(bounds("box:guidance")).toEqual({
-      x: 0,
-      y: 34,
-      width: 160,
-      height: 1,
-    });
+    expect(bounds("box:guidance")).toBeUndefined();
 
     // Each pane holds its own controls and no other pane's.
     expect(within(bounds("box:sidebar"), frame.boundsOf("transcript:selector"))).toBe(true);
-    for (const key of ["entries:heading", "footer:input", "draft:send"]) {
+    for (const key of ["entries:heading", "draft:new"]) {
       expect([key, within(bounds("box:transcript"), frame.boundsOf(key))]).toEqual([key, true]);
     }
     for (const key of ["tab:bindings", "tab:sidekick"]) {
@@ -372,7 +372,7 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(right.width).toBeLessThan(58);
     for (const column of [left, centre, right]) {
       expect(column.y).toBe(1);
-      expect(column.height).toBe(27);
+      expect(column.height).toBe(28);
     }
     expect(bounds("box:history")).toEqual({
       x: 0,
@@ -380,12 +380,7 @@ describe("REPL terminal: responsive semantic frames", () => {
       width: 120,
       height: 1,
     });
-    expect(bounds("box:guidance")).toEqual({
-      x: 0,
-      y: 28,
-      width: 120,
-      height: 1,
-    });
+    expect(bounds("box:guidance")).toBeUndefined();
     expect(frame.keys).not.toContain("tray:queue");
     expect(frame.keys).not.toContain("follow");
   });
@@ -399,24 +394,19 @@ describe("REPL terminal: responsive semantic frames", () => {
       x: 0,
       y: 1,
       width: 72,
-      height: 17,
+      height: 18,
     });
     for (const column of ["box:sidebar", "box:transcript", "box:inspection"]) {
       expect([column, frame.regionOf(column)]).toEqual([column, undefined]);
     }
-    // Readiness and History keep their order at the narrowest width.
+    // History stays on the final row at the narrowest width.
     expect(frame.regionOf("box:history")).toEqual({
       x: 0,
       y: 19,
       width: 72,
       height: 1,
     });
-    expect(frame.regionOf("box:guidance")).toEqual({
-      x: 0,
-      y: 18,
-      width: 72,
-      height: 1,
-    });
+    expect(frame.regionOf("box:guidance")).toBeUndefined();
     expect(frame.keys).not.toContain("tray:queue");
     expect(frame.keys).not.toContain("follow");
 
@@ -434,13 +424,12 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(app.presenter.grid.textIn(layer).join("\n")).toContain("Entries");
     expect(keysInside(app.presenter, opened, layer)).toEqual(["drawer:close"]);
     const history = opened.regionOf("box:history");
-    const guidance = opened.regionOf("box:guidance");
-    if (history === undefined || guidance === undefined) {
-      throw new Error("the narrow drawer lost its History band or fitted help");
+    if (history === undefined) {
+      throw new Error("the narrow drawer lost its History band");
     }
     expect(history).toEqual({ x: 0, y: NARROW.rows - 1, width: 72, height: 1 });
-    expect(guidance.y + guidance.height).toBe(history.y);
-    expect(layer.y + layer.height).toBeLessThanOrEqual(guidance.y);
+    expect(layer.y + layer.height).toBeLessThanOrEqual(history.y);
+    expect(app.presenter.grid.textIn(layer).join("\n")).toContain("Esc");
     expect(opened.keys).toContain("footer:history");
   });
 
@@ -451,9 +440,9 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     // Entries is the route a command opens on.
     const entries = yield* app.commit();
-    for (const key of ["footer:input", "draft:send"]) {
-      expect([key, entries.keys.includes(key)]).toEqual([key, true]);
-    }
+    expect(entries.keys).toContain("draft:new");
+    expect(entries.keys).not.toContain("footer:input");
+    expect(entries.keys).not.toContain("draft:send");
     expect(entries.regionOf("box:reading:viewport")).toBeDefined();
     // The other surface is **absent**, not hidden. A narrow frame has one
     // region, so a row of the surface it is not showing would be focusable with
@@ -558,9 +547,9 @@ describe("REPL terminal: responsive semantic frames", () => {
       profiles.push(frame.committed.manifest.profile);
       const shared = frame.keys.filter((key) => keys.includes(key));
       expect(shared).toEqual(
-        expect.arrayContaining(["footer:input", "footer:history", "footer:exit"]),
+        expect.arrayContaining(["draft:new", "footer:history", "footer:exit"]),
       );
-      expect(focusedKey(app.presenter)).toBe("footer:input");
+      expect(frame.keys).toContain(focusedKey(app.presenter));
     }
 
     // Below the minimum there is nothing to keep: that frame draws its refusal
@@ -581,12 +570,12 @@ describe("REPL terminal: responsive semantic frames", () => {
     for (const size of [WIDE, NARROW]) {
       const frame = yield* app.commit({ size });
       const history = frame.regionOf("box:history");
-      const guidance = frame.regionOf("box:guidance");
-      if (history === undefined || guidance === undefined) {
+      const bar = frame.regionOf("box:round-bar");
+      if (history === undefined || bar === undefined) {
         throw new Error("every drawable frame has a footer");
       }
 
-      // One row, full width, directly below readiness at the foot of the frame.
+      // One row, full width, directly below the round bar.
       expect(history).toEqual({
         x: 0,
         y: size.rows - 1,
@@ -594,7 +583,7 @@ describe("REPL terminal: responsive semantic frames", () => {
         height: 1,
       });
       expect(history.y).toBeGreaterThan(frame.regionOf("box:identity")?.y ?? 0);
-      expect(guidance.y + guidance.height).toBe(history.y);
+      expect(bar.y + bar.height).toBe(history.y);
       // And what the terminal actually holds on that row is the band's own
       // surface, for the full width of the footer: the controls it carries sit
       // inside it.
@@ -666,7 +655,11 @@ describe("REPL terminal: responsive semantic frames", () => {
 
   it("F1: a pointer against a control the refusal hides reaches nothing", function* () {
     const app = yield* useApplication(yield* referenceModel(), NARROW);
-    const visible = yield* app.commit();
+    const closed = yield* app.commit();
+    const opening = yield* actionOf(app.presenter, closed, "draft:new");
+    const model = yield* referenceModel();
+    const state = reduceRepl(initialState("reference"), opening, model, IDLE).state;
+    const visible = yield* app.commit({ state });
     const input = visible.targets.find(
       (target) => app.presenter.tree.keyOf(target.node) === "footer:input",
     );
@@ -2050,10 +2043,9 @@ describe("REPL bracketed paste", () => {
     }
   });
 
-  it("keeps a framed Draft editable until a deliberate Enter", function* () {
+  it("keeps a framed Draft editable until deliberate Send", function* () {
     const page = yield* useReplPage();
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     const source = "<Output>first\n\n  é界🙂 last</Output>";
     page.repl.terminal.bytes(framed(source.replaceAll("\n", "\r\n")));
     yield* page.until(
@@ -2062,7 +2054,7 @@ describe("REPL bracketed paste", () => {
     );
     expect(page.repl.fake.prompts).toHaveLength(0);
     expect((yield* settledReading(page.repl)).model.entries).toHaveLength(0);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 1, "ok");
     const history = yield* settledReading(page.repl);
     expect(history.model.entries).toHaveLength(1);
@@ -2284,13 +2276,12 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // defect. So the keystroke is sent to the running command, which answers
     // with the control that holds focus afterwards.
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
 
     yield* page.key("Tab");
-    yield* page.until("focus moving forward", (one) => !one.shows("> DRAFT"));
+    yield* page.until("focus moving forward", (one) => !one.shows("> Round"));
     yield* page.key("Backtab");
-    yield* page.until("focus coming back", (one) => one.shows("> DRAFT"));
+    yield* page.until("focus coming back", (one) => one.shows("> Round"));
   });
 
   it("I1: going back inside a drawer stays inside it", function* () {
@@ -2323,8 +2314,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
 
   it("I1: text and Backspace reach the draft through the same ancestry as a key", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
 
     yield* draftText(page, "é");
     expect(draftShows(page.screen(), "é")).toBe(true);
@@ -2335,7 +2325,14 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* page.type("x\ny");
     const pasted = yield* page.until("the pasted row", (one) => one.shows("éx") && one.shows("y"));
     const first = pasted.locate("éx", DRAFT_VALUE);
-    const secondRow = pasted.rows.findIndex((line) => line.includes("│  y"));
+    const secondRow = pasted.locate("y", {
+      within: {
+        top: first.row + 1,
+        bottom: first.row + 2,
+        left: first.column,
+        right: first.column + 1,
+      },
+    }).row;
     if (secondRow === -1) {
       throw new Error(`the second pasted row was not shown. ${page.describe()}`);
     }
@@ -2345,19 +2342,15 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* page.key("Backspace");
     yield* page.until(
       "both characters erased",
-      (one) => draftShows(one, "éx") && one.rows.every((line) => !line.includes("│  y")),
+      (one) => draftShows(one, "éx") && !draftShows(one, "y"),
     );
 
-    // And the named keys still mean what they meant.
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 1, "ok");
-    const settled = yield* page.until(
-      "the draft being spent",
-      (one) => one.found("éx", DRAFT_VALUE) === 0,
-    );
+    const settled = yield* page.until("the draft being spent", (one) => !draftOpen(one));
     expect(settled.shows("éx")).toBe(true);
     yield* page.key("Tab");
-    yield* page.until("focus moving off the draft", (one) => !one.shows("> DRAFT"));
+    yield* page.until("focus moving off the draft", (one) => !one.shows("> Round"));
   });
 
   it("I1: text a row does not claim passes it on the way up", function* () {
@@ -2681,8 +2674,7 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
 
   it("TL7: typing while the drawer is open does not change the Draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     yield* draftText(page, "kept in the Draft");
     yield* page.press("[history]");
     yield* page.until("the History drawer", (one) => one.shows("[close]"));
@@ -3044,6 +3036,8 @@ function historyMarkers(reading: ScreenReading): string[] {
  */
 function* submitPast(page: ReplPage, order: number): Operation<void> {
   yield* pasteDraft(page, `Entry ${order} text.`);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* page.until(`ready for entry ${order + 1}`, (one) =>
     one.shows(`Ready for Entry ${order + 1}`),
@@ -3054,8 +3048,7 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
   beforeEach(journalBeforeEach(OWNER));
   it("keeps every action reachable and preserves results, selection and the draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     // Past the row-full point: the compact map's text grows roughly three
     // cells an entry and nothing else bounds it, so twenty-four entries at
     // this width overruns what the row's two controls leave long before the
@@ -3094,8 +3087,7 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
 
   it("bounds the same row at 200x36 without losing a control", function* () {
     const page = yield* useReplPage({ size: { columns: 200, rows: 36 } });
-    yield* page.type("\x074");
-    yield* page.until("Draft focus", (one) => one.shows("> DRAFT"));
+    yield* intoDraft(page);
     // Past this width's own row-full point (twenty-five, measured) without
     // adding a viewport matrix: one further size, driven through the same
     // harness as the 160-column case above.

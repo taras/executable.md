@@ -780,6 +780,8 @@ describe("asset import acknowledgement and independent owners", () => {
       page,
       '<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="answer">The entry is asking.</Elicit>',
     );
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("entry question", (one) => one.shows("[answer]"));
     page.repl.fake.script({ reply: invocation(source, "assets/never.bin") });

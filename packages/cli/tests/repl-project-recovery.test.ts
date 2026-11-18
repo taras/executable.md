@@ -89,6 +89,8 @@ function* saved(sidekick = false) {
       yield* sendMessage(page, "start the held entry");
     } else {
       yield* pasteDraft(page, source);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
     }
     yield* waiting.operation;
@@ -413,7 +415,18 @@ describe("1113: project placement before live recovery", () => {
       expect(model.ok && model.value.entries[0]?.terminal?.output).toBe(held.project);
       expect(yield* readTextFile(join(held.project, "acknowledged"))).toBe("external edit");
       expect(mountSources).toEqual([join(held.project, "mapped")]);
-      screen.terminal.feed('<Where /><File path="new-work">denied</File>\r');
+      const shows = (text: string) =>
+        screen.terminal.screen?.rows().some((row) => row.includes(text)) === true;
+      yield* awaited("the next entry becoming ready", () => shows("Ready for Entry 2"));
+      screen.terminal.feed("\x074");
+      yield* awaited("New Round focused", () => shows("> + New Round"));
+      screen.terminal.feed("\r");
+      yield* awaited("Round editor focused", () => shows("> Round 2"));
+      screen.terminal.feed('<Where /><File path="new-work">denied</File>');
+      yield* awaited("the successor source in the editor", () => shows("denied</File>"));
+      screen.terminal.feed("\t");
+      yield* awaited("Round Send focused", () => shows("> Send"));
+      screen.terminal.feed("\r");
       yield* awaitedFact("new entry in A", function* () {
         const reopened = yield* held.host.repository.open(held.id);
         const model = projectRepl(yield* reopened.stream.readAll());

@@ -54,7 +54,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* focusPtyDraft(first, 30_000);
       yield* first.type(source);
       yield* sleep(500);
-      yield* first.type("\r");
+      yield* first.type("\t\r");
       yield* showing(first, "waiting for an answer", 30_000);
       expect(yield* readTextFile(join(old, "process-cwd.txt"))).toBe(old);
       yield* click(first, "[exit]");
@@ -84,7 +84,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
         `<Dir path=${JSON.stringify(target)}><File path="read.md" as="fresh" /><File path="fresh.md">{fresh}</File>fresh is {fresh}</Dir>`,
       );
       yield* sleep(500);
-      yield* third.type("\r");
+      yield* third.type("\t\r");
       yield* showing(third, "Ready for Entry 3", 30_000);
       yield* holding(join(selected, "fresh.md"), selected === old ? "changed" : "current");
       // The catalog is a drawer on this screen: `Entries` opens it, and the

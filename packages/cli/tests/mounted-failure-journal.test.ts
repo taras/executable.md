@@ -9,7 +9,10 @@
  * nothing; an assertion after a successful run keeps its pair and none of the
  * execution's authored files; a case deadline that cancels a turn in flight
  * keeps what that turn wrote; an append still held when its case fails is
- * written before the histories are read and the root is removed; and a case
+ * written before the histories are read and the root is removed; a message
+ * append held when an assertion fails is released by its own owner, so the
+ * failure surfaces and the record is saved without anything else letting it
+ * go; and a case
  * with a nested and a supplied root under nested attribution keeps each root
  * apart, with every session and legacy history the supplied root held.
  */
@@ -142,6 +145,7 @@ describe("mounted REPL failure journals", () => {
     expect(output).toContain('Expected: "deliberate mounted late assertion"');
     expect(output).toContain("deliberate mounted deadline after 500ms");
     expect(output).toContain("deliberate held append cancellation");
+    expect(output).toContain('Expected: "deliberate held message failure"');
     expect(output).toContain('Expected: "deliberate multiple-root assertion"');
 
     // A passing case unwound the same way and created nothing to upload.
@@ -203,6 +207,47 @@ describe("mounted REPL failure journals", () => {
       expect(saved[pair.entries]).toContain("entry BEFORE");
       expect(saved[pair.sidekick]).toContain("reply before");
       expect(saved[pair.sidekick].endsWith(held.record)).toBe(true);
+      expect(yield* readJson(join(directory, "root-1.case.json"))).toEqual({
+        owner: OWNER,
+        name,
+        suite: "mounted journal " + name,
+        kind: "root",
+        ordinal: 1,
+        source: root.root,
+        files: [pair.entries, pair.sidekick],
+      });
+    }
+
+    // The message append its own owner held was let go by that owner as the
+    // assertion failed: the rescue watching it found nothing left to release,
+    // and the record was written before the histories were read and removed.
+    {
+      const name = "held message";
+      const witness = join(witnesses, name);
+      const [root] = yield* teardown(witness);
+      expect(root.exists).toBe(false);
+      const held = yield* readJson(join(witness, "held-message.json"));
+      expect(held).toMatchObject({
+        rescueNeeded: false,
+        rootAtRescue: false,
+        rootAfterClose: false,
+      });
+      if (
+        held === null ||
+        typeof held !== "object" ||
+        !("record" in held) ||
+        typeof held.record !== "string"
+      ) {
+        throw new Error(`The child recorded no held message: ${JSON.stringify(held)}`);
+      }
+      expect(held.record).toContain('"kind":"message"');
+      const directory = yield* invocation(artifacts, name);
+      expect((yield* readdir(directory)).sort()).toEqual(["root-1", "root-1.case.json"]);
+      const saved = yield* contents(join(directory, "root-1"));
+      const [pair] = pairs(Object.keys(saved));
+      expect(Object.keys(saved).sort()).toEqual([pair.entries, pair.sidekick]);
+      expect(saved[pair.entries]).toContain("entry BEFORE");
+      expect(saved[pair.sidekick]).toContain(held.record);
       expect(yield* readJson(join(directory, "root-1.case.json"))).toEqual({
         owner: OWNER,
         name,

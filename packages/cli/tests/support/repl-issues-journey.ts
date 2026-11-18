@@ -168,7 +168,7 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(ENTRY);
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     // The prefix ran: one issue was filed, and the two facts the document
     // asked for are on the screen. The URL is read across the wrap the
@@ -252,7 +252,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(ENTRY);
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     // The tracker has the issue, and the answer is still on this side of the
     // wire. Nothing about it is retained.
@@ -304,7 +304,7 @@ export function replIssuesUnsupported(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(ENTRY);
     yield* sleep(500);
-    yield* pty.type("\r");
+    yield* pty.type("\t\r");
 
     // Wrapped by the Transcript's own width, so read across its rows.
     yield* showingAcross(pty, "no Issue provider is installed", ACT_MS);

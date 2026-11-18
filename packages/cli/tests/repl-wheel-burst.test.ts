@@ -144,7 +144,7 @@ describe("wheel bursts in one input chunk", () => {
     // Each dotted segment is one probed path segment, so each stays within a file name.
     const name = ["Unknown", "Missing", "Absent"].map((at) => at + "Component".repeat(27));
     const request = `<${name.join(".")} />`;
-    const footer = "! this entry cannot run here: Cannot resolve component:";
+    const refusal = "! this entry cannot run here: Cannot resolve component:";
     const cell = { column: 140, row: 13 };
 
     function* endpoints(move: typeof burst) {
@@ -159,13 +159,13 @@ describe("wheel bursts in one input chunk", () => {
           draftHolds(one, "/>"),
         );
         const before = tailLines(drafted);
-        yield* page.key("Enter");
-        const refused = yield* page.until("the staged refusal", (one) => one.shows(footer));
+        yield* page.press("Send", { onRow: "✎ draft" });
+        const refused = yield* page.until("the staged refusal", (one) => one.shows(refusal));
         const start = tailLines(refused);
-        expect(start.length + 3).toBeLessThan(before.length);
+        expect(start.length + 2).toBeLessThan(before.length);
 
         yield* move(page, "up", cell, 2);
-        expect(page.screen().shows(footer)).toBe(false);
+        expect(page.screen().shows(refusal)).toBe(false);
         const end = tailLines(page.screen());
         expect(end.length).toBeGreaterThan(start.length);
         expect(end[0]).not.toBe(start[0]);

@@ -117,7 +117,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(entry(origin, "notes.md"));
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     const working = yield* managedCheckout(home, "worktrees");
 
@@ -188,7 +188,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(republishing(origin));
     yield* sleep(500);
-    yield* third.type("\r");
+    yield* third.type("\t\r");
     yield* showing(third, "published again", ACT_MS);
     yield* remoteHolding(origin, BRANCH, advanced, home);
     expect(yield* pushes(shim.log)).toHaveLength(1);
@@ -233,7 +233,7 @@ export function replUnsupportedPush(repl: ReplCommand): Operation<void> {
       ].join("\n"),
     );
     yield* sleep(500);
-    yield* pty.type("\r");
+    yield* pty.type("\t\r");
 
     // Refused before a managed checkout exists, which is before a remote exists
     // in the story at all. The refusal is a sentence, wrapped where the

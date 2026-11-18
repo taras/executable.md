@@ -16,15 +16,16 @@
       </Terminal.Region>
 
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="> DRAFT" bold={true} />
+      <Terminal.Key key="Enter" />
+      <Terminal.WaitForText text="> Round" bold={true} />
       <Terminal.Type text="entry-draft" />
       <Terminal.WaitForText text="entry-draft" />
 
       <Terminal.Key key="Tab" />
-      <Terminal.WaitForText text="> BINDINGS" bold={true} />
+      <Terminal.WaitForText text="> Send" bold={true} />
       <Terminal.WaitForText text="message the sidekick" bold={false} />
       <Terminal.Key key="Shift+Tab" />
-      <Terminal.WaitForText text="> DRAFT" bold={true} />
+      <Terminal.WaitForText text="> Round" bold={true} />
       <Terminal.WaitForText text="> BINDINGS" present={false} />
 
       <Repl.Focus.Message />
@@ -47,7 +48,8 @@
         <Terminal.WaitForText text="narrow-message" />
       </Terminal.Region>
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="> DRAFT" bold={true} />
+      <Terminal.Key key="Enter" />
+      <Terminal.WaitForText text="> Round" bold={true} />
       <Terminal.Type text="narrow-draft" />
       <Try>
         <Repl.Focus.Tabs />
@@ -79,7 +81,7 @@
         <Terminal.WaitForText text="narrow-message-kept" />
       </Terminal.Region>
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="> DRAFT" bold={true} />
+      <Terminal.WaitForText text="> Round" bold={true} />
       <Terminal.WaitForText text="narrow-draft-kept" />
     </ReplBench>
   </Terminal>
@@ -93,7 +95,7 @@
       <Repl.Focus.SelectedWork />
       <Terminal.WaitForText text="> Entries" />
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="> DRAFT" />
+      <Terminal.WaitForText text="> + New Round" />
       <Repl.Focus.Tabs />
       <Terminal.WaitForText text="> BINDINGS" />
       <Repl.Focus.RightReading />
@@ -107,7 +109,7 @@
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="Sessions" row={1} />
       <Repl.Focus.Draft />
-      <Terminal.WaitForText text="> DRAFT" />
+      <Terminal.WaitForText text="> + New Round" />
       <Repl.Focus.SurfaceBar />
       <Terminal.WaitForText text=">   Sessions" row={1} />
     </XMD.Repl>

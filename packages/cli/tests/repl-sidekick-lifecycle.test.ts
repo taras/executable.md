@@ -1029,58 +1029,66 @@ describe("Tier PV — generation that ended without a reply", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* pasteDraft(page, OWN_ENTRY);
-    yield* page.key("Enter");
-    yield* closing.started();
+    try {
+      yield* pasteDraft(page, OWN_ENTRY);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
+      yield* page.key("Enter");
+      yield* closing.started();
 
-    yield* sendMessage(page, "try it");
-    yield* repl.fake.streamingTurns(1);
-    yield* page.until("the preview", (one) => one.shows(`${MOUNTED_AGENT} (preview): As far as I`));
+      yield* sendMessage(page, "try it");
+      yield* repl.fake.streamingTurns(1);
+      yield* page.until("the preview", (one) =>
+        one.shows(`${MOUNTED_AGENT} (preview): As far as I`),
+      );
 
-    // Stopped, with the provider's own cancellation held: this is what says
-    // Stop joined what it asked for rather than returning over the top of it.
-    expect(page.screen().shows("[x] Follow")).toBe(true);
-    const cancelling = repl.fake.holdCancellation();
-    // The Sidekick's own Stop. This person's entry is running, so the draft is
-    // wearing a Stop too — and it is the leftmost, so a press that went looking
-    // for `[stop]` on the screen would stop the document's work and never reach
-    // the generation this row is about.
-    yield* stopSidekick(page);
-    yield* cancelling.reached;
-    expect(repl.outcome()).toBe(undefined);
-    cancelling.release();
+      // Stopped, with the provider's own cancellation held: this is what says
+      // Stop joined what it asked for rather than returning over the top of it.
+      expect(page.screen().shows("[x] Follow")).toBe(true);
+      const cancelling = repl.fake.holdCancellation();
+      // The Sidekick's own Stop. This person's entry is running, so the draft is
+      // wearing a Stop too — and it is the leftmost, so a press that went looking
+      // for `[stop]` on the screen would stop the document's work and never reach
+      // the generation this row is about.
+      yield* stopSidekick(page);
+      yield* cancelling.reached;
+      expect(repl.outcome()).toBe(undefined);
+      cancelling.release();
 
-    // What the agent said stays, as the attempt it is — and it claims nothing:
-    // no turn, no response, no acceptance, no recorded failure.
-    yield* page.until("the attempt Stop left", (one) =>
-      one.shows(`${MOUNTED_AGENT} (unfinished): As far as I`),
-    );
-    expect(page.screen().shows("[x] Follow")).toBe(true);
-    const read = yield* settledReading(repl);
-    expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
-    expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
-    expect(page.screen().shows("[retry]")).toBe(false);
-    // None of the candidate's controls ran, and no successor turn started.
-    expect(repl.fake.prompts).toHaveLength(1);
+      // What the agent said stays, as the attempt it is — and it claims nothing:
+      // no turn, no response, no acceptance, no recorded failure.
+      yield* page.until("the attempt Stop left", (one) =>
+        one.shows(`${MOUNTED_AGENT} (unfinished): As far as I`),
+      );
+      expect(page.screen().shows("[x] Follow")).toBe(true);
+      const read = yield* settledReading(repl);
+      expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
+      expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
+      expect(page.screen().shows("[retry]")).toBe(false);
+      // None of the candidate's controls ran, and no successor turn started.
+      expect(repl.fake.prompts).toHaveLength(1);
 
-    // The entry is untouched by any of it: still open, and still the
-    // document's own work to finish.
-    expect(closing.released).toBe(false);
-    closing.release();
-    yield* page.until("the entry finishing on its own", (one) => one.shows("my own entry"));
+      // The entry is untouched by any of it: still open, and still the
+      // document's own work to finish.
+      expect(closing.released).toBe(false);
+      closing.release();
+      yield* page.until("the entry finishing on its own", (one) => one.shows("my own entry"));
 
-    // And nothing of that attempt was persisted to preserve a screen: a cold
-    // reopen of this same history has no account of it.
-    const execution = yield* mountedExecution(repl);
-    yield* page.press("[exit]");
-    yield* awaited("the command returning", () => repl.outcome() !== undefined);
-    const againPage = yield* useReplPage({
-      host,
-      location: `xmd://repl/${execution}/entries`,
-    });
-    yield* againPage.until("the reopened chat", (one) => saidByPerson(one, "try it"));
-    expect(againPage.screen().shows("(unfinished)")).toBe(false);
-    expect(againPage.screen().shows("As far as I")).toBe(false);
+      // And nothing of that attempt was persisted to preserve a screen: a cold
+      // reopen of this same history has no account of it.
+      const execution = yield* mountedExecution(repl);
+      yield* page.press("[exit]");
+      yield* awaited("the command returning", () => repl.outcome() !== undefined);
+      const againPage = yield* useReplPage({
+        host,
+        location: `xmd://repl/${execution}/entries`,
+      });
+      yield* againPage.until("the reopened chat", (one) => saidByPerson(one, "try it"));
+      expect(againPage.screen().shows("(unfinished)")).toBe(false);
+      expect(againPage.screen().shows("As far as I")).toBe(false);
+    } finally {
+      closing.release();
+    }
   });
 
   /**
@@ -1223,6 +1231,8 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
 
     // An ordinary entry of this person's, admitted and still open.
     yield* pasteDraft(page, SUSPENDS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry being admitted", (one) => one.shows("Entry 1"));
     if (draft !== undefined) {
@@ -1238,6 +1248,8 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
     // The provider's own teardown, held: this is what says the command joined
     // its work rather than returning over the top of it.
     const cancelling = repl.fake.holdCancellation();
+    // A failed assertion must not leave teardown waiting on this hold.
+    yield* ensure(() => cancelling.release());
     const restored = repl.terminal.resets;
     yield* leave(page);
     yield* cancelling.reached;
@@ -1295,7 +1307,9 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
       // Nothing else moved: the Draft, the running entry, the queue and the one
       // request the agent accepted are exactly as they were.
       expect(draftShows(cleared, "kept draft")).toBe(true);
-      expect(cleared.shows("Entries › Entry 1")).toBe(true);
+      expect(cleared.shows("Entry 1 running")).toBe(true);
+      const held = (yield* settledReading(repl)).model.entries;
+      expect(held.map((entry) => [entry.key, entry.terminal])).toEqual([["entry-1", undefined]]);
       expect(
         cleared.rows.find((row) => row.includes("Waiting messages are kept only in this REPL.")),
       ).toBe(queue);
@@ -1726,6 +1740,8 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
 
     // The entry's question first, so both are pending at once.
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -1778,6 +1794,8 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     // The entry's question, pending throughout: Stop is the Sidekick's and must
     // not reach it.
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -1891,6 +1909,8 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
 
     // The entry's question, pending and unanswered throughout.
     yield* pasteDraft(page, ENTRY_WAITS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -2037,36 +2057,40 @@ describe("Tier CFG — a preference being written when the command leaves", () =
     // their way and this writer's memory of them is not there yet, which is the
     // one window the ordering is about.
     const saving = gate.holdNext((_path, record) => record.includes('"kind":"preferences"'));
-    yield* page.press("[apply]");
-    yield* saving.started();
+    try {
+      yield* page.press("[apply]");
+      yield* saving.started();
 
-    // Leave while it is in flight.
-    yield* page.press("[exit]");
-    yield* lingering();
+      // Leave while it is in flight.
+      yield* page.press("[exit]");
+      yield* lingering();
 
-    // The command has not returned: it is waiting for the record it admitted.
-    expect(repl.outcome()).toBe(undefined);
-    expect(repl.terminal.resets).toBe(0);
+      // The command has not returned: it is waiting for the record it admitted.
+      expect(repl.outcome()).toBe(undefined);
+      expect(repl.terminal.resets).toBe(0);
 
-    saving.release();
-    yield* awaited("the command returning", () => repl.outcome() !== undefined);
+      saving.release();
+      yield* awaited("the command returning", () => repl.outcome() !== undefined);
 
-    // Once, and with everything released.
-    expect(repl.outcome()?.ok).toBe(true);
-    expect(repl.terminal.resets).toBe(1);
-    expect(repl.terminal.readers).toBe(0);
-    expect(repl.terminal.listeners).toBe(0);
+      // Once, and with everything released.
+      expect(repl.outcome()?.ok).toBe(true);
+      expect(repl.terminal.resets).toBe(1);
+      expect(repl.terminal.readers).toBe(0);
+      expect(repl.terminal.listeners).toBe(0);
 
-    // And the record is on disk: a save that had been let go of halfway would
-    // have left the file holding something nothing acknowledged, or nothing at
-    // all after the drawer said it had saved.
-    const execution = yield* mountedExecution(repl);
-    const written = yield* readSidekickRecords(
-      join(repl.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE),
-    );
-    const saved = written.filter((record) => record.kind === "preferences");
-    expect(saved).toHaveLength(1);
-    expect(saved[0]).toMatchObject({ model: "fast" });
+      // And the record is on disk: a save that had been let go of halfway would
+      // have left the file holding something nothing acknowledged, or nothing at
+      // all after the drawer said it had saved.
+      const execution = yield* mountedExecution(repl);
+      const written = yield* readSidekickRecords(
+        join(repl.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE),
+      );
+      const saved = written.filter((record) => record.kind === "preferences");
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ model: "fast" });
+    } finally {
+      saving.release();
+    }
   });
 
   it("CFG9: a save still waiting for the writer is cancelled, and appends nothing", function* () {
@@ -2090,32 +2114,36 @@ describe("Tier CFG — a preference being written when the command leaves", () =
     // Somebody else's record held inside the host, so the writer is occupied
     // by an append that is not this save's.
     const writing = gate.holdNext((_path, record) => record.includes('"kind":"response"'));
-    yield* sendMessage(page, "again");
-    yield* writing.started();
+    try {
+      yield* sendMessage(page, "again");
+      yield* writing.started();
 
-    // And now the save, which is admitted and then *waits*: it is behind that
-    // append in the one order this history has.
-    yield* configure(page);
-    yield* chooseOffer(page, "Fast");
-    yield* page.until("the model being chosen", (one) => one.shows("(x) Fast"));
-    yield* page.press("[apply]");
-    yield* lingering();
-    const before = yield* readSidekickRecords(savedAt(repl, yield* mountedExecution(repl)));
-    expect(before.filter((record) => record.kind === "preferences")).toEqual([]);
+      // And now the save, which is admitted and then *waits*: it is behind that
+      // append in the one order this history has.
+      yield* configure(page);
+      yield* chooseOffer(page, "Fast");
+      yield* page.until("the model being chosen", (one) => one.shows("(x) Fast"));
+      yield* page.press("[apply]");
+      yield* lingering();
+      const before = yield* readSidekickRecords(savedAt(repl, yield* mountedExecution(repl)));
+      expect(before.filter((record) => record.kind === "preferences")).toEqual([]);
 
-    // Control-C while it is still waiting. A waiter is not a write: it has
-    // nothing in flight to join, so leaving cancels it.
-    repl.terminal.feed("\x03");
-    writing.release();
-    yield* awaited("the command returning", () => repl.outcome() !== undefined);
-    expect(repl.outcome()?.ok).toBe(true);
-    expect(repl.terminal.resets).toBe(1);
+      // Control-C while it is still waiting. A waiter is not a write: it has
+      // nothing in flight to join, so leaving cancels it.
+      repl.terminal.feed("\x03");
+      writing.release();
+      yield* awaited("the command returning", () => repl.outcome() !== undefined);
+      expect(repl.outcome()?.ok).toBe(true);
+      expect(repl.terminal.resets).toBe(1);
 
-    // Nothing of it reached the file, then or later: a cancelled waiter writes
-    // no record, and no record arrives after the command has gone.
-    yield* lingering();
-    const written = yield* readSidekickRecords(savedAt(repl, yield* mountedExecution(repl)));
-    expect(written.filter((record) => record.kind === "preferences")).toEqual([]);
+      // Nothing of it reached the file, then or later: a cancelled waiter writes
+      // no record, and no record arrives after the command has gone.
+      yield* lingering();
+      const written = yield* readSidekickRecords(savedAt(repl, yield* mountedExecution(repl)));
+      expect(written.filter((record) => record.kind === "preferences")).toEqual([]);
+    } finally {
+      writing.release();
+    }
   });
 
   it("CFG9: an inspection in flight is cancelled, and its result reaches nothing", function* () {
@@ -2188,6 +2216,10 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 
 describe("Follow: mounted Stop owns continuation", () => {
   beforeEach(journalBeforeEach(OWNER));
+  /** The Round bar's own Stop, counted only while that one bar is drawn. */
+  const roundStops = (one: ScreenReading): number =>
+    one.occurrences("+ New Round") === 1 ? one.found("Stop", { onRow: "+ New Round" }) : -1;
+
   it("Follow: Sidekick Stop preserves the setting and a late entry result cannot restart the Send", function* () {
     const entered = withResolvers<void>();
     const release = withResolvers<void>();
@@ -2220,12 +2252,15 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* entered.operation;
     yield* page.until(
       "both Stops with Follow enabled",
-      (one) => one.occurrences("[stop]") === 2 && one.shows("[x] Follow"),
+      (one) =>
+        one.found("[stop]", SIDEKICK_CONTROLS) === 1 &&
+        roundStops(one) === 1 &&
+        one.shows("[x] Follow"),
     );
     yield* stopSidekick(page);
     yield* page.until(
       "Sidekick Stop joined with the entry still running",
-      (one) => sidekickIdle(one) && one.found("[stop]", { onRow: DRAFT }) === 1,
+      (one) => sidekickIdle(one) && roundStops(one) === 1,
     );
     expect(page.screen().shows("[x] Follow")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(1);
@@ -2234,10 +2269,7 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* awaitedFact("the independent entry joined after Sidekick Stop", function* () {
       return (yield* settledReading(page.repl)).model.entries[0]?.terminal?.status === "ok";
     });
-    yield* page.until(
-      "Entry Stop retired after settlement",
-      (one) => one.occurrences("[stop]") === 0,
-    );
+    yield* page.until("Entry Stop retired after settlement", (one) => roundStops(one) === 0);
     expect(page.repl.fake.prompts).toHaveLength(1);
     yield* page.until("stopped queue selected", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
@@ -2269,36 +2301,43 @@ describe("Contributed control acknowledgement and teardown", () => {
         record.includes('"kind":"control"') && record.includes('"component":"Contributed"'),
     );
     const outcome = gate.holdNext((_path, record) => record.includes('"kind":"control-outcome"'));
-    const cleaning = withResolvers<void>();
-    const release = withResolvers<void>();
-    counts.cleanup = function* () {
-      cleaning.resolve();
-      yield* release.operation;
-    };
-    const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)], gate });
-    held.host.fake.script({ reply: '<Contributed as="actual" />' });
-    held.host.fake.script({ reply: "<Output>joined</Output>" });
-    const sending = yield* spawn(() => held.root.owner.message("Read the contributed value"));
-    yield* intent.started();
-    expect(counts.calls).toEqual([]);
-    expect(held.host.fake.prompts).toHaveLength(1);
-    intent.release();
-    yield* cleaning.operation;
-    expect(counts.calls).toEqual(["read"]);
-    expect(held.host.fake.prompts).toHaveLength(1);
-    const execution = yield* held.host.repository.open(held.root.execution);
-    expect((yield* records(execution)).filter((one) => one.kind === "control-outcome")).toEqual([]);
-    release.resolve();
-    yield* outcome.started();
-    expect(held.host.fake.prompts).toHaveLength(1);
-    outcome.release();
-    expect((yield* sending).ok).toBe(true);
-    expect(held.host.fake.prompts[1]).toContain('"count": 1');
-    expect(
-      (yield* records(yield* held.host.repository.open(held.root.execution))).filter(
-        (one) => one.kind === "control-outcome",
-      ),
-    ).toHaveLength(1);
+    try {
+      const cleaning = withResolvers<void>();
+      const release = withResolvers<void>();
+      counts.cleanup = function* () {
+        cleaning.resolve();
+        yield* release.operation;
+      };
+      const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)], gate });
+      held.host.fake.script({ reply: '<Contributed as="actual" />' });
+      held.host.fake.script({ reply: "<Output>joined</Output>" });
+      const sending = yield* spawn(() => held.root.owner.message("Read the contributed value"));
+      yield* intent.started();
+      expect(counts.calls).toEqual([]);
+      expect(held.host.fake.prompts).toHaveLength(1);
+      intent.release();
+      yield* cleaning.operation;
+      expect(counts.calls).toEqual(["read"]);
+      expect(held.host.fake.prompts).toHaveLength(1);
+      const execution = yield* held.host.repository.open(held.root.execution);
+      expect((yield* records(execution)).filter((one) => one.kind === "control-outcome")).toEqual(
+        [],
+      );
+      release.resolve();
+      yield* outcome.started();
+      expect(held.host.fake.prompts).toHaveLength(1);
+      outcome.release();
+      expect((yield* sending).ok).toBe(true);
+      expect(held.host.fake.prompts[1]).toContain('"count": 1');
+      expect(
+        (yield* records(yield* held.host.repository.open(held.root.execution))).filter(
+          (one) => one.kind === "control-outcome",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      intent.release();
+      outcome.release();
+    }
   });
 
   it("R4g: actual cancellation leaves only acknowledged intent after joined cleanup", function* () {

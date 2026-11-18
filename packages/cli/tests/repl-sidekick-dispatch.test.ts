@@ -228,7 +228,7 @@ describe("shared Sidekick dispatch", () => {
     );
     yield* intoComposer(page);
     yield* typed(page, "newer unsent text");
-    yield* draftText(page, "newer held draft", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "newer held draft");
     expect(page.repl.fake.prompts).toHaveLength(1);
     const before = yield* settledReading(page.repl);
     expect(before.chat.filter((one) => one.kind === "message")).toHaveLength(1);
