@@ -115,7 +115,7 @@ describe("wheel remaining migration journeys", () => {
     yield* intoDraft(page);
     yield* page.type('<Session name="permission"><Prompt text="many choices" /></Session>');
     yield* page.until("source", (one) => one.shows("</Session>"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("permission pending", (one) => one.shows("asks:"));
     yield* page.press("asks:");
     yield* page.until("first option", (one) => one.shows("> [Choice 00]"));
@@ -134,8 +134,8 @@ describe("wheel remaining migration journeys", () => {
       size: { columns: 72, rows: 20 },
       includes: [REFERENCE_DIRECTORY],
     });
-    yield* intoDraft(page);
     for (let at = 1; at <= 8; at += 1) {
+      yield* intoDraft(page);
       const title =
         at === 1
           ? Array.from(
@@ -151,11 +151,15 @@ describe("wheel remaining migration journeys", () => {
           ).join(""),
       );
       yield* page.until("source ready", (one) => one.shows(`steps={${at}}`));
-      yield* page.key("Enter");
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* page.until("settled entry", (one) => one.shows(`Ready for Entry ${at + 1}`));
     }
+    yield* intoDraft(page);
     yield* page.type("draft-held");
     yield* page.until("draft", (one) => one.shows("draft-held"));
+    yield* page.key("Ctrl+G");
+    yield* page.type("3");
+    yield* page.until("selected work", (one) => !one.shows("✎ draft"));
     yield* page.press("Entries");
     yield* page.until("catalog", (one) => one.shows("[close]"));
     yield* key(page, "Tab");
@@ -219,6 +223,7 @@ describe("wheel remaining migration journeys", () => {
     yield* ticks(page, "up", nested, 90);
     expect(page.screen().shows("Nested work 00")).toBe(true);
     absentButtons(page);
+    yield* intoDraft(page);
     yield* page.until("draft returns", (one) => one.shows("draft-held"));
     expect(page.repl.fake.prompts).toHaveLength(0);
   });
@@ -241,7 +246,7 @@ describe("wheel remaining migration journeys", () => {
       `<Elicit as="response" schema={${JSON.stringify(schema)}}>Recorded question</Elicit>`,
     );
     yield* page.until("source", (one) => one.shows("</Elicit>"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("answer available", (one) => one.shows("[answer]"));
     yield* page.press("[answer]");
     yield* page.until("form", (one) => one.shows("[submit]"));
@@ -296,10 +301,13 @@ describe("wheel remaining migration journeys", () => {
       ).join("\n"),
     );
     yield* page.until("source", (one) => one.shows("Resize work 89"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("settled", (one) => one.shows("Ready for Entry 2"));
+    yield* intoDraft(page);
     yield* page.type("draft-retained");
     yield* page.until("Draft", (one) => one.shows("draft-retained"));
+    yield* page.type("\x073");
+    yield* page.until("selected work", (one) => one.shows("Resize work 00"));
     const cell = page.screen().locate("Resize work 00");
     const blankAbove = page.screen().locate("Resize work 02");
     const blank = { column: blankAbove.column, row: blankAbove.row + 1 };
@@ -312,7 +320,7 @@ describe("wheel remaining migration journeys", () => {
       yield* wheel(page, direction, { column: empty.column, row: empty.row + 1 });
       expect(page.screen().shows("Resize work 00")).toBe(true);
     }
-    for (const label of ["DRAFT", "HISTORY", "BINDINGS"]) {
+    for (const label of ["+ New Round", "HISTORY", "BINDINGS"]) {
       yield* wheel(page, "down", page.screen().locate(label));
       expect(page.screen().shows("Resize work 00")).toBe(true);
     }
@@ -322,7 +330,6 @@ describe("wheel remaining migration journeys", () => {
       "burst moved nine rows",
       (one) => one.index > before && one.shows("Resize work 08") && !one.shows("Resize work 07"),
     );
-    let refused = false;
     for (const size of [
       { columns: 120, rows: 30 },
       { columns: 72, rows: 20 },
@@ -333,23 +340,26 @@ describe("wheel remaining migration journeys", () => {
       yield* page.resize(size);
       if (size.columns === 50) {
         expect(page.screen().shows("needs at least")).toBe(true);
-        refused = true;
       } else {
+        yield* intoDraft(page);
         expect(page.screen().shows("draft-retained")).toBe(true);
-        if (refused && size.columns === 72) {
-          yield* key(page, "Tab");
-        }
+        yield* page.type("\x073");
+        yield* page.until("selected work", (one) => !one.shows("✎ draft"));
       }
     }
     expect(page.screen().shows("Resize work 08")).toBe(true);
+    yield* intoDraft(page);
     yield* page.type("!");
     yield* page.until("focus survived", (one) => one.shows("draft-retained!"));
+    yield* page.type("\x073");
+    yield* page.until("selected work", (one) => !one.shows("✎ draft"));
     yield* page.press("Entries");
     yield* page.until("catalog remount", (one) => one.shows("[close]"));
     yield* wheel(page, "down", cell);
     yield* page.key("Escape");
     yield* page.until("work returns", (one) => !one.shows("[close]"));
     expect(page.screen().shows("Resize work 08")).toBe(true);
+    yield* intoDraft(page);
     expect(page.screen().shows("draft-retained!")).toBe(true);
     absentButtons(page);
   });

@@ -1447,6 +1447,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // Genuinely below the window before it is scrolled to.
     expect(offered(page.screen(), last)).toBe(false);
     yield* scrollDrawerTo(page, last);
+    yield* page.until("the scrolled Content focus", (one) =>
+      one.rows.some((row) => />\s+\([ x]\) Model \d+\s*$/.test(row)),
+    );
     yield* chooseNamed(page, last);
     // Apply is below the window too, which is the state this is about: the
     // window has been moved a long way, and the way out is still on the screen.
@@ -2062,7 +2065,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // Retry sends, and neither is consumed by it.
     // The send left the keystrokes in the composer, so this needs no route.
     yield* typed(page, "something else");
-    yield* draftText(page, "mine", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "mine");
 
     // A second explicit Retry waits behind the first; it consumes no newer text.
     yield* page.press("[retry]");
@@ -2245,6 +2248,8 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // default is what is under test, and naming it here would bypass it.
     repl.fake.script({ reply: `${ANSWERED}\n` });
     yield* pasteDraft(page, ASKING);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's own Agent answering", (one) => one.shows(ANSWERED));
 

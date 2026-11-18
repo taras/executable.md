@@ -91,7 +91,9 @@ import {
   previewedMessage,
   retainedDetailsOf,
   MESSAGE_VALUE_ROWS,
-  footerSentence,
+  drawerGuidance,
+  executionRefusal,
+  guidanceSentence,
   readinessOf,
   readingOf,
   SIDEBAR_BODY,
@@ -100,17 +102,15 @@ import {
   SIDEKICK_WINDOW,
   wheelDestination,
   createChatPreparationStore,
-  draftFieldWidth,
+  ROUND_EDITOR_BODY,
   configureNoticesOf,
-  draftLinesOf,
+  roundEditorVisible,
   NOTICE_INDENT,
   historyMapWidth,
   historyProbeOf,
   historySplitOf,
   wideHistoryWidths,
   queueTextWidth,
-  draftRowsOf,
-  GUIDANCE_ROW,
   QUEUE_TEXT,
   queueLinesOf,
   queueStatusLinesOf,
@@ -229,7 +229,7 @@ import { readingLines } from "./source-reading.ts";
 import { inertCommandText } from "./command-output.ts";
 import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
-import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
+import { admitRows, capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
 import { resolveWheel, resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
@@ -2343,7 +2343,19 @@ function* drive(
           // The entry exists now, so the draft that became it is finished — and
           // only the revision it was taken from. Somebody who typed while the
           // preflight was running keeps what they typed.
+          const previous = state;
           state = admitted(state, report.held);
+          if (report.held.by === "person") {
+            state = {
+              ...state,
+              humanRound: report.submission.entry,
+              draftOpen: false,
+              ...(previous.revisions.draft === report.held.revision
+                ? { draftCaret: undefined }
+                : {}),
+              route: { ...state.route, at: undefined, scopes: [report.submission.entry] },
+            };
+          }
           continue;
         }
         // A refusal leaves the draft exactly as it was and the history as it
@@ -2355,7 +2367,7 @@ function* drive(
         // is true of the document, and readiness moving on does not make it
         // admissible — dropping that one would take away the only explanation
         // of why the draft is still sitting there.
-        state = Object.freeze({ ...state, refusal: report.refusal });
+        state = Object.freeze({ ...state, refusal: report.refusal, refusalPosition: undefined });
         refusedByReadiness = report.byReadiness;
       }
     }
@@ -2458,6 +2470,7 @@ function* drive(
           route,
           todoOpen,
           inspection: revealWork ? undefined : state.inspection,
+          draftOpen: digit === "3" ? false : state.draftOpen,
           restore: undefined,
         };
         const view = yield* inputView(candidate, at);
@@ -2506,7 +2519,14 @@ function* drive(
           hints.set(digit, undefined);
           continue;
         }
-        const key = JSON.stringify([route.surface, route.view, route.right, todoOpen, revealWork]);
+        const key = JSON.stringify([
+          route.surface,
+          route.view,
+          route.right,
+          todoOpen,
+          revealWork,
+          digit === "3",
+        ]);
         let descriptions = routes.get(key);
         if (descriptions === undefined) {
           const destination = yield* inputView(
@@ -2515,6 +2535,7 @@ function* drive(
               route,
               todoOpen,
               inspection: revealWork ? undefined : state.inspection,
+              draftOpen: digit === "3" ? false : state.draftOpen,
               restore: undefined,
             },
             view.size,
@@ -2532,13 +2553,15 @@ function* drive(
         if (hasRegion(descriptions, region)) {
           hints.set(
             digit,
-            revealWork
-              ? "closes inspection"
-              : route !== current
-                ? focusRouteHint(route, narrow)
-                : todoOpen
-                  ? "switches to the TODO tab"
-                  : "switches to the Sidekick tab",
+            digit === "3" && roundEditorVisible(view)
+              ? "shows selected work"
+              : revealWork
+                ? "closes inspection"
+                : route !== current
+                  ? focusRouteHint(route, narrow)
+                  : todoOpen
+                    ? "switches to the TODO tab"
+                    : "switches to the Sidekick tab",
           );
         }
       }
@@ -3122,7 +3145,7 @@ function* drive(
         });
       }
       if (performed.refusal !== undefined) {
-        state = Object.freeze({ ...state, refusal: performed.refusal });
+        state = Object.freeze({ ...state, refusal: performed.refusal, refusalPosition: undefined });
         refusedByReadiness = performed.refusedByReadiness === true;
       } else if (transition.state.refusal === undefined) {
         // The action was taken, or refused for its own reasons and then cleared.
@@ -3803,7 +3826,10 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
 }
 
 function shortcutRevealsWork(view: ReplView, digit: string): boolean {
-  return (digit === "3" || digit === "4") && inlineInspectionOpen(view);
+  return (
+    (digit === "3" && roundEditorVisible(view)) ||
+    ((digit === "3" || digit === "4") && inlineInspectionOpen(view))
+  );
 }
 
 /**
@@ -5694,6 +5720,57 @@ export function* prepareFrame(
     return first;
   }
   const widths = widthsOf(probe.manifest, first.value);
+  const workspace = stagedWorkspace(view) !== undefined;
+  const reasonInHeader = workspace ? executionRefusal(view) : undefined;
+  const header =
+    reasonInHeader === undefined || widths.surfaceBody < 1
+      ? Ok([])
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "header-refusal", text: reasonInHeader }],
+          view.size.columns,
+          guidanceStore,
+        );
+  if (!header.ok) {
+    return header;
+  }
+  const headerLimit = Math.max(1, Math.floor(view.size.rows / 4));
+  const refusalPosition = view.state.refusalPosition;
+  const headerRefusalWindow =
+    header.value.length > headerLimit
+      ? admitRows({
+          offset: refusalPosition?.reason === view.state.refusal ? (refusalPosition?.from ?? 0) : 0,
+          total: header.value.length,
+          capacity: headerLimit - 1,
+        })
+      : undefined;
+  const headerRefusal = (
+    headerRefusalWindow === undefined
+      ? header.value
+      : header.value.slice(
+          headerRefusalWindow.from,
+          headerRefusalWindow.from + headerRefusalWindow.count,
+        )
+  ).map((row) => row.text);
+  if (headerRefusalWindow !== undefined) {
+    const { from, count, total } = headerRefusalWindow;
+    headerRefusal.push(`Wheel here to read the refusal · ${from + 1}–${from + count} of ${total}`);
+  }
+  const drawerRoom = widths.drawer ?? 0;
+  const help =
+    !workspace || !modalOpen(view) || drawerRoom < 1
+      ? Ok([])
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "drawer-help", text: drawerGuidance(view) }],
+          drawerRoom,
+        );
+  if (!help.ok) {
+    return help;
+  }
+  const drawerHelp = help.value.map((row) => row.text);
 
   // The staged queue, fitted to the text column its first message measured.
   // Before every pass below, because each message is as many rows as its text
@@ -5777,12 +5854,6 @@ export function* prepareFrame(
       wrapped.add(line.key);
     }
   }
-  // What the Draft's field has left, once this frame's own heading row and the
-  // control beside it have been measured. Settled here, before anything is
-  // mounted, and carried into every pass after it — the field is stated in the
-  // measuring ops and in the committed ops alike, because a width the two
-  // passes disagreed about is a control drawn where nothing measured it.
-  let field: number | undefined;
   let messageText: number | undefined;
   let historyRoom: number | undefined;
   let historySpace: number | undefined;
@@ -5803,12 +5874,14 @@ export function* prepareFrame(
   let historyWideMap: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
+    headerRefusal,
+    headerRefusalWindow,
+    drawerHelp,
     todo: todoRows.value,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
     queueStatus: queueStatus.value,
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
     ...(historySpace === undefined ? {} : { historyGap: historySpace }),
-    ...(field === undefined ? {} : { draftField: field }),
     ...(messageText === undefined ? {} : { queueText: messageText }),
     ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
     ...(historyParts === undefined ? {} : { historySplit: historyParts }),
@@ -5830,14 +5903,14 @@ export function* prepareFrame(
   // The directions, fitted to the surface they are drawn on. Before the frame
   // below, because they are fixed content: the room the composer may grow into
   // is what is left once they have taken theirs.
-  const guidanceRoom = widths.guidance ?? widths.surfaceBody;
+  const guidanceRoom = widths.surfaceBody;
   const guidance =
-    widths.surfaceBody < 1 || guidanceRoom < 1
+    workspace || guidanceRoom < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
-          [{ key: "guidance", text: footerSentence(view) }],
+          [{ key: "guidance", text: guidanceSentence(view) }],
           guidanceRoom,
           guidanceStore,
         );
@@ -5852,7 +5925,7 @@ export function* prepareFrame(
   // never share a frame — a refusal is the whole of what its screen says — so
   // one store holds whichever of them this frame is giving.
   const refused =
-    view.refusal === undefined || widths.surfaceBody < 1
+    workspace || view.refusal === undefined || widths.surfaceBody < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
@@ -5879,7 +5952,6 @@ export function* prepareFrame(
   if (!fitted.ok) {
     return fitted;
   }
-  field = draftFieldWidth(probed.manifest, (id) => fitted.value.boundsOf(id)?.width);
   messageText = queueTextWidth(
     probed.manifest,
     (id) => fitted.value.boundsOf(id)?.width,
@@ -5928,7 +6000,6 @@ export function* prepareFrame(
   // that counts them has to be a pass that knows where it starts. Bounded, not
   // a loop — a floating layer takes no row out of any column's flow, so the
   // guidance it was moved clear of cannot move because it moved.
-  const workspace = stagedWorkspace(view) !== undefined;
   const envelope = routeDrawerRect(
     view.size,
     guidanceBottomOf(probed.manifest, fitted.value),
@@ -6160,20 +6231,20 @@ export function* prepareFrame(
   if (!rail.ok) {
     return rail;
   }
-  // The staged Draft's own value, fitted to the selected work it sits in. A
-  // fixed number of rows, so no measurement above depends on it.
-  //
+  const editorBounds = third.value.boundsOf(ROUND_EDITOR_BODY);
+  const editorWidth = Math.floor(editorBounds?.width ?? 0);
   const drafted =
-    draftLinesOf(view) === undefined || widths.surfaceBody < 1
+    !roundEditorVisible(view) || editorWidth < 1
       ? Ok(undefined)
       : yield* fitEditor(
           renderer,
           view.size,
           caretFor(view.state.draft, view.state.draftCaret),
-          widths.surfaceBody,
+          editorWidth,
           view.focused === "footer:input",
           draftStore,
           sourceRuns,
+          "horizontal",
         );
   if (!drafted.ok) {
     return drafted;
@@ -6181,7 +6252,7 @@ export function* prepareFrame(
   let draftRows: readonly string[] | undefined;
   if (drafted.value !== undefined) {
     editors.set("footer:input", drafted.value);
-    const count = draftRowsOf([]).length;
+    const count = Math.max(1, capacityOf(editorBounds));
     const from = Math.max(0, Math.min(drafted.value.active, drafted.value.display.length - count));
     const shown = drafted.value.display.slice(from, from + count).map((one) => one.text);
     draftRows = [...shown, ...Array.from({ length: count - shown.length }, () => "")];
@@ -6233,6 +6304,7 @@ export function* prepareFrame(
     todo: todoRows.value,
     notices: notices.value,
     details: details.value,
+    headerRefusalWindow,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -6251,10 +6323,12 @@ export function* prepareFrame(
     sessionMaterialize: sessions.materialize,
     message: shown,
     guidance: guidanceRows,
+    headerRefusal,
+    headerRefusalWindow,
+    drawerHelp,
     refusal: refusalRows,
     rail: rail.value,
     drawer: envelope,
-    draftField: field,
     queueText: messageText,
     historyMap: historyRoom,
     historyGap: historySpace,
@@ -6427,18 +6501,7 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
     body: bodyOf(SIDEKICK_BODY, "inspection", "content"),
     drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
     queue: widthOf(measured, manifest.contents.find((content) => content.id === QUEUE_TEXT)?.id),
-    guidance: guidanceWidthOf(manifest, measured),
   };
-}
-
-/**
- * The guidance row's own width, where a frame draws the guidance below the body.
- *
- * None otherwise, so the guidance is fitted to the selected work it is part of.
- */
-function guidanceWidthOf(manifest: ReplLayoutManifest, measured: ReplMeasured): number | undefined {
-  const drawn = flatten(manifest.root).some((box) => box.id === GUIDANCE_ROW);
-  return drawn ? widthOf(measured, GUIDANCE_ROW) : undefined;
 }
 
 function widthOf(measured: ReplMeasured, id: string | undefined): number {

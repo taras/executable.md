@@ -3,8 +3,11 @@
     <XMD.Repl expectExit={true} as="closed">
       <Terminal.WaitForText text="Ready for Entry 1" />
       <Repl.Focus.Draft />
+      <Terminal.Key key="Enter" />
       <Terminal.Type text="retained-marker-1272" />
       <Terminal.WaitForText text="retained-marker-1272" />
+      <Terminal.Key key="Tab" />
+      <Terminal.WaitForText text="> Send" />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="Ready for Entry 2" />
       <Terminal.Focus target="sidekick-composer" />

@@ -55,10 +55,12 @@ import {
   draftText,
   pasteDraft,
   composerHolds,
-  DRAFT,
   draftHolds,
+  draftOpen,
+  draftShows,
   intoComposer,
   intoDraft,
+  paneLines,
   sendMessage,
   SIDEKICK,
   SIDEKICK_CONTROLS,
@@ -93,6 +95,7 @@ function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Ope
  * not a reason to fail.
  */
 function* draftFromComposer(page: ReplPage): Operation<void> {
+  yield* intoDraft(page);
   yield* intoComposer(page);
   // A token no part of this screen draws: a single letter would collide with
   // ordinary labels like QUEUE and make every stop look like the Draft.
@@ -248,6 +251,8 @@ describe("987 — mounted original recovery", () => {
       page,
       '<Elicit as="answer" schema={{type:"object",properties:{answer:{type:"string"}},required:["answer"],additionalProperties:false}}>Independent entry question.</Elicit>',
     );
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the independent question", (one) => one.shows("[answer]"));
     yield* page.press("[answer]");
@@ -305,12 +310,13 @@ describe("Sidekick presentation: visible work owns its controls", () => {
 
   it("keeps the composer separate from the Draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
+    yield* intoDraft(page);
     yield* intoComposer(page);
     yield* typed(page, "a Sidekick question");
     const reading = page.screen();
     expect(composerHolds(reading, "a Sidekick question")).toBe(true);
-    expect(draftHolds(reading, "a Sidekick question")).toBe(false);
-    expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(draftShows(reading, "a Sidekick question")).toBe(false);
+    expect(reading.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 
   it("routes one visible surface at narrow size and recovers when widened", function* () {
@@ -318,11 +324,17 @@ describe("Sidekick presentation: visible work owns its controls", () => {
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(narrow.shows(COMPOSER)).toBe(false);
-    expect(narrow.occurrences("[send]")).toBe(1);
+    expect(narrow.occurrences("[send]")).toBe(0);
+    expect(draftOpen(narrow)).toBe(false);
+    yield* intoDraft(page);
+    const editing = page.screen();
+    expect(editing.found("Send", { onRow: "✎ draft" })).toBe(1);
+    expect(editing.occurrences("[send]")).toBe(0);
     const wide = yield* page.resize(WIDE);
     expect(wide.shows(SIDEKICK)).toBe(true);
     expect(wide.shows(COMPOSER)).toBe(true);
-    expect(wide.occurrences("[send]")).toBe(2);
+    expect(wide.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(wide.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 
   it("shows Stop while a Sidekick turn is held and restores Send after Stop", function* () {
@@ -340,20 +352,24 @@ describe("Sidekick presentation: visible work owns its controls", () => {
 });
 
 function chatHas(reading: ScreenReading, text: string): boolean {
-  return reading.found(text, reading.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined) > 0;
+  return sidekickShows(reading, text);
 }
 
 function chatLines(reading: ScreenReading, anchor: string): string[] {
-  const column = reading.locate(
-    anchor,
-    reading.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined,
-  ).column;
-  const start = reading.locate(reading.shows("SIDEKICK") ? "SIDEKICK" : "Sidekick").row;
+  const pane = paneLines(reading);
+  const anchors = pane.filter((row) => row.includes(anchor));
+  if (anchors.length !== 1) {
+    throw new Error(
+      `expected one Sidekick row containing ${JSON.stringify(anchor)}, saw ${anchors.length}`,
+    );
+  }
+  const column = anchors[0].indexOf(anchor);
   const end = reading.shows(COMPOSER)
     ? reading.locate(COMPOSER).row - 2
     : reading.locate("HISTORY").row;
 
-  return reading.rows.slice(start + 1, end).map((row) => {
+  const start = reading.locate(SIDEKICK).row;
+  return pane.slice(start + 1, end).map((row) => {
     const text = row.slice(column).trim();
     return text.startsWith("Sidekick total") || /^\d+ turns? unavailable$/.test(text) ? "" : text;
   });
@@ -390,7 +406,8 @@ describe("Tier CF — complete messages and following the newest reply", () => {
     expect(at(after, "one-C")).toBeLessThan(at(after, "two-A"));
     expect(at(after, "two-A")).toBeLessThan(at(after, "two-B"));
     expect(page.screen().shows(COMPOSER)).toBe(true);
-    expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
+    yield* intoDraft(page);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     yield* awaitedFact("two saved replies", function* () {
       return (
         (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response").length ===
@@ -582,12 +599,11 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
     const running = gate.holdNext((path) => path === legacy && gate.reaching(legacy) >= 1);
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* running.started();
-    yield* page.until(
-      "the admitted source leaving the draft",
-      (one) => one.found("second =", DRAFT_VALUE) === 0,
-    );
+    yield* page.until("the admitted source leaving the draft", (one) => !draftOpen(one));
     yield* compose(page, "explain");
     yield* sendComposed(page);
     yield* sleep(100);
@@ -597,7 +613,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(yield* publishedPairs(host.root)).toEqual([]);
     yield* compose(page, "!");
     expect(composerHolds(page.screen(), "!")).toBe(true);
-    yield* draftText(page, "next", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "next");
     running.release();
     yield* page.until("the reply arriving", (one) => one.shows("Noted."));
     yield* finishing.started();
@@ -652,7 +668,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* sendComposed(page);
     yield* saving.started();
     yield* compose(page, "!");
-    yield* draftText(page, "X", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "X");
     saving.release();
     yield* page.until("the reply arriving", (one) => one.shows("Understood."));
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
@@ -687,6 +703,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
   it("M5: while generation is held, Send remains beside Stop without starting unrequested work", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ held: true, reply: "<Output>Done.</Output>\n" });
+    yield* intoDraft(page);
     yield* compose(page, "ask");
     yield* page.type("\r\r");
     yield* page.repl.fake.holdingTurns(1);
@@ -695,7 +712,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* page.until("the Sidekick working", (one) => one.shows("[S] working"));
     expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
     expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
-    expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     yield* compose(page, "then this");
     page.repl.fake.releaseTurn();
     yield* page.until("the reply arriving", (one) => one.shows("Done."));
@@ -725,6 +742,8 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
   it("M5: control — an ordinary entry's own progress reaches the screen with no further key", function* () {
     const page = yield* useReplPage();
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
     yield* page.until("the entry output without input", (one) => one.shows("step-two"));
@@ -769,10 +788,10 @@ describe("Sidekick texts and reading across every profile", () => {
       if (size.columns > NARROW.columns) {
         expect(draftHolds(drawn, "note")).toBe(true);
       } else {
-        expect(drawn.shows("DRAFT")).toBe(false);
+        expect(draftOpen(drawn)).toBe(false);
         yield* openEntryCatalog(page);
         yield* closeDrawer(page);
-        expect(page.screen().found("note", { after: "DRAFT" })).toBe(1);
+        expect(draftShows(page.screen(), "note")).toBe(true);
         yield* page.resize(WIDE);
         expect(composerHolds(page.screen(), "ask")).toBe(true);
         expect(draftHolds(page.screen(), "note")).toBe(true);
@@ -787,7 +806,8 @@ describe("Sidekick texts and reading across every profile", () => {
     yield* compose(page, "my question");
     yield* selectPane(page, "bindings");
     expect(page.screen().shows(COMPOSER)).toBe(false);
-    expect(page.screen().occurrences("[send]")).toBe(1);
+    expect(page.screen().occurrences("[send]")).toBe(0);
+    expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     expect(page.screen().found("my entry", DRAFT_VALUE)).toBe(1);
     yield* intoComposer(page);
     expect(composerHolds(page.screen(), "my question")).toBe(true);
@@ -813,6 +833,8 @@ describe("Sidekick texts and reading across every profile", () => {
   it("M7: an older entry stays frozen while the Sidekick works, and Bindings still reads it", function* () {
     const page = yield* useReplPage();
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     yield* chooseEntry(page, "entry-1");
@@ -901,7 +923,7 @@ function* submittedUnderEdit(
   yield* reached.operation;
   let edited: string | undefined;
   if (edit) {
-    yield* draftText(page, "mine now", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "mine now");
     expect(page.screen().found("mine now", DRAFT_VALUE)).toBe(1);
     edited = "<GateThing />mine now";
   }
@@ -1008,13 +1030,15 @@ describe("Sidekick question announcement and modal ownership", () => {
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"component":"Elicit"'),
     );
     yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     yield* chooseEntry(page, "entry-1");
     yield* sendMessage(page, "review it");
     yield* filing.started();
     yield* selectPane(page, "bindings");
-    yield* draftText(page, "mine", ["Tab", "Tab", "Tab"]);
+    yield* draftText(page, "mine");
     const fed = page.repl.terminal.fed;
     filing.release();
     yield* page.until("the question announcing without input", (one) =>
@@ -1023,12 +1047,17 @@ describe("Sidekick question announcement and modal ownership", () => {
     expect(page.repl.terminal.fed).toBe(fed);
     expect(page.screen().shows(COMPOSER)).toBe(false);
     expect(page.screen().shows("[submit]")).toBe(false);
-    expect(entryTrail(page.screen())).toContain("Entry 1");
     yield* page.type("-still-draft");
     yield* page.until(
       "the original input still receiving text",
       (one) => one.found("mine-still-draft", DRAFT_VALUE) === 1,
     );
+    yield* page.key("Ctrl+G");
+    yield* page.type("3");
+    yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    yield* intoDraft(page);
+    expect(draftShows(page.screen(), "mine-still-draft")).toBe(true);
     yield* selectPane(page, "sidekick");
     yield* page.until("the notice in its pane", (one) => one.shows("[answer sidekick]"));
     expect(page.screen().shows("[submit]")).toBe(false);
@@ -1043,6 +1072,8 @@ describe("Sidekick question announcement and modal ownership", () => {
   it("MQ1: control — an ordinary entry's question announces itself the same way", function* () {
     const page = yield* useReplPage();
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
     yield* page.until("the entry announcing without input", (one) => one.shows("[answer]"));
@@ -1134,7 +1165,7 @@ describe("PV3/PV4: question and Configure editing", () => {
     yield* sleep(30);
     yield* page.type("!");
     yield* page.until("the Agent caret survived History", (one) => one.shows("Agent: s!cribe"));
-    expect(page.screen().found("draft-kept", { after: "DRAFT" })).toBe(1);
+    expect(draftShows(page.screen(), "draft-kept")).toBe(true);
   });
 });
 
@@ -1164,7 +1195,7 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* page.until("the opener receiving Enter after Close", (one) => one.shows("[refresh]"));
     yield* page.key("Escape");
     yield* configured(page);
-    yield* draftText(page, "-more", ["Backtab"]);
+    yield* draftText(page, "-more");
     expect(yield* finishDraft(page)).toBe("note-more");
   });
 
@@ -1249,12 +1280,13 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* page.until("the narrow Agent field taking keys", (one) =>
       one.shows("Agent: scribe-two"),
     );
-    expect(page.screen().shows("DRAFT")).toBe(false);
+    expect(draftOpen(page.screen())).toBe(false);
     yield* page.press("[close]");
     yield* configured(page);
     yield* openEntryCatalog(page);
     yield* closeDrawer(page);
-    expect(page.screen().found("note", { after: "DRAFT" })).toBe(1);
+    yield* intoDraft(page);
+    expect(draftShows(page.screen(), "note")).toBe(true);
     expect(yield* finishDraft(page)).toBe("note");
   });
 
@@ -1280,9 +1312,15 @@ describe("Configure keyboard, retained values and window ownership", () => {
   });
 });
 
+function transcriptWidth(reading: ScreenReading): number {
+  const header = reading.rows.find((row) => /^\s*TRANSCRIPT\b/.test(row));
+  const divider = header?.indexOf("│") ?? -1;
+  return divider < 0 ? reading.size.columns : divider;
+}
+
 function transcriptLines(reading: ScreenReading): string[] {
-  const heading = reading.locate("Entries");
-  return reading.rows.map((row) => row.slice(0, heading.column));
+  const width = transcriptWidth(reading);
+  return reading.rows.map((row) => row.slice(0, width));
 }
 
 function transcriptLabel(row: string): string {
@@ -1303,11 +1341,15 @@ function settledTranscriptHas(reading: ScreenReading, label: string): boolean {
 }
 
 function* chooseTurn(page: ReplPage, text: string): Operation<void> {
-  const row = transcriptLines(page.screen()).find((one) => matchesTurn(one, text));
-  if (row === undefined) {
+  const reading = page.screen();
+  const rows = transcriptLines(reading);
+  const at = rows.findIndex((row) => matchesTurn(row, text));
+  if (at < 0) {
     throw new Error(`no Transcript row says ${text}. ${page.describe()}`);
   }
-  yield* page.press(row.trim());
+  yield* page.press(rows[at].trim(), {
+    within: { top: at, bottom: at + 1, left: 0, right: transcriptWidth(reading) },
+  });
 }
 
 function* newConversation(page: ReplPage): Operation<void> {
@@ -1366,6 +1408,8 @@ describe("Transcript ownership and immutable older chat readings", () => {
     page.repl.fake.script({ held: true, reply: "ENTRY-DONE" });
     page.repl.fake.script({ deltas: ["<Output>Side ans", "wer.</Output>\n"], holdAfter: 1 });
     yield* pasteDraft(page, '<Session name="planner"><Prompt text="ask-entry" /></Session>\n');
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.repl.fake.holdingTurns(1);
     yield* sendMessage(page, "ask side");
@@ -1592,14 +1636,14 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect(page.screen().shows("[submit]")).toBe(false);
     expect(sidekickShows(page.screen(), "Older answer.")).toBe(true);
     expect(page.screen().shows("Noted.")).toBe(false);
-    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab"]);
+    yield* draftText(page, "my entry");
     yield* page.press("[Back to current chat]");
     yield* page.until("the question notice coming home", (one) => one.shows("[answer sidekick]"));
     expect(page.screen().shows("[submit]")).toBe(false);
     yield* openedQuestion(page);
     expect(page.screen().shows("decision: appr")).toBe(true);
     expect(page.screen().shows("Noted.")).toBe(false);
-    expect(page.screen().found("my entry", DRAFT_VALUE)).toBe(1);
+    expect(draftShows(page.screen(), "my entry")).toBe(true);
     expect(yield* finishDraft(page)).toBe("my entry");
   });
 });
@@ -1617,7 +1661,10 @@ function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
   }
   yield* page.type("ask");
   yield* page.until("the composer reached by keyboard", (one) => composerHolds(one, "ask"));
-  expect(draftHolds(page.screen(), "ask")).toBe(false);
+  const screen = page.screen();
+  if (draftOpen(screen)) {
+    expect(draftShows(screen, "ask")).toBe(false);
+  }
   yield* sendComposed(page);
   yield* page.until("the question notice", (one) => one.shows("[answer sidekick]"));
   yield* openedQuestion(page);
@@ -1631,11 +1678,8 @@ describe("Sidekick resize ownership", () => {
     const page = yield* questionThroughKeyboard(false);
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("[submit]")).toBe(false);
-    yield* draftText(page, "ordinary", ["Tab"]);
-    yield* page.until(
-      "the visible Draft taking text",
-      (one) => one.found("ordinary", { after: "DRAFT" }) === 1,
-    );
+    yield* draftText(page, "ordinary");
+    yield* page.until("the visible Draft taking text", (one) => draftShows(one, "ordinary"));
     yield* page.resize(WIDE);
     yield* page.until("the form returning", (one) => one.shows("[submit]"));
     expect(page.screen().shows("partialordinary")).toBe(false);
@@ -1648,11 +1692,11 @@ describe("Sidekick resize ownership", () => {
     const page = yield* questionThroughKeyboard(true);
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("[submit]")).toBe(true);
-    expect(narrow.shows("DRAFT")).toBe(false);
+    expect(draftOpen(narrow)).toBe(false);
     yield* page.type(" more");
     yield* page.until("the visible form taking text", (one) => one.shows("message: partial more"));
     yield* page.resize(WIDE);
-    expect(page.screen().found("partial more", DRAFT_VALUE)).toBe(0);
+    expect(draftOpen(page.screen())).toBe(false);
     expect(yield* finishDraft(page)).toBeUndefined();
   });
 
@@ -1665,10 +1709,9 @@ describe("Sidekick resize ownership", () => {
     expect(page.repl.outcome()).toBeUndefined();
     expect(page.screen().shows("[refresh]")).toBe(true);
     expect((yield* page.resize(NARROW)).shows("[refresh]")).toBe(false);
-    yield* page.type("-more");
-    yield* page.until(
-      "the visible Draft receiving the text",
-      (one) => one.found("note-more", { after: "DRAFT" }) === 1,
+    yield* draftText(page, "-more");
+    yield* page.until("the visible Draft receiving the text", (one) =>
+      draftShows(one, "note-more"),
     );
     yield* page.resize(WIDE);
     yield* page.until("Configure returning", (one) => one.shows("[refresh]"));
@@ -1746,7 +1789,7 @@ describe("Sidekick drawers across every supported size", () => {
       if (size.columns > NARROW.columns) {
         expect(reading.found("mine", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(reading.shows("DRAFT")).toBe(false);
+        expect(draftOpen(reading)).toBe(false);
       }
     }
     const refused = yield* page.resize(TOO_SMALL);
@@ -1788,7 +1831,7 @@ describe("Sidekick drawers across every supported size", () => {
       if (size.columns > NARROW.columns) {
         expect(reading.found("note", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(reading.shows("DRAFT")).toBe(false);
+        expect(draftOpen(reading)).toBe(false);
       }
     }
     const refused = yield* page.resize(TOO_SMALL);
@@ -2024,8 +2067,9 @@ describe("Older chats retain their identity across failure and cold opening", ()
       yield* pasteDraft(
         page,
         '<Session name="planner"><Prompt text="unfinished-entry" /></Session>\n',
-        ["Tab", "Tab", "Tab", "Tab"],
       );
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* first.fake.holdingTurns(1);
       execution = yield* mountedExecution(page.repl);
@@ -2065,7 +2109,9 @@ describe("Older chats retain their identity across failure and cold opening", ()
       root = first.root;
       const page = yield* useReplPage({ host: first });
       yield* exchange(page, "only ask", "Only answer.");
-      yield* pasteDraft(page, TWO_STEP_ENTRY, ["Tab", "Tab", "Tab", "Tab"]);
+      yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       execution = yield* mountedExecution(page.repl);
@@ -2205,6 +2251,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
     page.repl.fake.script({ reply: "<Output>Shared answer.</Output>\n", turnId: "sk-turn-1" });
     yield* pasteDraft(page, promptEntry("entry-ask"));
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry turn recorded", (one) =>
       settledTranscriptHas(one, "[A] entry-ask"),
@@ -2269,6 +2317,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
       const host = yield* useMountedHost({ dataRoot });
       const page = yield* useReplPage({ host });
       yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       const first = yield* settledReading(page.repl);
@@ -2277,6 +2327,8 @@ describe("Sidekick original provider membership and cancelled append", () => {
       page.repl.fake.script({ reply: "ENTRY-REPLY" });
       page.repl.fake.script({ reply: "<Output>Chat answer.</Output>\n" });
       yield* pasteDraft(page, promptEntry("later-entry"));
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("the second entry recorded", (one) =>
         settledTranscriptHas(one, "[A] later-entry"),
@@ -2323,7 +2375,8 @@ function composerRows(one: ScreenReading, anchor?: string): string[] {
   const prompt = one.locate(COMPOSER);
   const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
   const footer = one.locate("HISTORY");
-  const end = footer.row - (one.size.columns === NARROW.columns ? 2 : 1);
+  // On the narrow Sidekick outlet, the compact selected-work row precedes History.
+  const end = footer.row - (one.size.columns === NARROW.columns ? 1 : 0);
   return one.rows.slice(prompt.row + 1, end).map((row) => row.slice(edge).trimEnd());
 }
 
@@ -2486,6 +2539,8 @@ const HI_FAILING = '```js eval\nthrow new Error("the third entry failed");\n```'
 
 function* entryRun(page: ReplPage, source: string, ordinal: number): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* page.key("Tab");
+  yield* page.until("Round Send focused", (one) => one.shows("> Send"));
   yield* page.key("Enter");
   yield* entrySettles(page, ordinal, "ok");
 }
@@ -2636,20 +2691,19 @@ describe("Sidekick original acknowledged history submission identity", () => {
     yield* closeDrawer(page);
     yield* intoDraft(page);
     yield* page.type(HI_THIRD);
-    yield* page.until(
-      "the frozen Draft holding its source",
-      (one) => one.found(HI_THIRD, DRAFT_VALUE) === 1,
-    );
-    yield* page.key("Enter");
+    yield* page.until("the frozen Draft holding its source", (one) => draftShows(one, HI_THIRD));
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the frozen Run refusal", (one) => one.shows("live head"));
     expect((yield* settledReading(page.repl)).model.entries).toHaveLength(2);
-    expect(page.screen().found(HI_THIRD, DRAFT_VALUE)).toBe(1);
+    expect(draftShows(page.screen(), HI_THIRD)).toBe(true);
     yield* page.press("[live]");
     yield* page.until("the live head restored", (one) => !one.shows("[live]"));
     yield* intoDraft(page);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* entrySettles(page, 3, "ok");
-    expect(page.screen().found(HI_THIRD, DRAFT_VALUE)).toBe(0);
+    expect(draftOpen(page.screen())).toBe(false);
     const read = yield* settledReading(page.repl);
     expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
     expect(read.model.entries[2]?.source).toBe(HI_THIRD);
@@ -2667,12 +2721,12 @@ function* chatWheel(page: ReplPage, direction: "up" | "down"): Operation<void> {
   });
 }
 function shownChat(one: ScreenReading): string[] {
-  const scope = one.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined;
-  const anchor = one.rows
+  const pane = paneLines(one);
+  const anchor = pane
     .flatMap((row) =>
       [...row.matchAll(/\[[US]\] /g)].map((match) => row.slice(match.index).trimEnd()),
     )
-    .find((label) => one.found(label, scope) === 1);
+    .find((label) => pane.filter((row) => row.includes(label)).length === 1);
   if (anchor === undefined) {
     throw new Error(`no visible chat item: ${one.rows.join("\n")}`);
   }
@@ -3071,7 +3125,6 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     yield* newConversation(page);
     yield* exchange(page, "newer ask", "Newer answer.");
     page.repl.fake.script({ reply: "ENTRY-ANSWER" });
-    yield* intoDraft(page, ["Tab", "Tab", "Tab", "Tab"]);
     yield* entryRun(page, promptEntry("kept-entry"), 1);
     yield* draftText(page, "my entry");
     yield* compose(page, "half typed");
@@ -3084,6 +3137,9 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     yield* backToCurrent(page);
     expect(composerHolds(page.screen(), "half typed")).toBe(true);
     expect(page.screen().shows(`[configure ${OTHER_MOUNTED_AGENT}]`)).toBe(true);
+    yield* page.key("Ctrl+G");
+    yield* page.type("3");
+    yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
     expect(entryTrail(page.screen())).toContain("Entry 1");
     expect(yield* finishDraft(page)).toBe("my entry");
   });
@@ -3094,7 +3150,6 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     yield* newConversation(page);
     yield* exchange(page, "newer ask", "Newer answer.");
     page.repl.fake.script({ reply: "ENTRY-ANSWER" });
-    yield* intoDraft(page, ["Tab", "Tab", "Tab", "Tab"]);
     yield* entryRun(page, promptEntry("kept-entry"), 1);
     yield* draftText(page, "my entry");
     yield* compose(page, "half typed");
@@ -3102,6 +3157,9 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     expect(sidekickShows(page.screen(), "Newer answer.")).toBe(false);
     yield* backToCurrent(page);
     expect(composerHolds(page.screen(), "half typed")).toBe(true);
+    yield* page.key("Ctrl+G");
+    yield* page.type("3");
+    yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
     expect(entryTrail(page.screen())).toContain("Entry 1");
     expect(yield* finishDraft(page)).toBe("my entry");
   });
@@ -3163,6 +3221,8 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
     yield* pasteDraft(page, promptEntry("control-ask"));
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     const fed = page.repl.terminal.fed;
     yield* page.until("the entry's recorded provider turn", (one) =>
@@ -3184,7 +3244,7 @@ describe("Sidekick original populated chat profiles", () => {
     }
     yield* newConversation(page);
     yield* exchange(page, "current ask", "Current answer.");
-    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "my entry");
     yield* compose(page, "my q");
     yield* reachTurn(page, "old-6 ");
     yield* page.until("the populated older reading", (one) => chatHas(one, "OLD-6"));
@@ -3201,7 +3261,7 @@ describe("Sidekick original populated chat profiles", () => {
         expect(one.shows("SIDEKICK")).toBe(true);
         expect(one.found("my entry", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(one.shows("DRAFT")).toBe(false);
+        expect(draftOpen(one)).toBe(false);
       }
     }
     yield* page.resize(WIDE);
@@ -3213,7 +3273,7 @@ describe("Sidekick original populated chat profiles", () => {
   it("SS7: three profiles keep both sections, the window, Back and both texts", function* () {
     const page = yield* useReplPage();
     yield* exchange(page, "older ask", "Older answer.");
-    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* draftText(page, "my entry");
     yield* compose(page, "my q");
     yield* chooseTurn(page, "older ask ");
     yield* page.until("the current chat explicitly selected", (one) =>
@@ -3231,7 +3291,7 @@ describe("Sidekick original populated chat profiles", () => {
         expect(one.shows("SIDEKICK")).toBe(true);
         expect(one.found("my entry", DRAFT_VALUE)).toBe(1);
       } else {
-        expect(one.shows("DRAFT")).toBe(false);
+        expect(draftOpen(one)).toBe(false);
       }
     }
     yield* page.resize(WIDE);
@@ -3240,7 +3300,7 @@ describe("Sidekick original populated chat profiles", () => {
 });
 
 describe("Sidekick original independent body controls", () => {
-  it("BP3: both bodies stay usable through their own controls, and narrow gains no inset", function* () {
+  it("BP3: both bodies stay usable through their own controls across resize", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
     yield* entryRun(page, promptEntry("entry-ask"), 1);
@@ -3253,21 +3313,30 @@ describe("Sidekick original independent body controls", () => {
     const before = yield* pairBytes(page.repl.root, execution);
     for (const size of [WIDE, { columns: 120, rows: 30 }]) {
       yield* atSize(page, size);
-      for (const scope of [{ after: COMPOSER }, SIDEKICK_CONTROLS]) {
-        const index = page.screen().index;
-        const heading = page.screen().locate(scope === SIDEKICK_CONTROLS ? COMPOSER : "DRAFT");
-        yield* page.wheel("down", { column: heading.column, row: heading.row - 3 });
-        yield* page.until("the body's own scroll response", (one) => one.index > index);
-        expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
+      for (const anchor of ["kept entry", COMPOSER]) {
+        const screen = page.screen();
+        const target =
+          anchor === COMPOSER ? screen.locate(COMPOSER) : screen.locate(anchor, DRAFT_VALUE);
+        yield* page.wheel("down", {
+          column: target.column,
+          row: target.row - (anchor === COMPOSER ? 3 : 0),
+        });
+        yield* page.until("the body's own scroll response", (one) => one.index > screen.index);
+        expect(draftShows(page.screen(), "kept entry")).toBe(true);
         expect(composerHolds(page.screen(), "kept question")).toBe(true);
-        expect(entryTrail(page.screen())).toContain("Entry 1");
       }
+      yield* page.key("Ctrl+G");
+      yield* page.type("3");
+      yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
+      expect(entryTrail(page.screen())).toContain("Entry 1");
+      yield* intoDraft(page);
+      expect(draftShows(page.screen(), "kept entry")).toBe(true);
     }
     yield* page.resize(NARROW);
     yield* page.press("Entries");
     yield* page.until("the narrow Entries catalog", (one) => one.shows("[close]"));
     yield* closeDrawer(page);
-    expect(page.screen().shows("DRAFT")).toBe(true);
+    expect(draftOpen(page.screen())).toBe(true);
     expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
     yield* page.resize(WIDE);
     expect(composerHolds(page.screen(), "kept question")).toBe(true);

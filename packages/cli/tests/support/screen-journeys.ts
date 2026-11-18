@@ -2,9 +2,8 @@
  * The words this product draws, and the keyboard routes a person takes to them.
  *
  * Every helper here is built from `support/repl-page.ts`'s own readings:
- * `shows`, `occurrences`, `found`, `locate` and the three scopes. None of them
- * counts a border, reads a focus cue, names a terminal column or builds a view,
- * and none of them searches for focus at run time: a route is a key count
+ * `shows`, `occurrences`, `found`, `locate`, the three scopes and drawn rows.
+ * None names a fixed terminal column or builds a view. A route is a key count
  * measured on a fresh mount from a named opening state, written down here with
  * the receipt that measured it.
  *
@@ -20,8 +19,8 @@ import { MOUNTED_DEADLINE_MS } from "./mounted-repl.ts";
 import type { Terminal } from "./mounted-repl.ts";
 import type { PageKey, ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
 
-/** The Draft's own heading, which its Send shares a row with. */
-export const DRAFT = " DRAFT";
+/** The suffix in the Round editor heading. */
+export const DRAFT = "· draft";
 
 /** The Sidekick tab, which its own Send is drawn below and right of. */
 export const SIDEKICK = "SIDEKICK";
@@ -97,7 +96,14 @@ export function* intoDraft(page: ReplPage, route: readonly PageKey[] = []): Oper
   if (route.length === 0) {
     yield* page.key("Ctrl+G");
     yield* page.key("4");
-    yield* page.until("Draft focus", (one) => one.found("> DRAFT") === 1);
+    const ready = yield* page.until(
+      "the Draft shortcut",
+      (one) => one.shows("> Round") || one.shows("> + New Round"),
+    );
+    if (ready.shows("> + New Round")) {
+      yield* page.key("Enter");
+      yield* page.until("Round editor focus", (one) => one.shows("> Round"));
+    }
     return;
   }
   for (const name of route) {
@@ -142,27 +148,22 @@ function* pressTab(
   }
 }
 
-/**
- * Put several lines in the Draft as one chunk, the way a paste arrives.
- *
- * The screen wraps a value into the rows its field has, so the arrival is read
- * from the last line's own words rather than from the whole text: a wrapped
- * value is not on the screen as one string.
- */
+/** Paste source into the editor and wait for a visible fragment near its caret. */
 export function* pasteDraft(
   page: ReplPage,
   text: string,
   route: readonly PageKey[] = [],
 ): Operation<void> {
   yield* intoDraft(page, route);
-  // The last word rather than the last line: a field fits a value into the
-  // rows it has, so a long line is not on the screen as one string.
-  const last = (text.trimEnd().split(/\s+/).at(-1) ?? "").slice(0, 24);
+  const line = text.trimEnd().split("\n").at(-1) ?? "";
+  const witness = (text.endsWith("\n") ? line.trimStart().slice(0, 12) : line.slice(-12)).trim();
   yield* page.type(text);
-  yield* page.until(
-    `the Draft holding ${JSON.stringify(last)}`,
-    (one) => one.found(last, DRAFT_VALUE) > 0,
-  );
+  if (witness !== "") {
+    yield* page.until(
+      `the Draft holding ${JSON.stringify(witness)}`,
+      (one) => draftOpen(one) && draftShows(one, witness),
+    );
+  }
 }
 
 /** Put this text in the already active Draft. */
@@ -223,13 +224,8 @@ export function sidekickIdle(reading: ScreenReading): boolean {
 /**
  * The Sidekick pane's own rows, as this screen draws them.
  *
- * Below the tab row and from the Draft heading's own cell rightward. The pane's
- * chat is drawn a couple of cells left of its tab, so the tab's column is too
- * far right to be a floor, while the sidebar's copy of a reply sits far left of
- * the Draft. Both bounds are cells of text this screen draws.
- *
- * It does not separate the Transcript, which shares those columns, so words
- * both readings draw are asked of the whole screen by count instead.
+ * The wide tab row crosses the divider at the pane's left edge. At one outlet
+ * the tab row has no divider before Sidekick and the pane is full width.
  */
 export function paneLines(reading: ScreenReading): string[] {
   // A drawer over this pane covers its tab row, and then the pane draws none
@@ -237,8 +233,8 @@ export function paneLines(reading: ScreenReading): string[] {
   if (!reading.shows(SIDEKICK)) {
     return [];
   }
-  const tabs = reading.locate(SIDEKICK).row;
-  const floor = reading.shows(DRAFT) ? reading.locate(DRAFT).column : 0;
+  const { row: tabs, column } = reading.locate(SIDEKICK);
+  const floor = reading.rows[tabs].lastIndexOf("│", column) + 1;
   return reading.rows.map((row, index) =>
     index > tabs ? row.slice(Math.min(floor, row.length)) : "",
   );
@@ -274,7 +270,8 @@ export function railMark(reading: ScreenReading, order: number): string | undefi
   // The cancelled mark is a hyphen, which is a range inside a class anywhere but
   // the end of one: it goes last, beside the mark a refused entry wears.
   const marks = Object.values(RAIL).filter((mark) => mark !== RAIL.cancelled);
-  return new RegExp(`(?:^|\\s)${order}\\s*([${marks.join("")}U-])`).exec(rail)?.[1];
+  const mark = new RegExp(`(?:^|\\s)${order}\\s*([${marks.join("")}U⠋-])`).exec(rail)?.[1];
+  return mark === "⠋" ? RAIL.unfinished : mark;
 }
 
 /** Whether a drawer is open: its own way out is the one every drawer draws. */
@@ -354,9 +351,34 @@ export function* drawnScreen(terminal: Terminal): Operation<Operation<void>> {
   ]);
 }
 
-/** Whether the Draft's own rows hold this text. */
+/** The round bar stays visible while Send temporarily hides the heading. */
+export function draftOpen(reading: ScreenReading): boolean {
+  return reading.rows.some((row) => row.includes("✎ draft") && row.includes("+ New Round"));
+}
+
+/** Whether the open editor's interior holds this text. */
 export function draftShows(reading: ScreenReading, text: string): boolean {
-  return reading.found(text, DRAFT_VALUE) > 0;
+  if (!draftOpen(reading)) {
+    throw new Error("the Round editor is closed");
+  }
+  const bar = reading.locate("✎ draft", { onRow: "+ New Round" }).row;
+  const bottomEdge = /└─+┘/.exec(reading.rows[bar - 1]);
+  if (bottomEdge === null) {
+    throw new Error("the open Round editor has no bottom border");
+  }
+  const { column: left } = reading.locate(bottomEdge[0], { onRow: bottomEdge[0] });
+  const topEdge = `┌${"─".repeat(bottomEdge[0].length - 2)}┐`;
+  const { row: top } = reading.locate(topEdge, { onRow: topEdge });
+  return (
+    reading.found(text, {
+      within: {
+        top: top + 1,
+        bottom: bar - 1,
+        left: left + 2,
+        right: left + bottomEdge[0].length - 2,
+      },
+    }) > 0
+  );
 }
 
 /** Whether the Draft holds this text, and the composer does not. */

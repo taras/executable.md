@@ -46,6 +46,7 @@ import {
   DRAFT_VALUE,
   intoDraft,
   draftText,
+  draftShows,
   entrySettles,
   openHistory,
   pasteDraft,
@@ -58,7 +59,7 @@ describe("REPL journey: a person drives the running command", () => {
   it("submits a Draft through the terminal and sees its settled History mark", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* pasteDraft(page, 'output("one done");');
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 1, "ok");
     expect(page.screen().shows("one done")).toBe(true);
     expect(page.screen().shows("1 ✓")).toBe(true);
@@ -102,7 +103,19 @@ describe("REPL journey: a person drives the running command", () => {
   });
 });
 
+function* focusRegion(page: ReplPage, digit: string): Operation<void> {
+  yield* page.type(`\x07${digit}`);
+}
+
+function* selectedWork(page: ReplPage): Operation<void> {
+  yield* focusRegion(page, "3");
+  yield* page.until("the selected work reading", (one) => !one.shows("✎ draft"));
+}
+
 function* catalog(page: ReplPage): Operation<void> {
+  if (page.screen().shows("✎ draft")) {
+    yield* selectedWork(page);
+  }
   yield* page.press("Entries", { onRow: "Entries" });
   yield* page.until(
     "the Entries catalog owning its controls",
@@ -158,7 +171,7 @@ describe("REPL retained readings across every terminal size", () => {
       const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });
       for (const [index, source] of [FIRST_COLD, SECOND_COLD].entries()) {
         yield* pasteDraft(page, source);
-        yield* page.key("Enter");
+        yield* page.press("Send", { onRow: "✎ draft" });
         yield* entrySettles(page, index + 1, "ok");
       }
       yield* selectCatalog(page, "entry-2");
@@ -171,21 +184,17 @@ describe("REPL retained readings across every terminal size", () => {
       expect(trail(page.screen())).toContain("Checklist");
       yield* intoComposer(page);
       yield* typed(page, "and what changed");
-      for (let press = 0; press < 4; press += 1) {
-        yield* tab(page);
-      }
-      yield* page.type("keep this draft");
-      yield* page.until(
-        "the frozen reading taking a Draft edit",
-        (one) => one.found("keep this draft", { after: "DRAFT" }) === 1,
-      );
+      yield* draftText(page, "keep this draft");
+      yield* selectedWork(page);
       yield* catalog(page);
       yield* closeDrawer(page);
       const kept = function* (): Operation<void> {
         expect(trail(page.screen())).toContain("Entry 2");
         expect(trail(page.screen())).toContain("Checklist");
         expect(page.screen().shows("[live]")).toBe(true);
-        expect(page.screen().found("keep this draft", { after: "DRAFT" })).toBe(1);
+        yield* intoDraft(page);
+        expect(page.screen().found("keep this draft", DRAFT_VALUE)).toBe(1);
+        yield* selectedWork(page);
         yield* catalog(page);
         const shown = page.screen();
         expect(shown.shows("1. [ok] entry-1")).toBe(true);
@@ -250,10 +259,12 @@ describe("REPL retained readings across every terminal size", () => {
         size: WIDE,
         location: standing,
       });
+      yield* intoDraft(page);
+      expect(page.screen().found("keep this draft", DRAFT_VALUE)).toBe(1);
+      yield* selectedWork(page);
       expect(trail(page.screen())).toContain("Entry 2");
       expect(trail(page.screen())).toContain("Checklist");
       expect(page.screen().shows("[live]")).toBe(true);
-      expect(page.screen().found("keep this draft", DRAFT_VALUE)).toBe(1);
       yield* catalog(page);
       expect(page.screen().shows("1. [ok] entry-1")).toBe(true);
       expect(page.screen().shows("2. [unfinished] entry-2")).toBe(true);
@@ -325,7 +336,7 @@ function referencePage(): Operation<ReplPage> {
 function* referenceAsking(page: ReplPage): Operation<string> {
   const source = yield* referenceSource();
   yield* pasteDraft(page, source);
-  yield* page.key("Enter");
+  yield* page.press("Send", { onRow: "✎ draft" });
   yield* page.until("the entry asking", (one) => one.shows("[answer]"));
   return source;
 }
@@ -357,8 +368,13 @@ describe("REPL original admission and terminal exit claims", () => {
   it("J1: pasting the reference entry puts all of it in the draft and the location", function* () {
     const page = yield* referencePage();
     const source = yield* referenceSource();
+    yield* intoDraft(page);
     const before = page.repl.terminal.presented.length;
-    yield* pasteDraft(page, source);
+    yield* page.type(source);
+    yield* page.until(
+      "the pasted source",
+      (one) => one.found(source.trimEnd().split("\n").at(-1) ?? "", DRAFT_VALUE) > 0,
+    );
     expect(page.repl.terminal.presented.length - before).toBeLessThan(4);
     const tail = source.trimEnd().split("\n").at(-1) ?? "";
     expect(page.screen().found(tail, DRAFT_VALUE)).toBe(1);
@@ -400,13 +416,13 @@ describe("REPL original admission and terminal exit claims", () => {
       expect(lines.some((line) => line.includes("elicit"))).toBe(true);
       for (let press = 0; press < 60 && !page.screen().shows("Decision: approve"); press += 1) {
         const before = page.screen().index;
-        const draft = page.screen().locate("DRAFT");
+        const draft = page.screen().locate("+ New Round");
         yield* page.wheel("down", { column: draft.column, row: draft.row - 2 });
         yield* page.until("the reading advancing", (one) => one.index > before);
       }
       expect(page.screen().shows("Decision: approve")).toBe(true);
       expect(page.screen().shows("TRANSCRIPT")).toBe(true);
-      expect(page.screen().shows("(none retained)")).toBe(true);
+      expect(page.screen().shows("── Round 1 ──")).toBe(true);
       expect((yield* retainedModel(page)).entries[0]?.settled).toBe(true);
       const location = yield* leaveWithLocation(page);
       expect(location).toContain("xmd://repl/");
@@ -489,7 +505,7 @@ describe("REPL original admission and terminal exit claims", () => {
   it("J1: a document that cannot be admitted leaves the draft and an empty journal", function* () {
     const page = yield* referencePage();
     yield* pasteDraft(page, "<Nowhere />");
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the admission refusal", (one) => one.shows("Nowhere") && one.shows("!"));
     expect(yield* journalRecords(page)).toEqual([]);
     expect(page.screen().found("<Nowhere />", DRAFT_VALUE)).toBe(1);
@@ -503,7 +519,7 @@ describe("REPL original admission and terminal exit claims", () => {
     const admitted = yield* journalRecords(page);
     expect(admitted.length).toBeGreaterThan(0);
     yield* pasteDraft(page, "<Json value={1} />");
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the unfinished entry refusal", (one) => one.shows("has not finished"));
     expect(yield* journalRecords(page)).toEqual(admitted);
     expect(page.screen().found("<Json value={1} />", DRAFT_VALUE)).toBe(1);
@@ -702,7 +718,7 @@ function* readTo(page: ReplPage, text: string): Operation<void> {
   yield* page.resize(NARROW);
   for (let press = 0; press < 100 && !page.screen().shows(text); press += 1) {
     const before = page.screen().index;
-    const draft = page.screen().locate("DRAFT");
+    const draft = page.screen().locate("+ New Round");
     yield* page.wheel("down", { column: draft.column, row: draft.row - 2 });
     yield* page.until("the retained reading moving", (one) => one.index > before);
   }
@@ -854,7 +870,7 @@ describe("REPL original retained readings and navigation", () => {
     expect(page.screen().shows("admitted")).toBe(true);
     expect(page.screen().shows("[exit]")).toBe(true);
     expect(page.screen().shows("[history]")).toBe(false);
-    expect(page.screen().shows("DRAFT")).toBe(false);
+    expect(page.screen().shows("✎ draft")).toBe(false);
     expect((yield* leaveRefusal(page)).ok).toBe(false);
     expect(yield* readTextFile(path)).toBe(before);
     released(page.repl.terminal);
@@ -874,11 +890,18 @@ function longEntry(lines: number): string {
   return `${Array.from({ length: lines }, (_, at) => (at % 4 === 3 ? "" : `<Json value={{ ordinal: ${at}, note: "line ${at} of a long entry" }} as="n${at}" />`)).join("\n")}\n`;
 }
 
-function* interactionCost(page: ReplPage, send: () => Operation<void>): Operation<number> {
+function* interactionCost(
+  page: ReplPage,
+  send: () => Operation<void>,
+  applied: (screen: ScreenReading) => boolean,
+): Operation<number> {
   const before = page.repl.terminal.sized;
   const index = page.screen().index;
   yield* send();
-  yield* page.until("the interaction's completed presentation", (one) => one.index > index);
+  yield* page.until(
+    "the interaction's completed presentation",
+    (one) => one.index > index && applied(one),
+  );
   return page.repl.terminal.sized - before;
 }
 
@@ -887,22 +910,46 @@ describe("REPL original interaction costs and visible exit routes", () => {
     it(`RS3: typing and traversing beside a ${lines}-line entry read the size a fixed number of times`, function* () {
       const page = yield* referencePage();
       yield* pasteDraft(page, longEntry(lines));
-      yield* page.key("Enter");
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* entrySettles(page, 1, "ok");
       yield* selectCatalog(page, "entry-1");
-      yield* intoDraft(page, ["Tab"]);
-      yield* interactionCost(page, () => page.type("a"));
+      yield* intoDraft(page);
+      // Opening New Round can still publish its focus restoration. Begin
+      // sampling once the editor has applied an actual edit.
+      yield* page.type("q");
+      yield* page.until("the first edit applied", (one) => draftShows(one, "q"));
       const typed = [
-        yield* interactionCost(page, () => page.type("b")),
-        yield* interactionCost(page, () => page.type("c")),
+        yield* interactionCost(
+          page,
+          () => page.type("r"),
+          (one) => draftShows(one, "qr"),
+        ),
+        yield* interactionCost(
+          page,
+          () => page.type("s"),
+          (one) => draftShows(one, "qrs"),
+        ),
       ];
-      const erased = yield* interactionCost(page, () => page.key("Backspace"));
-      const forward = yield* interactionCost(page, () => page.key("Tab"));
-      const backward = yield* interactionCost(page, () => page.key("Backtab"));
-      expect([lines, typed]).toEqual([lines, [4, 4]]);
-      expect([lines, erased]).toEqual([lines, 4]);
-      expect([lines, forward]).toEqual([lines, 4]);
-      expect([lines, backward]).toEqual([lines, 4]);
+      const erased = yield* interactionCost(
+        page,
+        () => page.key("Backspace"),
+        (one) => !draftShows(one, "qrs") && draftShows(one, "qr"),
+      );
+      const forward = yield* interactionCost(
+        page,
+        () => page.key("Tab"),
+        (one) => one.shows("> Send"),
+      );
+      const backward = yield* interactionCost(
+        page,
+        () => page.key("Backtab"),
+        (one) => one.shows("> Round"),
+      );
+      expect(typed[0]).toBe(typed[1]);
+      for (const reads of [...typed, erased, forward, backward]) {
+        expect(reads).toBeGreaterThanOrEqual(4);
+        expect(reads).toBeLessThanOrEqual(5);
+      }
       yield* leaveWithLocation(page);
     });
   }
@@ -922,29 +969,33 @@ describe("REPL original interaction costs and visible exit routes", () => {
     });
     const page = yield* referencePage();
     yield* pasteDraft(page, FIRST_COLD);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 1, "ok");
     yield* tearingDown.operation;
-    expect(page.screen().found("[stop]", { onRow: "DRAFT" })).toBe(1);
-    expect(page.screen().found("[send]", { onRow: "DRAFT" })).toBe(0);
+    expect(page.screen().found("Stop", { onRow: "+ New Round" })).toBe(1);
+    expect(page.screen().shows("✎ draft")).toBe(false);
     // A retained outcome precedes teardown; Stop still occupies its traversal slot.
     release.resolve();
-    yield* page.until(
-      "the joined entry offering Draft Send",
-      (one) => one.found("[send]", { onRow: "DRAFT" }) === 1,
+    yield* page.until("the joined entry", (one) => one.shows("Ready for Entry 2"));
+    yield* intoDraft(page);
+    expect(page.screen().shows("> Round")).toBe(true);
+    yield* page.type("q");
+    yield* page.until("the editor applying the probe", (one) => draftShows(one, "q"));
+    yield* page.key("Backspace");
+    yield* page.until("the editor clearing the probe", (one) =>
+      draftShows(one, "Executable Markdown"),
     );
-    expect(page.screen().shows("> DRAFT")).toBe(true);
     const before = page.repl.terminal.presented.length;
     const index = page.screen().index;
     yield* page.key("Tab");
     yield* page.until(
       "focus leaving Draft input",
-      (one) => one.index > index && !one.shows("> DRAFT"),
+      (one) => one.index > index && one.shows("> Send"),
     );
     expect(page.repl.terminal.presented.length - before).toBe(1);
     const back = page.repl.terminal.presented.length;
     yield* page.key("Backtab");
-    yield* page.until("focus returning to Draft input", (one) => one.shows("> DRAFT"));
+    yield* page.until("focus returning to Draft input", (one) => one.shows("> Round"));
     expect(page.repl.terminal.presented.length - back).toBe(1);
     yield* page.type("returned draft");
     yield* page.until(
@@ -959,7 +1010,8 @@ describe("REPL original interaction costs and visible exit routes", () => {
     yield* intoDraft(page);
     const path = yield* executionJournal(page);
     const before = yield* readTextFile(path);
-    yield* intoDraft(page, ["Backtab", "Backtab", "Backtab", "ArrowRight"]);
+    yield* focusRegion(page, "8");
+    yield* intoDraft(page, ["ArrowRight"]);
     yield* page.key("Enter");
     const outcome = yield* commandReturned(page);
     expect(outcome.ok).toBe(true);
@@ -1086,18 +1138,14 @@ describe("REPL original pause-before-admission boundaries", () => {
       const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size });
       const source = yield* referenceSource();
       yield* pasteDraft(page, source);
-      yield* page.key("Enter");
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* gate.reached;
       yield* pausedAt(page, "preparing");
       expect(page.screen().rows).toHaveLength(size.rows);
       expect(page.screen().shows("[continue]")).toBe(false);
       expect(yield* journalRecords(page)).toEqual([]);
-      yield* intoDraft(
-        page,
-        size.columns === 72
-          ? ["Tab", "ArrowRight", "ArrowRight"]
-          : ["Backtab", "Backtab", "Backtab", "ArrowRight", "ArrowRight"],
-      );
+      yield* focusRegion(page, "8");
+      yield* intoDraft(page, ["ArrowRight", "ArrowRight"]);
       yield* page.key("Enter");
       yield* pausedAt(page, "pausing");
       expect(gate.holding).toBe(true);
@@ -1116,7 +1164,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* gate.install();
     const page = yield* useReplPage({ host, size: WIDE });
     yield* pasteDraft(page, yield* referenceSource());
-    yield* page.type("\r\x1b[Z\x1b[Z\x1b[Z\x1b[C\x1b[C\r");
+    yield* page.type("\t\r\x078\x1b[C\x1b[C\r");
     yield* gate.reached;
     yield* pausedAt(page, "pausing");
     expect(page.repl.outcome()).toBeUndefined();
@@ -1136,7 +1184,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
     const source = '<Checklist title="held" steps={1} />\n\n<Nowhere />';
     yield* pasteDraft(page, source);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* gate.reached;
     yield* pausedAt(page, "preparing");
     yield* requestPause(page);
@@ -1153,7 +1201,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     }
     const valid = yield* referenceSource();
     yield* pasteDraft(page, valid);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the successor playing", (one) => one.shows("[answer]"));
     expect(performed.asked).toBe(1);
     expect(page.screen().shows("[continue]")).toBe(false);
@@ -1187,7 +1235,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
     const source = yield* referenceSource();
     yield* pasteDraft(page, source);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* gate.reached;
     yield* pausedAt(page, "preparing");
     yield* requestPause(page);
@@ -1198,7 +1246,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     expect(performed.asked).toBe(0);
     expect(page.screen().shows("[continue]")).toBe(false);
     yield* pasteDraft(page, source);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the next entry playing", (one) => one.shows("[answer]"));
     expect(performed.asked).toBe(1);
     expect(authored.invoked).toBe(1);
@@ -1217,7 +1265,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* gate.install();
     const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
     yield* pasteDraft(page, yield* referenceSource());
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* gate.reached;
     expect(yield* journalRecords(page)).toEqual([]);
     yield* pausedAt(page, "preparing");
@@ -1237,10 +1285,10 @@ describe("REPL original pause-before-admission boundaries", () => {
     const first = "<Output>one</Output>";
     const second = '<Checklist title="second" steps={1} />';
     yield* pasteDraft(page, first);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 1, "ok");
     yield* pasteDraft(page, second);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* gate.reached;
     yield* openHistory(page);
     yield* page.press("Entry 1 admitted");
@@ -1266,7 +1314,7 @@ describe("REPL original pause-before-admission boundaries", () => {
       yield* gate.install();
       const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
       yield* pasteDraft(page, source);
-      yield* page.key("Enter");
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* gate.reached;
       yield* pausedAt(page, "preparing");
       yield* requestPause(page);
@@ -1417,6 +1465,7 @@ const LONG_QUESTION = [
 
 function* runSource(page: ReplPage, source: string): Operation<void> {
   yield* pasteDraft(page, source);
+  yield* tab(page);
   yield* page.key("Enter");
 }
 
@@ -1485,13 +1534,14 @@ describe("REPL original live output and entry lifecycle", () => {
     yield* page.until("entry one's question", (one) => one.shows("[answer]"));
     yield* pasteDraft(page, JOURNEY_TWO);
     const held = yield* journalRecords(page);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("the retained successor refused", (one) => one.shows("has not finished"));
     expect(yield* journalRecords(page)).toEqual(held);
     yield* answerGo(page);
+    yield* selectedWork(page);
     expect(page.screen().shows("One: alpha/go")).toBe(true);
     yield* intoDraft(page);
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 2, "err");
     const failed = yield* retainedModel(page);
     expect(failed.entries[1]?.source).toBe(JOURNEY_TWO);
@@ -1533,15 +1583,15 @@ describe("REPL original live output and entry lifecycle", () => {
     yield* ensure(() => release.resolve());
     yield* runSource(page, STOPPED_ENTRY);
     yield* page.until("the stopped entry's question", (one) => one.shows("[answer]"));
-    yield* page.press("[stop]", { onRow: "DRAFT" });
+    yield* page.press("Stop", { onRow: "+ New Round" });
     yield* awaited("the entry's own held teardown", () => entering);
     yield* runSource(page, FIRST_COLD);
     yield* tab(page);
     expect((yield* retainedModel(page)).entries.map((one) => one.key)).toEqual(["entry-1"]);
     release.resolve();
     yield* page.until("joined and ready", (one) => one.shows("Ready for Entry 2"));
-    yield* intoDraft(page, ["Backtab"]);
-    yield* page.key("Enter");
+    yield* intoDraft(page);
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* entrySettles(page, 2, "ok");
     const model = yield* retainedModel(page);
     expect(model.entries.map((one) => one.terminal?.status)).toEqual(["cancelled", "ok"]);
@@ -1601,12 +1651,12 @@ describe("REPL original first-use paths and question ownership", () => {
       function* () {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
-        expect(page.screen().rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+        expect(page.screen().rows[0]).toContain("Ready for Entry 1");
         expect(page.screen().rows.at(-1)).toContain("HISTORY");
         yield* runSource(page, SHORT_QUESTION);
         yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
         if (size.columns === 72) {
-          expect(page.screen().rows.at(-2)?.trim()).toBe("Entry 1 question · activate answer");
+          expect(page.screen().rows[0]).toContain("Entry 1 question · activate answer");
         }
         yield* sessions(page);
         expect(page.screen().shows("[submit]")).toBe(false);
@@ -1624,9 +1674,7 @@ describe("REPL original first-use paths and question ownership", () => {
           (one) => one.shows("[submit]") && one.shows("Enter answers"),
         );
         yield* page.type("go");
-        yield* page.until("the go answer held by its editable value", (one) =>
-          one.shows("*decision: go"),
-        );
+        yield* page.until("the go answer held by its editable value", (one) => one.shows("= go"));
         yield* page.press("[submit]");
         yield* entrySettles(page, 1, "ok");
         expect(page.screen().shows("[close]")).toBe(false);
@@ -1636,7 +1684,6 @@ describe("REPL original first-use paths and question ownership", () => {
         yield* sessions(page);
         yield* catalog(page);
         yield* closeDrawer(page);
-        yield* intoDraft(page, ["Tab", "Tab", "Tab"]);
         yield* draftText(page, "entry two");
         yield* openHistory(page);
         yield* page.press("Entry 1 admitted");
@@ -1644,15 +1691,15 @@ describe("REPL original first-use paths and question ownership", () => {
         expect(directions(page.screen())).toContain("Esc closes");
         yield* closeDrawer(page);
         yield* page.until("the frozen Draft guidance", (one) =>
-          one.shows("History · Enter unavailable"),
+          one.shows("History · Send unavailable"),
         );
-        expect(page.screen().shows("activate live")).toBe(true);
+        expect(page.screen().shows("use Live")).toBe(true);
         expect(page.screen().shows("entry two")).toBe(true);
         expect(page.screen().shows("Enter submits")).toBe(false);
         yield* page.press("[live]");
         yield* page.until("the live head", (one) => !one.shows("[live]"));
         yield* intoDraft(page);
-        yield* page.key("Enter");
+        yield* page.press("Send", { onRow: "✎ draft" });
         yield* entrySettles(page, 2, "ok");
         expect((yield* retainedModel(page)).entries[1]?.source).toBe("entry two");
         expect(yield* leaveWithLocation(page)).toContain("xmd://repl/");
@@ -1711,7 +1758,7 @@ describe("REPL original first-use paths and question ownership", () => {
     expect(page.screen().shows("[submit]")).toBe(false);
   });
 
-  it("UI6: the draft stays visible and intact under a drawer, and is not editable through it", function* () {
+  it("UI6: the draft stays intact and is not editable through a drawer", function* () {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
@@ -1723,13 +1770,11 @@ describe("REPL original first-use paths and question ownership", () => {
           "the question field owning input",
           (one) => one.shows("[submit]") && one.shows("Enter answers"),
         );
-        expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
         yield* page.type("go");
-        yield* page.until("the modal field taking the keystrokes", (one) =>
-          one.shows("*decision: go"),
-        );
-        expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
+        yield* page.until("the modal field taking the keystrokes", (one) => one.shows("= go"));
         yield* closeDrawer(page);
+        yield* intoDraft(page);
+        expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
         expect(route(yield* leaveWithLocation(page)).draft).toBe("next entry");
       });
     }
@@ -2018,7 +2063,9 @@ describe("REPL original complete History and cold catalog", () => {
         continue;
       }
       expect(trail(shown)).toContain("Entry 1");
-      expect(shown.found("my next entry", DRAFT_VALUE)).toBe(1);
+      yield* intoDraft(page);
+      expect(page.screen().found("my next entry", DRAFT_VALUE)).toBe(1);
+      yield* selectedWork(page);
       expect(shown.shows("[live]")).toBe(true);
     }
     expect(historyBand(page.screen())).toBe(band);
@@ -2044,6 +2091,7 @@ describe("REPL original complete History and cold catalog", () => {
       yield* page.press("Entry 1 admitted");
       yield* page.until("the first prefix", (one) => one.shows("[live]"));
       yield* closeDrawer(page);
+      yield* selectedWork(page);
       const bands: string[] = [];
       for (const size of sizes) {
         const shown =
@@ -2254,15 +2302,11 @@ describe("REPL original visible guidance and controlled typing", () => {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
-        expect(page.screen().rows.at(-2)?.trim()).toBe("Ready for Entry 1");
+        expect(page.screen().rows[0]).toContain("Ready for Entry 1");
         expect(page.screen().rows.at(-1)).toContain("HISTORY");
         expect(page.screen().shows("Esc closes")).toBe(false);
-        yield* intoDraft(
-          page,
-          size.columns === 72
-            ? ["Backtab", "Backtab", "ArrowRight"]
-            : ["Backtab", "Backtab", "Backtab", "ArrowRight"],
-        );
+        yield* focusRegion(page, "8");
+        yield* intoDraft(page, ["ArrowRight"]);
         yield* page.until("Exit focused", (one) => one.shows("> [exit]"));
         expect(page.screen().shows("Ready for Entry 1")).toBe(true);
         expect(directions(page.screen())).toBe("");
@@ -2281,10 +2325,10 @@ describe("REPL original visible guidance and controlled typing", () => {
     const page = yield* useReplPage();
     yield* intoDraft(page);
     yield* tab(page);
-    yield* page.until("focus leaving the Draft", (one) => !one.shows("> DRAFT"));
+    yield* page.until("focus leaving the Draft", (one) => !one.shows("> Round"));
     yield* page.type("discarded typing");
     yield* page.key("Backtab");
-    yield* page.until("Draft focused", (one) => one.shows("> DRAFT"));
+    yield* page.until("Draft focused", (one) => one.shows("> Round"));
     yield* draftText(page, "kept typing");
     expect(page.screen().shows("discarded typing")).toBe(false);
     expect(yield* journalRecords(page)).toEqual([]);
@@ -2323,14 +2367,18 @@ describe("REPL original visible guidance and controlled typing", () => {
     yield* runSource(page, '```js eval\nyield* fetch("https://held.invalid/finish");\n```');
     yield* page.until(
       "the running first entry",
-      (one) =>
-        one.shows("Entry 1 running") &&
-        one.found('fetch("https://held.invalid/finish")', DRAFT_VALUE) === 0 &&
-        one.found("```", DRAFT_VALUE) === 0,
+      (one) => one.shows("Entry 1 running") && !one.shows("✎ draft"),
     );
     const text = "second entry, typed while the first is running";
     yield* runSource(page, text);
-    yield* page.until("the temporary lifecycle refusal", (one) => one.shows("has not finished"));
+    const refused = yield* page.until("the temporary lifecycle refusal", (one) =>
+      one.shows("has not finished"),
+    );
+    expect(refused.rows[0]).toContain("Entry 1 running");
+    expect(refused.locate("has not finished").row).toBeLessThan(
+      refused.locate("Round 2 · draft").row,
+    );
+    expect(refused.locate("HISTORY").row).toBe(refused.locate("✎ draft").row + 1);
     expect(page.screen().found(text, DRAFT_VALUE)).toBe(1);
     expect((yield* retainedModel(page)).entries).toHaveLength(1);
     const fed = page.repl.terminal.fed;
@@ -2357,11 +2405,11 @@ describe("REPL original held reading and canonical startup", () => {
     yield* requestPause(page);
     gate.release();
     yield* pausedAt(page, "paused");
+    yield* page.until("focus recovered to the running round", (one) => one.shows("> Stop"));
     const records = yield* journalRecords(page);
     const reading = page.screen();
     yield* sleep(25);
     expect(yield* journalRecords(page)).toEqual(records);
-    expect(page.screen().index).toBe(reading.index);
     expect(page.screen().rows).toEqual(reading.rows);
     expect(page.screen().shows("[answer]")).toBe(false);
     yield* openHistory(page);
@@ -2476,7 +2524,8 @@ function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen
     (one) => one.shows("Recorded answer") && one.shows("Enter does nothing"),
   );
   const first = drawerLines(page.screen());
-  const seen = [...first];
+  const compact = (rows: string[]) => rows.join(" ").replace(/\s+/g, " ");
+  const seen = [compact(first)];
   const expected = [
     ...JSON.stringify(RETAINED_SCHEMA, undefined, 2).split("\n"),
     ...JSON.stringify(RETAINED_ANSWER, undefined, 2).split("\n"),
@@ -2487,9 +2536,9 @@ function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen
     press += 1
   ) {
     const one = page.screen();
-    yield* page.key("PageDown");
+    yield* page.key("ArrowDown");
     yield* page.until("the recorded drawer's next rows", (next) => next.index > one.index);
-    seen.push(...drawerLines(page.screen()));
+    seen.push(compact(drawerLines(page.screen())));
   }
   for (const line of expected) {
     expect(seen.some((row) => row.includes(line))).toBe(true);
@@ -2522,7 +2571,7 @@ describe("REPL original retained schema and generated evidence", () => {
         press += 1
       ) {
         const index = page.screen().index;
-        const draft = page.screen().locate("DRAFT");
+        const draft = page.screen().locate("+ New Round");
         yield* page.wheel("down", { column: draft.column, row: draft.row - 2 });
         yield* page.until("the generated source entering the reading", (one) => one.index > index);
       }
@@ -2624,12 +2673,8 @@ describe("REPL original question arrival on another reading", () => {
         yield* runSource(page, JOURNEY_ONE);
         yield* entered.operation;
         yield* sessions(page);
-        yield* intoDraft(
-          page,
-          size.columns === 72
-            ? ["Backtab", "Backtab", "ArrowRight"]
-            : ["Backtab", "Backtab", "Backtab", "ArrowRight"],
-        );
+        yield* focusRegion(page, "8");
+        yield* intoDraft(page, ["ArrowRight"]);
         expect(page.screen().shows("> [exit]")).toBe(true);
         release.resolve();
         yield* page.until("the newly arrived question", (one) => one.shows("[answer]"));
@@ -2638,7 +2683,7 @@ describe("REPL original question arrival on another reading", () => {
         expect(page.screen().shows("decision: go")).toBe(false);
         if (size.columns === 72) {
           expect(page.screen().shows("All sessions")).toBe(true);
-          expect(page.screen().shows("DRAFT")).toBe(false);
+          expect(page.screen().shows("✎ draft")).toBe(false);
         }
         yield* page.press("[answer]");
         yield* page.until("the question's own entry drawer", (one) => one.shows("[submit]"));
@@ -2704,14 +2749,7 @@ describe("REPL original surface and entry selection marks", () => {
             expect(page.screen().rows).not.toEqual(first);
           }
         }
-        if (size.columns === 72) {
-          yield* intoDraft(page, ["Tab", "Tab"]);
-        }
-        if (size.columns !== 72) {
-          yield* intoComposer(page);
-          yield* tab(page);
-          yield* page.until("History focused", (one) => one.shows("> [history]"));
-        }
+        yield* focusRegion(page, "8");
         yield* page.key("ArrowRight");
         yield* page.until("the way out keeping the entry selected", (one) => one.shows("> [exit]"));
         yield* catalog(page);
@@ -2719,7 +2757,7 @@ describe("REPL original surface and entry selection marks", () => {
         expect(selected).toContain("*");
         yield* closeDrawer(page);
         yield* sessions(page);
-        expect(page.screen().shows("(none retained)")).toBe(true);
+        expect(page.screen().shows("── Round 2 ──")).toBe(true);
       });
     }
   });

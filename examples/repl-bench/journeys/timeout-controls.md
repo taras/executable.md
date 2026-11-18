@@ -12,6 +12,7 @@
 <Test name="Draft text cannot imitate the hidden Sidekick composer">
   <ReplBench columns={72} rows={20} waitTimeout="2min">
     <Repl.Focus.Draft />
+    <ReplBench.Key key="Enter" />
     <ReplBench.Type text={"› message the sidekick\nonly-in-draft-1248"} />
     <ReplBench.WaitForText text="only-in-draft-1248" />
     <ReplBench.Region name="sidekick-composer">
@@ -48,6 +49,7 @@
 <Test name="Draft text cannot imitate the History drawer">
   <ReplBench columns={72} rows={20}>
     <Repl.Focus.Draft />
+    <ReplBench.Key key="Enter" />
     <ReplBench.Type text={"────────────────────────\n History \nfalse-history-drawer"} />
     <ReplBench.WaitForText text="false-history-drawer" />
     <ReplBench.Region name="history">

@@ -1026,6 +1026,8 @@ describe("Tier PV — generation that ended without a reply", () => {
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
     yield* pasteDraft(page, OWN_ENTRY);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* closing.started();
 
@@ -1218,6 +1220,8 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
 
     // An ordinary entry of this person's, admitted and still open.
     yield* pasteDraft(page, SUSPENDS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry being admitted", (one) => one.shows("Entry 1"));
     if (draft !== undefined) {
@@ -1233,6 +1237,8 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
     // The provider's own teardown, held: this is what says the command joined
     // its work rather than returning over the top of it.
     const cancelling = repl.fake.holdCancellation();
+    // A failed assertion must not leave teardown waiting on this hold.
+    yield* ensure(() => cancelling.release());
     const restored = repl.terminal.resets;
     yield* leave(page);
     yield* cancelling.reached;
@@ -1290,7 +1296,9 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
       // Nothing else moved: the Draft, the running entry, the queue and the one
       // request the agent accepted are exactly as they were.
       expect(draftShows(cleared, "kept draft")).toBe(true);
-      expect(cleared.shows("Entries › Entry 1")).toBe(true);
+      expect(cleared.shows("Entry 1 running")).toBe(true);
+      const held = (yield* settledReading(repl)).model.entries;
+      expect(held.map((entry) => [entry.key, entry.terminal])).toEqual([["entry-1", undefined]]);
       expect(
         cleared.rows.find((row) => row.includes("Waiting messages are kept only in this REPL.")),
       ).toBe(queue);
@@ -1718,6 +1726,8 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
 
     // The entry's question first, so both are pending at once.
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -1770,6 +1780,8 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     // The entry's question, pending throughout: Stop is the Sidekick's and must
     // not reach it.
     yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -1882,6 +1894,8 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
 
     // The entry's question, pending and unanswered throughout.
     yield* pasteDraft(page, ENTRY_WAITS);
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
@@ -2177,6 +2191,10 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 });
 
 describe("Follow: mounted Stop owns continuation", () => {
+  /** The Round bar's own Stop, counted only while that one bar is drawn. */
+  const roundStops = (one: ScreenReading): number =>
+    one.occurrences("+ New Round") === 1 ? one.found("Stop", { onRow: "+ New Round" }) : -1;
+
   it("Follow: Sidekick Stop preserves the setting and a late entry result cannot restart the Send", function* () {
     const entered = withResolvers<void>();
     const release = withResolvers<void>();
@@ -2209,12 +2227,15 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* entered.operation;
     yield* page.until(
       "both Stops with Follow enabled",
-      (one) => one.occurrences("[stop]") === 2 && one.shows("[x] Follow"),
+      (one) =>
+        one.found("[stop]", SIDEKICK_CONTROLS) === 1 &&
+        roundStops(one) === 1 &&
+        one.shows("[x] Follow"),
     );
     yield* stopSidekick(page);
     yield* page.until(
       "Sidekick Stop joined with the entry still running",
-      (one) => sidekickIdle(one) && one.found("[stop]", { onRow: DRAFT }) === 1,
+      (one) => sidekickIdle(one) && roundStops(one) === 1,
     );
     expect(page.screen().shows("[x] Follow")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(1);
@@ -2223,10 +2244,7 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* awaitedFact("the independent entry joined after Sidekick Stop", function* () {
       return (yield* settledReading(page.repl)).model.entries[0]?.terminal?.status === "ok";
     });
-    yield* page.until(
-      "Entry Stop retired after settlement",
-      (one) => one.occurrences("[stop]") === 0,
-    );
+    yield* page.until("Entry Stop retired after settlement", (one) => roundStops(one) === 0);
     expect(page.repl.fake.prompts).toHaveLength(1);
     yield* page.until("stopped queue selected", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");

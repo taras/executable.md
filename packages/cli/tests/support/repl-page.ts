@@ -53,6 +53,12 @@ export interface ScreenScope {
   readonly after?: string;
   readonly rightOf?: string;
   readonly rightOffset?: number;
+  readonly within?: {
+    readonly top: number;
+    readonly bottom: number;
+    readonly left: number;
+    readonly right: number;
+  };
 }
 
 /** The screen after one write the command completed. */
@@ -201,30 +207,34 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
   const columnAt = (row: number, offset: number): number => columns[row]?.[offset] ?? offset;
   /** The cells this scope admits: a row range, and a column floor. */
   const bounded = (scope: ScreenScope | undefined, what: string) => {
-    let from = 0;
-    let to = rows.length;
-    let floor = 0;
+    let from = scope?.within?.top ?? 0;
+    let to = scope?.within?.bottom ?? rows.length;
+    let floor = scope?.within?.left ?? 0;
+    const ceiling = scope?.within?.right ?? size.columns;
     if (scope?.onRow !== undefined) {
       const at = rowOf(rows, scope.onRow, what);
-      from = at;
-      to = at + 1;
+      from = Math.max(from, at);
+      to = Math.min(to, at + 1);
     }
     if (scope?.after !== undefined) {
       from = Math.max(from, rowOf(rows, scope.after, what) + 1);
     }
     if (scope?.rightOf !== undefined) {
       const at = rowOf(rows, scope.rightOf, what);
-      floor = Math.max(0, columnAt(at, rows[at].indexOf(scope.rightOf)) + (scope.rightOffset ?? 0));
+      floor = Math.max(
+        floor,
+        columnAt(at, rows[at].indexOf(scope.rightOf)) + (scope.rightOffset ?? 0),
+      );
     }
-    return { from, to, floor };
+    return { from, to, floor, ceiling };
   };
   const matches = (text: string, scope: ScreenScope | undefined, what: string): ScreenCell[] => {
-    const { from, to, floor } = bounded(scope, what);
+    const { from, to, floor, ceiling } = bounded(scope, what);
     const found: ScreenCell[] = [];
     for (let row = from; row < to; row += 1) {
       for (const offset of offsetsIn(rows[row] ?? "", text)) {
         const column = columnAt(row, offset);
-        if (column >= floor) {
+        if (column >= floor && columnAt(row, offset + text.length - 1) < ceiling) {
           found.push({ column, row });
         }
       }
@@ -264,6 +274,7 @@ function scopeOf(scope: ScreenScope | undefined): string {
     scope.onRow === undefined ? undefined : `the row showing ${JSON.stringify(scope.onRow)}`,
     scope.after === undefined ? undefined : `below ${JSON.stringify(scope.after)}`,
     scope.rightOf === undefined ? undefined : `at or right of ${JSON.stringify(scope.rightOf)}`,
+    scope.within === undefined ? undefined : `inside ${JSON.stringify(scope.within)}`,
   ].filter((part) => part !== undefined);
   return parts.join(", ");
 }

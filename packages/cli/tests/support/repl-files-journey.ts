@@ -189,7 +189,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(ENTRY);
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     // The prefix ran. Everything the entry authored before the question is on
     // disk, and the write after the question is not.
@@ -267,7 +267,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(LIVE_READ);
     yield* sleep(500);
-    yield* third.type("\r");
+    yield* third.type("\t\r");
     yield* showing(third, "live is second", ACT_MS);
 
     yield* click(third, "[exit]");
@@ -447,7 +447,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(managedEntry(through, origin));
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     // The checkout the selection created, found under the managed layout.
     const checkout = yield* managedCheckout(
@@ -514,7 +514,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(managedLiveRead(through, origin));
     yield* sleep(500);
-    yield* third.type("\r");
+    yield* third.type("\t\r");
     yield* showing(third, "live is second", ACT_MS);
 
     yield* click(third, "[exit]");
@@ -548,7 +548,7 @@ export function replUnsupportedSelection(repl: ReplCommand): Operation<void> {
       ].join("\n"),
     );
     yield* sleep(500);
-    yield* pty.type("\r");
+    yield* pty.type("\t\r");
 
     // The refusal is a sentence, wrapped where the Transcript's own width
     // cuts it, so it is read across those rows rather than off one of them.
@@ -581,7 +581,7 @@ export function replOrdinaryFileWork(repl: ReplCommand): Operation<void> {
     yield* focusPtyDraft(pty, ACT_MS);
     yield* pty.type(ENTRY);
     yield* sleep(500);
-    yield* pty.type("\r");
+    yield* pty.type("\t\r");
 
     yield* holding(join(checkout, "drafts", "note.md"), "first");
     yield* removed(join(checkout, "drafts", "obsolete.md"));
@@ -799,7 +799,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     yield* focusPtyDraft(first, ACT_MS);
     yield* first.type(gitEntry(through, origin));
     yield* sleep(500);
-    yield* first.type("\r");
+    yield* first.type("\t\r");
 
     const working = through === "ambient" ? ambient : yield* managedCheckout(home, "worktrees");
 
@@ -887,7 +887,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(gitLiveCommit(through, origin));
     yield* sleep(500);
-    yield* third.type("\r");
+    yield* third.type("\t\r");
     const today = yield* moved(working, home, theirs);
     // The object id is read across the wrap the Transcript's own width puts in
     // it: forty characters of it, whole, rather than whichever row it starts on.
@@ -941,7 +941,7 @@ export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
       ].join("\n"),
     );
     yield* sleep(500);
-    yield* pty.type("\r");
+    yield* pty.type("\t\r");
 
     // Refused before a repository is in scope, which is before Git exists in
     // the story at all. Either way nothing native was reached.

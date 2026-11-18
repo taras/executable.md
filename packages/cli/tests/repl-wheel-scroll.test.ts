@@ -90,7 +90,7 @@ describe("wheel real consumers", () => {
     yield* intoDraft(page);
     yield* page.type('<Session name="permission"><Prompt text="permission-witness" /></Session>');
     yield* page.until("entry source ready", (one) => one.shows("</Session>"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("pending permission", (one) => one.shows("asks:"));
     yield* page.press("asks:");
     yield* page.until("first permission choice", (one) => one.shows("> [Allow]"));
@@ -130,16 +130,19 @@ describe("wheel real consumers", () => {
     yield* intoDraft(page);
     yield* page.type(Array.from({ length: 70 }, (_, at) => `Work row ${at}`).join("\n"));
     yield* page.until("source ready", (one) => one.shows("Work row 69"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("work settled", (one) => one.shows("Ready for Entry 2"));
+    yield* intoDraft(page);
     yield* typed(page, "draft-kept");
+    yield* page.key("Ctrl+G");
+    yield* page.type("3");
+    yield* page.until("selected work", (one) => one.shows("Work row 0") && !one.shows("✎ draft"));
     const at = page.screen().locate("Work row 0");
     yield* wheel(page, "down", at);
     expect(page.screen().shows("Work row 0")).toBe(false);
     expect(page.screen().shows("Work row 3")).toBe(true);
     yield* wheel(page, "up", at);
     expect(page.screen().shows("Work row 0")).toBe(true);
-    yield* key(page, "Backtab");
     yield* key(page, "Alt+ArrowDown");
     yield* key(page, "End");
     expect(page.screen().shows("Work row 69")).toBe(true);
@@ -148,6 +151,7 @@ describe("wheel real consumers", () => {
     yield* key(page, "PageDown");
     yield* key(page, "PageUp");
     expect(page.screen().shows("Work row 0")).toBe(true);
+    yield* intoDraft(page);
     expect(page.screen().shows("draft-kept")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(0);
   });
@@ -308,7 +312,7 @@ describe("wheel real consumers", () => {
     yield* intoDraft(page);
     yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
     yield* page.until("binding source ready", (one) => one.shows('row 59"]}'));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("binding retained", (one) => one.shows("Ready for Entry 2"));
     yield* page.press("Entries");
     yield* page.until("catalog", (one) => one.shows("[close]"));
@@ -354,7 +358,7 @@ describe("wheel real consumers", () => {
     yield* intoDraft(page);
     yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
     yield* page.until("string source ready", (one) => one.shows("VALUE-END"));
-    yield* page.key("Enter");
+    yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("string retained", (one) => one.shows("Ready for Entry 2"));
     yield* page.press("Entries");
     yield* page.until("string catalog", (one) => one.shows("[close]"));
@@ -449,11 +453,8 @@ describe("wheel real consumers", () => {
       expect(page.screen().found("[↑ earlier]", SIDEKICK_PANE) > 0).toBe(false);
       expect(page.screen().found("[↓ later]", SIDEKICK_PANE) > 0).toBe(false);
       expect(page.repl.fake.prompts).toHaveLength(1);
-      expect(page.screen().shows("No entry yet")).toBe(true);
-      // Message -> History -> Transcript -> Selected work -> Draft.
-      for (let step = 0; step < 4; step += 1) {
-        yield* key(page, "Tab");
-      }
+      expect(page.screen().rows[0]).toContain("Ready for Entry 1");
+      yield* intoDraft(page);
       yield* key(page, "ArrowLeft");
       const tail = page.screen().locate("Chat row 79");
       yield* wheel(page, "up", tail);
@@ -486,7 +487,7 @@ describe("wheel real consumers", () => {
         `<Elicit as="response" schema={${JSON.stringify(schema)}}>${preview}</Elicit>`,
       );
       yield* page.until("source prepared", (one) => one.shows("</Elicit>"));
-      yield* page.key("Enter");
+      yield* page.press("Send", { onRow: "✎ draft" });
       yield* page.until("entry waiting", (one) => one.shows("[answer]"));
       yield* page.press("[answer]");
       yield* page.until("question opened", (one) => one.shows("[submit]") && one.shows("pick-34"));

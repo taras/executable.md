@@ -27,8 +27,11 @@ describe("TODO logical runtime recovery", () => {
     yield* intoComposer(first);
     first.repl.fake.script({ reply: "incomplete", stopReason: "max_tokens" });
     yield* first.press("TODO", { onRow: "SIDEKICK" });
-    yield* first.until("add task", (one) => one.shows("+"));
-    yield* first.press("+");
+    yield* first.until(
+      "add task",
+      (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+    );
+    yield* first.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
     yield* first.until("editor", (one) => one.shows("Task:"));
     yield* first.type("saved before failure");
     yield* first.key("Enter");
@@ -139,12 +142,17 @@ describe("TODO logical runtime recovery", () => {
     });
     yield* ensure(() => release.resolve());
     yield* pasteDraft(page, "<Output>entry finished</Output>");
+    yield* page.key("Tab");
+    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
     yield* page.key("Enter");
     yield* cleaning.operation;
     yield* intoComposer(page);
     yield* page.press("TODO", { onRow: "SIDEKICK" });
-    yield* page.until("add task", (one) => one.shows("+"));
-    yield* page.press("+");
+    yield* page.until(
+      "add task",
+      (one) => one.found("+", { after: "SIDEKICK", rightOf: "SIDEKICK" }) === 1,
+    );
+    yield* page.press("+", { after: "SIDEKICK", rightOf: "SIDEKICK" });
     yield* page.until("task editor during entry cleanup", (one) => one.shows("Task:"));
     yield* page.type("pending during cleanup");
     yield* page.key("Enter");

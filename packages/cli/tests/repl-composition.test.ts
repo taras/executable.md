@@ -1621,10 +1621,20 @@ describe("1075 invocation to REPL entry", () => {
           ),
         );
         yield* awaited("initial REPL frame", () => recording.terminal.drawn > 1);
-        recording.terminal.feed("\x074");
-        recording.terminal.feed(
-          `<Dir path=${JSON.stringify(external)}><File path="input.txt" /></Dir>\r`,
+        recording.terminal.feed("\x074\r");
+        yield* awaited(
+          "Round editor ready",
+          () => recording.terminal.screen?.rows().some((row) => row.includes("> Round")) === true,
         );
+        recording.terminal.feed(
+          `<Dir path=${JSON.stringify(external)}><File path="input.txt" /></Dir>`,
+        );
+        recording.terminal.feed("\t");
+        yield* awaited(
+          "Round Send focused",
+          () => recording.terminal.screen?.rows().some((row) => row.includes("> Send")) === true,
+        );
+        recording.terminal.feed("\r");
         yield* awaitedFact("submitted entry settlement", function* () {
           const opened = yield* pairedReplRepository(join(root, "xmd", "repl")).open(
             "absolute-entry",

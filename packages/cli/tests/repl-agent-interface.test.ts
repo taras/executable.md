@@ -2014,6 +2014,8 @@ describe("U2 — the program performs a permission, end to end", () => {
 
       // One entry, submitted the way a person submits one.
       yield* pasteDraft(page, THREE_SPAWNS);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
 
       yield* page.until("the request being announced", requestShown);
@@ -2069,6 +2071,8 @@ describe("U2 — the program performs a permission, end to end", () => {
     yield* scoped(function* (): Operation<void> {
       const { page } = yield* useAgentPage(stub);
       yield* pasteDraft(page, THREE_SPAWNS);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
       yield* page.until("the request being announced", requestShown);
 
@@ -2130,6 +2134,8 @@ describe("U4 — the loop wakes for Agent work", () => {
       const { page } = yield* useAgentPage(stub);
       const { terminal } = page.repl;
       yield* pasteDraft(page, THREE_SPAWNS);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
       yield* page.key("Enter");
 
       // A stable screen: all three observed, none of them started.
@@ -3787,6 +3793,8 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
 
         // One entry, which is what will ask for the permission.
         yield* pasteDraft(page, THREE_SPAWNS);
+        yield* page.key("Tab");
+        yield* page.until("Round Send focused", (one) => one.shows("> Send"));
         yield* page.key("Enter");
 
         // That a request is waiting is read from the one row that says what the
@@ -3844,7 +3852,8 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         // 4. Found again the way the row says to find it, and still editable: a
         // draft nobody can get back to is a draft that was not really kept.
         const EDITED = `${TYPED}-EDITED`;
-        yield* draftText(page, "-EDITED", size.columns === 72 ? ["Tab"] : ["Tab", "Tab"]);
+        yield* intoDraft(page);
+        yield* draftText(page, "-EDITED");
         expect(draftShows(page.screen(), EDITED)).toBe(true);
 
         // 5. And it is the thing that becomes the next entry, once the one that
@@ -3862,17 +3871,14 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         // modal over the draft the rows below go on to read.
         expect(railMark(page.screen(), 1)).toBe(RAIL.ok);
         yield* intoDraft(page);
-        yield* page.key("Enter");
+        yield* page.press("Send", { onRow: "✎ draft" });
         // The History rail's own mark for the second entry, which every size
         // draws: the catalog that spells `2.` is a drawer now, and one opened
         // here would be a drawer over the draft this row goes on to read.
         yield* page.until("the second entry", (one) => railMark(one, 2) !== undefined);
         // Submitted means consumed: the draft is the *next* entry's, and there is
         // no next one typed yet.
-        yield* page.until(
-          "the draft being spent",
-          (one) => one.shows(DRAFT) && !draftShows(one, TYPED),
-        );
+        yield* page.until("the draft being spent", (one) => !one.shows(DRAFT));
 
         // And the file says which bytes became that entry. An entry appearing and
         // a draft clearing are both true of one admitted from the wrong source,
