@@ -16,6 +16,7 @@ import type { Json } from "@executablemd/core";
 import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { Permissions, useHostFiles } from "@executablemd/runtime";
+import { Stdio } from "@effectionx/process";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { AcpRuntimeOptions, ProbeCapableRuntime } from "@executablemd/acp";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
@@ -63,20 +64,44 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
     strong?: boolean;
     guard?: boolean;
     receiptDirectory?: string;
+    /** A carried agent, run through this host-selected executable, in its own invocation. */
+    agent?: "codex" | "claude";
+    executable?: string;
   }) {
     return scoped(function* () {
+      const warned: string[] = [];
+      yield* Stdio.around({
+        // deno-lint-ignore require-yield
+        *stderr([bytes]) {
+          warned.push(...new TextDecoder().decode(bytes).split("\n").filter(Boolean));
+        },
+      });
       yield* useHostFiles();
       yield* Permissions.around({ files: () => true });
       yield* useNormalizedOutput();
+      const agentName = options.agent ?? "scribe";
       yield* installAgentComponents({
-        defaultAgent: "scribe",
+        defaultAgent: agentName,
         rootProvider: {
-          options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+          options: { defaultAgent: agentName, permissionMode: "deny-all" },
           factory: createAcpxProvider({
             sessionStore: current.store,
             agentRegistry: current.registry,
             advertiseNativeLaunch: [],
             advertiseClientNativeAttachment: [],
+            ...(options.agent === undefined
+              ? {}
+              : {
+                  // The host's own selection, through the seam its carried-adapter
+                  // selector fills: today's executable reaches the adapter child.
+                  // deno-lint-ignore require-yield
+                  *agentProcessEnv() {
+                    return {
+                      [agentName === "codex" ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE"]:
+                        options.executable ?? `/selected/${agentName}`,
+                    };
+                  },
+                }),
             ...(options.strong
               ? {
                   nativeAdapters: {
@@ -145,7 +170,7 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
       const doc = join(current.dir, "guard.md");
       yield* writeTextFile(
         doc,
-        `<Agent name="scribe"><Session name="review" model="selected" effort="xhigh">${body}</Session></Agent>`,
+        `<Agent name="${agentName}"><Session name="review" model="selected" effort="xhigh">${body}</Session></Agent>`,
       );
       const journal = new InMemoryStream();
       const execution = yield* executeInstalled({ path: doc, stream: journal }, [
@@ -174,7 +199,14 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
       ]);
       const output = yield* execution.output;
       while (!(yield* output.next()).done) {}
-      return { result: yield* execution, history: journal.snapshot(), started, resolved, content };
+      return {
+        result: yield* execution,
+        history: journal.snapshot(),
+        started,
+        resolved,
+        content,
+        warned,
+      };
     });
   }
   function* methods() {
@@ -186,6 +218,83 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
   }
   return { ...current, run, methods };
 }
+
+describe(
+  "E1 ordinary workflow Session continuity across a CLI release (#891)",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const agent of ["codex", "claude"] as const) {
+      const before = `/selected/${agent}-0.167.1`;
+      const after = `/selected/${agent}-0.169.1`;
+      it(`${agent}: a changed executable quietly continues the configured conversation and its original-only context`, function* () {
+        const peer = yield* guardPeer(AGENT_SOURCE);
+        const first = yield* peer.run({ text: "marker", agent, executable: before });
+        expect(first.result.ok).toBe(true);
+        expect(first.warned).toEqual([]);
+        const asserted = first.resolved?.identity;
+        expect(asserted?.kind).toBe("acpx.agentSessionId");
+
+        const continued = yield* peer.run({
+          existing: true,
+          text: "recall",
+          agent,
+          executable: after,
+        });
+        expect(continued.result.ok).toBe(true);
+        // Context only the original conversation held, through today's executable.
+        expect(JSON.stringify(continued.history)).toContain("answer:recall:marker");
+        expect(continued.resolved?.identity).toEqual(asserted);
+        // Quiet: a changed executable is not news, here or anywhere else.
+        expect(continued.warned).toEqual([]);
+        const methods = (yield* peer.methods()).map((entry) => entry.method);
+        expect(methods.filter((method) => method === "session/new")).toHaveLength(1);
+        const reopened = methods.lastIndexOf("session/load");
+        expect(reopened).toBeGreaterThan(methods.indexOf("session/prompt"));
+        expect(reopened).toBeLessThan(methods.lastIndexOf("session/set_config_option"));
+        expect(methods.lastIndexOf("session/set_config_option")).toBeLessThan(
+          methods.lastIndexOf("session/prompt"),
+        );
+
+        // Another native conversation, or none asserted at all on an unchanged
+        // build: refused before any setting or prompt, with nothing created.
+        for (const refusal of ["different", "missing"] as const) {
+          const prompts = (yield* peer.methods()).filter(
+            (entry) => entry.method === "session/prompt",
+          ).length;
+          if (refusal === "different") {
+            yield* writeTextFile(join(peer.dir, "different-native-identity"), "");
+          } else {
+            yield* writeTextFile(peer.agent, STANDARD_AGENT_SOURCE);
+          }
+          const refused = yield* peer.run({
+            existing: true,
+            text: "recall",
+            agent,
+            executable: after,
+          });
+          expect([refusal, refused.result.ok]).toEqual([refusal, false]);
+          const now = yield* peer.methods();
+          expect(now.filter((entry) => entry.method === "session/prompt")).toHaveLength(prompts);
+          expect(now.filter((entry) => entry.method === "session/new")).toHaveLength(1);
+          if (refusal === "different") {
+            yield* rm(join(peer.dir, "different-native-identity"));
+          } else {
+            yield* writeTextFile(peer.agent, AGENT_SOURCE);
+          }
+        }
+        // A later explicit attempt reaches the same conversation.
+        const retried = yield* peer.run({
+          existing: true,
+          text: "recall",
+          agent,
+          executable: after,
+        });
+        expect(retried.result.ok).toBe(true);
+        expect(retried.resolved?.identity).toEqual(asserted);
+      });
+    }
+  },
+);
 
 describe("workflow Session continuity", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("retains the real ACP-only started pair through close/load and a failed continuation", function* () {

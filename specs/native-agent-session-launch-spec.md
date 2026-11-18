@@ -383,10 +383,19 @@ codex resume <native-session-id>
 
 ### Executable build binding
 
-A client-allocated identity means one thing only while the build that accepted
-it can be recognized later. Two builds of one provider accept the same identity
-and disagree silently about what it names, so a new client-allocated session
-retains which build accepted it:
+A conversation continues quietly on the executable the current environment
+selects. The provider must positively confirm the retained native identity
+before work that requires it. A missing or different assertion refuses without
+creating a replacement conversation. Executable version and digest do not
+decide admission. Existing routes and journal history remain unchanged; normal
+continuation creates no new version-history record.
+
+Fresh production construction uses the released unbound V1 route forms.
+Client-native construction retains its native identity, client-allocation
+provenance, launcher and instruction digest. No current version or digest is
+persisted for compatibility reporting.
+
+Released records may still carry the binding an earlier release recorded:
 
 ```ts
 interface ExecutableBuildBindingV1 {
@@ -396,48 +405,41 @@ interface ExecutableBuildBindingV1 {
 }
 ```
 
-Every member is exact, and equality requires all of them to agree. The digest is
-the lowercase SHA-256 of the canonical executable target; `reportedVersion` is
-the adapter's canonical parse of what that exact target reports. That parse
-accepts exactly one canonical line: output naming no build is unrecognized, and
-output naming several is a list of builds rather than an answer — taking the
-first would be choosing one, which is the question a binding exists to settle.
-Neither is repeated in a diagnostic. A matching build
-reached at another path is the same build; a changed build at the same path is
-not. A path is never a member: it says where a build was, which stops being
-true, and it names host layout besides.
+Released V1/V2/V3 routes and prepared journals remain readable and unchanged.
+Before incomplete live work, compare the original provider, identity,
+provenance, launcher, instructions and policy. When both original accounts
+contain executable bindings, those original bindings must agree. A missing
+binding alone is not disagreement. No original binding is compared with
+today's executable for admission. A new phase referring to an existing bound
+route carries its original binding only where required to preserve that
+agreement.
 
-The host supplies an executable observer directly to the provider, alongside the
-coordinator and the route store. It resolves the launcher command through the
-host's real execution environment, canonicalizes the target, requires an
-executable regular file, hashes that target, and asks that same file its
-version. It is deliberately not a Context, contextual Api, Agent operation,
-component or middleware value: executable validation decides which retained
-history may be accepted, and a resolver document middleware could replace could
-point the observation at one binary while the run spawns another. A controlled
-test substitutes the whole observer through the same constructor seam.
+Selection comes first. A carried adapter's executable is selected by the host
+once — Claude's nonempty `CLAUDE_CODE_EXECUTABLE`, otherwise `claude` on the
+host PATH; Codex's nonempty `CODEX_PATH`, otherwise `codex` on the host PATH;
+relative selections against the host execution directory, and a bad explicit
+choice with no PATH fallback. The host selector resolves a canonical regular
+executable and verifies that it can start; its joined, output-suppressed
+`--version` child is a launchability check, and its version text and exit
+status decide nothing. A missing or unlaunchable selection is an availability
+failure. A host that makes no selection runs the adapter's declared launcher
+name, and a custom native adapter keeps its declared command.
 
-One observation yields two kinds of value:
+The selected path is live only. It exists only in the operation that selected
+it. Native creation and resume replace the adapter command's first argv member
+with it, and the matching ACP child receives it through its adapter's variable
+— `CLAUDE_CODE_EXECUTABLE` or `CODEX_PATH` — in a transient child-process
+environment. The integrity-pinned ACPX 0.22.0 source closure supplies the
+child-only environment seam. Its local first-turn materialization barrier
+remains required independently of that released capability. The path enters no
+route, journal, ACPX session option or record, public result, diagnostic,
+`process.env`, or provider partition that outlives its last handle.
 
-```text
-durable: the executable build binding
-live:    the canonical executable path
-```
-
-The live path exists only in the operation that observed it. Native creation and
-resume replace the adapter command's first argv member with it, and the matching
-Claude ACP child receives it through `CLAUDE_CODE_EXECUTABLE` in a transient
-child-process environment. The integrity-pinned ACPX 0.22.0 source closure
-supplies the child-only environment seam. Its local first-turn materialization
-barrier remains required independently of that released capability. It enters no route, journal, ACPX session option or
-record, public result, diagnostic, `process.env`, or provider partition that
-outlives its last handle.
-
-A session established before any build was recorded is legacy-unbound. It keeps
-exactly the native-only behavior that released it: resume works, nothing is
-observed, and no binding is invented for it. It never authorizes ACP attachment
-and is never upgraded in place, because a build observed today says which build
-is installed now, not which one established the conversation.
+A session established before any build was recorded is legacy-unbound. Its
+route directly supplies the native identity, allocation provenance,
+instruction digest and launcher, so no historical build is needed for exact
+attachment or native preflight. It continues under the same selection and
+confirmation as any other session, and no binding is invented for it.
 
 ### Attachment capability
 
@@ -449,47 +451,50 @@ join that conversation afterwards.
 `claude` is advertised for both. Its attachment claim was proven by
 `packages/acp/src/ClaudeNativeToAcp.test.md`: one native turn planted a random
 marker, a checked-in marker-free ACP `<Prompt>` recovered it under the same
-identity and the same observed build, and an independent route naming an absent
-identity refused before a turn without creating history in its place.
+identity, and an independent route naming an absent identity refused before a
+turn without creating history in its place. That same attachment is how a
+client-native session's identity is positively confirmed around a native
+handoff; a host that does not advertise it cannot hand such a session over.
 
 Those command shapes are adapter implementation details, not authored document
 values. A custom ACP agent without a declared native launcher fails with an
 unsupported-capability error before XMD releases its ACP session.
 
 Knowing a command shape is not the same as being launch-capable. Advertisement
-is separate: an adapter becomes launch-capable only once an opt-in proof runs
-the claims its provenance names against the installed CLI. Until then
+is separate: an adapter becomes launch-capable once XMD's integration with it is
+proven by an opt-in proof of the claims its provenance names. Until then
 `<Session.Launch>` refuses that agent before anything of the session moves —
 before a provider-returned adapter's ACP session is released, and before a
 client-allocated adapter allocates an identity or writes a private file. That is
 the failure this contract asks for rather than a hopeful spawn.
 
 `claude` is advertised. Its client-allocated claims were proven through the
-production CLI against **Claude Code 2.1.241 on macOS arm64**, which is the
-compatibility point the advertisement stands on.
+production CLI against Claude Code 2.1.241 on macOS arm64.
 
-`codex` is advertised for native launch, gated by the complete provider-returned
-proof through the production CLI against **`codex-cli 0.153.2` on macOS arm64**,
+`codex` is advertised for native launch, from the complete provider-returned
+proof through the production CLI against `codex-cli 0.153.2` on macOS arm64,
 with the vendored `@agentclientprotocol/codex-acp` 1.6.2 snapshot that asserts
-the App Server thread on the response `_meta` — that whole tuple is the
-compatibility point the advertisement stands on.
+the App Server thread on the response `_meta`.
 
-Admission is a question about the product, not about that release. What the
-executable observer accepts is one canonical `codex-cli x.y.z` line and nothing
-else: another canonical version is admitted, and output that is bare
-(`codex-cli`), malformed, or carries a second line refuses — even when one of
-those lines would have been canonical on its own. The product word travels with
-the number because a bare semver from another tool compares equal to one from
-this one.
+Recorded CLI, adapter and host versions describe the checks that ran. They are
+evidence, not an allowlist or a requirement to repeat certification for every
+release. The existing live documents remain opt-in integration regressions for
+initial use, original-context continuity and native handoff where supported.
+Actual protocol capabilities and provider-native identity assertions remain
+required.
 
-What is exact is the session, not the release. The canonical string a
-preparation accepted becomes that session's retained executable binding, and
-every later native launch, attachment or incomplete launch replay reobserves the live
-build and compares it against that binding before a process, an ensure or a
-turn. A build that no longer matches refuses without creating a substitute
-conversation. This is the native launch and attachment contract. A held Codex
-conversation can continue over ACP on a different build when a live load
-confirms its original native identity; see [ACP client](acp-client-spec.md#acpx-provider).
+The opt-in proofs may still measure a version explicitly. Their Codex parser
+recognizes one canonical `codex-cli x.y.z` line and nothing else: output that is
+bare (`codex-cli`), malformed, or carries a second line is no answer. The
+product word travels with the number because a bare semver from another tool
+compares equal to one from this one. Normal work reads no version at all.
+
+Every later native launch, attachment or incomplete launch replay selects the
+current executable and positively confirms the retained native identity before
+a native process, a configuration or a turn, quietly: nothing about the
+executable's version is compared or reported. This is the native launch and
+attachment contract, and it is the same policy ordinary and held ACP
+continuation follow; see [ACP client](acp-client-spec.md#acpx-provider).
 Complete means through to history: the gate closes
 only when XMD rejoins that same conversation over ACP afterwards and reads the
 native turn back out of it, because a conversation that cannot be rejoined is
@@ -530,22 +535,27 @@ session one of them constructs through ACP and the other does not.
 where the adapter owes a materialization turn the identity does not exist until
 that turn is accepted:
 
-9. The live build is observed and the bound V3 `acp-first` route is published or
+9. The current executable is selected, and the `acp-first` route is published or
    adopted — **before** the provider constructs anything, so the route a later
-   run is held to already exists when there is a session to hold it to. A build
-   this run cannot name, or a route naming a different one, ends the launch here
-   with nothing durable written about a session.
+   run is held to already exists when there is a session to hold it to. A fresh
+   route is unbound V1; an existing route is never rewritten. An executable that
+   cannot run ends the launch here with nothing durable written about a
+   session.
 10. The provider creates or resumes the durable provider session through ACPX,
     applying the prepared instruction layer and contextual cwd configuration.
-    An **already-established** session has an identity of its own: the provider
-    verifies a native-resume capability and obtains that asserted identity. A
+        An **already-established** session has an identity of its own: the provider
+    reopens its exact retained loading target with `expectedAgentSessionId`
+    equal to the retained native assertion, under exclusive ownership and
+    before any configuration or handoff, and spends no turn. A record with no
+    retained assertion, or a live load that is missing or differing, refuses
+    with `identity-unavailable`. A
     **fresh** session on an adapter that owes a materialization turn does not:
     creation yields provisional occupancy and asserts no native identity at all.
 11. XMD commits the prepared launch record before releasing ownership. For an
     already-existing session it carries the asserted identity and **no**
     materialization plan, and no turn is spent. For a fresh one it carries an
-    **empty** `nativeSessionId`, its executable binding, and the exact
-    materialization plan this launch owes.
+    **empty** `nativeSessionId` and the exact materialization plan this launch
+    owes, and no executable binding.
 
     Once `prepared` is durable — and only then — the fixed materialization turn
     is announced on the reserved terminal and executed. It is retained as an
@@ -564,18 +574,24 @@ owner to release — what has to be settled first is which conversation this is:
 9. The provider reads both durable accounts under ownership and refuses rather
    than converting: a session ACP already established, or a route that
    disagrees about the instruction layer or the launcher, ends the launch here.
-10. The build is observed before an identity is made, so a build this run
-    cannot name ends the launch before anything durable is written, and a route
-    that already names a different build ends it with
-    `executable-binding-refused`. A legacy unbound route is the exception: it
-    observes nothing, resumes under the launcher name, and gains no binding.
-    Whether an identity is needed at all is decided next. An existing compatible
-    `client-native` route already names this conversation, so its retained
-    identity is adopted and **nothing is allocated** — a second candidate for a
-    conversation that already exists is a value with nowhere to go. Only where
+10. A launcher without an advertised confirmation capability — client-native
+    ACP attachment — refuses with `unsupported-capability` before allocation or
+    handoff; exit status is never substituted for confirmation. The current
+    executable is selected before an identity is made, so one that cannot run
+    ends the launch before anything durable is written. Nothing about its version
+    is read or reported, and a legacy unbound route continues the same way and
+    gains no binding. Whether an identity is needed at all is decided next. An
+    existing compatible `client-native` route already names this conversation,
+    so its retained identity is adopted and **nothing is allocated** — a second
+    candidate for a conversation that already exists is a value with nowhere to go. That
+    established conversation is positively confirmed now: its exact native
+    identity is loaded over ACP — strictly, with `expectedAgentSessionId`, when
+    an ACP record exists; with no record, by exact `resumeSessionId` and a
+    required returned assertion — with no configuration or turn, and the ACP
+    close is joined before preparation is retained. Only where
     no route names it yet does the adapter allocate one, inside ownership and
     before any process exists; nothing else supplies or replaces it.
-11. A launch that allocated publishes the bound V2 `client-native` route
+11. A launch that allocated publishes the unbound V1 `client-native` route
     create-once, and
     what it publishes against is authoritative — whoever published first
     described the session that exists. Four outcomes, and no other:
@@ -604,22 +620,30 @@ From there both rejoin:
     terminal inherited — resuming, for a provider-returned adapter,
     the identity its materialization turn asserted, or the one an
     already-existing session already had; and for a client-allocated one
-    creating it under the allocated identity from the private file, or resuming
-    it by the same name when the route already named it. No provider-returned
-    path reaches this step without an asserted identity.
+        creating it under the allocated identity from the private file, or resuming
+    it by the same name when the route already named it. No resume reaches this
+    step without a positive assertion of its exact identity from this
+    invocation, and ACP's close is joined first; a close that failed stops the
+    handoff and retains unresolved ownership.
 14. `Session.Launch` suspends while the child runs.
 15. The child handles prompts, tools, permission dialogs, rendering, and native
     transcript persistence directly.
 16. When the child exits, XMD records its terminal outcome, removes the private
     file and its directory while ownership is still held, and releases the
-    foreground-terminal lease. The route and the retained phases stay: they are
+    foreground-terminal lease. A fresh client-allocated creation is confirmed
+    after the child has fully joined and before the launch acknowledges success
+    or releases the coordinator: the allocated identity is loaded over ACP, its
+    returned assertion must equal it, and the ACP close is joined. Exit status is
+    retained as process evidence and never as identity. A failed or absent
+    confirmation fails this launch and never creates again. Cancellation joins
+    the child and propagates; it starts no confirmation during teardown. The route and the retained phases stay: they are
     what the next invocation resumes from.
 17. Later Agent work depends on the route again. On an `acp-first` session it
-    lazily reattaches through ACP to the same provider session. On a bound
+    lazily reattaches through ACP to the same provider session. On a
     `client-native` route advertised for attachment, `<Session>` and `<Prompt>`
     follow *ACP attachment on a bound route* below and join the same provider
-    conversation. A legacy unbound route or an unavailable attachment
-    capability refuses before a turn and creates no substitute conversation.
+    conversation, bound or legacy unbound. An unavailable attachment capability
+    refuses before a turn and creates no substitute conversation.
 18. Execution continues after `Session.Launch` in its enclosing document flow.
 
 An enclosing `<Agent>` or `<Session>` resolves by its own contract, before
@@ -642,25 +666,30 @@ this sequence, and every step happens while the coordinator holds the session:
 3. Read and classify the route. `acp-first` follows the existing ACP path; a
    session with no route at all is constructed as `acp-first` here, which is
    what makes a nested client-native launch refuse afterwards.
-4. A legacy unbound `client-native` route refuses with
-   `executable-binding-refused`, and an agent this host has not advertised for
-   attachment refuses with `unsupported-capability`.
-5. Reobserve the executable and compare the binding exactly.
+4. An agent this host has not advertised for attachment refuses with
+   `unsupported-capability`. A legacy unbound route attaches like a bound one.
+5. Select the current executable. One that cannot run is an availability
+   failure; nothing about its version is read or reported.
 6. Inspect any retained ACP arrangement without creating one: absence may enter
    exact resume, because exact resume is the operation being attempted; a
    record must assert this route's identity and nothing else.
-7. Select the live runtime for `(resolved agent command, binding)` and give the
-   observed path only to that runtime's child environment.
-8. Ensure with `resumeSessionId` equal to the route's identity.
+7. Select the live runtime for `(resolved agent command, selected environment)`
+   and give the selected path only to that runtime's child environment.
+8. Ensure with `resumeSessionId` equal to the route's identity, and with
+   `expectedAgentSessionId` equal to it when an ACP record exists. A first
+   attachment without a record carries no expectation that presupposes one and
+   sends no configuration or turn.
 9. Require the provider's canonical assertion to equal it. Absence or
-   disagreement closes the handle and refuses before a turn.
+   disagreement closes the handle and refuses before a turn; a refused first
+   arrangement is left asserting nothing, so a later exact retry is not blocked.
 10. Only then return a `Session`, or start the subscribed turn.
 
-Runtime partitions are scope-owned. Different bindings never share an ACP child,
+Runtime partitions are scope-owned. Different selected environments never share
+an ACP child,
 a managed handle remembers the partition that created it, and every turn, close,
 detach, cancellation and stale-handle release goes through that same partition.
 When a bound partition's last handle closes it is removed and torn down; a later
-attachment reobserves and builds another.
+attachment selects again and builds another.
 
 A partition is kept exactly as long as something is standing on it, and two
 different things can be: a handle nobody has closed, and work that has claimed
@@ -685,11 +714,12 @@ are met rather than a further invariant beside them:
 
 - **Claimed work that produced no handle releases its claim.** The runtime is
   built before the ensure that would use it, so a rejection would otherwise
-  strand a partition holding a live path for work that never happened — and a
-  binding compares a version and a digest, so the same build found somewhere
-  else is the same partition key and a different file to run. Success transfers
-  the claim into ownership of the handle instead, in one step: a moment where
-  neither count is held is a moment another operation could evict.
+  strand a partition holding a live path for work that never happened. The
+  selected command, adapter command and environment determine the partition.
+  Identical executable bytes selected through different paths can therefore
+  use different partitions. Success transfers the claim into ownership of the
+  handle in one step. A moment where neither count is held is a moment another
+  operation could evict.
 - **Cancellation observes the ensure it started, and settles it before
   quiescence.** Starting an ensure is not the same as owning it: the call runs
   whether or not anybody is still waiting, so a cancellation is not the end of
@@ -758,7 +788,7 @@ A conversation a trusted host holds open is the one qualification. Its key and
 its construction route keep the provider and resolved command of the history's
 initial configuration record, with the session key its Prompt records name,
 for as long as the conversation lasts; the command that executes it, and the
-build observed for it, are today's (acp-client-spec.md §Sessions: ownership,
+executable selected for it, are today's (acp-client-spec.md §Sessions: ownership,
 routes and attachment). One logical conversation therefore keeps one owner when
 its adapter command changes, an earlier owner of the original tuple still
 refuses a changed-command contender, and a tombstone on that tuple still
@@ -819,10 +849,10 @@ calls a paused process dead and admits two owners. So every advertised
 session, prompt, launch and incomplete replay refuses there with
 `unsupported-capability`, before contacting an agent, while read-only resolution
 and non-advertised ACP work are unaffected. An advertised agent whose adapter
-binds a build also requires a route store and
-executable observer. Missing either refuses before any provider effect,
-whichever side names the session. An adapter that binds no build keeps its
-ordinary behavior without those dependencies.
+carries an executable binding also requires a route store; a host without one
+refuses before any provider effect, whichever side names the session. No executable
+observer is needed. An adapter that carries no binding keeps its ordinary
+behavior without those dependencies.
 
 
 ### Exact-target ownership inspection and recovery
@@ -932,7 +962,9 @@ type AgentSessionRouteV1 =
     };
 ```
 
-V2 exists only for `client-native`, and adds the one fact V1 never had:
+V2 exists only for `client-native`, and adds the one fact V1 never had. Earlier
+releases published it; fresh construction no longer does, and a V2 record is
+read exactly and never rewritten:
 
 ```ts
 interface AgentSessionRouteV2 {
@@ -949,7 +981,8 @@ interface AgentSessionRouteV2 {
 }
 ```
 
-ACP-first construction bound to a build is V3, and only V3:
+ACP-first construction an earlier release bound to a build is V3, and only V3;
+fresh construction publishes the unbound V1 form instead:
 
 ```ts
 interface AgentSessionRouteV3 {
@@ -964,16 +997,15 @@ interface AgentSessionRouteV3 {
 
 It carries the binding and nothing more. The other members of V2 describe an
 identity XMD chose and a layer it wrote a file for, and neither is a fact about
-a session the provider named — so an ACP-first route says how the session was
-constructed and which build constructed it, exactly as it always did, with the
-one fact that was missing.
+a session the provider named — so a V3 route says how the session was constructed
+and which build an earlier release recorded constructing it.
 
 Each bound schema admits only its own construction: a V2 record is
 `client-native` and a V3 record is `acp-first`, and the two pairings do not
-cross. New client-native construction publishes V2 and observes the build before
-it allocates an identity; new bound ACP-first construction publishes V3 and
-observes the build before it creates a session. Serialization preserves the
-schema it was given, so nothing here upgrades a route.
+cross. New construction of either kind publishes the unbound V1 form and observes
+nothing; V2 and V3 records come only from earlier releases. Serialization
+preserves the schema it was given, so nothing here upgrades or downgrades a
+route.
 
 Every member of all three schemas is exact. A path, adapter command, environment,
 argv, instruction text, credential, transcript, process fact or temporary path
@@ -983,14 +1015,17 @@ V1 record from being read as a bound one. So are missing, malformed,
 unknown-schema, moved and natural-key-mismatched records. Only a file that is
 not there means the session has not been constructed yet.
 
-A V1 route of either kind is legacy-unbound. A V1 `client-native` route remains
-valid for native resume under the contract that created it, authorizes no ACP
-attachment, and is never overwritten, supplemented or upgraded. A V1 `acp-first`
-route is the same story from the other side: it says the session was constructed
-before XMD recorded which build issued its identity, so an agent whose adapter
-binds a build refuses it rather than writing the current executable into it. A
-user who needs either bound behavior creates a differently named logical session
-under the bound contract.
+A V1 route of either kind is legacy-unbound, and is never overwritten,
+supplemented or upgraded. A V1 `client-native` route directly supplies the
+native identity, client allocation provenance, instruction digest and launcher,
+so it continues through native resume and ACP attachment under the same
+selection and positive confirmation as a bound one. A V1 `acp-first` route has
+no native identity itself: its conversation is located by the exact retained
+ACP loading target and record placement, and its native assertion comes from
+the acknowledged host or history account, or the promoted provider record in
+the pre-commit window. Missing both a usable locator and the required native
+assertion is a real refusal; the absence of an old version or digest alone is
+not. Unknown schemas and corrupt records remain rejected.
 
 The route shares the coordinator's namespace, natural key and digest, so one
 session names one lease, one ownership record and one route. The route directory
@@ -1018,12 +1053,12 @@ construction effect:
    and otherwise the adapter allocates a candidate and publishes `client-native`;
 4. a launch that adopts `acp-first` retains `identity-unavailable` at `prepared`,
    before allocation, private-file creation, detach or spawn;
-5. a `session()` or subscribed prompt that meets a legacy unbound
-   `client-native` route raises the provider's typed route error before runtime
-   creation, ensure, turn, close or accepted history. It retains no launch
-   failure, because no launch was asked for. A bound route instead follows
+5. a `session()` or subscribed prompt that meets a `client-native` route, bound
+   or legacy unbound, follows
    [ACP attachment on a bound route](#acp-attachment-on-a-bound-route), including
-   advertisement, exact build and canonical assertion checks.
+   advertisement and canonical assertion checks. A refusal there raises the
+   provider's typed error and retains no launch failure, because no launch was
+   asked for.
 
 The resolved agent command is carried from session resolution through the coordinator
 key, the route key and provider work. It is never resolved a second time inside
@@ -1095,12 +1130,12 @@ continuation, because `detached` is retained before the exit phase is invoked:
 For a session the provider named, the same rule reads against two more durable
 operations, and the order they are written in is what a replay reads.
 
-A **fresh** launch observes the live build and publishes the bound V3 ACP-first
-route *before* the provider constructs anything, so the route a later run is
-held to exists before there is a session to hold it to. ACPX then creates
+A **fresh** launch selects the current executable and publishes the unbound V1
+ACP-first route *before* the provider constructs anything, so the route a later
+run is held to exists before there is a session to hold it to. ACPX then creates
 provisional occupancy and asserts no native identity at all: `prepared` retains
-an **empty** `nativeSessionId`, the executable binding, and the exact
-materialization plan this launch owes. A preparation is not a report of the
+an **empty** `nativeSessionId` and the exact materialization plan this launch
+owes, and no executable binding. A preparation is not a report of the
 conversation's name.
 
 The coordinator retains `prepared` *before* the turn starts. It then executes the turn and
@@ -1140,31 +1175,37 @@ retained with the preparation and is what governs the **first native user
 turn**. Neither is ever substituted for the other, and the turn spent here
 cannot perform the task the body describes.
 
-A prepared record carries `executableBinding` exactly when the route it agrees
-with is bound, whichever side named the session. It is optional for
-compatibility: the client-allocated path was released before any build was
-observed, so a record without it is legacy history — readable, and resumable
-only under the native-only contract that wrote it. A provider-returned
-preparation whose adapter binds a build carries one too — `codex` does, on the
-bound V3 ACP-first route — and a refusal that prepared no identity invents
-none.
+A prepared record carries `executableBinding` exactly when the existing route it
+agrees with is bound, whichever side named the session, and it carries the
+route's original binding rather than anything about today's executable. A
+fresh preparation carries none. A record without it is readable and continued
+under the same selection and confirmation as any other, and a refusal that
+prepared no identity invents none.
 
-Every incomplete replay requires exact agreement between its journal and its
-route on identity, provenance, instruction digest, launcher and build binding
-before its first live effect, and then requires the live build to equal that
-binding. Neither account repairs or republishes the other: a replay that
+Every incomplete replay requires agreement between its journal and its route on
+identity, provenance, instruction digest, launcher and provider before its first
+live effect. When both original accounts carry an executable binding, those
+bindings must agree exactly; a missing binding alone is not a disagreement, and
+no original binding is compared with today's executable. The live executable
+is then selected, and the conversation is confirmed positively instead of by
+build equality. Neither account repairs or republishes the other: a replay that
 found a disagreement has discovered that the session it was going to continue is
 not the session it prepared, and retains `identity-unavailable` without starting
 a child. Equal instructions may resume the retained identity; different
 instructions retain `instructions-refused` and replace neither the layer, the
 route, the identity, nor any provider state.
 
-An incomplete replay of a legacy unbound client-allocated launch retains
-`executable-binding-refused` before any live work: nothing available to it can
-show which build has that session's history, and resuming anyway would answer
-the question by ignoring it. A **completed** replay of the same launch reads its
-journal and nothing else, exactly as before — it performs no live validation and
-contacts no route store, observer, ACP runtime or process.
+Incomplete replay continues at its first remaining live phase under the same
+rules as a live launch. An established native resume — provider-returned, or
+client-allocated after a retained detach — is preceded by the same positive
+confirmation and joined ACP release, even when no configuration was requested.
+A client-allocated prepared-only replay still owes creation under the retained
+identity when handoff never began, and confirms after the joined creation. A
+detached replay resumes only and never creates if confirmation fails. An
+ambiguous materialization stays recovery-required and sends no turn. Legacy
+unbound launches follow these same paths. A **completed** replay reads its
+journal and nothing else — it performs no selection, observation or live
+validation and contacts no route store, ACP runtime or process.
 
 A session XMD named takes its instruction layer from one invocation-private
 file, mode `0600`, passed by path. The text appears in neither argv nor
@@ -1262,13 +1303,11 @@ different layer, exactly as a session a native UI has been in is. A `<Session>`
 that only placed one has established nothing, so a launch inside it constructs
 the session it named rather than meeting one.
 
-A build this run cannot show is the build behind the session fails with
-`executable-binding-refused`. Resolution, canonicalization, executable-file
-validation, version parsing, digesting, schema recognition, equality, and a
-session established before any build was recorded all end there. The diagnostic
-names the stable class, the launcher, and the two canonical versions being
-compared; it carries no executable path, raw version output, host error, argv,
-environment, credential, instruction text or provider payload.
+A selected executable that is missing, is not a file or cannot be run fails with
+`executable-binding-refused`, the availability class. An executable's version
+never causes this refusal, or any notice. The refusal carries no executable
+path, raw version output, host error, argv, environment, credential,
+instruction text or provider payload.
 
 An attachment that reaches the provider and cannot open the conversation the
 route names fails with `identity-unavailable`: missing provider history, an
@@ -1321,8 +1360,7 @@ belongs to whoever is running the tests. That is what lets an authored
 means a launch under `<TestAgent>` never reaches the host's launcher.
 
 Only the Deno and compiled hosts assemble machine-wide agent sessions: a session
-coordinator, a construction-route store and an executable observer, all rooted
-together, plus the two advertised capability sets this host has proven. Node and
+coordinator and a construction-route store, rooted together, plus the two advertised capability sets this host has proven. Node and
 Bun keep the same advertised names and assemble none of the answers, so every
 advertised operation refuses before provider work rather than acting while a
 native UI may be in the conversation — as *Ownership and concurrency* describes.
@@ -1376,19 +1414,19 @@ Focused tests prove:
     natural key, contention refuses instead of queueing, a crashed owner leaves
     a recovery tombstone, and a host with no coordinator refuses before
     contacting an agent;
-18. a build binding is read and compared exactly — a moved matching build is
-    accepted, a changed build is not, and an inexact record refuses rather than
-    being read past;
-19. new client-native construction observes the build before it allocates,
-    publishes a bound V2 route, and retains a preparation that agrees with it,
-    while a legacy V1 route resumes natively under the launcher name and gains
-    nothing;
-20. a `<Session>` or `<Prompt>` on a bound route supplies the route identity as
-    the exact resume identity, delivers the observed path only to the matching
-    child's transient environment, and refuses before ensure on a missing
-    attachment gate, a missing observer, build drift, a disagreeing retained
-    arrangement or a returned identity that is not the route's; and
-21. ACP runtimes are partitioned by resolved agent command and binding, a handle
+18. a released build binding is read exactly, an inexact record refuses rather
+    than being read past, and a changed or moved current executable continues the
+    same confirmed conversation quietly;
+19. new client-native construction selects the executable before it allocates,
+    publishes an unbound V1 route, and retains a preparation that agrees with it,
+    while an existing route continues under today's selection and gains nothing;
+20. a `<Session>` or `<Prompt>` on a client-native route supplies the route
+    identity as the exact resume identity, delivers the selected path only to
+    the matching child's transient environment, and refuses before a turn on a
+    missing attachment gate, a disagreeing retained arrangement or a returned
+    identity that is not the route's; and
+21. ACP runtimes are partitioned by resolved agent command and selected
+    environment, a handle
     is closed by the partition that created it, the last close evicts a bound
     partition, and provider teardown settles what remains;
 22. claimed runtime work that produced no handle releases its claim, a partition
@@ -1473,10 +1511,10 @@ native-launch capability in the ACPX provider;
 provider-native identity that is either asserted by the provider or allocated by
 the adapter before the provider exists, retained explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
-in a released unbound form and a bound one; the host-owned executable observer
-and the build binding it produces; ACP attachment to a bound client-native
-session under its exact retained identity, through runtime partitions keyed by
-agent command and build;
+in a released unbound form and a bound one, of which fresh construction writes
+the unbound form; ACP attachment to a
+client-native session under its exact retained identity, through runtime
+partitions keyed by agent command and selected environment;
 an inherited foreground-terminal interactive child with cancellation and
 bounded reaping;
 and the controlled TestAgent fixture that proves all of it without starting a
@@ -1541,15 +1579,10 @@ degrading:
   record. New records write neither member, and an incomplete older record does
   no configuration work because one was present. Canonical `configuration`
   beside either released member is ambiguous and refuses.
-- **Executable upgrade migration is unbuilt.** A V2 route freezes one build for
-  that logical session, and a later build refuses with
-  `executable-binding-refused` rather than modifying the route or the provider's
-  history. Rebinding old provider history to a new build is a separate design.
-- **A legacy unbound client-native session never attaches.** It was constructed
-  before XMD recorded which build accepted its identity, so nothing available
-  now can show this run is talking to that build. It keeps native resume and
-  refuses ACP attachment; a session that needs attachment is created anew under
-  a different logical name.
+- **Executable history is never rebound.** A released route keeps any binding
+  it recorded. A later executable continues the same confirmed conversation
+  quietly; nothing rewrites the route or the provider's history to claim the
+  current executable made it.
 
 Additional provider adapters land independently against the same core contract.
 An adapter that cannot prove instruction injection before the first user turn
@@ -1599,9 +1632,13 @@ Implementation review checks these frozen invariants:
     reaches neither argv nor environment.
 17. Private setup and child-creation failures are normalized before they cross a
     public or durable boundary.
-18. A new client-native session is bound to one observed executable build, and
-    every later create, resume, attachment and incomplete replay reobserves and
-    compares before a process, an ensure or a turn.
+18. Every create, resume, attachment and incomplete replay uses the executable
+    the current environment selects and requires the provider's positive
+    assertion of the exact retained native identity before a configuration, a
+    turn or a native handoff — or, for a fresh client-allocated creation, after
+    the child joins and before success. Nothing about the executable's version
+    or digest is compared, reported, admitted or refused; exit status never
+    confirms identity.
 19. The canonical executable path is live only: it enters no route, journal,
     retained provider state, public result, diagnostic or global environment,
     and no partition that outlives its last handle.
@@ -1609,14 +1646,20 @@ Implementation review checks these frozen invariants:
     the provider's canonical assertion must equal it before the first turn.
 21. Native-launch advertisement and client-native attachment advertisement are
     separate trusted-host choices, and neither is inferred from the other.
-22. A released V1 route and a completed legacy journal remain readable, and
-    neither authorizes ACP attachment or incomplete live replay.
+22. A released V1 route and a legacy journal remain readable and are never
+    rewritten; they continue through attachment and incomplete replay under the
+    same selection and confirmation, and missing historical build evidence alone
+    refuses nothing.
 23. A failed acquisition retains no partition and no live path; a partition is
     evicted only when it holds no handle and no work in flight; every
     handle-producing path enters one ownership account bound to its creator the
     moment its handle exists; a cancellation observes and settles an ensure it
     already started before quiescence; quiescence is answered from that account;
     and a close that failed releases nothing and acknowledges none.
+Items 18 and 22 are the #891 amendment: tested versions are evidence, and a
+session continues quietly on the current executable under positive identity
+confirmation.
+
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
 transcript. The amendment prevents transcript absence from authorizing loss of

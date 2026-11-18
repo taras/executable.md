@@ -9,36 +9,32 @@
  * allocated identity, applies private instructions to the first user turn without
  * a bootstrap, and later resumes that conversation.
  *
- * Until that contract is proven against the installed CLI, launch refuses before
- * ACP detach, client identity allocation or private-file creation. Build pinning
- * is an independent discriminator: either construction route may bind a session
- * to the exact executable build that issued or accepted its identity.
+ * A launch refuses before ACP detach, client identity allocation or
+ * private-file creation for an adapter this host does not advertise. The
+ * executable each operation runs is the one the current environment selects,
+ * and nothing about its version is read, retained or reported. What continues a
+ * session is the provider's positive confirmation of its native identity.
  */
 
 import { randomUUID } from "node:crypto";
 import type { IdentityProvenance } from "@executablemd/agent/api";
 
 /**
- * What an adapter knows about the build behind its executable.
+ * What an adapter knows about the executable behind it.
  *
- * A provider-native identity only means something while the build behind it can
- * be recognized later: two builds of one provider accept the same identity and
- * disagree silently about what it names, whether XMD chose that identity or the
- * provider issued it. Everything here is
- * that adapter's private dialect — which command to observe, what its version
- * output looks like, and what the ACP adapter child needs in order to run the
- * same build. None of it reaches a document.
+ * Everything here is that adapter's private dialect — its launcher command,
+ * what its version output looks like when an opt-in proof measures one, and
+ * what the ACP adapter child needs in order to run the selected file. None of it
+ * reaches a document, and none of it admits or refuses a session: the
+ * provider's live identity assertion decides whether a conversation continues.
  */
 export interface NativeBinding {
-  /** The command whose build is observed, bound and retained. */
+  /** The launcher command whose executable a host selects. */
   command: string;
-  /** The arguments that ask that exact file its version. */
-  versionArgs?: readonly string[];
   /**
    * The canonical version from that output, or `undefined` when the output is
-   * not something this adapter recognizes. An unrecognized version is a
-   * refusal, not a value to retain — a build XMD cannot name is one it cannot
-   * later confirm.
+   * not something this adapter recognizes. Used by the opt-in proofs that
+   * record the version they ran against as evidence; normal work never asks.
    */
   version(output: string): string | undefined;
   /**
@@ -73,14 +69,13 @@ export interface NativeBinding {
  *
  * The whole line is retained rather than the number alone, because the number
  * alone is not a build: the same version string from a different product would
- * compare equal. Anything that does not look like this is unrecognized, and an
- * unrecognized build is refused rather than retained under a guess.
+ * compare equal. Anything that does not look like this is unrecognized rather
+ * than read under a guess.
  *
  * Exactly one line may match. Zero is an output this adapter does not
  * recognize; two or more is output it cannot read as one answer, and taking
  * the first would be picking a build out of a list of them. Neither is
- * repeated anywhere — the caller refuses with a stable class, and the output
- * itself is provider-private.
+ * repeated anywhere: the output itself is provider-private.
  */
 function claudeVersion(output: string): string | undefined {
   const canonical = output
@@ -94,10 +89,8 @@ function claudeVersion(output: string): string | undefined {
  * Codex reports one line shaped `codex-cli x.y.z` — `codex-cli 0.153.2` at the
  * release this was proven against.
  *
- * What is admitted is that shape, not that release: another canonical version
- * passes here. Exactness belongs to the session instead — the string accepted
- * here becomes its retained executable binding, and a later build that differs
- * refuses against that binding rather than against a constant written down here.
+ * What is recognized is that shape, not that release: another canonical
+ * version passes here, and none is compared with a constant.
  *
  * The product word is retained with the number for the same reason Claude's
  * whole line is: a bare semver from another tool compares equal. The one-line
@@ -109,7 +102,7 @@ function codexVersion(output: string): string | undefined {
   // second build's line ride along unnoticed: the answer would be "one
   // canonical line was in there somewhere" rather than "this is what the
   // executable reported". A wrapper that prints anything beside the version has
-  // not told us which build ran, so it is refused.
+  // not told us which build ran, so it has no answer.
   const lines = output
     .split("\n")
     .map((line) => line.trim())
@@ -170,12 +163,11 @@ export interface ClientAllocatedAdapter extends AdapterCommands {
   /** The argv that creates a session under `id` with that instruction layer. */
   create(nativeSessionId: string, instructionFile: string): string[];
   /**
-   * Which build of this adapter's executable a session is bound to.
+   * How this adapter's executable is reached and described.
    *
-   * Required, because an identity XMD chose is only meaningful beside the build
-   * that accepted it. The argv `create` and `resume` return still begins with
-   * the stable launcher name, which is what durable records carry; a run
-   * replaces that first member with the exact path it observed.
+   * The argv `create` and `resume` return still begins with the stable
+   * launcher name, which is what durable records carry; a run replaces that
+   * first member with the exact path the current environment selected.
    */
   binding: NativeBinding;
 }
@@ -185,17 +177,16 @@ export interface ProviderReturnedAdapter extends AdapterCommands {
 }
 
 /**
- * A provider-returned adapter whose sessions are pinned to one observed build.
+ * A provider-returned adapter whose executable this host selects and describes.
  *
  * The provider still names the session, so nothing here chooses an identity.
- * What the binding adds is the other half of what makes that name mean
- * something: an identity a provider issued is only resumable by the build that
- * issued it, and two builds of one provider accept the same string while
- * disagreeing about which conversation it is.
+ * What the binding adds is which executable a host selects for it and how
+ * that selection reaches the adapter's child.
  *
  * It is a separate type rather than an optional member on the one above,
- * because an adapter a host supplies for a provider that does not pin builds
- * must not be able to reach a binding at all. Narrowing is the only way in.
+ * because an adapter a host supplies for a provider without a carried
+ * executable must not be able to reach a binding at all. Narrowing is the only
+ * way in.
  */
 export interface BoundProviderReturnedAdapter extends ProviderReturnedAdapter {
   binding: NativeBinding;
@@ -206,7 +197,7 @@ export type NativeAdapter =
   | BoundProviderReturnedAdapter
   | ClientAllocatedAdapter;
 
-/** An adapter whose sessions are bound to the build that accepted them. */
+/** An adapter whose executable this host selects and describes. */
 export type BuildBoundAdapter = BoundProviderReturnedAdapter | ClientAllocatedAdapter;
 
 /** Whether this adapter names its own sessions. */
@@ -215,12 +206,12 @@ export function allocatesIdentity(adapter: NativeAdapter): adapter is ClientAllo
 }
 
 /**
- * Whether this adapter's sessions are bound to one observed executable build.
+ * Whether this adapter's executable is selected and described by this host.
  *
  * Independent of who names the session: `claude` allocates its identities and
- * `codex` is handed them, and both are meaningless beside a build this run
- * cannot recognize. An adapter without a binding keeps the released
- * native-only behavior — it observes nothing and gains nothing.
+ * `codex` is handed them, and for both the current environment selects the
+ * executable. An adapter without a binding keeps the released native-only
+ * behavior — it selects nothing.
  */
 export function bindsBuild(adapter: NativeAdapter): adapter is BuildBoundAdapter {
   return "binding" in adapter;
@@ -287,8 +278,13 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
 };
 
 /**
- * The adapters whose native creation, instruction and resume contracts have
- * been proven against the installed CLI.
+ * The adapters whose native creation, instruction and resume contracts XMD's
+ * integration supports.
+ *
+ * Recorded CLI, adapter and host versions describe the checks that ran. They
+ * are evidence, not an allowlist or a requirement to repeat certification for
+ * every release; the live documents below remain opt-in integration
+ * regressions.
  *
  * `claude` is here because `packages/acp/src/ClaudeNativeLaunch.test.md` and
  * `packages/acp/src/ClaudeZeroTurnExit.test.md` ran the production command
@@ -321,8 +317,7 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
 export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude", "codex"];
 
 /**
- * The adapters whose client-native ACP attachment has been proven against the
- * installed CLI.
+ * The adapters whose client-native ACP attachment XMD's integration supports.
  *
  * A separate list from the one above, because they are separate capabilities:
  * handing a session to a native UI and later joining that same conversation
@@ -332,8 +327,10 @@ export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude", "codex"];
  * `claude` is here because `packages/acp/src/ClaudeNativeToAcp.test.md` ran the
  * production command through the built binary: a native turn carrying a random
  * marker, then a marker-free ACP Prompt that recovered it under the same
- * provider-native identity and the same observed build, and an independent
- * absent identity that refused without taking a turn.
+ * provider-native identity, and an independent absent identity that refused
+ * without taking a turn. This attachment is also how a client-native session's
+ * identity is positively confirmed before a native resume and after a native
+ * creation.
  */
 export const ADVERTISED_CLIENT_NATIVE_ATTACHMENT: readonly string[] = ["claude"];
 

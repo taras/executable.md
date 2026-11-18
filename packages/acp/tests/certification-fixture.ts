@@ -63,7 +63,7 @@ function answer(request) {
         if (mode === "standard-wait") { update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:"WAITING"}}); }
         return;
       }
-      const value=seed !== undefined ? "READY" : mode === "lost" ? "WRONG" : marker ?? "UNKNOWN";
+      const value=seed !== undefined ? "READY" : mode.endsWith("lost") ? "WRONG" : marker ?? "UNKNOWN";
       update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:value}});
       reply(id,{stopReason:"end_turn"});
     };

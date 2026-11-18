@@ -18,13 +18,14 @@ rejoins the same conversation over ACP — from an authored document that has
 never seen the marker — and asks for it. Recovering it is what makes the native
 UI and the ACP session one conversation rather than two wearing the same name.
 
-Getting there costs one turn nobody asked for. Codex CLI 0.153.2 does not write
-a conversation anywhere `codex resume` can find it until a turn has completed in
-it, so XMD spends exactly one of its own first: `codex-materialization.v1`,
-whose only job is to make the conversation openable. That the operator can then
-leave without ever speaking — and come back without buying a second one — is the
-subject of `CodexZeroNativeTurnExit.test.md`, so that question can be corrected
-without respending the three turns this document is authorized to spend.
+Getting there costs one turn nobody asked for. Codex CLI, as first proven at
+0.153.2, does not write a conversation anywhere `codex resume` can find it
+until a turn has completed in it, so XMD spends exactly one of its own first:
+`codex-materialization.v1`, whose only job is to make the conversation
+openable. That the operator can then leave without ever speaking — and come
+back without buying a second one — is the subject of
+`CodexZeroNativeTurnExit.test.md`, so that question can be corrected without
+respending the three turns this document is authorized to spend.
 
 ## What this costs, and what it touches
 
@@ -38,8 +39,10 @@ authored content.
 It is opt-in twice over. Without `XMD_CODEX_NATIVE_PROOF=1` the fixture refuses
 before starting any Codex process; without a separate
 `XMD_CODEX_MODEL_TURNS_AUTHORIZED=3` it refuses before spending a turn. It also
-refuses on a machine outside the frozen compatibility tuple below, because the
-finding this feature rests on is a fact about one Codex build.
+refuses when the carried Codex adapter is not the one named below, because that
+adapter is part of XMD's own integration. The installed Codex release, its
+digest and the host platform are recorded as evidence of what ran and never
+decide whether it passes.
 
 Everything sent besides those three turns is terminal control: Codex's own
 directory trust dialog is answered at most once with the choice it pre-selects,
@@ -278,24 +281,17 @@ that one did.
 
 <Assert expr={proof.ran} />
 
-## The frozen compatibility point
+## The carried adapter, and what else ran
 
-The materialization turn exists because of a fact about one Codex build. This
-records which one, so a later build that stopped needing it — or started needing
-something else — cannot pass as this one.
+The adapter is XMD's own integration, so this run names it exactly. The Codex
+release, its digest, the platform and the architecture are reported beside it
+as evidence of what this run exercised; none is compared with an earlier run.
 
-<AssertEquals actual={proof.platform} expected={"darwin"} />
-<AssertEquals actual={proof.architecture} expected={"arm64"} />
-<AssertEquals actual={proof.codexVersion} expected={"codex-cli 0.153.2"} />
-<AssertEquals
-  actual={proof.codexDigest}
-  expected={"195ace4100a634a9df39147f493e730e666b5bd87795f3c9f3251d8542400424"}
-/>
 <AssertEquals actual={proof.adapterPackage} expected={"@agentclientprotocol/codex-acp"} />
 <AssertEquals actual={proof.adapterVersion} expected={"1.6.2"} />
 <AssertEquals
   actual={proof.adapterDigest}
-  expected={"3ee22bc6b1649d02fcef80b352516f395fe774e63b459193195a41c42930dd8b"}
+  expected={"a3f699537970127972635b4596aef40ab8a4caa25a9028861d9ee07bf6c4b1a1"}
 />
 <Assert expr={proof.compatibilityTupleFrozen} />
 
@@ -399,16 +395,16 @@ inconvenient.
 
 ## Route and journal agree
 
-The route names the construction and the Codex build the tuple above froze, and
-nothing else: an ACP-first route deliberately records no conversation identity,
-launcher or instruction layer, so those are read from the journal instead. A
+The route names the construction and nothing else: a fresh ACP-first route
+records no conversation identity, launcher, instruction layer or executable
+build, so the identity and instructions are read from the journal instead. A
 route that had converted to anything but `acp-first` would mean the launch
 stopped being the one this document describes.
 
 <AssertEquals actual={proof.route.kind} expected={"acp-first"} />
 <AssertEquals actual={proof.route.provider} expected={"acpx"} />
-<AssertEquals actual={proof.route.buildVersion} expected={proof.codexVersion} />
-<AssertEquals actual={proof.route.buildDigest} expected={proof.codexDigest} />
+<AssertEquals actual={proof.route.buildVersion} expected={""} />
+<AssertEquals actual={proof.route.buildDigest} expected={""} />
 <AssertEquals actual={proof.journal.provider} expected={"acpx"} />
 <AssertEquals actual={proof.journal.agent} expected={"codex"} />
 <AssertEquals actual={proof.journal.launcher} expected={"codex"} />

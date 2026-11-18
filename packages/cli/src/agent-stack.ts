@@ -158,7 +158,6 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
     ...adapters,
     ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
     ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
-    ...(sessions.executableObserver ? { executableObserver: sessions.executableObserver } : {}),
     advertiseNativeLaunch: sessions.advertiseNativeLaunch,
     advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
   };
