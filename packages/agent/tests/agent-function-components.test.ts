@@ -8,7 +8,11 @@
  * what a document gets.
  */
 
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -375,10 +379,10 @@ interface RunOptions {
 function* runDoc(
   doc: string,
   options: RunOptions = {},
-  sharedJournal = true,
+  fixture?: { directory: string; stream: InMemoryStream },
 ): Operation<{ output: string; result: Result<Json>; trace: Trace; events: DurableEvent[] }> {
   const trace: Trace = options.trace ?? { prompts: [], agentLookups: [], timeouts: [] };
-  const dir = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
+  const dir = fixture?.directory ?? path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -430,7 +434,7 @@ function* runDoc(
 
     // `<Session>` names durable work after its own invocation, so the host
     // declares it to the execution rather than registering it.
-    const stream = sharedJournal ? yield* useJournalStream(docPath) : new InMemoryStream();
+    const stream = fixture?.stream ?? (yield* useJournalStream(docPath));
     const execution = yield* executeInstalled(
       {
         path: docPath,
@@ -457,7 +461,7 @@ function* runDoc(
 const OWNER = "packages/agent/tests/agent-function-components.test.ts";
 
 function* run(doc: string, options?: RunOptions): ReturnType<typeof runDoc> {
-  return yield* runDoc(doc, options, true);
+  return yield* runDoc(doc, options);
 }
 
 describe("Tier AF — the engine owns props", () => {
@@ -777,18 +781,33 @@ describe("Tier AF — registered defaults a document can replace", () => {
     expect(info.kind).toBe("unresolved");
   });
 
-  it("AF14: a repository component overrides each of them", function* () {
+  const repositoryOverrides = "AF14: a repository component overrides each of them";
+  it(repositoryOverrides, function* () {
     for (const name of names) {
-      const { output } = yield* runDoc(`<${name}>ignored</${name}>\n`, {
-        files: { [`${name}.md`]: "MINE\n" },
-      });
-      expect(output).toContain("MINE");
+      const directory = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
+      yield* captureTestJournal(
+        {
+          owner: "packages/agent/tests/agent-function-components.test.ts",
+          name: repositoryOverrides,
+        },
+        path.join(directory, "doc.md"),
+        function* (stream) {
+          const { output } = yield* runDoc(
+            `<${name}>ignored</${name}>\n`,
+            {
+              files: { [`${name}.md`]: "MINE\n" },
+            },
+            { directory, stream },
+          );
+          expect(output).toContain("MINE");
+        },
+      );
     }
   });
 
   it("AF15: a repository Prompt contacts no provider and writes no journal entry", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output } = yield* runDoc("<Prompt />\n", {
+    const { output } = yield* run("<Prompt />\n", {
       trace,
       files: { "Prompt.md": "LOCAL PROMPT\n" },
     });
