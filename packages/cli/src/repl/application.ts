@@ -5372,6 +5372,12 @@ export function focusSettled(
         return Object.freeze({
           ...state,
           restore: undefined,
+          inspection:
+            open === undefined &&
+            presentedInspection(view) !== undefined &&
+            state.inspection !== undefined
+              ? { ...state.inspection, offset: from }
+              : state.inspection,
           viewports: {
             ...viewports,
             configure: presentedConfiguring(view) === undefined ? viewports.configure : from,

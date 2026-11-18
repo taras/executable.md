@@ -635,6 +635,79 @@ describe("REPL focus regions: logical drawer reveal", () => {
     ).state;
     expect(state.route.at).toBe(model.checkpoints.at(-1)?.marker);
   });
+
+  it("a revealed feedback toggle and its linked entry stay in place after focus settles", function* () {
+    const model = yield* journalModel(["# Round result\n\nResult output."]);
+    const entry = model.entries[0];
+    if (entry === undefined) {
+      throw new Error("the journal recorded no entry");
+    }
+    expect(entry.terminal?.output).toBeDefined();
+    const presenter = yield* usePresenter(NARROW);
+    let state = reduceRepl(
+      initialState("feedback"),
+      { kind: "select-pane", pane: "sidekick" },
+      model,
+      IDLE,
+    ).state;
+    function* commit() {
+      const resolved = viewFor(state, model, IDLE, NARROW, focused(presenter));
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const view = withWorkspace(resolved.value, {
+        ...workspaceOf(model),
+        feedback: [
+          {
+            conversation: "owned",
+            response: "r1",
+            turn: 1,
+            source: 1,
+            text: "results",
+            key: "owned:r1:1",
+            label: "Round 1 result sent to Sidekick",
+            controls: ["REPL.EntryInput", "REPL.Submit"],
+            entries: [{ key: entry.key, round: entry.order }],
+          },
+        ],
+      });
+      const shown = yield* presenter.commit(view);
+      state = focusSettled(view, focused(presenter), shown.committed.admission);
+      return shown;
+    }
+    yield* commit();
+    state = reduceRepl(
+      state,
+      { kind: "inspect-sidekick", target: "feedback", key: "owned:r1:1" },
+      model,
+      IDLE,
+    ).state;
+    const toggle = "drawer:inspection:feedback";
+    const link = `drawer:inspection:entry:${entry.key}`;
+    // The toggle is the sixth content row of a five-row window, so the frame
+    // answering the request can only show it by starting one row down.
+    const opened = yield* commit();
+    const first = {
+      from: windowOf(opened.committed.admission, DRAWER_WINDOW).from,
+      focused: focused(presenter),
+      toggle: opened.boundsOf(toggle),
+      link: opened.boundsOf(link),
+    };
+    expect(first.from).toBe(1);
+    expect(first.focused).toBe(toggle);
+    expect(first.toggle).toBeDefined();
+    expect(first.link).toBeDefined();
+    expect(presenter.grid.rows()[first.toggle?.y ?? -1]).toContain("Show recorded feedback");
+    expect(state.inspection?.offset).toBe(1);
+    expect(state.restore).toBeUndefined();
+
+    const settled = yield* commit();
+    expect(windowOf(settled.committed.admission, DRAWER_WINDOW).from).toBe(first.from);
+    expect(focused(presenter)).toBe(toggle);
+    expect(settled.boundsOf(toggle)).toEqual(first.toggle);
+    expect(settled.boundsOf(link)).toEqual(first.link);
+    expect(presenter.grid.rows()[first.toggle?.y ?? -1]).toContain("> Show recorded feedback");
+  });
 });
 
 describe("REPL focus regions: background input ownership", () => {
