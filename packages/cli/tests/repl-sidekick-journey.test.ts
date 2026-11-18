@@ -1,4 +1,4 @@
-import { env } from "@executablemd/core";
+import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
@@ -58,6 +58,8 @@ import {
   DocumentOutput,
   Elicitation,
   Execution,
+  INLINE_SOURCE_PATH,
+  env,
   useNormalizedOutput,
 } from "@executablemd/core";
 import { openReplSession } from "../src/repl/session.ts";
@@ -3584,18 +3586,21 @@ describe("975 — the shipped session component journey", () => {
 });
 
 describe("975 — entry cwd ends with its actual owner", () => {
-  it("restores after body failure and cancellation, then admits a manual successor", function* () {
+  const entryLifetime =
+    "restores after body failure and cancellation, then admits a manual successor";
+  it(entryLifetime, function* () {
     const project = yield* useTemporary("xmd-cwd-project-");
     const workspace = yield* useTemporary("xmd-cwd-workspace-");
     yield* useHostFiles();
-    yield* API.Env.around(
-      {
-        *cwd() {
-          return project;
+    const useProjectCwd = () =>
+      API.Env.around(
+        {
+          *cwd() {
+            return project;
+          },
         },
-      },
-      { at: "min" },
-    );
+        { at: "min" },
+      );
     const seen: string[] = [];
     let mode = "fail";
     yield* Elicitation.around({
@@ -3612,22 +3617,31 @@ describe("975 — entry cwd ends with its actual owner", () => {
     });
     const source =
       '<Dir path="inner"><Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">wait</Elicit></Dir>\n<File path="settled.md">settled</File>';
-    const failed = yield* openReplSession({
-      execution: { id: "failed", stream: new InMemoryStream() },
-      projectCwd: project,
-      workspace,
-    });
-    if (!failed.ok) {
-      throw failed.error;
-    }
-    const submission = yield* failed.value.submit(source, undefined, undefined, true);
-    if (!submission.ok) {
-      throw submission.error;
-    }
-    expect((yield* submission.value.join()).ok).toBe(false);
-    expect(seen[0]).toBe(join(workspace, "inner"));
-    expect(yield* cwd()).toBe(project);
-    expect(yield* yield* spawn(() => cwd())).toBe(project);
+    yield* captureReplEntry(
+      { owner: "packages/cli/tests/repl-sidekick-journey.test.ts", name: entryLifetime },
+      "failed",
+      INLINE_SOURCE_PATH,
+      function* (entry) {
+        yield* useProjectCwd();
+        const failed = yield* openReplSession({
+          execution: entry,
+          projectCwd: project,
+          workspace,
+        });
+        if (!failed.ok) {
+          throw failed.error;
+        }
+        const submission = yield* failed.value.submit(source, undefined, undefined, true);
+        if (!submission.ok) {
+          throw submission.error;
+        }
+        expect((yield* submission.value.join()).ok).toBe(false);
+        expect(seen[0]).toBe(join(workspace, "inner"));
+        expect(yield* cwd()).toBe(project);
+        expect(yield* yield* spawn(() => cwd())).toBe(project);
+      },
+    );
+    yield* useProjectCwd();
     mode = "cancel";
     const stream = new InMemoryStream();
     yield* scoped(function* () {
