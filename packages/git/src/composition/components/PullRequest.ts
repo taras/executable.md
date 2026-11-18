@@ -34,7 +34,7 @@
  * this run's name.
  */
 import { cwd } from "@executablemd/runtime";
-import { content, documented, formDispatcher, hasBinding, hasContent } from "@executablemd/core";
+import { content, documented, formDispatcher, hasBinding } from "@executablemd/core";
 import type {
   ComponentRegistration,
   FirstPartyDocumentation,
@@ -254,7 +254,7 @@ const upsertBody: ComponentBody<PullRequestOperationsApi> = function* PullReques
   // evidence read: a body that never finished rendering must not become one
   // that was published, and a child that retains work of its own finishes at
   // its own journal position first.
-  const body = (yield* hasContent()) ? yield* content() : "";
+  const body = yield* content();
 
   const repository = yield* selectedRepository();
   if (repository === undefined) {

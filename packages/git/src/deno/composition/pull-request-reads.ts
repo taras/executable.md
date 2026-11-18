@@ -399,7 +399,7 @@ export function gitHubPullRequestReadHandler(
         const access = yield* transport(configuration).open();
         const reading =
           kind === "details"
-            ? yield* readPullRequestDetails(access, name, name.number)
+            ? yield* readPullRequestDetails(access, name, name.number, url)
             : yield* readEvidence(access, name, name.number, kind);
         if (reading.state === "unavailable") {
           throw new PullRequestReadError(

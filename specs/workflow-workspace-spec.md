@@ -98,10 +98,11 @@ repository components a workflow run has, over the caller's own filesystem:
   repository-supplied credential helpers stay disabled exactly as they are for a
   workflow run.
 - `<Git.Push>` keeps the observe/adopt/fast-forward/refuse rules and stores
-  private evidence of what it published. `<PullRequest>` is authorized by that
-  evidence and by nothing else, so a new run must publish again.
-- `<Issue>` and the pull-request evidence reads reach the same configured
-  transports under the same host ceilings, retaining nothing.
+  private evidence of what it published. A paired `<PullRequest>` write is
+  authorized by that evidence, so a new run must publish again before writing.
+- `<Issue>` and pull-request reads, including self-closing `<PullRequest />`,
+  reach the same configured transports under the same host ceilings, retaining
+  nothing.
 
 Node and Bun register the same sixteen declarations and install no operational
 repository provider, so `xmd syntax` describes one language everywhere and
@@ -242,17 +243,16 @@ ordinary run and a REPL entry is the policy beneath that operation — which
 journal it writes to, what it reconciles and what it replays — and nothing a
 document can see.
 
-`<PullRequest>` and its three evidence reads are available to a REPL entry too,
-on publication's own terms: a saved request written down before anything is
-contacted, the Git host's own reconciled outcome beside it, and for each read
-the provider's snapshot and nothing above it. A retained local result authorizes
-none of it — what admits an upsert is this entry's own last acknowledged
-publication of that branch, from that checkout, at that commit. An evidence read
-needs no Repository and no working directory, and its restoration still passes
-the host's current URL admission and the live composition around it, so a target
-the operator has since withdrawn refuses rather than binding what was kept.
-`<Issue>` is available on the same terms as publication, and lives at a service
-rather than in a Workspace.
+A paired `<PullRequest>` write in a REPL entry saves its request before
+contacting the Git host and retains the reconciled outcome. The entry's last
+acknowledged publication of that branch, from that checkout, at that commit
+admits the upsert. A self-closing `<PullRequest />` details read and the three
+collection reads need neither a Repository nor a working directory. Each
+retains the provider's complete result. Restoration passes through live
+composition and the host's current URL admission, so withdrawing a target
+also prevents its retained result from binding. `<Issue>` is available on
+the same terms as publication, and lives at a service rather than in a
+Workspace.
 
 ## 3. Workflow lifecycle
 
@@ -4269,11 +4269,11 @@ unchanged.
 | `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; that hold is distinct from the shared Git directory's mutation lease. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
 | `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and then the shared Git directory's mutation lease and keeps both until teardown; a completed one takes neither. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |
 | `<Git.Push />` inside a REPL entry | built on the #181 stack, Deno and compiled only: the same observe/adopt/fast-forward/refuse reconciliation §7.4 describes, reached under the entry's own owner and core's minted invocation identity rather than a run and an expansion. The request the entry asked for — branch, commit, destination ref and admitted credential-free origin — is published before anything is contacted, so an interrupted publication reconciles that exact request and an accepted push whose result was never recorded is adopted rather than repeated. Objects are read from the caller's own checkout through a control repository with a read-only alternate rather than from an exported Workspace family; no Workspace root, savepoint or frontier takes part, a completed publication reaches no provider, credential or remote, and the publication takes the managed slot and no mutation lease |
-| local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
+| local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes a paired `<PullRequest>` write and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
-| `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
+| self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
