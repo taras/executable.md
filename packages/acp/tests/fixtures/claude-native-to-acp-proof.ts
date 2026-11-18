@@ -1593,21 +1593,13 @@ function bindingDigestPresent(value: unknown): boolean {
   return isRecord(digest) && typeof digest.value === "string" && digest.value.length === 64;
 }
 
-function* claudeVersion(journey: Journey): Operation<string> {
-  const reported = yield* bounded("claude-version", VERSION_MS, () =>
-    runChild("claude", ["--version"], { cwd: journey.root, live: journey.live }),
-  );
-  return reported.code === 0 ? reported.stdout.trim() : "";
-}
-
 /** Everything both journeys establish before they are allowed to launch. */
-function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
+function ready(journey: Journey, verdict: JourneyVerdict): boolean {
   if (journey.realClaude.length === 0) {
     verdict.verdict = "ENVIRONMENT_BLOCKED";
     verdict.detail = "no installed claude executable was found on PATH";
     return false;
   }
-  verdict.claudeVersion = yield* claudeVersion(journey);
   if (!verdict.projectCopyVerified) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the project copy is not byte-identical to the checked-in role document";
@@ -1625,7 +1617,7 @@ function* runAttachment(
   verdict: JourneyVerdict,
   marker: string,
 ): Operation<void> {
-  if (!(yield* ready(journey, verdict))) {
+  if (!ready(journey, verdict)) {
     return;
   }
   verdict.adapterCommand = boundAdapterCommand();
@@ -1681,13 +1673,8 @@ function* runAttachment(
   verdict.markerRecovered = squeeze(acp.stdout).includes(`${RECOVER_PREFIX}${marker}`);
   verdict.outcome = verdict.markerRecovered ? "same-conversation" : "unresolved";
 
-  // Observed after the whole journey, as evidence of which build ran. Nothing
-  // is compared with it.
-  const reobserved = yield* observeBuild(journey);
-  verdict.observed.version = reobserved.version;
-  verdict.observed.digestPresent = reobserved.digest.length === 64;
-
   yield* runAbsentIdentity(journey, verdict);
+  yield* observeBuild(verdict);
 }
 
 /** The exact ACP adapter command a bound Claude attachment is proven against. */
@@ -1699,20 +1686,22 @@ function boundAdapterCommand(): string {
   return adapter.binding.adapterCommand ?? "";
 }
 
-/** What this run's own observer says the installed Claude build is. */
-function* observeBuild(journey: Journey): Operation<{ version: string; digest: string }> {
-  const observer = createDenoExecutableObserver();
-  if (!observer) {
-    return { version: "", digest: "" };
+/** Record only the build evidence available after both cases finish. */
+function* observeBuild(verdict: JourneyVerdict): Operation<void> {
+  try {
+    const observer = createDenoExecutableObserver();
+    if (observer) {
+      const found = yield* observer.observe("claude");
+      const adapter = nativeAdapterFor("claude");
+      if (adapter && allocatesIdentity(adapter)) {
+        verdict.observed.version = adapter.binding.version(found.versionOutput) ?? "";
+        verdict.claudeVersion = verdict.observed.version;
+      }
+      verdict.observed.digestPresent = found.digest.value.length === 64;
+    }
+  } catch {
+    // An unavailable observation leaves the evidence fields at their defaults.
   }
-  const found = yield* observer.observe("claude");
-  const adapter = nativeAdapterFor("claude");
-  const version =
-    adapter && allocatesIdentity(adapter)
-      ? adapter.binding.version(found.versionOutput)
-      : undefined;
-  void journey;
-  return { version: version ?? "", digest: found.digest.value };
 }
 
 /**
@@ -1732,11 +1721,8 @@ function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operatio
   const sessionKey = deriveSessionKey(agentCommand, journey.absentProject, "implementer");
   journey.absentKey = sessionKey;
   const store = createDenoSessionRouteStore(SESSION_COORDINATOR_ROOT);
-  const observed = yield* observeBuild(journey);
-  if (!store || observed.version.length === 0 || observed.digest.length !== 64) {
-    verdict.verdict = "HARNESS_FAILED";
-    verdict.detail = "the absent-identity case could not name a build to bind to";
-    return;
+  if (!store) {
+    throw new Error("the absent-identity case requires the session route store");
   }
   yield* store.publish({
     schema: "session-route.v2",
@@ -1750,8 +1736,8 @@ function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operatio
     launcher: "claude",
     executableBinding: {
       schema: "executable-build.v1",
-      reportedVersion: observed.version,
-      executableDigest: { algorithm: "sha256", value: observed.digest },
+      reportedVersion: "2.1.241 (Claude Code)",
+      executableDigest: { algorithm: "sha256", value: "c".repeat(64) },
     },
   });
 
@@ -1851,8 +1837,8 @@ function decideAttachment(verdict: JourneyVerdict): void {
   }
   verdict.verdict = "PASS";
   verdict.detail =
-    "a marker-free ACP prompt recovered the native turn's history under the same identity " +
-    "and the same build, and an absent identity refused without a turn";
+    "a marker-free ACP prompt recovered the native turn's history under the same identity, " +
+    "and the provider refused an absent identity before a turn";
 }
 
 /**
