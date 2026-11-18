@@ -1,5 +1,5 @@
 ---
-description: 'Select the fixed role model. Use <Phase.Profile role="planner" assessment={assessment} as="profile" />.'
+description: 'Select the role profile and optional explicit Implementor model. Use <Phase.Profile role="planner" assessment={assessment} as="profile" />.'
 props:
   type: object
   properties:
@@ -8,10 +8,11 @@ props:
     design: {type: boolean, default: false}
     plannerProvider: {enum: [claude, codex], default: claude}
     implementationProvider: {enum: [claude, codex], default: claude}
+    implementationModel: {type: string, minLength: 1}
   required: [role, assessment]
   additionalProperties: false
 returns: {type: object}
 ---
 
 <ReviewPolicy assessment={props.assessment} as="policy" />
-<Return value={props.role === "planner" && props.plannerProvider === "claude" ? {provider:"claude",model:"opus",effort:props.design ? "high" : policy.effort} : props.role === "implementor" && props.implementationProvider === "claude" ? {provider:"claude",model:"opus",effort:"high"} : {provider:"codex",model:policy.model,effort:props.role === "planner" && props.design ? "high" : policy.effort}} />
+<Return value={props.role === "planner" && props.plannerProvider === "claude" ? {provider:"claude",model:"opus",effort:props.design ? "high" : policy.effort} : props.role === "implementor" && props.implementationProvider === "claude" ? {provider:"claude",model:props.implementationModel ?? "opus",effort:"high"} : {provider:"codex",model:props.role === "implementor" ? props.implementationModel ?? policy.model : policy.model,effort:props.role === "planner" && props.design ? "high" : policy.effort}} />

@@ -42,3 +42,10 @@ printf '%s' "$XMD_EXAMPLE_TEST_COMMAND"
 {tester} {group}
 ```
 </Test>
+
+<Test name="A1 A4 A5 A6 explicit Implementor model, joined step limit and pre-dispatch amendment" timeout="300s">
+<Let as="group" value={[root + "/examples/adversarial-implementation/tests/implementation-selection.md",...profile].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
+```bash exec
+{tester} {group}
+```
+</Test>

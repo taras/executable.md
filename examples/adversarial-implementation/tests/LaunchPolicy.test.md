@@ -8,7 +8,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <Let as="runner" value={commandSetting.stdout || "deno run --allow-all '" + root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run"} />
 
 <Test name="G4 migration validates representatives and structural foundation before remainder and retirement" timeout="90s">
-<Each in={[{request:"normal",limit:0},{request:"response-repair",limit:1},{request:"response-repair",limit:0}]} let="scenario">
+<Each in={[{request:"normal",limit:0},{request:"response-repair",limit:1},{request:"response-repair",limit:0},{request:"normal",limit:0,model:"migration-model"}]} let="scenario">
 <TempDir>
 <Fixture.Repository guides={true} as="fixture" />
 <Dir path={fixture.repository}>
@@ -28,7 +28,7 @@ git rev-parse HEAD
 <Let as="evidence" value={fixture.root + "/accepted.md"} />
 <Dir path={fixture.root}><File path="accepted.md">Accepted repeated production friction in wide and the difficult modal case; substantial remaining conversion in consumer.sh.</File></Dir>
 <Let as="assessment" value={{mechanical:false,architecture:true,acceptance:true,risk:null,reason:"Inspect the structural foundation and accepted migration.",evidence:[evidence]}} />
-<Let as="task" value={{work:"test",repository:fixture.repository,directory:fixture.directory,revision:base.stdout.trim(),request:scenario.request,inputs:[evidence],sessions:{planner:"original-planner",implementor:"original-implementor",architect:"conditional-architect"},providers:{architect:"codex",planner:"codex",implementor:"codex"},maxResponseCorrections:scenario.limit,maxCorrections:1,maxApiRepairs:2,assessment,scope:{decisions:{evidence:[evidence],openQuestions:[]},implementation:{ready:true,evidence:[evidence]},sharedApi:{needed:true,evidence:[evidence]},migration:{evidence:[evidence],representativeConsumers:["wide.sh","modal.sh"],remainingConsumers:["consumer.sh"]}}}} />
+<Let as="task" value={{work:"test",repository:fixture.repository,directory:fixture.directory,revision:base.stdout.trim(),request:scenario.request,inputs:[evidence],sessions:{planner:"original-planner",implementor:"original-implementor",architect:"conditional-architect"},providers:{architect:"codex",planner:"codex",implementor:"codex"},...(scenario.model === undefined ? {} : {implementationModel:scenario.model}),maxResponseCorrections:scenario.limit,maxCorrections:1,maxApiRepairs:2,assessment,scope:{decisions:{evidence:[evidence],openQuestions:[]},implementation:{ready:true,evidence:[evidence]},sharedApi:{needed:true,evidence:[evidence]},migration:{evidence:[evidence],representativeConsumers:["wide.sh","modal.sh"],remainingConsumers:["consumer.sh"]}}}} />
 <Let as="task" value={{...task,delivery:{repository:"taras/executable.md",reviewer:{provider:"claude",model:"fixture",effort:null,session:"independent-review"},acceptance:[{id:"accepted-behavior",source:task.inputs[0],requirement:"Preserve the original accepted behavior."}]}}} />
 <Fixture.Entry entry="run" value={task} command={runner} root={root} as="child" />
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
@@ -83,6 +83,9 @@ git rev-parse HEAD
 <AssertEquals actual={migrationState.manifest.maxApiRepairs} expected={2} />
 <AssertEquals actual={migrationState.manifest.maxResponseCorrections} expected={scenario.limit} />
 <AssertEquals actual={migrationState.manifest.roles.planner.provider} expected="codex" />
+<AssertEquals actual={migrationState.manifest.roles.implementor.model} expected={scenario.model} />
+<AssertEquals actual={Object.hasOwn(migrationState.manifest.roles.planner,"model")} expected={false} />
+<AssertEquals actual={migrationCall.implementationModel} expected={scenario.model} />
 <AssertEquals actual={migrationState.calls.filter(call => call.role !== "architect").every(call => call.provider === "codex")} expected={true} />
 <Ticket.Text path={fixture.directory + "/retirement.json"} as="retirement" />
 <AssertStringIncludes actual={retirement} expected="legacy.fixture" />
@@ -112,6 +115,7 @@ git rev-parse HEAD
   ...["providers","maxCorrections","maxApiRepairs","maxResponseCorrections"].map(field => ({name:"missing-" + field,value:Object.fromEntries(Object.entries(task).filter(([key]) => key !== field)),field})),
   ...[-1,0.5,4,"0"].map(limit => ({name:"invalid-response-" + limit,value:{...task,maxResponseCorrections:limit},field:"maxResponseCorrections"})),
   {name:"invalid-provider",value:{...task,providers:{...task.providers,planner:"other"}},field:"planner"},
+  ...["",1,null].map(model => ({name:"invalid-model-" + String(model),value:{...task,implementationModel:model},field:"implementationModel"})),
   {name:"missing-member",value:{...task,scope:{...task.scope,implementation:{evidence:[evidence]}}},field:"ready"},
   {name:"string-boolean",value:{...task,scope:{...task.scope,implementation:{...task.scope.implementation,ready:"false"}}},field:"ready"},
   {name:"unknown-scope",value:{...task,scope:{...task.scope,settled:true}},field:"settled"},
@@ -185,4 +189,39 @@ cd -- {directory}
 <AssertEquals actual={work.ticketState.manifest.deliveredInputs["conditional-architect"]} expected={taskInputs} />
 </TempDir>
 </Each>
+</Test>
+
+<Test name="A7 an explicit step limit holds on the foundation route before any role or directory" timeout="90s">
+<TempDir>
+<Fixture.Repository guides={true} as="fixture" />
+<Dir path={fixture.repository}>
+<File path="wide.sh">printf '%s' 'wide production fixture'
+</File>
+<File path="consumer.sh">printf '%s' 'remaining production fixture'
+</File>
+```bash exec as="base"
+git add wide.sh consumer.sh
+git commit -qm 'existing production consumers'
+git rev-parse HEAD
+```
+<If condition={base.exitCode !== 0}><Fail message={base.stderr} /></If>
+</Dir>
+<Let as="evidence" value={fixture.root + "/accepted.md"} />
+<Dir path={fixture.root}><File path="accepted.md">Accepted repeated production friction.</File></Dir>
+<Let as="assessment" value={{mechanical:false,architecture:true,acceptance:true,risk:null,reason:"Inspect the structural foundation and accepted migration.",evidence:[evidence]}} />
+<Let as="task" value={{work:"test",repository:fixture.repository,directory:fixture.directory,revision:base.stdout.trim(),request:"normal",inputs:[evidence],sessions:{planner:"original-planner",implementor:"original-implementor",architect:"conditional-architect"},providers:{architect:"codex",planner:"codex",implementor:"codex"},maxResponseCorrections:0,maxCorrections:1,maxApiRepairs:2,assessment,scope:{decisions:{evidence:[evidence],openQuestions:[]},implementation:{ready:true,evidence:[evidence]},sharedApi:{needed:true,evidence:[evidence]},migration:{evidence:[evidence],representativeConsumers:["wide.sh"],remainingConsumers:["consumer.sh"]}}}} />
+<Let as="task" value={{...task,delivery:{repository:"taras/executable.md",reviewer:{provider:"claude",model:"fixture",effort:null,session:"independent-review"},acceptance:[{id:"accepted-behavior",source:task.inputs[0],requirement:"Preserve the original accepted behavior."}]}}} />
+<Fixture.Entry entry="run" value={task} maxSteps={1} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="held">{child.stdout}</Parse>
+<AssertEquals actual={held.status} expected="hold" />
+<AssertEquals actual={held.reason} expected="An explicit maxSteps boundary is supported for ordinary tickets only. Remove maxSteps for the foundation/migration route." />
+<Let as="quotedDirectory" value={"'" + fixture.directory.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="reserved"
+test -e {quotedDirectory} -o -L {quotedDirectory}
+```
+<AssertEquals actual={reserved.exitCode} expected={1} />
+<Dir path={fixture.root}><Glob include={["**/called.json"]} as="calls" /></Dir>
+<AssertEquals actual={calls} expected={[]} />
+</TempDir>
 </Test>
