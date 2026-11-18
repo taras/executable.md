@@ -31,11 +31,9 @@ before a new continuation records the selection and links the one it replaces.
 </If>
 <Let as="id" value={String(saved.calls.length).padStart(4,"0")} />
 <Let as="identityPath" value={(saved.manifest.identityDirectory ?? saved.manifest.directory + "/sessions") + "/" + encodeURIComponent(roles.implementor.session) + ".json"} />
-<Let as="unstartedPaths" value={[saved.manifest.directory + "/calls/" + id,saved.manifest.directory + "/attempts/" + id,saved.manifest.directory + "/preparations/" + id,identityPath,identityPath + ".mismatch.json"].map(path => "'" + path.replaceAll("'","'\"'\"'") + "'").join(" ")} />
-```bash exec as="unstarted"
-for path in {unstartedPaths}; do if test -e "$path" || test -L "$path"; then exit 1; fi; done
-```
-<If condition={unstarted.exitCode !== 0}>
+<Let as="unstartedPaths" value={[saved.manifest.directory + "/calls/" + id,saved.manifest.directory + "/attempts/" + id,saved.manifest.directory + "/preparations/" + id,identityPath,identityPath + ".mismatch.json"]} />
+<Ticket.Unstarted paths={unstartedPaths} as="unstarted" />
+<If condition={!unstarted}>
 <Fail message="The Implementor model can change only at a confirmed paused implementation handoff before its first dispatch. Preserve this record and reconcile its current owner." />
 </If>
 <If condition={Object.hasOwn(saved.documents,props.evidence)}>

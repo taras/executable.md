@@ -290,3 +290,53 @@ chmod 755 {continuations}
 <AssertEquals actual={called} expected={["attempts/0000/called.json"]} />
 </TempDir>
 </Test>
+
+<Test name="An unreadable occupied next-call parent refuses model selection before publication" timeout="150s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Dir path={fixture.repository}>
+<File path="api.sh">format() { printf '%s' "$1"; }
+</File>
+```bash exec as="base"
+git add api.sh
+git commit -qm 'existing API'
+git rev-parse HEAD
+```
+<If condition={base.exitCode !== 0}><Fail message={base.stderr} /></If>
+</Dir>
+<Let as="reference" value={fixture.root + "/accepted.md"} />
+<Let as="approval" value={fixture.root + "/sonnet-approval.md"} />
+<Dir path={fixture.root}><File path="accepted.md">Accepted plan retention contract.</File><File path="sonnet-approval.md">The user selected Claude Sonnet for the unused Implementor.</File></Dir>
+<Let as="impact" value={{mechanical:false,architecture:true,acceptance:true,risk:null,reason:"Inspect the saved test evidence.",evidence:[reference]}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:"handoff",directory:fixture.directory,maxCorrections:3,maxApiRepairs:3,maxResponseCorrections:0,roles:{architect:{session:"original-architect",provider:"codex",initialized:false},planner:{session:"original-planner",provider:"claude",initialized:false},implementor:{session:"original-implementor",provider:"claude",initialized:false}},acceptedInputs:[{path:reference,content:"Accepted plan retention contract."}],assignment:{phase:"discovery",work:"handoff",repository:fixture.repository,revision:base.stdout.trim(),priorRevision:null,request:"handoff-retention",assessment:impact,changedPaths:[],artifacts:[],evidence:[],findings:[],recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}}} />
+<Fixture.Entry entry="planning-case" value={manifest} repository={fixture.repository} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="planned">{child.stdout}</Parse>
+<Let as="plannedReturn" value={planned} /><Ticket.Load record={plannedReturn} as="planned" />
+<AssertEquals actual={[planned.checkpoint.status,planned.checkpoint.gate,planned.checkpoint.dispatchable]} expected={["paused","implementation",true]} />
+<AssertEquals actual={planned.calls.map(call => call.role)} expected={["planner"]} />
+<AssertEquals actual={Object.hasOwn(planned.manifest.roles.implementor,"model")} expected={false} />
+
+<Ticket.Text path={plannedReturn.continuation.path} as="priorBytes" />
+<Dir path={fixture.directory}><Glob include={["**/*"]} as="before" /></Dir>
+<Let as="calls" value={"'" + (fixture.directory + "/calls").replaceAll("'","'\"'\"'") + "'"} />
+<Let as="occupied" value={"'" + (fixture.directory + "/calls/0001").replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="blocked"
+mkdir -p {occupied}
+chmod 000 {calls}
+```
+<If condition={blocked.exitCode !== 0}><Fail message={blocked.stderr} /></If>
+<Ticket.Capture as="selected"><Ticket.SelectModel record={plannedReturn} model="sonnet" evidence={approval} as="amended" /><Json value={amended} /></Ticket.Capture>
+```bash exec as="restored"
+chmod 755 {calls}
+```
+<AssertEquals actual={restored.exitCode} expected={0} />
+<Ticket.Text path={plannedReturn.continuation.path} as="afterBytes" />
+<Ticket.Load record={plannedReturn} as="after" />
+<Dir path={fixture.directory}><Glob include={["**/*"]} as="afterPaths" /></Dir>
+<AssertEquals actual={afterBytes} expected={priorBytes} />
+<AssertEquals actual={after} expected={planned} />
+<AssertEquals actual={afterPaths.filter(path => path !== "calls/0001")} expected={before} />
+<AssertEquals actual={selected.status} expected="failed" />
+</TempDir>
+</Test>
