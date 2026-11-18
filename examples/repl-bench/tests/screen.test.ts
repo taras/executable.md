@@ -59,3 +59,24 @@ Deno.test("reads the complete focus legend without treating document text as sho
     backend.destroy();
   }
 });
+
+Deno.test("finds the Sidekick tab below a notice that names the Sidekick", () => {
+  const backend = createXtermBackend({ cols: size.columns, rows: size.rows });
+  try {
+    const identity = paint(REPL_PALETTE.chromeSurface, " XMD REPL".padEnd(size.columns));
+    const notice = paint(
+      REPL_PALETTE.chromeSurface,
+      "! the Sidekick was stopped. Nothing it had already done was undone".padEnd(size.columns),
+    );
+    backend.feed(encoder.encode(`${identity}\r\n${notice}\r\n`));
+    assert.equal(viewport(backend, size).sidekickControl(), undefined);
+
+    const surfaces =
+      paint(REPL_PALETTE.paneHeaderSurface, "     Sessions      Entries  ") +
+      paint(REPL_PALETTE.selectedSurface, "  * Sidekick");
+    backend.feed(encoder.encode(surfaces));
+    assert.deepEqual(viewport(backend, size).sidekickControl(), { row: 2, column: 32 });
+  } finally {
+    backend.destroy();
+  }
+});
