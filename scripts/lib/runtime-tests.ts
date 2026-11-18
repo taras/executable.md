@@ -99,6 +99,7 @@ function cliEntry(runtime: Runtime): string[] {
 const PRODUCTION_SUITES = new Set([
   "Preparation",
   "ProductionRole",
+  "ProductionRoleRepair",
   "ProductionRoleSonnet",
   "Submission",
 ]);
@@ -118,9 +119,12 @@ export const MARKDOWN_DEADLINES: Record<string, number> = {
   LaunchPolicy: 120_000,
   Preparation: 420_000,
   ProductionRole: 120_000,
+  ProductionRoleRepair: 120_000,
   ProductionRoleSonnet: 120_000,
   Submission: 120_000,
   Workflow: 120_000,
+  WorkflowFoundation: 120_000,
+  WorkflowRepair: 120_000,
 };
 
 function suiteName(file: string): string {

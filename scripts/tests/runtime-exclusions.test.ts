@@ -183,12 +183,16 @@ describe("the applicable corpus", () => {
       "DeliverySummaryRepair",
       "Friction",
       "Implementation",
+      "JoinedResponseRecovery",
       "LaunchPolicy",
       "Preparation",
       "ProductionRole",
+      "ProductionRoleRepair",
       "ProductionRoleSonnet",
       "Submission",
       "Workflow",
+      "WorkflowFoundation",
+      "WorkflowRepair",
     ].map((name) => `examples/adversarial-implementation/tests/${name}.test.md`);
     expect(
       (yield* listTestFiles(ROOT)).filter(
@@ -337,7 +341,13 @@ describe("the one-file Markdown commands", () => {
   });
 
   it("gives the production-role suites their production components", function* () {
-    for (const name of ["Preparation", "ProductionRole", "ProductionRoleSonnet", "Submission"]) {
+    for (const name of [
+      "Preparation",
+      "ProductionRole",
+      "ProductionRoleRepair",
+      "ProductionRoleSonnet",
+      "Submission",
+    ]) {
       const file = `examples/adversarial-implementation/tests/${name}.test.md`;
       expect(oneFileCommand("bun", file, ROOT).arguments.slice(-4)).toEqual([
         "--include",
@@ -396,9 +406,12 @@ describe("the one-file Markdown commands", () => {
       LaunchPolicy: 120_000,
       Preparation: 420_000,
       ProductionRole: 120_000,
+      ProductionRoleRepair: 120_000,
       ProductionRoleSonnet: 120_000,
       Submission: 120_000,
       Workflow: 120_000,
+      WorkflowFoundation: 120_000,
+      WorkflowRepair: 120_000,
     });
   });
 

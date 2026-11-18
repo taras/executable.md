@@ -40,7 +40,9 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   'Kept the {quoted} placeholder.\n{"passed":true}',
   '```\n$ deno task test\nok | 3 passed\n```\n{"passed":true}',
   'Ran it (see ```log``` above).\n{"passed":true}',
-  '```sh\necho "{not a result}"\n```\n{"passed":true}'
+  '```sh\necho "{not a result}"\n```\n{"passed":true}',
+  'The selection names ["title","body"].\n{"passed":true}',
+  'The selection names [\n{"nested":[1,{"escaped":"bracket ] and quote \\\""}]}\n].\n{"passed":true}'
 ]} let="reply">
 <Phase.Extract text={reply} as="extracted" />
 <AssertEquals actual={extracted.ok} expected={true} />
@@ -56,11 +58,24 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   '```json\n{"passed":true}',
   'Broken: {"outer":{"passed":true}',
   'Broken: {"outer":}\n{"passed":true}',
-  'No result is available.'
+  'No result is available.',
+  '{"passed":true}\n{"passed":true}',
+  'Example: {"example":true}\n{"passed":true}',
+  'Names ["title",\n{"passed":true}',
+  '```sh\necho done\n{"passed":true}'
 ]} let="reply">
 <Phase.Extract text={reply} as="extracted" />
 <AssertEquals actual={extracted.ok} expected={false} />
 </Each>
+</Test>
+
+<Test name="a Unicode fenced result retains its original UTF-16 slice">
+<Let as="reply" value={'🦉 Completed.\n```json\n{"passed":true}\n```\nSaved.'} />
+<Phase.Extract text={reply} as="extracted" />
+<AssertEquals actual={extracted.ok} expected={true} />
+<AssertEquals actual={extracted.json} expected={'{"passed":true}'} />
+<AssertEquals actual={extracted.span} expected={{start:reply.indexOf('{"passed":true}'),end:reply.indexOf('{"passed":true}')+'{"passed":true}'.length}} />
+<AssertEquals actual={reply.slice(extracted.span.start,extracted.span.end)} expected={'{"passed":true}'} />
 </Test>
 
 <Test name="existing SafeParse owns result validation">
@@ -82,185 +97,4 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <Ticket.Capture as="refused"><Phase.Run phase="review" role="planner" session="never-called" assignment={{}} attempt="/unused" responseProfile={{kind:"delivery-editorial",knownDocuments:[]}} as="unexpected" /></Ticket.Capture>
 <AssertEquals actual={refused.status} expected="failed" />
 <AssertStringIncludes actual={refused.failure} expected="metadata belong" />
-</Test>
-
-<Test name="real committed examples precede migration and obsolete files disappear" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="normal" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="feedback_ready" />
-<AssertEquals actual={work.history.length} expected={2} />
-<Ticket.Text path={fixture.directory + "/retirement.json"} as="retirement" />
-<AssertStringIncludes actual={retirement} expected="legacy.fixture" />
-</TempDir>
-</Test>
-
-<Test name="structural foundations reach Architect before migration" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="structural" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="feedback_ready" />
-<Ticket.Text path={fixture.directory + "/foundation-review-1/called.json"} as="calledText" />
-<Parse schema={{type:"object"}} as="called">{calledText}</Parse>
-<Ticket.Text path={fixture.directory + "/foundation-0/validated-api.json"} as="apiText" />
-<Parse schema={{type:"object"}} as="api">{apiText}</Parse>
-<AssertEquals actual={called.revision} expected={api.revision} />
-<AssertEquals actual={called.changedPaths.includes("api.sh")} expected={true} />
-</TempDir>
-</Test>
-
-<Test name="a rejected structural foundation starts no migration" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="structural-rejected" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertEquals actual={work.history.length} expected={1} />
-<AssertStringIncludes actual={work.reason} expected="requires Architect acceptance" />
-</TempDir>
-</Test>
-
-<Test name="a migration cannot silently change the validated API" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="change-api" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason.reason} expected="API-owned path" />
-</TempDir>
-</Test>
-
-<Test name="a narrated fenced foundation reply needs no productive replay" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="fenced" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="feedback_ready" />
-<Ticket.Text path={fixture.directory + "/foundation-0/response-acceptance.json"} as="text" />
-<Parse schema={{type:"object"}} as="accepted">{text}</Parse>
-<AssertEquals actual={accepted.round} expected={0} />
-</TempDir>
-</Test>
-
-<Test name="an oversized summary is repaired in the same session without repeating implementation" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="response-repair" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="feedback_ready" />
-<Ticket.Text path={fixture.directory + "/foundation-0/response-corrections/1/called.json"} as="text" />
-<Parse schema={{type:"object"}} as="called">{text}</Parse>
-<AssertEquals actual={called} expected={{session:"original-planner",initialize:false,productive:false}} />
-</TempDir>
-</Test>
-
-<Test name="response repair cannot change the API and stops after three attempts" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="response-tamper" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason} expected="selected response-only correction budget is exhausted" />
-<Ticket.Text path={fixture.directory + "/foundation-0/response-corrections/3/disposition.json"} as="text" />
-<Parse schema={{type:"object"}} as="disposition">{text}</Parse>
-<AssertEquals actual={disposition.accepted} expected={false} />
-</TempDir>
-</Test>
-
-<Test name="response repair holds if its owner changes source" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="response-source" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason} expected="Response-only correction changed source" />
-</TempDir>
-</Test>
-
-<Test name="ambiguous foundation results hold without a response correction" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="ambiguous" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason} expected="No unambiguous substantive foundation result" />
-</TempDir>
-</Test>
-
-<Test name="a failing API example prevents every migration call" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="failed-example" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertEquals actual={work.history.length} expected={1} />
-<AssertStringIncludes actual={work.reason} expected="API validation failed" />
-<Ticket.Text path={fixture.directory + "/foundation-0/example-1.json"} as="firstFailure" />
-<AssertStringIncludes actual={firstFailure} expected='"exitCode": 1' />
-</TempDir>
-</Test>
-
-<Test name="a consumer mismatch repairs the API in the same sessions" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="api-repair" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="feedback_ready" />
-<AssertEquals actual={work.history.length} expected={4} />
-<Ticket.Text path={fixture.directory + "/foundation-2/called.json"} as="calledText" />
-<Parse schema={{type:"object"}} as="called">{calledText}</Parse>
-<AssertEquals actual={called.session} expected="original-planner" />
-<AssertEquals actual={called.initialize} expected={false} />
-<Ticket.Text path={fixture.directory + "/migration-1/attempts/0000/called.json"} as="migratorText" />
-<Parse schema={{type:"object"}} as="migrator">{migratorText}</Parse>
-<AssertEquals actual={migrator.session} expected="original-implementor" />
-<AssertEquals actual={migrator.initialize} expected={false} />
-</TempDir>
-</Test>
-
-<Test name="the API repair bound preserves the failed consumer" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="api-repair" command={runner} root={suiteRoot} maxApiRepairs={0} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason} expected="API repair bound reached" />
-</TempDir>
-</Test>
-
-<Test name="a provider blocker holds without invoking migration" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="blocked" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertEquals actual={work.history.length} expected={1} />
-<AssertEquals actual={work.reason} expected="Wait for provider availability." />
-</TempDir>
-</Test>
-
-<Test name="passing reviews do not waive the retirement outcome" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="kept-fixture" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason} expected="promised to retire" />
-</TempDir>
 </Test>

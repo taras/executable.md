@@ -886,3 +886,55 @@ selection and user-approval escalation policy. Existing host containment remains
 in force with its stable-namespace limitation; #227 owns concurrent
 path-replacement hardening. Deferring those decisions does not defer File or
 Glob reads. #679 remains separate evaluation work after product delivery.
+
+## Joined implementation replies retain their original failure during explicit revalidation
+
+The joined-phase-result-recovery-1396 amendment permits explicit revalidation of
+an unchanged, proven-completed original implementation reply after an extraction
+hold. The canonical extractor's rejection of incidental inline arrays is an
+implementation defect. Historical revalidation is a separately approved
+user-directed amendment: it grants no correction allowance or acceptance waiver.
+
+The approved decision and delegation are retained at
+`/private/tmp/xmd-joined-phase-recovery-1396/approved-decision/decision.md` and
+`/private/tmp/xmd-joined-phase-recovery-1396/approved-decision/provenance.md`.
+The bounded consumer is the original #1400 hold
+`f816aad386057df21b95730b19c6e919673e98615d0c1b93caf2876374d149f6`;
+controlled fixtures exercise the same mechanism. Its supported owning workflow
+already understands the historical model allocation, so an adapter is unnecessary.
+
+The [recovery action](../examples/adversarial-implementation/recovery/README.md)
+checks the confirmed record, original assignment and frozen guide, selected
+inputs, completed provider prompt, joined native entry and clean signed source.
+It reserves one append-only reconciliation, records a derivative and disposition,
+and confirms publication before returning the original policy's paused feedback
+gate. The actual failed execution remains failed; original calls, receipts,
+conversations, models and all allowance consumption remain unchanged. No provider
+or role runs during reconciliation. The original Sol feedback and Haiku correction
+sequence retains A6/A4/A8/A2/A7 and unfinished-root replay as unproved work.
+
+A confirmed repeat uses the actual returned successor and retained snapshots.
+The old hold after a reservation stays held, including when publication or its
+confirmation may have committed without acknowledgment. Matching files do not
+supply that acknowledgment. This adds no operator-disposition path, compatibility
+framework, model selection, interrupted-guide replay, review waiver or merge
+permission.
+
+A later explicit human approval permits one bounded request-only resumption.
+Its scope and allocation are retained at
+`/private/tmp/xmd-joined-phase-recovery-1396/ownership-feedback/prepublication-correction-04/scope.md`
+and `allocation.json` in that namespace. Historical source round3/max3 remains
+recorded; this source amendment is round4/max4, with no additional API, response
+or original consumer allowance. The earlier no-disposition decision above
+remains the rule for uncertain or potentially published actions.
+
+The optional `resume` document binds the exact original request, explicit
+authority and joined native failure receipt. Only a request-only reservation
+with unchanged full record/proof/owner correspondence may claim one exclusive
+append-only resumption receipt. Any publication evidence, prior resumption,
+changed request or uncertain history refuses. Existing full validation and
+publication run after admission; success returns the actual original feedback
+successor. The first failure and request stay immutable. Matching bytes never
+supply a lost acknowledgment. The [recovery guide](../examples/adversarial-implementation/recovery/README.md#resume-a-proven-unpublished-reservation)
+defines the finite document and invocation; this adds no generic operator
+framework or automatic retry.

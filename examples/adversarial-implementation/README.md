@@ -769,9 +769,24 @@ expand only when they identify one commit in the assigned repository. Missing,
 ambiguous and non-commit references hold without a correction prompt. The raw
 reply stays saved; `response-acceptance.json` records the expansions. Other
 evidence fields remain subject to the existing correspondence checks.
-One narrated or fenced JSON result is accepted without another agent call.
-Multiple candidates, incomplete JSON and unclosed fences hold with the original
-reply and diagnostics. Schema matching never chooses between candidates.
+One narrated or fenced JSON object is accepted without another agent call.
+A complete JSON array embedded in prose is incidental only when non-whitespace
+prose precedes its opening bracket on that physical line. Its nested contents do
+not become candidates. An array occupying the reply, starting a line after
+indentation, or occupying a JSON fence refuses. Inline objects always count,
+including examples; fences give no candidate precedence. Multiple objects,
+malformed or incomplete JSON-looking spans, non-object JSON fences and unclosed
+fences hold with the original reply and diagnostics. Closed non-JSON fences and
+ordinary Markdown links, checkboxes, progress notation and placeholders retain
+their existing treatment. Schema matching never chooses between candidates.
+`Phase.Extract` reports the selected object's original half-open UTF-16 span,
+excluding prose and fences, alongside its existing JSON value.
+
+An eligible original implementation extraction hold has an explicit
+[no-provider recovery action](recovery/README.md). It preserves the failed call
+and publishes a separate derivative at the original feedback gate under the
+approved amendment. Use its narrow overlay with the original prepared owner;
+ordinary continuation and independent review keep their existing contracts.
 
 When the only invalid fields are an oversized summary or handoff, foundation
 response correction can shorten those fields in the same Planner session, at

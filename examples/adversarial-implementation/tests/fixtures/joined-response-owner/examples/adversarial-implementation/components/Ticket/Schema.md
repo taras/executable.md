@@ -1,0 +1,247 @@
+---
+description: >-
+  Read the resolved ticket manifest contract. Use <Ticket.Schema as="schema" />.
+props: {type: object, additionalProperties: false}
+returns: {type: object}
+---
+
+<Phase.Schema as="phases" />
+<Return value={{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "ticket-workflow.v2"
+    },
+    "work": {
+      "type": "string",
+      "minLength": 1
+    },
+    "directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "identityDirectory": {"type":"string","pattern":"^/"},
+    "api": {"type": "object"},
+    "delivery": {"type": "object"},
+    "implementationModelSelection": {
+      "type": "object",
+      "properties": {
+        "previousContinuation": {"type":"object","properties":{"path":{"type":"string","minLength":1},"utf8Bytes":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["path","utf8Bytes","sha256"],"additionalProperties":false},
+        "previousModel": {"type": ["string", "null"], "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "evidence": {"type":"object","properties":{"path":{"type":"string","minLength":1},"utf8Bytes":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"snapshot":{"type":"string","pattern":"^/"},"observation":{"enum":["file","supplied"]}},"required":["path","utf8Bytes","sha256","snapshot","observation"],"additionalProperties":false}
+      },
+      "required": ["previousContinuation", "previousModel", "model", "evidence"],
+      "additionalProperties": false
+    },
+    "assignment": phases.assignment,
+    "maxApiRepairs": {"type":"integer","minimum":0,"maximum":10},
+    "maxResponseCorrections": {"type":"integer","minimum":0,"maximum":3},
+    "maxCorrections": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "roles": {
+      "type": "object",
+      "properties": {
+        "architect": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provider": {
+              "enum": [
+                "codex"
+              ]
+            },
+            "initialized": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "session",
+            "provider",
+            "initialized"
+          ],
+          "additionalProperties": false
+        },
+        "planner": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provider": {
+              "enum": [
+                "codex",
+                "claude"
+              ]
+            },
+            "initialized": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "session",
+            "provider",
+            "initialized"
+          ],
+          "additionalProperties": false
+        },
+        "implementor": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provider": {
+              "enum": [
+                "codex",
+                "claude"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "initialized": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "session",
+            "provider",
+            "initialized"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "architect",
+        "planner",
+        "implementor"
+      ],
+      "additionalProperties": false
+    },
+    "acceptedInputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "deliveredInputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uniqueItems": true
+      },
+      "default": {}
+    },
+    "roleInputs": {
+      "type": "object",
+      "properties": {
+        "architect": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "planner": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "implementor": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "required": [
+    "schema",
+    "work",
+    "directory",
+    "assignment",
+    "maxCorrections",
+    "maxApiRepairs",
+    "maxResponseCorrections",
+    "roles",
+    "acceptedInputs"
+  ],
+  "additionalProperties": false
+}} />
