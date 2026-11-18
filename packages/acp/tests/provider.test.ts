@@ -5,12 +5,15 @@
  * no agent process ever starts.
  */
 import { join } from "node:path";
+import { realpath, rename, symlink } from "node:fs/promises";
+import process from "node:process";
+import { hostClaudeExecutable, hostCodexExecutable } from "@executablemd/runtime";
 import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { createAcpRuntime } from "../src/acpx-runtime.ts";
 import { AGENT_SOURCE, STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn, until, useScope, withResolvers } from "effection";
+import { ensure, race, scoped, sleep, spawn, until, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Config } from "@executablemd/core";
 import { Agent, claimsConfiguration, sessionOf } from "@executablemd/agent/api";
@@ -58,6 +61,7 @@ import {
   useGitWorld,
 } from "./helpers.ts";
 import type {
+  AcpRuntimeEnsureInput,
   AcpPermissionRequest,
   AcpRuntimeEvent,
   AcpRuntimeTurnResult,
@@ -3706,5 +3710,286 @@ describe(
         expect(recovered).toBe(true);
       });
     }
+  },
+);
+
+/** One public named placement using the diagnostic host's executable selectors and the strict wire peer. */
+function* eagerWorld(agent: "claude" | "codex") {
+  const peer = yield* world(true);
+  yield* useFlatWorld(peer.dir);
+  yield* Agent.around(
+    {
+      *agent([name]) {
+        return name ?? agent;
+      },
+    },
+    { at: "min" },
+  );
+  const variable = agent === "claude" ? "CLAUDE_CODE_EXECUTABLE" : "CODEX_PATH";
+  const prior = process.env[variable];
+  yield* ensure(() => {
+    if (prior === undefined) {
+      delete process.env[variable];
+    } else {
+      process.env[variable] = prior;
+    }
+  });
+  const first = yield* until(realpath("/usr/bin/true"));
+  const second = yield* until(realpath("/bin/echo"));
+  const link = join(peer.dir, "selected");
+  yield* until(symlink(first, link));
+  process.env[variable] = link;
+  const events: string[] = [];
+  const ensures: AcpRuntimeEnsureInput[] = [];
+  const hooks: {
+    closeA?: () => Promise<void>;
+    turn?: () => void;
+    route?: (phase: "enter" | "leave") => void;
+  } = {};
+  const provider = yield* useAcpxProvider(
+    { defaultAgent: agent, permissionMode: "deny-all" },
+    {
+      sessionStore: peer.store,
+      agentRegistry: peer.registry,
+      advertiseNativeLaunch: [],
+      advertiseClientNativeAttachment: [],
+      *withSessionRoute(context, op) {
+        if (context.session === "review") {
+          hooks.route?.("enter");
+        }
+        const value = yield* op();
+        if (context.session === "review") {
+          hooks.route?.("leave");
+        }
+        return value;
+      },
+      *agentProcessEnv() {
+        return {
+          [variable]:
+            agent === "claude" ? yield* hostClaudeExecutable() : yield* hostCodexExecutable(),
+        };
+      },
+      createRuntime(options) {
+        const executable = options.agentProcessEnv?.[variable];
+        const owner = executable === first ? "A" : executable === second ? "B" : "doctor";
+        const runtime = createAcpRuntime({ ...options, agentRegistry: peer.registry });
+        const open = runtime.ensureSession.bind(runtime);
+        runtime.ensureSession = (input) => {
+          events.push(owner + " ensure");
+          ensures.push(input);
+          return open(input);
+        };
+        const close = runtime.close.bind(runtime);
+        runtime.close = (input) => {
+          events.push(owner + " closing");
+          const wait = owner === "A" ? hooks.closeA?.() : undefined;
+          return Promise.resolve(wait)
+            .then(() => close(input))
+            .then(() => {
+              events.push(owner + " closed");
+            });
+        };
+        const start = runtime.startTurn.bind(runtime);
+        runtime.startTurn = (input) => {
+          events.push(owner + " turn");
+          hooks.turn?.();
+          return start(input);
+        };
+        return runtime;
+      },
+    },
+  );
+  const issued = yield* provider.session("review");
+  function prompt(text: string) {
+    return scoped(function* () {
+      const stream = yield* provider.promptStream(text, { session: issued });
+      let next = yield* stream.next();
+      let output = "";
+      while (!next.done) {
+        if (next.value.type === "text_delta") {
+          output += next.value.text;
+        }
+        next = yield* stream.next();
+      }
+      return output;
+    });
+  }
+  yield* prompt("marker");
+  const original = yield* until(peer.store.load(issued.sessionKey));
+  expect(original?.agentSessionId).toBeDefined();
+  expect(events).toEqual(["A ensure", "A turn"]);
+  function* switchExecutable() {
+    yield* until(symlink(second, link + ".next"));
+    yield* until(rename(link + ".next", link));
+  }
+  return { peer, issued, provider, prompt, switchExecutable, events, hooks, ensures, original };
+}
+
+describe(
+  "eager resolution of a live named Session",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const [agent, refusal] of [
+      ["codex", undefined],
+      ["claude", undefined],
+      ["codex", "close"],
+      ["claude", "different"],
+    ] as const) {
+      it(`Eager: ${agent} ${refusal ?? "reopens"} at the named Session boundary`, function* () {
+        let cleanup: unknown;
+        let complete = false;
+        try {
+          yield* scoped(function* () {
+            const f = yield* eagerWorld(agent);
+            yield* f.switchExecutable();
+            const trace = join(f.peer.dir, "methods.jsonl");
+            const before = yield* readTextFile(trace);
+            if (refusal === "close") {
+              f.hooks.closeA = () => {
+                delete f.hooks.closeA;
+                return Promise.reject(new Error("eager close rejected"));
+              };
+            } else if (refusal === "different") {
+              yield* writeTextFile(join(f.peer.dir, "different-native-identity"), "1");
+            }
+            let resolved: Session | undefined;
+            let caught: unknown;
+            try {
+              resolved = yield* f.provider.session("review");
+            } catch (error) {
+              caught = error;
+            }
+            const delta = (yield* readTextFile(trace)).slice(before.length).trim();
+            if (refusal === "close") {
+              expect(caught).toBeInstanceOf(Error);
+              expect(resolved).toBe(undefined);
+              expect(delta).toBe("");
+              expect(f.events).toEqual([
+                "A ensure",
+                "A turn",
+                "A closing",
+                "A closing",
+                "A closed",
+              ]);
+            } else {
+              expect(JSON.parse(delta)).toMatchObject({
+                method: "session/load",
+                sessionId: f.original?.acpSessionId,
+              });
+              expect(f.ensures[1]).toMatchObject({
+                sessionKey: f.issued.sessionKey,
+                resumeSessionId: f.original?.acpSessionId,
+                expectedAgentSessionId: f.original?.agentSessionId,
+              });
+              if (refusal === "different") {
+                expect(caught).toBeInstanceOf(Error);
+                expect(resolved).toBe(undefined);
+                expect(f.events).toEqual([
+                  "A ensure",
+                  "A turn",
+                  "A closing",
+                  "A closed",
+                  "B ensure",
+                ]);
+                expect((yield* until(f.peer.store.load(f.issued.sessionKey)))?.agentSessionId).toBe(
+                  f.original?.agentSessionId,
+                );
+                yield* rm(join(f.peer.dir, "different-native-identity"));
+                resolved = yield* f.provider.session("review");
+              } else {
+                if (caught) {
+                  throw caught;
+                }
+                expect(f.events).toEqual([
+                  "A ensure",
+                  "A turn",
+                  "A closing",
+                  "A closed",
+                  "B ensure",
+                  "B closing",
+                  "B closed",
+                ]);
+              }
+              expect(resolved).toBe(f.issued);
+            }
+            expect(f.issued.agentSessionId).toBe(f.original?.agentSessionId);
+            expect(yield* f.prompt("recall")).toContain("answer:recall:marker");
+            complete = true;
+          });
+        } catch (error) {
+          cleanup = error;
+        }
+        if (refusal === "close" && complete) {
+          expect(String(cleanup)).toContain("eager close rejected");
+        } else if (cleanup) {
+          throw cleanup;
+        }
+        expect(complete).toBe(true);
+      });
+    }
+
+    it("Eager: the queued Codex lookup joins the old close when halted", function* () {
+      const f = yield* eagerWorld("codex");
+      const turnStarted = withResolvers<void>();
+      const closing = withResolvers<string>();
+      const release = withResolvers<void>();
+      const scope = yield* useScope();
+      f.hooks.turn = turnStarted.resolve;
+      yield* writeTextFile(join(f.peer.dir, "hold-prompt"), "1");
+      const busy = yield* spawn(() => f.prompt("recall"));
+      yield* turnStarted.operation;
+      yield* f.switchExecutable();
+      const placed = withResolvers<void>();
+      f.hooks.route = (phase) => {
+        if (phase === "leave") {
+          placed.resolve();
+        }
+      };
+      f.hooks.closeA = () => {
+        closing.resolve("closing");
+        return scope.run(() => release.operation);
+      };
+      const returned = withResolvers<string>();
+      const eager = yield* spawn(function* () {
+        yield* f.provider.session("review");
+        returned.resolve("returned");
+      });
+      yield* placed.operation;
+      expect(f.events).toEqual(["A ensure", "A turn", "A turn"]);
+      yield* writeTextFile(join(f.peer.dir, "release-prompt"), "1");
+      yield* busy;
+      try {
+        expect(yield* race([closing.operation, returned.operation])).toBe("closing");
+        const halted = yield* spawn(() => eager.halt());
+        const waiting = withResolvers<void>();
+        let enters = 0;
+        f.hooks.route = (phase) => {
+          if (phase === "leave") {
+            waiting.resolve();
+          } else if (++enters === 2) {
+            f.events.push("retry holds slot");
+          }
+        };
+        const retry = yield* spawn(() => f.provider.session("review"));
+        yield* waiting.operation;
+        expect(f.events).toEqual(["A ensure", "A turn", "A turn", "A closing"]);
+        release.resolve();
+        yield* halted;
+        expect(yield* retry).toBe(f.issued);
+        expect(f.events).toEqual([
+          "A ensure",
+          "A turn",
+          "A turn",
+          "A closing",
+          "A closed",
+          "retry holds slot",
+          "B ensure",
+          "B closing",
+          "B closed",
+        ]);
+      } finally {
+        release.resolve();
+      }
+    });
   },
 );

@@ -133,22 +133,38 @@ describe("native proof evidence", { sanitizeOps: false, sanitizeResources: false
   it("P2: both Claude shims distinguish native UI argv from availability and ACP", function* () {
     const create = ["--session-id", "identity", "--system-prompt-file", "/private/file"];
     const resume = ["--resume", "identity"];
-    const trace = [
+    const unexpected = ["--session-id", "different"];
+    const nonUi = [
       ["--version"],
+      ["--help"],
+      ["auth", "status"],
+      ["project", "purge", "--dry-run", "project"],
       ["--print", "--input-format", "stream-json", "--resume", "unrelated"],
-      create,
-      resume,
-    ]
+      ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json"],
+      ["--resume", "absent", "--print"],
+      ["--session-id", "absent", "--system-prompt-file", "/absent", "--print"],
+    ];
+    const commands = [create, ...nonUi, unexpected, [], ["--resume", "--print"], resume];
+    const trace = commands
       .map((args) => ["invocation", ...args.map((arg) => "arg " + arg)].join("\n"))
       .join("\n");
     for (const fixture of [claude, attachment]) {
       const all = fixture.parseObservations(trace);
-      expect(all).toHaveLength(4);
+      expect(all).toHaveLength(commands.length);
       expect(nativeUiInvocations(all).map(fixture.filtered)).toEqual([
         ["claude", "--session-id", "identity", "--system-prompt-file", "<private-file>"],
+        ["claude", "--session-id", "different"],
+        ["claude"],
+        ["claude", "--resume", "--print"],
         ["claude", "--resume", "identity"],
       ]);
     }
+    const observed = attachment.parseObservations(trace);
+    const extra = attachment.blankJourney("native-to-acp");
+    attachment.recordNativeInvocations(observed.slice(0, 2 + nonUi.length), extra);
+    expect(extra.identityAllocations).toBe(2);
+    expect(extra.substitutedIdentity).toBe(true);
+    expect(extra.freshFallback).toBe(true);
     const zero = claude.blankJourney("zero-turn");
     zero.nativeSessionId = "identity";
     zero.secondInvocationChildren = 1;

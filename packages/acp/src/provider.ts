@@ -1696,24 +1696,15 @@ function* useAcpxProviderState(
             `"${named.sessionKey}" (${entry.agentCommand})`,
         );
       }
-      if (!isLive(entry)) {
-        // Nothing of this provider's holds the session any more: the handle was
-        // released, or handed to a native UI. Reaching for the same key
-        // re-ensures it, which reattaches ACP to whatever holds it now rather
-        // than reusing a connection older than that.
-        refuseIfUnusable(entry.session.sessionKey);
-        return {
-          kind: "details",
-          sessionKey: entry.session.sessionKey,
-          agentCommand: entry.agentCommand,
-          details: {
-            sessionKey: entry.session.sessionKey,
-            cwd: entry.cwd,
-            state: entry.state,
-          },
-          issued: entry.session,
-          ...(entry.continuation === undefined ? {} : { continuation: entry.continuation }),
-        };
+      const continuation = continuationOf(facts);
+      if (!isLive(entry) || continuation !== undefined) {
+        // Reopening needs the caller's retained history, even when this provider
+        // still has the exact object previously issued for the placement.
+        return prepareSessionDetails(
+          agentCommand,
+          { sessionKey: named.sessionKey, cwd: entry.cwd, state: entry.state },
+          continuation,
+        );
       }
       refuseIfUnusable(named.sessionKey);
       return { kind: "existing", sessionKey: named.sessionKey, entry };
@@ -1827,16 +1818,21 @@ function* useAcpxProviderState(
    */
   function* sessionCreationState(
     agentName: string,
-    agentCommand: string,
-    details: AcpxSessionDetails,
+    prepared: Prepared,
   ): Operation<"new" | "existing"> {
+    if (prepared.kind === "existing") {
+      return prepared.entry.state;
+    }
+    const { details } = prepared;
     if (details.state === "existing") {
       return "existing";
     }
     if (!namesOwnSessions(agentName) || !routeStore) {
       return "new";
     }
-    const route = yield* routeStore.read(sessionKeyOf(agentCommand, details.sessionKey));
+    const route = yield* routeStore.read(
+      sessionKeyOf(ownerCommandOf(prepared), details.sessionKey),
+    );
     return route?.route === "client-native" ? "existing" : "new";
   }
 
@@ -1847,13 +1843,22 @@ function* useAcpxProviderState(
    * caller is about to construct, and acting on what was read before waiting is
    * how one session ends up with two conversations.
    */
-  function* requeried(prepared: Prepared): Operation<Prepared> {
+  function* requeried(prepared: Prepared, validatePlacement = false): Operation<Prepared> {
     const sessionKey = prepared.sessionKey;
     const held = managed.get(sessionKey);
-    if (held && isLive(held)) {
+    const agentCommand = agentCommandOf(prepared);
+    const continuation = continuationOfPrepared(prepared) ?? held?.continuation;
+    // A named eager lookup validates its placement through the host and ACPX.
+    // Caller-supplied history also needs its own assertion on reopening.
+    if (
+      held &&
+      isLive(held) &&
+      !validatePlacement &&
+      held.agentCommand === agentCommand &&
+      held.continuation === continuation
+    ) {
       return { kind: "existing", sessionKey, entry: held };
     }
-    const agentCommand = agentCommandOf(prepared);
     const cwd =
       held?.cwd ?? (prepared.kind === "existing" ? prepared.entry.cwd : prepared.details.cwd);
     const record = yield* until(store.load(sessionKey));
@@ -1861,13 +1866,14 @@ function* useAcpxProviderState(
     // does not touch; what this provider holds in memory is the translated value.
     const exists =
       held?.state === "existing" ||
+      (prepared.kind === "details" && prepared.details.state === "existing") ||
       (record !== undefined && record.sessionMaterialization?.state !== "pending");
     const details: AcpxSessionDetails = {
       sessionKey,
       cwd,
       state: exists ? "existing" : "new",
     };
-    return prepareSessionDetails(agentCommand, details, continuationOfPrepared(prepared));
+    return prepareSessionDetails(agentCommand, details, continuation);
   }
 
   /**
@@ -1941,16 +1947,18 @@ function* useAcpxProviderState(
     prepared: Prepared,
     intent: EnsureIntent,
   ): Operation<ManagedSession> {
+    const current = managed.get(prepared.sessionKey);
     if (
-      prepared.kind === "existing" &&
+      current &&
+      isLive(current) &&
       intent.build !== undefined &&
-      prepared.entry.runtime.partition !== partitionOf(intent.build)
+      (prepared.kind === "details" || current.runtime.partition !== partitionOf(intent.build))
     ) {
       // Keep the session slot until the old transport has finished closing, even on halt.
       const { sessionKey } = prepared;
       yield* scoped(() => ensure(() => releaseHandle(sessionKey)));
       if (holding(prepared.sessionKey)) {
-        throw new Error(`could not release session "${prepared.sessionKey}" to change executables`);
+        throw new Error(`could not release session "${prepared.sessionKey}" before reopening it`);
       }
       prepared = yield* requeried(prepared);
     }
@@ -3205,10 +3213,7 @@ function* useAcpxProviderState(
           // continues what its predecessor established instead of constructing
           // a second conversation beside it.
           const prepared = yield* requeried(resolved);
-          const state =
-            prepared.kind === "existing"
-              ? prepared.entry.state
-              : yield* sessionCreationState(agentName, ownerCommandOf(prepared), prepared.details);
+          const state = yield* sessionCreationState(agentName, prepared);
           // Inside ownership, before the runtime exists and before a turn: a
           // first Prompt constructs this session through ACP, so that is what
           // its construction route says — and a session a native process
@@ -5222,10 +5227,7 @@ function* useAcpxProviderState(
         setup,
       ),
     );
-    const state =
-      prepared.kind === "existing"
-        ? prepared.entry.state
-        : yield* sessionCreationState(agentName, ownerCommandOf(prepared), prepared.details);
+    const state = yield* sessionCreationState(agentName, prepared);
     if (setup !== undefined) {
       // The command is resolved and the construction inputs are settled, and
       // nothing has been reattached or created yet — which is the only place
@@ -5278,19 +5280,20 @@ function* useAcpxProviderState(
         // before the caller saw the failure, and preserving the route is what
         // stops that uncertainty from later being reclassified as
         // client-native.
-        const construction = yield* constructRoute(agentName, prepared);
-        const resumeSessionId = construction?.resumeSessionId;
         return yield* turns.withSlot(prepared.sessionKey, () =>
           withSessionRoute(context, () =>
             scoped(function* (): Operation<Session> {
+              const current = yield* requeried(prepared, prepared.kind === "details");
+              const construction = yield* constructRoute(agentName, current);
+              const resumeSessionId = construction?.resumeSessionId;
               // Before the ensure that creates it, so nothing this scope takes
               // outlives the scope — a handle held past this operation is a
               // second owner of a session a native UI may take.
-              yield* ensure(() => releaseHandle(prepared.sessionKey));
-              const entry = yield* ensureFromPrepared(agentName, prepared, {
+              yield* ensure(() => releaseHandle(current.sessionKey));
+              const entry = yield* ensureFromPrepared(agentName, current, {
                 ...(construction === undefined ? {} : { build: construction.build }),
                 ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
-                state,
+                state: yield* sessionCreationState(agentName, current),
                 ...(selectedAgent === undefined
                   ? {}
                   : { resumeFailureStage: "held-session-ensure" }),

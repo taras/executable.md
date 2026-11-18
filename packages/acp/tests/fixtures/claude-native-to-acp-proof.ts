@@ -1068,6 +1068,24 @@ function valueOf(invocation: Invocation, flag: string): string | undefined {
   return index >= 0 ? invocation.argv[index + 1] : undefined;
 }
 
+export function recordNativeInvocations(observed: Invocation[], verdict: JourneyVerdict): void {
+  const ui = nativeUiInvocations(observed);
+  const opening = ui[0];
+  if (opening) {
+    verdict.firstCommand = filtered(opening);
+  }
+  const allocated = new Set(
+    ui
+      .map((invocation) => valueOf(invocation, "--session-id"))
+      .filter((value): value is string => typeof value === "string"),
+  );
+  verdict.identityAllocations = allocated.size;
+  // Nothing after the native launch may start a Claude of its own: an ACP turn
+  // that spawned one would be a native UI, not an attachment.
+  verdict.substitutedIdentity = ui.length > 1;
+  verdict.freshFallback = allocated.size > 1;
+}
+
 /** The command shape a verdict may carry: the private path is never in it. */
 export function filtered(invocation: Invocation): string[] {
   const argv = ["claude", ...invocation.argv];
@@ -1472,21 +1490,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     .filter((entry): entry is string => typeof entry === "string");
 
   const observed = yield* observedInvocations(journey);
-  const ui = nativeUiInvocations(observed);
-  const opening = ui[0];
-  if (opening) {
-    verdict.firstCommand = filtered(opening);
-  }
-  const allocated = new Set(
-    ui
-      .map((invocation) => valueOf(invocation, "--session-id"))
-      .filter((value): value is string => typeof value === "string"),
-  );
-  verdict.identityAllocations = allocated.size;
-  // Nothing after the native launch may start a Claude of its own: an ACP turn
-  // that spawned one would be a native UI, not an attachment.
-  verdict.substitutedIdentity = ui.length > 1;
-  verdict.freshFallback = allocated.size > 1;
+  recordNativeInvocations(observed, verdict);
 
   // The prepared text, held here and nowhere else. It answers the two questions
   // about where it travelled, and reaches no rendered field.

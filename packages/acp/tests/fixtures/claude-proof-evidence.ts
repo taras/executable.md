@@ -12,12 +12,28 @@ import type { AgentSessionRouteStore, AgentSessionRouteV2 } from "../../src/sess
 import { createAcpxSessionStore } from "../../src/session-store.ts";
 
 export function nativeUiInvocations<T extends { argv: string[] }>(invocations: T[]): T[] {
-  return invocations.filter(
-    ({ argv }) =>
-      !argv.some((arg) => ["--print", "-p", "--input-format", "--output-format"].includes(arg)) &&
-      ((argv[0] === "--session-id" && argv.includes("--system-prompt-file")) ||
-        (argv[0] === "--resume" && !argv.includes("--session-id"))),
-  );
+  return invocations.filter(({ argv }) => {
+    const [command, option] = argv;
+    if (["--version", "-v", "--help", "-h", "help", "--print", "-p"].includes(command ?? "")) {
+      return false;
+    }
+    if (
+      (command === "auth" && option === "status") ||
+      (command === "project" && option === "purge") ||
+      ((command === "--output-format" || command === "--input-format") && option === "stream-json")
+    ) {
+      return false;
+    }
+    // The two headless capability probes put --print *after* their option values.
+    // A flag-like id or private-file path is still just that option's value.
+    return !(
+      (command === "--resume" && argv.length === 3 && argv[2] === "--print") ||
+      (command === "--session-id" &&
+        argv.length === 5 &&
+        argv[2] === "--system-prompt-file" &&
+        argv[4] === "--print")
+    );
+  });
 }
 
 export function claudeKeyPaths(root: string, agent: string, sessionKey: string): string[] {
