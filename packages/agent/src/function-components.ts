@@ -289,6 +289,9 @@ export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
       // travels where the engine identity already travels — inside the value,
       // reachable only by the installed provider's coordinator.
       session = yield* Agent.operations.session(issuance.request);
+    } catch (error) {
+      issuance.close();
+      throw yield* describedSessionRefusal(error);
     } finally {
       issuance.close();
     }
@@ -830,6 +833,57 @@ function* selectPromptDiagnostic(error: Error): Operation<SerializedPromptFailur
   } catch {
     return fallback;
   }
+}
+
+/**
+ * An ordinary Session's resume refusal, with its screened diagnostic in the
+ * message — the one field a root failure, its journal and a log retain.
+ *
+ * Only a refusal whose carrier says ordinary resolution produced it gains the
+ * suffix. Any other error, and a refusal whose diagnostic does not survive
+ * screening, propagates unchanged. The described error carries neither the
+ * raw refusal nor its carrier.
+ */
+function* describedSessionRefusal(error: unknown): Operation<unknown> {
+  if (
+    !(error instanceof Error) ||
+    error.name !== SESSION_RESUME_REQUIRED_ERROR ||
+    readPromptDiagnostic(error)?.stage !== "session-ensure"
+  ) {
+    return error;
+  }
+  const diagnostic = yield* selectPromptDiagnostic(error);
+  if (diagnostic === undefined) {
+    return error;
+  }
+  const lines = [
+    error.message,
+    `Resume diagnostic (provider=${diagnostic.provider}, operation=${diagnostic.operation}, stage=${diagnostic.stage})`,
+  ];
+  if (diagnostic.origin !== undefined) {
+    lines.push(`Normalization origin: ${diagnostic.origin}`);
+  }
+  if (diagnostic.code !== undefined) {
+    lines.push(
+      `Runtime code: ${JSON.stringify(diagnostic.code)}` +
+        (diagnostic.code === "RUNTIME" ? " (normalizer fallback)" : ""),
+    );
+  }
+  if (diagnostic.detailCode !== undefined) {
+    lines.push(`Runtime detail code: ${JSON.stringify(diagnostic.detailCode)}`);
+  }
+  if (diagnostic.acp !== undefined) {
+    lines.push(`ACP code: ${diagnostic.acp.code}`);
+    if (diagnostic.acp.message !== undefined) {
+      lines.push(`ACP message: ${JSON.stringify(diagnostic.acp.message)}`);
+    }
+    if (diagnostic.acp.details !== undefined) {
+      lines.push(`ACP details: ${JSON.stringify(diagnostic.acp.details)}`);
+    }
+  }
+  const described = new Error(lines.join("\n"));
+  described.name = SESSION_RESUME_REQUIRED_ERROR;
+  return described;
 }
 
 export function* retainPromptFailure(error: Error): Operation<SerializedPromptFailure> {

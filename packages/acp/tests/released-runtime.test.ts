@@ -13,7 +13,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, walk, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
@@ -28,7 +28,7 @@ import type {
 } from "../src/acpx-runtime.ts";
 import { retainedSession } from "../src/session-store.ts";
 import { createAcpxProvider } from "../src/provider.ts";
-import { useNormalizedOutput } from "@executablemd/core";
+import { registerComponents, useNormalizedOutput } from "@executablemd/core";
 import { Agent, configurationOf } from "@executablemd/agent/api";
 import {
   agentIdentityComponents,
@@ -37,7 +37,12 @@ import {
 } from "@executablemd/agent/host";
 import type { AgentPromptEvent, Session } from "@executablemd/agent/api";
 import { executeInstalled } from "@executablemd/core/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import {
+  InMemoryStream,
+  parseDurableEvent,
+  protocolToEffection,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import { applySessionConfiguration } from "../src/session-configuration.ts";
 import { checkpointFromResult } from "../src/checkpoint.ts";
 import { consumeTurn } from "../src/events.ts";
@@ -48,6 +53,9 @@ import {
 } from "../vendor/acpx/generated/queue-owner-runtime-ucHvXJ33.js";
 
 import { AGENT_SOURCE, STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
+import Capture, {
+  props as captureProps,
+} from "../../../examples/adversarial-implementation/components/Ticket/Capture.ts";
 
 function* runtimeWorld() {
   const current = yield* world();
@@ -1386,6 +1394,242 @@ describe(
           .filter(Boolean)
           .map((line) => methodReport.parse(JSON.parse(line)).method);
         expect(recoveredMethods).toEqual(["session/load", "session/prompt"]);
+      });
+    }
+  },
+);
+
+describe(
+  "resume retention: ordinary Session refusal reporting",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    const credential = ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
+    const unrelated = "unrelated-adapter-envelope";
+    for (const [row, failure, detail] of [
+      ["I1", "fail-load", "Release the active writer before reconnecting."],
+      ["I2", "fail-load", credential],
+      ["I3", "no-load", undefined],
+    ] as const) {
+      it(`${row}: ${failure} reaches the root, its journal and Capture screened, with the original conversation unchanged`, function* () {
+        const current = yield* world(true);
+        const seed = createAcpRuntime({
+          cwd: current.dir,
+          sessionStore: current.store,
+          agentRegistry: current.registry,
+          permissionMode: "deny-all",
+        });
+        yield* ensure(() => until(seed.shutdown()));
+        const sessionKey = "ordinary-" + randomUUID();
+        const handle = yield* until(
+          seed.ensureSession({ sessionKey, agent: "scribe", mode: "persistent" }),
+        );
+        expect(
+          (yield* drainedResult(
+            seed.startTurn({ handle, text: "seed", mode: "prompt", requestId: "seed" }),
+          )).status,
+        ).toBe("completed");
+        yield* until(seed.shutdown());
+        const before = yield* until(current.store.load(sessionKey));
+        if (before === undefined) {
+          throw new Error("missing seeded record");
+        }
+        expect(before.sessionMaterialization).toBe(undefined);
+        expect(before.agentSessionId).toBe(`native-${before.acpSessionId}`);
+        const flag = join(current.dir, failure);
+        yield* writeTextFile(
+          flag,
+          failure === "fail-load"
+            ? JSON.stringify({
+                code: -32041,
+                message: "Internal error",
+                data: { details: detail, unrelated },
+              })
+            : "enabled",
+        );
+        const docs = join(current.dir, "documents");
+        const ignored = [join(current.dir, "methods.jsonl"), flag, docs];
+        function* files() {
+          const contents: Record<string, string> = {};
+          for (const entry of yield* each(walk(current.dir, { includeDirs: false }))) {
+            if (!ignored.some((path) => entry.path.startsWith(path))) {
+              contents[entry.path] = yield* readTextFile(entry.path);
+            }
+            yield* each.next();
+          }
+          return contents;
+        }
+        const physical = yield* files();
+        expect(Object.values(physical).some((text) => text.includes(before.acpSessionId))).toBe(
+          true,
+        );
+        const saves = current.storeCalls.save;
+
+        const run = function* (doc: string) {
+          return yield* scoped(function* () {
+            yield* installAgentComponents({
+              defaultAgent: "scribe",
+              rootProvider: {
+                options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+                factory: createAcpxProvider({
+                  sessionStore: current.store,
+                  agentRegistry: current.registry,
+                  nativeAdapters: {
+                    scribe: {
+                      launcher: "scribe",
+                      identity: "provider-returned",
+                      acceptance: "first-turn-acceptance",
+                      resume: () => [],
+                    },
+                  },
+                  advertiseNativeLaunch: [],
+                  advertiseClientNativeAttachment: [],
+                  *agentCwd() {
+                    return current.dir;
+                  },
+                  sessions: {
+                    *requestSession() {
+                      return { sessionKey, cwd: current.dir, state: "existing" };
+                    },
+                    *recordSessionIdentity() {},
+                  },
+                }),
+              },
+            });
+            const prompts: unknown[] = [];
+            yield* Agent.around({
+              *prompt(args, next) {
+                prompts.push(args[0]);
+                return yield* next(...args);
+              },
+            });
+            const captured: { status: string; output: string; failure: string | null }[] = [];
+            yield* registerComponents([
+              {
+                name: "Capture",
+                origin: "test",
+                props: captureProps,
+                *fn() {
+                  const value = yield* Capture();
+                  captured.push(value);
+                  return value;
+                },
+              },
+            ]);
+            const path = join(docs, `${randomUUID()}.md`);
+            yield* writeTextFile(path, doc);
+            yield* useNormalizedOutput();
+            const journal = new InMemoryStream();
+            const methodsBefore = yield* readTextFile(join(current.dir, "methods.jsonl"));
+            const execution = yield* executeInstalled({ path, stream: journal }, [
+              { components: agentIdentityComponents() },
+            ]);
+            const output = yield* execution.output;
+            let next = yield* output.next();
+            while (!next.done) {
+              next = yield* output.next();
+            }
+            const result = yield* execution;
+            const methods = (yield* readTextFile(join(current.dir, "methods.jsonl")))
+              .slice(methodsBefore.length)
+              .trim()
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => methodReport.parse(JSON.parse(line)).method);
+            return {
+              result,
+              output: next.value,
+              history: journal.snapshot(),
+              prompts,
+              captured,
+              methods,
+            };
+          });
+        };
+        yield* ensureDir(docs);
+
+        const facts = [
+          `Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`,
+          "Resume diagnostic (provider=acp, operation=session/ensure, stage=session-ensure)",
+          "Normalization origin: acp",
+          'Runtime code: "RUNTIME" (normalizer fallback)',
+          'Runtime detail code: "SESSION_RESUME_REQUIRED"',
+          ...(failure === "fail-load"
+            ? [
+                "ACP code: -32041",
+                'ACP message: "Internal error"',
+                ...(detail === credential ? [] : [`ACP details: ${JSON.stringify(detail)}`]),
+              ]
+            : []),
+        ].join("\n");
+        function excludesPrivate(text: string) {
+          expect(text).not.toContain(unrelated);
+          expect(text).not.toContain(credential);
+          expect(text).not.toContain("Persistent ACP session");
+        }
+        const body = "Session body must not run.";
+        const later = "Later success must not run.";
+        const session = `<Agent name="scribe"><Session name="review">${body}</Session></Agent>`;
+
+        const direct = yield* run(`${session}\n\n${later}\n`);
+        expect(direct.result.ok).toBe(false);
+        if (direct.result.ok) {
+          throw new Error("the refused Session completed");
+        }
+        const chain: Error[] = [];
+        for (let error: unknown = direct.result.error; error instanceof Error; ) {
+          chain.push(error);
+          error = error.cause;
+        }
+        expect(chain.map((error) => error.message).join("\n")).toContain(facts);
+        for (const error of chain) {
+          excludesPrivate(`${error.message}\n${error.stack ?? ""}`);
+        }
+        expect(direct.output).not.toContain(body);
+        expect(direct.output).not.toContain(later);
+        excludesPrivate(direct.output);
+        const retained = direct.history.map((event) =>
+          parseDurableEvent(serializeDurableEvent(event)),
+        );
+        const close = retained.findLast(
+          (event) =>
+            event.ok && event.value.type === "close" && event.value.result.status === "err",
+        );
+        if (close?.ok !== true || close.value.result.status !== "err") {
+          throw new Error("no retained root failure");
+        }
+        const reread = protocolToEffection(close.value.result);
+        expect(!reread.ok && reread.error.message).toContain(facts);
+        excludesPrivate(JSON.stringify(direct.history));
+        expect(
+          direct.history.filter(
+            (event) => event.type === "yield" && event.description.type === "agent_prompt",
+          ),
+        ).toEqual([]);
+        expect(direct.prompts).toEqual([]);
+        expect(direct.methods).toEqual(failure === "fail-load" ? ["session/load"] : []);
+
+        const capture = yield* run(`<Capture>\n\n${session}\n\n${later}\n\n</Capture>\n`);
+        expect(capture.captured).toHaveLength(1);
+        const [captured] = capture.captured;
+        expect(captured?.status).toBe("failed");
+        expect(captured?.failure).toContain(facts);
+        excludesPrivate(captured?.failure ?? "");
+        expect(captured?.output).not.toContain(body);
+        expect(captured?.output).not.toContain(later);
+        expect(capture.output).not.toContain(body);
+        expect(capture.output).not.toContain(later);
+        excludesPrivate(JSON.stringify(capture.history));
+        expect(
+          capture.history.filter(
+            (event) => event.type === "yield" && event.description.type === "agent_prompt",
+          ),
+        ).toEqual([]);
+        expect(capture.prompts).toEqual([]);
+        expect(capture.methods).toEqual(failure === "fail-load" ? ["session/load"] : []);
+
+        expect(yield* until(current.store.load(sessionKey))).toEqual(before);
+        expect(yield* files()).toEqual(physical);
+        expect(current.storeCalls.save).toBe(saves);
       });
     }
   },
