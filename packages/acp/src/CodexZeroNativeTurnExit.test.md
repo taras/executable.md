@@ -4,12 +4,12 @@ A prepared session you never speak in should still be there tomorrow. For Claude
 that costs nothing, and `ClaudeZeroTurnExit.test.md` proves it: the session the
 launch constructs is openable the moment it exists.
 
-Codex is not like that. Codex CLI 0.153.2 does not write a conversation anywhere
-`codex resume` can find it until a turn has completed in it, so a launch that
-handed you the native UI without one would hand you a name Codex disowns. XMD
-therefore spends exactly one model turn of its own — `codex-materialization.v1`,
-whose only job is to make the conversation openable — and then gets out of the
-way.
+Codex is not like that. Codex CLI, as first proven at 0.153.2, does not write a
+conversation anywhere `codex resume` can find it until a turn has completed in
+it, so a launch that handed you the native UI without one would hand you a name
+Codex disowns. XMD therefore spends exactly one model turn of its own —
+`codex-materialization.v1`, whose only job is to make the conversation openable
+— and then gets out of the way.
 
 That turn is the whole subject of this document, and it asks the two questions
 that decide whether it was worth spending.
@@ -38,8 +38,10 @@ identity, environment or authored content.
 It is opt-in twice over. Without `XMD_CODEX_NATIVE_PROOF=1` the fixture refuses
 before starting any Codex process; without a separate
 `XMD_CODEX_MODEL_TURNS_AUTHORIZED=1` it refuses before spending the turn. It
-also refuses on a machine outside the frozen compatibility tuple below, because
-the finding this feature rests on is a fact about one Codex build.
+also refuses when the carried Codex adapter is not the one named below, because
+that adapter is part of XMD's own integration. The installed Codex release, its
+digest and the host platform are recorded as evidence of what ran and never
+decide whether it passes.
 
 Everything sent besides that turn is terminal control: Codex's own directory
 trust dialog is answered at most once with the choice it pre-selects, and the
@@ -254,19 +256,12 @@ of the public contract may not open.
 
 <If condition={proof.ran}>
 
-## The frozen compatibility point
+## The carried adapter, and what else ran
 
-The materialization turn exists because of a fact about one Codex build. This
-records which one, so a later build that stopped needing it — or started needing
-something else — cannot pass as this one.
+The adapter is XMD's own integration, so this run names it exactly. The Codex
+release, its digest, the platform and the architecture are reported beside it
+as evidence of what this run exercised; none is compared with an earlier run.
 
-<AssertEquals actual={proof.platform} expected={"darwin"} />
-<AssertEquals actual={proof.architecture} expected={"arm64"} />
-<AssertEquals actual={proof.codexVersion} expected={"codex-cli 0.153.2"} />
-<AssertEquals
-  actual={proof.codexDigest}
-  expected={"195ace4100a634a9df39147f493e730e666b5bd87795f3c9f3251d8542400424"}
-/>
 <AssertEquals actual={proof.adapterPackage} expected={"@agentclientprotocol/codex-acp"} />
 <AssertEquals actual={proof.adapterVersion} expected={"1.6.2"} />
 <AssertEquals
@@ -362,16 +357,16 @@ inconvenient.
 
 ## Route and journal agree
 
-The route names the construction and the Codex build the tuple above froze, and
-nothing else: an ACP-first route deliberately records no conversation identity,
-launcher or instruction layer, so those are read from the journal instead. A
+The route names the construction and nothing else: a fresh ACP-first route
+records no conversation identity, launcher, instruction layer or executable
+build, so the identity and instructions are read from the journal instead. A
 route that had converted to anything but `acp-first` would mean the launch
 stopped being the one this document describes.
 
 <AssertEquals actual={proof.route.kind} expected={"acp-first"} />
 <AssertEquals actual={proof.route.provider} expected={"acpx"} />
-<AssertEquals actual={proof.route.buildVersion} expected={proof.codexVersion} />
-<AssertEquals actual={proof.route.buildDigest} expected={proof.codexDigest} />
+<AssertEquals actual={proof.route.buildVersion} expected={""} />
+<AssertEquals actual={proof.route.buildDigest} expected={""} />
 <AssertEquals actual={proof.journal.provider} expected={"acpx"} />
 <AssertEquals actual={proof.journal.agent} expected={"codex"} />
 <AssertEquals actual={proof.journal.launcher} expected={"codex"} />
@@ -404,11 +399,12 @@ finding a conversation that is already openable, does not.
 
 <Else>
 
-## Without the authorization, or the build, nothing started
+## Without the authorization, or the carried adapter, nothing started
 
 The refusal happens before any Codex conversation exists, so an unauthorized run
 spends no turn and observes nothing. This is the branch that runs on an ordinary
-machine, and the branch that runs on a machine outside the frozen tuple.
+machine, and the branch that runs when the carried adapter is not the one named
+above.
 
 <Assert expr={proof.verdict === "REFUSED" || proof.verdict === "ENVIRONMENT_BLOCKED"} />
 <Assert

@@ -1154,7 +1154,6 @@ function* useAcpxProviderState(
   };
   const coordinator = dependencies?.coordinator;
   const routeStore = dependencies?.routeStore;
-
   const promptUsageHost = dependencies?.promptUsageHost;
   const adapterBuild = dependencies?.adapterBuild;
   const agentCwd = dependencies?.agentCwd ?? cwd;
@@ -1175,7 +1174,6 @@ function* useAcpxProviderState(
       ? undefined
       : structuredClone(dependencies.newSessionOptions);
   const sessions = checkedSessionPolicy(dependencies?.sessions);
-
   const strict = dependencies?.permissions === "strict";
   const stateScope = yield* useScope();
   const turns = yield* useSerialQueues();
@@ -2346,14 +2344,14 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Whether this agent's sessions carry a construction route and one build.
+   * Whether this agent's sessions carry a construction route and a selected
+   * executable.
    *
-   * The two facts arrive together and for the same reason. A route says how the
-   * session was first constructed, and for an adapter that pins a build the
-   * build is part of that account: whichever side chose the identity, the name
-   * resolves to one conversation only beside the build that issued or accepted
-   * it. An agent whose adapter binds nothing keeps its merged behavior, on a
-   * host that installs neither.
+   * An advertised adapter that carries an executable binding has its
+   * executable selected by this host, and whichever side chose the identity,
+   * the route is what says how the session was first constructed. An agent
+   * whose adapter binds nothing keeps its merged behavior, on a host that
+   * installs no route store.
    */
   function boundSessions(agentName: string): boolean {
     const adapter = adapterFor(agentName);

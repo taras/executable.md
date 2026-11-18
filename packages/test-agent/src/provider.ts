@@ -75,7 +75,6 @@ export interface TestAgentProviderOptions {
   coordinator?: AgentSessionCoordinator;
   /** How this partition's sessions were constructed. Its own, like the rest. */
   routeStore?: AgentSessionRouteStore;
-
   dependencies?: AcpxProviderDependencies;
   inspection?: {
     agent: string;
@@ -297,7 +296,6 @@ export function* useTestAgentProvider(
       }),
     ...(options.coordinator ? { coordinator: options.coordinator } : {}),
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
-
     ...(options.dependencies?.createRuntime
       ? { createRuntime: options.dependencies.createRuntime }
       : {}),

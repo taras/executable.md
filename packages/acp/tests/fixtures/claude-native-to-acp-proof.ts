@@ -856,11 +856,16 @@ interface JourneyVerdict {
     present: boolean;
     agentSessionId: string;
   };
-  /** The build this run observed, reobserved after the whole journey. */
+  /**
+   * The build this run observed after the whole journey.
+   *
+   * Recorded evidence of what ran. It decides nothing: a fresh route keeps no
+   * executable history to compare it with, and a release absent from earlier
+   * evidence is what this opt-in regression exists to exercise.
+   */
   observed: {
     version: string;
     digestPresent: boolean;
-    matchesRoute: boolean;
   };
   /** The independent case: a route naming a conversation nobody ever had. */
   absent: {
@@ -943,7 +948,7 @@ function blankJourney(mode: Mode): JourneyVerdict {
       failureClasses: [],
     },
     arrangement: { present: false, agentSessionId: "" },
-    observed: { version: "", digestPresent: false, matchesRoute: false },
+    observed: { version: "", digestPresent: false },
     absent: {
       ran: false,
       xmdExitCode: -1,
@@ -1676,8 +1681,8 @@ function* runAttachment(
   verdict.markerRecovered = squeeze(acp.stdout).includes(`${RECOVER_PREFIX}${marker}`);
   verdict.outcome = verdict.markerRecovered ? "same-conversation" : "unresolved";
 
-  // Reobserved after the whole journey, against what the route retained. A
-  // build that moved is the same build; a build that changed is not.
+  // Observed after the whole journey, as evidence of which build ran. Nothing
+  // is compared with it.
   const reobserved = yield* observeBuild(journey);
   verdict.observed.version = reobserved.version;
   verdict.observed.digestPresent = reobserved.digest.length === 64;
@@ -1826,14 +1831,12 @@ function decideAttachment(verdict: JourneyVerdict): void {
     verdict.detail = "the route, the journal and the ACP arrangement do not name one conversation";
     return;
   }
-  verdict.observed.matchesRoute =
-    verdict.observed.version.length > 0 && verdict.observed.version === verdict.route.buildVersion;
-  if (
-    !verdict.observed.matchesRoute ||
-    verdict.journal.buildVersion !== verdict.route.buildVersion
-  ) {
+  // A fresh route and its journal record no executable history. Whatever the
+  // two original accounts say about a build, they must say the same thing; the
+  // build this run used is never compared with either.
+  if (verdict.journal.buildVersion !== verdict.route.buildVersion) {
     verdict.verdict = "PRODUCT_FAILED";
-    verdict.detail = "the retained build and the build this run would use are not the same";
+    verdict.detail = "the route and the journal describe the session's build differently";
     return;
   }
   if (verdict.substitutedIdentity || verdict.freshFallback || verdict.routeConverted) {

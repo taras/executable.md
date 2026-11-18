@@ -31,8 +31,6 @@ import type { IdentityProvenance } from "@executablemd/agent/api";
 export interface NativeBinding {
   /** The launcher command whose executable a host selects. */
   command: string;
-  /** The arguments that ask that exact file its version. */
-  versionArgs?: readonly string[];
   /**
    * The canonical version from that output, or `undefined` when the output is
    * not something this adapter recognizes. Used by the opt-in proofs that

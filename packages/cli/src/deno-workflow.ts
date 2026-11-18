@@ -50,7 +50,6 @@ export function* useDenoWorkflowHost(
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
-
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });

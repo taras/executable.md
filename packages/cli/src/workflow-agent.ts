@@ -438,15 +438,14 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     ...(options.agentProcessEnv === undefined ? {} : { agentProcessEnv: options.agentProcessEnv }),
     ...(options.promptUsageHost === undefined ? {} : { promptUsageHost: options.promptUsageHost }),
-
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,
     // arranged in the run's own sidecar, and continued by reattaching that row.
     // The ordinary-run capabilities are about a different account entirely —
     // machine-wide ownership and construction routes — and this profile
-    // supplies neither. Inheriting the package's
-    // advertised sets by omission would make a workflow Claude prompt demand
-    // ownership and a route that this profile has no way to give it.
+    // supplies neither. Inheriting the package's advertised sets by omission
+    // would make a workflow Claude prompt demand ownership and a route that
+    // this profile has no way to give it.
     advertiseNativeLaunch: [],
     advertiseClientNativeAttachment: [],
     // The Workspace root is a logical path, not a directory an agent process

@@ -244,11 +244,9 @@ nothing was said before the first.
 
 The question named neither the sentence nor any file. The answer carried the
 opening sentence of `.agents/implementor.md` exactly, which only the prepared
-layer could have supplied.
+layer could have supplied. The Claude version, platform and architecture the
+verdict reports are evidence of what ran, never a condition of passing.
 
-<AssertEquals actual={proof.claudeVersion} expected={"2.1.241 (Claude Code)"} />
-<AssertEquals actual={proof.platform} expected={"darwin"} />
-<AssertEquals actual={proof.architecture} expected={"arm64"} />
 <Assert expr={proof.openingSentenceExact} />
 
 ## The resumed session is the same conversation

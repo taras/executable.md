@@ -1593,6 +1593,17 @@ function* runTwoTurn(journey: Journey, verdict: JourneyVerdict, marker: string):
 const ZERO_TURN_ACCEPTED: readonly string[] = ["same-identity", "no-session"];
 
 function decideZeroTurn(verdict: JourneyVerdict): void {
+  // XMD confirms a client-native identity over ACP after creating it and again
+  // before resuming it. A session Claude kept nothing of is therefore refused
+  // by XMD itself, before any re-entry child, with the stable class in the
+  // journal — the same exact-identity refusal, said one step earlier.
+  if (
+    verdict.outcome === "unresolved" &&
+    verdict.secondInvocationChildren === 0 &&
+    verdict.journal.failureClasses.includes("identity-unavailable")
+  ) {
+    verdict.outcome = "no-session";
+  }
   if (!ZERO_TURN_ACCEPTED.includes(verdict.outcome)) {
     verdict.verdict = "PRODUCT_FAILED";
     verdict.detail = "re-entry was neither the same identity nor an explicit refusal";
@@ -1607,7 +1618,7 @@ function decideZeroTurn(verdict: JourneyVerdict): void {
   verdict.detail =
     verdict.outcome === "same-identity"
       ? "re-entry reached its conversation surface under the exact retained identity"
-      : "re-entry refused the exact retained identity, and XMD failed closed";
+      : "the exact retained identity was refused, and XMD failed closed";
 }
 
 function decideTwoTurn(verdict: JourneyVerdict): void {
@@ -1838,8 +1849,8 @@ function* runPreflight(): Operation<PreflightVerdict> {
     verdict.advertised[0] === "claude";
   verdict.verdict = established ? "PASS" : "ENVIRONMENT_BLOCKED";
   verdict.detail = established
-    ? "the frozen compatibility point is established, and no model turn was spent"
-    : "the frozen compatibility point is not established";
+    ? "the surfaces this journey needs are established, and no model turn was spent"
+    : "the surfaces this journey needs are not established";
   return verdict;
 }
 

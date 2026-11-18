@@ -1034,7 +1034,8 @@ while the conversation it continues is the same native history, so the current
 adapter is attempted on that history. What the provider actually applies is
 verified where it applies it (§Session configuration), and a genuine resume,
 assertion or configuration failure still fails the turn without a replacement
-conversation or a new prompt. A version change is reported, never a failure. A reopening on its own performs no
+conversation or a new prompt. A changed executable is neither reported nor a
+failure. A reopening on its own performs no
 activation and no provider work at all; the configuration record is re-offered
 in its own position so the turns written after it replay in order, and it is
 never rewritten. The record is configuration, not identity: an absent Prompt

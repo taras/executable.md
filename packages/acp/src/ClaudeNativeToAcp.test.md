@@ -183,11 +183,10 @@ would fail this document.
     "observed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "digestPresent", "matchesRoute"],
+            "required": ["version", "digestPresent"],
       "properties": {
         "version": { "type": "string" },
-        "digestPresent": { "type": "boolean" },
-        "matchesRoute": { "type": "boolean" }
+        "digestPresent": { "type": "boolean" }
       }
     },
     "absent": {
@@ -276,8 +275,6 @@ memory — never in the instruction file, the argument vector, the environment, 
 session key, or the document the ACP turn ran. The answer produced it behind a
 prefix that appears in no earlier turn.
 
-<AssertEquals actual={proof.platform} expected={"darwin"} />
-<AssertEquals actual={proof.architecture} expected={"arm64"} />
 <Assert expr={proof.markerStored} />
 <AssertFalse expr={proof.acpDocumentCarriesMarker} />
 <Assert expr={proof.markerRecovered} />
@@ -297,32 +294,33 @@ the launch, and nothing after it named a second.
 <AssertFalse expr={proof.freshFallback} />
 <AssertFalse expr={proof.routeConverted} />
 
-## One conversation, one build, four accounts
+## One conversation, four accounts
 
 The route, the journal, the ACP client's own arrangement and the identity the
-launch reported all name the same conversation — and the build this run would
-use is the build the route retained.
+launch reported all name the same conversation. A fresh route records how the
+session was constructed and nothing about the executable that ran it, so
+neither the route nor the journal carries a build. The platform, architecture,
+Claude version and digest the verdict reports are evidence of what ran, never
+a condition of passing.
 
-<AssertEquals actual={proof.route.schema} expected={"session-route.v2"} />
+<AssertEquals actual={proof.route.schema} expected={"session-route.v1"} />
 <AssertEquals actual={proof.route.kind} expected={"client-native"} />
 <AssertEquals actual={proof.route.provenance} expected={"client-allocated"} />
 <AssertEquals actual={proof.route.launcher} expected={"claude"} />
 <AssertEquals actual={proof.route.nativeSessionId} expected={proof.nativeSessionId} />
 <Assert expr={proof.route.instructionsDigestPresent} />
-<Assert expr={proof.route.buildDigestPresent} />
-<AssertEquals actual={proof.route.buildVersion} expected={proof.claudeVersion} />
+<AssertFalse expr={proof.route.buildDigestPresent} />
+<AssertEquals actual={proof.route.buildVersion} expected={""} />
 <AssertEquals actual={proof.journal.provider} expected={"acpx"} />
 <AssertEquals actual={proof.journal.agent} expected={"claude"} />
 <AssertEquals actual={proof.journal.launcher} expected={"claude"} />
 <AssertEquals actual={proof.journal.provenance} expected={"client-allocated"} />
 <AssertEquals actual={proof.journal.nativeSessionId} expected={proof.nativeSessionId} />
-<AssertEquals actual={proof.journal.buildVersion} expected={proof.route.buildVersion} />
+<AssertEquals actual={proof.journal.buildVersion} expected={""} />
 <AssertEquals actual={proof.journal.firstPhases} expected={["prepared", "detached", "exited"]} />
 <AssertEquals actual={proof.journal.failureClasses} expected={[]} />
 <Assert expr={proof.arrangement.present} />
 <AssertEquals actual={proof.arrangement.agentSessionId} expected={proof.nativeSessionId} />
-<Assert expr={proof.observed.digestPresent} />
-<Assert expr={proof.observed.matchesRoute} />
 
 ## The adapter the attachment was proven against
 
@@ -337,9 +335,10 @@ so this binding names one — and the name is live, reaching no durable record.
 
 ## An identity nobody ever had is refused before a turn
 
-The independent case. A bound route naming a fresh random conversation, in a
-directory of its own, with no provider arrangement beside it: the prompt refuses
-rather than starting an empty conversation and answering from it.
+The independent case. A route in the historical bound V2 form an earlier release
+published, naming a fresh random conversation, in a directory of its own, with
+no provider arrangement beside it: the prompt reads that released record, and
+refuses rather than starting an empty conversation and answering from it.
 
 <Assert expr={proof.absent.ran} />
 <AssertEquals actual={proof.absent.failureClass} expected={"identity-unavailable"} />

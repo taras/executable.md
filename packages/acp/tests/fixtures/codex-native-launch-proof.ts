@@ -1694,7 +1694,7 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
   if (!verdict.compatibilityTupleFrozen) {
     verdict.ran = false;
     verdict.verdict = "ENVIRONMENT_BLOCKED";
-    verdict.detail = "this journey is only meaningful against the frozen compatibility tuple";
+    verdict.detail = "this journey is only meaningful through the carried adapter it names";
     return false;
   }
   if (!verdict.projectCopyVerified) {
@@ -2284,8 +2284,8 @@ function* runPreflight(): Operation<PreflightVerdict> {
     verdict.binaryBuilt;
   verdict.verdict = established ? "PASS" : "ENVIRONMENT_BLOCKED";
   verdict.detail = established
-    ? "the frozen compatibility point is established, and no model turn was spent"
-    : "the frozen compatibility point is not established";
+    ? "the surfaces this journey needs are established, and no model turn was spent"
+    : "the surfaces this journey needs are not established";
   return verdict;
 }
 
