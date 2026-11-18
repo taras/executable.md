@@ -31,6 +31,7 @@ import {
   fakeGitHubAccess,
   gitHubStore,
   issueCreations,
+  mutations,
   patches,
 } from "./support/github.ts";
 import {
@@ -49,6 +50,7 @@ import {
   useManagedRoot,
   useNamedOriginCheckout,
 } from "./support/run-composition.ts";
+import { stored } from "./support/pull-requests.ts";
 import {
   GITHUB_LOCATOR,
   HEAD,
@@ -616,6 +618,35 @@ describe("ORC17 — live PullRequests", () => {
     expect(String(rendered)).toContain("state open");
     // The evidence it bound names the repository this run acted on.
     expect(String(rendered)).toContain("number 1");
+  });
+
+  it("binds a selected details page or renders the same JSON during an ordinary run", function* () {
+    const root = yield* useManagedRoot();
+    const body = "  Ordinary description  \n\n";
+    const pull = stored({ number: 4, body, headSha: HEAD, baseSha: "b".repeat(40) });
+    const store = gitHubStore({ token: TOKEN, pullRequests: [pull] });
+    const options = {
+      root,
+      cwd: root,
+      gitHubPullRequests: {
+        access: gitHubSource(fakeGitHubAccess(store)),
+        configuration: { allowed: [GITHUB_LOCATOR] },
+      },
+    };
+    const read = `<PullRequest url="${GITHUB_LOCATOR}/pull/4" yq=".body"`;
+    const rendered = yield* runOrdinaryDocument(`${read} />`, options);
+    const bound = yield* runOrdinaryDocument(
+      `${read} as="description" />\n\n<Query value={description} yq="." />`,
+      options,
+    );
+    const page = { value: body, next: null, prev: null, last: null };
+    expect(JSON.parse(String(rendered))).toEqual(page);
+    expect(JSON.parse(String(bound))).toEqual(page);
+    expect(store.requests.map(({ method, url }) => [method, new URL(url).pathname])).toEqual([
+      ["GET", "/repos/octo/project/pulls/4"],
+      ["GET", "/repos/octo/project/pulls/4"],
+    ]);
+    expect(mutations(store)).toEqual([]);
   });
 
   it("reads all three collections, each from its own route", function* () {

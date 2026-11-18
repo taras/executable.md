@@ -9,7 +9,11 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { Operation } from "effection";
+import { scoped, type Operation } from "effection";
+import { Component, getExpansion, hasContent, registerComponents } from "@executablemd/core";
+import type { ComponentRegistration } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
+import { PullRequestAPI } from "@executablemd/git/api";
 import type { GitWorkspaceOptions } from "../src/deno/attachment.ts";
 import { PullRequestContentError, PullRequestReadError } from "../src/composition/errors.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
@@ -354,10 +358,48 @@ describe("PullRequest authored read", () => {
       const wrongSubject = yield* refusalOf(elsewhere, `<PullRequest url="${URL_1}" />`);
       expect(String(wrongSubject)).toContain("answered about a different subject");
 
+      const otherHost = githubWith(
+        openPullRequest({ payload: { html_url: "https://elsewhere.test/octo/project/pull/1" } }),
+      );
+      const wrongHost = yield* refusalOf(otherHost, `<PullRequest url="${URL_1}" />`);
+      expect(String(wrongHost)).toContain("answered about a different subject");
+
       const malformed = githubWith(openPullRequest({ payload: { title: 5 } }));
       const broken = yield* refusalOf(malformed, `<PullRequest url="${URL_1}" />`);
       expect(String(broken)).toContain("outside the evidence contract");
     });
+  });
+
+  it("refuses a normalized details record with an empty title", function* () {
+    const store = githubWith(openPullRequest());
+    yield* PullRequestAPI.around({
+      *read(args, next) {
+        const read = yield* next(...args);
+        if (read.kind === "details") {
+          return { ...read, details: { ...read.details, title: "" } };
+        }
+        return read;
+      },
+    });
+    const failure = yield* refusalOf(store, `<PullRequest url="${URL_1}" as="pr" />`);
+    expect(causedBy(failure, isReadError)?.reason).toBe("protocol");
+    expect(lookups(store, 1)).toBe(1);
+  });
+
+  it("publishes the read and write forms through Syntax", function* () {
+    const store = githubWith();
+    const syntax = yield* renderText(store, '<Syntax names={["PullRequest"]} />\n\n<Syntax />');
+    expect(syntax).toContain("**Forms:** `<PullRequest />`, `<PullRequest>…</PullRequest>`");
+    for (const prop of ["url", "provider", "yq", "maxBytes", "number", "title", "base", "draft"]) {
+      expect(syntax).toContain(`| \`${prop}\` |`);
+    }
+    expect(syntax).toContain(
+      "Optional for a read: binds value, next, prev and last instead of rendering JSON.",
+    );
+    expect(syntax).toContain("Required for a paired write: binds its settled PR identity.");
+    expect(syntax).not.toContain("PullRequest.Snapshot");
+    expect(syntax).not.toContain("PullRequest.Details");
+    expect(store.requests).toEqual([]);
   });
 
   it("refuses an invalid read before any GitHub request", function* () {
@@ -388,6 +430,73 @@ describe("PullRequest authored read", () => {
 });
 
 describe("PullRequest authored write", () => {
+  it("validates a pair before expanding children, and a valid pair expands even when hasContent denies it", function* () {
+    let expanded = 0;
+    const contentAnswers: boolean[] = [];
+    const child: ComponentRegistration = {
+      name: "CountChild",
+      origin: "test",
+      props: { type: "object", additionalProperties: false },
+      *fn(): Operation<string> {
+        expanded += 1;
+        contentAnswers.push(yield* hasContent());
+        return "";
+      },
+    };
+    const register = (run: () => Operation<Json>) =>
+      scoped(function* () {
+        yield* registerComponents([child]);
+        return yield* run();
+      });
+
+    const store = githubWith(openPullRequest());
+    for (const attributes of [
+      'as="pr"',
+      'title="Missing binding"',
+      `title="Mixed props" as="pr" url="${URL_1}"`,
+    ]) {
+      yield* inOwnRun(function* (database) {
+        const failure = yield* raised(
+          runWorkflowDocument(
+            database,
+            `<PullRequest ${attributes}><CountChild></CountChild></PullRequest>`,
+            readOptions(store),
+            register,
+          ),
+        );
+        expect(causedBy(failure, isContentError)).toBeDefined();
+      });
+    }
+    expect(expanded).toBe(0);
+    expect(store.requests).toEqual([]);
+
+    const remote = yield* useBareRemote(REMOTE);
+    const run = fixture(remote);
+    yield* inOwnRun(function* (database) {
+      yield* runWorkflowDocument(
+        database,
+        published('<PullRequest title="Valid" as="pr"><CountChild></CountChild></PullRequest>'),
+        run.options,
+        (execute) =>
+          register(function* () {
+            yield* Component.around({
+              *hasContent(_args, next) {
+                const { name } = yield* getExpansion();
+                if (name === "PullRequest" || name === "CountChild") {
+                  return false;
+                }
+                return yield* next();
+              },
+            });
+            return yield* execute();
+          }),
+      );
+    });
+    expect(expanded).toBe(1);
+    expect(contentAnswers).toEqual([false]);
+    expect(creations(run.store)).toBe(1);
+  });
+
   it("writes an explicitly empty pair", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);

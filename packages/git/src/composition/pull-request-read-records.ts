@@ -20,6 +20,7 @@
 
 import { isJsonObject, JsonParseError, parseJson } from "@executablemd/core";
 import type { Json, JsonObject } from "@executablemd/core";
+import { canonicalPullRequestUrl } from "./pull-request-target.ts";
 
 /** Which collection one read covers. */
 export type PullRequestReadKind = "reviews" | "comments" | "checks";
@@ -113,7 +114,7 @@ export function parsePullRequestDetails(value: Json | undefined): PullRequestDet
   const providerId = nonEmptyText(value.providerId);
   const number = value.number;
   const url = nonEmptyText(value.url);
-  const title = text(value.title);
+  const title = nonEmptyText(value.title);
   const body = text(value.body);
   const headBranch = nonEmptyText(value.headBranch);
   const headRepository = nonEmptyText(value.headRepository);
@@ -128,6 +129,7 @@ export function parsePullRequestDetails(value: Json | undefined): PullRequestDet
     !Number.isSafeInteger(number) ||
     number < 1 ||
     url === undefined ||
+    canonicalPullRequestUrl(url) === undefined ||
     (state !== "open" && state !== "closed") ||
     title === undefined ||
     body === undefined ||

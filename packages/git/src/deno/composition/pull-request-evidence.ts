@@ -56,6 +56,7 @@ import type {
   PullRequestReadResult,
   ReviewEvidence,
 } from "../../composition/pull-request-read-records.ts";
+import { canonicalPullRequestUrl } from "../../composition/pull-request-target.ts";
 
 /** What one read produced, or that it could not be completed. */
 export type EvidenceReading =
@@ -586,8 +587,8 @@ export function* readPullRequestEvidence(
  * The complete record one pull request holds, read with one request or not at all.
  *
  * One GET of the pull request, with no collection to walk. The payload must
- * describe the pull request that was asked for: its own URL names this number in
- * this repository, and its base repository is that repository. A well-formed
+ * describe the pull request that was asked for: its URL names this host, repository
+ * and number, and its base repository is that repository. A well-formed
  * record of another pull request is a protocol failure, not the answer.
  *
  * GitHub stores its repositories as SHA-1, so a payload whose commits are not
@@ -597,6 +598,7 @@ export function* readPullRequestDetails(
   access: GitHubAccess,
   name: GitHubRepositoryName,
   number: number,
+  requestedUrl: string,
 ): Operation<EvidenceReading> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
@@ -618,7 +620,7 @@ export function* readPullRequestDetails(
   }
   if (
     reading.number !== number ||
-    !namesPullRequest(reading.url, name, number) ||
+    !namesPullRequest(reading.url, requestedUrl, name, number) ||
     !same(reading.baseRepository, `${name.owner}/${name.repository}`)
   ) {
     return { state: "protocol-invalid" };
@@ -642,15 +644,20 @@ export function* readPullRequestDetails(
 }
 
 /** Whether a pull request's own address is the one this read asked for. */
-function namesPullRequest(url: string, name: GitHubRepositoryName, number: number): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+function namesPullRequest(
+  url: string,
+  requestedUrl: string,
+  name: GitHubRepositoryName,
+  number: number,
+): boolean {
+  const canonical = canonicalPullRequestUrl(url);
+  if (canonical === undefined) {
     return false;
   }
+  const parsed = new URL(canonical);
   const segments = parsed.pathname.split("/").filter((segment) => segment !== "");
   return (
+    parsed.host === new URL(requestedUrl).host &&
     segments.length === 4 &&
     same(segments[0] ?? "", name.owner) &&
     same(segments[1] ?? "", name.repository) &&
