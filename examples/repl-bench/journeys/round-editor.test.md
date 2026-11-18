@@ -19,9 +19,17 @@
           <Terminal.Screenshot name="draft-open" />
           <Terminal.Key key="Tab" />
           <Terminal.WaitForText text="> Send" />
+          <If condition={viewport.columns === 72}>
+            <Terminal.WaitForText text="Round 1 · draft" present={false} />
+          </If>
           <Terminal.Key key="Enter" />
-          <Terminal.WaitForText text="Round 1 · draft" />
+          <Terminal.WaitForText text="> Send" />
+          <Terminal.WaitForText text="✎ draft" />
+          <Terminal.WaitForText text="Executable Markdown" />
+          <Terminal.WaitForText text="1 ✎" />
+          <Terminal.WaitForText text="● running" present={false} />
           <Terminal.Key key="Shift+Tab" />
+          <Terminal.WaitForText text="> Round 1 · draft" />
           <Terminal.Type text="First witness." />
           <Terminal.Key key="Enter" />
           <Terminal.Type text="Second witness." />
