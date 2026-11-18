@@ -1681,11 +1681,29 @@ describe("Tier PRR — pull-request evidence", () => {
    */
   const publicationOrder = "PRR24a: an admitted read is appended only after its session has closed";
   it(publicationOrder, function* () {
-    for (const outcome of ["success", "refusal"] as const) {
-      const host =
-        outcome === "success"
-          ? server({ [REVIEWS]: { body: "[]" } })
-          : server({ [REVIEWS]: { status: 500, body: "{}" } });
+    const scenarios = [
+      { component: "PullRequest.Reviews", route: REVIEWS, body: "[]", status: 200 },
+      { component: "PullRequest.Reviews", route: REVIEWS, body: "{}", status: 500 },
+      {
+        component: "PullRequest",
+        route: PULL,
+        status: 200,
+        body: JSON.stringify(
+          pullRequestPayload({
+            node_id: "PR_node_7",
+            html_url: SUBJECT_URL,
+            title: "Read after teardown",
+            body: "Original description",
+            state: "open",
+            draft: false,
+            head: { sha: HEAD, ref: "review", repo: { full_name: "octo/project" } },
+            base: { sha: HEAD, ref: "main", repo: { full_name: "octo/project" } },
+          }),
+        ),
+      },
+    ];
+    for (const { component, route, body, status } of scenarios) {
+      const host = server({ [route]: { body, status } });
       const order: string[] = [];
       const gate = gatedAccess(host.access, order);
       yield* captureTestJournal(
@@ -1695,7 +1713,7 @@ describe("Tier PRR — pull-request evidence", () => {
           noteAppends(stream, order);
 
           let returned = false;
-          const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+          const document = `<${component} url="${SUBJECT_URL}" as="read" />\n`;
 
           try {
             const task = yield* spawn(function* () {
@@ -1720,10 +1738,10 @@ describe("Tier PRR — pull-request evidence", () => {
           expect(order).toEqual(["open", "closing", "closed", "appended"]);
           expect(returned).toBe(true);
 
-          // One read either way, and the outcome the collection actually had.
+          // One read either way, with the provider outcome.
           const retained = readYields(stream.snapshot());
           expect(retained).toHaveLength(1);
-          expect(retained[0]?.result?.status).toBe(outcome === "success" ? "ok" : "err");
+          expect(retained[0]?.result?.status).toBe(status === 200 ? "ok" : "err");
         },
       );
     }
@@ -1801,51 +1819,57 @@ describe("Tier PRR — pull-request evidence", () => {
    */
   const cancelledRead = "PRR26a: a cancelled read joins its held cleanup and publishes nothing";
   it(cancelledRead, function* () {
-    yield* captureTestJournal({ owner: OWNER, name: cancelledRead }, "<eval>", function* (stream) {
-      const entered = withResolvers<void>();
-      const order: string[] = [];
-      const access: GitHubAccess = {
-        endpoint: ENDPOINT,
-        // deno-lint-ignore require-yield
-        *token(): Operation<string | undefined> {
-          return "t";
+    for (const component of ["PullRequest.Reviews", "PullRequest"]) {
+      yield* captureTestJournal(
+        { owner: OWNER, name: cancelledRead },
+        "<eval>",
+        function* (stream) {
+          const entered = withResolvers<void>();
+          const order: string[] = [];
+          const access: GitHubAccess = {
+            endpoint: ENDPOINT,
+            // deno-lint-ignore require-yield
+            *token(): Operation<string | undefined> {
+              return "t";
+            },
+            *send(): Operation<GitHubHttpResponse> {
+              entered.resolve();
+              yield* suspend();
+              throw new Error("unreachable");
+            },
+          };
+          const gate = gatedAccess(access, order);
+          noteAppends(stream, order);
+          const document = `<${component} url="${SUBJECT_URL}" as="read" />\n`;
+
+          let halted = false;
+          try {
+            const task = yield* spawn(() => raised(retainedRead(stream, document, gate.source)));
+            yield* entered.operation;
+
+            const halting = yield* spawn(function* () {
+              yield* task.halt();
+              halted = true;
+            });
+
+            yield* gate.closing;
+            // The halt has reached this session's teardown and is waiting on it.
+            expect(halted).toBe(false);
+            expect(order).toEqual(["open", "closing"]);
+
+            gate.release();
+            yield* halting;
+          } finally {
+            gate.release();
+          }
+
+          expect(halted).toBe(true);
+          expect(order).toEqual(["open", "closing", "closed"]);
+          // Cancellation stays cancellation: no success, and no failed read either.
+          expect(readYields(stream.snapshot())).toEqual([]);
         },
-        *send(): Operation<GitHubHttpResponse> {
-          entered.resolve();
-          yield* suspend();
-          throw new Error("unreachable");
-        },
-      };
-      const gate = gatedAccess(access, order);
-      noteAppends(stream, order);
-      const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`;
-
-      let halted = false;
-      try {
-        const task = yield* spawn(() => raised(retainedRead(stream, document, gate.source)));
-        yield* entered.operation;
-
-        const halting = yield* spawn(function* () {
-          yield* task.halt();
-          halted = true;
-        });
-
-        yield* gate.closing;
-        // The halt has reached this session's teardown and is waiting on it.
-        expect(halted).toBe(false);
-        expect(order).toEqual(["open", "closing"]);
-
-        gate.release();
-        yield* halting;
-      } finally {
-        gate.release();
-      }
-
-      expect(halted).toBe(true);
-      expect(order).toEqual(["open", "closing", "closed"]);
-      // Cancellation stays cancellation: no success, and no failed read either.
-      expect(readYields(stream.snapshot())).toEqual([]);
-    });
+      );
+    }
   });
 
   it("PRR32: a received envelope carrying one member more retains the failure", function* () {
