@@ -1,7 +1,5 @@
-import { createContext, each, ensure, Err, Ok, resource, scoped } from "effection";
+import { createContext, ensure, Err, Ok, resource, scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { exists, readTextFile, walk } from "@effectionx/fs";
-import { relative } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { withFailureJournal } from "@executablemd/testing";
@@ -36,7 +34,7 @@ const CaseJournals = createContext<CaseRoots>("@executablemd/test-support/case-j
  * Give ordinary cases fresh attributed roots with one suite setup. For example,
  * the held-host witness registers `beforeEach(journalBeforeEach(OWNER))`. Its
  * fixture selects `request.stream ?? (yield* useJournalStream(document.path))`.
- * A fixture whose host writes journal files registers their directory with
+ * A fixture whose host writes journal files registers how to read them with
  * {@link retainJournalFiles}. Keep explicit replay and private inputs at the
  * fixture that owns them.
  */
@@ -120,44 +118,37 @@ export function* useJournalStream(source: string): Operation<InMemoryStream> {
 }
 
 /**
- * Keep the JSONL journals a fixture's host writes beneath `directory` for this
- * case's failure save.
+ * Keep the journal files a fixture's host writes for this case's failure save.
  *
- * Call it once the fixture owns the directory and before the work that writes
- * there begins. The files are read, with their original text, when the calling
- * scope ends: after everything acquired later in that scope has been torn down
- * and before anything acquired earlier — such as the directory's own removal —
- * runs. A passing case discards what was read, and a failed case saves each
- * file beneath the registration's own execution name, keeping its path inside
- * `directory`. Outside an attributed case this registers nothing.
+ * `snapshot` is the owner's own operation for reading them, because only the
+ * owner knows which of its files are journals. Acquire this once the fixture
+ * owns the storage and before the work that writes there begins: `snapshot`
+ * runs when this resource is torn down, after everything the calling scope
+ * acquired later and before anything it acquired earlier — such as the
+ * storage's own removal. A passing case discards what was read, and a failed
+ * case saves each file beneath the registration's own execution name, keeping
+ * its `path`. Outside an attributed case `snapshot` never runs.
  */
-export function* retainJournalFiles(source: string, directory: string): Operation<void> {
-  const roots = yield* CaseJournals.get();
-  if (roots === undefined) {
-    return;
-  }
-  const retained = roots.files(source);
-  yield* ensure(function* () {
-    try {
-      retained.read = Ok(yield* readJournalFiles(directory));
-    } catch (error) {
-      retained.read = Err(error instanceof Error ? error : new Error(String(error)));
+export function retainJournalFiles(
+  source: string,
+  snapshot: Operation<readonly SavedJournalFile[]>,
+): Operation<void> {
+  return resource(function* (provide) {
+    const roots = yield* CaseJournals.get();
+    if (roots === undefined) {
+      yield* provide();
+      return;
     }
+    const retained = roots.files(source);
+    yield* ensure(function* () {
+      try {
+        retained.read = Ok(yield* snapshot);
+      } catch (error) {
+        retained.read = Err(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    yield* provide();
   });
-}
-
-function* readJournalFiles(directory: string): Operation<readonly SavedJournalFile[]> {
-  if (!(yield* exists(directory))) {
-    return [];
-  }
-  const files: SavedJournalFile[] = [];
-  for (const entry of yield* each(walk(directory, { includeDirs: false, match: [/\.jsonl$/] }))) {
-    files.push({ path: relative(directory, entry.path), text: yield* readTextFile(entry.path) });
-    yield* each.next();
-  }
-  return files.sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-  );
 }
 
 /**

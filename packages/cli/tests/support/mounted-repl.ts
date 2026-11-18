@@ -15,8 +15,9 @@ import { installTodoSource } from "../../src/node-todo-source.ts";
 import { action, ensure, resource, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
 import { appendFile, open as openFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { randomBytes } from "node:crypto";
+import { exists, FsApi, readTextFile } from "@effectionx/fs";
 
 import { installReplHost } from "../../src/repl-assembly.ts";
 import { ReplHost } from "../../src/repl/host.ts";
@@ -31,7 +32,10 @@ import { resolveAgentStack } from "../../src/agent-stack.ts";
 import { NO_PLUGINS, installPlugins } from "../../src/plugin-host.ts";
 import { todoPlugin, todoPluginDeclaresFor } from "../../src/repl/todo/plugin.ts";
 import { pairedReplRepository } from "../../src/repl/sidekick/repository.ts";
-import { PAIRED_DIRECTORY } from "../../src/repl/sidekick/history.ts";
+import { PAIRED_DIRECTORY, pairedLocation } from "../../src/repl/sidekick/history.ts";
+import { executionPath } from "../../src/repl/journal.ts";
+import { isOpaqueExecution } from "../../src/repl/route.ts";
+import type { SavedJournalFile } from "../../src/test-diagnostics.ts";
 import type { SidekickRecord } from "../../src/repl/sidekick/history.ts";
 import { projectRepl } from "../../src/repl/model.ts";
 import type { ReplModel } from "../../src/repl/model.ts";
@@ -635,6 +639,77 @@ export function operationGate(): OperationGate {
   };
 }
 
+/**
+ * The histories a mounted command writes beneath `root`, as UTF-8 text: each
+ * paired execution's entries and Sidekick files, and each direct legacy file.
+ *
+ * Named files only, because an execution's directory also holds its authored
+ * assets and components, which are inputs rather than history.
+ */
+function* mountedJournals(root: string): Operation<readonly SavedJournalFile[]> {
+  if (!(yield* exists(root))) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const entry of yield* FsApi.operations.readdirDirents(root)) {
+    const execution = entry.name.slice(0, -".jsonl".length);
+    if (entry.isFile() && entry.name.endsWith(".jsonl") && isOpaqueExecution(execution)) {
+      paths.push(executionPath(root, execution));
+    }
+  }
+  const paired = join(root, PAIRED_DIRECTORY);
+  if (yield* exists(paired)) {
+    for (const entry of yield* FsApi.operations.readdirDirents(paired)) {
+      if (entry.isDirectory() && isOpaqueExecution(entry.name)) {
+        const location = pairedLocation(root, entry.name);
+        paths.push(location.entries, location.sidekick);
+      }
+    }
+  }
+  const files: SavedJournalFile[] = [];
+  for (const path of paths.sort()) {
+    if ((yield* exists(path)) && (yield* FsApi.operations.stat(path)).isFile()) {
+      files.push({ path: relative(root, path), text: yield* readTextFile(path) });
+    }
+  }
+  return files;
+}
+
+/** The appends a mounted host has handed out and not yet seen settle. */
+interface OutstandingAppends {
+  /** Hold `append` until it settles, and hand it back unchanged. */
+  track(append: Promise<void>): Promise<void>;
+}
+
+/**
+ * Keep the host's appends inside the host's lifetime.
+ *
+ * Halting the task that asked for an append abandons its wait but not the
+ * write, which is already scheduled. Teardown waits for every outstanding one
+ * to settle — written or refused, without retrying or reporting it — so nothing
+ * acquired earlier, such as reading or removing the storage, races a write.
+ */
+function useOutstandingAppends(): Operation<OutstandingAppends> {
+  return resource(function* (provide) {
+    const outstanding = new Set<Promise<unknown>>();
+    yield* ensure(function* () {
+      while (outstanding.size > 0) {
+        yield* until(Promise.all(outstanding));
+      }
+    });
+    yield* provide({
+      track(append) {
+        const settled: Promise<unknown> = append.then(
+          () => outstanding.delete(settled),
+          () => outstanding.delete(settled),
+        );
+        outstanding.add(settled);
+        return append;
+      },
+    });
+  });
+}
+
 /** One mounted command, and everything a case needs to drive and read it. */
 
 export interface MountedRepl {
@@ -767,9 +842,11 @@ export function* useMountedHost(
   // The directory the command itself resolves, so a case that writes a file for
   // the command to find writes it where the command actually looks.
   const root = join(dataRoot, ...REPL_DIRECTORY);
-  // Before anything that writes there, so this case's command has unwound when
-  // its histories are read and they are read before the root is removed.
-  yield* retainJournalFiles(root, root);
+  // Before anything that writes there, so this case's command has unwound and
+  // its appends have settled when its histories are read, and they are read
+  // before the root is removed.
+  yield* retainJournalFiles(root, mountedJournals(root));
+  const appends = yield* useOutstandingAppends();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
   yield* installReplHost({
@@ -783,11 +860,13 @@ export function* useMountedHost(
     appendRecord: (path, record) => {
       const held = gate?.around(path, record);
       const written = (held ?? Promise.resolve()).then(() => appendFile(path, record));
-      return gate === undefined
-        ? written
-        : written.then(() => {
-            gate.reached.push(path);
-          });
+      return appends.track(
+        gate === undefined
+          ? written
+          : written.then(() => {
+              gate.reached.push(path);
+            }),
+      );
     },
   });
   // Over the installed implementation, at the instrumentation band, so the

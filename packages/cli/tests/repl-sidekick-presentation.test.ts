@@ -2916,14 +2916,16 @@ describe("Sidekick original interrupted identities and native input routes", () 
 
   it("SS6: a real automatic turn nobody answered opens as its own inert anchor", function* () {
     const dataRoot = yield* useTemporary("xmd-ss6-inert-");
-    const gate = appendGate();
+    // Held as an operation, so closing the host takes the response back rather
+    // than leaving a write for the host's teardown to wait on.
+    const operations = operationGate();
     const execution = yield* scoped(function* () {
-      const host = yield* useMountedHost({ dataRoot, gate });
+      const host = yield* useMountedHost({ dataRoot, operations });
       const page = yield* useReplPage({ host });
       page.repl.fake.script({ reply: "<Output>First answer.</Output>\n<REPL.Bindings />\n" });
       page.repl.fake.script({ reply: "<REPL.Bindings />\n" });
       let seen = 0;
-      const held = gate.holdNext(
+      const held = operations.holdNext(
         (path, record) =>
           path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"') && ++seen === 2,
       );

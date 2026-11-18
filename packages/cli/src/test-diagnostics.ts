@@ -80,8 +80,8 @@ export interface ExecutionDiagnostics {
   /** Saves this execution's journal when `failed` says its outcome failed. */
   journal<T>(failed: (value: T) => boolean): FailureJournalHost<T>;
   /**
-   * Saves journal files a host wrote for this execution, with their original
-   * text, beneath one directory named like this execution's journal.
+   * Saves journal files a host wrote for this execution, as the UTF-8 text
+   * they held, beneath one directory named like this execution's journal.
    *
    * `path` is each file's place beneath the storage root, so two files of one
    * root keep the names that tell them apart.
