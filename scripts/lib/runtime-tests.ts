@@ -107,6 +107,8 @@ export const MARKDOWN_DEADLINES: Record<string, number> = {
   ArtifactReturnRecovery: 120_000,
   DecisionResolution: 300_000,
   Delivery: 300_000,
+  DeliveryProgressCompletion: 120_000,
+  DeliverySummaryRepair: 120_000,
   Friction: 180_000,
   LaunchPolicy: 120_000,
   Preparation: 420_000,
