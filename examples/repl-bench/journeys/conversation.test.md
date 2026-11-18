@@ -87,6 +87,7 @@
       <AssertEquals actual={Math.sign(narrowOutcome.row - narrowGuidance.row)} expected={1} />
       <Terminal.WaitForText text="Entry entry-1 completed." present={false} />
       <Terminal.Screenshot name="narrow-feedback-drawer" />
+      <Terminal.WaitForText text="> Show recorded feedback" />
       <Terminal.WaitForText text="linked entry Round 1" as="linked" />
       <Terminal.Click at={linked} />
       <Terminal.WaitForText text="* Entries" row={1} />
