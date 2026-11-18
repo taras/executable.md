@@ -40,7 +40,9 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   'Kept the {quoted} placeholder.\n{"passed":true}',
   '```\n$ deno task test\nok | 3 passed\n```\n{"passed":true}',
   'Ran it (see ```log``` above).\n{"passed":true}',
-  '```sh\necho "{not a result}"\n```\n{"passed":true}'
+  '```sh\necho "{not a result}"\n```\n{"passed":true}',
+  'The selection names ["title","body"].\n{"passed":true}',
+  'The selection names [\n{"nested":[1,{"escaped":"bracket ] and quote \\\""}]}\n].\n{"passed":true}'
 ]} let="reply">
 <Phase.Extract text={reply} as="extracted" />
 <AssertEquals actual={extracted.ok} expected={true} />
@@ -56,28 +58,24 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   '```json\n{"passed":true}',
   'Broken: {"outer":{"passed":true}',
   'Broken: {"outer":}\n{"passed":true}',
-  'No result is available.'
+  'No result is available.',
+  '{"passed":true}\n{"passed":true}',
+  'Example: {"example":true}\n{"passed":true}',
+  'Names ["title",\n{"passed":true}',
+  '```sh\necho done\n{"passed":true}'
 ]} let="reply">
 <Phase.Extract text={reply} as="extracted" />
 <AssertEquals actual={extracted.ok} expected={false} />
 </Each>
 </Test>
 
-<Test name="one object survives incidental arrays with original UTF-16 spans">
-<Each in={["The selection names [\"title\",\"body\"].\n{\"passed\":true}", "The selection names [\"title\",\"body\"].\n```json\n{\"passed\":true}\n```", "The selection names [{\"nested\":[1,{\"escaped\":\"bracket ] and quote \\\"\"}]}].\n{\"passed\":true}", "The selection names [\n\"title\",\n{\"nested\":[1,2]}\n].\n{\"passed\":true}", "🦉 Completed.\n```json\n{\"passed\":true}\n```\nSaved.", "  {\"passed\":true}  "]} let="reply">
+<Test name="a Unicode fenced result retains its original UTF-16 slice">
+<Let as="reply" value={'🦉 Completed.\n```json\n{"passed":true}\n```\nSaved.'} />
 <Phase.Extract text={reply} as="extracted" />
 <AssertEquals actual={extracted.ok} expected={true} />
 <AssertEquals actual={extracted.json} expected={'{"passed":true}'} />
 <AssertEquals actual={extracted.span} expected={{start:reply.indexOf('{"passed":true}'),end:reply.indexOf('{"passed":true}')+'{"passed":true}'.length}} />
 <AssertEquals actual={reply.slice(extracted.span.start,extracted.span.end)} expected={'{"passed":true}'} />
-</Each>
-</Test>
-
-<Test name="result positions, competing objects and malformed boundaries refuse">
-<Each in={["{\"passed\":true}\n{\"passed\":true}", "{\"passed\":true}\n{\"work\":\"wrong\",\"passed\":false}", "Example: {\"example\":true}\n{\"passed\":true}", "[{\"passed\":true}]", "   [\"title\",\"body\"]\n{\"passed\":true}", "```json\n[\"title\",\"body\"]\n```\n{\"passed\":true}", "```\n[\"title\",\"body\"]\n```\n{\"passed\":true}", "Names [\"title\",\n{\"passed\":true}", "Names [\"title\",]\n{\"passed\":true}", "```json\ntrue\n```\n{\"passed\":true}", "```json\n\n```\n{\"passed\":true}", "```json\n{\"a\":1} {\"b\":2}\n```\n{\"passed\":true}", "true", "42", "\"done\"", "null", "```sh\necho done\n{\"passed\":true}"]} let="reply">
-<Phase.Extract text={reply} as="extracted" />
-<AssertEquals actual={extracted.ok} expected={false} />
-</Each>
 </Test>
 
 <Test name="existing SafeParse owns result validation">

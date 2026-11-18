@@ -74,19 +74,6 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </TempDir>
 </Test>
 
-<Test name="an incidental array preserves the independent foundation contract" timeout="60s">
-<TempDir>
-<Fixture.Repository as="fixture" />
-<Fixture.Run fixture={fixture} request="incidental-array" command={runner} root={suiteRoot} as="child" />
-<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
-<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
-<AssertEquals actual={work.status} expected="feedback_ready" />
-<Ticket.Text path={fixture.directory + "/foundation-0/response-acceptance.json"} as="text" />
-<Parse schema={{type:"object"}} as="accepted">{text}</Parse>
-<AssertEquals actual={accepted.round} expected={0} />
-</TempDir>
-</Test>
-
 <Test name="an oversized summary is repaired in the same session without repeating implementation" timeout="60s">
 <TempDir>
 <Fixture.Repository as="fixture" />

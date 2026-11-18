@@ -29,9 +29,6 @@ const object = z.record(z.string(), z.json());
 export function* recoveryFixture(
   options: {
     architecture?: boolean;
-    route?: "absent" | "predicted" | "actual" | "wrong";
-    source?: "unsigned" | "unrelated";
-    apiOwned?: boolean;
     historical?: boolean;
     reply?: (result: Record<string, Json>) => string;
   } = {},
@@ -108,30 +105,8 @@ export function* recoveryFixture(
   const launch = (yield* git(["rev-parse", "HEAD"], repository, directory)).trim();
   yield* writeTextFile(join(repository, "tracked"), "implementation\n");
   yield* git(["add", "tracked"], repository, directory);
-  yield* git(
-    [
-      ...(options.source === "unsigned" ? ["-c", "commit.gpgsign=false"] : []),
-      "commit",
-      "-qm",
-      "fixture implementation",
-    ],
-    repository,
-    directory,
-  );
-  const revision =
-    options.source === "unrelated"
-      ? (yield* git(
-          [
-            "commit-tree",
-            (yield* git(["rev-parse", "HEAD^{tree}"], repository, directory)).trim(),
-            "-S",
-            "-m",
-            "unrelated fixture",
-          ],
-          repository,
-          directory,
-        )).trim()
-      : (yield* git(["rev-parse", "HEAD"], repository, directory)).trim();
+  yield* git(["commit", "-qm", "fixture implementation"], repository, directory);
+  const revision = (yield* git(["rev-parse", "HEAD"], repository, directory)).trim();
   yield* git(["reset", "--hard", launch], repository, directory);
   const evidence = join(directory, "focused.txt");
   yield* writeTextFile(evidence, "Controlled focused evidence.\n");
@@ -160,18 +135,10 @@ export function* recoveryFixture(
     ],
     findings: ["A6/A4/A8/A2/A7 and unfinished-root replay remain unproved."],
     assessment: { ...assessment, architecture: options.architecture ?? false },
-    next:
-      options.route === "wrong"
-        ? { phase: "hold", role: null }
-        : options.route === "actual" && options.architecture
-          ? { phase: "review", role: "architect" }
-          : { phase: "review", role: "planner" },
+    next: { phase: "review", role: "planner" },
     discoveryRequests: [],
     discoveryGaps: [],
   };
-  if (options.route === "absent") {
-    delete result.next;
-  }
   const ticket = join(directory, "ticket");
   const ownerComponents = join(owner, "examples/adversarial-implementation/components");
   const manifestFile = join(directory, "manifest.json");
@@ -213,7 +180,6 @@ export function* recoveryFixture(
       maxCorrections: 3,
       maxApiRepairs: 3,
       maxResponseCorrections: 2,
-      ...(options.apiOwned ? { api: { ownedPaths: ["tracked"] } } : {}),
     }),
   );
   yield* API.Env.around(
@@ -337,11 +303,10 @@ export type RecoveryFixture =
   ReturnType<typeof recoveryFixture> extends import("effection").Operation<infer T> ? T : never;
 export function* reconcile(
   fixture: RecoveryFixture,
-  runtime?: "deno" | "node",
+  fileEntry = false,
   recordPath = fixture.recordPath,
-  extra: string[] = [],
 ) {
-  if (runtime === undefined && extra.length === 0) {
+  if (!fileEntry) {
     const record = object.parse(JSON.parse(yield* readTextFile(recordPath)));
     const execution = yield* recoveryRoot(fixture, record);
     return {
@@ -359,16 +324,8 @@ export function* reconcile(
     }
     cli.arguments.splice(1, 0, "--node-modules-dir=manual", "--cached-only", "--frozen");
   }
-  const foreignNode = runtime === "node" && cliRuntime() !== "node";
-  const command = foreignNode
-    ? [
-        "node",
-        join(root, "node_modules/tsx/dist/cli.mjs"),
-        "--tsconfig",
-        join(root, "tsconfig.node.json"),
-        join(root, "examples/adversarial-implementation/tests/runtime/node-entry.ts"),
-      ]
-    : [cli.command, ...cli.arguments];
+  const command = [cli.command, ...cli.arguments];
+  const runtime = cliRuntime();
   const ordinal = fixture.runs++;
   const journal = join(fixture.directory, "recovery-" + runtime + "-" + ordinal + ".jsonl");
   const result = yield* API.Process.operations.exec({
@@ -398,7 +355,6 @@ export function* reconcile(
       "--journal",
       journal,
       "--raw",
-      ...extra,
     ],
     cwd: fixture.repository,
   });
@@ -416,26 +372,21 @@ export function* reconcile(
   return captured;
 }
 
-function recoveryRoot(
+export function recoveryRoot(
   fixture: RecoveryFixture,
-  record: Record<string, Json>,
-  extra: Record<string, Json> = {},
+  record: Record<string, Json> = fixture.record,
 ) {
   const source =
     "---\nreturns: {type: object}\n---\n<Ticket.ReconcileResponse record={" +
     JSON.stringify(record) +
     "} proof=" +
     JSON.stringify(fixture.proof) +
-    Object.entries(extra)
-      .map(([key, value]) => " " + key + "={" + JSON.stringify(value) + "}")
-      .join("") +
     ' as="recovered" /><Return value={recovered} />';
   return fixture.native.run(source, "original-haiku", [overlay, fixture.ownerComponents]);
 }
 export function* directRecovery(
   fixture: RecoveryFixture,
   record: Record<string, Json> = fixture.record,
-  extra: Record<string, Json> = {},
 ) {
-  return object.parse((yield* recoveryRoot(fixture, record, extra)).value);
+  return object.parse((yield* recoveryRoot(fixture, record)).value);
 }

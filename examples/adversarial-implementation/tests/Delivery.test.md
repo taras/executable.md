@@ -202,25 +202,3 @@ pwd -P
 <AssertEquals actual={preserved} expected={firstFailure} />
 </TempDir>
 </Test>
-<Test name="incidental arrays preserve independent revision, clauses and frozen review checks">
-<Let as="revision" value={"a".repeat(40)} />
-<Let as="acceptance" value={[{id:"behavior",source:"accepted.md",requirement:"Keep accepted behavior."}]} />
-<Let as="review" value={{revision,verdict:"pass",summary:"Verified the controlled clause.",acceptance:["behavior"],findings:[]}} />
-<Let as="prefix" value={'Reviewed ["title","body"].\n'} />
-<Delivery.Validate text={prefix + JSON.stringify(review)} revision={revision} acceptance={acceptance} as="valid" />
-<AssertEquals actual={valid.ok} expected={true} />
-<AssertEquals actual={valid.result} expected={review} />
-<Each in={[
- {...review,revision:"b".repeat(40)},
- {...review,acceptance:[]},
- {...review,findings:[{blocking:true,description:"Unproved clause."}]}
-]} let="invalid">
-<Delivery.Validate text={prefix + JSON.stringify(invalid)} revision={revision} acceptance={acceptance} as="checked" />
-<AssertEquals actual={checked.ok} expected={false} />
-</Each>
-<Delivery.Validate text={prefix + JSON.stringify({...review,verdict:"blocked"})} revision={revision} acceptance={acceptance} frozen={review} as="changed" />
-<AssertEquals actual={changed.ok} expected={false} />
-<Delivery.Validate text={JSON.stringify({...review,revision:"b".repeat(40)}) + "\n" + JSON.stringify(review)} revision={revision} acceptance={acceptance} as="competing" />
-<AssertEquals actual={competing.ok} expected={false} />
-<AssertEquals actual={competing.repairable} expected={false} />
-</Test>

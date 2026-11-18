@@ -57,6 +57,11 @@ export function* originalFeedback(
       }),
     );
     current = yield* nativeStep(fixture, current);
+    const prompt = fixture.native.prompts.at(-1) ?? "";
+    const note = yield* readTextFile(fixture.note);
+    if (!prompt.includes(fixture.revision) || !prompt.includes(JSON.stringify(note))) {
+      throw new Error("Original Architect did not receive the feedback SHA and complete note.");
+    }
   }
   yield* fixture.native.script(
     JSON.stringify({
@@ -151,6 +156,7 @@ export function* originalFeedback(
   if (
     after.calls.at(-1).session !== "original-haiku" ||
     after.calls.at(-1).profile?.model !== "haiku" ||
+    after.calls.at(-1).profile?.effort !== "high" ||
     after.manifest.roles.implementor.model !== "haiku" ||
     after.checkpoint.round !== 1 ||
     after.manifest.maxCorrections !== 3 ||
