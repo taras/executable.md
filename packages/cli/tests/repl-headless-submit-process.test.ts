@@ -212,9 +212,11 @@ describe("first SIGINT at the submit host boundary", () => {
     expect(call.closed).toBe(false);
     expect(call.records.some((record) => record.kind === "finished")).toBe(false);
     released.resolve();
-    expect(
-      yield* within(call.joined, () => ({ waiting: "joined Stop", ...call.output() })),
-    ).toEqual({ code: 130, signal: null });
+    const exit = yield* within(call.joined, () => ({ waiting: "joined Stop", ...call.output() }));
+    if (exit.code !== 130 || exit.signal !== null) {
+      console.error(JSON.stringify({ ...exit, ...call.output(), records: call.records }));
+    }
+    expect(exit).toEqual({ code: 130, signal: null });
     const admitted = call.records[0];
     const final = call.records.at(-1);
     expect(final).toMatchObject({
