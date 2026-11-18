@@ -260,9 +260,7 @@ export function* recoveryFixture(
   });
   const nativeRecords: SubmitRecord[] = [];
   const source =
-    "---\nreturns: {type: object}\n---\n<Fixture.Owner root=" +
-    JSON.stringify(owner) +
-    ' as="owners" /><Ticket.Run manifest=' +
+    "---\nreturns: {type: object}\n---\n<Ticket.Run manifest=" +
     JSON.stringify(manifestFile) +
     ' maxSteps={1} as="original" /><Return value={original} />';
   const status = yield* runReplSubmit(
@@ -301,6 +299,17 @@ export function* recoveryFixture(
   const journal = join(native.host.root, "v1", finished.submission.execution, "entries.jsonl");
   const journalText = yield* readTextFile(journal);
   const lines = journalText.trimEnd().split("\n");
+  for (const line of lines) {
+    const event = parseDurableEvent(line);
+    if (
+      event.ok &&
+      event.value.type === "yield" &&
+      event.value.description.type === "import_component" &&
+      ["Fixture.Owner", "Ticket.Advance"].includes(event.value.description.name)
+    ) {
+      throw new Error("The natural extraction-failed entry preloaded an unentered recovery owner.");
+    }
+  }
   const promptIndex = lines.findIndex((line) => {
     const event = parseDurableEvent(line);
     return (
@@ -318,8 +327,8 @@ export function* recoveryFixture(
     nativeRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
   );
   const joinFile = join(directory, "join.json");
-  const promptDescriptor = describe(journal, lines[promptIndex]);
-  const nativeDescriptor = describe(nativeFile, JSON.stringify(finished));
+  const promptDescriptor = describe(journal, lines[promptIndex] + "\n");
+  const nativeDescriptor = describe(nativeFile, yield* readTextFile(nativeFile));
   yield* writeTextFile(
     joinFile,
     JSON.stringify({

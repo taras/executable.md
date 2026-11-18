@@ -105,7 +105,7 @@ for path in {slots}; do if test -e "$path" || test -L "$path"; then exit 1; fi; 
 <Ticket.Read path={call.attempt + "/raw.txt"} as="raw" />
 <Ticket.JoinedProof path={props.proof} mode="validate" record={envelope} call={call} request={composed} raw={raw} as="joined" />
 <If condition={JSON.stringify(joined.file) !== JSON.stringify(admitted.file)}><Fail message="The admitted proof changed during validation." /></If>
-<If condition={owner.definitions.some(actual => !joined.imports.some(original => original.name === actual.name && original.sha256 === actual.sha256 && original.utf8Bytes === actual.utf8Bytes))}>
+<If condition={owner.definitions.some(actual => joined.imports.some(original => original.name === actual.name && (original.sha256 !== actual.sha256 || original.utf8Bytes !== actual.utf8Bytes)))}>
 <Fail message="The effective owning definitions differ from the original retained imports." />
 </If>
 <Phase.Extract text={raw} as="extracted" />

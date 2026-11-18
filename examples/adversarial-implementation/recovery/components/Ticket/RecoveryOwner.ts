@@ -63,6 +63,21 @@ export default function RecoveryOwner(value: unknown) {
             "; select the original prepared owning include.",
         );
       }
+      const retained = yield* API.Process.operations.exec({
+        command: [
+          "git",
+          "show",
+          "HEAD:" +
+            "examples/adversarial-implementation/components/" +
+            selected[0].path.slice(directory.length),
+        ],
+        cwd: root,
+      });
+      if (retained.exitCode !== 0 || retained.stdout !== selected[0].text) {
+        throw new Error(
+          "The effective owning definition differs from its prepared Git source: " + name,
+        );
+      }
       definitions.push({ name, ...describe(selected[0].path, selected[0].text) });
     }
     const control = directory + "Ticket/control.ts";

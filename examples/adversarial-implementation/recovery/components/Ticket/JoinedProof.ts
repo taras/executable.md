@@ -106,7 +106,7 @@ export default function* JoinedProof(value: unknown) {
     promptText === undefined ||
     !same(
       { path: join.journal.path, ...join.journal.lineDescriptor },
-      describe(join.journal.path, promptText),
+      describe(join.journal.path, promptText + "\n"),
     )
   ) {
     failure("the original event is not at its recorded journal location.");
@@ -189,7 +189,7 @@ export default function* JoinedProof(value: unknown) {
         utf8Bytes: join.nativeFinishedSource.utf8Bytes,
         sha256: join.nativeFinishedSource.sha256,
       },
-      describe(join.nativeFinishedSource.path, nativeLine),
+      describe(join.nativeFinishedSource.path, nativeText),
     )
   ) {
     failure("the original native completion receipt changed.");
@@ -255,7 +255,11 @@ export default function* JoinedProof(value: unknown) {
     const selected = finished.submission.entry === "entry-" + order;
     if (item.type === "yield") {
       const ordinal = yields[item.coroutineId] ?? 0;
-      if (selected && item.description.type === "import_component" && item.result.status === "ok") {
+      if (
+        order <= Number(finished.submission.entry.slice(6)) &&
+        item.description.type === "import_component" &&
+        item.result.status === "ok"
+      ) {
         const definition = z
           .object({ kind: z.literal("repository"), path: z.string(), content: z.string() })
           .safeParse(item.result.value);
@@ -265,6 +269,7 @@ export default function* JoinedProof(value: unknown) {
             ...describe(definition.data.path, definition.data.content),
           });
           if (
+            selected &&
             item.coroutineId === sourceOwner.coroutineId &&
             ordinal === sourceOwner.index &&
             definition.data.path === position.path &&

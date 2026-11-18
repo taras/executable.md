@@ -208,7 +208,7 @@ function* changeJoin(f: RecoveryFixture, kind: string) {
   lines[report.journal.line - 1] = JSON.stringify(event);
   yield* writeTextFile(report.journal.path, lines.join("\n") + "\n");
   yield* writeTextFile(report.retainedEvent, lines[report.journal.line - 1]);
-  const d = descriptor(report.journal.path, lines[report.journal.line - 1]);
+  const d = descriptor(report.journal.path, lines[report.journal.line - 1] + "\n");
   report.journal.lineDescriptor = { utf8Bytes: d.utf8Bytes, sha256: d.sha256 };
   if (kind === "unjoined" || kind === "execution") {
     const native = (yield* readTextFile(report.nativeFinishedSource.path)).trimEnd().split("\n");
@@ -221,7 +221,10 @@ function* changeJoin(f: RecoveryFixture, kind: string) {
     native[report.nativeFinishedSource.line - 1] = JSON.stringify(finished);
     yield* writeTextFile(report.nativeFinishedSource.path, native.join("\n") + "\n");
     report.nativeFinishedSource = {
-      ...descriptor(report.nativeFinishedSource.path, native[report.nativeFinishedSource.line - 1]),
+      ...descriptor(
+        report.nativeFinishedSource.path,
+        yield* readTextFile(report.nativeFinishedSource.path),
+      ),
       line: report.nativeFinishedSource.line,
     };
   }
@@ -231,6 +234,30 @@ function* changeJoin(f: RecoveryFixture, kind: string) {
 }
 
 const refusals: Refusal[] = [
+  {
+    name: "changed whole native log bytes",
+    reservation: true,
+    *mutate(f) {
+      const proof = JSON.parse(yield* readTextFile(f.proof));
+      const report = JSON.parse(yield* readTextFile(proof.join.path));
+      yield* writeTextFile(
+        report.nativeFinishedSource.path,
+        (yield* readTextFile(report.nativeFinishedSource.path)) + "changed\n",
+      );
+    },
+  },
+  {
+    name: "changed framed prompt descriptor",
+    reservation: true,
+    *mutate(f) {
+      const proof = JSON.parse(yield* readTextFile(f.proof));
+      const report = JSON.parse(yield* readTextFile(proof.join.path));
+      report.journal.lineDescriptor.sha256 = "0".repeat(64);
+      yield* writeTextFile(proof.join.path, JSON.stringify(report));
+      proof.join = descriptor(proof.join.path, yield* readTextFile(proof.join.path));
+      yield* writeTextFile(f.proof, JSON.stringify(proof));
+    },
+  },
   ...[
     "failed",
     "cancelled",

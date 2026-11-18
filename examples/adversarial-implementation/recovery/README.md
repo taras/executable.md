@@ -42,6 +42,8 @@ The displayed sizes/digests are explanatory placeholders, not a ready-made proof
 
 For #1400, amendment and provenance are the retained approved decision and provenance files. join is `/private/tmp/xmd-joined-phase-recovery-1396/ticket/attempts/0001/architect-join-proof.json`, not an operator assertion that a turn joined. Read and validate its full referenced original prompt event, exact source membership and outer native completion against the held record. Ignore its summary booleans as proof of those facts. handoffInputs includes the exact supplied `/private/tmp/xmd-pullrequest-1400.4n6d_64v/known-unmet-acceptance.md`; keep its complete A6/A4/A8/A2/A7/unfinished-root qualifications.
 
+The join report’s journal line descriptor names the complete JSONL record, including its newline. Its native completion descriptor names the whole native log; the line selects the completion record only after that log validates. Effective definitions must match the prepared Git source. Retained imports through the original entry must agree, but code after the extraction failure need not have run.
+
 Approval/provenance document the actual authority already granted. Descriptors verify evidence correspondence and grant no permission. This format creates neither authority tokens nor a model-selection or historical-migration interface.
 
 ## Invoke the native entry
