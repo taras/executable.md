@@ -4,7 +4,7 @@ pwd -P
 <Let as="root" value={location.stdout.trim()} />
 <Each in={["selected-capacity","final-source","late-proof","current-permission","repeat-proof","repeat-snapshot","repeat-linkage","public-props"]} let="scenario">
 <Test name={"P4/P6/P9 native recovery boundary: " + scenario} timeout="240s">
-<Let as="caseArguments" value={["run","--allow-all","--node-modules-dir=manual","--cached-only","--frozen",root + "/packages/cli/tests/fixtures/joined-response-owner/boundary-runner.ts",scenario].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
+<Let as="caseArguments" value={["run","--allow-all","--node-modules-dir=manual","--cached-only","--frozen",root + "/examples/adversarial-implementation/tests/fixtures/joined-response-owner/boundary-runner.ts",scenario].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
 ```bash exec as="ran"
 deno {caseArguments}
 ```
@@ -14,3 +14,10 @@ deno {caseArguments}
 <AssertEquals actual={checked.noProviderCalls} expected={true} />
 </Test>
 </Each>
+
+<Test name="workflow-owned recovery runtime suite" timeout="1200s">
+```bash exec as="runtime"
+deno test --allow-all --frozen --node-modules-dir=manual --cached-only examples/adversarial-implementation/tests/runtime/joined-response-recovery.test.ts
+```
+<If condition={runtime.exitCode !== 0}><Fail message={runtime.stdout + "\n" + runtime.stderr} /></If>
+</Test>

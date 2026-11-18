@@ -337,7 +337,7 @@ describe("adversarial problem-solver phase", () => {
       howToObtain: "Capture one journal per child.",
     };
     const json = JSON.stringify(result);
-    const reply = `Recording one overlap pair with ["title","body"].\n${json}`;
+    const reply = `Recording one overlap pair.\n${json}`;
     const first = join(test.root, "progress");
     test.fake.script({ reply });
     expect(JSON.parse(yield* test.run(first))).toMatchObject({ status: "missing_witness" });

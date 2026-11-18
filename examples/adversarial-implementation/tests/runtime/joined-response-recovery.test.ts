@@ -2,15 +2,18 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensureDir, readTextFile, writeTextFile, rm } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
+import { Ok, scoped, spawn, withResolvers } from "effection";
+import { publicRoots } from "../support/public-root.ts";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { z } from "zod";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseDurableEvent } from "@executablemd/durable-streams";
-import { git } from "../../git/tests/support/git-remotes.ts";
-import { originalFeedback } from "./support/joined-response-feedback.ts";
-import { cuts, interruptedRecovery, contenders } from "./support/joined-response-interruption.ts";
-import { recoveryFixture, reconcile, directRecovery } from "./support/joined-response-recovery.ts";
-import type { RecoveryFixture } from "./support/joined-response-recovery.ts";
-import { describe as descriptor } from "../../../examples/adversarial-implementation/components/Ticket/text-storage.ts";
+import { git } from "../support/git.ts";
+import { originalFeedback } from "../support/joined-response-feedback.ts";
+import { cuts, interruptedRecovery, contenders } from "../support/joined-response-interruption.ts";
+import { recoveryFixture, reconcile, directRecovery } from "../support/joined-response-recovery.ts";
+import type { RecoveryFixture } from "../support/joined-response-recovery.ts";
+import { describe as descriptor } from "../../components/Ticket/text-storage.ts";
 
 const envelope = z.object({
   status: z.string(),
@@ -39,12 +42,12 @@ function* unchanged(files: Record<string, string>) {
     expect(descriptor(path, yield* readTextFile(path)).sha256).toBe(hash);
   }
 }
-function* accepted(fixture: RecoveryFixture, runtime: "deno" | "node" = "deno") {
+function* accepted(fixture: RecoveryFixture, runtime?: "deno" | "node") {
   const before = yield* originalFiles(fixture.ticket);
   const oldState = JSON.parse(
     yield* readTextFile(envelope.parse(fixture.record).continuation.path),
   );
-  const calls = fixture.native.host.fake.prompts.length;
+  const calls = fixture.native.prompts.length;
   const run = yield* reconcile(fixture, runtime);
   if (run.exitCode !== 0) {
     throw new Error(run.stderr || run.stdout);
@@ -52,7 +55,7 @@ function* accepted(fixture: RecoveryFixture, runtime: "deno" | "node" = "deno") 
   const recovered = envelope.parse(JSON.parse(run.stdout));
   expect(recovered).toMatchObject({ status: "paused", publication: "confirmed", hold: null });
   yield* unchanged(before);
-  expect(fixture.native.host.fake.prompts.length).toBe(calls);
+  expect(fixture.native.prompts.length).toBe(calls);
   const state = JSON.parse(yield* readTextFile(recovered.continuation.path));
   expect(state.manifest).toEqual(oldState.manifest);
   expect(state.calls).toEqual(oldState.calls);
@@ -112,11 +115,11 @@ function* accepted(fixture: RecoveryFixture, runtime: "deno" | "node" = "deno") 
 describe("joined original response recovery", () => {
   it("P3/P5: the native file entry preserves history and the original Haiku allocation", function* () {
     const fixture = yield* recoveryFixture();
-    const success = yield* accepted(fixture);
+    const success = yield* accepted(fixture, "deno");
     expect(success.state.checkpoint.gate).toBe("planner-review");
     expect(success.state.manifest.roles.implementor.model).toBe("haiku");
   });
-  it("P9: an actual Node CLI loads the composed entry and TypeScript forwarding module", function* () {
+  it("P9: a real Node CLI loads the composed entry and TypeScript forwarding module", function* () {
     yield* accepted(yield* recoveryFixture(), "node");
   });
   it("P3: a current-shaped matching owner uses the same direct native component", function* () {
@@ -210,24 +213,19 @@ function* changeJoin(f: RecoveryFixture, kind: string) {
   yield* writeTextFile(report.retainedEvent, lines[report.journal.line - 1]);
   const d = descriptor(report.journal.path, lines[report.journal.line - 1] + "\n");
   report.journal.lineDescriptor = { utf8Bytes: d.utf8Bytes, sha256: d.sha256 };
-  if (kind === "unjoined" || kind === "execution") {
-    const native = (yield* readTextFile(report.nativeFinishedSource.path)).trimEnd().split("\n");
-    const finished = JSON.parse(native[report.nativeFinishedSource.line - 1]);
-    if (kind === "unjoined") {
-      finished.joined = false;
-    } else {
-      finished.submission.execution = "foreign";
-    }
-    native[report.nativeFinishedSource.line - 1] = JSON.stringify(finished);
-    yield* writeTextFile(report.nativeFinishedSource.path, native.join("\n") + "\n");
-    report.nativeFinishedSource = {
-      ...descriptor(
-        report.nativeFinishedSource.path,
-        yield* readTextFile(report.nativeFinishedSource.path),
-      ),
-      line: report.nativeFinishedSource.line,
-    };
+  const settlement = JSON.parse(yield* readTextFile(report.publicRunSource.path));
+  settlement.journal = descriptor(report.journal.path, yield* readTextFile(report.journal.path));
+  if (kind === "unjoined") {
+    settlement.outcome = { kind: "suspended" };
   }
+  if (kind === "execution") {
+    settlement.root.path += "foreign";
+  }
+  yield* writeTextFile(report.publicRunSource.path, JSON.stringify(settlement));
+  report.publicRunSource = descriptor(
+    report.publicRunSource.path,
+    yield* readTextFile(report.publicRunSource.path),
+  );
   yield* writeTextFile(p.join.path, JSON.stringify(report));
   p.join = descriptor(p.join.path, yield* readTextFile(p.join.path));
   yield* writeTextFile(f.proof, JSON.stringify(p));
@@ -241,8 +239,8 @@ const refusals: Refusal[] = [
       const proof = JSON.parse(yield* readTextFile(f.proof));
       const report = JSON.parse(yield* readTextFile(proof.join.path));
       yield* writeTextFile(
-        report.nativeFinishedSource.path,
-        (yield* readTextFile(report.nativeFinishedSource.path)) + "changed\n",
+        report.publicRunSource.path,
+        (yield* readTextFile(report.publicRunSource.path)) + "changed\n",
       );
     },
   },
@@ -468,7 +466,7 @@ const refusals: Refusal[] = [
     name: "wrong resulting HEAD",
     reservation: true,
     *mutate(f) {
-      git(["reset", "--hard", f.launch], f.repository, f.directory);
+      yield* git(["reset", "--hard", f.launch], f.repository, f.directory);
     },
   },
   { name: "signed non-descendant", reservation: true, options: { source: "unrelated" } },
@@ -527,7 +525,7 @@ describe("joined recovery conjunctive refusals", () => {
         yield* row.mutate(fixture);
       }
       const before = yield* originalFiles(fixture.ticket);
-      const prompts = fixture.native.host.fake.prompts.length;
+      const prompts = fixture.native.prompts.length;
       const run = yield* reconcile(fixture);
       let value: unknown = null;
       try {
@@ -538,7 +536,7 @@ describe("joined recovery conjunctive refusals", () => {
       const returned = envelope.safeParse(value);
       expect(returned.success && returned.data.publication === "confirmed").toBe(false);
       expect(run.stderr + run.stdout).not.toContain("ForbiddenReconciliation");
-      expect(fixture.native.host.fake.prompts.length).toBe(prompts);
+      expect(fixture.native.prompts.length).toBe(prompts);
       yield* unchanged(before);
       const reservation = join(
         fixture.ticket,
@@ -565,7 +563,7 @@ describe("joined recovery publication boundaries", () => {
     it("P6: " + cut + " never adopts matching files or repeats publication", function* () {
       const fixture = yield* recoveryFixture();
       const before = yield* originalFiles(fixture.ticket);
-      const prompts = fixture.native.host.fake.prompts.length;
+      const prompts = fixture.native.prompts.length;
       const interrupted = yield* interruptedRecovery(fixture, cut);
       expect(interrupted.injected).toBe(true);
       expect(interrupted.laterWrites).toEqual([]);
@@ -579,7 +577,7 @@ describe("joined recovery publication boundaries", () => {
       const old = yield* directRecovery(fixture);
       expect(old).toMatchObject({ publication: "held", continuation: fixture.record.continuation });
       yield* unchanged(retained);
-      expect(fixture.native.host.fake.prompts.length).toBe(prompts);
+      expect(fixture.native.prompts.length).toBe(prompts);
     });
   }
   it("P6: one real exclusive reservation wins against a concurrent contender", function* () {
@@ -602,14 +600,295 @@ describe("joined recovery missing call member", () => {
     delete call.initialize;
     yield* writeTextFile(path, JSON.stringify(call));
     const before = yield* originalFiles(fixture.ticket);
-    const prompts = fixture.native.host.fake.prompts.length;
+    const prompts = fixture.native.prompts.length;
     const run = yield* reconcile(fixture);
     expect(JSON.parse(run.stdout)).toMatchObject({
       publication: "held",
       continuation: fixture.record.continuation,
     });
     expect(run.stdout).toContain("original final call receipt changed");
-    expect(fixture.native.host.fake.prompts.length).toBe(prompts);
+    expect(fixture.native.prompts.length).toBe(prompts);
     yield* unchanged(before);
   });
+});
+
+describe("public run settlement proof", () => {
+  for (const kind of [
+    "missing",
+    "err",
+    "suspended",
+    "root-source",
+    "journal-hash",
+    "returned-envelope",
+    "document-result",
+    "two-roots",
+    "mixed",
+  ]) {
+    it("P4: public run refuses " + kind, function* () {
+      const f = yield* recoveryFixture();
+      const p = JSON.parse(yield* readTextFile(f.proof));
+      const report = JSON.parse(yield* readTextFile(p.join.path));
+      const receipt = JSON.parse(yield* readTextFile(report.publicRunSource.path));
+      if (kind === "missing") {
+        delete receipt.outcome;
+      }
+      if (kind === "err") {
+        receipt.outcome.result = { ok: false, error: { name: "Error", message: "failed" } };
+      }
+      if (kind === "suspended") {
+        receipt.outcome = { kind: "suspended" };
+      }
+      if (kind === "root-source") {
+        receipt.root.sha256 = "0".repeat(64);
+      }
+      if (kind === "journal-hash") {
+        receipt.journal.sha256 = "0".repeat(64);
+      }
+      if (kind === "returned-envelope") {
+        receipt.outcome.result.value.work = "foreign";
+      }
+      if (kind === "mixed") {
+        report.nativeFinishedSource = { ...report.publicRunSource, line: 1 };
+      }
+      if (kind === "document-result" || kind === "two-roots") {
+        let text = yield* readTextFile(report.journal.path);
+        if (kind === "two-roots") {
+          text += text;
+        } else {
+          const lines = text.trimEnd().split("\n");
+          const close = JSON.parse(z.string().parse(lines.at(-1)));
+          close.result.value.status = "error";
+          lines[lines.length - 1] = JSON.stringify(close);
+          text = lines.join("\n") + "\n";
+        }
+        yield* writeTextFile(report.journal.path, text);
+        receipt.journal = descriptor(report.journal.path, text);
+      }
+      yield* writeTextFile(report.publicRunSource.path, JSON.stringify(receipt));
+      report.publicRunSource = descriptor(
+        report.publicRunSource.path,
+        yield* readTextFile(report.publicRunSource.path),
+      );
+      yield* writeTextFile(p.join.path, JSON.stringify(report));
+      p.join = descriptor(p.join.path, yield* readTextFile(p.join.path));
+      yield* writeTextFile(f.proof, JSON.stringify(p));
+      const before = yield* originalFiles(f.ticket);
+      const calls = f.native.prompts.length;
+      expect(yield* directRecovery(f)).toMatchObject({ status: "hold", publication: "held" });
+      yield* unchanged(before);
+      expect(f.native.prompts.length).toBe(calls);
+    });
+  }
+  it("P3/P4: settlement is unavailable until cleanup joins", function* () {
+    const f = yield* recoveryFixture();
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    f.native.hooks.cleanup = function* () {
+      entered.resolve();
+      yield* release.operation;
+    };
+    const ordinal = f.native.journals.length;
+    const task = yield* spawn(() =>
+      f.native.run("---\nreturns: {type: object}\n---\n<Return value={{held:true}} />"),
+    );
+    yield* entered.operation;
+    expect(
+      (yield* API.Fs.operations.stat(join(f.directory, "root-" + ordinal + "-settlement.json")))
+        .exists,
+    ).toBe(false);
+    release.resolve();
+    yield* task;
+    expect(
+      (yield* API.Fs.operations.stat(join(f.directory, "root-" + ordinal + "-settlement.json")))
+        .exists,
+    ).toBe(true);
+  });
+  it("P3: reads the authentic historical Submit proof without rewriting it", function* () {
+    const directory = join("examples/adversarial-implementation/tests/fixtures/historical-submit");
+    const index = JSON.parse(yield* readTextFile(join(directory, "index.json")));
+    const texts = new Map<string, string>();
+    const seen = new Set<string>();
+    for (const [path, entry] of Object.entries(index.files)) {
+      const file = z.object({ file: z.string(), sha256: z.string() }).parse(entry);
+      const text = yield* readTextFile(join(directory, file.file));
+      expect(descriptor(path, text).sha256).toBe(file.sha256);
+      texts.set(path, text);
+    }
+    yield* scoped(function* () {
+      yield* API.Files.around(
+        {
+          *readTextFile([request], next) {
+            const path = join(request.cwd, request.path);
+            const text = texts.get(path);
+            if (text === undefined) {
+              throw new Error("Unmapped historical read: " + path);
+            }
+            seen.add(path);
+            return Ok(text);
+          },
+        },
+        { at: "max" },
+      );
+      const native = yield* publicRoots(yield* useTempDirectory("legacy-proof-"), [
+        join("examples/adversarial-implementation/recovery/components"),
+      ]);
+      const originals = new Map(texts);
+      for (const variant of ["original", "changed-log", "malformed-entry", "wrong-source"]) {
+        texts.clear();
+        for (const [path, text] of originals) {
+          texts.set(path, text);
+        }
+        const proof = JSON.parse(z.string().parse(texts.get(index.input.path)));
+        const report = JSON.parse(z.string().parse(texts.get(proof.join.path)));
+        if (variant === "changed-log") {
+          texts.set(
+            report.nativeFinishedSource.path,
+            z.string().parse(texts.get(report.nativeFinishedSource.path)) + "changed\n",
+          );
+        }
+        if (variant === "malformed-entry") {
+          const path = report.nativeFinishedSource.path;
+          const lines = z.string().parse(texts.get(path)).trimEnd().split("\n");
+          const finished = JSON.parse(
+            z.string().parse(lines[report.nativeFinishedSource.line - 1]),
+          );
+          finished.submission.entry = "xxxxxx1";
+          lines[report.nativeFinishedSource.line - 1] = JSON.stringify(finished);
+          const text = lines.join("\n") + "\n";
+          texts.set(path, text);
+          report.nativeFinishedSource = {
+            ...descriptor(path, text),
+            line: report.nativeFinishedSource.line,
+          };
+        }
+        if (variant === "wrong-source") {
+          const path = report.journal.path;
+          const lines = z.string().parse(texts.get(path)).trimEnd().split("\n");
+          const event = JSON.parse(z.string().parse(lines[report.journal.line - 1]));
+          event.description["executablemd.source-owner"].index = 999999;
+          lines[report.journal.line - 1] = JSON.stringify(event);
+          texts.set(path, lines.join("\n") + "\n");
+          texts.set(report.retainedEvent, lines[report.journal.line - 1]);
+          const d = descriptor(path, lines[report.journal.line - 1] + "\n");
+          report.journal.lineDescriptor = { utf8Bytes: d.utf8Bytes, sha256: d.sha256 };
+        }
+        if (variant === "malformed-entry" || variant === "wrong-source") {
+          const text = JSON.stringify(report);
+          texts.set(proof.join.path, text);
+          proof.join = descriptor(proof.join.path, text);
+          texts.set(index.input.path, JSON.stringify(proof));
+        }
+        const props = Object.entries(index.input)
+          .map(([key, value]) => key + "={" + JSON.stringify(value) + "}")
+          .join(" ");
+        let refused = false;
+        try {
+          const result = yield* native.run(
+            "---\nreturns: {type: object}\n---\n<Ticket.JoinedProof " +
+              props +
+              ' as="proof" /><Return value={proof} />',
+          );
+          expect(
+            z.object({ prompt: z.object({ configuration: z.json() }) }).parse(result.value).prompt
+              .configuration,
+          ).toEqual({ model: "haiku", effort: "high" });
+        } catch (error) {
+          if (variant === "original") {
+            throw error;
+          }
+          refused = true;
+        }
+        expect(refused).toBe(variant !== "original");
+      }
+      expect(seen.size).toBe(texts.size);
+    });
+  });
+});
+
+describe("workflow-owned diagnosis consumer", () => {
+  for (const kind of ["incidental-array", "ambiguous", "revision", "evidence", "session"]) {
+    it("P8: diagnosis " + kind, function* () {
+      const f = yield* recoveryFixture();
+      const attempt = join(f.directory, "diagnosis-" + kind);
+      const result =
+        kind === "evidence"
+          ? {
+              outcome: "cause",
+              revision: f.revision,
+              cause: "Controlled cause.",
+              evidence: ["foreign.log"],
+              regression: { command: "controlled", expected: "pass", observed: "fail" },
+              handoff: "Supply the witness.",
+            }
+          : {
+              outcome: "missing_witness",
+              revision: kind === "revision" ? "0".repeat(40) : f.revision,
+              witness: "Original journal",
+              howToObtain: "Capture the controlled journal.",
+            };
+      let reply = 'Recording ["title","body"].\n' + JSON.stringify(result);
+      if (kind === "ambiguous") {
+        reply += "\n" + JSON.stringify(result);
+      }
+      yield* f.native.script(reply);
+      let identityRefused = false;
+      if (kind === "session") {
+        yield* API.Files.around(
+          {
+            *readTextFile([request], next) {
+              const result = yield* next(request);
+              if (
+                result.ok &&
+                request.cwd.includes("diagnosis") &&
+                request.cwd.endsWith("sessions")
+              ) {
+                const identity = JSON.parse(result.value);
+                identity.name = "foreign";
+                identityRefused = true;
+                return Ok(JSON.stringify(identity));
+              }
+              return result;
+            },
+          },
+          { at: "max" },
+        );
+      }
+      const request = {
+        role: "problem-solver",
+        session: "controlled-diagnosis",
+        attempt,
+        inputPaths: [f.note],
+        assignment: {
+          repository: f.repository,
+          revision: f.revision,
+          work: "controlled-recovery",
+          request: "Identify the controlled missing witness.",
+        },
+      };
+      const solvers = {
+        primary: { key: "controlled", provider: "claude", models: ["haiku"], effort: "high" },
+      };
+      const source =
+        "---\nreturns: {type: object}\n---\n<Diagnosis.Run request={" +
+        JSON.stringify(request) +
+        "} solvers={" +
+        JSON.stringify(solvers) +
+        '} as="diagnosis" /><Return value={diagnosis} />';
+      const returned = z
+        .object({ status: z.string() })
+        .passthrough()
+        .parse(
+          (yield* f.native.run(source, "controlled-diagnosis", [
+            resolve("examples/adversarial-implementation/components"),
+          ])).value,
+        );
+      if (kind === "incidental-array" && returned.status !== "missing_witness") {
+        throw new Error(JSON.stringify(returned));
+      }
+      if (kind === "session") {
+        expect(identityRefused).toBe(true);
+      }
+      expect(returned.status).toBe(kind === "incidental-array" ? "missing_witness" : "hold");
+    });
+  }
 });

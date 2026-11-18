@@ -3,7 +3,7 @@ import { API, Permissions } from "@executablemd/runtime";
 import { scoped } from "effection";
 import { join } from "node:path";
 import { expect } from "@executablemd/test-support/expect";
-import { describe } from "../../../../examples/adversarial-implementation/components/Ticket/text-storage.ts";
+import { describe } from "../../components/Ticket/text-storage.ts";
 import { directRecovery, recoveryFixture, reconcile } from "./joined-response-recovery.ts";
 
 export function proofBoundary(scenario: string) {
@@ -14,7 +14,7 @@ export function proofBoundary(scenario: string) {
     let denied = false;
     let proofChanged = false;
     const namedProof = JSON.parse(yield* readTextFile(fixture.proof));
-    const before = fixture.native.host.fake.prompts.length;
+    const before = fixture.native.prompts.length;
     if (scenario === "selected-capacity") {
       yield* writeTextFile(
         fixture.note,
@@ -163,7 +163,7 @@ export function proofBoundary(scenario: string) {
         );
       }
     }
-    expect(fixture.native.host.fake.prompts.length).toBe(before);
+    expect(fixture.native.prompts.length).toBe(before);
     return { scenario, refused: true, writes, sourceCommands, noProviderCalls: true };
   });
 }

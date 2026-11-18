@@ -1,28 +1,26 @@
 import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
-import { until, Ok, suspend, scoped } from "effection";
+import { until } from "effection";
 import { symlink, mkdtemp } from "node:fs/promises";
 import { join, resolve, dirname } from "node:path";
-import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { z } from "zod";
 import { Agent } from "@executablemd/agent/api";
 import type { Json } from "@executablemd/core";
-import { collect, useNormalizedOutput } from "@executablemd/core";
-import { executeInstalled } from "@executablemd/core/host";
-import { useHostFiles } from "@executablemd/runtime";
-import { InMemoryStream, parseDurableEvent } from "@executablemd/durable-streams";
+import { parseDurableEvent } from "@executablemd/durable-streams";
 import { API, realpath, env, Permissions } from "@executablemd/runtime";
-import { git } from "../../../git/tests/support/git-remotes.ts";
-import { runReplSubmit } from "../../src/sidekick-acp/submit.ts";
-import { SubmitRecord } from "../../src/sidekick-acp/protocol.ts";
-import { useHeadlessFixture } from "./headless-repl.ts";
-import { describe } from "../../../../examples/adversarial-implementation/components/Ticket/text-storage.ts";
-import sourceBoundary from "../fixtures/joined-response-owner/git-boundary.ts";
+import { git } from "./git.ts";
+import { cliRuntime, cliCommand } from "@executablemd/test-support/launch";
+import { publicRoots } from "./public-root.ts";
+
+import { describe } from "../../components/Ticket/text-storage.ts";
 
 const root = resolve(".");
 const overlay = join(root, "examples/adversarial-implementation/recovery/components");
 const entry = join(root, "examples/adversarial-implementation/reconcile-response.md");
-const manifestPath = join(root, "packages/cli/tests/fixtures/joined-response-owner/manifest.json");
+const manifestPath = join(
+  root,
+  "examples/adversarial-implementation/tests/fixtures/joined-response-owner/manifest.json",
+);
 const manifestSchema = z.object({
   files: z.array(z.object({ originalPath: z.string(), source: z.string(), sha256: z.string() })),
 });
@@ -81,16 +79,17 @@ export function* recoveryFixture(
     "fixture " + (yield* readTextFile(join(directory, "signer.pub"))),
   );
   for (const selected of [repository, owner]) {
-    git(["init", "-q"], selected, directory);
+    yield* git(["init", "-q"], selected, directory);
     for (const [key, value] of Object.entries({
       "user.name": "Fixture",
       "user.email": "fixture@example.test",
       "commit.gpgsign": "true",
       "gpg.format": "ssh",
+      "gpg.ssh.program": "ssh-keygen",
       "user.signingkey": join(directory, "signer"),
       "gpg.ssh.allowedSignersFile": join(directory, "allowed-signers"),
     })) {
-      git(["config", key, value], selected, directory);
+      yield* git(["config", key, value], selected, directory);
     }
   }
   yield* writeTextFile(join(repository, "AGENTS.md"), "Use only controlled fixture evidence.\n");
@@ -103,13 +102,13 @@ export function* recoveryFixture(
   }
   yield* writeTextFile(join(repository, "tracked"), "launch\n");
   for (const selected of [repository, owner]) {
-    git(["add", "."], selected, directory);
-    git(["commit", "-qm", "fixture launch"], selected, directory);
+    yield* git(["add", "."], selected, directory);
+    yield* git(["commit", "-qm", "fixture launch"], selected, directory);
   }
-  const launch = git(["rev-parse", "HEAD"], repository, directory).trim();
+  const launch = (yield* git(["rev-parse", "HEAD"], repository, directory)).trim();
   yield* writeTextFile(join(repository, "tracked"), "implementation\n");
-  git(["add", "tracked"], repository, directory);
-  git(
+  yield* git(["add", "tracked"], repository, directory);
+  yield* git(
     [
       ...(options.source === "unsigned" ? ["-c", "commit.gpgsign=false"] : []),
       "commit",
@@ -121,19 +120,19 @@ export function* recoveryFixture(
   );
   const revision =
     options.source === "unrelated"
-      ? git(
+      ? (yield* git(
           [
             "commit-tree",
-            git(["rev-parse", "HEAD^{tree}"], repository, directory).trim(),
+            (yield* git(["rev-parse", "HEAD^{tree}"], repository, directory)).trim(),
             "-S",
             "-m",
             "unrelated fixture",
           ],
           repository,
           directory,
-        ).trim()
-      : git(["rev-parse", "HEAD"], repository, directory).trim();
-  git(["reset", "--hard", launch], repository, directory);
+        )).trim()
+      : (yield* git(["rev-parse", "HEAD"], repository, directory)).trim();
+  yield* git(["reset", "--hard", launch], repository, directory);
   const evidence = join(directory, "focused.txt");
   yield* writeTextFile(evidence, "Controlled focused evidence.\n");
   const note = join(directory, "known-unmet-acceptance.md");
@@ -231,72 +230,24 @@ export function* recoveryFixture(
     *prompt(args, next) {
       if (!moved) {
         moved = true;
-        git(["reset", "--hard", revision], repository, directory);
+        yield* git(["reset", "--hard", revision], repository, directory);
       }
       return yield* next(...args);
     },
   });
-  yield* useComponentModuleLoader();
-  const native = yield* useHeadlessFixture(
-    undefined,
-    undefined,
-    join(directory, "native"),
-    { advertiseNativeLaunch: [], advertiseClientNativeAttachment: [] },
-    { includes: [ownerComponents] },
-    [sourceBoundary],
+  const native = yield* publicRoots(directory, [ownerComponents]);
+  yield* native.script(
+    options.reply?.(result) ?? 'The selection names ["title","body"].\n' + JSON.stringify(result),
   );
-  native.host.fake.configuration({
-    model: { selected: "haiku", choices: ["haiku", "gpt-6.1-sol", "opus"].map((id) => ({ id })) },
-    effort: Object.fromEntries(
-      ["haiku", "gpt-6.1-sol", "opus"].map((model) => [
-        model,
-        { selected: "high", choices: ["high", "medium"].map((id) => ({ id })) },
-      ]),
-    ),
-  });
-  native.host.fake.script({
-    reply:
-      options.reply?.(result) ?? 'The selection names ["title","body"].\n' + JSON.stringify(result),
-  });
-  const nativeRecords: SubmitRecord[] = [];
   const source =
     "---\nreturns: {type: object}\n---\n<Ticket.Run manifest=" +
     JSON.stringify(manifestFile) +
     ' maxSteps={1} as="original" /><Return value={original} />';
-  const status = yield* runReplSubmit(
-    ["repl", "submit", "--attach", native.reference.sessionId, "-"],
-    function* () {
-      return Ok(source);
-    },
-    suspend(),
-    function* (record) {
-      nativeRecords.push(record);
-    },
-    (message) => {
-      throw new Error(message);
-    },
-  );
-  if (status !== 0) {
-    console.error("Native fixture failure retained at " + directory);
-    const child = native.children[0];
-    if (child !== undefined) {
-      const failed = yield* child.session.join();
-      if (!failed.ok) {
-        console.error(failed.error);
-      }
-    }
-    throw new Error(
-      "The original native entry did not join: " + JSON.stringify(nativeRecords.at(-1)),
-    );
-  }
-  const finished = nativeRecords.at(-1);
-  if (finished?.kind !== "finished" || finished.result === null || finished.submission === null) {
-    throw new Error("Missing actual native completed return.");
-  }
-  const record = object.parse(finished.result.value);
+  const original = yield* native.run(source);
+  const record = object.parse(original.value);
   const recordPath = join(directory, "original-return.json");
   yield* writeTextFile(recordPath, JSON.stringify(record));
-  const journal = join(native.host.root, "v1", finished.submission.execution, "entries.jsonl");
+  const journal = original.journal;
   const journalText = yield* readTextFile(journal);
   const lines = journalText.trimEnd().split("\n");
   for (const line of lines) {
@@ -317,28 +268,29 @@ export function* recoveryFixture(
     );
   });
   if (promptIndex < 0) {
-    throw new Error("No original prompt event.");
+    throw new Error(
+      "No original prompt event: " +
+        (yield* readTextFile(
+          z.object({ continuation: z.object({ path: z.string() }) }).parse(record).continuation
+            .path,
+        )),
+    );
   }
   const retainedEvent = join(directory, "original-event.json");
   yield* writeTextFile(retainedEvent, lines[promptIndex]);
-  const nativeFile = join(directory, "original-native.jsonl");
-  yield* writeTextFile(
-    nativeFile,
-    nativeRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
-  );
   const joinFile = join(directory, "join.json");
   const promptDescriptor = describe(journal, lines[promptIndex] + "\n");
-  const nativeDescriptor = describe(nativeFile, yield* readTextFile(nativeFile));
   yield* writeTextFile(
     joinFile,
     JSON.stringify({
+      schema: "joined-response-run-proof.v1",
       journal: {
         path: journal,
         line: promptIndex + 1,
         lineDescriptor: { utf8Bytes: promptDescriptor.utf8Bytes, sha256: promptDescriptor.sha256 },
       },
       retainedEvent,
-      nativeFinishedSource: { ...nativeDescriptor, line: nativeRecords.length },
+      publicRunSource: describe(original.settlement, yield* readTextFile(original.settlement)),
     }),
   );
   const amendment = join(directory, "amendment.md");
@@ -385,28 +337,38 @@ export type RecoveryFixture =
   ReturnType<typeof recoveryFixture> extends import("effection").Operation<infer T> ? T : never;
 export function* reconcile(
   fixture: RecoveryFixture,
-  runtime: "deno" | "node" = "deno",
+  runtime?: "deno" | "node",
   recordPath = fixture.recordPath,
   extra: string[] = [],
 ) {
-  const command =
-    runtime === "node"
-      ? [
-          "node",
-          join(root, "node_modules/tsx/dist/cli.mjs"),
-          "--tsconfig",
-          join(root, "tsconfig.node.json"),
-          join(root, "packages/cli/src/node.ts"),
-        ]
-      : [
-          "deno",
-          "run",
-          "--allow-all",
-          "--node-modules-dir=manual",
-          "--cached-only",
-          "--frozen",
-          join(root, "packages/cli/src/deno.ts"),
-        ];
+  if (runtime === undefined && extra.length === 0) {
+    const record = object.parse(JSON.parse(yield* readTextFile(recordPath)));
+    const execution = yield* recoveryRoot(fixture, record);
+    return {
+      command: [],
+      exitCode: 0,
+      stdout: JSON.stringify(execution.value),
+      stderr: "",
+      journal: execution.journal,
+    };
+  }
+  const cli = cliCommand([]);
+  if (cliRuntime() === "deno") {
+    if (cli.arguments[0] !== "run") {
+      throw new Error("Unsupported Deno entry prefix");
+    }
+    cli.arguments.splice(1, 0, "--node-modules-dir=manual", "--cached-only", "--frozen");
+  }
+  const foreignNode = runtime === "node" && cliRuntime() !== "node";
+  const command = foreignNode
+    ? [
+        "node",
+        join(root, "node_modules/tsx/dist/cli.mjs"),
+        "--tsconfig",
+        join(root, "tsconfig.node.json"),
+        join(root, "examples/adversarial-implementation/tests/runtime/node-entry.ts"),
+      ]
+    : [cli.command, ...cli.arguments];
   const ordinal = fixture.runs++;
   const journal = join(fixture.directory, "recovery-" + runtime + "-" + ordinal + ".jsonl");
   const result = yield* API.Process.operations.exec({
@@ -423,11 +385,16 @@ export function* reconcile(
       overlay,
       "--include",
       fixture.ownerComponents,
-      ...(runtime === "node"
-        ? ["--include", join(root, "packages/cli/tests/fixtures/joined-response-owner/boundary")]
-        : []),
+      "--include",
+      join(
+        root,
+        "examples/adversarial-implementation/tests/fixtures/joined-response-owner/boundary",
+      ),
       "--plugin",
-      join(root, "packages/cli/tests/fixtures/joined-response-owner/no-dispatch.ts"),
+      join(
+        root,
+        "examples/adversarial-implementation/tests/fixtures/joined-response-owner/no-dispatch.ts",
+      ),
       "--journal",
       journal,
       "--raw",
@@ -449,36 +416,26 @@ export function* reconcile(
   return captured;
 }
 
-export function directRecovery(
+function recoveryRoot(
+  fixture: RecoveryFixture,
+  record: Record<string, Json>,
+  extra: Record<string, Json> = {},
+) {
+  const source =
+    "---\nreturns: {type: object}\n---\n<Ticket.ReconcileResponse record={" +
+    JSON.stringify(record) +
+    "} proof=" +
+    JSON.stringify(fixture.proof) +
+    Object.entries(extra)
+      .map(([key, value]) => " " + key + "={" + JSON.stringify(value) + "}")
+      .join("") +
+    ' as="recovered" /><Return value={recovered} />';
+  return fixture.native.run(source, "original-haiku", [overlay, fixture.ownerComponents]);
+}
+export function* directRecovery(
   fixture: RecoveryFixture,
   record: Record<string, Json> = fixture.record,
   extra: Record<string, Json> = {},
 ) {
-  return scoped(function* () {
-    yield* useHostFiles();
-    yield* Permissions.around({ files: () => true }, { at: "min" });
-    yield* useComponentModuleLoader();
-    yield* useNormalizedOutput();
-    const install = sourceBoundary.install;
-    if (install !== undefined) {
-      yield* install({ command: "run", args: [] });
-    }
-    const path = join(fixture.directory, "direct-recovery.md");
-    yield* writeTextFile(
-      path,
-      "<Ticket.ReconcileResponse record={" +
-        JSON.stringify(record) +
-        "} proof=" +
-        JSON.stringify(fixture.proof) +
-        Object.entries(extra)
-          .map(([name, value]) => " " + name + "={" + JSON.stringify(value) + "}")
-          .join("") +
-        ' as="recovered" /><Output><Json value={recovered} /></Output>',
-    );
-    const execution = yield* executeInstalled(
-      { path, includes: [overlay, fixture.ownerComponents], stream: new InMemoryStream() },
-      [],
-    );
-    return object.parse(JSON.parse(z.string().parse(yield* collect(execution))));
-  });
+  return object.parse((yield* recoveryRoot(fixture, record, extra)).value);
 }

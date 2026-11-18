@@ -2,9 +2,6 @@ import { registerComponents } from "@executablemd/core";
 import { Component, Plugin } from "@executablemd/core/api";
 import { API, cwd } from "@executablemd/runtime";
 import { z } from "zod";
-import RecoveryOwner, {
-  props as ownerProps,
-} from "../../../../../examples/adversarial-implementation/recovery/components/Ticket/RecoveryOwner.ts";
 
 export default Plugin({
   name: "test://joined-response-source-boundary",
@@ -18,13 +15,6 @@ export default Plugin({
       },
     });
     yield* registerComponents([
-      {
-        name: "Fixture.Owner",
-        props: ownerProps,
-        returns: { type: "object" },
-        fn: RecoveryOwner,
-        origin: "test://joined-response",
-      },
       {
         name: "Git.Changes",
         origin: "test://joined-response",

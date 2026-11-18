@@ -4,7 +4,7 @@ Use this interface when an original implementation reply completed but extractio
 
 ## Applies to
 
-The explicit native file entry and direct native REPL component invocation. Select the recovery include before the existing owning workflow include. For #1400, keep the owner at eda5c08a9fbcc4a308537b17f0b9547108fbc748. Do not select current-main's ordinary Ticket loaders in place of that owner. The repaired CLI supplies the new action; its include composition supplies the unchanged owner.
+The explicit native file entry and direct native REPL component invocation. Select the recovery include before the existing owning workflow include. For #1400, keep the owner at eda5c08a9fbcc4a308537b17f0b9547108fbc748. Do not select current-main's ordinary Ticket loaders in place of that owner. The recovery include supplies the new action; its include composition supplies the unchanged owner.
 
 ## Public interface
 
@@ -43,6 +43,25 @@ The displayed sizes/digests are explanatory placeholders, not a ready-made proof
 For #1400, amendment and provenance are the retained approved decision and provenance files. join is `/private/tmp/xmd-joined-phase-recovery-1396/ticket/attempts/0001/architect-join-proof.json`, not an operator assertion that a turn joined. Read and validate its full referenced original prompt event, exact source membership and outer native completion against the held record. Ignore its summary booleans as proof of those facts. handoffInputs includes the exact supplied `/private/tmp/xmd-pullrequest-1400.4n6d_64v/known-unmet-acceptance.md`; keep its complete A6/A4/A8/A2/A7/unfinished-root qualifications.
 
 The join report’s journal line descriptor names the complete JSONL record, including its newline. Its native completion descriptor names the whole native log; the line selects the completion record only after that log validates. Effective definitions must match the prepared Git source. Retained imports through the original entry must agree, but code after the extraction failure need not have run.
+
+### Public run settlement
+
+A public `executeInstalled` host can supply the alternate report below. It records the actual returned execution result after leaving the execution's owning scope and joining its cleanup. A journal root close alone does not establish that completion.
+
+```json
+{
+  "schema": "joined-response-run-proof.v1",
+  "journal": {"path": "/absolute/original.jsonl", "line": 1, "lineDescriptor": {"utf8Bytes": 1, "sha256": "64 lowercase hexadecimal characters"}},
+  "retainedEvent": "/absolute/original-event.json",
+  "publicRunSource": {"path": "/absolute/settlement.json", "utf8Bytes": 1, "sha256": "64 lowercase hexadecimal characters"}
+}
+```
+
+These four members are exact. The report cannot mix `nativeFinishedSource` or Submit entry metadata with this form. Its settlement descriptor binds the whole JSON receipt before fields are interpreted. That receipt has exactly `schema: "joined-response-run-settlement.v1"`, `root` and `journal` absolute UTF-8 descriptors, and `outcome: {kind: "settled", result: {ok: true, value: <actual held Ticket envelope>}}`.
+
+The root descriptor binds the retained authored source. The journal descriptor binds the entire newline-framed journal at the report's path. Every event must parse, with one root import and one settled root close, matching source bytes and a successful retained document result equal to both the actual returned envelope and the confirmed input. Failed document results, ambiguous root membership, unfinished suffixes, missing settlement, failed or suspended outer results and changed descriptors refuse. Original prompt/source-owner, session identity, model, request and reply checks apply to both forms. The receipt, root source and full journal are snapshotted alongside the other original evidence.
+
+The historical Submit form remains supported with its original byte framing, full native-log descriptor and entry/execution membership. Neither form turns the failed inner phase into a successful phase or grants an acceptance verdict.
 
 Approval/provenance document the actual authority already granted. Descriptors verify evidence correspondence and grant no permission. This format creates neither authority tokens nor a model-selection or historical-migration interface.
 

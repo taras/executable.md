@@ -39,12 +39,28 @@ const location = z.strictObject({
   path: z.string().startsWith("/"),
   line: z.number().int().positive(),
 });
-const joinSchema = z.object({
+const historicalJoinSchema = z.object({
   journal: location.extend({ lineDescriptor: descriptor.omit({ path: true }) }),
   retainedEvent: z.string().startsWith("/"),
   nativeFinishedSource: location.extend({
     utf8Bytes: z.number().int().nonnegative().max(textLimit),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  }),
+});
+
+const runJoinSchema = z.strictObject({
+  schema: z.literal("joined-response-run-proof.v1"),
+  journal: location.extend({ lineDescriptor: descriptor.omit({ path: true }) }).strict(),
+  retainedEvent: z.string().startsWith("/"),
+  publicRunSource: nonempty,
+});
+const runSettlementSchema = z.strictObject({
+  schema: z.literal("joined-response-run-settlement.v1"),
+  root: nonempty,
+  journal: nonempty,
+  outcome: z.strictObject({
+    kind: z.literal("settled"),
+    result: z.strictObject({ ok: z.literal(true), value: jsonObject }),
   }),
 });
 
@@ -94,10 +110,31 @@ export default function* JoinedProof(value: unknown) {
   if (input.mode === "admit") {
     return { file: describe(input.path, text), proof, references };
   }
-  const join = joinSchema.parse(JSON.parse(texts[proof.join.path]));
+  const report = JSON.parse(texts[proof.join.path]);
+  const run = runJoinSchema.safeParse(report);
+  if (
+    !run.success &&
+    (report.schema === "joined-response-run-proof.v1" || "publicRunSource" in report)
+  ) {
+    failure("mixed or invalid public run report.");
+  }
+  const join = run.success ? run.data : historicalJoinSchema.parse(report);
+  const settlement = run.success
+    ? runSettlementSchema.parse(JSON.parse(yield* observed(run.data.publicRunSource)))
+    : undefined;
+  const rootText = settlement === undefined ? undefined : yield* observed(settlement.root);
   const journalText = yield* read("/", join.journal.path, textLimit);
   if (!journalText.endsWith("\n")) {
     failure("the original journal has an unfinished final record.");
+  }
+  if (
+    settlement !== undefined &&
+    (settlement.journal.path !== join.journal.path ||
+      !same(settlement.journal, describe(join.journal.path, journalText)) ||
+      JSON.stringify(canonicalize(settlement.outcome.result.value)) !==
+        JSON.stringify(canonicalize(input.record)))
+  ) {
+    failure("public run journal or returned envelope changed.");
   }
   const lines = journalText.split("\n");
   lines.pop();
@@ -179,37 +216,59 @@ export default function* JoinedProof(value: unknown) {
   if (!retained.ok || JSON.stringify(retained.value) !== JSON.stringify(event.value)) {
     failure("the retained event export does not match the original journal.");
   }
-  const nativeText = yield* read("/", join.nativeFinishedSource.path, textLimit);
-  const nativeLine = nativeText.split("\n")[join.nativeFinishedSource.line - 1];
-  if (
-    nativeLine === undefined ||
-    !same(
-      {
-        path: join.nativeFinishedSource.path,
-        utf8Bytes: join.nativeFinishedSource.utf8Bytes,
-        sha256: join.nativeFinishedSource.sha256,
-      },
-      describe(join.nativeFinishedSource.path, nativeText),
-    )
-  ) {
-    failure("the original native completion receipt changed.");
-  }
-  const finished = z
-    .object({
-      kind: z.literal("finished"),
-      joined: z.literal(true),
-      outcome: z.literal("completed"),
-      submission: z.object({ sessionId: z.string(), execution: z.string(), entry: z.string() }),
-      result: z.object({ value: jsonObject }),
-      error: z.null(),
-      journal: z.literal("completed"),
-    })
-    .parse(JSON.parse(nativeLine));
-  if (
-    JSON.stringify(canonicalize(finished.result.value)) !==
-    JSON.stringify(canonicalize(input.record))
-  ) {
-    failure("the joined native entry returned another Ticket envelope.");
+  const originals = [
+    describe(join.journal.path, journalText),
+    describe(join.retainedEvent, retainedEvent),
+    describe(sessionPath, identityText),
+  ];
+  let selectedEntry = 1;
+  let expectedExecution: string | undefined;
+  if (settlement === undefined) {
+    const historical = historicalJoinSchema.parse(report);
+    const nativeText = yield* read("/", historical.nativeFinishedSource.path, textLimit);
+    const nativeLine = nativeText.split("\n")[historical.nativeFinishedSource.line - 1];
+    if (
+      nativeLine === undefined ||
+      !same(
+        {
+          path: historical.nativeFinishedSource.path,
+          utf8Bytes: historical.nativeFinishedSource.utf8Bytes,
+          sha256: historical.nativeFinishedSource.sha256,
+        },
+        describe(historical.nativeFinishedSource.path, nativeText),
+      )
+    ) {
+      failure("the original native completion receipt changed.");
+    }
+    const finished = z
+      .object({
+        kind: z.literal("finished"),
+        joined: z.literal(true),
+        outcome: z.literal("completed"),
+        submission: z.object({ sessionId: z.string(), execution: z.string(), entry: z.string() }),
+        result: z.object({ value: jsonObject }),
+        error: z.null(),
+        journal: z.literal("completed"),
+      })
+      .parse(JSON.parse(nativeLine));
+    if (
+      JSON.stringify(canonicalize(finished.result.value)) !==
+      JSON.stringify(canonicalize(input.record))
+    ) {
+      failure("the joined native entry returned another Ticket envelope.");
+    }
+    selectedEntry = Number(finished.submission.entry.slice(6));
+    if (
+      !Number.isSafeInteger(selectedEntry) ||
+      selectedEntry < 1 ||
+      finished.submission.entry !== "entry-" + selectedEntry
+    ) {
+      failure("the original native entry identity is malformed.");
+    }
+    expectedExecution = finished.submission.execution;
+    originals.push(describe(historical.nativeFinishedSource.path, nativeText));
+  } else if (run.success && rootText !== undefined) {
+    originals.push(run.data.publicRunSource, settlement.root);
   }
   let order = 0;
   let open = false;
@@ -244,6 +303,16 @@ export default function* JoinedProof(value: unknown) {
         failure("the original journal has contradictory entry boundaries.");
       }
       order += 1;
+      if (
+        settlement !== undefined &&
+        (order !== 1 ||
+          item.result.status !== "ok" ||
+          !z
+            .object({ path: z.literal(settlement.root.path), content: z.literal(rootText ?? "") })
+            .safeParse(item.result.value).success)
+      ) {
+        failure("public run root source or membership changed.");
+      }
       open = true;
       for (const key of Object.keys(yields)) {
         delete yields[key];
@@ -252,11 +321,11 @@ export default function* JoinedProof(value: unknown) {
     if (!open) {
       failure("the original journal has an event outside an entry.");
     }
-    const selected = finished.submission.entry === "entry-" + order;
+    const selected = selectedEntry === order;
     if (item.type === "yield") {
       const ordinal = yields[item.coroutineId] ?? 0;
       if (
-        order <= Number(finished.submission.entry.slice(6)) &&
+        order <= selectedEntry &&
         item.description.type === "import_component" &&
         item.result.status === "ok"
       ) {
@@ -287,6 +356,26 @@ export default function* JoinedProof(value: unknown) {
     if (item.type === "close" && item.coroutineId === "root") {
       if (selected) {
         closed = item.result.status === "ok";
+        if (settlement !== undefined) {
+          const terminal =
+            item.result.status === "ok"
+              ? z
+                  .strictObject({
+                    status: z.literal("ok"),
+                    output: z.string(),
+                    value: jsonObject,
+                    bindings: jsonObject,
+                  })
+                  .safeParse(item.result.value)
+              : undefined;
+          if (
+            !terminal?.success ||
+            JSON.stringify(canonicalize(terminal.data.value)) !==
+              JSON.stringify(canonicalize(input.record))
+          ) {
+            failure("public run document did not return the held envelope.");
+          }
+        }
       }
       open = false;
     }
@@ -295,7 +384,9 @@ export default function* JoinedProof(value: unknown) {
     !member ||
     !closed ||
     !ownerFound ||
-    join.journal.path.split("/").at(-2) !== finished.submission.execution
+    (expectedExecution !== undefined &&
+      join.journal.path.split("/").at(-2) !== expectedExecution) ||
+    open
   ) {
     failure("the prompt lacks matching source, execution and joined-entry membership.");
   }
@@ -304,12 +395,7 @@ export default function* JoinedProof(value: unknown) {
     proof,
     references,
     raw: describe(input.call.assignment.artifactDirectory + "/raw.txt", input.raw),
-    originals: [
-      describe(join.journal.path, journalText),
-      describe(join.retainedEvent, retainedEvent),
-      describe(join.nativeFinishedSource.path, nativeText),
-      describe(sessionPath, identityText),
-    ],
+    originals,
     imports,
     prompt: {
       sequence: prompt.sequence,

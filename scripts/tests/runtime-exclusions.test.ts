@@ -183,6 +183,7 @@ describe("the applicable corpus", () => {
       "DeliverySummaryRepair",
       "Friction",
       "Implementation",
+      "JoinedResponseRecovery",
       "LaunchPolicy",
       "Preparation",
       "ProductionRole",

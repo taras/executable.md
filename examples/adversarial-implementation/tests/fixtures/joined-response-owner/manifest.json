@@ -13,7 +13,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Entry/Continue.md",
       "sha256": "67bf5781961f1c37e9d6e34ace821ffc8e3a5fc3ed617e2a07ef4daf71748c0a",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Entry/Continue.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Entry/Continue.md",
       "fixturePath": "examples/adversarial-implementation/components/Entry/Continue.md"
     },
     {
@@ -83,7 +83,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Phase/Correct.md",
       "sha256": "5f8eed09ef6fa2a15c5045db9e90d318ec48f799269279d0eef8b17c9ffca4be",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Correct.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Correct.md",
       "fixturePath": "examples/adversarial-implementation/components/Phase/Correct.md"
     },
     {
@@ -111,7 +111,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Phase/Extract.ts",
       "sha256": "8de344d6ee37606d06957ed2d2be0a45329cf6a990435907fba6eb0fdefb7fdf",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Extract.ts",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Extract.ts",
       "fixturePath": "examples/adversarial-implementation/components/Phase/Extract.ts"
     },
     {
@@ -146,7 +146,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Phase/Profile.md",
       "sha256": "85754051c70528df34a94830cc26a8c933b7206d7ea3e714c519e3769d87d0ca",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Profile.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Profile.md",
       "fixturePath": "examples/adversarial-implementation/components/Phase/Profile.md"
     },
     {
@@ -181,7 +181,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Phase/Role.md",
       "sha256": "865b4fac72473da9f92e6b1a3297696398b975a2d18ea6e146bf909f08a12f0a",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Role.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Role.md",
       "fixturePath": "examples/adversarial-implementation/components/Phase/Role.md"
     },
     {
@@ -195,7 +195,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Phase/Run.md",
       "sha256": "35a791c79e030e8356cf4a0d31d54674a825bab2d2b401a3149e6b9ada3b720f",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Run.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Phase/Run.md",
       "fixturePath": "examples/adversarial-implementation/components/Phase/Run.md"
     },
     {
@@ -293,7 +293,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/Continue.md",
       "sha256": "f730cecc802aca20a32e7a55be51e939489c38ad68e7d03edf292c8d73b72f5f",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/Continue.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/Continue.md",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/Continue.md"
     },
     {
@@ -461,14 +461,14 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/Schema.md",
       "sha256": "53bf508acfc3701a0b31f803b859c1de9753a2642d804deb1a875d1b43b587a1",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/Schema.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/Schema.md",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/Schema.md"
     },
     {
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/SelectModel.md",
       "sha256": "cb280e46a96a9ab8e44085357d47aca6186a26e202859d96aef8f118cfef93ec",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/SelectModel.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/SelectModel.md",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/SelectModel.md"
     },
     {
@@ -517,7 +517,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/Step.md",
       "sha256": "9947b54dbecf7a61f2fb34bf8e0bce7e5b7685f545eb08d0813edc820da25398",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/Step.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/Step.md",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/Step.md"
     },
     {
@@ -552,7 +552,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/control.ts",
       "sha256": "e50d9d5c70703797c218cd0ab6028fd6110097ce23ffee17a2c6addbd333e5a3",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/control.ts",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/control.ts",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/control.ts"
     },
     {
@@ -566,7 +566,7 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/native-node.ts",
       "sha256": "fc3a787e0359598e9acad45dc3b59d8a48ad8e50b0fcf1db145fa782f5941ddd",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/native-node.ts",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/native-node.ts",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/native-node.ts"
     },
     {
@@ -580,14 +580,14 @@
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/components/Ticket/text-storage.ts",
       "sha256": "84e2eb0341f1e3cdf4fb0a42358f88492f0fc29d3618758073638d3c8bf75939",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/text-storage.ts",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/components/Ticket/text-storage.ts",
       "fixturePath": "examples/adversarial-implementation/components/Ticket/text-storage.ts"
     },
     {
       "originPin": "eda5c08a9fbcc4a308537b17f0b9547108fbc748",
       "originalPath": "examples/adversarial-implementation/continue.md",
       "sha256": "e203e3a5b44f91aff27950f11a7f75af14077625c2e3a7cc1cbdb84c6e035ffa",
-      "source": "packages/cli/tests/fixtures/joined-response-owner/examples/adversarial-implementation/continue.md",
+      "source": "examples/adversarial-implementation/tests/fixtures/joined-response-owner/examples/adversarial-implementation/continue.md",
       "fixturePath": "examples/adversarial-implementation/continue.md"
     },
     {

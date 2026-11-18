@@ -290,15 +290,13 @@ export function* useHeadlessFixture(
   dataRoot?: string,
   native?: {
     formCapable?: boolean;
-    advertiseNativeLaunch?: readonly string[];
-    advertiseClientNativeAttachment?: readonly string[];
     event?(event: AcpRuntimeEvent): void;
     /** Replace one raw ACP runtime event before `consumeTurn` reads it. */
     transform?(event: AcpRuntimeEvent): AcpRuntimeEvent;
     permission?(request: AcpPermissionRequest): void;
     beforeClose?(): Operation<void>;
   },
-  profileFacts: Pick<ReplProfileFacts, "testingHarness" | "includes"> = {},
+  profileFacts: Pick<ReplProfileFacts, "testingHarness"> = {},
   plugins: readonly Plugin[] = [],
 ) {
   const scope = yield* useScope();
@@ -344,12 +342,6 @@ export function* useHeadlessFixture(
         observeChildRoot: (root) => children.push(root),
         acp: {
           sessionStore: store,
-          ...(native?.advertiseNativeLaunch === undefined
-            ? {}
-            : { advertiseNativeLaunch: native.advertiseNativeLaunch }),
-          ...(native?.advertiseClientNativeAttachment === undefined
-            ? {}
-            : { advertiseClientNativeAttachment: native.advertiseClientNativeAttachment }),
           agentRegistry: makeRegistry({ [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd` }),
           createRuntime(options) {
             const configured =
