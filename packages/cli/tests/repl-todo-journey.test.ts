@@ -1,6 +1,7 @@
 import { sleep } from "effection";
 import type { Operation } from "effection";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -11,6 +12,8 @@ import { awaitedFact } from "./support/mounted-repl.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { TODO_WAKE } from "../src/repl/todo/wake.ts";
+
+const OWNER = "packages/cli/tests/repl-todo-journey.test.ts";
 
 /**
  * Whether the inert last task is the focused one, by its own row and rows.
@@ -173,6 +176,7 @@ for (const size of [
   { columns: 72, rows: 20 },
 ]) {
   describe(`Shared TODO terminal at ${size.columns}x${size.rows}`, () => {
+    beforeEach(journalBeforeEach(OWNER));
     it("creates a shared task and keeps it when switching tabs", function* () {
       const page = yield* useReplPage({ size });
       if (size.columns < 120) {
@@ -464,6 +468,7 @@ for (const size of [
 }
 
 describe("TODO human semantic actions", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("adds, renames, completes, reopens, reorders and removes through mounted controls", function* () {
     const page = yield* useReplPage();
     let inputCount = 0;
@@ -647,6 +652,7 @@ describe("TODO human semantic actions", () => {
 });
 
 describe("TODO background task focus", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps the surviving target and its local actions after an external prepend", function* () {
     const page = yield* useReplPage();
     yield* intoComposer(page);

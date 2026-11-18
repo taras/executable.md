@@ -3,7 +3,8 @@ import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import { API } from "@executablemd/runtime";
@@ -29,7 +30,10 @@ import { join } from "node:path";
 import { makeRegistry, makeStore } from "./support/fake-acp.ts";
 import { chmod, mkdtemp, realpath } from "node:fs/promises";
 
+const OWNER = "packages/cli/tests/repl-headless.test.ts";
+
 describe("parent-owned headless REPL", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("H3: disconnect after accepted work reconnects exactly without resubmitting its effect", function* () {
     const held = yield* useHeadlessFixture();
     const source = '<Let as="once" value="single-disconnected-effect" /><Output>{once}</Output>';
@@ -841,6 +845,7 @@ function* useManagedRecoveryChild(publicationFailure: { armed: boolean }) {
 }
 
 describe("987 — owned reference disposition", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const cut of ["publication", "active-unwind"]) {
     it(`keeps authoritative selection and reference lifetime at ${cut}`, function* () {
       const publication = { armed: false };
@@ -918,6 +923,7 @@ describe("987 — owned reference disposition", () => {
 });
 
 describe("987 — original child input ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps an entry question through inspection, UI detach and same-original recovery", function* () {
     const held = yield* useManagedRecoveryChild({ armed: false });
     held.host.fake.script({ reply: "<REPL.Bindings />" });
@@ -999,6 +1005,7 @@ describe("987 — original child input ownership", () => {
 });
 
 describe("REPL Plugin session ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R2: parent and child initialize once; UI and history reads initialize nothing", function* () {
     const workspaces: string[] = [];
     const stopped: string[] = [];

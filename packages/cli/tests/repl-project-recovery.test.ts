@@ -11,7 +11,8 @@ import { runXmd } from "../src/cli.ts";
 import { Elicitation } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
 import { unsupportedWorkflowHost } from "../src/workflow.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile, exists, rm, ensureDir } from "@effectionx/fs";
 import { API, cwd, Permissions } from "@executablemd/runtime";
@@ -34,6 +35,8 @@ import {
 } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { pasteDraft, sendMessage } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-project-recovery.test.ts";
 
 function columnOf(cells: readonly string[], label: string): number {
   const offset = cells.join("").indexOf(label);
@@ -105,6 +108,7 @@ function* saved(sidekick = false) {
 }
 
 describe("1113: project placement before live recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: records the strict pair and needs no answer at the original root or an alias", function* () {
     const held = yield* saved();
     const reopened = yield* held.host.repository.open(held.id);
@@ -543,6 +547,7 @@ describe("1113: project placement before live recovery", () => {
 });
 
 describe("1113: unavailable access and conflicting placement", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: diagnoses an access refusal without offering another path", function* () {
     const directory = yield* useTemporary("1113-inaccessible-");
     let accessed = "";

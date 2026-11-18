@@ -4,7 +4,8 @@ import { planComponentDescription } from "../src/plan-component.ts";
 import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { DurablePersistenceError } from "@executablemd/durable-streams";
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
@@ -60,6 +61,8 @@ import {
   sendMessage,
   stopSidekick,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-testing.test.ts";
 
 const reportSchema = z
   .object({
@@ -149,6 +152,7 @@ function passing(name = "real assertion", expected = "yes"): string {
 }
 
 describe("REPL.Test accepted journeys", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R1: authors, fails, fixes and reuses ordinary Markdown without executing its creation", function* () {
     const { page, repl, workspace } = yield* mounted();
     const chapter = yield* readGuideChapter("Entries");
@@ -322,6 +326,7 @@ describe("REPL.Test accepted journeys", () => {
 });
 
 describe("REPL.Test selection, display and isolation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R4: preserves configured selection, immutable declarations, document isolation and explicit display", function* () {
     const configured = yield* useTemporary("xmd-testing-includes-");
     yield* writeTextFile(join(configured, "Greeting.md"), "configured greeting");
@@ -465,6 +470,7 @@ function* holdModule(
 }
 
 describe("REPL.Test admission and joined lifetime", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R5: refuses both submitters and a second test throughout response cancellation and gated cleanup", function* () {
     yield* useHostFiles();
     yield* useComponentModuleLoader();
@@ -669,6 +675,7 @@ describe("REPL.Test admission and joined lifetime", () => {
 });
 
 describe("REPL.Test retained and fatal outcomes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R6: reopen inspection keeps completed reports inert and unmatched work unknown until a new explicit request", function* () {
     yield* useComponentModuleLoader();
     const gate = appendGate();
@@ -890,6 +897,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
 });
 
 describe("1113: session tests use bounded fixtures", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("1113: keeps test cwd at S and permits components fixtures while refusing private session bytes", function* () {
     yield* useComponentModuleLoader();
     const host = yield* useMountedHost({
