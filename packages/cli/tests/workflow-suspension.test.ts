@@ -32,7 +32,8 @@ import { protectedInputPlugin, protectedInputChild } from "./support/protected-i
  * assembly. It is the only observation here that a value cannot stand in for.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { call, ensure, Err, Ok, resource, scoped } from "effection";
@@ -46,7 +47,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { durableCall, InMemoryStream } from "@executablemd/durable-streams";
+import { durableCall } from "@executablemd/durable-streams";
 import {
   useWorkflowInputDelivery,
   useWorkflowLifecycle,
@@ -75,6 +76,8 @@ import type {
 } from "../src/workflow.ts";
 import { runWorkflowManagement } from "../src/workflow-management.ts";
 import { retainedSource } from "../../workflow/tests/support/storage.ts";
+
+const OWNER = "packages/cli/tests/workflow-suspension.test.ts";
 
 const SCHEMA = { type: "object", properties: { approved: { type: "boolean" } } };
 
@@ -458,6 +461,7 @@ function body(): (execution: WorkflowExecution) => Operation<Result<void>> {
 }
 
 describe("Tier WFS — a suspended run and its no-input resumes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("WFS1: suspends, exits 2, releases the lock, and resumes into the same wait", function* () {
     const root = yield* useRunStore();
     const fixture = yield* useFixture();
@@ -745,9 +749,9 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
   });
 
   it("WFS3: an ordinary execution outside a workflow run is unaffected", function* () {
+    const stream = yield* useJournalStream("<eval>");
     // No workflow host, no run, no controller: `suspendFor()` has no run to
     // derive an identity from, so it refuses rather than reaching for one.
-    const stream = new InMemoryStream();
     yield* registerComponents([
       {
         name: "Wait",
