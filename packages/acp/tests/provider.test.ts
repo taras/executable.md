@@ -4,9 +4,13 @@
  * Drives the provider through its dependencies with a scriptable fake runtime:
  * no agent process ever starts.
  */
+import { join } from "node:path";
+import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { createAcpRuntime } from "../src/acpx-runtime.ts";
+import { AGENT_SOURCE, STANDARD_AGENT_SOURCE, world } from "./released-peer.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn, until, withResolvers } from "effection";
+import { scoped, sleep, spawn, until, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Config } from "@executablemd/core";
 import { Agent, claimsConfiguration, sessionOf } from "@executablemd/agent/api";
@@ -3553,3 +3557,154 @@ describe("Tier AP — Prompt usage observation", () => {
     expect(seen.reports[0].coverage.finalReport).toBe("received");
   });
 });
+
+describe(
+  "changed executable on a retained live handle",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const [agent, refusal] of [
+      ["codex", "close"],
+      ["codex", "missing"],
+      ["claude", "different"],
+    ] as const) {
+      it(`W3: ${agent} refuses ${refusal} before another turn`, function* () {
+        const peer = yield* world(true);
+        yield* useFlatWorld(peer.dir);
+        yield* Agent.around(
+          {
+            *agent([name]) {
+              return name ?? agent;
+            },
+          },
+          { at: "min" },
+        );
+        let selected = "A";
+        const ensures: string[] = [];
+        let failClose = refusal === "close";
+        let cleanupFailure: unknown;
+        let recovered = false;
+        let beforeReopen = "";
+        try {
+          yield* scoped(function* () {
+            const scope = yield* useScope();
+            const provider = yield* useAcpxProvider(
+              { defaultAgent: agent, permissionMode: "deny-all" },
+              {
+                sessionStore: peer.store,
+                agentRegistry: peer.registry,
+                advertiseNativeLaunch: [],
+                advertiseClientNativeAttachment: [],
+                *agentProcessEnv() {
+                  return { SELECTION: selected };
+                },
+                createRuntime(options) {
+                  const runtime = createAcpRuntime({ ...options, agentRegistry: peer.registry });
+                  const open = runtime.ensureSession.bind(runtime);
+                  runtime.ensureSession = (input) => {
+                    ensures.push(options.agentProcessEnv?.SELECTION ?? "");
+                    if (!input.expectedAgentSessionId) {
+                      return open(input);
+                    }
+                    return scope
+                      .run(() =>
+                        readTextFile(
+                          join(
+                            peer.dir,
+                            "sessions",
+                            encodeURIComponent(input.sessionKey) + ".json",
+                          ),
+                        ),
+                      )
+                      .then((bytes) => {
+                        beforeReopen = bytes;
+                        return open(input);
+                      });
+                  };
+                  const close = runtime.close.bind(runtime);
+                  runtime.close = (input) => {
+                    if (failClose) {
+                      failClose = false;
+                      return Promise.reject(new Error("controlled release rejection"));
+                    }
+                    return close(input);
+                  };
+                  return runtime;
+                },
+              },
+            );
+            const session = yield* provider.session("retained");
+            function prompt(text: string) {
+              return scoped(function* () {
+                const subscription = yield* provider.promptStream(text, { session });
+                let output = "";
+                let value = yield* subscription.next();
+                while (!value.done) {
+                  if (value.value.type === "text_delta") {
+                    output += value.value.text;
+                  }
+                  value = yield* subscription.next();
+                }
+                return output;
+              });
+            }
+            yield* prompt("marker");
+            const retained = yield* until(peer.store.load(session.sessionKey));
+            expect(retained?.agentSessionId).toBeDefined();
+            const recordPath = join(
+              peer.dir,
+              "sessions",
+              encodeURIComponent(session.sessionKey) + ".json",
+            );
+            const original = yield* readTextFile(recordPath);
+            const calls = join(peer.dir, "methods.jsonl");
+            const seed = yield* readTextFile(calls);
+            selected = "B";
+            if (refusal === "missing") {
+              yield* writeTextFile(peer.agent, STANDARD_AGENT_SOURCE);
+            } else if (refusal === "different") {
+              yield* writeTextFile(join(peer.dir, "different-native-identity"), "1");
+            }
+            let caught: unknown;
+            try {
+              yield* prompt("must not run");
+            } catch (error) {
+              caught = error;
+            }
+            expect(caught).toBeInstanceOf(Error);
+            const delta = (yield* readTextFile(calls)).slice(seed.length);
+            if (refusal === "close") {
+              expect(ensures).toEqual(["A"]);
+              expect(delta).toBe("");
+            } else {
+              expect(ensures).toEqual(["A", "B"]);
+              expect(
+                delta
+                  .trim()
+                  .split("\n")
+                  .map((line) => JSON.parse(line).method),
+              ).toEqual(["session/load"]);
+              expect(JSON.parse(delta).sessionId).toBe(retained?.acpSessionId);
+            }
+            expect(yield* readTextFile(recordPath)).toBe(
+              refusal === "close" ? original : beforeReopen,
+            );
+            expect(session.agentSessionId).toBe(retained?.agentSessionId);
+            yield* writeTextFile(peer.agent, AGENT_SOURCE);
+            yield* rm(join(peer.dir, "different-native-identity"), { force: true });
+            expect(yield* prompt("recall")).toContain("answer:recall:marker");
+            recovered = true;
+            expect(session.agentSessionId).toBe(retained?.agentSessionId);
+          });
+        } catch (error) {
+          cleanupFailure = error;
+        }
+        if (refusal === "close") {
+          expect(String(cleanupFailure)).toContain("controlled release rejection");
+        } else if (cleanupFailure) {
+          throw cleanupFailure;
+        }
+        expect(recovered).toBe(true);
+      });
+    }
+  },
+);

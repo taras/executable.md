@@ -278,6 +278,7 @@ on screen.
 
 ## The two commands are the documented ones
 
+Only native UI invocations count here. Availability and ACP subprocesses may also run.
 Creation names the session and hands over a private instruction file. Resuming
 hands over nothing — a `--session-id` there would be a second conversation, not
 a continuation.

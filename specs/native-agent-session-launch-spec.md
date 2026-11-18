@@ -714,11 +714,12 @@ are met rather than a further invariant beside them:
 
 - **Claimed work that produced no handle releases its claim.** The runtime is
   built before the ensure that would use it, so a rejection would otherwise
-  strand a partition holding a live path for work that never happened — and a
-  binding compares a version and a digest, so the same build found somewhere
-  else is the same partition key and a different file to run. Success transfers
-  the claim into ownership of the handle instead, in one step: a moment where
-  neither count is held is a moment another operation could evict.
+  strand a partition holding a live path for work that never happened. The
+  selected command, adapter command and environment determine the partition.
+  Identical executable bytes selected through different paths can therefore
+  use different partitions. Success transfers the claim into ownership of the
+  handle in one step. A moment where neither count is held is a moment another
+  operation could evict.
 - **Cancellation observes the ensure it started, and settles it before
   quiescence.** Starting an ensure is not the same as owning it: the call runs
   whether or not anybody is still waiting, so a cancellation is not the end of

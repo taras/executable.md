@@ -34,6 +34,8 @@
  *   and private paths never leave this file.
  */
 
+import { runChild } from "./native-proof-child.ts";
+import type { ChildOutcome, LiveSet } from "./native-proof-child.ts";
 import { ensure, main, race, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { exists, rm } from "@effectionx/fs";
@@ -45,9 +47,13 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { createAgentRegistry, resolveAgentCommand } from "../../src/acpx-runtime.ts";
-import { agentSessionKeyDigest } from "@executablemd/runtime";
-import { ADVERTISED_NATIVE_LAUNCH } from "../../src/native-launch.ts";
+import { createEmbeddedAdapters } from "../../src/adapter-snapshots.ts";
+import { claudeKeyPaths, nativeUiInvocations } from "./claude-proof-evidence.ts";
+import {
+  ADVERTISED_NATIVE_LAUNCH,
+  allocatesIdentity,
+  nativeAdapterFor,
+} from "../../src/native-launch.ts";
 
 /** Opting in at all. Absent, every mode refuses before a provider child. */
 const PROOF_ENV = "XMD_CLAUDE_NATIVE_PROOF";
@@ -315,91 +321,6 @@ function shows(text: string, marker: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-interface ChildOutcome {
-  code: number | null;
-  signal: string | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Every child a mode started, so cleanup can prove none outlived it. */
-type LiveSet = Set<number>;
-
-/** Run one captured child to settlement. Never the production command. */
-function runChild(
-  command: string,
-  args: string[],
-  options: { cwd: string; input?: string; live: LiveSet },
-): Operation<ChildOutcome> {
-  return (function* (): Operation<ChildOutcome> {
-    const settled = withResolvers<ChildOutcome>();
-    const failed = withResolvers<never>();
-    let child: ChildProcess | undefined;
-
-    // Registered before the spawn: a halt between acquiring a process and
-    // registering its cleanup leaks the process.
-    yield* ensure(() => {
-      const running = child;
-      if (!running?.pid) {
-        return;
-      }
-      if (running.exitCode === null && running.signalCode === null) {
-        killed(running.pid);
-      }
-      options.live.delete(running.pid);
-    });
-
-    const started = spawnChild(command, args, {
-      cwd: options.cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    child = started;
-    if (started.pid) {
-      options.live.add(started.pid);
-    }
-    let stdout = "";
-    let stderr = "";
-
-    const onStdout = (chunk: Buffer): void => {
-      stdout += chunk.toString();
-    };
-    const onStderr = (chunk: Buffer): void => {
-      stderr += chunk.toString();
-    };
-    const onError = (error: Error): void => failed.reject(error);
-    const onClose = (code: number | null, signal: string | null): void => {
-      if (started.pid) {
-        options.live.delete(started.pid);
-      }
-      settled.resolve({ code, signal, stdout, stderr });
-    };
-
-    // Registered after the cleanup above and so torn down before it: the child
-    // stops being observed before it is signalled, and a race this arm loses
-    // leaves nothing attached to a process somebody else is still reading.
-    // Established before the subscriptions, because `yield* ensure(...)` is
-    // itself a suspension an owner can be halted at.
-    yield* ensure(() => {
-      started.stdout?.off("data", onStdout);
-      started.stderr?.off("data", onStderr);
-      started.off("error", onError);
-      started.off("close", onClose);
-    });
-
-    started.stdout?.on("data", onStdout);
-    started.stderr?.on("data", onStderr);
-    started.on("error", onError);
-    started.on("close", onClose);
-
-    if (options.input !== undefined) {
-      started.stdin?.write(options.input);
-    }
-    started.stdin?.end();
-
-    return yield* race([settled.operation, failed.operation]);
-  })();
 }
 
 /**
@@ -836,7 +757,7 @@ interface JourneyVerdict {
   privateStateInspected: boolean;
 }
 
-function blankJourney(mode: Mode): JourneyVerdict {
+export function blankJourney(mode: Mode): JourneyVerdict {
   return {
     mode,
     verdict: "HARNESS_FAILED",
@@ -917,15 +838,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
 const XMD_BINARY = join(REPO_ROOT, "dist", "xmd");
 const SESSION_COORDINATOR_ROOT = join(homedir(), ".acpx", "xmd-native-sessions", "v1");
 
-/** The exact absolute paths one natural key owns, and nothing else. */
-function keyPaths(agentCommand: string, sessionKey: string): string[] {
-  const digest = agentSessionKeyDigest({ provider: "acpx", agent: agentCommand, sessionKey });
-  return [
-    join(SESSION_COORDINATOR_ROOT, "routes", `${digest}.json`),
-    join(SESSION_COORDINATOR_ROOT, "ownership", `${digest}.json`),
-    join(SESSION_COORDINATOR_ROOT, "leases", `${digest}.lease`),
-  ];
-}
+const adapters = createEmbeddedAdapters(join(homedir(), ".xmd", "adapters"));
 
 /**
  * A path this fixture may write into a generated shell script.
@@ -969,7 +882,7 @@ interface Invocation {
   argv: string[];
 }
 
-function parseObservations(text: string): Invocation[] {
+export function parseObservations(text: string): Invocation[] {
   const invocations: Invocation[] = [];
   let current: Invocation | undefined;
   for (const line of text.split("\n")) {
@@ -998,7 +911,7 @@ function valueOf(invocation: Invocation, flag: string): string | undefined {
 }
 
 /** The command shape a verdict may carry: the private path is never in it. */
-function filtered(invocation: Invocation): string[] {
+export function filtered(invocation: Invocation): string[] {
   const argv = ["claude", ...invocation.argv];
   const index = argv.indexOf("--system-prompt-file");
   if (index >= 0 && index + 1 < argv.length) {
@@ -1249,7 +1162,7 @@ function* invoke(
   index: 0 | 1,
   plan: TurnPlan,
 ): Operation<InvocationOutcome> {
-  const before = (yield* observedInvocations(journey)).length;
+  const before = nativeUiInvocations(yield* observedInvocations(journey)).length;
   const first = index === 0;
   const channels: PtyChannels = {
     charged(bytes) {
@@ -1301,7 +1214,7 @@ function* invoke(
     },
   );
 
-  outcome.children = (yield* observedInvocations(journey)).length - before;
+  outcome.children = nativeUiInvocations(yield* observedInvocations(journey)).length - before;
   return outcome;
 }
 
@@ -1398,8 +1311,9 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     .filter((entry): entry is string => typeof entry === "string");
 
   const observed = yield* observedInvocations(journey);
-  const opening = observed[0];
-  const reentry = observed[1];
+  const native = nativeUiInvocations(observed);
+  const opening = native[0];
+  const reentry = native[1];
   if (opening) {
     verdict.firstCommand = filtered(opening);
   }
@@ -1407,7 +1321,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     verdict.secondCommand = filtered(reentry);
   }
   const allocated = new Set(
-    observed
+    native
       .map((invocation) => valueOf(invocation, "--session-id"))
       .filter((value): value is string => typeof value === "string"),
   );
@@ -1437,7 +1351,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
 
   const sessionKey = head?.sessionKey;
   if (typeof sessionKey === "string" && sessionKey.length > 0) {
-    const paths = keyPaths(resolveAgentCommand(createAgentRegistry(), "claude"), sessionKey);
+    const paths = claudeKeyPaths(SESSION_COORDINATOR_ROOT, adapters.command("claude"), sessionKey);
     const [route] = paths;
     if (route !== undefined && (yield* exists(route))) {
       const parsed: unknown = JSON.parse(yield* until(readFile(route, "utf8")));
@@ -1484,15 +1398,26 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
   verdict.cleanup.journalsRemoved = journalsGone;
 }
 
-function* claudeVersion(journey: Journey): Operation<string> {
-  const reported = yield* bounded("claude-version", VERSION_MS, () =>
-    runChild("claude", ["--version"], { cwd: journey.root, live: journey.live }),
-  );
-  return reported.code === 0 ? reported.stdout.trim() : "";
+function* claudeVersion(cwd: string, live: LiveSet, child: typeof runChild): Operation<string> {
+  try {
+    const reported = yield* bounded("claude-version", VERSION_MS, () =>
+      child("claude", ["--version"], { cwd, live }),
+    );
+    const adapter = nativeAdapterFor("claude");
+    return reported.code === 0 && adapter && allocatesIdentity(adapter)
+      ? (adapter.binding.version(reported.stdout) ?? "")
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 /** Everything both journeys establish before they are allowed to launch. */
-function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
+export function* ready(
+  journey: Pick<Journey, "root" | "live" | "realClaude">,
+  verdict: JourneyVerdict,
+  child = runChild,
+): Operation<boolean> {
   if (journey.realClaude.length === 0) {
     verdict.verdict = "ENVIRONMENT_BLOCKED";
     verdict.detail = "no installed claude executable was found on PATH";
@@ -1500,7 +1425,7 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
   }
   // Recorded as evidence of what ran. A release absent from earlier evidence is
   // what an opt-in regression exists to exercise, so it never blocks the run.
-  verdict.claudeVersion = yield* claudeVersion(journey);
+  verdict.claudeVersion = yield* claudeVersion(journey.root, journey.live, child);
   if (!verdict.projectCopyVerified) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the project copy is not byte-identical to the checked-in role document";
@@ -1592,7 +1517,7 @@ function* runTwoTurn(journey: Journey, verdict: JourneyVerdict, marker: string):
 
 const ZERO_TURN_ACCEPTED: readonly string[] = ["same-identity", "no-session"];
 
-function decideZeroTurn(verdict: JourneyVerdict): void {
+export function decideZeroTurn(verdict: JourneyVerdict): void {
   // XMD confirms a client-native identity over ACP after creating it and again
   // before resuming it. A session Claude kept nothing of is therefore refused
   // by XMD itself, before any re-entry child, with the stable class in the
@@ -1621,7 +1546,7 @@ function decideZeroTurn(verdict: JourneyVerdict): void {
       : "the exact retained identity was refused, and XMD failed closed";
 }
 
-function decideTwoTurn(verdict: JourneyVerdict): void {
+export function decideTwoTurn(verdict: JourneyVerdict): void {
   if (!verdict.openingSentenceExact) {
     verdict.verdict = "PRODUCT_FAILED";
     verdict.detail = "the prepared layer did not govern the first native turn";
@@ -1743,11 +1668,15 @@ function recognized(outcome: ChildOutcome, option: string): boolean {
   return !`${outcome.stdout}${outcome.stderr}`.includes(`unknown option '${option}'`);
 }
 
-function* runPreflight(): Operation<PreflightVerdict> {
+export function* runPreflight(
+  child = runChild,
+  authorized = process.env[PROOF_ENV] === "1",
+  binary = XMD_BINARY,
+): Operation<PreflightVerdict> {
   const verdict: PreflightVerdict = {
     mode: "preflight",
     verdict: "HARNESS_FAILED",
-    authorized: process.env[PROOF_ENV] === "1",
+    authorized,
     refusal: "",
     detail: "preflight did not reach a verdict",
     head: "",
@@ -1778,22 +1707,19 @@ function* runPreflight(): Operation<PreflightVerdict> {
   const live: LiveSet = new Set<number>();
   const cwd = REPO_ROOT;
 
-  verdict.head = (yield* runChild("git", ["rev-parse", "HEAD"], { cwd, live })).stdout.trim();
-  verdict.branch = (yield* runChild("git", ["branch", "--show-current"], {
+  verdict.head = (yield* child("git", ["rev-parse", "HEAD"], { cwd, live })).stdout.trim();
+  verdict.branch = (yield* child("git", ["branch", "--show-current"], {
     cwd,
     live,
   })).stdout.trim();
 
-  const version = yield* bounded("claude-version", VERSION_MS, () =>
-    runChild("claude", ["--version"], { cwd, live }),
-  );
-  verdict.claudeVersion = version.code === 0 ? version.stdout.trim() : "";
+  verdict.claudeVersion = yield* claudeVersion(cwd, live, child);
 
   // Every invocation below is given empty stdin and fails on an argument rather
   // than reaching a model.
   const missing = join(tmpdir(), `xmd-520-absent-${randomUUID()}`);
   const options = yield* bounded("claude-options", VERSION_MS, () =>
-    runChild("claude", ["--session-id", randomUUID(), "--system-prompt-file", missing, "--print"], {
+    child("claude", ["--session-id", randomUUID(), "--system-prompt-file", missing, "--print"], {
       cwd,
       live,
       input: "",
@@ -1804,18 +1730,18 @@ function* runPreflight(): Operation<PreflightVerdict> {
     recognized(options, "--system-prompt-file") &&
     `${options.stdout}${options.stderr}`.includes("System prompt file not found");
   const resume = yield* bounded("claude-resume", VERSION_MS, () =>
-    runChild("claude", ["--resume", randomUUID(), "--print"], { cwd, live, input: "" }),
+    child("claude", ["--resume", randomUUID(), "--print"], { cwd, live, input: "" }),
   );
   verdict.resumeFlag = recognized(resume, "--resume");
 
   const purge = yield* bounded("claude-purge-help", VERSION_MS, () =>
-    runChild("claude", ["project", "purge", "--help"], { cwd, live }),
+    child("claude", ["project", "purge", "--help"], { cwd, live }),
   );
   verdict.projectPurgeSurface = purge.code === 0 && purge.stdout.includes("--dry-run");
 
   // Whether an account is usable, and nothing about whose it is.
   const auth = yield* bounded("claude-auth-status", VERSION_MS, () =>
-    runChild("claude", ["auth", "status"], { cwd, live }),
+    child("claude", ["auth", "status"], { cwd, live }),
   );
   if (auth.code === 0) {
     try {
@@ -1827,16 +1753,15 @@ function* runPreflight(): Operation<PreflightVerdict> {
   }
 
   const pty = yield* bounded("pty-capability", VERSION_MS, () =>
-    runChild("/usr/bin/script", ["-q", "/dev/null", "/bin/sh", "-c", "test -t 1 && echo PTY"], {
+    child("/usr/bin/script", ["-q", "/dev/null", "/bin/sh", "-c", "test -t 1 && echo PTY"], {
       cwd,
       live,
     }),
   );
   verdict.ptyUsable = pty.stdout.includes("PTY");
-  verdict.binaryBuilt = yield* exists(XMD_BINARY);
+  verdict.binaryBuilt = yield* exists(binary);
 
   const established =
-    verdict.claudeVersion.length > 0 &&
     !verdict.claudeConfigDirSet &&
     verdict.sessionIdFlag &&
     verdict.systemPromptFileFlag &&
@@ -1845,8 +1770,7 @@ function* runPreflight(): Operation<PreflightVerdict> {
     verdict.credentialsUsable &&
     verdict.ptyUsable &&
     verdict.binaryBuilt &&
-    verdict.advertised.length === 1 &&
-    verdict.advertised[0] === "claude";
+    verdict.advertised.includes("claude");
   verdict.verdict = established ? "PASS" : "ENVIRONMENT_BLOCKED";
   verdict.detail = established
     ? "the surfaces this journey needs are established, and no model turn was spent"
@@ -1858,7 +1782,7 @@ function render(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-main(function* () {
+function* runProof(): Operation<void> {
   const mode = process.argv[2];
 
   if (mode === "preflight") {
@@ -1885,4 +1809,8 @@ main(function* () {
   }
 
   throw new Error(`claude-native-launch-proof: unknown mode "${mode ?? ""}"`);
-});
+}
+
+if (import.meta.main) {
+  main(runProof);
+}

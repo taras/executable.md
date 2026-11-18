@@ -1941,6 +1941,19 @@ function* useAcpxProviderState(
     prepared: Prepared,
     intent: EnsureIntent,
   ): Operation<ManagedSession> {
+    if (
+      prepared.kind === "existing" &&
+      intent.build !== undefined &&
+      prepared.entry.runtime.partition !== partitionOf(intent.build)
+    ) {
+      // Keep the session slot until the old transport has finished closing, even on halt.
+      const { sessionKey } = prepared;
+      yield* scoped(() => ensure(() => releaseHandle(sessionKey)));
+      if (holding(prepared.sessionKey)) {
+        throw new Error(`could not release session "${prepared.sessionKey}" to change executables`);
+      }
+      prepared = yield* requeried(prepared);
+    }
     if (newSessionOptions?.disallowedTools !== undefined) {
       const launchOptionsRecord = yield* until(store.load(prepared.sessionKey));
       if (launchOptionsRecord !== undefined) {
@@ -1986,7 +1999,11 @@ function* useAcpxProviderState(
     // here rather than loading something it could not tell apart.
     let expectedAgentSessionId = reopening?.agentSessionId;
     if (
-      reopening !== undefined &&
+      (reopening !== undefined ||
+        (attachment === undefined &&
+          intent.state === "existing" &&
+          intent.build !== undefined &&
+          held?.session.agentSessionId !== undefined)) &&
       expectedAgentSessionId === undefined &&
       owesIdentity(agentName)
     ) {

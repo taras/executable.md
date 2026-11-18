@@ -82,7 +82,7 @@ would fail this document.
     "preparedTextInArgv", "preparedTextInEnvironment",
     "modelTurns", "conversationInputByteCount",
     "consentInputBytes", "consentSurfaces", "exitControlBytes",
-    "adapterCommand", "inheritedAgentMarkersRemoved",
+    "adapterIdentity", "inheritedAgentMarkersRemoved",
     "markerStored", "markerRecovered", "markerInReportedEvidence",
     "answerSurface", "outcome",
     "route", "journal", "arrangement", "observed", "absent",
@@ -125,7 +125,7 @@ would fail this document.
     "consentInputBytes": { "type": "string" },
     "consentSurfaces": { "type": "array", "items": { "type": "string" } },
     "exitControlBytes": { "type": "string" },
-    "adapterCommand": { "type": "string" },
+    "adapterIdentity": { "type": "string" },
     "inheritedAgentMarkersRemoved": { "type": "integer" },
     "markerStored": { "type": "boolean" },
     "markerRecovered": { "type": "boolean" },
@@ -324,21 +324,22 @@ a condition of passing.
 
 ## The adapter the attachment was proven against
 
-ACPX resolves adapters through a semver range of its own. A capability that
-depends on how an adapter handles resume identity cannot be left to that range,
-so this binding names one — and the name is live, reaching no durable record.
+The binary's carried adapter supplies both the command used to address the route
+and this path-free snapshot identity. The native UI count covers create and
+resume invocations. Availability probes and ACP subprocesses have separate argv.
 
 <AssertEquals
-  actual={proof.adapterCommand}
-  expected={"npx -y @agentclientprotocol/claude-agent-acp@0.70.0"}
+  actual={proof.adapterIdentity}
+  expected={"xmd-embedded-adapter:claude:@agentclientprotocol/claude-agent-acp@0.70.0+7bb5296c72adb4268f8dc9ed484b53fd2aa6b1b16ab30868d7b8dfb63501257e"}
 />
 
 ## An identity nobody ever had is refused before a turn
 
-The independent case. A route in the historical bound V2 form an earlier release
-published, naming a fresh random conversation, in a directory of its own, with
-no provider arrangement beside it: the prompt reads that released record, and
-refuses rather than starting an empty conversation and answering from it.
+The fixture publishes a historical bound V2 route for a fresh random conversation
+in its own directory. It reads the record back under the command and key the
+binary will use before attempting the prompt. The provider must refuse that
+exact missing conversation. ACPX saves each user submission to this key before
+sending a model request, so the independent arrangement counts attempted turns.
 
 <Assert expr={proof.absent.ran} />
 <AssertEquals actual={proof.absent.failureClass} expected={"identity-unavailable"} />

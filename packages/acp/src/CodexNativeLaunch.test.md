@@ -291,7 +291,7 @@ as evidence of what this run exercised; none is compared with an earlier run.
 <AssertEquals actual={proof.adapterVersion} expected={"1.6.2"} />
 <AssertEquals
   actual={proof.adapterDigest}
-  expected={"3ee22bc6b1649d02fcef80b352516f395fe774e63b459193195a41c42930dd8b"}
+  expected={"a3f699537970127972635b4596aef40ab8a4caa25a9028861d9ee07bf6c4b1a1"}
 />
 <Assert expr={proof.compatibilityTupleFrozen} />
 

@@ -15,11 +15,17 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, until, suspend, withResolvers } from "effection";
+import { ensure, scoped, spawn, until, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { readdir, ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
-import { chmod, symlink } from "node:fs/promises";
+import { chmod, realpath, rename, symlink } from "node:fs/promises";
 import process from "node:process";
+import { randomUUID } from "node:crypto";
+import {
+  hostClaudeExecutable,
+  hostCodexExecutable,
+} from "../../runtime/node-host-agent-executable.ts";
+import type { AcpRuntimeEnsureInput } from "../../acp/src/acpx-runtime.ts";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { createAcpRuntime, createAcpxSessionStore } from "@executablemd/acp";
 import { withCertificationFixture } from "../../acp/tests/certification-fixture.ts";
@@ -29,6 +35,8 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join, relative as relativePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerComponents, collect, retainedSource } from "@executablemd/core";
+import { Agent, sessionOf } from "@executablemd/agent/api";
+import type { Session } from "@executablemd/agent/api";
 import { agentIdentityComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/durable-streams";
@@ -68,6 +76,8 @@ function attach(
     readonly sessionStore: WorkflowAgentProfileOptions["sessionStore"];
     readonly defaultAgent?: string;
     readonly installation?: ExecutionInstallation;
+    readonly agentProcessEnv?: WorkflowAgentProfileOptions["agentProcessEnv"];
+    readonly adapters?: WorkflowAgentProfileOptions["adapters"];
   },
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -741,3 +751,159 @@ describe("workflow ACP loading identity", { sanitizeOps: false, sanitizeResource
     });
   }
 });
+
+describe(
+  "current executable within one workflow Session",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const [agent, changes] of [
+      ["claude", true],
+      ["codex", true],
+      ["codex", false],
+    ] as const) {
+      it(`${changes ? "W1" : "W2"}: ${agent} ${changes ? "switches executable" : "reuses the live handle"} between prompts`, function* () {
+        yield* withCertificationFixture(function* (peer) {
+          const root = yield* useStorageRoot();
+          const first = yield* until(realpath("/usr/bin/true"));
+          const second = yield* until(realpath("/bin/echo"));
+          const selected = join(peer.dir, "selected");
+          yield* until(symlink(first, selected));
+          const variable = agent === "claude" ? "CLAUDE_CODE_EXECUTABLE" : "CODEX_PATH";
+          const original = process.env[variable];
+          yield* ensure(() => {
+            if (original === undefined) {
+              delete process.env[variable];
+            } else {
+              process.env[variable] = original;
+            }
+          });
+          process.env[variable] = selected;
+          yield* withStorage(root, function* () {
+            const db = yield* createRun();
+            const path = workflowRunPath(root, db.record.runId);
+            const trace: string[] = [];
+            const ensures: AcpRuntimeEnsureInput[] = [];
+            let rows: MappingRow[] = [];
+            const issued: Array<Session | undefined> = [];
+            const marker = randomUUID();
+            const source = `<Session name="one" model="selected"><Prompt text="seed:${marker}" /><Gate /><Prompt text="recall" /></Session>`;
+            const result = yield* attach(root, db, source, {
+              defaultAgent: agent,
+              sessionStore: createAcpxSessionStore(peer.home),
+              adapters: { ...createEmbeddedAdapters(join(root, "adapters")), *materialize() {} },
+              *agentProcessEnv() {
+                return {
+                  [variable]: yield* agent === "claude"
+                    ? hostClaudeExecutable()
+                    : hostCodexExecutable(),
+                };
+              },
+              createRuntime(options) {
+                const executable = options.agentProcessEnv?.[variable];
+                const runtime = createAcpRuntime({
+                  ...options,
+                  agentRegistry: {
+                    resolve: () => peer.command("distinct"),
+                    list: () => [agent],
+                  },
+                });
+                const open = runtime.ensureSession.bind(runtime);
+                runtime.ensureSession = (input) => {
+                  ensures.push(input);
+                  trace.push("ensure " + executable);
+                  return open(input);
+                };
+                const close = runtime.close.bind(runtime);
+                runtime.close = (input) =>
+                  close(input).then(() => {
+                    trace.push("closed " + executable);
+                  });
+                const turn = runtime.startTurn.bind(runtime);
+                runtime.startTurn = (input) => {
+                  trace.push("turn " + executable);
+                  return turn(input);
+                };
+                return runtime;
+              },
+              installation: {
+                *install() {
+                  yield* Agent.around({
+                    *prompt(args, next) {
+                      issued.push(sessionOf(args[1]?.session));
+                      return yield* next(...args);
+                    },
+                  });
+                  yield* registerComponents([
+                    {
+                      name: "Gate",
+                      origin: "test://workflow-executable-switch",
+                      props: { type: "object", properties: {}, additionalProperties: false },
+                      *fn() {
+                        rows = mappingRows(path);
+                        if (changes) {
+                          yield* until(symlink(second, selected + ".next"));
+                          yield* until(rename(selected + ".next", selected));
+                        }
+                        return "";
+                      },
+                    },
+                  ]);
+                },
+              },
+            });
+            expect(result.failure).toBe(undefined);
+            expect(JSON.stringify(result.output)).toContain(marker);
+            expect(issued).toHaveLength(2);
+            expect(issued[0]).toBeDefined();
+            expect(issued[1]).toBe(issued[0]);
+            expect(issued[0]?.agentSessionId).toBe(rows[0]?.value);
+            expect(rows).toHaveLength(1);
+            expect(rows[0]?.kind).toBe("acpx.agentSessionId");
+            expect(mappingRows(path)).toEqual(rows);
+            const next = changes ? second : first;
+            expect(trace.filter((e) => e.startsWith("turn "))).toEqual([
+              "turn " + first,
+              "turn " + next,
+            ]);
+            const calls = (yield* peer.calls()).filter((e) => e.method.startsWith("session/"));
+            expect(calls.filter((e) => e.method === "session/new")).toHaveLength(1);
+            expect(calls.filter((e) => e.method === "session/prompt").map((e) => e.kind)).toEqual([
+              "seed",
+              "recall",
+            ]);
+            const target = calls.find((e) => e.kind === "seed")?.sessionId;
+            expect(target).toBeDefined();
+            expect(ensures).toHaveLength(changes ? 2 : 1);
+            if (changes) {
+              expect(ensures[1]).toMatchObject({
+                sessionKey: ensures[0]?.sessionKey,
+                resumeSessionId: target,
+                expectedAgentSessionId: rows[0]?.value,
+              });
+              expect(calls.filter((e) => e.method === "session/load").at(-1)?.sessionId).toBe(
+                target,
+              );
+              expect(
+                trace.slice(trace.indexOf("turn " + first), trace.indexOf("turn " + second) + 1),
+              ).toEqual(["turn " + first, "closed " + first, "ensure " + second, "turn " + second]);
+              const recalled = calls.slice(calls.findIndex((e) => e.kind === "seed") + 1);
+              expect(
+                recalled
+                  .filter((e) =>
+                    ["session/load", "session/set_config_option", "session/prompt"].includes(
+                      e.method,
+                    ),
+                  )
+                  .map((e) => e.method),
+              ).toEqual(["session/load", "session/set_config_option", "session/prompt"]);
+            } else {
+              expect(
+                trace.slice(trace.indexOf("turn " + first), trace.lastIndexOf("turn " + first) + 1),
+              ).toEqual(["turn " + first, "turn " + first]);
+            }
+          });
+        });
+      });
+    }
+  },
+);

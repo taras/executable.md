@@ -257,7 +257,7 @@ section and no other role's.
 <Assert expr={proof.implementorMarkerRendered} />
 <AssertEquals actual={proof.siblingMarkersRendered} expected={0} />
 <AssertEquals actual={proof.firstInvocationChildren} expected={1} />
-<Assert expr={proof.secondInvocationChildren === 1 || proof.outcome === "no-session"} />
+<Assert expr={proof.secondInvocationChildren === 1 || (proof.secondInvocationChildren === 0 && proof.outcome === "no-session")} />
 
 ## Every key sent was terminal control
 
@@ -273,14 +273,13 @@ Ctrl-D bytes: one to ask the prompt whether it is there, one to leave.
 
 Creation names the session and hands over a private instruction file. Re-entry
 resumes that same name and hands over nothing — a `--session-id` there would be
-a second conversation, not a continuation. When the identity was refused, no
-re-entry command ran at all.
+a second conversation, not a continuation. XMD can refuse during preflight before launching the second UI. A refusal from the UI itself still requires the exact resume command.
 
 <AssertEquals
   actual={proof.firstCommand}
   expected={["claude", "--session-id", proof.nativeSessionId, "--system-prompt-file", "<private-file>"]}
 />
-<If condition={proof.outcome === "same-identity"}>
+<If condition={proof.secondInvocationChildren === 1}>
 <AssertEquals actual={proof.secondCommand} expected={["claude", "--resume", proof.nativeSessionId]} />
 <Else>
 <AssertEquals actual={proof.secondCommand} expected={[]} />
