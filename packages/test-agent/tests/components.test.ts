@@ -1,3 +1,5 @@
+import process from "node:process";
+import { useTestDiagnostics } from "../../cli/src/test-diagnostics.ts";
 /**
  * Tier TV — <TestAgent> component tests (specs/test-agent-spec.md
  * acceptance §1): scenario mapping, per-<Test> and per-cwd isolation,
@@ -27,6 +29,7 @@ import {
   installTestingComponents,
   testHarnessInstallation,
   useTesting,
+  withFailureJournal,
 } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
@@ -950,9 +953,9 @@ describe(
     function runChild(
       files: Record<string, string>,
       options: ChildOptions,
+      dir = path.join(os.tmpdir(), `xmd-tn-${randomUUID()}`),
     ): Operation<ChildRun & { torn: string[] }> {
       return scoped(function* () {
-        const dir = path.join(os.tmpdir(), `xmd-tn-${randomUUID()}`);
         yield* ensureDir(dir);
         yield* ensure(() => rm(dir, { recursive: true, force: true }));
         for (const [name, content] of Object.entries(files)) {
@@ -1044,41 +1047,54 @@ describe(
       expect(stream.appendCount).toBe(appended);
     });
 
-    it("TN2: halting a child mid-turn finishes its teardown before the halt returns", function* () {
-      const asked = withResolvers<void>();
-      const torn: string[] = [];
-      // Halted from outside, which is what cancelling the owning test does to the
-      // scope the harness created for a child.
-      const child = yield* spawn(() =>
-        runChild(
-          { "doc.md": CHILD },
-          {
-            worker: NESTED_WORKER,
-            stream: new InMemoryStream(),
-            torn,
-            *nearer(): Operation<void> {
-              // The child stops here, with its session established and its
-              // worker connected — a halt mid-turn rather than one before any.
-              yield* Elicitation.around(
-                {
-                  *elicit(): Operation<unknown> {
-                    asked.resolve();
-                    yield* suspend();
-                    return null;
-                  },
+    const haltedChild =
+      "TN2: halting a child mid-turn finishes its teardown before the halt returns";
+    it(haltedChild, function* () {
+      const dir = path.join(os.tmpdir(), `xmd-tn-${randomUUID()}`);
+      const diagnostics = yield* useTestDiagnostics(process.stderr, {
+        owner: OWNER,
+        name: haltedChild,
+      });
+      yield* withFailureJournal(
+        diagnostics.execution("child", path.join(dir, "doc.md")).journal(() => false),
+        function* (stream) {
+          const asked = withResolvers<void>();
+          const torn: string[] = [];
+          // Halted from outside, which is what cancelling the owning test does to the
+          // scope the harness created for a child.
+          const child = yield* spawn(() =>
+            runChild(
+              { "doc.md": CHILD },
+              {
+                worker: NESTED_WORKER,
+                stream,
+                torn,
+                *nearer(): Operation<void> {
+                  // The child stops here, with its session established and its
+                  // worker connected — a halt mid-turn rather than one before any.
+                  yield* Elicitation.around(
+                    {
+                      *elicit(): Operation<unknown> {
+                        asked.resolve();
+                        yield* suspend();
+                        return null;
+                      },
+                    },
+                    { at: "min" },
+                  );
                 },
-                { at: "min" },
-              );
-            },
-          },
-        ),
+              },
+              dir,
+            ),
+          );
+          yield* asked.operation;
+          expect(torn).toEqual([]);
+          yield* child.halt();
+          // Every `ensure` the child scope held has run, so its provider, worker
+          // connection and controller went with it before this line.
+          expect(torn).toEqual(["the child scope"]);
+        },
       );
-      yield* asked.operation;
-      expect(torn).toEqual([]);
-      yield* child.halt();
-      // Every `ensure` the child scope held has run, so its provider, worker
-      // connection and controller went with it before this line.
-      expect(torn).toEqual(["the child scope"]);
     });
   },
 );

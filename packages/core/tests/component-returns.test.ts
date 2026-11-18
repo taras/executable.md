@@ -1,3 +1,4 @@
+import { captureTestJournal } from "@executablemd/test-support/failure-journal";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier RV — component and root return values (spec §6.10, §5.4).
@@ -741,7 +742,6 @@ describe("Tier RV — component return values", () => {
         yield* ensureDir(dir);
         yield* ensure(() => rm(dir, { recursive: true, force: true }));
         const documentPath = path.join(dir, "doc.md");
-        const stream = yield* useJournalStream(documentPath);
         yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
         yield* until(
           symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"),
@@ -777,24 +777,29 @@ describe("Tier RV — component return values", () => {
           ].join("\n"),
         );
 
-        const outcome: string[] = [];
-        const task = yield* spawn(function* () {
-          const execution = yield* execute({
-            path: documentPath,
-            stream,
-            includes: [dir],
-          });
-          const result = yield* execution;
-          outcome.push(result.ok ? "ok" : "err");
-        });
+        yield* captureTestJournal(
+          {
+            owner: OWNER,
+            name: "RV12: halting after selection publishes no value and completes teardown",
+          },
+          documentPath,
+          function* (stream) {
+            const outcome: string[] = [];
+            const task = yield* spawn(function* () {
+              const execution = yield* execute({ path: documentPath, stream, includes: [dir] });
+              const result = yield* execution;
+              outcome.push(result.ok ? "ok" : "err");
+            });
 
-        yield* reached.operation;
-        yield* task.halt();
+            yield* reached.operation;
+            yield* task.halt();
 
-        // Halted rather than completed: the selected value was never published
-        // as a result, and the suspended component's teardown still ran.
-        expect(outcome).toEqual([]);
-        expect(torn).toEqual(["torn down"]);
+            // Halted rather than completed: the selected value was never published
+            // as a result, and the suspended component's teardown still ran.
+            expect(outcome).toEqual([]);
+            expect(torn).toEqual(["torn down"]);
+          },
+        );
       });
     });
 
