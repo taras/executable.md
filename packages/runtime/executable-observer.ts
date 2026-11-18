@@ -3,11 +3,11 @@
  * (specs/native-agent-session-launch-spec.md §Executable binding).
  *
  * What is observed is a canonical path, the SHA-256 of that file's bytes, and
- * whatever the file says when asked its version. Only the last two ever become
- * durable, as diagnostic history beside a session XMD constructs: a path stops
- * being true when a build moves, and names host layout besides. A host asks
- * this about the file it already selected; the observation reports, and never
- * decides whether a conversation continues.
+ * whatever the file says when asked its version. Opt-in integration proofs use
+ * it to record the build they ran against as evidence; normal session work
+ * neither observes nor retains anything about an executable, and an
+ * observation never decides whether a conversation continues. A path is never
+ * retained: it stops being true when a build moves, and names host layout.
  *
  * This is a plain capability the trusted host builds and hands directly to the
  * provider that needs it. It is deliberately not a contextual Api: a

@@ -238,10 +238,9 @@ Built-in **`claude` and `codex` are advertised** for native launch, and
 `claude` additionally for attaching ACP to a session a native process
 constructed. Claude's sessions are named by XMD and created by the native
 process; Codex names its own and reports it back
-(native-agent-session-launch-spec.md). The ownership, construction-route and
-executable-observation requirements below therefore apply to them on every
-host, and only the hosts that assemble all three — Deno and the compiled
-binary — can serve them. An agent that is not advertised keeps ordinary ACP
+(native-agent-session-launch-spec.md). The ownership and construction-route requirements
+below therefore apply to them on every host, and only the hosts that assemble
+both — Deno and the compiled binary — can serve them. An agent that is not advertised keeps ordinary ACP
 behavior on every host.
 
 Every operation that can act on an advertised session — `session()`, a
@@ -264,22 +263,19 @@ latest forced-release marker across ordinary ownership. Obsolete shapes refuse;
 there is no ownership format selection or compatibility reader. Recovery sends
 no provider request and repairs no identity, route or journal.
 
-The host also passes in a **construction-route store** and an **executable
-observer**, directly and from the same trusted root as the coordinator. The
-route store is required for an advertised agent whose adapter carries an
-executable binding, and a host missing it refuses that agent before any
-provider effect, on the same terms as a missing coordinator. The observer is
-diagnostic: it reports the version and digest of the executable the current
-environment selected, and a host without one continues with the version
-reported as undetermined. Neither is a contextual Api, so document middleware
-cannot point the observation at one binary while the run spawns another.
+The host also passes in a **construction-route store**, directly and from the
+same trusted root as the coordinator. It is required for an advertised agent
+whose adapter carries an executable binding, and a host missing it refuses
+that agent before any provider effect, on the same terms as a missing
+coordinator. It is not a contextual Api, for the same reason the coordinator is
+not.
 
-XMD uses the executable selected by the current environment and opens the
-retained provider conversation. It requires the provider to confirm the same
-native conversation identity. A version or digest change does not refuse
-continuation. Missing required confirmation, a different identity or a real
-resume failure stops the operation without creating a replacement
-conversation. Historical executable observations remain unchanged.
+A conversation continues quietly on the executable the current environment
+selects. The provider must positively confirm the retained native identity
+before work that requires it. A missing or different assertion refuses without
+creating a replacement conversation. Executable version and digest do not
+decide admission. Existing routes and journal history remain unchanged; normal
+continuation creates no new version-history record.
 
 While ownership is held and before any provider construction effect, the
 provider reconciles the route. A fresh `session()` places the session and
@@ -291,11 +287,9 @@ its own sessions publishes `client-native` under an identity that adapter
 allocated, unless existing durable ACPX state or an existing route says the
 session was constructed through ACP — in which case it publishes or adopts
 `acp-first` and retains `identity-unavailable`. A fresh `acp-first`
-route for an adapter with an executable binding is published in the **bound**
-form, carrying the complete observation of the selected executable as its
-history, before ACP creates anything; with no complete observation it is
-published unbound. An existing route is never rewritten: an unbound record
-stays unbound and continues. Publication is create-once, so the loser of
+route is published in the released unbound form before ACP creates anything.
+An existing route is never rewritten: a bound record keeps its original
+binding, an unbound record stays unbound, and both continue. Publication is create-once, so the loser of
 either order adopts the winner, and no route converts.
 
 A `session()` or subscribed `prompt()` meeting a `client-native` route,
@@ -887,12 +881,8 @@ Reconnection first establishes the exact original live child; missing identity
 or outcome remains uncertain and never authorizes resend.
 
 A held conversation's work executes through its captured provider in the
-conversation's own task, so diagnostic capture is installed in that owning
-task before `useAgentConversation()`; middleware around the caller of a turn
-does not move queued work into the caller's scope. A compatibility warning a
-reopened conversation owes is therefore delivered to the host that holds it,
-and continuation follows the same confirmation and refusal policy as an
-ordinary Session.
+conversation's own task, and continuation follows the same quiet confirmation
+and refusal policy as an ordinary Session.
 
 ```ts
 const opened = yield* useAgentConversation({
@@ -1548,12 +1538,13 @@ arranged in the run's own sidecar, continued by reattaching that row — and the
 machine-wide account of ownership, construction routes and executable builds
 describes a different thing entirely. Inheriting the package's advertised sets
 by omission would make an ordinary workflow Claude prompt demand machine
-ownership and a route this profile has no way to give it. The profile therefore
-supplies no session coordinator and no route store, and never consults their
-namespace. A host may supply an executable observer for diagnostics only: it
-reports the version of the executable the run's selection chose, grants no
-native capability and admits nothing. A workflow session keeps no executable
-history, so it warns only when the current version cannot be determined.
+ownership and a route this profile has no way to give it. Workflow sessions use the current selected executable and the provider's
+positive confirmation of their retained native identity. They follow the same
+quiet-continuation policy as ordinary and held sessions. The workflow profile
+supplies no diagnostic observer, machine coordinator or construction-route
+store, and both native capability sets remain empty. The run mapping and
+provider assertion retain their existing authority. No diagnostic baseline or
+journal field is added.
 
 A native permission request under this profile does not reach
 `Agent.requestPermission`. The provider answers it: a reject option when ACP
@@ -1886,37 +1877,17 @@ model prompt; the SDK executable is never a fallback. Version output is
 observation rather than an admission condition. Custom agent commands retain
 their own selection, and completed replay performs no selection or launch.
 
-The provider retains the selected path before it asks the observer anything,
-observes that same file and executes it through the transient child
-environment and native argv. It never resolves the launcher name again on the
-observer's own PATH. A version that cannot be asked or read leaves no current
-build binding and keeps the selection; a missing, non-file or non-executable
-selection is an availability failure. A command the host configured other than
-the carried adapter is never replaced by it because the agent shares a name:
-its backend is not guessed at, so its version is undetermined, and actual
-protocol, capability and identity results decide whether it works.
+The provider carries the selected executable into the matching ACP child
+environment and native argv. It does not use a second PATH resolution to
+replace that choice. Host selectors retain their joined, output-suppressed
+launchability check; the child's version text and exit status impose no
+version admission policy. Missing or unlaunchable selections remain
+availability failures. Supported custom commands keep their arguments and
+environment, and XMD does not guess the backend of an opaque wrapper.
 
-Before affected live work, XMD warns once per logical session in the current
-invocation when the observed version differs from its historical observation.
-If the current version cannot be determined, it reports that once and
-continues otherwise supported work. Missing historical metadata alone
-establishes no observed difference. Diagnostics use stderr and leave
-machine-readable stdout unchanged. Completed replay performs no executable
-observation and emits no new compatibility warning.
-
-The warning reads `<Product> has changed from <old> to <new> since this session
-was established. Continuing the existing conversation.` with normalized product
-versions, or `The <Product> version could not be determined. Continuing.`; raw
-version output and paths are never displayed. It is written through the
-contextual `Stdio` stderr of the task performing the work. The CLI owns one
-transient set per invocation and passes the same reference to every provider
-it installs as `AcpxProviderDependencies.compatibilityWarnings`; a host that
-omits it gives each installation its own. A provider keys a warning by its
-private logical placement — provider, original owner command, session key and
-placement directory — and claims it synchronously before yielding delivery.
-The set admits nothing and is never serialized. A failed diagnostic write is an
-ordinary host I/O failure; it authorizes no replacement and no retry of model
-work.
+Continuation produces no compatibility or undetermined-version notice and
+retains no new version baseline. Completed replay performs no selection,
+observation or launch.
 
 For the retained embedded Codex adapter, live availability selects nonempty
 `CODEX_PATH`, otherwise `codex` on the host PATH. Relative path selections
@@ -2171,11 +2142,9 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   availability probe and live runtime. Each embedded Claude or Codex default
   applies only to its matching retained command; another provider or
   deliberate custom command receives no default overlay for either agent. A
-  native-bound operation's observed executable takes precedence: its runtime
-  receives the bound build's environment in place of the ordinary host
-  selection, which is never consulted for it. The inputs never enter durable
-  session records or global process environment. `executableObserver` says how
-  this host observes the build behind an executable; `agentCwd` answers with the
+  native-capable operation selects through this same seam once, and carries
+  that selection into its runtime and native argv. The inputs never enter durable
+  session records or global process environment. `agentCwd` answers with the
   directory an Agent runs in when the contextual one is not a directory an
   agent process could stand in; `mcpServers` and `newSessionOptions` are passed
   to runtime creation and to `ensureSession()` exactly as given;

@@ -413,15 +413,10 @@ function* hostClaudeWorkflow(
       env: { PATH: bin, CLAUDE_CODE_EXECUTABLE: selected },
     });
   });
-  // An unfamiliar version is reported once, before the live work it concerns,
-  // and the work continues; completed replay in the same invocation adds
-  // nothing. An unavailable executable is an availability failure instead.
-  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({
-    exitCode: 0,
-    stderr: ["missing", "invalid", "unlaunchable"].includes(mode)
-      ? ""
-      : "The Claude version could not be determined. Continuing.\n",
-  });
+  // Quiet: an unfamiliar version is no news, and completed replay in the same
+  // invocation adds nothing. An unavailable executable is reported as an
+  // availability failure in the report instead.
+  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({ exitCode: 0, stderr: "" });
   const report = JSON.parse(yield* readTextFile(join(root, "report.json")));
   expect(yield* exists(staleLog)).toBe(false);
   expect(yield* exists(pathLog)).toBe(false);
@@ -588,14 +583,7 @@ function* hostCodexWorkflow(mode: HostCodexMode): Operation<void> {
       env: mode === "path" ? { PATH: bin } : { PATH: bin, CODEX_PATH: override ?? "" },
     });
   });
-  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({
-    exitCode: 0,
-    stderr: ["missing", "invalid", "unlaunchable"].includes(mode)
-      ? ""
-      : mode === "versioned"
-        ? ""
-        : "The Codex version could not be determined. Continuing.\n",
-  });
+  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({ exitCode: 0, stderr: "" });
   const report = JSON.parse(yield* readTextFile(join(root, "report.json")));
   expect(report.environmentPreserved).toBe(true);
   const selectedRan = ["explicit", "relative", "bare"].includes(mode);
@@ -664,7 +652,7 @@ describe("H host Codex through the production workflow", () => {
     hostCodexWorkflow("effort"));
   it("H4: a host without the model's effort selector refuses with no turn", () =>
     hostCodexWorkflow("no-selector"));
-  it("H5: a release absent from recorded evidence works and is observed without a warning", () =>
+  it("H5: a release absent from recorded evidence works, quietly", () =>
     hostCodexWorkflow("versioned"));
 });
 

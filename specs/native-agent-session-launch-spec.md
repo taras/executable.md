@@ -383,15 +383,19 @@ codex resume <native-session-id>
 
 ### Executable build binding
 
-XMD uses the executable selected by the current environment and opens the
-retained provider conversation. It requires the provider to confirm the same
-native conversation identity. A version or digest change does not refuse
-continuation. Missing required confirmation, a different identity or a real
-resume failure stops the operation without creating a replacement
-conversation. Historical executable observations remain unchanged.
+A conversation continues quietly on the executable the current environment
+selects. The provider must positively confirm the retained native identity
+before work that requires it. A missing or different assertion refuses without
+creating a replacement conversation. Executable version and digest do not
+decide admission. Existing routes and journal history remain unchanged; normal
+continuation creates no new version-history record.
 
-A session XMD constructs retains, as diagnostic history, the complete
-observation of the executable that constructed it, when one could be made:
+Fresh production construction uses the released unbound V1 route forms.
+Client-native construction retains its native identity, client-allocation
+provenance, launcher and instruction digest. No current version or digest is
+persisted for compatibility reporting.
+
+Released records may still carry the binding an earlier release recorded:
 
 ```ts
 interface ExecutableBuildBindingV1 {
@@ -401,63 +405,41 @@ interface ExecutableBuildBindingV1 {
 }
 ```
 
-The digest is the lowercase SHA-256 of the canonical executable target;
-`reportedVersion` is the adapter's canonical parse of what that exact target
-reports. That parse accepts exactly one canonical line: output naming no build,
-or naming several, is an undetermined version rather than an answer. Neither is
-repeated in a diagnostic, and a binding is never invented for it. A path is
-never a member: it says where a build was, which stops being true, and it names
-host layout besides. Equality over these members is used only to check that two
-original accounts of one session agree; it never admits a live executable.
+Released V1/V2/V3 routes and prepared journals remain readable and unchanged.
+Before incomplete live work, compare the original provider, identity,
+provenance, launcher, instructions and policy. When both original accounts
+contain executable bindings, those original bindings must agree. A missing
+binding alone is not disagreement. No original binding is compared with
+today's executable for admission. A new phase referring to an existing bound
+route carries its original binding only where required to preserve that
+agreement.
 
 Selection comes first. A carried adapter's executable is selected by the host
 once — Claude's nonempty `CLAUDE_CODE_EXECUTABLE`, otherwise `claude` on the
 host PATH; Codex's nonempty `CODEX_PATH`, otherwise `codex` on the host PATH;
 relative selections against the host execution directory, and a bad explicit
-choice with no PATH fallback. A host that makes no selection of its own lets
-its observer resolve the launcher command. The host supplies an executable
-observer directly to the provider, alongside the coordinator and the route
-store. It canonicalizes the selected target, requires an executable regular
-file, hashes it, and asks that same file its version. It is deliberately not a
-Context, contextual Api, Agent operation, component or middleware value: a
-resolver document middleware could replace could point the observation at one
-binary while the run spawns another. A controlled test substitutes the whole
-observer through the same constructor seam. A missing, non-file or
-non-executable selection is an availability failure; a version that cannot be
-asked or read is a diagnostic and keeps the selection.
+choice with no PATH fallback. The host selector resolves a canonical regular
+executable and verifies that it can start; its joined, output-suppressed
+`--version` child is a launchability check, and its version text and exit
+status decide nothing. A missing or unlaunchable selection is an availability
+failure. A host that makes no selection runs the adapter's declared launcher
+name, and a custom native adapter keeps its declared command.
 
-One observation yields two kinds of value:
-
-```text
-durable: the executable build binding
-live:    the canonical executable path
-```
-
-The live path exists only in the operation that selected it. Native creation and
-resume replace the adapter command's first argv member with it, and the matching
-Claude ACP child receives it through `CLAUDE_CODE_EXECUTABLE` in a transient
-child-process environment. The integrity-pinned ACPX 0.22.0 source closure
-supplies the child-only environment seam. Its local first-turn materialization
-barrier remains required independently of that released capability. It enters no route, journal, ACPX session option or
-record, public result, diagnostic, `process.env`, or provider partition that
-outlives its last handle.
+The selected path is live only. It exists only in the operation that selected
+it. Native creation and resume replace the adapter command's first argv member
+with it, and the matching ACP child receives it through its adapter's variable
+— `CLAUDE_CODE_EXECUTABLE` or `CODEX_PATH` — in a transient child-process
+environment. The integrity-pinned ACPX 0.22.0 source closure supplies the
+child-only environment seam. Its local first-turn materialization barrier
+remains required independently of that released capability. The path enters no
+route, journal, ACPX session option or record, public result, diagnostic,
+`process.env`, or provider partition that outlives its last handle.
 
 A session established before any build was recorded is legacy-unbound. Its
 route directly supplies the native identity, allocation provenance,
 instruction digest and launcher, so no historical build is needed for exact
 attachment or native preflight. It continues under the same selection and
-confirmation as any other session, and no binding is invented for it: it is
-never upgraded in place, because a build observed today says which build is
-installed now, not which one established the conversation. Missing historical
-metadata alone establishes no observed difference.
-
-Before affected live work, XMD warns once per logical session in the current
-invocation when the observed version differs from its historical observation.
-If the current version cannot be determined, it reports that once and
-continues otherwise supported work. Missing historical metadata alone
-establishes no observed difference. Diagnostics use stderr and leave
-machine-readable stdout unchanged. Completed replay performs no executable
-observation and emits no new compatibility warning.
+confirmation as any other session, and no binding is invented for it.
 
 ### Attachment capability
 
@@ -501,11 +483,11 @@ initial use, original-context continuity and native handoff where supported.
 Actual protocol capabilities and provider-native identity assertions remain
 required.
 
-What the executable observer recognizes is one canonical `codex-cli x.y.z`
-line and nothing else: another canonical version is recognized, and output
-that is bare (`codex-cli`), malformed, or carries a second line is an
-undetermined version. The product word travels with the number because a bare
-semver from another tool compares equal to one from this one.
+The opt-in proofs may still measure a version explicitly. Their Codex parser
+recognizes one canonical `codex-cli x.y.z` line and nothing else: output that is
+bare (`codex-cli`), malformed, or carries a second line is no answer. The
+product word travels with the number because a bare semver from another tool
+compares equal to one from this one. Normal work reads no version at all.
 
 Every later native launch, attachment or incomplete launch replay selects the
 current executable and positively confirms the retained native identity before
@@ -553,13 +535,12 @@ session one of them constructs through ACP and the other does not.
 where the adapter owes a materialization turn the identity does not exist until
 that turn is accepted:
 
-9. The current executable is selected and observed, and the `acp-first` route is
-   published or adopted — **before** the provider constructs anything, so the
-   route a later run is held to already exists when there is a session to hold
-   it to. A fresh route records the complete observation as V3 history, or is
-   unbound without one; an existing route is never rewritten. An executable that
-   cannot run ends the launch here with nothing durable written about a session;
-   a version difference is reported once and continues.
+9. The current executable is selected, and the `acp-first` route is published or
+   adopted — **before** the provider constructs anything, so the route a later
+   run is held to already exists when there is a session to hold it to. A fresh
+   route is unbound V1; an existing route is never rewritten. An executable that
+   cannot run ends the launch here with nothing durable written about a
+   session.
 10. The provider creates or resumes the durable provider session through ACPX,
     applying the prepared instruction layer and contextual cwd configuration.
         An **already-established** session has an identity of its own: the provider
@@ -611,8 +592,8 @@ owner to release — what has to be settled first is which conversation this is:
     close is joined before preparation is retained. Only where
     no route names it yet does the adapter allocate one, inside ownership and
     before any process exists; nothing else supplies or replaces it.
-11. A launch that allocated publishes the `client-native` route create-once —
-    V2 with the complete observation as history, or V1 without one — and
+11. A launch that allocated publishes the unbound V1 `client-native` route
+    create-once, and
     what it publishes against is authoritative — whoever published first
     described the session that exists. Four outcomes, and no other:
     - this launch's own candidate won — `created`;
@@ -870,10 +851,9 @@ session, prompt, launch and incomplete replay refuses there with
 `unsupported-capability`, before contacting an agent, while read-only resolution
 and non-advertised ACP work are unaffected. An advertised agent whose adapter
 carries an executable binding also requires a route store; a host without one
-refuses before any provider effect, whichever side names the session. The
-executable observer is diagnostic and optional: a host without one continues
-and reports the version as undetermined. An adapter that carries no binding
-keeps its ordinary behavior without those dependencies.
+refuses before any provider effect, whichever side names the session. No executable
+observer is needed. An adapter that carries no binding keeps its ordinary
+behavior without those dependencies.
 
 
 ### Exact-target ownership inspection and recovery
@@ -1194,21 +1174,19 @@ retained with the preparation and is what governs the **first native user
 turn**. Neither is ever substituted for the other, and the turn spent here
 cannot perform the task the body describes.
 
-A prepared record carries `executableBinding` exactly when the route it agrees
-with is bound, whichever side named the session, and it carries the route's
-original observation rather than today's. It is optional for compatibility: a
-record without it is legacy history, readable and continued under the same
-selection and confirmation as any other. A provider-returned
-preparation whose adapter binds a build carries one too — `codex` does, on the
-bound V3 ACP-first route — and a refusal that prepared no identity invents
-none.
+A prepared record carries `executableBinding` exactly when the existing route it
+agrees with is bound, whichever side named the session, and it carries the
+route's original binding rather than anything about today's executable. A
+fresh preparation carries none. A record without it is readable and continued
+under the same selection and confirmation as any other, and a refusal that
+prepared no identity invents none.
 
 Every incomplete replay requires agreement between its journal and its route on
 identity, provenance, instruction digest, launcher and provider before its first
 live effect. When both original accounts carry an executable binding, those
-bindings must agree exactly; a missing observation alone is not a disagreement,
-and today's observation is never compared with either. The live executable is
-then selected, and the conversation is confirmed positively instead of by
+bindings must agree exactly; a missing binding alone is not a disagreement, and
+no original binding is compared with today's executable. The live executable
+is then selected, and the conversation is confirmed positively instead of by
 build equality. Neither account repairs or republishes the other: a replay that
 found a disagreement has discovered that the session it was going to continue is
 not the session it prepared, and retains `identity-unavailable` without starting
@@ -1225,8 +1203,8 @@ identity when handoff never began, and confirms after the joined creation. A
 detached replay resumes only and never creates if confirmation fails. An
 ambiguous materialization stays recovery-required and sends no turn. Legacy
 unbound launches follow these same paths. A **completed** replay reads its
-journal and nothing else — it performs no selection, observation, warning or
-live validation and contacts no route store, observer, ACP runtime or process.
+journal and nothing else — it performs no selection, observation or live
+validation and contacts no route store, ACP runtime or process.
 
 A session XMD named takes its instruction layer from one invocation-private
 file, mode `0600`, passed by path. The text appears in neither argv nor
@@ -1325,9 +1303,8 @@ that only placed one has established nothing, so a launch inside it constructs
 the session it named rather than meeting one.
 
 A selected executable that is missing, is not a file or cannot be run fails with
-`executable-binding-refused`, the availability class. A version that differs
-from the session's history, or cannot be determined, is a diagnostic warning and
-never this refusal. Neither carries an executable path, raw version output, host
+`executable-binding-refused`, the availability class. An executable's version
+never causes this refusal, or any notice. It carries an executable path, raw version output, host
 error, argv, environment, credential, instruction text or provider payload.
 
 An attachment that reaches the provider and cannot open the conversation the
@@ -1381,8 +1358,7 @@ belongs to whoever is running the tests. That is what lets an authored
 means a launch under `<TestAgent>` never reaches the host's launcher.
 
 Only the Deno and compiled hosts assemble machine-wide agent sessions: a session
-coordinator, a construction-route store and an executable observer, all rooted
-together, plus the two advertised capability sets this host has proven. Node and
+coordinator and a construction-route store, rooted together, plus the two advertised capability sets this host has proven. Node and
 Bun keep the same advertised names and assemble none of the answers, so every
 advertised operation refuses before provider work rather than acting while a
 native UI may be in the conversation — as *Ownership and concurrency* describes.
@@ -1436,13 +1412,12 @@ Focused tests prove:
     natural key, contention refuses instead of queueing, a crashed owner leaves
     a recovery tombstone, and a host with no coordinator refuses before
     contacting an agent;
-18. a build binding is read exactly, an inexact record refuses rather than being
-    read past, and a changed, moved or unrecognized current build continues the
-    same confirmed conversation with at most one warning;
+18. a released build binding is read exactly, an inexact record refuses rather
+    than being read past, and a changed or moved current executable continues the
+    same confirmed conversation quietly;
 19. new client-native construction selects the executable before it allocates,
-    publishes a route recording any complete observation, and retains a
-    preparation that agrees with it, while a legacy V1 route continues under
-    today's selection and gains nothing;
+    publishes an unbound V1 route, and retains a preparation that agrees with it,
+    while an existing route continues under today's selection and gains nothing;
 20. a `<Session>` or `<Prompt>` on a client-native route supplies the route
     identity as the exact resume identity, delivers the selected path only to
     the matching child's transient environment, and refuses before a turn on a
@@ -1534,8 +1509,8 @@ native-launch capability in the ACPX provider;
 provider-native identity that is either asserted by the provider or allocated by
 the adapter before the provider exists, retained explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
-in a released unbound form and a bound one; the host-owned diagnostic
-executable observer and the build history it records; ACP attachment to a
+in a released unbound form and a bound one, of which fresh construction writes
+the unbound form; ACP attachment to a
 client-native session under its exact retained identity, through runtime
 partitions keyed by agent command and selected environment;
 an inherited foreground-terminal interactive child with cancellation and
@@ -1602,10 +1577,10 @@ degrading:
   record. New records write neither member, and an incomplete older record does
   no configuration work because one was present. Canonical `configuration`
   beside either released member is ambiguous and refuses.
-- **Executable history is never rebound.** A route keeps the observation of the
-  executable that constructed its session. A later build continues the same
-  confirmed conversation and is reported against that history; nothing rewrites
-  the route or the provider's history to claim the current executable made it.
+- **Executable history is never rebound.** A released route keeps any binding
+  it recorded. A later executable continues the same confirmed conversation
+  quietly; nothing rewrites the route or the provider's history to claim the
+  current executable made it.
 
 Additional provider adapters land independently against the same core contract.
 An adapter that cannot prove instruction injection before the first user turn
@@ -1679,7 +1654,7 @@ Implementation review checks these frozen invariants:
     already started before quiescence; quiescence is answered from that account;
     and a close that failed releases nothing and acknowledges none.
 Items 18 and 22 are the #891 amendment: tested versions are evidence, and a
-session continues on the current executable under positive identity
+session continues quietly on the current executable under positive identity
 confirmation.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at

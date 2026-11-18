@@ -1218,9 +1218,8 @@ function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): 
 function* settleAgentStack(
   flags: AgentFlags,
   sessions: MachineSessionAssembly | undefined,
-  compatibilityWarnings: Set<string>,
 ): Operation<AgentStack | undefined> {
-  const stack = yield* resolveAgentStack(flags, sessions, compatibilityWarnings);
+  const stack = yield* resolveAgentStack(flags, sessions);
   if (!stack.ok) {
     console.error(stack.error.message);
     yield* exit(1);
@@ -2978,14 +2977,6 @@ function* dispatch(
   sessions: MachineSessionAssembly | undefined,
   replHost: ReplHostAssembly | undefined,
   /**
-   * The sessions this invocation has already warned about.
-   *
-   * One set for the whole command, shared by every provider it installs, so a
-   * session is reported once however many entries, roles or nested runs reach
-   * it. Transient: it is never retained and admits nothing.
-   */
-  compatibilityWarnings: Set<string>,
-  /**
    * What this invocation's Plugins installed.
    *
    * One assembly for the whole command. Every surface that describes or
@@ -3093,7 +3084,6 @@ function* dispatch(
           denyAll: config.denyAll,
         },
         sessions,
-        compatibilityWarnings,
       );
       if (runStack === undefined) {
         break;
@@ -3150,7 +3140,6 @@ function* dispatch(
       const planWriter = yield* resolvePlanWriterStack(
         { agentProvider: config.agentProvider, defaultAgent: config.defaultAgent },
         sessions,
-        compatibilityWarnings,
       );
       if (!planWriter.ok) {
         console.error(planWriter.error.message);
@@ -3249,7 +3238,6 @@ function* dispatch(
           denyAll: command.config.denyAll,
         },
         sessions,
-        compatibilityWarnings,
       );
       if (replStack === undefined) {
         break;
@@ -3542,7 +3530,6 @@ function* dispatch(
         // than a document-level default: nothing here runs a document.
         { agentProvider: "acpx", defaultAgent: scan.agent },
         sessions,
-        compatibilityWarnings,
       );
       if (!stack.ok) {
         console.error(stack.error.message);
@@ -3859,9 +3846,6 @@ function* runCommand(
   sessions: MachineSessionAssembly | undefined,
   replHost: ReplHostAssembly | undefined,
 ): Operation<void> {
-  // This invocation's compatibility warnings, shared by every provider it
-  // installs and gone when it ends. A new invocation can warn again.
-  const compatibilityWarnings = new Set<string>();
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
   const evalFlags = readEvalFlags(args);
@@ -3898,7 +3882,7 @@ function* runCommand(
   let workflowHost: WorkflowHost | undefined;
   if (!helpRequest.requested && namesWorkflow(helpRequest.args)) {
     try {
-      workflowHost = yield* installWorkflowHost({ compatibilityWarnings });
+      workflowHost = yield* installWorkflowHost();
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       yield* exit(1);
@@ -3978,7 +3962,6 @@ function* runCommand(
         denyAll: selected.config.denyAll,
       },
       sessions,
-      compatibilityWarnings,
     );
     if (stack === undefined) {
       return;
@@ -4012,7 +3995,6 @@ function* runCommand(
       workflowHost,
       sessions,
       replHost,
-      compatibilityWarnings,
       plugins,
       (document) => installTestPlugins(document, selection, loadPluginModule),
       cold,

@@ -23,7 +23,7 @@ import type { PromptUsageHost } from "@executablemd/acp";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Operation } from "effection";
-import { createDenoExecutableObserver, env as readEnv } from "@executablemd/runtime";
+import { env as readEnv } from "@executablemd/runtime";
 import {
   useWorkflowInputDelivery,
   useWorkflowLifecycle,
@@ -46,12 +46,11 @@ export const RUN_STORAGE_ROOT_ENV = "XMD_WORKFLOW_RUNS";
 export function* useDenoWorkflowHost(
   helper: HelperAssembly,
   usage?: PromptUsageHost,
-  compatibilityWarnings?: Set<string>,
 ): Operation<WorkflowHost> {
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
-  const observer = createDenoExecutableObserver();
+
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
@@ -82,10 +81,6 @@ export function* useDenoWorkflowHost(
             root,
             attachment,
             ...(usage === undefined ? {} : { promptUsageHost: usage }),
-            // Diagnostic only: which version the selected executable reports,
-            // for a warning. It admits nothing and grants no native capability.
-            ...(observer === undefined ? {} : { executableObserver: observer }),
-            ...(compatibilityWarnings === undefined ? {} : { compatibilityWarnings }),
           }),
       });
     },

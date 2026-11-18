@@ -1,18 +1,19 @@
 /**
- * Session compatibility across agent CLI releases (#891).
+ * Session continuation across agent CLI releases (#891).
  *
  * The production provider, installed the way a host installs it, over a
- * controlled ACP runtime and executable observer. What these rows read is what
- * an invocation would actually show on standard error and what it actually
- * asked the agent to do: a version change warns once per logical session in one
- * invocation and the retained conversation continues under the provider's live
- * confirmation; nothing about a version admits or refuses.
+ * controlled ACP runtime and the host's own executable selection. What these
+ * rows read is what an invocation actually asked the agent to do, and what it
+ * wrote to standard error: the retained conversation continues on today's
+ * selected executable under the provider's live confirmation of its native
+ * identity, quietly. Nothing about an executable's version admits, refuses or
+ * reports.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Stdio } from "@effectionx/process";
-import { all, scoped, until } from "effection";
+import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "@executablemd/agent/api";
 import type { AcpxProvider, AcpxProviderDependencies } from "@executablemd/acp";
@@ -21,8 +22,8 @@ import { useAcpxProvider } from "../../acp/src/provider.ts";
 import { createMemorySessionRouteStore } from "../../acp/src/session-route.ts";
 import type { AgentSessionRouteStore } from "../../acp/src/session-route.ts";
 import {
-  createFakeObserver,
   createFakeRuntime,
+  createFakeSelection,
   makeCoordinator,
   makeRegistry,
   makeStore,
@@ -30,29 +31,17 @@ import {
 } from "../../acp/tests/helpers.ts";
 import type {
   CoordinatorHarness,
-  FakeObserverHarness,
   FakeRuntimeHarness,
+  FakeSelectionHarness,
 } from "../../acp/tests/helpers.ts";
 import { ADAPTERS } from "./support/plan-harness.ts";
 
 const CWD = "/work";
 
-/** What one product reports at two releases, and the selector it is chosen by. */
+/** The selector variable and registered command for each supported product. */
 const PRODUCTS = {
-  codex: {
-    name: "Codex",
-    before: "codex-cli 0.167.1\n",
-    after: "codex-cli 0.169.1\n",
-    variable: "CODEX_PATH",
-    command: "codex-cmd",
-  },
-  claude: {
-    name: "Claude",
-    before: "2.1.241 (Claude Code)\n",
-    after: "2.1.250 (Claude Code)\n",
-    variable: "CLAUDE_CODE_EXECUTABLE",
-    command: "claude-cmd",
-  },
+  codex: { variable: "CODEX_PATH", command: "codex-cmd" },
+  claude: { variable: "CLAUDE_CODE_EXECUTABLE", command: "claude-cmd" },
 } as const;
 
 type Product = keyof typeof PRODUCTS;
@@ -62,7 +51,7 @@ interface Machine {
   readonly store: ReturnType<typeof makeStore>;
   readonly routes: AgentSessionRouteStore;
   readonly ownership: CoordinatorHarness;
-  readonly observer: FakeObserverHarness;
+  readonly selection: FakeSelectionHarness;
 }
 
 function machine(product: Product): Machine {
@@ -70,23 +59,17 @@ function machine(product: Product): Machine {
     store: makeStore(),
     routes: createMemorySessionRouteStore(),
     ownership: makeCoordinator(),
-    observer: createFakeObserver({
-      path: `/selected/${product}`,
-      versionOutput: PRODUCTS[product].before,
-    }),
+    selection: createFakeSelection(`/selected/${product}-0.167.1`),
   };
 }
 
 /** Every line this scope's operations wrote to standard error. */
-function* stderr(fail?: Error): Operation<string[]> {
+function* stderr(): Operation<string[]> {
   const lines: string[] = [];
   const decoder = new TextDecoder();
   yield* Stdio.around({
     // deno-lint-ignore require-yield
     *stderr([bytes]) {
-      if (fail !== undefined) {
-        throw fail;
-      }
       lines.push(
         ...decoder
           .decode(bytes)
@@ -94,27 +77,22 @@ function* stderr(fail?: Error): Operation<string[]> {
           .filter((line) => line.length > 0),
       );
     },
-    // deno-lint-ignore require-yield
-    *stdout() {
-      throw new Error("a compatibility diagnostic reached standard output");
-    },
   });
   return lines;
 }
 
-/**
- * Install one provider for `product` over this host's state, as the CLI does:
- * the built-in adapter, the host's own selection, and the invocation's set.
- */
 let provider: AcpxProvider | undefined;
 
+/**
+ * Install one provider for `product` over this host's state, as the CLI does:
+ * the built-in adapter and the host's own selection.
+ */
 function* install(
   product: Product,
   host: Machine,
   harness: FakeRuntimeHarness,
   extra: Partial<AcpxProviderDependencies> = {},
 ): Operation<void> {
-  const { variable, command } = PRODUCTS[product];
   // The agent a Prompt that names none means, as the installed chain answers it.
   yield* Agent.around(
     {
@@ -130,16 +108,12 @@ function* install(
     {
       createRuntime: harness.create,
       sessionStore: host.store,
-      agentRegistry: makeRegistry({ [product]: command }),
+      agentRegistry: makeRegistry({ [product]: PRODUCTS[product].command }),
       coordinator: host.ownership.coordinator,
       routeStore: host.routes,
-      executableObserver: host.observer.observer,
       advertiseNativeLaunch: [product],
       advertiseClientNativeAttachment: product === "claude" ? ["claude"] : [],
-      // deno-lint-ignore require-yield
-      *agentProcessEnv() {
-        return { [variable]: `/selected/${product}` };
-      },
+      agentProcessEnv: host.selection.agentProcessEnv(),
       ...extra,
     },
   );
@@ -160,58 +134,45 @@ function* prompt(text: string, session = "review"): Operation<string> {
   });
 }
 
-/** Establish a session in one invocation, under the release recorded as its history. */
+/** Establish a session in one invocation. */
 function* establish(product: Product, host: Machine, session = "review"): Operation<void> {
   yield* scoped(function* () {
     yield* useFlatWorld(CWD);
     const lines = yield* stderr();
-    yield* install(product, host, createFakeRuntime(), {
-      compatibilityWarnings: new Set<string>(),
-    });
+    yield* install(product, host, createFakeRuntime());
     yield* prompt("seed", session);
     expect(lines).toEqual([]);
   });
 }
 
-function changed(product: Product): string {
-  const { name } = PRODUCTS[product];
-  const [from, to] =
-    product === "codex" ? ["0.167.1", "0.169.1"] : (["2.1.241", "2.1.250"] as const);
-  return (
-    `${name} has changed from ${from} to ${to} since this session was established. ` +
-    `Continuing the existing conversation.`
-  );
-}
-
-describe("SC — a CLI release change warns and continues", () => {
+describe("SC — a changed executable continues the same conversation, quietly", () => {
   for (const product of ["codex", "claude"] as const) {
-    it(`SC1 (${product}): an upgraded executable continues the retained conversation and warns once`, function* () {
+    it(`SC1 (${product}): today's selected executable continues the retained conversation`, function* () {
       const host = machine(product);
       yield* establish(product, host);
       const established = yield* until(host.store.load([...host.store.records.keys()][0]!));
       expect(established?.agentSessionId).toBeDefined();
-      const route = yield* host.routes.read({
+      const tuple = {
         provider: "acpx",
         agent: PRODUCTS[product].command,
         sessionKey: established!.acpxRecordId,
-      });
-      expect(route?.schema).toBe("session-route.v3");
+      };
+      // A fresh route records how the session was constructed and nothing about
+      // the executable that constructed it.
+      const route = yield* host.routes.read(tuple);
+      expect(route).toEqual({ schema: "session-route.v1", route: "acp-first", ...tuple });
 
-      host.observer.observation.versionOutput = PRODUCTS[product].after;
-      host.observer.observation.digest = "b".repeat(64);
+      host.selection.path = `/selected/${product}-0.169.1`;
       const harness = createFakeRuntime();
       yield* scoped(function* () {
         yield* useFlatWorld(CWD);
         const lines = yield* stderr();
-        yield* install(product, host, harness, {
-          compatibilityWarnings: new Set<string>(),
-        });
+        yield* install(product, host, harness);
 
         yield* prompt("first after the upgrade");
         yield* prompt("second after the upgrade");
 
-        // One warning, before the live work it concerns, and no repetition.
-        expect(lines).toEqual([changed(product)]);
+        expect(lines).toEqual([]);
       });
       // Each operation reopened the exact retained conversation and required
       // the provider's live confirmation of its native identity first.
@@ -227,215 +188,77 @@ describe("SC — a CLI release change warns and continues", () => {
       ]);
       // Through the executable the current environment selected.
       expect(harness.createdOptions[0]?.agentProcessEnv).toEqual({
-        [PRODUCTS[product].variable]: `/selected/${product}`,
+        [PRODUCTS[product].variable]: `/selected/${product}-0.169.1`,
       });
-      // History is not rewritten to claim today's executable made it.
-      expect(
-        yield* host.routes.read({
-          provider: "acpx",
-          agent: PRODUCTS[product].command,
-          sessionKey: established!.acpxRecordId,
-        }),
-      ).toEqual(route);
+      // Nothing was written to say today's executable made this session.
+      expect(yield* host.routes.read(tuple)).toEqual(route);
     });
   }
-
-  it("SC2: one invocation set spans installations; a second session and a new invocation each warn", function* () {
-    const host = machine("codex");
-    yield* establish("codex", host, "review");
-    yield* establish("codex", host, "build");
-    host.observer.observation.versionOutput = PRODUCTS.codex.after;
-
-    const invocation = new Set<string>();
-    const runs: string[][] = [];
-    for (const installation of ["root", "nested"]) {
-      yield* scoped(function* () {
-        yield* useFlatWorld(CWD);
-        const lines = yield* stderr();
-        yield* install("codex", host, createFakeRuntime(), {
-          compatibilityWarnings: invocation,
-        });
-        yield* prompt(`${installation} review`, "review");
-        if (installation === "nested") {
-          yield* prompt("nested build", "build");
-        }
-        runs.push(lines);
-      });
-    }
-    // The nested installation shares the invocation's set: the reviewed session
-    // is not repeated, and the second session gets its own warning.
-    expect(runs).toEqual([[changed("codex")], [changed("codex")]]);
-    expect(invocation.size).toBe(2);
-
-    // A new invocation starts with nothing and may warn again.
-    yield* scoped(function* () {
-      yield* useFlatWorld(CWD);
-      const lines = yield* stderr();
-      yield* install("codex", host, createFakeRuntime(), {
-        compatibilityWarnings: new Set(),
-      });
-      yield* prompt("next invocation", "review");
-      expect(lines).toEqual([changed("codex")]);
-    });
-  });
-
-  it("SC3: distinct placements of one session name warn separately", function* () {
-    const host = machine("codex");
-    for (const cwd of ["/work/a", "/work/b"]) {
-      yield* scoped(function* () {
-        yield* useFlatWorld(cwd);
-        yield* install("codex", host, createFakeRuntime(), {
-          compatibilityWarnings: new Set(),
-        });
-        yield* prompt("seed", "review");
-      });
-    }
-    host.observer.observation.versionOutput = PRODUCTS.codex.after;
-    const invocation = new Set<string>();
-    const shown: string[] = [];
-    for (const cwd of ["/work/a", "/work/b"]) {
-      yield* scoped(function* () {
-        yield* useFlatWorld(cwd);
-        const lines = yield* stderr();
-        yield* install("codex", host, createFakeRuntime(), {
-          compatibilityWarnings: invocation,
-        });
-        yield* prompt("continue", "review");
-        shown.push(...lines);
-      });
-    }
-    expect(shown).toEqual([changed("codex"), changed("codex")]);
-  });
-
-  it("SC4: an embedding host that omits the set gets one per installation", function* () {
-    const host = machine("codex");
-    yield* establish("codex", host);
-    host.observer.observation.versionOutput = PRODUCTS.codex.after;
-    const shown: string[] = [];
-    for (const _ of [1, 2]) {
-      yield* scoped(function* () {
-        yield* useFlatWorld(CWD);
-        const lines = yield* stderr();
-        yield* install("codex", host, createFakeRuntime());
-        yield* prompt("continue");
-        yield* prompt("again");
-        shown.push(...lines);
-      });
-    }
-    expect(shown).toEqual([changed("codex"), changed("codex")]);
-  });
-
-  it("SC5: concurrent first uses of one session deliver one warning", function* () {
-    const host = machine("codex");
-    yield* establish("codex", host, "review");
-    yield* establish("codex", host, "build");
-    host.observer.observation.versionOutput = PRODUCTS.codex.after;
-    const invocation = new Set<string>();
-    const shown: string[] = [];
-    yield* scoped(function* () {
-      yield* useFlatWorld(CWD);
-      const lines = yield* stderr();
-      yield* install("codex", host, createFakeRuntime(), {
-        compatibilityWarnings: invocation,
-      });
-      yield* all([prompt("one", "review"), prompt("two", "review"), prompt("three", "build")]);
-      shown.push(...lines);
-    });
-    expect(shown).toEqual([changed("codex"), changed("codex")]);
-    expect(invocation.size).toBe(2);
-  });
-
-  it("SC6: a diagnostic that cannot be written is a host I/O failure, never model work", function* () {
-    const host = machine("codex");
-    yield* establish("codex", host);
-    host.observer.observation.versionOutput = PRODUCTS.codex.after;
-    const harness = createFakeRuntime();
-    let raised: Error | undefined;
-    yield* scoped(function* () {
-      yield* useFlatWorld(CWD);
-      yield* stderr(new Error("standard error is closed"));
-      yield* install("codex", host, harness, {
-        compatibilityWarnings: new Set(),
-      });
-      try {
-        yield* prompt("continue");
-      } catch (error) {
-        raised = error as Error;
-      }
-    });
-    expect(raised?.message).toBe("standard error is closed");
-    // Nothing was reopened, replaced or retried on its account.
-    expect(harness.ensureCalls).toEqual([]);
-    expect(harness.turns).toEqual([]);
-  });
 });
 
-describe("SV — what a version observation can and cannot say", () => {
-  it("SV1: unrecognized or private version output says only that it is undetermined", function* () {
+describe("SV — what selection can and cannot decide", () => {
+  it("SV1: a replaced file at the same selected path continues without a word", function* () {
     const host = machine("codex");
     yield* establish("codex", host);
-    host.observer.observation.versionOutput = "codex-cli 0.169.1 built at /home/private/secret\n";
+    // The same path, other bytes: nothing about the file is read.
     const harness = createFakeRuntime();
     yield* scoped(function* () {
       yield* useFlatWorld(CWD);
       const lines = yield* stderr();
-      yield* install("codex", host, harness, {
-        compatibilityWarnings: new Set(),
-      });
+      yield* install("codex", host, harness);
       expect(yield* prompt("continue")).toBe("hello world");
-      expect(lines).toEqual(["The Codex version could not be determined. Continuing."]);
-      expect(lines.join("\n")).not.toContain("/home/private");
-      expect(lines.join("\n")).not.toContain("/selected");
+      expect(lines).toEqual([]);
     });
     expect(harness.turns).toHaveLength(1);
+    expect(harness.ensureCalls[0]?.expectedAgentSessionId).toBeDefined();
   });
 
-  it("SV2: a fresh session under a release no evidence names works, with no warning", function* () {
+  it("SV2: a fresh session under a release no evidence names works, quietly", function* () {
     const host = machine("claude");
-    host.observer.observation.versionOutput = "9.0.0 (Claude Code)\n";
+    host.selection.path = "/selected/claude-9.0.0";
     const harness = createFakeRuntime();
     yield* scoped(function* () {
       yield* useFlatWorld(CWD);
       const lines = yield* stderr();
-      yield* install("claude", host, harness, {
-        compatibilityWarnings: new Set(),
-      });
+      yield* install("claude", host, harness);
       expect(yield* prompt("first")).toBe("hello world");
       expect(lines).toEqual([]);
     });
+    expect(harness.createdOptions[0]?.agentProcessEnv).toEqual({
+      CLAUDE_CODE_EXECUTABLE: "/selected/claude-9.0.0",
+    });
   });
 
-  it("SV3: history without a recorded version continues without a difference warning", function* () {
+  it("SV3: an earlier release's bound route continues, unchanged and unrewritten", function* () {
     const host = machine("codex");
     yield* establish("codex", host);
-    // Rewritten here only to stand for a session established before XMD kept
-    // executable history: the released unbound form of the same route.
     const key = [...host.store.records.keys()][0]!;
-    const tuple = {
-      provider: "acpx",
-      agent: PRODUCTS.codex.command,
-      sessionKey: key,
-    };
-    const legacy = createMemorySessionRouteStore();
-    yield* legacy.publish({
-      schema: "session-route.v1",
+    const tuple = { provider: "acpx", agent: PRODUCTS.codex.command, sessionKey: key };
+    // The route an earlier release published, carrying the executable history
+    // it recorded then. It is original evidence, read and left as it was.
+    const earlier = createMemorySessionRouteStore();
+    yield* earlier.publish({
+      schema: "session-route.v3",
       route: "acp-first",
       ...tuple,
+      executableBinding: {
+        schema: "executable-build.v1",
+        reportedVersion: "codex-cli 0.153.2",
+        executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+      },
     });
-    const before = yield* legacy.read(tuple);
-    host.observer.observation.versionOutput = PRODUCTS.codex.after;
+    const before = yield* earlier.read(tuple);
+    host.selection.path = "/selected/codex-0.169.1";
     const harness = createFakeRuntime();
     yield* scoped(function* () {
       yield* useFlatWorld(CWD);
       const lines = yield* stderr();
-      yield* install("codex", { ...host, routes: legacy }, harness, {
-        compatibilityWarnings: new Set(),
-      });
+      yield* install("codex", { ...host, routes: earlier }, harness);
       expect(yield* prompt("continue")).toBe("hello world");
       expect(lines).toEqual([]);
     });
     expect(harness.ensureCalls[0]?.expectedAgentSessionId).toBeDefined();
-    expect(yield* legacy.read(tuple)).toEqual(before);
+    expect(yield* earlier.read(tuple)).toEqual(before);
   });
 
   it("SV4: a custom command named codex keeps its own command and selects nothing", function* () {
@@ -448,38 +271,37 @@ describe("SV — what a version observation can and cannot say", () => {
       yield* install("codex", host, harness, {
         agentRegistry: makeRegistry({ codex: "my-wrapper --acp" }),
         ...(agentProcessEnv === undefined ? {} : { agentProcessEnv }),
-        compatibilityWarnings: new Set(),
       });
       expect(yield* prompt("through the wrapper")).toBe("hello world");
-      // The wrapper's backend is not guessed at: its version is undetermined.
-      expect(lines).toEqual(["The Codex version could not be determined. Continuing."]);
+      // The wrapper's backend is not guessed at, and nothing is said about it.
+      expect(lines).toEqual([]);
     });
-    expect(host.observer.observed).toEqual([]);
     const options = harness.createdOptions.at(-1);
     expect(options?.agentRegistry.resolve("codex")).toBe("my-wrapper --acp");
     expect(options?.agentProcessEnv ?? {}).toEqual({});
     expect(harness.turns).toHaveLength(1);
   });
 
-  it("SV5: a selected executable that cannot run is an availability failure", function* () {
+  it("SV5: a selection that cannot run is an availability failure, in the selector's words", function* () {
     const host = machine("codex");
-    host.observer.failure = "not-found";
+    host.selection.failure = new Error(
+      "Host Codex is unavailable. Install codex on the host PATH or correct CODEX_PATH to " +
+        "select a launchable host executable.",
+    );
     const harness = createFakeRuntime();
     let raised: Error | undefined;
     yield* scoped(function* () {
       yield* useFlatWorld(CWD);
-      const lines = yield* stderr();
-      yield* install("codex", host, harness, {
-        compatibilityWarnings: new Set(),
-      });
+      yield* install("codex", host, harness);
       try {
         yield* prompt("first");
       } catch (error) {
         raised = error as Error;
       }
-      expect(lines).toEqual([]);
     });
-    expect(raised?.message).toContain("is unavailable");
+    expect(raised?.message).toContain("Host Codex is unavailable");
+    expect(raised?.message).toContain("CODEX_PATH");
     expect(harness.ensureCalls).toEqual([]);
+    expect(harness.turns).toEqual([]);
   });
 });

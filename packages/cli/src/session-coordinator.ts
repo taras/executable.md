@@ -14,11 +14,10 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createDenoAgentSessionHost, createDenoExecutableObserver } from "@executablemd/runtime";
+import { createDenoAgentSessionHost } from "@executablemd/runtime";
 import type {
   AgentSessionCoordinator,
   AgentSessionOwnershipAdministration,
-  ExecutableObserver,
 } from "@executablemd/runtime";
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
@@ -45,7 +44,6 @@ export interface MachineSessionAssembly {
   coordinator?: AgentSessionCoordinator;
   ownershipAdministration?: AgentSessionOwnershipAdministration;
   routeStore?: AgentSessionRouteStore;
-  executableObserver?: ExecutableObserver;
   advertiseNativeLaunch: readonly string[];
   advertiseClientNativeAttachment: readonly string[];
   /** What this host states about its own build, for the Prompt usage its turns retain. */
@@ -66,31 +64,17 @@ export function useSessionRouteStore(): AgentSessionRouteStore | undefined {
 }
 
 /**
- * How this host observes which build of an agent executable it would run.
- *
- * Built here, beside the coordinator, and handed straight to the provider. It
- * is not a contextual Api: executable validation decides which retained history
- * may be accepted, and a decision document middleware could replace could point
- * the observation at one binary while the run spawns another.
- */
-export function useExecutableObserver(): ExecutableObserver | undefined {
-  return createDenoExecutableObserver();
-}
-
-/**
  * The ordinary `xmd run` profile: this machine's sessions, and the adapters
  * proven against the installed CLI.
  */
 export function useMachineSessions(): MachineSessionAssembly {
   const host = createDenoAgentSessionHost(sessionCoordinatorRoot());
   const routeStore = useSessionRouteStore();
-  const executableObserver = useExecutableObserver();
   return {
     ...(host
       ? { coordinator: host.coordinator, ownershipAdministration: host.ownershipAdministration }
       : {}),
     ...(routeStore ? { routeStore } : {}),
-    ...(executableObserver ? { executableObserver } : {}),
     advertiseNativeLaunch: ADVERTISED_NATIVE_LAUNCH,
     advertiseClientNativeAttachment: ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   };

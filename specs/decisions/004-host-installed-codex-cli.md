@@ -43,7 +43,7 @@ Updating the host CLI can change ordinary availability and the advertised model
 and effort catalog while the adapter digest stays the same. A session offers
 whatever the selected host CLI reports.
 
-A session continues on whichever host CLI is selected today, under the
+A session continues quietly on whichever host CLI is selected today, under the
 provider's live confirmation of its original native identity, for every
 operation including native launch and attachment. The strict build equality
 this record first kept for native work was replaced by

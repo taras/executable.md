@@ -29,7 +29,6 @@ import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import { NO_PLUGINS } from "../src/plugin-host.ts";
 import { resolveAgentStack } from "../src/agent-stack.ts";
-import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { createFakeAcp, makeRegistry, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
@@ -460,68 +459,6 @@ describe("C1 — the command line this REPL runs under", () => {
 
       expect(terminal.raw.length).toBe(modes);
       expect(terminal.resets).toBe(0);
-      yield* leave(page);
-    });
-  });
-});
-
-describe("E9 — a compatibility warning is the entry's own Command stderr", () => {
-  beforeAll(() => useTempFileCompiler());
-
-  it("E9: the first live use of a session warns once in its entry, and a later entry does not repeat it", function* () {
-    const fake = createFakeAcp();
-    fake.script({ reply: ANSWERED });
-    fake.script({ reply: ANSWERED });
-    const warnings = new Set<string>();
-
-    yield* scoped(function* (): Operation<void> {
-      const { page, hostRoot } = yield* beginJourney({
-        fake,
-        size: WIDE,
-        acp: {
-          // An adapter whose executable this host selects but cannot ask its
-          // version: the warning the issue requires, from the real provider.
-          nativeAdapters: {
-            [AGENT]: {
-              launcher: AGENT,
-              identity: "provider-returned",
-              resume: () => [],
-              binding: {
-                command: AGENT,
-                version: () => undefined,
-                environment: () => ({}),
-              },
-            },
-          },
-          advertiseNativeLaunch: [],
-          advertiseClientNativeAttachment: [],
-          compatibilityWarnings: warnings,
-        },
-      });
-      yield* submitted(page, '<Session name="review"><Prompt>first</Prompt></Session>', 1);
-      yield* awaitedFact("entry 1 never settled", function* () {
-        return (yield* journal(hostRoot)).some((event) => event.type === "close");
-      });
-      yield* page.type("\x073");
-      const shown = yield* page.until(
-        "the warning inside the entry's own reading",
-        (frame) =>
-          frame.shows("Command stderr") &&
-          frame.shows(`The ${AGENT} version could not be determined. Continuing.`),
-      );
-      expect(shown.shows("Command stdout")).toBe(false);
-      expect(warnings.size).toBe(1);
-      expect(fake.prompts).toHaveLength(1);
-      yield* page.type("\x073");
-
-      yield* submitted(page, '<Session name="review"><Prompt>second</Prompt></Session>', 2);
-      yield* awaitedFact("entry 2 never settled", function* () {
-        return (yield* journal(hostRoot)).filter((event) => event.type === "close").length >= 2;
-      });
-      // The same session in the same invocation: the warning is not repeated,
-      // and the turn still ran.
-      expect(warnings.size).toBe(1);
-      expect(fake.prompts).toHaveLength(2);
       yield* leave(page);
     });
   });
@@ -1575,7 +1512,6 @@ function* useJourneyHost(options: {
   readonly includes?: readonly string[];
   readonly planWriterRoot?: string;
   readonly permissionMode?: "approve-reads" | "deny-all";
-  readonly acp?: Partial<AcpxProviderDependencies>;
 }): Operation<JourneyHost> {
   const dataRoot =
     options.dataRoot ?? (yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-"))));
@@ -1601,7 +1537,6 @@ function* useJourneyHost(options: {
           options.held === undefined ? options.fake.create : options.held.create(options.fake),
         sessionStore: makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
-        ...options.acp,
       },
       planWriterRoot:
         options.planWriterRoot ?? (yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-plan-")))),
@@ -1628,7 +1563,6 @@ function* beginJourney(options: {
   readonly includes?: readonly string[];
   readonly planWriterRoot?: string;
   readonly permissionMode?: "approve-reads" | "deny-all";
-  readonly acp?: Partial<AcpxProviderDependencies>;
 
   readonly workspace?: boolean;
 }): Operation<{
@@ -1646,7 +1580,6 @@ function* beginJourney(options: {
     ...(options.includes === undefined ? {} : { includes: options.includes }),
     ...(options.planWriterRoot === undefined ? {} : { planWriterRoot: options.planWriterRoot }),
     ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
-    ...(options.acp === undefined ? {} : { acp: options.acp }),
   });
   const page = yield* useReplPage({
     host,

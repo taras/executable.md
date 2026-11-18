@@ -16,7 +16,6 @@ import {
   agentSessionKeyDigest,
   AgentSessionRecoveryRequired,
   API,
-  ExecutableObservationError,
 } from "@executablemd/runtime";
 import type {
   AgentSessionCoordinator,
@@ -24,8 +23,6 @@ import type {
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
-  ExecutableObserver,
-  ExecutableRefusal,
 } from "@executablemd/runtime";
 import type {
   AcpAgentRegistry,
@@ -41,7 +38,9 @@ import type {
   AcpSessionRecord,
   AcpSessionStore,
 } from "../src/acpx-runtime.ts";
-import type { ProbeCapableRuntime } from "../src/provider.ts";
+import type { AcpxProviderDependencies, ProbeCapableRuntime } from "../src/provider.ts";
+import { bindsBuild, nativeAdapterFor } from "../src/native-launch.ts";
+import type { NativeAdapter } from "../src/native-launch.ts";
 import { resolveAgentCommand } from "../src/acpx-runtime.ts";
 
 export function makeRecord(agentCommand: string, cwd: string): AcpSessionRecord {
@@ -284,58 +283,55 @@ export function group(
   return { group: id, name, options };
 }
 
-/** One controlled build, as an observer would report it. */
-export interface FakeObservation {
+/** A controlled stand-in for the host's own executable selection. */
+export interface FakeSelectionHarness {
+  /** The executable the next selection names. */
   path: string;
-  digest: string;
-  versionOutput: string;
-}
-
-export interface FakeObserverHarness {
-  observer: ExecutableObserver;
-  /** Every command this observer was asked about, in order. */
-  observed: string[];
-  /** What the next observation answers, or the failure it raises. */
-  observation: FakeObservation;
-  /** Answers taken in order before `observation`, so a build can change. */
-  queued: FakeObservation[];
-  failure?: ExecutableRefusal;
+  /** Paths answered in order before `path`, so a selection can change. */
+  queued: string[];
+  /** Every agent the host was asked to select for, in order. */
+  selected: string[];
+  /** Raised by the selector, as a missing or unlaunchable selection is. */
+  failure?: Error;
+  /**
+   * The provider's `agentProcessEnv` for these adapters.
+   *
+   * The same seam a host's carried-adapter selector fills: the selected path,
+   * under the variable the adapter's child reads. An adapter without an
+   * executable binding is selected for nothing.
+   */
+  agentProcessEnv(
+    adapters?: Readonly<Record<string, NativeAdapter>>,
+  ): NonNullable<AcpxProviderDependencies["agentProcessEnv"]>;
 }
 
 /**
- * A complete substitute for the host's executable observer.
+ * A complete substitute for the host's executable selection.
  *
- * The whole seam is replaced, exactly as a trusted host supplies the whole
- * thing: nothing inside the observer is made replaceable to be testable, so
- * drift is expressed by answering differently rather than by a control the
- * production path also has.
+ * The whole seam is replaced, exactly as a trusted host supplies it: a change
+ * of executable is expressed by selecting a different path, and nothing about
+ * the file is read or parsed, because production reads nothing either.
  */
-export function createFakeObserver(observation?: Partial<FakeObservation>): FakeObserverHarness {
-  const harness: FakeObserverHarness = {
-    observed: [],
+export function createFakeSelection(path = "/opt/builds/claude"): FakeSelectionHarness {
+  const harness: FakeSelectionHarness = {
+    path,
     queued: [],
-    observation: {
-      path: "/opt/builds/claude",
-      digest: "a".repeat(64),
-      versionOutput: "2.1.241 (Claude Code)\n",
-      ...observation,
-    },
-    observer: {
+    selected: [],
+    agentProcessEnv(adapters = {}) {
       // deno-lint-ignore require-yield
-      *observe(command) {
-        harness.observed.push(command);
-        if (harness.failure) {
-          throw new ExecutableObservationError(`${command} could not be observed`, {
-            refusal: harness.failure,
-          });
+      return function* (agentName) {
+        const adapter = Object.hasOwn(adapters, agentName)
+          ? adapters[agentName]
+          : nativeAdapterFor(agentName);
+        if (adapter === undefined || !bindsBuild(adapter)) {
+          return undefined;
         }
-        const answer = harness.queued.shift() ?? harness.observation;
-        return {
-          path: answer.path,
-          digest: { algorithm: "sha256", value: answer.digest },
-          versionOutput: answer.versionOutput,
-        };
-      },
+        harness.selected.push(agentName);
+        if (harness.failure) {
+          throw harness.failure;
+        }
+        return adapter.binding.environment(harness.queued.shift() ?? harness.path);
+      };
     },
   };
   return harness;

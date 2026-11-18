@@ -812,8 +812,6 @@ export function* useMountedHost(
       | "agentRegistry"
       | "advertiseNativeLaunch"
       | "advertiseClientNativeAttachment"
-      | "nativeAdapters"
-      | "compatibilityWarnings"
     >;
     readonly agentCwd?: AcpxProviderDependencies["agentCwd"];
   } = {},

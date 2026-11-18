@@ -62,7 +62,7 @@ import type { AgentSessionRouteStore } from "../src/session-route.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import type { AgentSessionRequest } from "@executablemd/agent/api";
 import {
-  createFakeObserver,
+  createFakeSelection,
   createFakeRuntime,
   makeCoordinator,
   makeRegistry,
@@ -247,8 +247,6 @@ function host(options: HostOptions = {}): Host {
                     advertiseClientNativeAttachment: [],
                     coordinator: options.owned.coordinator.coordinator,
                     routeStore: options.owned.routes,
-                    executableObserver: createFakeObserver({ versionOutput: "scribe 1.0.0\n" })
-                      .observer,
                   }),
               ...(options.states === false
                 ? {}
@@ -1326,7 +1324,7 @@ interface ChangingHost {
   readonly store: ReturnType<typeof createAcpxSessionStore>;
   readonly ownership: Owned;
   readonly runtime: RuntimeBoundary;
-  readonly observer: ReturnType<typeof createFakeObserver>;
+  readonly selection: ReturnType<typeof createFakeSelection>;
   installation(command: string | string[]): ExecutionInstallation;
 }
 
@@ -1334,19 +1332,12 @@ function changingHost(f: CertificationFixture, agent = AGENT): ChangingHost {
   const store = createAcpxSessionStore(join(f.dir, "store"));
   const ownership = owned();
   const runtime = runtimeBoundary();
-  const observer = createFakeObserver({
-    versionOutput:
-      agent === "codex"
-        ? "codex-cli 0.163.0\n"
-        : agent === "claude"
-          ? "2.1.241 (Claude Code)\n"
-          : "scribe 1.0.0\n",
-  });
+  const selection = createFakeSelection(`/opt/builds/${agent}`);
   return {
     store,
     ownership,
     runtime,
-    observer,
+    selection,
     installation(command) {
       return {
         *install() {
@@ -1363,7 +1354,9 @@ function changingHost(f: CertificationFixture, agent = AGENT): ChangingHost {
                 advertiseClientNativeAttachment: [],
                 coordinator: ownership.coordinator.coordinator,
                 routeStore: ownership.routes,
-                executableObserver: observer.observer,
+                agentProcessEnv: selection.agentProcessEnv(
+                  agent === AGENT ? { scribe: BOUND_SCRIBE } : {},
+                ),
                 mcpServers: [],
                 newSessionOptions: { allowedTools: [] },
                 permissions: "strict",
@@ -1512,7 +1505,7 @@ describe(
         ]);
         const route = yield* target.ownership.routes.read(tuple);
         expect(route?.route).toBe("acp-first");
-        expect(route?.schema).toBe("session-route.v3");
+        expect(route?.schema).toBe("session-route.v1");
         expect(yield* target.ownership.routes.read({ ...tuple, agent: after })).toBe(undefined);
         expect(
           yield* target.ownership.routes.read({ ...tuple, agent: after, sessionKey: natural }),
@@ -1749,32 +1742,15 @@ describe(
   },
 );
 
-/** One supported provider's release before and after a host CLI upgrade. */
-const UPGRADES = {
-  codex: {
-    before: "codex-cli 0.163.0",
-    after: "codex-cli 0.167.1\n",
-    variable: "CODEX_PATH",
-    warning:
-      "Codex has changed from 0.163.0 to 0.167.1 since this session was established. " +
-      "Continuing the existing conversation.",
-  },
-  claude: {
-    before: "2.1.241 (Claude Code)",
-    after: "2.1.250 (Claude Code)\n",
-    variable: "CLAUDE_CODE_EXECUTABLE",
-    warning:
-      "Claude has changed from 2.1.241 to 2.1.250 since this session was established. " +
-      "Continuing the existing conversation.",
-  },
-} as const;
+/** The variable each supported provider's selected executable reaches its child through. */
+const SELECTED = { codex: "CODEX_PATH", claude: "CLAUDE_CODE_EXECUTABLE" } as const;
 
 describe(
   "resume retention: a held conversation across a host CLI upgrade",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     for (const agent of ["codex", "claude"] as const) {
-      const upgrade = UPGRADES[agent];
+      const variable = SELECTED[agent];
       for (const [mode, failure, errorName] of [
         ["distinct", undefined, undefined],
         ["normal", "reopened a different native conversation", "AttachmentRefused"],
@@ -1801,19 +1777,19 @@ describe(
             ).toBe("READY");
             const record = yield* until(target.store.load(key));
             const route = yield* target.ownership.routes.read(tuple);
-            if (!record?.agentSessionId || route?.schema !== "session-route.v3") {
+            if (!record?.agentSessionId || route?.route !== "acp-first") {
               throw new Error("The original build did not establish a native conversation");
             }
-            expect(route.executableBinding.reportedVersion).toBe(upgrade.before);
+            // A fresh route records how the session was constructed, and no
+            // executable history.
+            expect(route.schema).toBe("session-route.v1");
             const { lines, stream } = yield* reread(history);
             const before = yield* f.calls();
             if (mode === "missing") {
               yield* rm(join(f.dir, `fixture-${record.acpSessionId}.json`));
             }
             const runtimeCount = target.runtime.environments.length;
-            target.observer.observation.path = `/opt/builds/${agent}-next`;
-            target.observer.observation.versionOutput = upgrade.after;
-            target.observer.observation.digest = "b".repeat(64);
+            target.selection.path = `/opt/builds/${agent}-next`;
             const begun: string[] = [];
             const published: unknown[] = [];
             const warned: string[] = [];
@@ -1851,11 +1827,10 @@ describe(
             const methods = calls.map((call) => call.method);
             const environments = target.runtime.environments.slice(runtimeCount);
             expect(environments).toContainEqual({
-              [upgrade.variable]: `/opt/builds/${agent}-next`,
+              [variable]: `/opt/builds/${agent}-next`,
             });
-            // The change is reported once, before the conversation is reached,
-            // whatever happens to the reopening after it.
-            expect(warned).toEqual([upgrade.warning]);
+            // Continuation is quiet: the executable changing is not news.
+            expect(warned).toEqual([]);
             expect(methods).toContain("session/load");
             expect(methods).not.toContain("session/new");
             expect(

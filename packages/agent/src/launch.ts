@@ -126,9 +126,9 @@ export type IdentityProvenance = "provider-returned" | "client-allocated";
 /**
  * Which build of a provider executable a session was established against.
  *
- * Diagnostic history: a later run reports when the version it observes
- * differs, and continues. The record is never rewritten with today's build,
- * and its absence says nothing.
+ * Original history an earlier release recorded. Fresh records carry none; an
+ * existing one is never rewritten with today's build, only compared with the
+ * other original account of the same session, and its absence says nothing.
  *
  * What is retained is deliberately not a path: a path says where a build was,
  * which stops being true, while a version and a digest say which build it was,
@@ -282,14 +282,10 @@ export interface PreparedLaunchRecord {
    */
   identityProvenance: IdentityProvenance;
   /**
-   * Which build the provider-native identity belongs to, present exactly when
-   * the adapter behind it binds one. Independent of who chose the identity: a
-   * build accepted the name XMD allocated, or issued the name XMD was handed,
-   * and neither name resolves to one conversation without it.
-   *
-   * Optional because both paths were released before any build was observed. A
-   * record without it is legacy history: readable, resumable by the native-only
-   * contract that wrote it, and never an attachable session.
+   * The executable binding the existing construction route recorded, repeated
+   * so the two original accounts agree. Fresh preparations carry none, and a
+   * record without one is readable and continued like any other: absence
+   * alone never refuses.
    */
   executableBinding?: ExecutableBuildBindingV1;
   /**

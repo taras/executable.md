@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { collect, retainedSource } from "@executablemd/core";
 import { agentIdentityComponents } from "@executablemd/agent/host";
 import { executeInstalled } from "@executablemd/core/host";
-import { API, createDenoExecutableObserver, useHostFiles } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import {
   withWorkflowWorkspace,
@@ -58,8 +58,6 @@ main(function* () {
             useWorkflowAgentProfile({
               root,
               attachment,
-              // As the Deno workflow host supplies it: diagnostic only.
-              ...(replay ? {} : { executableObserver: createDenoExecutableObserver() }),
               adapters: replay
                 ? {
                     ...adapters,

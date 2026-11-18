@@ -64,9 +64,9 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
     strong?: boolean;
     guard?: boolean;
     receiptDirectory?: string;
-    /** A carried agent, observed through this version output, in its own invocation. */
+    /** A carried agent, run through this host-selected executable, in its own invocation. */
     agent?: "codex" | "claude";
-    version?: string;
+    executable?: string;
   }) {
     return scoped(function* () {
       const warned: string[] = [];
@@ -92,18 +92,15 @@ function* guardPeer(source = STANDARD_AGENT_SOURCE, cwd?: string) {
             ...(options.agent === undefined
               ? {}
               : {
-                  // Diagnostic only, exactly as the workflow host supplies it.
-                  executableObserver: {
-                    // deno-lint-ignore require-yield
-                    *observe() {
-                      return {
-                        path: `/selected/${agentName}`,
-                        digest: { algorithm: "sha256" as const, value: "a".repeat(64) },
-                        versionOutput: options.version ?? "",
-                      };
-                    },
+                  // The host's own selection, through the seam its carried-adapter
+                  // selector fills: today's executable reaches the adapter child.
+                  // deno-lint-ignore require-yield
+                  *agentProcessEnv() {
+                    return {
+                      [agentName === "codex" ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE"]:
+                        options.executable ?? `/selected/${agentName}`,
+                    };
                   },
-                  compatibilityWarnings: new Set<string>(),
                 }),
             ...(options.strong
               ? {
@@ -226,15 +223,12 @@ describe(
   "E1 ordinary workflow Session continuity across a CLI release (#891)",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    const RELEASES = {
-      codex: ["codex-cli 0.167.1\n", "codex-cli 0.169.1\n", "Codex"],
-      claude: ["2.1.241 (Claude Code)\n", "2.1.250 (Claude Code)\n", "Claude"],
-    } as const;
     for (const agent of ["codex", "claude"] as const) {
-      const [before, after, product] = RELEASES[agent];
-      it(`${agent}: an upgraded executable continues the configured conversation and its original-only context`, function* () {
+      const before = `/selected/${agent}-0.167.1`;
+      const after = `/selected/${agent}-0.169.1`;
+      it(`${agent}: a changed executable quietly continues the configured conversation and its original-only context`, function* () {
         const peer = yield* guardPeer(AGENT_SOURCE);
-        const first = yield* peer.run({ text: "marker", agent, version: before });
+        const first = yield* peer.run({ text: "marker", agent, executable: before });
         expect(first.result.ok).toBe(true);
         expect(first.warned).toEqual([]);
         const asserted = first.resolved?.identity;
@@ -244,14 +238,13 @@ describe(
           existing: true,
           text: "recall",
           agent,
-          version: after,
+          executable: after,
         });
         expect(continued.result.ok).toBe(true);
-        // Context only the original conversation held, through today's build.
+        // Context only the original conversation held, through today's executable.
         expect(JSON.stringify(continued.history)).toContain("answer:recall:marker");
         expect(continued.resolved?.identity).toEqual(asserted);
-        // An ACP-only account keeps no executable history, so there is no
-        // difference to report; the work continued without a question.
+        // Quiet: a changed executable is not news, here or anywhere else.
         expect(continued.warned).toEqual([]);
         const methods = (yield* peer.methods()).map((entry) => entry.method);
         expect(methods.filter((method) => method === "session/new")).toHaveLength(1);
@@ -262,17 +255,6 @@ describe(
           methods.lastIndexOf("session/prompt"),
         );
 
-        // An unfamiliar version string is undetermined, said once, and works.
-        const unfamiliar = yield* peer.run({
-          existing: true,
-          text: "recall",
-          agent,
-          version: "development build\n",
-        });
-        expect(unfamiliar.result.ok).toBe(true);
-        expect(unfamiliar.warned).toEqual([
-          `The ${product} version could not be determined. Continuing.`,
-        ]);
         // Another native conversation, or none asserted at all on an unchanged
         // build: refused before any setting or prompt, with nothing created.
         for (const refusal of ["different", "missing"] as const) {
@@ -288,7 +270,7 @@ describe(
             existing: true,
             text: "recall",
             agent,
-            version: after,
+            executable: after,
           });
           expect([refusal, refused.result.ok]).toEqual([refusal, false]);
           const now = yield* peer.methods();
@@ -301,7 +283,12 @@ describe(
           }
         }
         // A later explicit attempt reaches the same conversation.
-        const retried = yield* peer.run({ existing: true, text: "recall", agent, version: after });
+        const retried = yield* peer.run({
+          existing: true,
+          text: "recall",
+          agent,
+          executable: after,
+        });
         expect(retried.result.ok).toBe(true);
         expect(retried.resolved?.identity).toEqual(asserted);
       });

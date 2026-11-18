@@ -34,19 +34,11 @@ native resume, and after a fresh client-allocated creation once the child has
 joined. Exit status never confirms identity. A selected executable that is
 missing or cannot run remains an availability failure.
 
-Before affected live work, XMD warns once per logical session in the current
-invocation when the observed version differs from its historical observation.
-If the current version cannot be determined, it reports that once and
-continues otherwise supported work. Missing historical metadata alone
-establishes no observed difference. Diagnostics use stderr and leave
-machine-readable stdout unchanged. Completed replay performs no executable
-observation and emits no new compatibility warning.
+Sessions continue quietly. XMD does not retain or compare old versions to
+produce compatibility messages and emits no undetermined-version replacement
+notice. Current executable selection, real availability errors and required
+positive native identity confirmation remain.
 
-The invocation owns the warning state. `AcpxProviderDependencies` gains one
-member, `compatibilityWarnings?: Set<string>`: the CLI shares one transient set
-across every provider installation of an invocation, and a host that omits it
-gives each installation its own. Delivery uses the contextual `Stdio` stderr of
-the task doing the work; no Agent operation or callback was added.
 
 Recorded CLI, adapter and host versions describe the checks that ran. They are
 evidence, not an allowlist or a requirement to repeat certification for every
@@ -58,12 +50,16 @@ required.
 ## Consequences
 
 Updating an agent CLI no longer requires a new XMD release, a downgrade or a
-replacement conversation. A user sees one warning naming both versions.
+replacement conversation, and continuing says nothing about the change.
 
-Routes and journals keep the observation recorded when their session was
-constructed. Equality between two original records still refuses a
-disagreement; nothing compares today's executable with either for admission,
-and nothing rewrites history to claim today's executable made it.
+Existing routes and journals retain original facts. Fresh construction writes
+only the required unbound construction and lifecycle records. Equality between
+two original records that both carry a binding still refuses a disagreement;
+nothing compares today's executable with either for admission, and nothing
+rewrites history to claim today's executable made it. Tested versions remain
+evidence rather than release certification. Independently reported usage and
+supplied provenance retain their existing contract; an unmeasured build is
+absent.
 
 Positive identity is not proof of history: a provider asserting the same
 identity over empty history passes confirmation. Regression suites detect that
@@ -71,6 +67,25 @@ with an original-only marker; no runtime detector is claimed.
 
 The adapter metadata patches that supply turn identity, acceptance and native
 identity remain required. This decision does not retire them.
+
+## Amendment: quiet continuation
+
+Date: 2026-11-18
+
+An earlier form of this decision also required a once-per-session warning when
+a session's recorded version differed from today's, a notice when the version
+could not be determined, fresh executable history in new routes to compare
+against, and an invocation-owned `compatibilityWarnings` set to deliver it.
+Review then found that newly established ACP-only workflow sessions had no
+place to keep that history.
+
+The user withdrew the requirement: “We don’t need to save the old version,l or
+show the message but if we did, we could store it in the journal”. The journal
+suggestion is conditional future guidance, not a request to add storage. The
+amendment supersedes the earlier warning requirement and the workflow warning
+gap; it does not repair that gap or approve the storage proposal made for it.
+The earlier warning-state approval remains historical evidence, not a reason to
+keep the member, which was removed with its consumers.
 
 ## Current owner
 

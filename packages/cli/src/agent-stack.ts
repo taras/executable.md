@@ -65,13 +65,6 @@ export interface PlanWriterStack {
   adapters: EmbeddedAdapters;
   /** What this host states about machine-wide agent sessions, if anything. */
   sessions?: MachineSessionAssembly;
-  /**
-   * The sessions this invocation has already warned about.
-   *
-   * Owned by the invocation and shared with every provider its stack builds.
-   * Absent leaves each provider installation its own.
-   */
-  compatibilityWarnings?: Set<string>;
 }
 
 /** Everything one `xmd run` invocation settled about agents, resolved once. */
@@ -90,7 +83,6 @@ export interface AgentStack extends PlanWriterStack {
 export function* resolvePlanWriterStack(
   flags: AuthorshipFlags,
   sessions: MachineSessionAssembly | undefined,
-  compatibilityWarnings?: Set<string>,
 ): Operation<Result<PlanWriterStack>> {
   if (flags.agentProvider !== "acpx") {
     return Err(new Error(`Unknown agent provider "${flags.agentProvider}"`));
@@ -101,7 +93,6 @@ export function* resolvePlanWriterStack(
     defaultAgent,
     adapters: createEmbeddedAdapters(DEFAULT_ADAPTER_ROOT),
     ...(sessions === undefined ? {} : { sessions }),
-    ...(compatibilityWarnings === undefined ? {} : { compatibilityWarnings }),
   });
 }
 
@@ -125,7 +116,6 @@ export function* contextualAgent(): Operation<string> {
 export function* resolveAgentStack(
   flags: AgentFlags,
   sessions: MachineSessionAssembly | undefined,
-  compatibilityWarnings?: Set<string>,
 ): Operation<Result<AgentStack>> {
   const config = resolveAgentConfig(flags);
   if ("error" in config) {
@@ -134,7 +124,6 @@ export function* resolveAgentStack(
   const planWriter = yield* resolvePlanWriterStack(
     { agentProvider: flags.agentProvider, defaultAgent: config.defaultAgent },
     sessions,
-    compatibilityWarnings,
   );
   if (!planWriter.ok) {
     return planWriter;
@@ -161,9 +150,6 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
     ...embeddedAdapterDependencies(stack.adapters),
     sessionStore: createAcpxSessionStore(join(homedir(), ".acpx")),
     ...(sessions?.usage === undefined ? {} : { promptUsageHost: sessions.usage }),
-    ...(stack.compatibilityWarnings === undefined
-      ? {}
-      : { compatibilityWarnings: stack.compatibilityWarnings }),
   };
   if (sessions === undefined) {
     return adapters;
@@ -172,7 +158,6 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
     ...adapters,
     ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
     ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
-    ...(sessions.executableObserver ? { executableObserver: sessions.executableObserver } : {}),
     advertiseNativeLaunch: sessions.advertiseNativeLaunch,
     advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
   };

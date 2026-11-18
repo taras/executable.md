@@ -3968,7 +3968,6 @@ function sidekickReadingOf(
     recovery: owner.recoveryPending,
     recoveryStatus: reading === undefined ? undefined : owner.recoveryStatus(reading),
     chat: sidekickChatRows(read.value, owner.previewing),
-    diagnostics: owner.diagnostics,
     // What the replies of this history actually did to this execution's
     // entries, as the coordinates their records hold. Detached from the chat
     // beside it: a row is what a conversation said, and these are what one of

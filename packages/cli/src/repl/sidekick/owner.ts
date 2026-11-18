@@ -3,8 +3,6 @@ import { DESIGNATED } from "./controls.ts";
 import { SCRIPTED_AGENT_PREFIX } from "./scripted.ts";
 import type { ReplPluginExtension } from "../../repl-api.ts";
 import { projectInputValue, useSecretInputs } from "@executablemd/core/host";
-import { Stdio } from "@effectionx/process";
-import { inertCommandText } from "../command-output.ts";
 import { cwd } from "@executablemd/runtime";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
@@ -575,17 +573,6 @@ export interface SidekickOwner {
    */
   readonly previewing: SidekickPreview | undefined;
   /**
-   * What held conversations' own work wrote to standard error in this
-   * invocation, oldest first.
-   *
-   * Captured in the task that owns each conversation, so a provider's warning
-   * before a reopened conversation's turn lands here rather than on a terminal
-   * this program is drawing. Inert, privacy-projected display copies only:
-   * never generated source, a chat record or a failure, and gone with this
-   * owner.
-   */
-  readonly diagnostics: readonly { readonly conversation: string; readonly text: string }[];
-  /**
    * The turn this owner is running, where it is running one.
    *
    * Announced from the canonical boundary that begins the turn, so a Sessions
@@ -855,8 +842,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     function moved(): void {
       changed.send();
     }
-    /** This invocation's held stderr, for display beside the replies. */
-    const diagnostics: { readonly conversation: string; readonly text: string }[] = [];
     let busy = false;
     let stopped: string | undefined;
     /** The cycle in flight, for Stop to halt and for its caller to wait on. */
@@ -1193,27 +1178,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             { at: "min" },
           );
         }
-        // In this task, before the conversation exists, because its queued work
-        // runs here and not under whichever message asked for a turn. What it
-        // writes is kept as an inert display copy; standard output is not this
-        // conversation's to write.
-        const decoder = new TextDecoder();
-        yield* Stdio.around(
-          {
-            // deno-lint-ignore require-yield
-            *stderr([bytes]) {
-              const raw = decoder.decode(bytes, { stream: true });
-              const projected = projectInputValue(owner, raw);
-              const shown =
-                projected.ok && typeof projected.value === "string" ? projected.value : "";
-              if (shown.length > 0) {
-                diagnostics.push(Object.freeze({ conversation, text: inertCommandText(shown) }));
-                moved();
-              }
-            },
-          },
-          { at: "min" },
-        );
         const opened = yield* useAgentConversation({
           history: conversationStream(writer, conversation, records),
           id: conversation,
@@ -3085,9 +3049,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       },
       get previewing(): SidekickPreview | undefined {
         return previewing();
-      },
-      get diagnostics() {
-        return Object.freeze([...diagnostics]);
       },
       get live(): SidekickLiveTurn | undefined {
         return liveTurn();

@@ -76,9 +76,6 @@ export function sidekickAssembly(
                   const worker = yield* scripted.worker(conversation);
                   yield* installSidekickProvider(scripted.agent, {
                     sessionStore: scripted.store,
-                    ...(dependencies.compatibilityWarnings === undefined
-                      ? {}
-                      : { compatibilityWarnings: dependencies.compatibilityWarnings }),
                     ...(dependencies.agentCwd === undefined
                       ? {}
                       : { agentCwd: dependencies.agentCwd }),

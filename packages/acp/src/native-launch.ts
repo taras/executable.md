@@ -11,10 +11,9 @@
  *
  * A launch refuses before ACP detach, client identity allocation or
  * private-file creation for an adapter this host does not advertise. The
- * executable each operation runs is the one the current environment selects;
- * its observed version and digest are diagnostic history, recorded beside a
- * session XMD constructs and compared only to warn. What continues a session is
- * the provider's positive confirmation of its native identity.
+ * executable each operation runs is the one the current environment selects,
+ * and nothing about its version is read, retained or reported. What continues a
+ * session is the provider's positive confirmation of its native identity.
  */
 
 import { randomUUID } from "node:crypto";
@@ -23,22 +22,21 @@ import type { IdentityProvenance } from "@executablemd/agent/api";
 /**
  * What an adapter knows about the executable behind it.
  *
- * Everything here is that adapter's private dialect — which command a host
- * resolves when it makes no selection of its own, what its version output
- * looks like, and what the ACP adapter child needs in order to run the selected
- * file. None of it reaches a document, and none of it admits or refuses a
- * session: the version is reported, and the provider's live identity assertion
- * decides whether a conversation continues.
+ * Everything here is that adapter's private dialect — its launcher command,
+ * what its version output looks like when an opt-in proof measures one, and
+ * what the ACP adapter child needs in order to run the selected file. None of it
+ * reaches a document, and none of it admits or refuses a session: the
+ * provider's live identity assertion decides whether a conversation continues.
  */
 export interface NativeBinding {
-  /** The command a host without its own selection resolves and observes. */
+  /** The launcher command whose executable a host selects. */
   command: string;
   /** The arguments that ask that exact file its version. */
   versionArgs?: readonly string[];
   /**
    * The canonical version from that output, or `undefined` when the output is
-   * not something this adapter recognizes. An unrecognized version is reported
-   * as undetermined and never retained under a guess; it does not stop work.
+   * not something this adapter recognizes. Used by the opt-in proofs that
+   * record the version they ran against as evidence; normal work never asks.
    */
   version(output: string): string | undefined;
   /**
@@ -73,14 +71,13 @@ export interface NativeBinding {
  *
  * The whole line is retained rather than the number alone, because the number
  * alone is not a build: the same version string from a different product would
- * compare equal. Anything that does not look like this is unrecognized, and is
- * reported as undetermined rather than retained under a guess.
+ * compare equal. Anything that does not look like this is unrecognized rather
+ * than read under a guess.
  *
  * Exactly one line may match. Zero is an output this adapter does not
  * recognize; two or more is output it cannot read as one answer, and taking
  * the first would be picking a build out of a list of them. Neither is
- * repeated anywhere — the caller reports the version as undetermined, and the
- * output itself is provider-private.
+ * repeated anywhere: the output itself is provider-private.
  */
 function claudeVersion(output: string): string | undefined {
   const canonical = output
@@ -95,9 +92,7 @@ function claudeVersion(output: string): string | undefined {
  * release this was proven against.
  *
  * What is recognized is that shape, not that release: another canonical
- * version passes here. The string recognized for a session XMD constructs is
- * retained as its executable history, and a later different version is
- * reported against that history; it is never compared with a constant here.
+ * version passes here, and none is compared with a constant.
  *
  * The product word is retained with the number for the same reason Claude's
  * whole line is: a bare semver from another tool compares equal. The one-line
@@ -109,7 +104,7 @@ function codexVersion(output: string): string | undefined {
   // second build's line ride along unnoticed: the answer would be "one
   // canonical line was in there somewhere" rather than "this is what the
   // executable reported". A wrapper that prints anything beside the version has
-  // not told us which build ran, so its version is undetermined.
+  // not told us which build ran, so it has no answer.
   const lines = output
     .split("\n")
     .map((line) => line.trim())
@@ -187,9 +182,8 @@ export interface ProviderReturnedAdapter extends AdapterCommands {
  * A provider-returned adapter whose executable this host selects and describes.
  *
  * The provider still names the session, so nothing here chooses an identity.
- * What the binding adds is which file runs and what version it reports, so a
- * session's construction route can keep that as history and a later run can
- * warn when it differs.
+ * What the binding adds is which executable a host selects for it and how
+ * that selection reaches the adapter's child.
  *
  * It is a separate type rather than an optional member on the one above,
  * because an adapter a host supplies for a provider without a carried
@@ -218,8 +212,8 @@ export function allocatesIdentity(adapter: NativeAdapter): adapter is ClientAllo
  *
  * Independent of who names the session: `claude` allocates its identities and
  * `codex` is handed them, and for both the current environment selects the
- * executable and its version is reported. An adapter without a binding keeps
- * the released native-only behavior — it observes nothing.
+ * executable. An adapter without a binding keeps the released native-only
+ * behavior — it selects nothing.
  */
 export function bindsBuild(adapter: NativeAdapter): adapter is BuildBoundAdapter {
   return "binding" in adapter;

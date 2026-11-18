@@ -149,7 +149,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       UPGRADE,
       () => readInputStream(process.stdin),
       importPluginModule,
-      (options) => useDenoWorkflowHost(HELPER, USAGE, options?.compatibilityWarnings),
+      () => useDenoWorkflowHost(HELPER, USAGE),
       { ...useMachineSessions(), usage: USAGE },
       // What this host selects for a REPL command, and what it installs for
       // one. The selection is the capability an entry runs with — its
