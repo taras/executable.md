@@ -1179,7 +1179,7 @@ record:
 
 | Field | Meaning |
 | --- | --- |
-| `provider`, `operation`, `stage` | The fixed provider and operation are `acp` and `session/prompt`. The stage is `runtime-turn`, `prompt-ensure` or `held-session-ensure`. The operation identifies the attempted Prompt and grants no wire receipt. |
+| `provider`, `operation`, `stage` | A saved Prompt diagnostic has the fixed provider and operation `acp` and `session/prompt`. The stage is `runtime-turn`, `prompt-ensure` or `held-session-ensure`. The operation identifies the attempted Prompt and grants no wire receipt. |
 | `requestId` | The actual turn's request ID, when supplied on `runtime-turn`. The ensure stages forbid this field. |
 | `code`, `detailCode` | Supplied nonempty runtime classifications. `RUNTIME` is the normalizer's fallback, not a backend diagnosis. |
 | `retryable` | A supplied boolean hint, including false; it grants no resend. |
@@ -1190,12 +1190,12 @@ Conversation correlation stays in the existing `agent`, `sessionKey` and
 `agentSessionId` fields. No raw protocol payload, prompt, environment or
 unrelated history is added. A plain Error has no diagnostic; stream exceptions,
 cancellation and host permission refusal keep their existing paths. A
-message-only upstream failure remains undiagnosed. An ordinary same-session
-load or resume refusal retains the local fallback and the name
-`SessionResumeRequiredError` without a raw upstream cause. ACP selects the
-same bounded facts when the subscribed Prompt's ensure fails before a runtime
-turn (`prompt-ensure`) or the runtime turn refuses before writing the prompt
-(`runtime-turn`). Identity confirmation, ownership, configuration, permission
+message-only upstream failure remains undiagnosed. An ordinary Session's
+same-session load or resume refusal is reported as described in
+[Ordinary Session resume failure details](#ordinary-session-resume-failure-details).
+ACP selects the same bounded facts when the subscribed Prompt's ensure fails
+before a runtime turn (`prompt-ensure`) or the runtime turn refuses before
+writing the prompt (`runtime-turn`). Identity confirmation, ownership, configuration, permission
 and cancellation keep their existing outcomes.
 
 When a held conversation's eager ensure refuses with that classification,
@@ -1225,7 +1225,10 @@ gate.
 
 The current reader validates a present diagnostic completely and refuses
 malformed or unknown members, including a held ensure failure with
-inconsistent surrounding Prompt fields. Deploy the reader and writer together.
+inconsistent surrounding Prompt fields. The same error carrier also serves
+ordinary Session reporting, but the saved Prompt failure and record readers
+refuse its `session-ensure` stage: an ordinary Session refusal is never a
+saved Prompt. Deploy the readers and writers together.
 Older readers refuse the new stages. This internal format has no downgrade
 reader. An absent diagnostic preserves
 message/name/cause-only records without a migration or rewrite. Reconstructed
@@ -1233,6 +1236,47 @@ thrown and aggregated Prompt failures keep the selected diagnostic under
 `executablemd.agent.prompt-diagnostic`. The existing REPL Journal query exposes
 the saved error as `promptError` after cold reopen; select a returned numeric Prompt locator within its entry to read it. Reading sends no prompt and
 reads no runtime log or native history.
+
+### Ordinary Session resume failure details
+
+An ordinary `<Session>` that resolves an existing conversation reattaches it
+before consuming its body. When the provider refuses that same-session load or
+resume, the element fails with the name `SessionResumeRequiredError` and no raw
+upstream cause, its body and later content do not run, and no Prompt record,
+attempted input, ordinal, usage or `started` event is created.
+
+ACP attaches the [selected bounded facts](#saved-prompt-failure-details) to the
+refusal under `executablemd.agent.prompt-diagnostic` with provider `acp`, stage
+`session-ensure` and operation `session/ensure`. The operation names the
+logical ensure: it proves neither which wire method the runtime chose nor that
+anything reached the backend. The ensure stage forbids `requestId`.
+
+Agent selects and screens that diagnostic exactly as it does a saved Prompt's,
+then states it in the error message, the one field the root failure, its
+retained journal and a log carry. The message keeps the readable opening and
+appends one line per present fact, in this order and with these labels; string
+values use JSON string rendering so an embedded line break stays unambiguous:
+
+```text
+Session "<key>" could not be resumed. Name a different <Session> to start a new conversation.
+Resume diagnostic (provider=acp, operation=session/ensure, stage=session-ensure)
+Normalization origin: acp
+Runtime code: "RUNTIME" (normalizer fallback)
+Runtime detail code: "SESSION_RESUME_REQUIRED"
+ACP code: -32041
+ACP message: "Internal error"
+ACP details: "Release the active writer before reconnecting."
+```
+
+`(normalizer fallback)` marks only the `RUNTIME` code. Absent facts have no
+line, and a diagnostic with no protocol facts states only its header and
+normalization fields. With detection enabled, an unsafe optional string is
+omitted and the remaining safe facts, including a numeric ACP code, stay. When
+no valid ordinary diagnostic is selected, or policy authentication or screening
+fails, the message is the opening sentence alone, with neither the raw error
+nor the scanning failure. The retryable hint grants no resend and is not
+displayed. These facts describe the selected protocol error, not a proven
+backend cause.
 
 ### The permission audit a turn retains
 
@@ -2060,9 +2104,14 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   uncertain record; the released `-32603` fallback remains only for a provably
   never-prompted record. Supported resume-required errors become
   `SessionResumeRequiredError`, naming the Session and a different Session
-  element as the remedy, before `started`. Prior messages, identity and
-  configuration stand; a refused user attempt and lifecycle changes may be
-  retained locally. A later successful reopen sends only the new request.
+  element as the remedy, before `started`. An ordinary Session's refusal
+  carries the bounded facts of
+  [Ordinary Session resume failure details](#ordinary-session-resume-failure-details)
+  under the `session-ensure` stage; Agent screens them and owns the message.
+  Prior messages, identity and configuration stand. A subscribed Prompt's
+  refused user attempt and lifecycle changes may be retained locally; ordinary
+  Session resolution has no attempted input and leaves the original record and
+  history unchanged. A later successful reopen sends only the new request.
 
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
   owned by the subscriber. Events are normalized to one `started`, `text_delta`

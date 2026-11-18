@@ -35,7 +35,7 @@ import type {
   Session,
   SessionConfiguration,
 } from "../src/agent-api.ts";
-import { parsePromptFailure, AgentPromptError } from "../src/errors.ts";
+import { parsePromptFailure, AgentPromptError, readPromptDiagnostic } from "../src/errors.ts";
 import { executeInstalled } from "@executablemd/core/host";
 import { useAgentPromptPublisher } from "../host.ts";
 import { agentIdentityComponents } from "../src/components.ts";
@@ -47,7 +47,7 @@ import { installApproveAll, installPromptFailurePolicy } from "../src/permission
 import { inspectComponent } from "../../core/src/inspect.ts";
 import type { AgentProviderFactory } from "../src/provider-api.ts";
 import type { Json } from "../../core/src/types.ts";
-import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
+import { secretPolicy, useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { createSecretScanner } from "../../core/src/secrets/scanner.ts";
 
 /** What the stub agent was asked to do, in order. */
@@ -2137,6 +2137,183 @@ describe("1039 saved Prompt diagnostics", () => {
     expect(run.result.ok).toBe(false);
     expect(JSON.stringify(run.events)).not.toContain(reply);
     expect(JSON.stringify(run.events)).not.toContain('"withheld"');
+  });
+});
+
+const ORDINARY = {
+  provider: "acp",
+  operation: "session/ensure",
+  stage: "session-ensure",
+  code: "RUNTIME",
+  detailCode: "SESSION_RESUME_REQUIRED",
+  retryable: true,
+  origin: "acp",
+  acp: {
+    code: -32041,
+    message: "Internal error",
+    details: "Release the active writer before reconnecting.",
+  },
+};
+const OPENING =
+  'Session "review" could not be resumed. Name a different <Session> to start a new conversation.';
+const ORDINARY_FACTS = [
+  OPENING,
+  "Resume diagnostic (provider=acp, operation=session/ensure, stage=session-ensure)",
+  "Normalization origin: acp",
+  'Runtime code: "RUNTIME" (normalizer fallback)',
+  'Runtime detail code: "SESSION_RESUME_REQUIRED"',
+  "ACP code: -32041",
+  'ACP message: "Internal error"',
+  'ACP details: "Release the active writer before reconnecting."',
+].join("\n");
+
+function resumeRefusal(diagnostic?: unknown): Error {
+  const error = new Error(OPENING);
+  error.name = "SessionResumeRequiredError";
+  if (diagnostic !== undefined) {
+    Object.defineProperty(error, DIAGNOSTIC_KEY, { value: diagnostic });
+  }
+  return error;
+}
+
+function* refusedSession(
+  error: Error,
+  options: { setup?: () => Operation<void>; before?: () => Operation<void> } = {},
+) {
+  const { setup, before } = options;
+  const run = yield* runDoc(
+    '<Session name="review">Session body must not run.</Session>\n\nLater success must not run.\n',
+    {
+      *handler() {
+        if (setup !== undefined) {
+          yield* setup();
+        }
+        yield* Agent.around({
+          *session() {
+            if (before !== undefined) {
+              yield* before();
+            }
+            throw error;
+          },
+        });
+      },
+    },
+  );
+  expect(run.result.ok).toBe(false);
+  expect(run.output).not.toContain("must not run");
+  expect(
+    run.events.filter(
+      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+    ),
+  ).toEqual([]);
+  if (run.result.ok) {
+    throw new Error("the refused Session completed");
+  }
+  const messages: string[] = [];
+  for (let failure: unknown = run.result.error; failure instanceof Error; ) {
+    messages.push(failure.message);
+    failure = failure.cause;
+  }
+  return { message: messages.join("\n"), events: JSON.stringify(run.events) };
+}
+
+describe("ordinary Session resume diagnostics", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("A1: only a valid ordinary carrier adds its screened facts", function* () {
+    const described = yield* refusedSession(resumeRefusal(ORDINARY));
+    expect(described.message).toContain(ORDINARY_FACTS);
+    expect(described.events).toContain("Resume diagnostic");
+    for (const diagnostic of [
+      undefined,
+      { ...ORDINARY, extra: true },
+      { ...ORDINARY, operation: "session/prompt", stage: "prompt-ensure" },
+    ]) {
+      const refused = yield* refusedSession(resumeRefusal(diagnostic));
+      expect(refused.message).toContain(OPENING);
+      expect(refused.message).not.toContain("Resume diagnostic");
+      expect(refused.events).not.toContain("Resume diagnostic");
+    }
+  });
+
+  it("A2: a scanner failure keeps only the opening sentence", function* () {
+    const scans: string[] = [];
+    const refused = yield* refusedSession(resumeRefusal(ORDINARY), {
+      *setup() {
+        yield* useSecretScannerFactory(() => {
+          const ordinary = createSecretScanner();
+          return {
+            *scan(content) {
+              scans.push(content);
+              if (content === JSON.stringify(ORDINARY.acp.details)) {
+                throw new Error("detector error must stay private");
+              }
+              return yield* ordinary.scan(content);
+            },
+          };
+        });
+      },
+    });
+    expect(scans).toContain(JSON.stringify(ORDINARY.acp.details));
+    expect(refused.message).toContain(OPENING);
+    expect(refused.message).not.toContain("Resume diagnostic");
+    expect(refused.message).not.toContain("detector error must stay private");
+    expect(refused.events).not.toContain("detector error must stay private");
+  });
+
+  it("A2: a policy the execution did not install keeps only the opening sentence", function* () {
+    const fake = { enabled: false, describe: () => "disabled" };
+    const authenticated: string[] = [];
+    const refused = yield* refusedSession(resumeRefusal(ORDINARY), {
+      *before() {
+        // Bound in the Session element's own scope, where its refusal is screened.
+        yield* createContext<unknown>("executablemd.secrets.policy").set(fake);
+        try {
+          yield* secretPolicy();
+          authenticated.push("<authenticated>");
+        } catch (error) {
+          authenticated.push(error instanceof Error ? error.name : String(error));
+        }
+      },
+    });
+    expect(authenticated).toEqual(["CounterfeitSecretPolicyError"]);
+    expect(refused.message).toContain(OPENING);
+    expect(refused.message).not.toContain("Resume diagnostic");
+    expect(refused.message).not.toContain("CounterfeitSecretPolicyError");
+  });
+
+  it("A3: the common carrier reads the ordinary pair, and a saved Prompt refuses it", function* () {
+    expect(readPromptDiagnostic(resumeRefusal(ORDINARY))).toEqual(ORDINARY);
+    for (const diagnostic of [
+      { ...ORDINARY, operation: "session/prompt" },
+      { ...ORDINARY, stage: "prompt-ensure" },
+      { ...ORDINARY, requestId: "request-1388" },
+      { ...ORDINARY, extra: true },
+    ]) {
+      expect(readPromptDiagnostic(resumeRefusal(diagnostic))).toBe(undefined);
+    }
+    const failure = { message: OPENING, name: "SessionResumeRequiredError" };
+    expect(parsePromptFailure({ ...failure, diagnostic: ORDINARY })).toBe(undefined);
+    const run = yield* runDoc('<Prompt text="once" />', {
+      handler: () => diagnosticPrompt(new Error("Internal error")),
+    });
+    const saved = run.events.find(
+      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+    );
+    if (saved?.type !== "yield" || saved.result.status !== "ok") {
+      throw new Error("no saved Prompt");
+    }
+    const value = saved.result.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("unexpected saved Prompt shape");
+    }
+    const prompt = { ...ORDINARY, operation: "session/prompt", stage: "runtime-turn" };
+    expect(
+      parsePromptRecord({ ...value, error: { ...failure, diagnostic: prompt } })?.error,
+    ).toEqual({ ...failure, diagnostic: prompt });
+    expect(parsePromptRecord({ ...value, error: { ...failure, diagnostic: ORDINARY } })).toBe(
+      undefined,
+    );
   });
 });
 

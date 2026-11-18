@@ -1943,7 +1943,7 @@ function* useAcpxProviderState(
      * this ensure itself may perform. Never kept on the entry it returns.
      */
     requestedModel?: string;
-    resumeFailureStage?: "held-session-ensure" | "prompt-ensure";
+    resumeFailureStage?: "held-session-ensure" | "prompt-ensure" | "session-ensure";
   }
 
   function* ensureFromPrepared(
@@ -5298,9 +5298,8 @@ function* useAcpxProviderState(
                 ...(construction === undefined ? {} : { build: construction.build }),
                 ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
                 state: yield* sessionCreationState(agentName, current),
-                ...(selectedAgent === undefined
-                  ? {}
-                  : { resumeFailureStage: "held-session-ensure" }),
+                resumeFailureStage:
+                  selectedAgent === undefined ? "session-ensure" : "held-session-ensure",
                 ...(setup?.requestedModel === undefined
                   ? {}
                   : { requestedModel: setup.requestedModel }),

@@ -198,7 +198,7 @@ function mapResult(result: AcpRuntimeTurnResult, requestId: string): AgentPrompt
 
 export type PromptDiagnosticSource =
   | { stage: "runtime-turn"; requestId: string }
-  | { stage: "held-session-ensure" | "prompt-ensure" };
+  | { stage: "held-session-ensure" | "prompt-ensure" | "session-ensure" };
 
 export function withPromptDiagnostic(
   failure: Error,
@@ -208,7 +208,9 @@ export function withPromptDiagnostic(
   Object.defineProperty(failure, "executablemd.agent.prompt-diagnostic", {
     value: {
       provider: "acp",
-      operation: "session/prompt",
+      // Ordinary Session resolution names the logical ensure, not the wire
+      // method: the runtime chooses resume or load and reports neither.
+      operation: source.stage === "session-ensure" ? "session/ensure" : "session/prompt",
       ...source,
       ...(facts.code === undefined ? {} : { code: facts.code }),
       ...(facts.detailCode === undefined ? {} : { detailCode: facts.detailCode }),

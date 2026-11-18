@@ -11,11 +11,15 @@ const PROMPT_DIAGNOSTIC = "executablemd.agent.prompt-diagnostic";
 const Diagnostic: z.ZodObject<
   {
     provider: z.ZodLiteral<"acp">;
-    operation: z.ZodLiteral<"session/prompt">;
+    operation: z.ZodEnum<{
+      "session/prompt": "session/prompt";
+      "session/ensure": "session/ensure";
+    }>;
     stage: z.ZodEnum<{
       "runtime-turn": "runtime-turn";
       "prompt-ensure": "prompt-ensure";
       "held-session-ensure": "held-session-ensure";
+      "session-ensure": "session-ensure";
     }>;
     requestId: z.ZodOptional<z.ZodString>;
     code: z.ZodOptional<z.ZodString>;
@@ -39,8 +43,8 @@ const Diagnostic: z.ZodObject<
 > = z
   .object({
     provider: z.literal("acp"),
-    operation: z.literal("session/prompt"),
-    stage: z.enum(["runtime-turn", "prompt-ensure", "held-session-ensure"]),
+    operation: z.enum(["session/prompt", "session/ensure"]),
+    stage: z.enum(["runtime-turn", "prompt-ensure", "held-session-ensure", "session-ensure"]),
     requestId: z.string().optional(),
     code: z.string().min(1).optional(),
     detailCode: z.string().min(1).optional(),
@@ -69,7 +73,8 @@ function parsePromptDiagnostic(value: unknown): PromptDiagnostic | undefined {
   const parsed = Diagnostic.safeParse(value);
   if (
     !parsed.success ||
-    (parsed.data.stage !== "runtime-turn" && parsed.data.requestId !== undefined)
+    (parsed.data.stage !== "runtime-turn" && parsed.data.requestId !== undefined) ||
+    (parsed.data.stage === "session-ensure") !== (parsed.data.operation === "session/ensure")
   ) {
     return undefined;
   }
@@ -154,6 +159,7 @@ export function parsePromptFailure(value: unknown): SerializedPromptFailure | un
     const diagnostic = parsePromptDiagnostic(value.diagnostic);
     if (
       diagnostic === undefined ||
+      diagnostic.stage === "session-ensure" ||
       (diagnostic.stage !== "runtime-turn" &&
         (name !== SESSION_RESUME_REQUIRED_ERROR ||
           Object.keys(value).some(
