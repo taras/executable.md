@@ -30,7 +30,9 @@
  * copy of core, which is Deno-only and lives in `syntax-loaded-copy.test.ts`.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { Ok, ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -53,7 +55,10 @@ import { mkdtemp, readdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const OWNER = "packages/core/tests/fixed-filesystem-components.test.ts";
+
 /** The registry visible in the current scope. */
+
 function currentRegistry(): Operation<ComponentRegistry> {
   return Component.operations.registry;
 }
@@ -131,6 +136,7 @@ function* useWorkspaceCwd(fixture: Fixture): Operation<void> {
  * before any later installation exists.
  */
 function observeEnclosingCwd(
+  stream: InMemoryStream,
   fixture: Fixture,
   source: string,
 ): Operation<{ failure: string; enclosing: string }> {
@@ -140,9 +146,7 @@ function observeEnclosingCwd(
     yield* useWorkspaceCwd(fixture);
     let failure = "";
     try {
-      yield* collect(
-        yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
-      );
+      yield* collect(yield* execute({ path, stream, includes: [fixture.workspace] }));
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
@@ -153,7 +157,12 @@ function observeEnclosingCwd(
   });
 }
 
-function run(fixture: Fixture, source: string, install?: () => Operation<void>): Operation<string> {
+function run(
+  fixture: Fixture,
+  source: string,
+  install?: () => Operation<void>,
+  stream = new InMemoryStream(),
+): Operation<string> {
   return scoped(function* () {
     const path = join(fixture.workspace, "doc.md");
     yield* writeTextFile(path, source);
@@ -162,7 +171,7 @@ function run(fixture: Fixture, source: string, install?: () => Operation<void>):
       yield* install();
     }
     const output: Json = yield* collect(
-      yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+      yield* execute({ path, stream, includes: [fixture.workspace] }),
     );
     return String(output);
   });
@@ -217,8 +226,10 @@ function answerImport(
 }
 
 describe("Tier FX — the complete journey, with no repository vocabulary", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FX1: core and a Files provider enter, write, read and delete; markers never run", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     yield* writeMarkers(fixture);
 
     const output = yield* run(
@@ -231,6 +242,8 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
         '<File.Delete path="message.md" />',
         "</Dir>",
       ].join("\n"),
+      undefined,
+      stream,
     );
 
     // The read text, and none of the three markers: selection answered with
@@ -246,7 +259,7 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
 
   it("FX1b: Files middleware transforms the write, and the later read returns it", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const output = yield* run(
       fixture,
       [
@@ -263,6 +276,7 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
           },
         });
       },
+      stream,
     );
 
     // A fixed name is not a fixed provider. The body still performs its write
@@ -276,7 +290,7 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
 
   it("FX1c: the enclosing working directory is restored for a later sibling", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const output = yield* run(
       fixture,
       [
@@ -287,6 +301,8 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
         '<File path="outside.md" as="seen" />',
         "{seen}",
       ].join("\n"),
+      undefined,
+      stream,
     );
 
     expect(output).toContain("out");
@@ -297,6 +313,7 @@ describe("Tier FX — the complete journey, with no repository vocabulary", () =
 });
 
 describe("Tier FX — nothing else may claim the names", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FX2: a registration and a reserved registration are both refused", function* () {
     for (const name of FIXED) {
       const refused = yield* raised(() =>
@@ -387,7 +404,7 @@ describe("Tier FX — nothing else may claim the names", () => {
 
   it("FX2c: a same-name local implementation is never loaded, and open names still win", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     // A candidate that would be fatal if it were ever imported. Selection
     // refuses it by name, so its top level never runs — which is the difference
     // between losing selection and being loaded and then ignored.
@@ -398,7 +415,12 @@ describe("Tier FX — nothing else may claim the names", () => {
     // An open name beside it, to show the include itself is live.
     yield* writeTextFile(join(fixture.workspace, "Kept.md"), "kept by the repository\n");
 
-    const output = yield* run(fixture, ['<Dir path="notes">', "<Kept />", "</Dir>"].join("\n"));
+    const output = yield* run(
+      fixture,
+      ['<Dir path="notes">', "<Kept />", "</Dir>"].join("\n"),
+      undefined,
+      stream,
+    );
 
     expect(output).toContain("kept by the repository");
     expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
@@ -406,8 +428,10 @@ describe("Tier FX — nothing else may claim the names", () => {
 });
 
 describe("Tier FX — the final import answer is verified", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FX3: middleware may observe and delegate every fixed import", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const seen: string[] = [];
 
     const output = yield* run(
@@ -426,6 +450,7 @@ describe("Tier FX — the final import answer is verified", () => {
           },
         });
       },
+      stream,
     );
 
     expect(output).not.toContain("MARKER");
@@ -434,162 +459,183 @@ describe("Tier FX — the final import answer is verified", () => {
     }
   });
 
-  it("FX3b: a replacement is refused before the body or any provider call", function* () {
+  const replacedDefinition = "FX3b: a replacement is refused before the body or any provider call";
+  it(replacedDefinition, function* () {
     for (const name of FIXED) {
       const fixture = yield* useFixture();
-      const reached: string[] = [];
+      yield* captureTestJournal(
+        { owner: OWNER, name: replacedDefinition },
+        join(fixture.workspace, "doc.md"),
+        function* (stream) {
+          const reached: string[] = [];
 
-      const refused = yield* raised(() =>
-        run(
-          fixture,
-          [
-            '<Dir path="notes">',
-            '<File path="message.md">first</File>',
-            '<File.Delete path="message.md" />',
-            "</Dir>",
-          ].join("\n"),
-          function* () {
-            yield* Files.around({
-              *ensureDirectory([input], next) {
-                reached.push("ensureDirectory");
-                return yield* next(input);
+          const refused = yield* raised(() =>
+            run(
+              fixture,
+              [
+                '<Dir path="notes">',
+                '<File path="message.md">first</File>',
+                '<File.Delete path="message.md" />',
+                "</Dir>",
+              ].join("\n"),
+              function* () {
+                yield* Files.around({
+                  *ensureDirectory([input], next) {
+                    reached.push("ensureDirectory");
+                    return yield* next(input);
+                  },
+                  *writeTextFile([input], next) {
+                    reached.push("writeTextFile");
+                    return yield* next(input);
+                  },
+                  *deleteFile([input], next) {
+                    reached.push("deleteFile");
+                    return yield* next(input);
+                  },
+                });
+                yield* answerImport(name, () => ({
+                  kind: "function",
+                  name,
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    reached.push("replacement");
+                    return "replaced";
+                  },
+                }))();
               },
-              *writeTextFile([input], next) {
-                reached.push("writeTextFile");
-                return yield* next(input);
-              },
-              *deleteFile([input], next) {
-                reached.push("deleteFile");
-                return yield* next(input);
-              },
-            });
-            yield* answerImport(name, () => ({
-              kind: "function",
-              name,
-              props: { type: "object", properties: {}, additionalProperties: false },
-              // deno-lint-ignore require-yield
-              *fn(): Operation<string> {
-                reached.push("replacement");
-                return "replaced";
-              },
-            }))();
-          },
-        ),
+              stream,
+            ),
+          );
+
+          expect(refused).toContain("canonical execution did not produce");
+          expect(reached).not.toContain("replacement");
+          // `<Dir>` is refused at the first element, so nothing inside it runs. The
+          // other two are refused after the directory exists, which is the element
+          // before them succeeding rather than this one partly succeeding.
+          if (name === "Dir") {
+            expect(reached).toEqual([]);
+          }
+        },
       );
-
-      expect(refused).toContain("canonical execution did not produce");
-      expect(reached).not.toContain("replacement");
-      // `<Dir>` is refused at the first element, so nothing inside it runs. The
-      // other two are refused after the directory exists, which is the element
-      // before them succeeding rather than this one partly succeeding.
-      if (name === "Dir") {
-        expect(reached).toEqual([]);
-      }
     }
   });
 
-  it("FX3c: an in-place change to a fixed definition cannot run, now or later", function* () {
+  const immutableDefinition =
+    "FX3c: an in-place change to a fixed definition cannot run, now or later";
+  it(immutableDefinition, function* () {
     const fixture = yield* useFixture();
-    const definition = fixedFilesystemDefinition("File");
-    if (definition === undefined) {
-      throw new Error("core supplies no File definition");
-    }
-    const original = definition.fn;
-    const originalPathType = pathType(definition.props);
-    expect(originalPathType).toBe("string");
+    const testCase = { owner: OWNER, name: immutableDefinition };
+    yield* captureTestJournal(testCase, join(fixture.workspace, "doc.md"), function* (stream) {
+      const definition = fixedFilesystemDefinition("File");
+      if (definition === undefined) {
+        throw new Error("core supplies no File definition");
+      }
+      const original = definition.fn;
+      const originalPathType = pathType(definition.props);
+      expect(originalPathType).toBe("string");
 
-    let attempts = 0;
-    const accepted: boolean[] = [];
-    let replacementCalls = 0;
+      let attempts = 0;
+      const accepted: boolean[] = [];
+      let replacementCalls = 0;
 
-    // The dangerous shape is not a replacement object — it is a change to the
-    // object canonical execution handed out, which every execution in the
-    // process shares. Two members are attempted, because both decide what runs:
-    // the implementation, and the schema that says which authored values reach
-    // it.
-    const output = yield* run(
-      fixture,
-      [
-        "<PrintErrors>",
-        "",
-        '<File path="one.md">one</File>',
-        "",
-        '<File path="two.md">two</File>',
-        "",
-        '<File path="two.md" as="two" />',
-        "",
-        "LATER {two}",
-        "",
-        "</PrintErrors>",
-      ].join("\n"),
-      function* () {
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            const answer = yield* next(name, position);
-            if (name !== "File" || attempts > 0) {
+      // The dangerous shape is not a replacement object — it is a change to the
+      // object canonical execution handed out, which every execution in the
+      // process shares. Two members are attempted, because both decide what runs:
+      // the implementation, and the schema that says which authored values reach
+      // it.
+      const output = yield* run(
+        fixture,
+        [
+          "<PrintErrors>",
+          "",
+          '<File path="one.md">one</File>',
+          "",
+          '<File path="two.md">two</File>',
+          "",
+          '<File path="two.md" as="two" />',
+          "",
+          "LATER {two}",
+          "",
+          "</PrintErrors>",
+        ].join("\n"),
+        function* () {
+          yield* Component.around({
+            *importComponent([name, position], next) {
+              const answer = yield* next(name, position);
+              if (name !== "File" || attempts > 0) {
+                return answer;
+              }
+              attempts += 1;
+              accepted.push(
+                Reflect.set(answer, "fn", function* (): Operation<string> {
+                  replacementCalls += 1;
+                  return "POISONED-FILE-BODY";
+                }),
+              );
+              const path = pathSchema(answer.props);
+              if (path !== undefined) {
+                accepted.push(Reflect.set(path, "type", "number"));
+              }
               return answer;
-            }
-            attempts += 1;
-            accepted.push(
-              Reflect.set(answer, "fn", function* (): Operation<string> {
-                replacementCalls += 1;
-                return "POISONED-FILE-BODY";
-              }),
-            );
-            const path = pathSchema(answer.props);
-            if (path !== undefined) {
-              accepted.push(Reflect.set(path, "type", "number"));
-            }
-            return answer;
-          },
-        });
-      },
-    );
+            },
+          });
+        },
+        stream,
+      );
 
-    // Both attempts were made and both were rejected where they were made,
-    // rather than the handler quietly doing nothing.
-    expect(attempts).toBe(1);
-    expect(accepted).toEqual([false, false]);
+      // Both attempts were made and both were rejected where they were made,
+      // rather than the handler quietly doing nothing.
+      expect(attempts).toBe(1);
+      expect(accepted).toEqual([false, false]);
 
-    // No replacement body and no replacement I/O, on this import or any later
-    // one: the writes are the document's own text and the read returns it.
-    expect(replacementCalls).toBe(0);
-    expect(output).not.toContain("POISONED");
-    expect(output).toContain("LATER two");
-    expect(yield* readTextFile(join(fixture.workspace, "one.md"))).toBe("one");
-    expect(yield* readTextFile(join(fixture.workspace, "two.md"))).toBe("two");
+      // No replacement body and no replacement I/O, on this import or any later
+      // one: the writes are the document's own text and the read returns it.
+      expect(replacementCalls).toBe(0);
+      expect(output).not.toContain("POISONED");
+      expect(output).toContain("LATER two");
+      expect(yield* readTextFile(join(fixture.workspace, "one.md"))).toBe("one");
+      expect(yield* readTextFile(join(fixture.workspace, "two.md"))).toBe("two");
 
-    // The owning definition and its whole schema are what they were.
-    expect(fixedFilesystemDefinition("File")?.fn).toBe(original);
-    expect(pathType(fixedFilesystemDefinition("File")?.props)).toBe("string");
+      // The owning definition and its whole schema are what they were.
+      expect(fixedFilesystemDefinition("File")?.fn).toBe(original);
+      expect(pathType(fixedFilesystemDefinition("File")?.props)).toBe("string");
 
-    // And the contract a *fresh* execution validates against is unchanged. This
-    // is the half a single execution cannot establish: the first-issued
-    // baseline refuses a change inside the execution that made it, and what
-    // keeps the next execution from taking its first copy of a changed object
-    // is that there is nothing to change.
-    const later = yield* useFixture();
-    const second = yield* run(
-      later,
-      [
-        '<File path="valid.md">still a string path</File>',
-        '<File path="valid.md" as="seen" />',
-        "{seen}",
-      ].join("\n"),
-    );
-    expect(second).toContain("still a string path");
-    expect(yield* readTextFile(join(later.workspace, "valid.md"))).toBe("still a string path");
+      // And the contract a *fresh* execution validates against is unchanged. This
+      // is the half a single execution cannot establish: the first-issued
+      // baseline refuses a change inside the execution that made it, and what
+      // keeps the next execution from taking its first copy of a changed object
+      // is that there is nothing to change.
+      const later = yield* useFixture();
+      yield* captureTestJournal(
+        testCase,
+        join(later.workspace, "doc.md"),
+        function* (secondStream) {
+          const second = yield* run(
+            later,
+            [
+              '<File path="valid.md">still a string path</File>',
+              '<File path="valid.md" as="seen" />',
+              "{seen}",
+            ].join("\n"),
+            undefined,
+            secondStream,
+          );
+          expect(second).toContain("still a string path");
+          expect(yield* readTextFile(join(later.workspace, "valid.md"))).toBe(
+            "still a string path",
+          );
+        },
+      );
+    });
   });
 
   it("FX3c2: another name's issued definition is refused", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const swapped = yield* raised(() =>
       run(
         fixture,
-        // `<File>` first, so its definition has been issued by the time the
-        // `<Dir>` import is answered with it. An answer holding a definition
-        // this execution never issued is the other refusal, below.
         '<File path="earlier.md">x</File>\n<Dir path="notes">\n<File path="m.md">first</File>\n</Dir>',
         function* () {
           const other = fixedFilesystemDefinition("File");
@@ -598,6 +644,7 @@ describe("Tier FX — the final import answer is verified", () => {
           }
           yield* answerImport("Dir", () => other)();
         },
+        stream,
       ),
     );
     expect(swapped).toContain("produced for another component");
@@ -605,7 +652,7 @@ describe("Tier FX — the final import answer is verified", () => {
 
   it("FX3d: a rebuilt definition is refused, however exactly it matches", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     // A dispatcher built from the same declaration, so every field matches and
     // the function is not the one this execution retained. A definition from an
     // actual second loaded copy of core is the same class of answer and is
@@ -623,6 +670,7 @@ describe("Tier FX — the final import answer is verified", () => {
         fixture,
         '<File path="message.md">first</File>',
         answerImport("File", () => rebuilt),
+        stream,
       ),
     );
 
@@ -632,18 +680,23 @@ describe("Tier FX — the final import answer is verified", () => {
 
   it("FX3e: middleware may still refuse a fixed import by throwing", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const refused = yield* raised(() =>
-      run(fixture, '<File path="message.md">first</File>', function* () {
-        yield* Component.around({
-          *importComponent([name, position], next) {
-            if (name === "File") {
-              throw new Error("this host refuses File");
-            }
-            return yield* next(name, position);
-          },
-        });
-      }),
+      run(
+        fixture,
+        '<File path="message.md">first</File>',
+        function* () {
+          yield* Component.around({
+            *importComponent([name, position], next) {
+              if (name === "File") {
+                throw new Error("this host refuses File");
+              }
+              return yield* next(name, position);
+            },
+          });
+        },
+        stream,
+      ),
     );
 
     expect(refused).toContain("this host refuses File");
@@ -684,9 +737,11 @@ describe("Tier FX — the dispatcher authenticates its own invocation", () => {
 });
 
 describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const tag of ["Dir", "InDirectory"]) {
     it(`FX5: ${tag} restores the enclosing directory in its owner after failure`, function* () {
       const fixture = yield* useFixture();
+      const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
       yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
       yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
 
@@ -694,6 +749,7 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
       // error this component owns, and what this case is about is the directory
       // ownership surviving a body that ends the run.
       const { failure, enclosing } = yield* observeEnclosingCwd(
+        stream,
         fixture,
         [
           `<${tag} path="notes">`,
@@ -716,6 +772,7 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
 
   it("FX5b: a refused ensure begins no content and binds no directory", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     // A file where the directory would go, so the ensure is refused rather than
     // failing for a reason of the test's own making.
     yield* writeTextFile(join(fixture.workspace, "notes"), "not a directory\n");
@@ -733,6 +790,7 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
             },
           });
         },
+        stream,
       ),
     );
 
@@ -743,12 +801,15 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
 
   it("FX5c: a directory that is already there keeps what is in it", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     yield* ensureDir(join(fixture.workspace, "notes"));
     yield* writeTextFile(join(fixture.workspace, "notes", "kept.md"), "kept\n");
 
     yield* run(
       fixture,
       ['<Dir path="notes">', '<File path="added.md">added</File>', "</Dir>"].join("\n"),
+      undefined,
+      stream,
     );
 
     expect(yield* entries(join(fixture.workspace, "notes"))).toEqual(["added.md", "kept.md"]);
@@ -758,6 +819,7 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
   for (const tag of ["Dir", "InDirectory"]) {
     it(`FX5d: ${tag} restores the directory after joined cancellation`, function* () {
       const fixture = yield* useFixture();
+      const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
       yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
       yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
       const inside = withResolvers<void>();
@@ -785,7 +847,7 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
 
         const task = yield* spawn(function* () {
           const output = yield* collect(
-            yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+            yield* execute({ path, stream, includes: [fixture.workspace] }),
           );
           outcome.push(String(output));
         });

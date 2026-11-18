@@ -15,7 +15,9 @@
  * that misbehave in exactly one way each.
  */
 
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
@@ -52,6 +54,7 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const OWNER = "packages/core/tests/files-fatal.test.ts";
 function useFixture(): Operation<string> {
   return resource(function* (provide) {
     const dir = yield* until(mkdtemp(join(tmpdir(), "ff-test-")));
@@ -74,7 +77,12 @@ interface Outcome {
  * error precisely by leaving nothing in the output, and by stopping what comes
  * after it.
  */
-function run(dir: string, source: string, install?: () => Operation<void>): Operation<Outcome> {
+function run(
+  dir: string,
+  source: string,
+  install?: () => Operation<void>,
+  stream = new InMemoryStream(),
+): Operation<Outcome> {
   return scoped(function* () {
     yield* writeTextFile(join(dir, "doc.md"), source);
     yield* API.Env.around(
@@ -93,7 +101,7 @@ function run(dir: string, source: string, install?: () => Operation<void>): Oper
     const result = yield* scoped(function* () {
       const execution = yield* execute({
         path: join(dir, "doc.md"),
-        stream: new InMemoryStream(),
+        stream,
         includes: [dir],
       });
       try {
@@ -223,6 +231,7 @@ function writeDocument(dir: string): string {
 }
 
 describe("Tier FF — Files infrastructure failure", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   // FF1: no provider at all. The check a write performs before its children is
@@ -230,20 +239,26 @@ describe("Tier FF — Files infrastructure failure", () => {
   // children — and nothing after the component runs either.
   it("FF1: an absent provider fails the execution before children or siblings", function* () {
     const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const touched: string[] = [];
 
-    const outcome = yield* run(dir, writeDocument(dir), function* () {
-      yield* API.Fs.around({
-        *writeTextFile([path, content], next) {
-          touched.push(path);
-          return yield* next(path, content);
-        },
-        *rename([from, to], next) {
-          touched.push(from);
-          return yield* next(from, to);
-        },
-      });
-    });
+    const outcome = yield* run(
+      dir,
+      writeDocument(dir),
+      function* () {
+        yield* API.Fs.around({
+          *writeTextFile([path, content], next) {
+            touched.push(path);
+            return yield* next(path, content);
+          },
+          *rename([from, to], next) {
+            touched.push(from);
+            return yield* next(from, to);
+          },
+        });
+      },
+      stream,
+    );
 
     expect(outcome.ok).toBe(false);
     expect(parseFilesFatal(fatalCause(outcome.error))).toEqual({
@@ -322,16 +337,21 @@ describe("Tier FF — Files infrastructure failure", () => {
   // the run does not own.
   it("FF3: a refused operation is fatal, with its own fixed diagnostic", function* () {
     const dir = yield* useFixture();
-
-    const outcome = yield* run(dir, "<TempDir>INSIDE</TempDir>\n\nAFTER", function* () {
-      yield* useHostFiles();
-      yield* useFiles({
-        // deno-lint-ignore require-yield
-        *temporaryDirectory(): Operation<Result<string>> {
-          throw new FilesOperationDeniedError("temporary-directory");
-        },
-      });
-    });
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const outcome = yield* run(
+      dir,
+      "<TempDir>INSIDE</TempDir>\n\nAFTER",
+      function* () {
+        yield* useHostFiles();
+        yield* useFiles({
+          // deno-lint-ignore require-yield
+          *temporaryDirectory(): Operation<Result<string>> {
+            throw new FilesOperationDeniedError("temporary-directory");
+          },
+        });
+      },
+      stream,
+    );
 
     expect(outcome.ok).toBe(false);
     expect(parseFilesFatal(fatalCause(outcome.error))).toEqual({
@@ -349,31 +369,37 @@ describe("Tier FF — Files infrastructure failure", () => {
   // provider-level statement of FL18b and FL18c.
   it("FF4: a refused check expands no children and makes no later provider call", function* () {
     const dir = yield* useFixture();
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
     const calls: string[] = [];
 
-    const outcome = yield* run(dir, writeDocument(dir), function* () {
-      yield* useFiles({
-        // deno-lint-ignore require-yield
-        *checkFilePath(): Operation<Result<void>> {
-          calls.push("checkFilePath");
-          return Err(
-            new FilesError(
-              Object.freeze({
-                type: FILES_ERROR,
-                operation: "check-file-path",
-                phase: "lexical",
-                reason: "lexical-escape",
-              }),
-            ),
-          );
-        },
-        // deno-lint-ignore require-yield
-        *writeTextFile(): Operation<Result<FileWriteSuccess>> {
-          calls.push("writeTextFile");
-          throw new Error("the write must never be reached");
-        },
-      });
-    });
+    const outcome = yield* run(
+      dir,
+      writeDocument(dir),
+      function* () {
+        yield* useFiles({
+          // deno-lint-ignore require-yield
+          *checkFilePath(): Operation<Result<void>> {
+            calls.push("checkFilePath");
+            return Err(
+              new FilesError(
+                Object.freeze({
+                  type: FILES_ERROR,
+                  operation: "check-file-path",
+                  phase: "lexical",
+                  reason: "lexical-escape",
+                }),
+              ),
+            );
+          },
+          // deno-lint-ignore require-yield
+          *writeTextFile(): Operation<Result<FileWriteSuccess>> {
+            calls.push("writeTextFile");
+            throw new Error("the write must never be reached");
+          },
+        });
+      },
+      stream,
+    );
 
     expect(calls).toEqual(["checkFilePath"]);
     // An ordinary refusal, so the document reads it and carries on.
@@ -1286,10 +1312,15 @@ describe("Tier FF — Files infrastructure failure", () => {
   // wrong beneath one.
   it("FF10: an ordinary provider failure stays a printed error", function* () {
     const dir = yield* useFixture();
-
-    const outcome = yield* run(dir, '<File path="absent.md" />\n\nAFTER', function* () {
-      yield* useHostFiles();
-    });
+    const stream = yield* useJournalStream(join(dir, "doc.md"));
+    const outcome = yield* run(
+      dir,
+      '<File path="absent.md" />\n\nAFTER',
+      function* () {
+        yield* useHostFiles();
+      },
+      stream,
+    );
 
     expect(outcome.ok).toBe(true);
     expect(outcome.output).toContain('cannot read "absent.md": no such file.');
