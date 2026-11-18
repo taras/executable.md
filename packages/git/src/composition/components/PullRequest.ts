@@ -79,7 +79,7 @@ export const props: PropsSchema = {
     /** The selection a read binds, over the complete record; omitted means `.`. */
     yq: { type: "string" },
     /** An explicit UTF-8 byte budget for one page, navigation included. */
-    maxBytes: { type: "integer", minimum: 1 },
+    maxBytes: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
     /** The pull request to bring up to date. Absent asks for one to exist. */
     number: { type: "integer", minimum: 1 },
     /** The title a write sets. */
