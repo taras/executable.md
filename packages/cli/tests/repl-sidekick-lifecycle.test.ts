@@ -1046,14 +1046,18 @@ describe("Tier PV — generation that ended without a reply", () => {
       // Stop joined what it asked for rather than returning over the top of it.
       expect(page.screen().shows("[x] Follow")).toBe(true);
       const cancelling = repl.fake.holdCancellation();
-      // The Sidekick's own Stop. This person's entry is running, so the draft is
-      // wearing a Stop too — and it is the leftmost, so a press that went looking
-      // for `[stop]` on the screen would stop the document's work and never reach
-      // the generation this row is about.
-      yield* stopSidekick(page);
-      yield* cancelling.reached;
-      expect(repl.outcome()).toBe(undefined);
-      cancelling.release();
+      try {
+        // The Sidekick's own Stop. This person's entry is running, so the draft is
+        // wearing a Stop too — and it is the leftmost, so a press that went looking
+        // for `[stop]` on the screen would stop the document's work and never reach
+        // the generation this row is about.
+        yield* stopSidekick(page);
+        yield* cancelling.reached;
+        expect(repl.outcome()).toBe(undefined);
+        cancelling.release();
+      } finally {
+        cancelling.release();
+      }
 
       // What the agent said stays, as the attempt it is — and it claims nothing:
       // no turn, no response, no acceptance, no recorded failure.
@@ -2301,9 +2305,9 @@ describe("Contributed control acknowledgement and teardown", () => {
         record.includes('"kind":"control"') && record.includes('"component":"Contributed"'),
     );
     const outcome = gate.holdNext((_path, record) => record.includes('"kind":"control-outcome"'));
+    const release = withResolvers<void>();
     try {
       const cleaning = withResolvers<void>();
-      const release = withResolvers<void>();
       counts.cleanup = function* () {
         cleaning.resolve();
         yield* release.operation;
@@ -2336,6 +2340,7 @@ describe("Contributed control acknowledgement and teardown", () => {
       ).toHaveLength(1);
     } finally {
       intent.release();
+      release.resolve();
       outcome.release();
     }
   });
