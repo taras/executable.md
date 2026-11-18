@@ -77,8 +77,8 @@ import {
   pullRequestReadRequestJson,
 } from "../../composition/pull-request-read-records.ts";
 import type {
-  PullRequestReadKind,
   PullRequestReadRequest,
+  PullRequestReadRequestKind,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
 import { gitOperationFingerprint } from "./operations.ts";
@@ -87,10 +87,11 @@ import { gitOperationFingerprint } from "./operations.ts";
 export const PULL_REQUEST_READ = "pull_request_read";
 
 /** Which element a refusal names, by the collection it was reading. */
-const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+const ELEMENT: Readonly<Record<PullRequestReadRequestKind, string>> = Object.freeze({
   reviews: "<PullRequest.Reviews>",
   comments: "<PullRequest.Comments>",
   checks: "<PullRequest.Checks>",
+  details: "<PullRequest>",
 });
 
 /**
@@ -167,7 +168,7 @@ export function retainPullRequestRead(
 /** The complete evidence this value describes, or the refusal it is not. */
 function validated(
   value: unknown,
-  kind: PullRequestReadKind,
+  kind: PullRequestReadRequestKind,
   element: string,
   sentence: string,
 ): PullRequestReadResult {

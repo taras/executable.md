@@ -300,7 +300,7 @@ describe("ORC19 — a nested run profile", () => {
         "",
       ].join("\n"),
     );
-    const asks = child('<PullRequest title="sibling" as="pr" />\n');
+    const asks = child('<PullRequest title="sibling" as="pr"></PullRequest>\n');
 
     yield* runNested(
       [
@@ -458,7 +458,7 @@ describe("ORC19 — a nested run profile", () => {
         "",
         '<Test name="a child cannot use its parent\'s publication">',
         "",
-        `<Execution host="run" source={${child('<PullRequest title="child" as="pr" />\n')}} as="opened">`,
+        `<Execution host="run" source={${child('<PullRequest title="child" as="pr"></PullRequest>\n')}} as="opened">`,
         ...refusedBeforeHostAccess("opened"),
         "</Execution>",
         "",
@@ -501,7 +501,7 @@ describe("ORC19 — a nested run profile", () => {
         "",
         "</Testing>",
         "",
-        '<PullRequest title="parent" as="pr" />',
+        '<PullRequest title="parent" as="pr"></PullRequest>',
         "",
       ].join("\n"),
       fixture,

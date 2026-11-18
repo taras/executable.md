@@ -39,7 +39,7 @@
 import type { Operation } from "effection";
 import { GitOperationAdmissionError, PullRequestReadError } from "../../composition/errors.ts";
 import type {
-  PullRequestReadKind,
+  PullRequestReadRequestKind,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
@@ -49,7 +49,10 @@ import type { AdmittedPullRequestRead } from "../../composition/pull-request-rea
 import type { RepositoryRecord } from "../../composition/records.ts";
 import type { SelectionRegistry } from "../selections.ts";
 import type { GitHubRepositoryName, GitHubSource } from "./github.ts";
-import { readPullRequestEvidence as readEvidence } from "./pull-request-evidence.ts";
+import {
+  readPullRequestDetails,
+  readPullRequestEvidence as readEvidence,
+} from "./pull-request-evidence.ts";
 import { upsertPullRequest } from "./pull-request.ts";
 import { gitHubPullRequestsConfiguration } from "./pull-request-configuration.ts";
 import type { RepositoryHost } from "./host.ts";
@@ -59,11 +62,12 @@ import type { PullRequestResult } from "../../composition/pull-request-records.t
 /** How this middleware names itself when a document names it explicitly. */
 export const GITHUB = "github";
 
-/** Which element a refusal names, by the collection it was reading. */
-const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+/** Which element a refusal names, by the question it was reading. */
+const ELEMENT: Readonly<Record<PullRequestReadRequestKind, string>> = Object.freeze({
   reviews: "<PullRequest.Reviews>",
   comments: "<PullRequest.Comments>",
   checks: "<PullRequest.Checks>",
+  details: "<PullRequest>",
 });
 
 /** One pull request on `github.com`, as a canonical URL names it. */
@@ -357,6 +361,7 @@ export function gitHubPullRequestReadHandler(
     }
 
     const element = ELEMENT[read.kind];
+    const kind = read.kind;
     // From here this middleware owns the answer, and what is allowed is asked
     // before anything is built: a URL a document wrote is not a place this
     // host authorized until the configuration says so.
@@ -392,7 +397,10 @@ export function gitHubPullRequestReadHandler(
         // After the ceiling, never before: a session opened first would be an
         // identity established for a target this host had not authorized.
         const access = yield* transport(configuration).open();
-        const reading = yield* readEvidence(access, name, name.number, read.kind);
+        const reading =
+          kind === "details"
+            ? yield* readPullRequestDetails(access, name, name.number)
+            : yield* readEvidence(access, name, name.number, kind);
         if (reading.state === "unavailable") {
           throw new PullRequestReadError(
             "unavailable",

@@ -1842,6 +1842,89 @@ disagreement; a later one at another commit is the branch having moved on.
 
 ### 7.5 Pull request
 
+The authored form chooses the operation. A self-closing PullRequest reads;
+a paired PullRequest creates or updates, including a pair whose content renders
+nothing. That choice comes from the engine's recorded form, not from rendered
+text or the number of children.
+
+#### Read an existing pull request
+
+```md
+<PullRequest url={url} as="pr" />
+<PullRequest url={url} yq=".body" as="description" />
+<PullRequest url={url}
+  yq='pick(["title", "body", "state", "headSha", "baseSha"])'
+  as="details" />
+```
+
+The read requires url and accepts provider, yq and maxBytes. It needs no
+Repository, working directory or Git.Push. URL canonicalization, provider
+selection, the operator's allowed ceiling, authentication, normalized-result
+validation and durable replay use §7.7's read boundary. It changes no remote
+state and performs no create or update.
+
+The complete documented record is:
+
+```ts
+{
+  providerId: string,
+  number: number,
+  url: string,
+  state: "open" | "closed",
+  title: string,
+  body: string,
+  draft: boolean,
+  headBranch: string,
+  headSha: string,
+  headRepository: string,
+  baseBranch: string,
+  baseSha: string,
+  baseRepository: string,
+}
+```
+
+providerId is the provider's stable opaque identity. number is a positive safe
+integer. The URL identifies the requested PR; its number and base repository
+must agree with the request. The GitHub repository strings are full_name
+values. SHAs use the existing Git object-id contract. Other identity, title,
+branch and repository strings are nonempty. The record is closed: provider
+transport fields do not become public fields. A GitHub null body becomes the
+empty string; other body text is preserved exactly. Open and closed records,
+including fork heads, are readable. GitHub's merged PRs have state closed.
+Reviews, comments and checks remain separate reads.
+
+Omitted yq means ".". Evaluate it over the complete record before paging the
+selection. Exactly one JSON value is an answer; no value, several values or an
+invalid expression refuses as invalid-query. The read produces the standard
+selected-value page of §7.8: {value, next, prev, last}. A selected string pages
+by 4096 code points, a selected array by 20 items, and other values remain
+whole. Thus "." includes the full body inside its record, while ".body" pages
+the body text itself.
+
+There is no default byte budget. maxBytes, when supplied, is a positive safe
+integer counting the compact UTF-8 serialized page including navigation.
+It travels with navigation and a later explicit maxBytes replaces it. A
+selected value or item that cannot fit refuses as invalid-query.
+
+Each navigation member is a yq string for the neighbouring page or null.
+A continuation names the canonical PR URL and the content fingerprint of the
+complete normalized record it observed. Following it against another URL or a
+changed record refuses as stale-continuation, including a body edit that leaves
+headSha unchanged. A fresh query without that continuation reads the current
+record.
+
+With as, bind the structured page and render nothing. Without as, render the
+page as JSON, using Query's formatting in the language specification §6.22.
+For example, pr.value.body is the full description in the default read above;
+description.value is one page of the selected description text.
+
+A self-closing invocation refuses title, number, base and draft. A paired
+invocation refuses url, provider, yq and maxBytes. Missing required props and
+mixed forms refuse before provider work or paired content expansion. An empty
+or whitespace-only yq and an invalid maxBytes refuse before provider work.
+
+#### Create or update a pull request
+
 ```md
 <Repository name="project" url={props.repository}>
   <Git.Push />
@@ -1857,7 +1940,7 @@ Prepared from commit {commit}.
 </Repository>
 ```
 
-`title` is required. `number` defaults to none, `base` defaults to the
+title and as are required for the paired write. `number` defaults to none, `base` defaults to the
 Repository's recorded initial branch, `draft` defaults to false and the rendered
 content is the body, verbatim — nothing trims or reflows what a document wrote,
 and content that renders nothing is an empty body. Which checkout the pull
@@ -1869,7 +1952,7 @@ Content expands first and completely. A body that never finished rendering stops
 everything this component owns, before a Repository is observed, a checkout is
 selected, retained history is read or a Git host exists in the story.
 
-**PullRequest is an upsert over one explicit pull-request identity.** Without a
+**The paired form is an upsert over one explicit pull-request identity.** Without a
 number the document asks for a pull request from this head to this base: one is
 created, or the compatible one an interrupted earlier attempt already created is
 adopted rather than duplicated. With a number it asks for that exact pull
@@ -1880,7 +1963,7 @@ run's head branch and commit is a conflict, as is one that belongs to another
 repository, was opened from a fork, or is no longer open. Nothing is reopened,
 merged, closed or commented on.
 
-**PullRequest never pushes.** Direct remote observation is not a substitute for
+**Neither form pushes.** Direct remote observation is not a substitute for
 authorization to create or update one: the run must already hold its own
 successful `Git.Push` result for the same Repository identity, head branch, full
 destination ref and head SHA. That admission reads this run's own successful
@@ -2018,6 +2101,8 @@ read(url: string, options: PullRequestReadOptions): Operation<PullRequestReadRes
 upsert(pullRequest: PullRequestInput, options: PullRequestUpsertOptions): Operation<PullRequestResult>
 ```
 
+The self-closing PullRequest read of §7.5 uses this same read operation with kind "details". Its normalized result is {kind: "details", details: PullRequestDetails}; the details are the closed record documented in §7.5. The existing reviews, comments and checks envelopes keep their current shapes. The provider and retained boundary validate the complete envelope before projection. Selection and paging happen over the restored details record after this read boundary; yq and maxBytes are presentation inputs rather than new provider operations.
+
 There is no registry, no resolver, no routing protocol and no private terminal.
 A provider is ordinary middleware around these operations: an adapter composes
 `PullRequestAPI.around(...)`, looks at what it was handed, and either handles the
@@ -2048,13 +2133,13 @@ a URL alone because that is the whole of its portable contract; a pull request
 already has a stronger shipped one, and adopting Issue's topology does not erase
 it.
 
-**A read is not a reconciled effect.** §7.5's upsert reconciles because it
-mutates a remote and must adopt an interrupted attempt rather than repeat it.
-These change nothing, have no natural key and no pre-state, and are ordinary
-non-mutating durable reads. An interruption before the result commits may repeat
-the requests, which is safe for a read in the way it is not for a write; no
-incomplete list is ever retained. A completed replay restores the retained array
-without opening an authentication session or sending anything.
+**A read is not a reconciled effect.** The paired upsert of §7.5 reconciles because it
+mutates a remote and must adopt an interrupted attempt rather than repeat it. A details
+or evidence read changes nothing, has no natural key and no pre-state, and is an ordinary
+non-mutating durable read. An interruption before the result commits may repeat its
+requests; no incomplete result is retained. Completed replay restores the full normalized
+record or collection without opening an authentication session or sending anything.
+Details selection and paging use that retained record.
 
 **Complete, or unavailable.** The host follows the provider's pagination until
 the collection is complete. A transport failure, a rate limit, an authentication
@@ -2099,13 +2184,13 @@ acquired for the request and disposed with the invocation. Which pull requests
 may be read at all is operator configuration — the `allowed` list, checked
 before a session is opened, a credential is read or anything is sent — and a
 document names a URL, never a host or a credential. Absence of that
-configuration authorizes no URL read and disables nothing else: `<PullRequest>`
+configuration authorizes no URL read and disables nothing else: the paired `<PullRequest>`
 upserts on this run's own matching Push evidence, which no configuration grants
 or withdraws. Nothing of the credential, the endpoint, the raw
 response or the pagination state is retained: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
 secret gate. The retained request is the whole normalized question: the operation, the
-canonical URL, the provider discriminator, the collection, the run and the
+canonical URL, the provider discriminator, the read kind, the run and the
 expansion. A REPL entry writes its own owner and the site it authenticated in
 those same two members, and binds them only inside its private policy. The
 effect's name covers the question rather than the run — a fork is a different
@@ -2940,7 +3025,8 @@ capturing the root the run already had.
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
 | suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
 | Git.Add/Switch/Commit | restore transactional result |
-| Git.Push/PullRequest | restore the retained reconciliation record — including a Push's attested `ancestor` pre-state, which is a fact this run established when it published and never proves again — or observe the Git host again under the same external identity and adopt only a proven compatible completion |
+| PullRequest read | restore the retained complete normalized record without provider or authentication access, then select and page that record |
+| Git.Push/paired PullRequest | restore the retained reconciliation record — including a Push's attested `ancestor` pre-state, which is a fact this run established when it published and never proves again — or observe the Git host again under the same external identity and adopt only a proven compatible completion |
 | Issue read | restore the retained `IssueDetails` without reaching `IssueApi` at all, and therefore without network access |
 | Issue upsert | restore the retained `IssueReference` without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
 

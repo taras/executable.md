@@ -311,6 +311,8 @@ export class GitCompositionProviderError extends WorkflowStorageError {
 export type PullRequestReadReason =
   | "invalid-url"
   | "invalid-provider"
+  | "invalid-query"
+  | "stale-continuation"
   | "unexpected-content"
   | "unavailable"
   | "protocol";
@@ -331,6 +333,22 @@ export class PullRequestReadError extends StaleInputError {
   constructor(reason: PullRequestReadReason, element: string, sentence: string) {
     super(`${element} could not read the evidence it names: ${sentence}`);
     this.reason = reason;
+  }
+}
+
+/**
+ * A `<PullRequest>` invocation whose authored form or props cannot be a read or a
+ * write, refused before any child or provider work.
+ *
+ * A `StaleInputError` for the same reason as {@link PullRequestReadError}: a
+ * refusal of what the document wrote must end the attempt rather than print
+ * beside a result, and the sentence names the spelling that is valid.
+ */
+export class PullRequestContentError extends StaleInputError {
+  override name = "PullRequestContentError";
+
+  constructor(sentence: string) {
+    super(sentence);
   }
 }
 

@@ -125,7 +125,7 @@ describe("workflow PullRequest", () => {
         },
         providerId: created?.nodeId,
         number: created?.number,
-        url: `https://github.com/owner/repository/pull/${created?.number}`,
+        url: `https://github.com/octo/project/pull/${created?.number}`,
         state: "open",
         headSha: head.commit,
         baseSha: remoteBranch(remote, "main"),
@@ -165,7 +165,7 @@ describe("workflow PullRequest", () => {
       const run = fixture(remote);
       yield* runWorkflowDocument(
         database,
-        published(`<PullRequest title="${TITLE}" as="pullRequest" />`),
+        published(`<PullRequest title="${TITLE}" as="pullRequest"></PullRequest>`),
         run.options,
       );
       const [created] = run.store.pullRequests;
@@ -185,7 +185,11 @@ describe("workflow PullRequest", () => {
       const database = yield* createRun();
       const run = fixture(remote);
       const failure = yield* raised(
-        runWorkflowDocument(database, published(`<PullRequest title="${TITLE}" />`), run.options),
+        runWorkflowDocument(
+          database,
+          published(`<PullRequest title="${TITLE}"></PullRequest>`),
+          run.options,
+        ),
       );
       // Core decides this, before the component's own work exists at all.
       expect(String(failure)).toContain("must be invoked with `as`");
@@ -247,7 +251,7 @@ describe("workflow PullRequest admission", () => {
       const failure = yield* raised(
         runWorkflowDocument(
           database,
-          [`<PullRequest title="${TITLE}" as="pullRequest" />`, "", LATER].join("\n"),
+          [`<PullRequest title="${TITLE}" as="pullRequest"></PullRequest>`, "", LATER].join("\n"),
           run.options,
         ),
       );
@@ -270,7 +274,7 @@ describe("workflow PullRequest admission", () => {
           [
             `<Repository name="project" url="${LOCATOR}" as="repository" />`,
             "<Dir path={repository}>",
-            `<PullRequest title="${TITLE}" as="pullRequest" />`,
+            `<PullRequest title="${TITLE}" as="pullRequest"></PullRequest>`,
             "</Dir>",
           ].join("\n"),
           run.options,
@@ -1002,7 +1006,9 @@ describe("workflow PullRequest containment", () => {
       const journaled = JSON.stringify(events);
 
       expect(journaled).not.toContain(TOKEN);
-      expect(journaled).not.toContain(LOCATOR);
+      // The locator as a value. A pull request's own URL legitimately begins with the
+      // repository's address, so the quoted value is what must not be journaled.
+      expect(journaled).not.toContain(JSON.stringify(LOCATOR));
       expect(journaled).not.toContain(remote.locator);
       expect(journaled).not.toContain(run.store.requests[0]?.url ?? "https://api.github.test");
       expect(journaled).not.toContain("checkoutPath");
@@ -1034,7 +1040,7 @@ describe("workflow PullRequest containment", () => {
       const rendered = String(
         yield* runWorkflowDocument(
           database,
-          published(`<PullRequest title="${TITLE}" />`),
+          published(`<PullRequest title="${TITLE}"></PullRequest>`),
           fixture(remote).options,
           (run_) =>
             scoped(function* () {
@@ -1058,7 +1064,7 @@ describe("workflow PullRequest containment", () => {
           yield* RepositoryContext.around({ current: () => FORGED }, { at: "min" });
           return yield* collect(
             yield* execute({
-              ...inlineSource(`<PullRequest title="${TITLE}" as="pullRequest" />`),
+              ...inlineSource(`<PullRequest title="${TITLE}" as="pullRequest"></PullRequest>`),
               stream: database.journal,
             }),
           );
