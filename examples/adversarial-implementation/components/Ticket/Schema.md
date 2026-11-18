@@ -23,6 +23,17 @@ returns: {type: object}
     "identityDirectory": {"type":"string","pattern":"^/"},
     "api": {"type": "object"},
     "delivery": {"type": "object"},
+    "implementationModelSelection": {
+      "type": "object",
+      "properties": {
+        "previousContinuation": {"type":"object","properties":{"path":{"type":"string","minLength":1},"utf8Bytes":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["path","utf8Bytes","sha256"],"additionalProperties":false},
+        "previousModel": {"type": ["string", "null"], "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "evidence": {"type":"object","properties":{"path":{"type":"string","minLength":1},"utf8Bytes":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"snapshot":{"type":"string","pattern":"^/"},"observation":{"enum":["file","supplied"]}},"required":["path","utf8Bytes","sha256","snapshot","observation"],"additionalProperties":false}
+      },
+      "required": ["previousContinuation", "previousModel", "model", "evidence"],
+      "additionalProperties": false
+    },
     "assignment": phases.assignment,
     "maxApiRepairs": {"type":"integer","minimum":0,"maximum":10},
     "maxResponseCorrections": {"type":"integer","minimum":0,"maximum":3},
@@ -93,6 +104,10 @@ returns: {type: object}
                 "codex",
                 "claude"
               ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
             },
             "initialized": {
               "type": "boolean"

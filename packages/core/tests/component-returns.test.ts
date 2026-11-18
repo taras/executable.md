@@ -7,7 +7,8 @@ import { useComponentModuleLoader } from "@executablemd/test-support/host";
  * roots, and deterministic replay.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -33,6 +34,13 @@ import {
 } from "../src/validate.ts";
 import type { Json } from "../src/types.ts";
 import { asText } from "./helpers.ts";
+
+const OWNER = "packages/core/tests/component-returns.test.ts";
+function* useReturnsFixture(): Operation<{ directory: string; stream: InMemoryStream }> {
+  const directory = path.join(os.tmpdir(), `returns-test-${randomUUID()}`);
+  const stream = yield* useJournalStream(path.join(directory, "doc.md"));
+  return { directory, stream };
+}
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -82,6 +90,7 @@ function* runExecution(options: {
  * comment in the body, so a case about what a rejection says reads it here. A
  * successful run's text is unchanged.
  */
+
 function said(run: Run): string {
   return run.error ?? asText(run.value ?? "");
 }
@@ -103,9 +112,12 @@ function run(files: Record<string, string>, stream?: DurableStream): Operation<R
  * by file URL, so they need files on disk and a package.json that makes the
  * host resolve them as ES modules with the workspace's dependencies.
  */
-function runFixture(files: Record<string, string>): Operation<Run> {
+function runFixture(
+  files: Record<string, string>,
+  stream = new InMemoryStream(),
+  dir = path.join(os.tmpdir(), `returns-test-${randomUUID()}`),
+): Operation<Run> {
   return scoped(function* () {
-    const dir = path.join(os.tmpdir(), `returns-test-${randomUUID()}`);
     yield* ensureDir(dir);
     // Removing the directory removes the symlink with it, and registering the
     // cleanup first means a failure during setup still takes the fixture away.
@@ -120,7 +132,7 @@ function runFixture(files: Record<string, string>): Operation<Run> {
 
     return yield* runExecution({
       path: path.join(dir, "doc.md"),
-      stream: new InMemoryStream(),
+      stream,
       includes: [dir],
       commands: [],
     });
@@ -167,6 +179,7 @@ function* raised(operation: () => Operation<unknown>): Operation<unknown> {
 }
 
 describe("Tier RV — component return values", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   describe("value kinds", () => {
@@ -186,42 +199,60 @@ describe("Tier RV — component return values", () => {
 
     for (const [label, declaration, expression, expected] of kinds) {
       it(`binds ${label} through as`, function* () {
-        const result = yield* run({
-          "doc.md": CAPTURING_ROOT,
-          "Verdict.md": valueComponent(declaration, expression),
-        });
+        const stream = yield* useJournalStream("doc.md");
+        const result = yield* run(
+          {
+            "doc.md": CAPTURING_ROOT,
+            "Verdict.md": valueComponent(declaration, expression),
+          },
+          stream,
+        );
         expect(result.error).toBeUndefined();
         expect(said(result)).toContain(`captured: ${JSON.stringify(expected)}`);
       });
     }
 
     it("emits no segments of its own", function* () {
-      const result = yield* run({
-        "doc.md": 'before\n\n<Verdict as="verdict" />\n\nafter\n',
-        "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": 'before\n\n<Verdict as="verdict" />\n\nafter\n',
+          "Verdict.md": valueComponent(
+            "returns:\n  passed: { type: boolean }",
+            "({ passed: true })",
+          ),
+        },
+        stream,
+      );
       expect(said(result)).not.toContain("passed");
     });
 
     it("drives caller control flow from the captured value", function* () {
-      const result = yield* run({
-        "doc.md": [
-          '<Verdict as="verdict" />',
-          "",
-          "<If condition={verdict.passed}>",
-          "",
-          "REVIEW PASSED",
-          "",
-          "<Else>",
-          "",
-          "REVIEW FAILED",
-          "",
-          "</Else>",
-          "</If>",
-          "",
-        ].join("\n"),
-        "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": [
+            '<Verdict as="verdict" />',
+            "",
+            "<If condition={verdict.passed}>",
+            "",
+            "REVIEW PASSED",
+            "",
+            "<Else>",
+            "",
+            "REVIEW FAILED",
+            "",
+            "</Else>",
+            "</If>",
+            "",
+          ].join("\n"),
+          "Verdict.md": valueComponent(
+            "returns:\n  passed: { type: boolean }",
+            "({ passed: true })",
+          ),
+        },
+        stream,
+      );
       expect(said(result)).toContain("REVIEW PASSED");
       expect(said(result)).not.toContain("REVIEW FAILED");
     });
@@ -229,53 +260,69 @@ describe("Tier RV — component return values", () => {
 
   describe("declaration forms", () => {
     it("requires every property of the object shorthand", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": valueComponent(
-          "returns:\n  passed: { type: boolean }\n  summary: { type: string }",
-          "({ passed: true })",
-        ),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": valueComponent(
+            "returns:\n  passed: { type: boolean }\n  summary: { type: string }",
+            "({ passed: true })",
+          ),
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain("Return validation failed for <Verdict />");
       expect(output).toContain("summary");
     });
 
     it("rejects a property the object shorthand does not declare", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": valueComponent(
-          "returns:\n  passed: { type: boolean }",
-          "({ passed: true, extra: 1 })",
-        ),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": valueComponent(
+            "returns:\n  passed: { type: boolean }",
+            "({ passed: true, extra: 1 })",
+          ),
+        },
+        stream,
+      );
       expect(said(result)).toContain("Return validation failed for <Verdict />");
     });
 
     it("accepts a full schema with an optional property", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": valueComponent(
-          [
-            "returns:",
-            "  type: object",
-            "  properties:",
-            "    passed: { type: boolean }",
-            "    summary: { type: string }",
-            "  required: [passed]",
-            "  additionalProperties: false",
-          ].join("\n"),
-          "({ passed: true })",
-        ),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": valueComponent(
+            [
+              "returns:",
+              "  type: object",
+              "  properties:",
+              "    passed: { type: boolean }",
+              "    summary: { type: string }",
+              "  required: [passed]",
+              "  additionalProperties: false",
+            ].join("\n"),
+            "({ passed: true })",
+          ),
+        },
+        stream,
+      );
       expect(said(result)).toContain('captured: {"passed":true}');
     });
 
     it("rejects a non-object returns declaration", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": "---\nreturns: text\n---\n\nbody\n",
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": "---\nreturns: text\n---\n\nbody\n",
+        },
+        stream,
+      );
       expect(said(result)).toContain('"returns" must declare a JSON Schema object');
     });
 
@@ -291,8 +338,9 @@ describe("Tier RV — component return values", () => {
     });
 
     it("rejects an invalid return schema in execution and inspection alike", function* () {
+      const stream = yield* useJournalStream("doc.md");
       const source = "---\nreturns:\n  type: nonsense\n---\n\n<Return value={1} />\n";
-      const result = yield* run({ "doc.md": CAPTURING_ROOT, "Verdict.md": source });
+      const result = yield* run({ "doc.md": CAPTURING_ROOT, "Verdict.md": source }, stream);
       expect(said(result)).toContain("invalid return schema");
 
       yield* useStubFs({ "Verdict.md": source });
@@ -316,20 +364,24 @@ describe("Tier RV — component return values", () => {
 
     for (const [label, expression] of rejected) {
       it(`rejects ${label} before binding`, function* () {
-        const result = yield* run({
-          "doc.md": CAPTURING_ROOT,
-          // The value is produced in the <Return> expression itself: an eval
-          // block cannot even export some of these.
-          "Verdict.md": [
-            "---",
-            "returns:",
-            "  type: object",
-            "---",
-            "",
-            `<Return value={${expression}} />`,
-            "",
-          ].join("\n"),
-        });
+        const stream = yield* useJournalStream("doc.md");
+        const result = yield* run(
+          {
+            "doc.md": CAPTURING_ROOT,
+            // The value is produced in the <Return> expression itself: an eval
+            // block cannot even export some of these.
+            "Verdict.md": [
+              "---",
+              "returns:",
+              "  type: object",
+              "---",
+              "",
+              `<Return value={${expression}} />`,
+              "",
+            ].join("\n"),
+          },
+          stream,
+        );
         const output = said(result);
         expect(output).toContain("Return validation failed for <Verdict />");
         expect(output).toContain("is not JSON");
@@ -342,29 +394,33 @@ describe("Tier RV — component return values", () => {
     }
 
     it("fills defaults into the returned value without mutating the producer's object", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: object",
-          "  properties:",
-          "    passed: { type: boolean }",
-          "    severity: { type: string, default: low }",
-          "  required: [passed]",
-          "  additionalProperties: false",
-          "---",
-          "",
-          "```js eval",
-          "const produced = { passed: true };",
-          "```",
-          "",
-          "<Return value={produced} />",
-          "",
-          "produced stays: {produced}",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: object",
+            "  properties:",
+            "    passed: { type: boolean }",
+            "    severity: { type: string, default: low }",
+            "  required: [passed]",
+            "  additionalProperties: false",
+            "---",
+            "",
+            "```js eval",
+            "const produced = { passed: true };",
+            "```",
+            "",
+            "<Return value={produced} />",
+            "",
+            "produced stays: {produced}",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain('"severity":"low"');
       expect(output).not.toContain("produced stays");
@@ -373,26 +429,38 @@ describe("Tier RV — component return values", () => {
 
   describe("text mode compatibility", () => {
     it("renders and captures a string when no returns is declared", function* () {
-      const result = yield* run({
-        "doc.md": '<Note as="note" />\n\ncaptured: {note}\n',
-        "Note.md": "NOTE BODY\n",
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Note as="note" />\n\ncaptured: {note}\n',
+          "Note.md": "NOTE BODY\n",
+        },
+        stream,
+      );
       expect(said(result)).toContain("captured: NOTE BODY");
     });
 
     it("treats an explicit string schema as value mode", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": valueComponent("returns:\n  type: string", '"shipped"'),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": valueComponent("returns:\n  type: string", '"shipped"'),
+        },
+        stream,
+      );
       expect(said(result)).toContain('captured: "shipped"');
     });
 
     it("keeps <Output> selection working for a text component", function* () {
-      const result = yield* run({
-        "doc.md": "<Note />\n",
-        "Note.md": "DOCUMENTATION\n\n<Output>\n\nSELECTED\n\n</Output>\n",
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": "<Note />\n",
+          "Note.md": "DOCUMENTATION\n\n<Output>\n\nSELECTED\n\n</Output>\n",
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain("SELECTED");
       expect(output).not.toContain("DOCUMENTATION");
@@ -421,68 +489,84 @@ describe("Tier RV — component return values", () => {
 
     for (const owned of OWNED) {
       it(`RV11a: <${owned.name}> keeps the value body that owns it`, function* () {
-        const result = yield* run({
-          "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
-          "Verdict.md": ["---", "returns:", "  type: string", "---", "", ...owned.body, ""].join(
-            "\n",
-          ),
-        });
+        const stream = yield* useJournalStream("doc.md");
+        const result = yield* run(
+          {
+            "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+            "Verdict.md": ["---", "returns:", "  type: string", "---", "", ...owned.body, ""].join(
+              "\n",
+            ),
+          },
+          stream,
+        );
         expect(said(result)).toContain("Got picked");
       });
     }
 
     it("RV11a: an unselected <If> reaches the component's missing-return diagnostic", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "<If condition={false}>",
-          '<Return value="picked" />',
-          "</If>",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "<If condition={false}>",
+            '<Return value="picked" />',
+            "</If>",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(said(result)).toContain("<Verdict /> declares `returns` but produced no <Return>");
     });
 
     it("RV11b: a caller's <Return> selects through a Markdown <Content /> wrapper", function* () {
+      const stream = yield* useJournalStream("doc.md");
       // The wrapper declares nothing. The return is the caller's text, so it
       // satisfies the caller's declaration wherever the wrapper renders it.
-      const result = yield* run({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "<Wrap>",
-          '<Return value="through the wrapper" />',
-          "</Wrap>",
-          "",
-        ].join("\n"),
-        "Wrap.md": "Wrapping <Content />\n",
-      });
+      const result = yield* run(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "<Wrap>",
+            '<Return value="through the wrapper" />',
+            "</Wrap>",
+            "",
+          ].join("\n"),
+          "Wrap.md": "Wrapping <Content />\n",
+        },
+        stream,
+      );
       expect(result.value).toBe("through the wrapper");
     });
 
     it("RV11c: a <Return> an invoked body writes never satisfies its caller", function* () {
-      const result = yield* run({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "<Foreign />",
-          '<Return value="the caller\'s own" />',
-          "",
-        ].join("\n"),
-        "Foreign.md": '<Return value="not the caller\'s" />\n',
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "<Foreign />",
+            '<Return value="the caller\'s own" />',
+            "",
+          ].join("\n"),
+          "Foreign.md": '<Return value="not the caller\'s" />\n',
+        },
+        stream,
+      );
       // The foreign body declares no `returns`, so its own text-body preflight
       // refuses the element — it never reaches the caller's frame.
       expect(said(result)).toContain("<Return> requires a document or component");
@@ -490,52 +574,61 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV11b: a caller's <Return> selects through a function component's content()", function* () {
-      const result = yield* runFixture({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "<Wrap>",
-          '<Return value="through content()" />',
-          "</Wrap>",
-          "",
-        ].join("\n"),
-        "Wrap.ts": [
-          'import { content } from "@executablemd/core";',
-          "export default function*() {",
-          "  const rendered = yield* content();",
-          "  return `wrapped ${rendered}`;",
-          "}",
-          "",
-        ].join("\n"),
-      });
+      const { directory, stream } = yield* useReturnsFixture();
+      const result = yield* runFixture(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "<Wrap>",
+            '<Return value="through content()" />',
+            "</Wrap>",
+            "",
+          ].join("\n"),
+          "Wrap.ts": [
+            'import { content } from "@executablemd/core";',
+            "export default function*() {",
+            "  const rendered = yield* content();",
+            "  return `wrapped ${rendered}`;",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        stream,
+        directory,
+      );
       expect(result.value).toBe("through content()");
     });
 
     it("RV11c: a <Return> render() generates stays reserved beneath a value body", function* () {
+      const stream = yield* useJournalStream("doc.md");
       // `render()` runs inside <Dynamic />, whose own value frame is active —
       // so this proves dynamic markdown is refused on its own terms rather than
       // for want of an owner to claim.
-      const result = yield* run({
-        "doc.md": '<Dynamic as="d" />\n',
-        "Dynamic.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "```js eval",
-          "const generated = yield* render(\'<Return value=\"dynamic\" />\');",
-          "```",
-          "",
-          "{generated}",
-          "",
-          '<Return value="the component\'s own" />',
-          "",
-        ].join("\n"),
-      });
+      const result = yield* run(
+        {
+          "doc.md": '<Dynamic as="d" />\n',
+          "Dynamic.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "```js eval",
+            "const generated = yield* render(\'<Return value=\"dynamic\" />\');",
+            "```",
+            "",
+            "{generated}",
+            "",
+            '<Return value="the component\'s own" />',
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       // Diagnosed where it was generated, and no component named Return was
       // resolved to answer it.
       expect(said(result)).toContain("<Return> is reserved");
@@ -545,42 +638,47 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV10c: two concurrent projections claim once and evaluate once", function* () {
+      const { directory, stream } = yield* useReturnsFixture();
       // Both projections of one authored <Return> are started before either is
       // awaited, so the second reaches the body while the first is in flight.
       // The claim is taken synchronously, before the claiming return evaluates
       // anything, so exactly one expression is ever evaluated.
-      const result = yield* runFixture({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "```js eval",
-          "globalThis.__rv10c = 0;",
-          "const mark = () => {",
-          "  globalThis.__rv10c += 1;",
-          '  return "evaluated";',
-          "};",
-          "```",
-          "",
-          "<Both>",
-          "<Return value={mark()} />",
-          "</Both>",
-          "",
-        ].join("\n"),
-        "Both.ts": [
-          'import { content } from "@executablemd/core";',
-          'import { all, spawn } from "effection";',
-          "export default function*() {",
-          "  const first = yield* spawn(() => content());",
-          "  const second = yield* spawn(() => content());",
-          "  yield* all([first, second]);",
-          '  return "both";',
-          "}",
-          "",
-        ].join("\n"),
-      });
+      const result = yield* runFixture(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "```js eval",
+            "globalThis.__rv10c = 0;",
+            "const mark = () => {",
+            "  globalThis.__rv10c += 1;",
+            '  return "evaluated";',
+            "};",
+            "```",
+            "",
+            "<Both>",
+            "<Return value={mark()} />",
+            "</Both>",
+            "",
+          ].join("\n"),
+          "Both.ts": [
+            'import { content } from "@executablemd/core";',
+            'import { all, spawn } from "effection";',
+            "export default function*() {",
+            "  const first = yield* spawn(() => content());",
+            "  const second = yield* spawn(() => content());",
+            "  yield* all([first, second]);",
+            '  return "both";',
+            "}",
+            "",
+          ].join("\n"),
+        },
+        stream,
+        directory,
+      );
 
       expect(said(result)).toContain(
         "The root document declares `returns` but executed more than one <Return>.",
@@ -592,30 +690,35 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV12: a teardown failure after selection wins over the selected value", function* () {
-      const result = yield* runFixture({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Return value="selected" />',
-          "",
-          '<Failing as="ignored" />',
-          "",
-        ].join("\n"),
-        // The body completes; teardown is what fails, after the value was
-        // already selected.
-        "Failing.ts": [
-          'import { ensure } from "effection";',
-          "export const returns = { type: 'string' };",
-          "export default function*() {",
-          '  yield* ensure(function* () { throw new Error("TEARDOWN_FAILED"); });',
-          '  return "body finished";',
-          "}",
-          "",
-        ].join("\n"),
-      });
+      const { directory, stream } = yield* useReturnsFixture();
+      const result = yield* runFixture(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Return value="selected" />',
+            "",
+            '<Failing as="ignored" />',
+            "",
+          ].join("\n"),
+          // The body completes; teardown is what fails, after the value was
+          // already selected.
+          "Failing.ts": [
+            'import { ensure } from "effection";',
+            "export const returns = { type: 'string' };",
+            "export default function*() {",
+            '  yield* ensure(function* () { throw new Error("TEARDOWN_FAILED"); });',
+            '  return "body finished";',
+            "}",
+            "",
+          ].join("\n"),
+        },
+        stream,
+        directory,
+      );
 
       expect(said(result)).toContain("TEARDOWN_FAILED");
       expect(result.value).toBeUndefined();
@@ -637,12 +740,14 @@ describe("Tier RV — component return values", () => {
         const dir = path.join(os.tmpdir(), `returns-halt-${randomUUID()}`);
         yield* ensureDir(dir);
         yield* ensure(() => rm(dir, { recursive: true, force: true }));
+        const documentPath = path.join(dir, "doc.md");
+        const stream = yield* useJournalStream(documentPath);
         yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
         yield* until(
           symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"),
         );
         yield* writeTextFile(
-          path.join(dir, "doc.md"),
+          documentPath,
           [
             "---",
             "returns:",
@@ -675,8 +780,8 @@ describe("Tier RV — component return values", () => {
         const outcome: string[] = [];
         const task = yield* spawn(function* () {
           const execution = yield* execute({
-            path: path.join(dir, "doc.md"),
-            stream: new InMemoryStream(),
+            path: documentPath,
+            stream,
             includes: [dir],
           });
           const result = yield* execution;
@@ -780,39 +885,43 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV10e: a component cannot select a value through the named return context", function* () {
+      const stream = yield* useJournalStream("doc.md");
       // The same attack the value root faces, run from inside a Markdown value
       // component's own body: read the carrier the engine published, write to
       // it, clear its claim, then replace the context with a fully-formed
       // forgery. The component's one authored <Return> is unselected, so
       // anything it selected would be a value nothing validated.
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: number",
-          "---",
-          "",
-          "```js eval",
-          'import { createContext } from "effection";',
-          'const ctx = createContext("expand.return");',
-          "const carrier = yield* ctx.get();",
-          'try { carrier.selected = { value: "schema-bypassed" }; } catch (error) {}',
-          "try { carrier.claimed = false; } catch (error) {}",
-          "yield* ctx.set({",
-          '  owner: "Verdict",',
-          '  returns: { type: "string" },',
-          "  claimed: true,",
-          '  selected: { value: "schema-bypassed" },',
-          "});",
-          "```",
-          "",
-          "<If condition={false}>",
-          "<Return value={1} />",
-          "</If>",
-          "",
-        ].join("\n"),
-      });
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: number",
+            "---",
+            "",
+            "```js eval",
+            'import { createContext } from "effection";',
+            'const ctx = createContext("expand.return");',
+            "const carrier = yield* ctx.get();",
+            'try { carrier.selected = { value: "schema-bypassed" }; } catch (error) {}',
+            "try { carrier.claimed = false; } catch (error) {}",
+            "yield* ctx.set({",
+            '  owner: "Verdict",',
+            '  returns: { type: "string" },',
+            "  claimed: true,",
+            '  selected: { value: "schema-bypassed" },',
+            "});",
+            "```",
+            "",
+            "<If condition={false}>",
+            "<Return value={1} />",
+            "</If>",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
 
       expect(said(result)).toContain("<Verdict /> declares `returns` but produced no <Return>");
       expect(said(result)).not.toContain("schema-bypassed");
@@ -822,39 +931,44 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV10e: importing the internal return module selects nothing", function* () {
+      const { directory, stream } = yield* useReturnsFixture();
       // An eval block's imports are hoisted and resolved like any module's, so
       // a document can import the engine's own source by file URL. It gains
       // nothing: the body a value root is settling from is a local of that
       // expansion, handed down as a parameter, and no export takes someone
       // else's. Whatever the document builds here is a body of its own.
       const internal = new URL("../src/return-flow.ts", import.meta.url).href;
-      const result = yield* runFixture({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: number",
-          "---",
-          "",
-          "```js eval",
-          'import { createContext } from "effection";',
-          `import * as flow from ${JSON.stringify(internal)};`,
-          'const surface = Object.keys(flow).sort().join(",");',
-          "// Whatever this module still exports, aimed at this run.",
-          'const own = flow.createReturnBody("__root__", { type: "string" });',
-          "own.claim();",
-          'own.select("schema-bypassed");',
-          'const stolen = yield* createContext("expand.return").get();',
-          'const reached = stolen === undefined ? "nothing" : "something";',
-          "```",
-          "",
-          "surface: {surface} reached: {reached}",
-          "",
-          "<If condition={false}>",
-          "<Return value={1} />",
-          "</If>",
-          "",
-        ].join("\n"),
-      });
+      const result = yield* runFixture(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: number",
+            "---",
+            "",
+            "```js eval",
+            'import { createContext } from "effection";',
+            `import * as flow from ${JSON.stringify(internal)};`,
+            'const surface = Object.keys(flow).sort().join(",");',
+            "// Whatever this module still exports, aimed at this run.",
+            'const own = flow.createReturnBody("__root__", { type: "string" });',
+            "own.claim();",
+            'own.select("schema-bypassed");',
+            'const stolen = yield* createContext("expand.return").get();',
+            'const reached = stolen === undefined ? "nothing" : "something";',
+            "```",
+            "",
+            "surface: {surface} reached: {reached}",
+            "",
+            "<If condition={false}>",
+            "<Return value={1} />",
+            "</If>",
+            "",
+          ].join("\n"),
+        },
+        stream,
+        directory,
+      );
 
       // The run fails exactly as a value root that executed no return does.
       expect(said(result)).toContain(
@@ -873,47 +987,55 @@ describe("Tier RV — component return values", () => {
     });
 
     it("RV14: a nested value body owns a separate declaration", function* () {
-      const result = yield* run({
-        "doc.md": '<Outer as="o" />\n\nGot {o}\n',
-        "Outer.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Inner as="i" />',
-          "<Return value={`outer saw ${i}`} />",
-          "",
-        ].join("\n"),
-        "Inner.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Return value="inner" />',
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Outer as="o" />\n\nGot {o}\n',
+          "Outer.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Inner as="i" />',
+            "<Return value={`outer saw ${i}`} />",
+            "",
+          ].join("\n"),
+          "Inner.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Return value="inner" />',
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       // Two executions, neither a duplicate: each claimed its own body.
       expect(said(result)).toContain("Got outer saw inner");
     });
 
     it("RV10d: projecting one authored <Return> twice is a duplicate", function* () {
-      const result = yield* run({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "<Twice>",
-          '<Return value="once" />',
-          "</Twice>",
-          "",
-        ].join("\n"),
-        "Twice.md": "<Content />\n\n<Content />\n",
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "<Twice>",
+            '<Return value="once" />',
+            "</Twice>",
+            "",
+          ].join("\n"),
+          "Twice.md": "<Content />\n\n<Content />\n",
+        },
+        stream,
+      );
       expect(said(result)).toContain(
         "The root document declares `returns` but executed more than one <Return>.",
       );
@@ -922,24 +1044,33 @@ describe("Tier RV — component return values", () => {
 
   describe("structure, before body effects", () => {
     it("refuses <Return> in a text component", function* () {
-      const result = yield* run({
-        "doc.md": "<Note />\n",
-        "Note.md": `${BODY_EFFECT}\n\n<Return value={1} />\n`,
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": "<Note />\n",
+          "Note.md": `${BODY_EFFECT}\n\n<Return value={1} />\n`,
+        },
+        stream,
+      );
       expect(said(result)).toContain("<Return> requires a document or component");
       expect(result.commands).toEqual([]);
     });
 
     it("RV10a: requires a statically authored <Return> when returns is declared", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n',
-        "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n`,
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n',
+          "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n`,
+        },
+        stream,
+      );
       expect(said(result)).toContain("no <Return>");
       expect(result.commands).toEqual([]);
     });
 
     it("RV10a: a caller's <Return> does not satisfy the callee's declaration", function* () {
+      const stream = yield* useJournalStream("doc.md");
       // Preflight reads the callee's own source, before <Content /> is
       // substituted, so content the caller offers can neither introduce nor
       // satisfy a declaration.
@@ -947,66 +1078,77 @@ describe("Tier RV — component return values", () => {
       // where it is written. Offering it to the callee still declares nothing:
       // preflight reads the callee's own source, before <Content /> is
       // substituted.
-      const result = yield* run({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Verdict as="v">',
-          '<Return value="the caller\'s" />',
-          "</Verdict>",
-          "",
-        ].join("\n"),
-        "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n<Content />\n`,
-      });
+      const result = yield* run(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Verdict as="v">',
+            '<Return value="the caller\'s" />',
+            "</Verdict>",
+            "",
+          ].join("\n"),
+          "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n<Content />\n`,
+        },
+        stream,
+      );
       expect(said(result)).toContain("no <Return>");
       expect(result.commands).toEqual([]);
     });
 
     it("RV10b: a nested <Return> is statically valid and reaches runtime", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          BODY_EFFECT,
-          "",
-          "<If condition={true}>",
-          '<Return value="one" />',
-          "</If>",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            BODY_EFFECT,
+            "",
+            "<If condition={true}>",
+            '<Return value="one" />',
+            "</If>",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(said(result)).toContain("Got one");
       // Preflight did not reject the shape, so the body's effect ran.
       expect(result.commands.length).toBe(1);
     });
 
     it("RV10d: two executed <Return>s fail the body after the first effect", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          BODY_EFFECT,
-          "",
-          '<Return value="one" />',
-          "",
-          // Evaluating this expression at all would throw a different, louder
-          // error, so the duplicate diagnostic below is proof it was never
-          // evaluated.
-          "<Return value={missingBinding.evaluated} />",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            BODY_EFFECT,
+            "",
+            '<Return value="one" />',
+            "",
+            // Evaluating this expression at all would throw a different, louder
+            // error, so the duplicate diagnostic below is proof it was never
+            // evaluated.
+            "<Return value={missingBinding.evaluated} />",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(said(result)).toContain("<Verdict /> declares `returns` but executed more than one");
       expect(said(result)).not.toContain("missingBinding");
       // The first selected value is discarded rather than bound: the caller's
@@ -1018,43 +1160,51 @@ describe("Tier RV — component return values", () => {
     });
 
     it("refuses <Output> alongside returns", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          BODY_EFFECT,
-          "",
-          "<If condition={false}><Output>",
-          "text",
-          "</Output></If>",
-          "",
-          '<Return value="one" />',
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            BODY_EFFECT,
+            "",
+            "<If condition={false}><Output>",
+            "text",
+            "</Output></If>",
+            "",
+            '<Return value="one" />',
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(said(result)).toContain("<Output> and `returns` are exclusive");
       expect(result.commands).toEqual([]);
     });
 
     it("refuses <Return> with children, extra props, or no value", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          BODY_EFFECT,
-          "",
-          '<Return kind="verdict">body</Return>',
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="v" />\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            BODY_EFFECT,
+            "",
+            '<Return kind="verdict">body</Return>',
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain('accepts only a "value" prop');
       expect(output).toContain('requires a "value" prop');
@@ -1063,20 +1213,24 @@ describe("Tier RV — component return values", () => {
     });
 
     it("refuses a value component invoked without as", function* () {
-      const result = yield* run({
-        "doc.md": "<Verdict />\n",
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          BODY_EFFECT,
-          "",
-          '<Return value="one" />',
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": "<Verdict />\n",
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            BODY_EFFECT,
+            "",
+            '<Return value="one" />',
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(said(result)).toContain("must be invoked with `as`");
       expect(result.commands).toEqual([]);
     });
@@ -1084,29 +1238,37 @@ describe("Tier RV — component return values", () => {
 
   describe("<Return> is reserved", () => {
     it("diagnoses caller content that declares <Return>", function* () {
-      const result = yield* run({
-        "doc.md": "<Wrapper>\n<Return value={1} />\n</Wrapper>\n",
-        "Wrapper.md": "<Content />\n",
-        "Return.md": "A COMPONENT NAMED RETURN\n",
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": "<Wrapper>\n<Return value={1} />\n</Wrapper>\n",
+          "Wrapper.md": "<Content />\n",
+          "Return.md": "A COMPONENT NAMED RETURN\n",
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain("<Return> requires a document or component");
       expect(output).not.toContain("A COMPONENT NAMED RETURN");
     });
 
     it("diagnoses a <Return> produced by render(markdown)", function* () {
-      const result = yield* run({
-        "doc.md": "<Dynamic />\n",
-        "Dynamic.md": [
-          "```js eval",
-          'const rendered = yield* render("<Return value={1} />");',
-          "```",
-          "",
-          "{rendered}",
-          "",
-        ].join("\n"),
-        "Return.md": "A COMPONENT NAMED RETURN\n",
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": "<Dynamic />\n",
+          "Dynamic.md": [
+            "```js eval",
+            'const rendered = yield* render("<Return value={1} />");',
+            "```",
+            "",
+            "{rendered}",
+            "",
+          ].join("\n"),
+          "Return.md": "A COMPONENT NAMED RETURN\n",
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain("<Return> is reserved");
       expect(output).not.toContain("A COMPONENT NAMED RETURN");
@@ -1115,49 +1277,57 @@ describe("Tier RV — component return values", () => {
 
   describe("execution order", () => {
     it("runs documentation after <Return> and evaluates the value in place", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          "```js eval",
-          'const before = "early";',
-          "```",
-          "",
-          "<Return value={before} />",
-          "",
-          "```sh exec",
-          "echo AFTER_RETURN",
-          "```",
-          "",
-          "```js eval",
-          'const after = "late";',
-          "```",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            "```js eval",
+            'const before = "early";',
+            "```",
+            "",
+            "<Return value={before} />",
+            "",
+            "```sh exec",
+            "echo AFTER_RETURN",
+            "```",
+            "",
+            "```js eval",
+            'const after = "late";',
+            "```",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(said(result)).toContain('captured: "early"');
       expect(result.commands).toEqual(["echo AFTER_RETURN"]);
     });
 
     it("fails the caller when documentation after <Return> fails", function* () {
-      const result = yield* run({
-        "doc.md": '<Verdict as="verdict" />\n',
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Return value="one" />',
-          "",
-          "<Missing />",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": '<Verdict as="verdict" />\n',
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Return value="one" />',
+            "",
+            "<Missing />",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(result.error).toContain("Missing");
     });
   });
@@ -1172,26 +1342,41 @@ describe("Tier RV — component return values", () => {
     ].join("\n");
 
     it("validates and captures a declared return value", function* () {
-      const result = yield* runFixture({ "doc.md": CAPTURING_ROOT, "Verdict.ts": valueFunction });
+      const { directory, stream } = yield* useReturnsFixture();
+      const result = yield* runFixture(
+        { "doc.md": CAPTURING_ROOT, "Verdict.ts": valueFunction },
+        stream,
+        directory,
+      );
       expect(said(result)).toContain('captured: {"passed":true}');
     });
 
     it("refuses a value function component invoked without as", function* () {
-      const result = yield* runFixture({ "doc.md": "<Verdict />\n", "Verdict.ts": valueFunction });
+      const { directory, stream } = yield* useReturnsFixture();
+      const result = yield* runFixture(
+        { "doc.md": "<Verdict />\n", "Verdict.ts": valueFunction },
+        stream,
+        directory,
+      );
       expect(said(result)).toContain("must be invoked with `as`");
     });
 
     it("reports a value that fails its schema", function* () {
-      const result = yield* runFixture({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.ts": [
-          "export const returns = { passed: { type: 'boolean' } };",
-          "export default function*() {",
-          "  return { passed: 'yes' };",
-          "}",
-          "",
-        ].join("\n"),
-      });
+      const { directory, stream } = yield* useReturnsFixture();
+      const result = yield* runFixture(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.ts": [
+            "export const returns = { passed: { type: 'boolean' } };",
+            "export default function*() {",
+            "  return { passed: 'yes' };",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        stream,
+        directory,
+      );
       expect(said(result)).toContain("Return validation failed for <Verdict />");
     });
 
@@ -1199,12 +1384,20 @@ describe("Tier RV — component return values", () => {
     // return value — it simply has nowhere to go without `as`, and renders
     // nothing rather than being stringified into the document or diagnosed.
     it("renders nothing for a component that returns a non-string", function* () {
-      const result = yield* runFixture({
-        "doc.md": "before\n\n<Verdict />\n\nafter\n",
-        "Verdict.ts": ["export default function*() {", "  return { passed: true };", "};", ""].join(
-          "\n",
-        ),
-      });
+      const { directory, stream } = yield* useReturnsFixture();
+      const result = yield* runFixture(
+        {
+          "doc.md": "before\n\n<Verdict />\n\nafter\n",
+          "Verdict.ts": [
+            "export default function*() {",
+            "  return { passed: true };",
+            "};",
+            "",
+          ].join("\n"),
+        },
+        stream,
+        directory,
+      );
       const rendered = said(result);
       expect(rendered).not.toContain("non-string");
       expect(rendered).not.toContain("passed");
@@ -1215,38 +1408,49 @@ describe("Tier RV — component return values", () => {
 
   describe("composition", () => {
     it("captures a value component invoked inside another component's body", function* () {
-      const result = yield* run({
-        "doc.md": "<Report />\n",
-        "Report.md": [
-          '<Verdict as="verdict" />',
-          "",
-          "<If condition={verdict.passed}>",
-          "",
-          "REPORT PASSED",
-          "",
-          "</If>",
-          "",
-        ].join("\n"),
-        "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": "<Report />\n",
+          "Report.md": [
+            '<Verdict as="verdict" />',
+            "",
+            "<If condition={verdict.passed}>",
+            "",
+            "REPORT PASSED",
+            "",
+            "</If>",
+            "",
+          ].join("\n"),
+          "Verdict.md": valueComponent(
+            "returns:\n  passed: { type: boolean }",
+            "({ passed: true })",
+          ),
+        },
+        stream,
+      );
       expect(said(result)).toContain("REPORT PASSED");
     });
 
     it("does not leak the value into the component's own environment", function* () {
-      const result = yield* run({
-        "doc.md": CAPTURING_ROOT,
-        "Verdict.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Return value="one" />',
-          "",
-          "self: {verdict}",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": CAPTURING_ROOT,
+          "Verdict.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Return value="one" />',
+            "",
+            "self: {verdict}",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       const output = said(result);
       expect(output).toContain('captured: "one"');
       expect(output).not.toContain("self:");
@@ -1271,7 +1475,8 @@ describe("Tier RV — component return values", () => {
     ].join("\n");
 
     it("returns its validated value and keeps body text observable", function* () {
-      const result = yield* run({ "doc.md": valueRoot });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run({ "doc.md": valueRoot }, stream);
       expect(result.value).toEqual({ passed: true });
       expect(result.output).toContain("BODY TEXT");
     });
@@ -1296,50 +1501,63 @@ describe("Tier RV — component return values", () => {
     });
 
     it("fails as a whole when its structure is invalid", function* () {
-      const result = yield* run({
-        "doc.md": ["---", "returns:", "  type: string", "---", "", BODY_EFFECT, ""].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": ["---", "returns:", "  type: string", "---", "", BODY_EFFECT, ""].join("\n"),
+        },
+        stream,
+      );
       expect(result.value).toBeUndefined();
       expect(result.error).toContain("no <Return>");
       expect(result.commands).toEqual([]);
     });
 
     it("fails as a whole when its value violates the schema", function* () {
-      const result = yield* run({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  passed: { type: boolean }",
-          "---",
-          "",
-          '<Return value="yes" />',
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  passed: { type: boolean }",
+            "---",
+            "",
+            '<Return value="yes" />',
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(result.value).toBeUndefined();
       expect(result.error).toContain("Return validation failed for <__root__ />");
     });
 
     it("fails as a whole when its body fails after <Return>", function* () {
-      const result = yield* run({
-        "doc.md": [
-          "---",
-          "returns:",
-          "  type: string",
-          "---",
-          "",
-          '<Return value="one" />',
-          "",
-          "<Missing />",
-          "",
-        ].join("\n"),
-      });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run(
+        {
+          "doc.md": [
+            "---",
+            "returns:",
+            "  type: string",
+            "---",
+            "",
+            '<Return value="one" />',
+            "",
+            "<Missing />",
+            "",
+          ].join("\n"),
+        },
+        stream,
+      );
       expect(result.value).toBeUndefined();
       expect(result.error).toContain("Missing");
     });
 
     it("keeps a text root's completion and rendering unchanged", function* () {
-      const result = yield* run({ "doc.md": "# Title\n" });
+      const stream = yield* useJournalStream("doc.md");
+      const result = yield* run({ "doc.md": "# Title\n" }, stream);
       expect(said(result)).toContain("# Title");
       expect(result.output).toContain("# Title");
     });
@@ -1413,6 +1631,7 @@ describe("Tier RV — component return values", () => {
 });
 
 describe("993 value invocation privacy", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("W5: a value body requesting caller text does not select the outer source", function* () {
     const result = yield* run({
       "doc.md": 'docs<Value as="held"><Output>private</Output></Value>',
@@ -1422,9 +1641,13 @@ describe("993 value invocation privacy", () => {
     expect(result.output).toBe("");
   });
   it("W5: a value root refuses nested declarations before its first effect", function* () {
-    const result = yield* run({
-      "doc.md": `---\nreturns: { type: string }\n---\n${BODY_EFFECT}\n<If condition={false}><Output /></If><Return value="answer" />`,
-    });
+    const stream = yield* useJournalStream("doc.md");
+    const result = yield* run(
+      {
+        "doc.md": `---\nreturns: { type: string }\n---\n${BODY_EFFECT}\n<If condition={false}><Output /></If><Return value="answer" />`,
+      },
+      stream,
+    );
     expect(said(result)).toContain("exclusive");
     expect(result.commands).toEqual([]);
   });

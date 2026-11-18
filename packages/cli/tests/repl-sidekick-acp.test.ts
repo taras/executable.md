@@ -6,7 +6,8 @@ import {
   sidekickCeilingInstallation,
 } from "../src/repl/sidekick/profile.ts";
 import { runSidekickCommand } from "../src/sidekick-acp/command.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
@@ -99,6 +100,8 @@ import {
   JournalReplyAllowance,
   journalReplyBound,
 } from "../src/sidekick-acp/protocol.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-acp.test.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const attachResult = z.object({ attachment: z.string() }).strict();
@@ -2500,6 +2503,7 @@ describe("A5: a peer the listener accepts after teardown begins", () => {
 });
 
 describe("ACP startup bootstrap", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("creates a real initial message without UI input and joins the first external prompt", function* () {
     yield* usePosixSidekickTransport(process.platform);
     const home = yield* until(realpath(yield* useTemporary("xmd-acp-startup-")));
@@ -3653,6 +3657,7 @@ describe("ACP82: the file this publication keeps open", () => {
 });
 
 describe("resume presentation in mounted Sidekick chat", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const actionable = "Release <writer> first.";
   const credential = ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
   const remedy = "could not be resumed";
@@ -3794,6 +3799,7 @@ describe("resume presentation in mounted Sidekick chat", () => {
 });
 
 describe("Follow: joined mixed-origin queue handoff", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Follow: mounted UI and delivered ACP stay FIFO behind entry and generated-control cleanup", function* () {
     yield* usePosixSidekickTransport(process.platform);
     const home = yield* publishingHome("xmd-follow-queue-");

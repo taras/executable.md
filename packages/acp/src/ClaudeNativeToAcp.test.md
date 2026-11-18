@@ -82,7 +82,7 @@ would fail this document.
     "preparedTextInArgv", "preparedTextInEnvironment",
     "modelTurns", "conversationInputByteCount",
     "consentInputBytes", "consentSurfaces", "exitControlBytes",
-    "adapterCommand", "inheritedAgentMarkersRemoved",
+    "adapterIdentity", "inheritedAgentMarkersRemoved",
     "markerStored", "markerRecovered", "markerInReportedEvidence",
     "answerSurface", "outcome",
     "route", "journal", "arrangement", "observed", "absent",
@@ -125,7 +125,7 @@ would fail this document.
     "consentInputBytes": { "type": "string" },
     "consentSurfaces": { "type": "array", "items": { "type": "string" } },
     "exitControlBytes": { "type": "string" },
-    "adapterCommand": { "type": "string" },
+    "adapterIdentity": { "type": "string" },
     "inheritedAgentMarkersRemoved": { "type": "integer" },
     "markerStored": { "type": "boolean" },
     "markerRecovered": { "type": "boolean" },
@@ -183,11 +183,10 @@ would fail this document.
     "observed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "digestPresent", "matchesRoute"],
+            "required": ["version", "digestPresent"],
       "properties": {
         "version": { "type": "string" },
-        "digestPresent": { "type": "boolean" },
-        "matchesRoute": { "type": "boolean" }
+        "digestPresent": { "type": "boolean" }
       }
     },
     "absent": {
@@ -276,8 +275,6 @@ memory — never in the instruction file, the argument vector, the environment, 
 session key, or the document the ACP turn ran. The answer produced it behind a
 prefix that appears in no earlier turn.
 
-<AssertEquals actual={proof.platform} expected={"darwin"} />
-<AssertEquals actual={proof.architecture} expected={"arm64"} />
 <Assert expr={proof.markerStored} />
 <AssertFalse expr={proof.acpDocumentCarriesMarker} />
 <Assert expr={proof.markerRecovered} />
@@ -297,49 +294,52 @@ the launch, and nothing after it named a second.
 <AssertFalse expr={proof.freshFallback} />
 <AssertFalse expr={proof.routeConverted} />
 
-## One conversation, one build, four accounts
+## One conversation, four accounts
 
 The route, the journal, the ACP client's own arrangement and the identity the
-launch reported all name the same conversation — and the build this run would
-use is the build the route retained.
+launch reported all name the same conversation. A fresh route records how the
+session was constructed and nothing about the executable that ran it, so
+neither the route nor the journal carries a build. The platform, architecture,
+Claude version and digest the verdict reports are evidence of what ran, never
+a condition of passing.
 
-<AssertEquals actual={proof.route.schema} expected={"session-route.v2"} />
+<AssertEquals actual={proof.route.schema} expected={"session-route.v1"} />
 <AssertEquals actual={proof.route.kind} expected={"client-native"} />
 <AssertEquals actual={proof.route.provenance} expected={"client-allocated"} />
 <AssertEquals actual={proof.route.launcher} expected={"claude"} />
 <AssertEquals actual={proof.route.nativeSessionId} expected={proof.nativeSessionId} />
 <Assert expr={proof.route.instructionsDigestPresent} />
-<Assert expr={proof.route.buildDigestPresent} />
-<AssertEquals actual={proof.route.buildVersion} expected={proof.claudeVersion} />
+<AssertFalse expr={proof.route.buildDigestPresent} />
+<AssertEquals actual={proof.route.buildVersion} expected={""} />
 <AssertEquals actual={proof.journal.provider} expected={"acpx"} />
 <AssertEquals actual={proof.journal.agent} expected={"claude"} />
 <AssertEquals actual={proof.journal.launcher} expected={"claude"} />
 <AssertEquals actual={proof.journal.provenance} expected={"client-allocated"} />
 <AssertEquals actual={proof.journal.nativeSessionId} expected={proof.nativeSessionId} />
-<AssertEquals actual={proof.journal.buildVersion} expected={proof.route.buildVersion} />
+<AssertEquals actual={proof.journal.buildVersion} expected={""} />
 <AssertEquals actual={proof.journal.firstPhases} expected={["prepared", "detached", "exited"]} />
 <AssertEquals actual={proof.journal.failureClasses} expected={[]} />
 <Assert expr={proof.arrangement.present} />
 <AssertEquals actual={proof.arrangement.agentSessionId} expected={proof.nativeSessionId} />
-<Assert expr={proof.observed.digestPresent} />
-<Assert expr={proof.observed.matchesRoute} />
 
 ## The adapter the attachment was proven against
 
-ACPX resolves adapters through a semver range of its own. A capability that
-depends on how an adapter handles resume identity cannot be left to that range,
-so this binding names one — and the name is live, reaching no durable record.
+The binary's carried adapter supplies both the command used to address the route
+and this path-free snapshot identity. The native UI count covers create and
+resume invocations. Availability probes and ACP subprocesses have separate argv.
 
 <AssertEquals
-  actual={proof.adapterCommand}
-  expected={"npx -y @agentclientprotocol/claude-agent-acp@0.70.0"}
+  actual={proof.adapterIdentity}
+  expected={"xmd-embedded-adapter:claude:@agentclientprotocol/claude-agent-acp@0.70.0+7bb5296c72adb4268f8dc9ed484b53fd2aa6b1b16ab30868d7b8dfb63501257e"}
 />
 
 ## An identity nobody ever had is refused before a turn
 
-The independent case. A bound route naming a fresh random conversation, in a
-directory of its own, with no provider arrangement beside it: the prompt refuses
-rather than starting an empty conversation and answering from it.
+The fixture publishes a historical bound V2 route for a fresh random conversation
+in its own directory. It reads the record back under the command and key the
+binary will use before attempting the prompt. The provider must refuse that
+exact missing conversation. ACPX saves each user submission to this key before
+sending a model request, so the independent arrangement counts attempted turns.
 
 <Assert expr={proof.absent.ran} />
 <AssertEquals actual={proof.absent.failureClass} expected={"identity-unavailable"} />

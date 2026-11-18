@@ -252,11 +252,13 @@ A storage lease belongs to the scope that opened it. The provider owns the under
 
 The workflow executor holds the run’s exclusive executor lock through execution, cleanup, and committed lifecycle settlement. Connection serialization alone does not permit another executor to advance the run.
 
-Native Agent ownership separately protects a logical provider conversation. Construction provenance and executable compatibility do not replace live ownership; release requires evidence that the owner’s work can no longer act.
+Native Agent ownership separately protects a logical provider conversation. Construction provenance and executable metadata do not replace live ownership; release requires evidence that the owner’s work can no longer act.
+
+A conversation continues quietly on the executable the current environment selects. The provider must positively confirm the retained native identity before work that requires it. A missing or different assertion refuses without creating a replacement conversation. Executable version and digest do not decide admission. Existing routes and journal history remain unchanged; normal continuation creates no new version-history record.
 
 A released operating-system lock proves a previous local workflow executor is gone. It does not, by itself, prove native Agent backend quiescence or clear an unresolved ownership record.
 
-The [Workflow Workspace specification](specs/workflow-workspace-spec.md) owns executor and storage lifetimes. The [Native Agent session launch specification](specs/native-agent-session-launch-spec.md) owns handoff, build compatibility, and release proof.
+The [Workflow Workspace specification](specs/workflow-workspace-spec.md) owns executor and storage lifetimes. The [Native Agent session launch specification](specs/native-agent-session-launch-spec.md) owns handoff, identity confirmation, and release proof; the [ACP client specification](specs/acp-client-spec.md#availability) owns executable selection and continuation.
 
 ### Cancellation and attachment
 

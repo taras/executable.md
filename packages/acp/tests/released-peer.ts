@@ -90,7 +90,7 @@ function respond(request) {
     const text = request.params.prompt.map(block => block.text ?? "").join("");
     const answer = () => {
     if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});
-    update({sessionUpdate: "agent_message_chunk", content: {type: "text", text: "answer:" + text + (text === "recall-fail" ? ":" + remembered : "")}});
+    update({sessionUpdate: "agent_message_chunk", content: {type: "text", text: "answer:" + text + (text === "recall-fail" || text === "recall" ? ":" + remembered : "")}});
     if (text === "diagnostic") {
       send({jsonrpc: "2.0", id: request.id, error: {code: -32041, message: "Internal error", data: {details: "/work/project: adapter unavailable", authorization: "<redacted>"}}});
     } else if (text === "fail" || text === "recall-fail") {

@@ -33,7 +33,6 @@ import { command, installControlledLauncher, readTextFile } from "@executablemd/
 import { Test } from "@executablemd/testing";
 import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, ScenarioRecord, TestAgentControllerInternals } from "./controller.ts";
-import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { normalizeModels, INSPECTION_PROPS, MODELS_PROPS } from "./configuration.ts";
@@ -312,9 +311,6 @@ export function* provisionPartition(options: {
     // owning two sessions and never exclude each other — and so a route
     // one published is not an account the next has to live with.
     coordinator: createDeterministicSessionCoordinator(),
-    // And its own build, so a client-allocated session in one boundary is
-    // bound to a build the next does not share.
-    executableObserver: createControlledExecutableObserver().observer,
     routeStore,
     ...(planConfiguration === undefined ? {} : { planConfiguration }),
   });

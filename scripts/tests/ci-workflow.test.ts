@@ -1,9 +1,11 @@
 import matter from "gray-matter";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
 import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
-import { exec } from "@effectionx/process";
+import { exec, Stdio } from "@effectionx/process";
+import type { ProcessResult } from "@effectionx/process";
 import { glob } from "@executablemd/runtime";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -203,22 +205,55 @@ const EVENTS: Record<Occasion, { EVENT: string; REPAIR: string }> = {
   repair: { EVENT: "pull_request", REPAIR: "true" },
 };
 
-function* runGreen(
+function runGreen(
   commandText: string,
   values: Record<string, string>,
   occasion: Occasion,
-): Operation<number | undefined> {
-  const result = yield* exec("/bin/bash", {
-    arguments: ["-c", commandText],
-    env: {
-      PATH: "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
-      ...EVENTS[occasion],
-      RESULTS: JSON.stringify(
-        Object.fromEntries(Object.entries(values).map(([key, result]) => [key, { result }])),
-      ),
-    },
-  }).join();
-  return result.code;
+): Operation<ProcessResult> {
+  return scoped(function* () {
+    // A rejected aggregate prints `::error::`, which a CI runner reading this
+    // test's own output would raise as an annotation. join() still captures it.
+    yield* Stdio.around({ *stdout() {}, *stderr() {} });
+    return yield* exec("/bin/bash", {
+      arguments: ["-c", commandText],
+      env: {
+        PATH: "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
+        ...EVENTS[occasion],
+        RESULTS: JSON.stringify(
+          Object.fromEntries(Object.entries(values).map(([key, result]) => [key, { result }])),
+        ),
+      },
+    }).join();
+  });
+}
+
+/**
+ * Asserts the aggregate's exit and, on a mismatch, reports its captured output
+ * escaped, so a printed `::error::` stays data instead of becoming a command.
+ */
+function expectExit(
+  result: ProcessResult,
+  exit: "zero" | "nonzero",
+  context: Record<string, string> = {},
+): void {
+  try {
+    if (exit === "zero") {
+      expect(result.code).toEqual(0);
+    } else {
+      expect(result.code).not.toEqual(0);
+    }
+  } catch (error) {
+    const received = JSON.stringify({ code: result.code ?? null, signal: result.signal ?? null });
+    throw new Error(
+      [
+        `exit: expected ${exit}, received ${received}`,
+        `context: ${JSON.stringify(context)}`,
+        `stdout: ${JSON.stringify(result.stdout)}`,
+        `stderr: ${JSON.stringify(result.stderr)}`,
+      ].join("\n"),
+      { cause: error },
+    );
+  }
 }
 
 /**
@@ -723,6 +758,22 @@ describe("the dedicated ReplBench job", () => {
       expect(terminal?.run).toContain(file);
     }
   });
+
+  it("uploads the failed journeys' journals beside their bench evidence", function* () {
+    const bench = (yield* workflow())["repl-bench"];
+    const upload = bench?.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+
+    expect(upload?.if).toBe("github.event_name == 'push' && (failure() || cancelled())");
+    expect(upload?.with?.["include-hidden-files"]).toBe("true");
+    expect(upload?.with?.path?.trim().split("\n")).toEqual([
+      "repl bench checkout/.bench/*/run.json",
+      "repl bench checkout/.bench/*/screen.txt",
+      "repl bench checkout/.bench/*/*.svg",
+      "repl bench checkout/.bench/*/terminal.ansi",
+      "repl bench checkout/.bench/*/closed.json",
+      "repl bench checkout/.xmd/test-artifacts",
+    ]);
+  });
 });
 
 describe("the CI workflow aggregate", () => {
@@ -795,12 +846,73 @@ describe("the CI workflow aggregate", () => {
     expect(decision).toBeGreaterThan(printed);
   });
 
+  it("keeps an aggregate's output captured and escapes it in a failed assertion", function* () {
+    const stdout =
+      "::error::stdout marker\nsecond line\r::error::after carriage\nordinary stdout\n";
+    const stderr = "::error::stderr marker\r\nordinary stderr\n";
+    const child = [
+      "printf '::error::stdout marker\\nsecond line\\r::error::after carriage\\nordinary stdout\\n'",
+      "printf '::error::stderr marker\\r\\nordinary stderr\\n' >&2",
+      "exit 7",
+    ].join("\n");
+    const forwarded: string[] = [];
+    const decoder = new TextDecoder();
+
+    const result = yield* scoped(function* () {
+      // At `min` the observer sits beside the host writer, so it sees only the
+      // bytes that would reach this process's own streams.
+      yield* Stdio.around(
+        {
+          *stdout([bytes]) {
+            forwarded.push(JSON.stringify(["stdout", decoder.decode(bytes)]));
+          },
+          *stderr([bytes]) {
+            forwarded.push(JSON.stringify(["stderr", decoder.decode(bytes)]));
+          },
+        },
+        { at: "min" },
+      );
+      const captured = yield* runGreen(child, {}, "push");
+      yield* Stdio.operations.stdout(new TextEncoder().encode("host marker"));
+      return captured;
+    });
+
+    // Bash reads the host's ~/.bashrc when its stdin is a socket, as Node and
+    // Bun provide, so the host's own startup errors can precede the child's.
+    const ownStderr = result.stderr.slice(result.stderr.length - stderr.length);
+    // Compared escaped, so a failure here cannot print a workflow command either.
+    expect(JSON.stringify({ code: result.code, stdout: result.stdout, stderr: ownStderr })).toEqual(
+      JSON.stringify({ code: 7, stdout, stderr }),
+    );
+    expect(forwarded).toEqual([JSON.stringify(["stdout", "host marker"])]);
+
+    let diagnostic = "";
+    try {
+      expectExit(result, "zero", { occasion: "push" });
+    } catch (error) {
+      diagnostic = error instanceof Error ? error.message : String(error);
+    }
+    const lines = diagnostic.split("\n");
+    expect(lines).toEqual([
+      'exit: expected zero, received {"code":7,"signal":null}',
+      'context: {"occasion":"push"}',
+      `stdout: ${JSON.stringify(stdout)}`,
+      `stderr: ${JSON.stringify(result.stderr)}`,
+    ]);
+    expect(diagnostic).toContain("\\r::error::after carriage\\n");
+    expect(diagnostic).toContain("::error::stderr marker\\r\\nordinary stderr\\n");
+    expect(diagnostic.includes("\r")).toEqual(false);
+    expect(lines.filter((line) => line.startsWith("::"))).toEqual([]);
+  });
+
   it("accepts the result every job is required to produce, on each occasion", function* () {
     const parsed = yield* workflow();
     const commandText = command(green(parsed));
 
     for (const occasion of ["push", "pull-request", "repair"] as const) {
-      expect(yield* runGreen(commandText, required(parsed, occasion), occasion)).toEqual(0);
+      expectExit(yield* runGreen(commandText, required(parsed, occasion), occasion), "zero", {
+        occasion,
+      });
     }
   });
 
@@ -827,13 +939,7 @@ describe("the CI workflow aggregate", () => {
       for (const job of unconditional) {
         const values = required(parsed, occasion);
         values[job] = "skipped";
-        expect({ occasion, job, code: yield* runGreen(commandText, values, occasion) }).not.toEqual(
-          {
-            occasion,
-            job,
-            code: 0,
-          },
-        );
+        expectExit(yield* runGreen(commandText, values, occasion), "nonzero", { occasion, job });
       }
     }
   });
@@ -845,7 +951,10 @@ describe("the CI workflow aggregate", () => {
 
     for (const occasion of ["push", "pull-request", "repair"] as const) {
       for (const result of rejected) {
-        expect(yield* runGreen(commandText, results(parsed, result), occasion)).not.toEqual(0);
+        expectExit(yield* runGreen(commandText, results(parsed, result), occasion), "nonzero", {
+          occasion,
+          result,
+        });
       }
     }
   });
@@ -864,12 +973,11 @@ describe("the CI workflow aggregate", () => {
         for (const result of ["failure", "cancelled", "skipped", "timed_out", "action_required"]) {
           const values = required(parsed, occasion);
           values[job] = result;
-          expect({
+          expectExit(yield* runGreen(commandText, values, occasion), "nonzero", {
             occasion,
             job,
             result,
-            code: yield* runGreen(commandText, values, occasion),
-          }).not.toEqual({ occasion, job, result, code: 0 });
+          });
         }
       }
     }
@@ -883,7 +991,7 @@ describe("the CI workflow aggregate", () => {
     for (const result of ["skipped", "failure", "cancelled"]) {
       const values = required(parsed, "pull-request");
       values["main-green"] = result;
-      expect(yield* runGreen(commandText, values, "pull-request")).not.toEqual(0);
+      expectExit(yield* runGreen(commandText, values, "pull-request"), "nonzero", { result });
     }
   });
 
@@ -896,11 +1004,7 @@ describe("the CI workflow aggregate", () => {
       for (const result of ["skipped", "failure", "cancelled"]) {
         const values = required(parsed, "repair");
         values[job] = result;
-        expect({ job, result, code: yield* runGreen(commandText, values, "repair") }).not.toEqual({
-          job,
-          result,
-          code: 0,
-        });
+        expectExit(yield* runGreen(commandText, values, "repair"), "nonzero", { job, result });
       }
     }
   });
@@ -916,13 +1020,13 @@ describe("the CI workflow aggregate", () => {
 
     // A repair run that passed: composability ran, main-green was excused.
     const repaired = required(parsed, "repair");
-    expect(yield* runGreen(commandText, repaired, "repair")).toEqual(0);
+    expectExit(yield* runGreen(commandText, repaired, "repair"), "zero");
 
     // The same jobs, re-decided without the label, where composability being
     // skipped is now permitted and the gate's own result is not.
     const ordinary = required(parsed, "pull-request");
     ordinary["main-green"] = "skipped";
-    expect(yield* runGreen(commandText, ordinary, "pull-request")).not.toEqual(0);
+    expectExit(yield* runGreen(commandText, ordinary, "pull-request"), "nonzero");
   });
 
   /** MG13: a push proves the base itself, so composability is not optional there. */
@@ -933,14 +1037,14 @@ describe("the CI workflow aggregate", () => {
     for (const result of ["skipped", "failure", "cancelled"]) {
       const values = required(parsed, "push");
       values.composability = result;
-      expect(yield* runGreen(commandText, values, "push")).not.toEqual(0);
+      expectExit(yield* runGreen(commandText, values, "push"), "nonzero", { result });
     }
 
     const excused = required(parsed, "push");
-    expect(yield* runGreen(commandText, excused, "push")).toEqual(0);
+    expectExit(yield* runGreen(commandText, excused, "push"), "zero");
     // "May be skipped" is permission, not a requirement.
     excused["main-green"] = "success";
-    expect(yield* runGreen(commandText, excused, "push")).toEqual(0);
+    expectExit(yield* runGreen(commandText, excused, "push"), "zero");
   });
 
   it("decides from the event and the labels rather than from a job name alone", function* () {

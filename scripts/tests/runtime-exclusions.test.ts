@@ -179,11 +179,14 @@ describe("the applicable corpus", () => {
       "ArtifactReturnRecovery",
       "DecisionResolution",
       "Delivery",
+      "DeliveryProgressCompletion",
+      "DeliverySummaryRepair",
       "Friction",
       "Implementation",
       "LaunchPolicy",
       "Preparation",
       "ProductionRole",
+      "ProductionRoleSonnet",
       "Submission",
       "Workflow",
     ].map((name) => `examples/adversarial-implementation/tests/${name}.test.md`);
@@ -334,7 +337,7 @@ describe("the one-file Markdown commands", () => {
   });
 
   it("gives the production-role suites their production components", function* () {
-    for (const name of ["Preparation", "ProductionRole", "Submission"]) {
+    for (const name of ["Preparation", "ProductionRole", "ProductionRoleSonnet", "Submission"]) {
       const file = `examples/adversarial-implementation/tests/${name}.test.md`;
       expect(oneFileCommand("bun", file, ROOT).arguments.slice(-4)).toEqual([
         "--include",
@@ -343,13 +346,15 @@ describe("the one-file Markdown commands", () => {
         at("examples/adversarial-implementation/components"),
       ]);
     }
-    expect(
-      oneFileCommand(
-        "node",
-        "examples/adversarial-implementation/tests/Delivery.test.md",
-        ROOT,
-      ).arguments.slice(-4),
-    ).toEqual(profile.slice(-4));
+    const general = oneFileCommand("deno", SUITE, ROOT).env;
+    for (const name of ["Delivery", "DeliveryProgressCompletion", "DeliverySummaryRepair"]) {
+      const file = `examples/adversarial-implementation/tests/${name}.test.md`;
+      for (const runtime of RUNTIMES) {
+        const launched = oneFileCommand(runtime, file, ROOT);
+        expect(launched.arguments.slice(-6)).toEqual(profile.slice(-6));
+        expect(launched.env?.XMD_EXAMPLE_TEST_COMMAND).toEqual(general?.XMD_EXAMPLE_TEST_COMMAND);
+      }
+    }
   });
 
   it("passes the retained artifact evidence location to the artifact-return suites alone", function* () {
@@ -385,10 +390,13 @@ describe("the one-file Markdown commands", () => {
       ArtifactReturnRecovery: 120_000,
       DecisionResolution: 300_000,
       Delivery: 300_000,
+      DeliveryProgressCompletion: 120_000,
+      DeliverySummaryRepair: 120_000,
       Friction: 180_000,
       LaunchPolicy: 120_000,
       Preparation: 420_000,
       ProductionRole: 120_000,
+      ProductionRoleSonnet: 120_000,
       Submission: 120_000,
       Workflow: 120_000,
     });

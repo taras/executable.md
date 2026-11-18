@@ -7,7 +7,11 @@
  * path, replay without a provider, and direct calls that retain nothing.
  */
 
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -549,50 +553,58 @@ describe("Tier PU — canonical retention and replay", () => {
     expect(record?.checkpoint).toBe(undefined);
   });
 
-  it("PU-P3: a held conversation's turn retains usage through the same runner", function* () {
-    const stream = new InMemoryStream();
-    const trace = newTrace();
-    const factory = stubFactory(trace, always({ usage: () => versioned("held") }));
-    const installation: ExecutionInstallation = {
-      *install(): Operation<void> {
-        yield* installAgentComponents({
-          rootProvider: {
-            factory,
-            options: { defaultAgent: AGENT, permissionMode: "deny-all" },
-          },
-        });
+  it("PU-P3: a held conversation's turn retains usage through the same runner", () =>
+    captureTestJournal(
+      {
+        owner: OWNER,
+        name: "PU-P3: a held conversation's turn retains usage through the same runner",
       },
-    };
-    const answered = yield* scoped(function* () {
-      const opened = yield* useAgentConversation({
-        history: stream,
-        id: "chat-usage",
-        agent: AGENT,
-        installations: [installation],
-      });
-      if (!opened.ok) {
-        throw opened.error;
-      }
-      return yield* opened.value.prompt("hello");
-    });
-    expect(answered.ok ? "ok" : answered.error.message).toBe("ok");
-    const records = promptValues(yield* stream.readAll());
-    expect(records.length).toBe(1);
-    expect(parsePromptRecord(records[0])?.usage?.provenance.xmd.version).toBe("held");
-    expect(trace.subscriptions).toBe(1);
-  });
+      "agent/conversation.md",
+      function* (stream) {
+        const trace = newTrace();
+        const factory = stubFactory(trace, always({ usage: () => versioned("held") }));
+        const installation: ExecutionInstallation = {
+          *install(): Operation<void> {
+            yield* installAgentComponents({
+              rootProvider: {
+                factory,
+                options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+              },
+            });
+          },
+        };
+        const answered = yield* scoped(function* () {
+          const opened = yield* useAgentConversation({
+            history: stream,
+            id: "chat-usage",
+            agent: AGENT,
+            installations: [installation],
+          });
+          if (!opened.ok) {
+            throw opened.error;
+          }
+          return yield* opened.value.prompt("hello");
+        });
+        expect(answered.ok ? "ok" : answered.error.message).toBe("ok");
+        const records = promptValues(yield* stream.readAll());
+        expect(records.length).toBe(1);
+        expect(parsePromptRecord(records[0])?.usage?.provenance.xmd.version).toBe("held");
+        expect(trace.subscriptions).toBe(1);
+      },
+    ));
 
   it("PU-P4: an unsafe model name is withheld by the producing execution; the rest is kept", function* () {
     const marker = ["tok", "en-", "USAGE01"].join("");
     const unsafe = sampleUsage("unsafe", marker);
-    const { result, events } = yield* scoped(function* () {
-      return yield* runDocument(
-        "<Prompt>one</Prompt>\n",
-        new InMemoryStream(),
-        stubFactory(newTrace(), always({ usage: () => unsafe })),
-        { scanner: markerScanner(marker) },
-      );
-    });
+    const directory = yield* useTempDirectory("xmd-pu-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
+    const { result, events } = yield* runDocument(
+      "<Prompt>one</Prompt>\n",
+      stream,
+      stubFactory(newTrace(), always({ usage: () => unsafe })),
+      { scanner: markerScanner(marker) },
+      directory,
+    );
     expect(result.ok).toBe(true);
     const retained = parsePromptRecord(promptValues(events)[0])?.usage;
     expect(JSON.stringify(retained).includes(marker)).toBe(false);
@@ -623,6 +635,7 @@ function markerScanner(marker: string): () => SecretScanner {
 }
 
 describe("Tier PU — producing-execution disclosure", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("PU-P5: a protected input stays withheld under scanner opt-out, whatever context is rebound", function* () {
     const owner = yield* createInputOwner();
     const values = yield* attachInputOwner(owner);
@@ -691,12 +704,14 @@ describe("Tier PU — producing-execution disclosure", () => {
           : [];
       },
     });
-    const stream = new InMemoryStream();
+    const directory = yield* useTempDirectory("xmd-pu-test-");
+    const stream = yield* useJournalStream(path.join(directory, "doc.md"));
     const { result, events } = yield* runDocument(
       "<Prompt>one</Prompt>\n",
       stream,
       stubFactory(newTrace(), always({ usage: () => sampleUsage("gated") })),
       { scanner },
+      directory,
     );
     expect(result.ok).toBe(false);
     expect(promptValues(events)).toEqual([]);

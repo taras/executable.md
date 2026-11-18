@@ -18,6 +18,15 @@ const identity = z
     initialized: z.boolean(),
   })
   .strict();
+const implementorIdentity = identity.extend({ model: z.string().min(1).optional() }).strict();
+const modelSelection = z
+  .object({
+    previousContinuation: descriptor,
+    previousModel: z.string().min(1).nullable(),
+    model: z.string().min(1),
+    evidence: snapshot,
+  })
+  .strict();
 export const envelope = z
   .object({
     schema: z.literal("ticket-return.v1"),
@@ -64,7 +73,9 @@ export const state = z
         directory: z.string().startsWith("/"),
         identityDirectory: z.string().startsWith("/").optional(),
         assignment: jsonObject,
-        roles: z.object({ architect: identity, planner: identity, implementor: identity }).strict(),
+        roles: z
+          .object({ architect: identity, planner: identity, implementor: implementorIdentity })
+          .strict(),
         acceptedInputs: z.array(snapshot),
         roleInputs: z.partialRecord(role, z.array(snapshot)).optional(),
         deliveredInputs: z.record(z.string(), z.array(z.string())).optional(),
@@ -73,6 +84,7 @@ export const state = z
         maxResponseCorrections: z.number().int(),
         api: jsonObject.optional(),
         delivery: jsonObject.optional(),
+        implementationModelSelection: modelSelection.optional(),
       })
       .strict(),
     checkpoint: z
@@ -182,7 +194,10 @@ export function confirmLinks(saved: z.infer<typeof state>, selected: z.infer<typ
         call.delivery !== call.attempt + "/delivery.json") ||
       (call.profile !== undefined &&
         call.profile !== null &&
-        call.profile.provider !== call.provider) ||
+        (call.profile.provider !== call.provider ||
+          (call.role === "implementor" &&
+            saved.manifest.roles.implementor.model !== undefined &&
+            call.profile.model !== saved.manifest.roles.implementor.model))) ||
       (call.result !== undefined &&
         call.result !== null &&
         call.result !== call.attempt + "/result.json") ||
@@ -192,6 +207,18 @@ export function confirmLinks(saved: z.infer<typeof state>, selected: z.infer<typ
     ) {
       throw new Error("Ticket call identity changed.");
     }
+  }
+  const selection = saved.manifest.implementationModelSelection;
+  if (
+    selection !== undefined &&
+    (selection.model !== saved.manifest.roles.implementor.model ||
+      !selection.previousContinuation.path.startsWith(
+        saved.manifest.directory + "/continuations/",
+      ) ||
+      JSON.stringify(saved.documents[selection.evidence.path]) !==
+        JSON.stringify(selection.evidence))
+  ) {
+    throw new Error("Ticket Implementor model selection changed.");
   }
   const receipt = saved.checkpoint.hold?.receipt;
   if (

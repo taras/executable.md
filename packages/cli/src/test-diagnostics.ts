@@ -32,7 +32,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { Test, testing } from "@executablemd/testing";
 import type { FailureJournalHost, TestResult } from "@executablemd/testing";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { deliverWhole } from "./stdout-delivery.ts";
 import type { DeliverySink } from "./stdout-delivery.ts";
 
@@ -79,6 +79,20 @@ export interface ExecutionDiagnostics {
   observe(): Operation<void>;
   /** Saves this execution's journal when `failed` says its outcome failed. */
   journal<T>(failed: (value: T) => boolean): FailureJournalHost<T>;
+  /**
+   * Saves journal files a host wrote for this execution, as the UTF-8 text
+   * they held, beneath one directory named like this execution's journal.
+   *
+   * `path` is each file's place beneath the storage root, so two files of one
+   * root keep the names that tell them apart.
+   */
+  saveFiles(files: readonly SavedJournalFile[]): Operation<void>;
+}
+
+/** One journal file as its host wrote it. */
+export interface SavedJournalFile {
+  readonly path: string;
+  readonly text: string;
 }
 
 /**
@@ -167,6 +181,22 @@ function testDiagnosticsAt(
         const displayedSource = shown(source);
         const named = `${kind} ${ordinal} ${displayedSource}${profile === undefined ? "" : ` (${profile})`}`;
         const context = kind === "root" ? "" : `${named}: `;
+        function* identify(files?: readonly string[]): Operation<void> {
+          yield* ensureDir(directory);
+          if (attribution !== undefined) {
+            yield* writeTextFile(
+              `${stem}.case.json`,
+              JSON.stringify({
+                ...attribution,
+                kind,
+                ordinal,
+                source: displayedSource,
+                profile,
+                files,
+              }) + "\n",
+            );
+          }
+        }
         return {
           observe: () =>
             observe(
@@ -186,19 +216,7 @@ function testDiagnosticsAt(
           journal: <T>(failed: (value: T) => boolean): FailureJournalHost<T> => ({
             failed,
             *save(events: readonly DurableEvent[]) {
-              yield* ensureDir(directory);
-              if (attribution !== undefined) {
-                yield* writeTextFile(
-                  `${stem}.case.json`,
-                  JSON.stringify({
-                    ...attribution,
-                    kind,
-                    ordinal,
-                    source: displayedSource,
-                    profile,
-                  }) + "\n",
-                );
-              }
+              yield* identify();
               yield* writeTextFile(file, events.map(serializeDurableEvent).join(""));
               emit(`journal saved: ${file} (${named})`);
             },
@@ -207,6 +225,15 @@ function testDiagnosticsAt(
               emit(`journal not saved for ${named}: ${error.message}`);
             },
           }),
+          *saveFiles(files: readonly SavedJournalFile[]) {
+            yield* identify(files.map(({ path }) => path));
+            for (const { path, text } of files) {
+              const target = join(stem, path);
+              yield* ensureDir(dirname(target));
+              yield* writeTextFile(target, text);
+            }
+            emit(`journal saved: ${stem} (${named})`);
+          },
         };
       },
       delivery: () => delivery,

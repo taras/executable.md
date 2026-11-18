@@ -3,6 +3,7 @@ props:
   type: object
   properties:
     task: {type: string, minLength: 1}
+    maxSteps: {type: integer, minimum: 1}
   required: [task]
   additionalProperties: false
 returns: {type: object}
@@ -28,6 +29,7 @@ input or existing record you need to reconcile before another launch.
 <Ticket.Capture as="policyCheck"><ReviewPolicy assessment={task.assessment} as="policy" /><Json value={policy} /></Ticket.Capture>
 <If condition={policyCheck.status !== "completed"}><Let as="work" value={{status:"hold",reason:"Correct the assessment consistency before launch: " + policyCheck.failure,history:[]}} /><Break /></If>
 <If condition={task.scope.migration !== null && (!task.scope.sharedApi.needed || task.scope.migration.representativeConsumers.some(path => task.scope.migration.remainingConsumers.includes(path)))}><Let as="work" value={{status:"hold",reason:"scope.migration requires sharedApi.needed=true and disjoint representativeConsumers and remainingConsumers. Correct the contradictory migration facts; they cannot fall through to ordinary planning.",history:[]}} /><Break /></If>
+<If condition={props.maxSteps !== undefined && task.scope.migration !== null}><Let as="work" value={{status:"hold",reason:"An explicit maxSteps boundary is supported for ordinary tickets only. Remove maxSteps for the foundation/migration route.",history:[]}} /><Break /></If>
 <Let as="repositoryPath" value={"'" + task.repository.replaceAll("'","'\"'\"'") + "'"} />
 ```bash exec as="source"
 git -C {repositoryPath} rev-parse --show-toplevel
@@ -88,7 +90,7 @@ test -f {referencePath} -a -r {referencePath}
 <Let as="plannerGuide" value={documents[guidePaths[0]]} />
 <Let as="implementorGuide" value={documents[guidePaths[1]]} />
 <If condition={task.scope.migration !== null}>
-<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,providers:task.providers,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={retained} assessment={task.assessment} as="work" />
+<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,providers:task.providers,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,...(task.implementationModel === undefined ? {} : {implementationModel:task.implementationModel})}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={retained} assessment={task.assessment} as="work" />
 <Else>
 ```bash exec as="reserved"
 mkdir -- {directoryPath}
@@ -99,9 +101,9 @@ mkdir -- {directoryPath}
 <If condition={task.scope.sharedApi.needed || !task.scope.implementation.ready}>
 <Let as="assignment" value={{...assignment,phase:"discovery",request:"Prepare the missing ordinary implementation plan and focused evidence for this accepted work: " + task.request + "\nProduce plan/evidence only. Do not edit or commit source or build an API foundation. Necessary API work and consumers belong to one Implementor. Preserve existing product and architecture approval gates; return needs_decision for any unanswered material choice.",recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}} />
 </If>
-<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,...(task.implementationModel === undefined ? {} : {model:task.implementationModel}),initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
-<Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
+<Ticket.Run manifest={task.directory + "/implementation.json"} maxSteps={props.maxSteps} as="work" />
 <If condition={work.status === "hold" && work.publication === "confirmed"}>
 <Ticket.Load record={work} as="launched" />
 <If condition={launched.calls.length === 0 && launched.checkpoint.hold?.kind === "input_preparation"}><Let as="work" value={{status:"hold",reason:launched.checkpoint.hold.reason,preparation:launched.checkpoint.hold.receipt,history:[],record:work}} /></If>

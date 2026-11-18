@@ -33,7 +33,8 @@ import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import type { Operation } from "effection";
 import { expect } from "@executablemd/test-support/expect";
 
@@ -70,6 +71,8 @@ import {
   stopSidekick,
   typed,
 } from "./support/screen-journeys.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-presentation.test.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
@@ -143,6 +146,7 @@ function* focusMessage(page: ReplPage): Operation<void> {
 }
 
 describe("987 — mounted original recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
     it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
       const page = yield* useReplPage({ size: WIDE });
@@ -299,6 +303,7 @@ describe("987 — mounted original recovery", () => {
 });
 
 describe("Sidekick presentation: visible work owns its controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("sends one message through the Sidekick pane and reads the reply", function* () {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
@@ -383,6 +388,7 @@ function* exchange(page: ReplPage, text: string, answer: string): Operation<void
 }
 
 describe("Tier CF — complete messages and following the newest reply", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CF1: a message with its own lines keeps every one of them when the next arrives", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const wide = "a-very-long-line-that-cannot-fit-this-pane-and-must-be-cut-across-rows";
@@ -531,6 +537,7 @@ function sendComposed(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M1: a fresh command shows its Sidekick, asks the agent nothing, and focuses Message", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const first = page.screen();
@@ -596,63 +603,72 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
       { at: "max" },
     );
     const finishing = gate.holdNext((path, record) => path === pair.sidekick && record === "\n");
-    const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
-    const running = gate.holdNext((path) => path === legacy && gate.reaching(legacy) >= 1);
-    yield* pasteDraft(page, TWO_STEP_ENTRY);
-    yield* page.key("Tab");
-    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
-    yield* page.key("Enter");
-    yield* running.started();
-    yield* page.until("the admitted source leaving the draft", (one) => !draftOpen(one));
-    yield* compose(page, "explain");
-    yield* sendComposed(page);
-    yield* sleep(100);
-    expect(host.fake.ensured).toEqual([]);
-    expect(host.fake.prompts).toEqual([]);
-    expect(running.released).toBe(false);
-    expect(yield* publishedPairs(host.root)).toEqual([]);
-    yield* compose(page, "!");
-    expect(composerHolds(page.screen(), "!")).toBe(true);
-    yield* draftText(page, "next");
-    running.release();
-    yield* page.until("the reply arriving", (one) => one.shows("Noted."));
-    yield* finishing.started();
-    expect(sidekickIdle(page.screen())).toBe(false);
-    let refusal: unknown;
     try {
-      yield* readSidekickRecords(pair.sidekick);
-    } catch (caught) {
-      refusal = caught;
+      const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
+      const running = gate.holdNext((path) => path === legacy && gate.reaching(legacy) >= 1);
+      try {
+        yield* pasteDraft(page, TWO_STEP_ENTRY);
+        yield* page.key("Tab");
+        yield* page.until("Round Send focused", (one) => one.shows("> Send"));
+        yield* page.key("Enter");
+        yield* running.started();
+        yield* page.until("the admitted source leaving the draft", (one) => !draftOpen(one));
+        yield* compose(page, "explain");
+        yield* sendComposed(page);
+        yield* sleep(100);
+        expect(host.fake.ensured).toEqual([]);
+        expect(host.fake.prompts).toEqual([]);
+        expect(running.released).toBe(false);
+        expect(yield* publishedPairs(host.root)).toEqual([]);
+        yield* compose(page, "!");
+        expect(composerHolds(page.screen(), "!")).toBe(true);
+        yield* draftText(page, "next");
+        running.release();
+        yield* page.until("the reply arriving", (one) => one.shows("Noted."));
+        yield* finishing.started();
+        expect(sidekickIdle(page.screen())).toBe(false);
+        let refusal: unknown;
+        try {
+          yield* readSidekickRecords(pair.sidekick);
+        } catch (caught) {
+          refusal = caught;
+        }
+        expect(refusal).toBeInstanceOf(SidekickHistoryError);
+        expect(refusal).toMatchObject({
+          message:
+            "this execution's chat history ends in a record that was never finished writing.",
+        });
+        finishing.release();
+        yield* page.until("the Sidekick finishing its saved reply", sidekickIdle);
+        yield* entrySettles(page, 1, "ok");
+        expect(yield* publishedPairs(host.root)).toEqual([execution]);
+        const retained = yield* readTextFile(legacy);
+        const records = retained.split("\n").filter((line) => line.length > 0);
+        expect(records.length).toBeGreaterThan(1);
+        expect((yield* readTextFile(pair.entries)).startsWith(retained)).toBe(true);
+        expect((yield* host.repository.open(execution)).chat.form).toBe("paired");
+        expect((yield* readSidekickRecords(pair.sidekick))[0]).toMatchObject({
+          kind: "owner",
+          execution,
+          origin: { bytes: new TextEncoder().encode(retained).length, records: records.length },
+        });
+        expect(host.fake.prompts).toHaveLength(1);
+        expect(host.fake.ensured).toHaveLength(1);
+        expect(host.fake.prompts[0]).toContain("explain");
+        expect(host.fake.prompts[0]).not.toContain("explain!");
+        expect(personMessages(yield* readSidekickRecords(pair.sidekick))).toEqual(["explain"]);
+        expect(page.screen().shows("[U] explain")).toBe(true);
+        const reachedLegacy = gate.reaching(legacy);
+        yield* awaited("the next record reaching the pair", () => gate.reaching(pair.entries) > 0);
+        expect(gate.reaching(legacy)).toBe(reachedLegacy);
+        expect(yield* readTextFile(legacy)).toBe(retained);
+        expect(yield* finishDraft(page)).toBe("next");
+      } finally {
+        running.release();
+      }
+    } finally {
+      finishing.release();
     }
-    expect(refusal).toBeInstanceOf(SidekickHistoryError);
-    expect(refusal).toMatchObject({
-      message: "this execution's chat history ends in a record that was never finished writing.",
-    });
-    finishing.release();
-    yield* page.until("the Sidekick finishing its saved reply", sidekickIdle);
-    yield* entrySettles(page, 1, "ok");
-    expect(yield* publishedPairs(host.root)).toEqual([execution]);
-    const retained = yield* readTextFile(legacy);
-    const records = retained.split("\n").filter((line) => line.length > 0);
-    expect(records.length).toBeGreaterThan(1);
-    expect((yield* readTextFile(pair.entries)).startsWith(retained)).toBe(true);
-    expect((yield* host.repository.open(execution)).chat.form).toBe("paired");
-    expect((yield* readSidekickRecords(pair.sidekick))[0]).toMatchObject({
-      kind: "owner",
-      execution,
-      origin: { bytes: new TextEncoder().encode(retained).length, records: records.length },
-    });
-    expect(host.fake.prompts).toHaveLength(1);
-    expect(host.fake.ensured).toHaveLength(1);
-    expect(host.fake.prompts[0]).toContain("explain");
-    expect(host.fake.prompts[0]).not.toContain("explain!");
-    expect(personMessages(yield* readSidekickRecords(pair.sidekick))).toEqual(["explain"]);
-    expect(page.screen().shows("[U] explain")).toBe(true);
-    const reachedLegacy = gate.reaching(legacy);
-    yield* awaited("the next record reaching the pair", () => gate.reaching(pair.entries) > 0);
-    expect(gate.reaching(legacy)).toBe(reachedLegacy);
-    expect(yield* readTextFile(legacy)).toBe(retained);
-    expect(yield* finishDraft(page)).toBe("next");
   });
 
   it("M4: acceptance clears Message while delayed saved acknowledgement preserves newer edits", function* () {
@@ -664,20 +680,24 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     const saving = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"message"'),
     );
-    yield* compose(page, "ask");
-    yield* sendComposed(page);
-    yield* saving.started();
-    yield* compose(page, "!");
-    yield* draftText(page, "X");
-    saving.release();
-    yield* page.until("the reply arriving", (one) => one.shows("Understood."));
-    expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
-    expect(page.repl.fake.prompts[0]).toContain("ask");
-    expect(page.repl.fake.prompts[0]).not.toContain("ask!");
-    expect(composerHolds(page.screen(), "!")).toBe(true);
-    expect(draftHolds(page.screen(), "mineX")).toBe(true);
-    expect(page.repl.fake.prompts[1] ?? "").toContain("taken the shared draft over");
-    expect(yield* finishDraft(page)).toBe("mineX");
+    try {
+      yield* compose(page, "ask");
+      yield* sendComposed(page);
+      yield* saving.started();
+      yield* compose(page, "!");
+      yield* draftText(page, "X");
+      saving.release();
+      yield* page.until("the reply arriving", (one) => one.shows("Understood."));
+      expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
+      expect(page.repl.fake.prompts[0]).toContain("ask");
+      expect(page.repl.fake.prompts[0]).not.toContain("ask!");
+      expect(composerHolds(page.screen(), "!")).toBe(true);
+      expect(draftHolds(page.screen(), "mineX")).toBe(true);
+      expect(page.repl.fake.prompts[1] ?? "").toContain("taken the shared draft over");
+      expect(yield* finishDraft(page)).toBe("mineX");
+    } finally {
+      saving.release();
+    }
   });
 
   it("M4: control — with nothing typed after it, the same message clears the box", function* () {
@@ -689,15 +709,19 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     const saving = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"message"'),
     );
-    yield* compose(page, "ask");
-    yield* sendComposed(page);
-    yield* saving.started();
-    saving.release();
-    yield* page.until("the reply arriving", (one) => one.shows("Understood."));
-    expect(composerHolds(page.screen(), "ask")).toBe(false);
-    expect(page.repl.fake.prompts[1] ?? "").toContain("Entry input updated.");
-    expect(page.repl.fake.prompts[1] ?? "").not.toContain("taken the shared draft over");
-    expect(page.screen().found("Replaced by the reply.", DRAFT_VALUE)).toBe(1);
+    try {
+      yield* compose(page, "ask");
+      yield* sendComposed(page);
+      yield* saving.started();
+      saving.release();
+      yield* page.until("the reply arriving", (one) => one.shows("Understood."));
+      expect(composerHolds(page.screen(), "ask")).toBe(false);
+      expect(page.repl.fake.prompts[1] ?? "").toContain("Entry input updated.");
+      expect(page.repl.fake.prompts[1] ?? "").not.toContain("taken the shared draft over");
+      expect(page.screen().found("Replaced by the reply.", DRAFT_VALUE)).toBe(1);
+    } finally {
+      saving.release();
+    }
   });
 
   it("M5: while generation is held, Send remains beside Stop without starting unrequested work", function* () {
@@ -771,6 +795,7 @@ function entryTrail(reading: ScreenReading): string {
 }
 
 describe("Sidekick texts and reading across every profile", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M7: all three profiles keep both texts, the footer and one body", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "note");
@@ -938,6 +963,7 @@ function* submittedUnderEdit(
 }
 
 describe("Sidekick submission held to the current Draft", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("M-P2: a Draft edit during preflight admits no stale entry, and the edit survives", function* () {
     const result = yield* submittedUnderEdit(true);
     expect(result.entries).toEqual([]);
@@ -1021,6 +1047,7 @@ function* filledQuestion(): Operation<ReplPage> {
 }
 
 describe("Sidekick question announcement and modal ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("MQ1: the notice arrives with nothing pressed, and only opening shows the form", function* () {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
@@ -1029,44 +1056,48 @@ describe("Sidekick question announcement and modal ownership", () => {
     const filing = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"component":"Elicit"'),
     );
-    yield* pasteDraft(page, TWO_STEP_ENTRY);
-    yield* page.key("Tab");
-    yield* page.until("Round Send focused", (one) => one.shows("> Send"));
-    yield* page.key("Enter");
-    yield* entrySettles(page, 1, "ok");
-    yield* chooseEntry(page, "entry-1");
-    yield* sendMessage(page, "review it");
-    yield* filing.started();
-    yield* selectPane(page, "bindings");
-    yield* draftText(page, "mine");
-    const fed = page.repl.terminal.fed;
-    filing.release();
-    yield* page.until("the question announcing without input", (one) =>
-      one.shows("SIDEKICK (question)"),
-    );
-    expect(page.repl.terminal.fed).toBe(fed);
-    expect(page.screen().shows(COMPOSER)).toBe(false);
-    expect(page.screen().shows("[submit]")).toBe(false);
-    yield* page.type("-still-draft");
-    yield* page.until(
-      "the original input still receiving text",
-      (one) => one.found("mine-still-draft", DRAFT_VALUE) === 1,
-    );
-    yield* page.key("Ctrl+G");
-    yield* page.type("3");
-    yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
-    expect(entryTrail(page.screen())).toContain("Entry 1");
-    yield* intoDraft(page);
-    expect(draftShows(page.screen(), "mine-still-draft")).toBe(true);
-    yield* selectPane(page, "sidekick");
-    yield* page.until("the notice in its pane", (one) => one.shows("[answer sidekick]"));
-    expect(page.screen().shows("[submit]")).toBe(false);
-    expect(composerHolds(page.screen(), "review it")).toBe(false);
-    yield* openedQuestion(page);
-    expect(page.screen().shows("Approve the plan?")).toBe(true);
-    expect(page.screen().shows("approve")).toBe(true);
-    expect(page.screen().shows("reject")).toBe(true);
-    expect(yield* finishDraft(page)).toBe("mine-still-draft");
+    try {
+      yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Tab");
+      yield* page.until("Round Send focused", (one) => one.shows("> Send"));
+      yield* page.key("Enter");
+      yield* entrySettles(page, 1, "ok");
+      yield* chooseEntry(page, "entry-1");
+      yield* sendMessage(page, "review it");
+      yield* filing.started();
+      yield* selectPane(page, "bindings");
+      yield* draftText(page, "mine");
+      const fed = page.repl.terminal.fed;
+      filing.release();
+      yield* page.until("the question announcing without input", (one) =>
+        one.shows("SIDEKICK (question)"),
+      );
+      expect(page.repl.terminal.fed).toBe(fed);
+      expect(page.screen().shows(COMPOSER)).toBe(false);
+      expect(page.screen().shows("[submit]")).toBe(false);
+      yield* page.type("-still-draft");
+      yield* page.until(
+        "the original input still receiving text",
+        (one) => one.found("mine-still-draft", DRAFT_VALUE) === 1,
+      );
+      yield* page.key("Ctrl+G");
+      yield* page.type("3");
+      yield* page.until("the selected entry", (one) => entryTrail(one).includes("Entry 1"));
+      expect(entryTrail(page.screen())).toContain("Entry 1");
+      yield* intoDraft(page);
+      expect(draftShows(page.screen(), "mine-still-draft")).toBe(true);
+      yield* selectPane(page, "sidekick");
+      yield* page.until("the notice in its pane", (one) => one.shows("[answer sidekick]"));
+      expect(page.screen().shows("[submit]")).toBe(false);
+      expect(composerHolds(page.screen(), "review it")).toBe(false);
+      yield* openedQuestion(page);
+      expect(page.screen().shows("Approve the plan?")).toBe(true);
+      expect(page.screen().shows("approve")).toBe(true);
+      expect(page.screen().shows("reject")).toBe(true);
+      expect(yield* finishDraft(page)).toBe("mine-still-draft");
+    } finally {
+      filing.release();
+    }
   });
 
   it("MQ1: control — an ordinary entry's question announces itself the same way", function* () {
@@ -1110,6 +1141,7 @@ function* configured(page: ReplPage): Operation<void> {
 }
 
 describe("PV3/PV4: question and Configure editing", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps each value's middle caret across close and a held History drawer", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -1170,6 +1202,7 @@ describe("PV3/PV4: question and Configure editing", () => {
 });
 
 describe("Configure keyboard, retained values and window ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CFG6: local arrows reach Configure choices, and Close or Escape return to its opener", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -1403,6 +1436,7 @@ function* backToCurrent(page: ReplPage, reply = "Newer answer."): Operation<void
 }
 
 describe("Transcript ownership and immutable older chat readings", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS1: both sections hold their own work, settled in the order each finishes", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ held: true, reply: "ENTRY-DONE" });
@@ -1674,6 +1708,7 @@ function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
 }
 
 describe("Sidekick resize ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("Q-P1: a form hidden by a resize does not consume Draft typing", function* () {
     const page = yield* questionThroughKeyboard(false);
     const narrow = yield* page.resize(NARROW);
@@ -1763,6 +1798,7 @@ function atSize(page: ReplPage, size: { columns: number; rows: number }): Operat
 }
 
 describe("Sidekick drawers across every supported size", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("MQ4: the form stays inside its own pane at every size, and survives a refusal", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "mine");
@@ -1907,6 +1943,7 @@ function* refusedLocation(host: MountedHost, location: string): Operation<string
 }
 
 describe("Older chats retain their identity across failure and cold opening", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS2: a current failure read beside an older chat leaves its items alone", function* () {
     const page = yield* useReplPage();
     yield* twoChats(page, true);
@@ -2240,6 +2277,7 @@ function* appendBoundary(stopped: boolean): Operation<void> {
 }
 
 describe("Sidekick original provider membership and cancelled append", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS3: Stop before the canonical append leaves the key local and nothing saved", function* () {
     yield* appendBoundary(true);
   });
@@ -2290,21 +2328,25 @@ describe("Sidekick original provider membership and cancelled append", () => {
     const hold = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes("agent_prompt"),
     );
-    yield* compose(page, "say it");
-    yield* sendComposed(page);
-    yield* hold.started();
-    const choices = yield* conversationChoices(page);
-    expect(choices).toHaveLength(1);
-    yield* filterChoice(page, choices[0]);
-    const standing = selectedFilter(page.screen());
-    expect(standing).toBeDefined();
-    expect(transcriptHas(page.screen(), "say it")).toBe(true);
-    expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["say it"]);
-    hold.release();
-    yield* stopSidekick(page);
-    yield* page.until("idle after the saved append", sidekickIdle);
-    expect(selectedFilter(page.screen())).toBe(standing);
-    expect(page.screen().shows("xmd:v1:")).toBe(true);
+    try {
+      yield* compose(page, "say it");
+      yield* sendComposed(page);
+      yield* hold.started();
+      const choices = yield* conversationChoices(page);
+      expect(choices).toHaveLength(1);
+      yield* filterChoice(page, choices[0]);
+      const standing = selectedFilter(page.screen());
+      expect(standing).toBeDefined();
+      expect(transcriptHas(page.screen(), "say it")).toBe(true);
+      expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["say it"]);
+      hold.release();
+      yield* stopSidekick(page);
+      yield* page.until("idle after the saved append", sidekickIdle);
+      expect(selectedFilter(page.screen())).toBe(standing);
+      expect(page.screen().shows("xmd:v1:")).toBe(true);
+    } finally {
+      hold.release();
+    }
   });
 
   it("SS3: a Sidekick key is selectable at an entry checkpoint that precedes it", function* () {
@@ -2400,6 +2442,7 @@ function* populateChat(page: ReplPage, count: number, prefix = "SAID"): Operatio
 }
 
 describe("Sidekick original multiline composer ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("MC5: the value wraps into rows of its own, and the chat gives them room", function* () {
     const page = yield* useReplPage();
     yield* populateChat(page, 10);
@@ -2443,24 +2486,28 @@ describe("Sidekick original multiline composer ownership", () => {
     const hold = gate.holdNext(
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"message"'),
     );
-    yield* sendComposed(page);
-    yield* hold.started();
-    yield* composerPaste(page, "NEWER-1\nNEWER-2\nNEWER-3");
-    const newer = composerRows(
-      page.screen(),
-      page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy",
-    );
-    expect(newer.length).toBeGreaterThan(1);
-    hold.release();
-    yield* page.until("the acknowledged multiline message", (one) => chatHas(one, "Understood."));
-    expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual([text]);
-    expect(page.repl.fake.prompts).toHaveLength(1);
-    expect(page.repl.fake.prompts[0]).toContain("LINE-1");
-    expect(page.repl.fake.prompts[0]).toContain("LINE-9");
-    expect(page.repl.fake.prompts[0]).not.toContain("NEWER-1");
-    expect(
-      composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy"),
-    ).toEqual(newer);
+    try {
+      yield* sendComposed(page);
+      yield* hold.started();
+      yield* composerPaste(page, "NEWER-1\nNEWER-2\nNEWER-3");
+      const newer = composerRows(
+        page.screen(),
+        page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy",
+      );
+      expect(newer.length).toBeGreaterThan(1);
+      hold.release();
+      yield* page.until("the acknowledged multiline message", (one) => chatHas(one, "Understood."));
+      expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual([text]);
+      expect(page.repl.fake.prompts).toHaveLength(1);
+      expect(page.repl.fake.prompts[0]).toContain("LINE-1");
+      expect(page.repl.fake.prompts[0]).toContain("LINE-9");
+      expect(page.repl.fake.prompts[0]).not.toContain("NEWER-1");
+      expect(
+        composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy"),
+      ).toEqual(newer);
+    } finally {
+      hold.release();
+    }
   });
 
   it("MC6: control — an acknowledged Send leaves three blank value rows", function* () {
@@ -2629,6 +2676,7 @@ function* historicalSubmit(historical: boolean, failed: boolean): Operation<void
 }
 
 describe("Sidekick original acknowledged history submission identity", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const arm of [
     { name: "opened at the first entry", historical: true },
     { name: "control: opened at the head", historical: false },
@@ -2648,35 +2696,41 @@ describe("Sidekick original acknowledged history submission identity", () => {
     const hold = gate.holdNext(
       (path, record) => path.endsWith(ENTRIES_FILE) && record.includes('"type":"close"'),
     );
-    page.repl.fake.script({ reply: submitting(HI_FAILING) });
-    page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
-    yield* compose(page, "run one that fails");
-    yield* sendComposed(page);
-    yield* hold.started();
-    yield* freezeFirst(page);
-    yield* closeDrawer(page);
-    hold.release();
-    yield* page.until("the failure's followup", (one) => sidekickShows(one, "Noted."));
-    expect(page.screen().shows("[live]")).toBe(true);
-    const read = yield* settledReading(page.repl);
-    expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
-    expect(read.model.entries[2]?.terminal?.status).toBe("err");
-    expect(submitIntent(read.chat).entry).toBe("entry-3");
-    const feedback = read.chat
-      .flatMap((one) => (one.kind === "feedback" ? [one.text] : []))
-      .join("\n");
-    expect(feedback).toContain("Entry entry-3 failed.");
-    expect(feedback).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
-    expect(feedback).not.toContain("entry={1}");
-    expect(feedback).not.toContain("entry={2}");
-    expect(
-      renderReceipt({
-        entry: "entry-3",
-        status: "failed",
-        failure: "the third entry failed",
-        read: { entry: "entry-3" },
-      }),
-    ).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
+    try {
+      page.repl.fake.script({ reply: submitting(HI_FAILING) });
+      page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
+      yield* compose(page, "run one that fails");
+      yield* sendComposed(page);
+      yield* hold.started();
+      yield* freezeFirst(page);
+      yield* closeDrawer(page);
+      hold.release();
+      yield* page.until("the failure's followup", (one) => sidekickShows(one, "Noted."));
+      expect(page.screen().shows("[live]")).toBe(true);
+      const read = yield* settledReading(page.repl);
+      expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
+      expect(read.model.entries[2]?.terminal?.status).toBe("err");
+      expect(submitIntent(read.chat).entry).toBe("entry-3");
+      const feedback = read.chat
+        .flatMap((one) => (one.kind === "feedback" ? [one.text] : []))
+        .join("\n");
+      expect(feedback).toContain("Entry entry-3 failed.");
+      expect(feedback).toContain(
+        "Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.",
+      );
+      expect(feedback).not.toContain("entry={1}");
+      expect(feedback).not.toContain("entry={2}");
+      expect(
+        renderReceipt({
+          entry: "entry-3",
+          status: "failed",
+          failure: "the third entry failed",
+          read: { entry: "entry-3" },
+        }),
+      ).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
+    } finally {
+      hold.release();
+    }
   });
   it("HI3: frozen, Run establishes nothing; live, it admits the next entry", function* () {
     const dataRoot = yield* useTemporary("xmd-hi-person-");
@@ -2787,6 +2841,7 @@ function* twoOverflowingChats(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick original independent readings and streaming rows", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("CF-P1: scrolling an older chat leaves the current chat's own reading alone", function* () {
     const page = yield* useReplPage();
     yield* twoOverflowingChats(page);
@@ -2903,6 +2958,7 @@ describe("Sidekick original independent readings and streaming rows", () => {
 });
 
 describe("Sidekick original interrupted identities and native input routes", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS6: an interrupted first message leaves every later row its own identity", function* () {
     const host = yield* useMountedHost();
     const first = yield* useReplPage({ host });
@@ -2949,14 +3005,16 @@ describe("Sidekick original interrupted identities and native input routes", () 
 
   it("SS6: a real automatic turn nobody answered opens as its own inert anchor", function* () {
     const dataRoot = yield* useTemporary("xmd-ss6-inert-");
-    const gate = appendGate();
+    // Held as an operation, so closing the host takes the response back rather
+    // than leaving a write for the host's teardown to wait on.
+    const operations = operationGate();
     const execution = yield* scoped(function* () {
-      const host = yield* useMountedHost({ dataRoot, gate });
+      const host = yield* useMountedHost({ dataRoot, operations });
       const page = yield* useReplPage({ host });
       page.repl.fake.script({ reply: "<Output>First answer.</Output>\n<REPL.Bindings />\n" });
       page.repl.fake.script({ reply: "<REPL.Bindings />\n" });
       let seen = 0;
-      const held = gate.holdNext(
+      const held = operations.holdNext(
         (path, record) =>
           path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"') && ++seen === 2,
       );
@@ -3116,6 +3174,7 @@ function* readSilentAndSpoken(page: ReplPage): Operation<void> {
 }
 
 describe("Sidekick original reveal and cold decision coverage", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS4: a turn past the chat's window is revealed, and this screen keeps its own", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -3236,6 +3295,7 @@ describe("Sidekick original reveal and cold decision coverage", () => {
 });
 
 describe("Sidekick original populated chat profiles", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SS7: three profiles keep a populated older reading, its window and the way home", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
@@ -3300,6 +3360,7 @@ describe("Sidekick original populated chat profiles", () => {
 });
 
 describe("Sidekick original independent body controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("BP3: both bodies stay usable through their own controls across resize", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "ENTRY-REPLY" });
@@ -3347,6 +3408,7 @@ describe("Sidekick original independent body controls", () => {
 });
 
 describe("Follow: the running command owns the mounted control", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const size of PROFILES) {
     it(`Follow: keyboard and pointer at ${size.columns}x${size.rows} retain the live setting`, function* () {
       const page = yield* useReplPage();
@@ -3410,6 +3472,7 @@ describe("Follow: the running command owns the mounted control", () => {
 });
 
 describe("1137 — recovery stays among the fixed conversation controls", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const LONG = Array.from(
     { length: 60 },
     (_, at) => `LONG${String(at + 1).padStart(2, "0")} retained reply row`,
@@ -3518,6 +3581,7 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
 });
 
 describe("Retained Sidekick token usage", () => {
+  beforeEach(journalBeforeEach(OWNER));
   const USAGE_OFF = "[ ] Show token usage";
   const USAGE_ON = "[x] Show token usage";
 

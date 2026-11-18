@@ -2447,8 +2447,7 @@ by #496 and does not widen this ceiling.
 both ordinary-run native capability sets empty and installs no native
 foreground launcher, so a launch is refused before provider preparation,
 session ownership transfer, or process creation. The host does not expose the
-machine-wide coordinator, construction-route store or executable observer to
-repair that refusal. Supporting an interactive workflow-native handoff would
+machine-wide coordinator or construction-route store to repair that refusal. Supporting an interactive workflow-native handoff would
 require a separate retained-host and permission contract; it does not weaken the
 current sandbox.
 
@@ -2831,16 +2830,27 @@ provider session key are not identity at all.
 states both ordinary-run native capability sets empty — no native-launch
 advertisement and no client-native ACP attachment advertisement — rather than
 inheriting the provider package's by omission. It supplies no machine session
-coordinator, no construction-route store and no executable observer, and
-consults none of their namespace. `xmd run` owns a machine-wide account of who
-owns a session, how it was constructed and which executable build accepted its
-identity; a workflow session is named by the row below instead, and an agent
-served here is served over ACP alone. Composing the two is a separate design.
+coordinator and no construction-route store, and consults none of their
+namespace. `xmd run` owns a machine-wide account of who owns a session and how
+it was constructed; a workflow session is named by the row below instead, and
+an agent served here is served over ACP alone. Composing the two is a separate
+design.
 
-The workflow host separately selects its installed Claude launcher and supplies
-its path only through the retained adapter child's transient environment. This
-selection grants no native-session capability and performs no executable-build
-admission.
+The workflow host separately selects its installed Claude or Codex launcher and
+supplies its path only through the retained adapter child's transient
+environment. This selection grants no native-session capability and performs
+no executable-build admission.
+
+Workflow sessions use the current selected executable and the provider's
+positive confirmation of their retained native identity. They follow the same
+quiet-continuation policy as ordinary and held sessions: a missing or
+differing assertion refuses before settings or a prompt and creates no
+substitute. The workflow profile supplies no diagnostic observer, machine
+coordinator or construction-route store, and both native capability sets
+remain empty. The run mapping and provider assertion retain their existing
+authority. No diagnostic baseline or journal field is added. Partial replay
+attaches lazily, and completed replay performs no selection, observation or
+live work.
 
 **The mapping lives in the run.** Its database row commits in the run's
 transaction and is part of the initial schema. Provider session stores and empty

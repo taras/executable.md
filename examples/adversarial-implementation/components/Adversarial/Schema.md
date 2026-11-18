@@ -75,6 +75,7 @@ returns: {type: object}
     },
     providers:{type:"object",properties:{architect:{const:"codex"},planner:{enum:["claude","codex"]},implementor:{enum:["claude","codex"]}},required:["architect","planner","implementor"],additionalProperties:false},
     maxResponseCorrections:{type:"integer",minimum:0,maximum:3},
+    implementationModel:{type:"string",minLength:1},
     "maxCorrections": {
       "type": "integer",
       "minimum": 0,
@@ -244,6 +245,7 @@ returns: {type: object}
     sessions:{type:"object",properties:{planner:text,implementor:text,architect:text},required:["planner","implementor","architect"],additionalProperties:false},
     providers:{type:"object",properties:{architect:{const:"codex"},planner:{enum:["claude","codex"]},implementor:{enum:["claude","codex"]}},required:["architect","planner","implementor"],additionalProperties:false},
     maxResponseCorrections:{type:"integer",minimum:0,maximum:3},
+    implementationModel:{type:"string",minLength:1},
     maxCorrections:{type:"integer",minimum:0,maximum:10},
     maxApiRepairs:{type:"integer",minimum:0,maximum:10}
   },required:["work","repository","directory","request","sessions","providers","maxCorrections","maxApiRepairs","maxResponseCorrections"],additionalProperties:false},

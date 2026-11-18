@@ -4,7 +4,13 @@
 session and hands you Claude's own interactive UI for it. This document asks the
 smallest question about that session's identity: if you leave without saying
 anything, does running the same command again put you back in *that*
-conversation — or does Claude at least refuse that exact session out loud?
+conversation — or is that exact session refused out loud?
+
+XMD confirms the identity it allocated over ACP once the native process has
+exited, and again before it resumes one. If Claude kept nothing of a session
+nobody spoke in, that confirmation is where the refusal happens: the first
+launch records `identity-unavailable`, and the second refuses before starting
+any Claude at all.
 
 Silently landing somewhere else is the failure this is looking for. A session
 picker, a replacement identity, or a fresh conversation wearing the old name
@@ -232,9 +238,9 @@ One session identity was chosen by the adapter before any process existed. The
 first command created that conversation; the second resumed it. Nothing
 translated an ACP or ACPX value into it, and no second candidate was allocated.
 
-<AssertEquals actual={proof.claudeVersion} expected={"2.1.241 (Claude Code)"} />
-<AssertEquals actual={proof.platform} expected={"darwin"} />
-<AssertEquals actual={proof.architecture} expected={"arm64"} />
+The Claude version, platform and architecture the verdict reports are evidence
+of what ran, never a condition of passing.
+
 <AssertEquals actual={proof.identityProvenance} expected={"client-allocated"} />
 <AssertEquals actual={proof.identityAllocations} expected={1} />
 <AssertFalse expr={proof.substitutedIdentity} />
@@ -251,7 +257,7 @@ section and no other role's.
 <Assert expr={proof.implementorMarkerRendered} />
 <AssertEquals actual={proof.siblingMarkersRendered} expected={0} />
 <AssertEquals actual={proof.firstInvocationChildren} expected={1} />
-<AssertEquals actual={proof.secondInvocationChildren} expected={1} />
+<Assert expr={proof.secondInvocationChildren === 1 || (proof.secondInvocationChildren === 0 && proof.outcome === "no-session")} />
 
 ## Every key sent was terminal control
 
@@ -263,17 +269,23 @@ Ctrl-D bytes: one to ask the prompt whether it is there, one to leave.
   expr={proof.reentryExitControlBytes === "0404" || proof.outcome === "no-session"}
 />
 
-## The two commands are the documented ones
+## The commands are the documented ones
 
 Creation names the session and hands over a private instruction file. Re-entry
 resumes that same name and hands over nothing — a `--session-id` there would be
-a second conversation, not a continuation.
+a second conversation, not a continuation. XMD can refuse during preflight before launching the second UI. A refusal from the UI itself still requires the exact resume command.
 
 <AssertEquals
   actual={proof.firstCommand}
   expected={["claude", "--session-id", proof.nativeSessionId, "--system-prompt-file", "<private-file>"]}
 />
+<If condition={proof.secondInvocationChildren === 1}>
 <AssertEquals actual={proof.secondCommand} expected={["claude", "--resume", proof.nativeSessionId]} />
+<Else>
+<AssertEquals actual={proof.secondCommand} expected={[]} />
+<Assert expr={proof.journal.failureClasses.includes("identity-unavailable")} />
+</Else>
+</If>
 
 ## The instruction layer travelled privately
 
@@ -300,14 +312,17 @@ process on the machine can read from.
 <AssertEquals actual={proof.journal.provenance} expected={"client-allocated"} />
 <AssertEquals actual={proof.journal.nativeSessionId} expected={proof.nativeSessionId} />
 <Assert expr={proof.journal.instructionsDigestPresent} />
-<AssertEquals actual={proof.journal.sessionState} expected={["created", "resumed"]} />
 <AssertEquals actual={proof.journal.firstPhases} expected={["prepared", "detached", "exited"]} />
+<If condition={proof.outcome === "same-identity"}>
+<AssertEquals actual={proof.journal.sessionState} expected={["created", "resumed"]} />
+<AssertEquals actual={proof.journal.failureClasses} expected={[]} />
+</If>
 
 ## Only two answers are accepted
 
-Re-entry reached the identity it was given, or Claude refused that exact
-identity and XMD failed closed. A picker, a replacement identity or a fresh
-conversation is none of those.
+Re-entry reached the identity it was given, or that exact identity was refused —
+by XMD's own confirmation or by Claude — and XMD failed closed. A picker, a
+replacement identity or a fresh conversation is none of those.
 
 <Assert expr={proof.outcome === "same-identity" || proof.outcome === "no-session"} />
 

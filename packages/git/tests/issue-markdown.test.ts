@@ -11,7 +11,7 @@
  * `github-issues.test.ts`, and nothing there duplicates a scenario here.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,13 @@ import type { Operation } from "effection";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import { issueYields, runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/git/tests/issue-markdown.test.ts";
 
 /** The scenarios, in the order a reader meets them. */
 const SCENARIOS = [
@@ -59,28 +65,13 @@ function* stated(observation: ScenarioObservation): Operation<ScenarioObservatio
 }
 
 describe("workflow Issue scenarios", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const name of SCENARIOS) {
     const title = `${name} states a contract that holds`;
     const path = pathOf(name);
-    if (name === "IssueRead.test.md" || name === "IssueUpsert.test.md") {
-      it(title, () =>
-        captureTestJournal(
-          {
-            owner: "packages/git/tests/issue-markdown.test.ts",
-            suite: "workflow Issue scenarios",
-            name: title,
-          },
-          path,
-          function* (stream) {
-            yield* stated(yield* runScenario(path, stream));
-          },
-        ),
-      );
-    } else {
-      it(title, function* () {
-        yield* stated(yield* runScenario(path));
-      });
-    }
+    it(title, function* () {
+      yield* stated(yield* runScenario(path, yield* useJournalStream(path)));
+    });
   }
 
   it("IssueDurability.test.md states a contract that holds", function* () {
@@ -90,7 +81,8 @@ describe("workflow Issue scenarios", () => {
     // put a run in the state this scenario is about.
     yield* fixture.stage("IssueDurability.attempt.stage.md");
     yield* fixture.stage("IssueDurability.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueDurability.test.md")));
+    const path = pathOf("IssueDurability.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 
   it("an issue effect retains where its <Issue> was written", function* () {
@@ -123,7 +115,8 @@ describe("workflow Issue scenarios", () => {
     const fixture = yield* useScenarioFixture();
     yield* fixture.stage("IssueReadDurability.attempt.stage.md");
     yield* fixture.stage("IssueReadDurability.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueReadDurability.test.md")));
+    const path = pathOf("IssueReadDurability.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 
   // Each hazard is its own run. They cannot share one: a process that ended
@@ -140,7 +133,8 @@ describe("workflow Issue scenarios", () => {
       const fixture = yield* useScenarioFixture();
       yield* fixture.stage(`${hazard}.attempt.stage.md`);
       yield* fixture.stage(`${hazard}.attempt.stage.md`);
-      yield* stated(yield* fixture.observe(pathOf(`${hazard}.test.md`)));
+      const path = pathOf(`${hazard}.test.md`);
+      yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
     });
   }
 
@@ -149,7 +143,8 @@ describe("workflow Issue scenarios", () => {
     // Staged twice so the second attempt shows there was nothing to restore.
     yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
     yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueReadSubstituted.test.md")));
+    const path = pathOf("IssueReadSubstituted.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 
   it("IssueRecovery.test.md states a contract that holds", function* () {
@@ -157,7 +152,8 @@ describe("workflow Issue scenarios", () => {
     // The interrupted attempt first, then one that inherits what it left.
     yield* fixture.stage("IssueRecovery.attempt.stage.md");
     yield* fixture.stage("IssueRecovery.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueRecovery.test.md")));
+    const path = pathOf("IssueRecovery.test.md");
+    yield* stated(yield* fixture.observe(path, yield* useJournalStream(path)));
   });
 });
 
@@ -177,59 +173,81 @@ describe("workflow Issue scenarios", () => {
  */
 describe("scenario sessions", () => {
   const sessions = (name: string) => pathOf(`sessions/${name}`);
+  const owner = "packages/git/tests/issue-markdown.test.ts";
+  const suite = "scenario sessions";
 
-  it("shares one tracker between documents that each get their own session", function* () {
+  const sharedTracker = "shares one tracker between documents that each get their own session";
+  it(sharedTracker, function* () {
     const fixture = yield* useScenarioFixture();
 
-    const first = yield* fixture.observe(sessions("First.test.md"));
-    const second = yield* fixture.observe(sessions("Second.test.md"));
+    const testCase = { owner, suite, name: sharedTracker };
+    const firstPath = sessions("First.test.md");
+    const secondPath = sessions("Second.test.md");
+    yield* captureTestJournal(testCase, firstPath, function* (firstStream) {
+      const first = yield* fixture.observe(firstPath, firstStream);
+      yield* captureTestJournal(testCase, secondPath, function* (secondStream) {
+        const second = yield* fixture.observe(secondPath, secondStream);
 
-    // Non-empty and disjoint: each document reports its own test and only
-    // its own, which is what a session per execution buys. A cumulative
-    // session would show the first document's result in the second's.
-    expect(first.results.map((result) => result.name)).toEqual([
-      "the first document sees the tracker it filed on",
-    ]);
-    expect(second.results.map((result) => result.name)).toEqual([
-      "the second document meets the first document's tracker",
-    ]);
+        // Non-empty and disjoint: each document reports its own test and only
+        // its own, which is what a session per execution buys. A cumulative
+        // session would show the first document's result in the second's.
+        expect(first.results.map((result) => result.name)).toEqual([
+          "the first document sees the tracker it filed on",
+        ]);
+        expect(second.results.map((result) => result.name)).toEqual([
+          "the second document meets the first document's tracker",
+        ]);
 
-    // Both passed, and the second's passing is the shared half: it asserted
-    // on an issue the first document filed, so the fixture outlived the
-    // scope the first session closed.
-    expect(failures(first)).toEqual([]);
-    expect(failures(second)).toEqual([]);
-    expect(first.outcome.ok).toBe(true);
-    expect(second.outcome.ok).toBe(true);
-    expect(fixture.server.issues.map((issue) => issue.title)).toEqual([
-      "Filed by the first document",
-    ]);
+        // Both passed, and the second's passing is the shared half: it asserted
+        // on an issue the first document filed, so the fixture outlived the
+        // scope the first session closed.
+        expect(failures(first)).toEqual([]);
+        expect(failures(second)).toEqual([]);
+        expect(first.outcome.ok).toBe(true);
+        expect(second.outcome.ok).toBe(true);
+        expect(fixture.server.issues.map((issue) => issue.title)).toEqual([
+          "Filed by the first document",
+        ]);
+      });
+    });
   });
 
-  it("fails the document whose assertion fails, and no other", function* () {
+  const independent = "fails the document whose assertion fails, and no other";
+  it(independent, function* () {
     const fixture = yield* useScenarioFixture();
 
-    const failing = yield* fixture.observe(sessions("Failing.test.md"));
-    expect(failing.results.map((result) => result.status)).toEqual(["fail"]);
-    expect(failing.outcome.ok).toBe(false);
+    const testCase = { owner, suite, name: independent };
+    const failingPath = sessions("Failing.test.md");
+    yield* captureTestJournal(testCase, failingPath, function* (stream) {
+      const failing = yield* fixture.observe(failingPath, stream);
+      expect(failing.results.map((result) => result.status)).toEqual(["fail"]);
+      expect(failing.outcome.ok).toBe(false);
+    });
 
     // The next document is unharmed, which is the claim that matters: a
     // failure belongs to the session that recorded it, so a passing document
     // observed after a failing one still settles Ok with its own result.
-    const after = yield* fixture.observe(sessions("Passing.test.md"));
-    expect(after.results.map((result) => result.status)).toEqual(["pass"]);
-    expect(after.outcome.ok).toBe(true);
+    const passingPath = sessions("Passing.test.md");
+    yield* captureTestJournal(testCase, passingPath, function* (stream) {
+      const after = yield* fixture.observe(passingPath, stream);
+      expect(after.results.map((result) => result.status)).toEqual(["pass"]);
+      expect(after.outcome.ok).toBe(true);
+    });
   });
 
-  it("fails a document that discovered no tests at all", function* () {
+  const noTests = "fails a document that discovered no tests at all";
+  it(noTests, function* () {
     const fixture = yield* useScenarioFixture();
     // The hazard this arrangement exists to remove: activation that did not
     // take renders a document full of passing assertion reports and collects
     // nothing. The session's completion policy is what makes that an `Err`
     // rather than a silent success. Tracked separately as
     // taras/executable.md#523 for the testing API itself.
-    const empty = yield* fixture.observe(sessions("Untested.md"));
-    expect(empty.results).toEqual([]);
-    expect(empty.outcome.ok).toBe(false);
+    const path = sessions("Untested.md");
+    yield* captureTestJournal({ owner, suite, name: noTests }, path, function* (stream) {
+      const empty = yield* fixture.observe(path, stream);
+      expect(empty.results).toEqual([]);
+      expect(empty.outcome.ok).toBe(false);
+    });
   });
 });

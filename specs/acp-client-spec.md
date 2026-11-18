@@ -238,10 +238,9 @@ Built-in **`claude` and `codex` are advertised** for native launch, and
 `claude` additionally for attaching ACP to a session a native process
 constructed. Claude's sessions are named by XMD and created by the native
 process; Codex names its own and reports it back
-(native-agent-session-launch-spec.md). The ownership, construction-route and
-executable-observation requirements below therefore apply to them on every
-host, and only the hosts that assemble all three — Deno and the compiled
-binary — can serve them. An agent that is not advertised keeps ordinary ACP
+(native-agent-session-launch-spec.md). The ownership and construction-route requirements
+below therefore apply to them on every host, and only the hosts that assemble
+both — Deno and the compiled binary — can serve them. An agent that is not advertised keeps ordinary ACP
 behavior on every host.
 
 Every operation that can act on an advertised session — `session()`, a
@@ -264,18 +263,19 @@ latest forced-release marker across ordinary ownership. Obsolete shapes refuse;
 there is no ownership format selection or compatibility reader. Recovery sends
 no provider request and repairs no identity, route or journal.
 
-The host also passes in a **construction-route store** and an **executable
-observer**, directly and from the same trusted root as the coordinator. Both
-are required only for an advertised agent whose adapter binds a build. Which
-side chose the identity does not decide that: whoever named the session, the
-name resolves to one conversation only beside the build that issued or
-accepted it, so an adapter that pins a build needs a route to say how the
-session was constructed and an observer to say which build that was. An
-adapter that binds nothing keeps its behavior unchanged on a host that has
-neither. A host missing either refuses that agent before any provider effect,
-on the same terms as a missing coordinator. The observer is not a contextual
-Api for the same reason the coordinator is not: executable validation decides
-which retained history may be accepted.
+The host also passes in a **construction-route store**, directly and from the
+same trusted root as the coordinator. It is required for an advertised agent
+whose adapter carries an executable binding, and a host missing it refuses
+that agent before any provider effect, on the same terms as a missing
+coordinator. It is not a contextual Api, for the same reason the coordinator is
+not.
+
+A conversation continues quietly on the executable the current environment
+selects. The provider must positively confirm the retained native identity
+before work that requires it. A missing or different assertion refuses without
+creating a replacement conversation. Executable version and digest do not
+decide admission. Existing routes and journal history remain unchanged; normal
+continuation creates no new version-history record.
 
 While ownership is held and before any provider construction effect, the
 provider reconciles the route. A fresh `session()` places the session and
@@ -286,32 +286,35 @@ fails afterwards leaves that route standing. A launch by an adapter that names
 its own sessions publishes `client-native` under an identity that adapter
 allocated, unless existing durable ACPX state or an existing route says the
 session was constructed through ACP — in which case it publishes or adopts
-`acp-first` and retains `identity-unavailable`. A launch by an adapter that
-binds a build and lets the provider name the session publishes or adopts the
-**bound** `acp-first` form, carrying the build it just observed, before ACP
-creates anything; an existing unbound `acp-first` record refuses rather than
-gaining the current executable. Publication is create-once, so the loser of
+`acp-first` and retains `identity-unavailable`. A fresh `acp-first`
+route is published in the released unbound form before ACP creates anything.
+An existing route is never rewritten: a bound record keeps its original
+binding, an unbound record stays unbound, and both continue. Publication is create-once, so the loser of
 either order adopts the winner, and no route converts.
 
-A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
-route **attaches** to it. Under the same ownership it reobserves the build and
-compares the binding exactly, requires any retained ACP arrangement to assert
-that route's identity, selects the runtime for (resolved agent command,
-binding), calls `ensureSession()` with `resumeSessionId` equal to that
-identity, and requires the returned canonical assertion to equal it before a
-turn. The observed executable path reaches only that runtime's transient child
-environment. A legacy unbound `client-native` route, an agent this host has not
-advertised for attachment, build drift, a disagreeing arrangement and a
-differing returned identity each refuse before a turn and create no substitute
-conversation.
+A `session()` or subscribed `prompt()` meeting a `client-native` route,
+bound or legacy unbound, **attaches** to it. Under the same ownership it
+selects the current executable, requires any retained ACP arrangement to
+assert that route's identity, selects the runtime for (resolved agent command,
+selected environment) and calls `ensureSession()` with `resumeSessionId` equal
+to that identity. An existing ACP record is reopened strictly with
+`expectedAgentSessionId` equal to the route's identity. With no record, the
+exact load carries no expectation that presupposes one; the returned canonical
+assertion must equal the route's identity, and a refused first arrangement is
+left asserting nothing so a later exact retry is not blocked by it. Either way
+the assertion is confirmed before settings or a turn. The selected executable
+path reaches only that runtime's transient child environment. An agent this
+host has not advertised for attachment, a disagreeing arrangement and a
+missing or differing returned identity each refuse before a turn and create no
+substitute conversation.
 
 A held conversation is owned and routed where it began. Its coordinator key
 and its construction route use the provider and resolved command of the
 history's initial configuration record with the recorded placement, before a
 Prompt records one with the placement the provider resolves, and the first
 setup with no initial record uses today's coordinates. Today's command still
-drives everything that executes: runtime selection, executable observation and
-the bound-build comparison, and usage reporting. So a conversation whose adapter
+drives everything that executes: runtime selection, executable selection and
+observation, and usage reporting. So a conversation whose adapter
 command changed between releases keeps one owner, one route and its original
 construction provenance, and an earlier owner still holding that original tuple
 refuses the changed-command contender before any ensure, prompt or route
@@ -877,6 +880,10 @@ history nor starts a fresh conversation after uncertain acceptance.
 Reconnection first establishes the exact original live child; missing identity
 or outcome remains uncertain and never authorizes resend.
 
+A held conversation's work executes through its captured provider in the
+conversation's own task, and continuation follows the same quiet confirmation
+and refusal policy as an ordinary Session.
+
 ```ts
 const opened = yield* useAgentConversation({
   history,        // the DurableStream holding this conversation's canonical history
@@ -1026,8 +1033,9 @@ adapter a host runs — the bundled Codex adapter became the host-installed one 
 while the conversation it continues is the same native history, so the current
 adapter is attempted on that history. What the provider actually applies is
 verified where it applies it (§Session configuration), and a genuine resume,
-assertion, build or configuration failure still fails the turn without a
-replacement conversation or a new prompt. A reopening on its own performs no
+assertion or configuration failure still fails the turn without a replacement
+conversation or a new prompt. A changed executable is neither reported nor a
+failure. A reopening on its own performs no
 activation and no provider work at all; the configuration record is re-offered
 in its own position so the turns written after it replay in order, and it is
 never rewritten. The record is configuration, not identity: an absent Prompt
@@ -1171,7 +1179,7 @@ record:
 
 | Field | Meaning |
 | --- | --- |
-| `provider`, `operation`, `stage` | The fixed provider and operation are `acp` and `session/prompt`. The stage is `runtime-turn`, `prompt-ensure` or `held-session-ensure`. The operation identifies the attempted Prompt and grants no wire receipt. |
+| `provider`, `operation`, `stage` | A saved Prompt diagnostic has the fixed provider and operation `acp` and `session/prompt`. The stage is `runtime-turn`, `prompt-ensure` or `held-session-ensure`. The operation identifies the attempted Prompt and grants no wire receipt. |
 | `requestId` | The actual turn's request ID, when supplied on `runtime-turn`. The ensure stages forbid this field. |
 | `code`, `detailCode` | Supplied nonempty runtime classifications. `RUNTIME` is the normalizer's fallback, not a backend diagnosis. |
 | `retryable` | A supplied boolean hint, including false; it grants no resend. |
@@ -1182,12 +1190,12 @@ Conversation correlation stays in the existing `agent`, `sessionKey` and
 `agentSessionId` fields. No raw protocol payload, prompt, environment or
 unrelated history is added. A plain Error has no diagnostic; stream exceptions,
 cancellation and host permission refusal keep their existing paths. A
-message-only upstream failure remains undiagnosed. An ordinary same-session
-load or resume refusal retains the local fallback and the name
-`SessionResumeRequiredError` without a raw upstream cause. ACP selects the
-same bounded facts when the subscribed Prompt's ensure fails before a runtime
-turn (`prompt-ensure`) or the runtime turn refuses before writing the prompt
-(`runtime-turn`). Identity confirmation, ownership, configuration, permission
+message-only upstream failure remains undiagnosed. An ordinary Session's
+same-session load or resume refusal is reported as described in
+[Ordinary Session resume failure details](#ordinary-session-resume-failure-details).
+ACP selects the same bounded facts when the subscribed Prompt's ensure fails
+before a runtime turn (`prompt-ensure`) or the runtime turn refuses before
+writing the prompt (`runtime-turn`). Identity confirmation, ownership, configuration, permission
 and cancellation keep their existing outcomes.
 
 When a held conversation's eager ensure refuses with that classification,
@@ -1217,7 +1225,10 @@ gate.
 
 The current reader validates a present diagnostic completely and refuses
 malformed or unknown members, including a held ensure failure with
-inconsistent surrounding Prompt fields. Deploy the reader and writer together.
+inconsistent surrounding Prompt fields. The same error carrier also serves
+ordinary Session reporting, but the saved Prompt failure and record readers
+refuse its `session-ensure` stage: an ordinary Session refusal is never a
+saved Prompt. Deploy the readers and writers together.
 Older readers refuse the new stages. This internal format has no downgrade
 reader. An absent diagnostic preserves
 message/name/cause-only records without a migration or rewrite. Reconstructed
@@ -1225,6 +1236,47 @@ thrown and aggregated Prompt failures keep the selected diagnostic under
 `executablemd.agent.prompt-diagnostic`. The existing REPL Journal query exposes
 the saved error as `promptError` after cold reopen; select a returned numeric Prompt locator within its entry to read it. Reading sends no prompt and
 reads no runtime log or native history.
+
+### Ordinary Session resume failure details
+
+An ordinary `<Session>` that resolves an existing conversation reattaches it
+before consuming its body. When the provider refuses that same-session load or
+resume, the element fails with the name `SessionResumeRequiredError` and no raw
+upstream cause, its body and later content do not run, and no Prompt record,
+attempted input, ordinal, usage or `started` event is created.
+
+ACP attaches the [selected bounded facts](#saved-prompt-failure-details) to the
+refusal under `executablemd.agent.prompt-diagnostic` with provider `acp`, stage
+`session-ensure` and operation `session/ensure`. The operation names the
+logical ensure: it proves neither which wire method the runtime chose nor that
+anything reached the backend. The ensure stage forbids `requestId`.
+
+Agent selects and screens that diagnostic exactly as it does a saved Prompt's,
+then states it in the error message, the one field the root failure, its
+retained journal and a log carry. The message keeps the readable opening and
+appends one line per present fact, in this order and with these labels; string
+values use JSON string rendering so an embedded line break stays unambiguous:
+
+```text
+Session "<key>" could not be resumed. Name a different <Session> to start a new conversation.
+Resume diagnostic (provider=acp, operation=session/ensure, stage=session-ensure)
+Normalization origin: acp
+Runtime code: "RUNTIME" (normalizer fallback)
+Runtime detail code: "SESSION_RESUME_REQUIRED"
+ACP code: -32041
+ACP message: "Internal error"
+ACP details: "Release the active writer before reconnecting."
+```
+
+`(normalizer fallback)` marks only the `RUNTIME` code. Absent facts have no
+line, and a diagnostic with no protocol facts states only its header and
+normalization fields. With detection enabled, an unsafe optional string is
+omitted and the remaining safe facts, including a numeric ACP code, stay. When
+no valid ordinary diagnostic is selected, or policy authentication or screening
+fails, the message is the opening sentence alone, with neither the raw error
+nor the scanning failure. The retryable hint grants no resend and is not
+displayed. These facts describe the selected protocol error, not a proven
+backend cause.
 
 ### The permission audit a turn retains
 
@@ -1531,9 +1583,13 @@ arranged in the run's own sidecar, continued by reattaching that row — and the
 machine-wide account of ownership, construction routes and executable builds
 describes a different thing entirely. Inheriting the package's advertised sets
 by omission would make an ordinary workflow Claude prompt demand machine
-ownership and a route this profile has no way to give it. The profile therefore
-supplies no session coordinator, no route store and no executable observer, and
-never consults their namespace.
+ownership and a route this profile has no way to give it. Workflow sessions use the current selected executable and the provider's
+positive confirmation of their retained native identity. They follow the same
+quiet-continuation policy as ordinary and held sessions. The workflow profile
+supplies no diagnostic observer, machine coordinator or construction-route
+store, and both native capability sets remain empty. The run mapping and
+provider assertion retain their existing authority. No diagnostic baseline or
+journal field is added.
 
 A native permission request under this profile does not reach
 `Agent.requestPermission`. The provider answers it: a reject option when ACP
@@ -1866,6 +1922,18 @@ model prompt; the SDK executable is never a fallback. Version output is
 observation rather than an admission condition. Custom agent commands retain
 their own selection, and completed replay performs no selection or launch.
 
+The provider carries the selected executable into the matching ACP child
+environment and native argv. It does not use a second PATH resolution to
+replace that choice. Host selectors retain their joined, output-suppressed
+launchability check; the child's version text and exit status impose no
+version admission policy. Missing or unlaunchable selections remain
+availability failures. Supported custom commands keep their arguments and
+environment, and XMD does not guess the backend of an opaque wrapper.
+
+Continuation produces no compatibility or undetermined-version notice and
+retains no new version baseline. Completed replay performs no selection,
+observation or launch.
+
 For the retained embedded Codex adapter, live availability selects nonempty
 `CODEX_PATH`, otherwise `codex` on the host PATH. Relative path selections
 resolve against the host execution directory. Selection resolves to a canonical
@@ -1875,8 +1943,7 @@ PATH or correct `CODEX_PATH`. A bad explicit selection does not retry the
 default command. Version output and exit status impose no ordinary version
 admission policy. No bundled CLI or download supplies a fallback. Custom
 commands retain their selection; completed replay performs no host selection or
-launch. Native-bound work uses its observed executable under the native
-build-binding contract. [Decision 004](decisions/004-host-installed-codex-cli.md)
+launch. Native work uses the same selected executable. [Decision 004](decisions/004-host-installed-codex-cli.md)
 records why Codex runs the host CLI.
 
 ## ACPX provider
@@ -2001,25 +2068,27 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
 
   Reopening loads/resumes the exact stored ACP id. ACPX reuses a persistent
   record in place only for the same command string and argv that created it,
-  and would otherwise create a fresh conversation under the same key, so a
-  held conversation's non-pending record is always ensured with
+  and would otherwise create a fresh conversation under the same key, so an
+  established non-pending record — a held conversation's, or any ordinary or
+  workflow session of a built-in adapter — is always ensured with
   `resumeSessionId` equal to that record's ACP loading target, through today's
   command and in the record's own directory, under the conversation's queue
   and ownership: a record ACPX can reuse in place is reused, and any other is
   loaded, whether the adapter changed or the same command changed from an argv
-  array to its string. The loading target is not the native identity: the returned
-  native assertion, when the adapter reports one, must equal the one the
-  history's Prompt records assert, or — before the host acknowledged one — the
-  one the provider's promoted record asserts. A pending record supplies
-  neither. For an established Codex conversation held by a host such as Sidekick,
-  a different observed executable version or digest requires a live load on
-  the current build before applying settings or sending a prompt. The live
-  response must assert the retained native identity; an omitted assertion does
-  not inherit the saved identity. The same check applies if the runtime has
-  to reconnect again during the operation. The ACP record retains its history
-  and saved preferences, and the original construction route is unchanged.
-  The exact-build rule still applies to explicit native launch and attachment.
-  A failed load uses the ordinary resume error. A different native identity,
+  array to its string. The loading target is not the native identity. The retained native
+  assertion is the one the history's Prompt records assert, or — before the
+  host acknowledged one — the one the provider's promoted record asserts, and
+  the ensure carries it as `expectedAgentSessionId`, whether or not the
+  executable changed. A pending first-turn record is occupancy rather than an
+  established conversation and keeps its acceptance and promotion order. An
+  established session of an adapter that owes a native identity, with no
+  retained assertion, refuses before loading. The live response must assert
+  the retained native identity before settings are applied or a prompt is
+  sent; an omitted assertion does not inherit the saved identity. The same
+  check applies to a cold reconnect during the operation, and it costs no
+  model turn. The ACP record retains its history and saved preferences, and
+  the original construction route is unchanged. Native launch and attachment
+  follow the same policy. A failed load uses the ordinary resume error. A different native identity,
   or an omitted identity when live confirmation is required, refuses with
   `identity-unavailable`. A refusal at ensure sends no `session/new` or prompt
   and leaves the record, history and route as they were. If a client disconnects
@@ -2035,9 +2104,14 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   uncertain record; the released `-32603` fallback remains only for a provably
   never-prompted record. Supported resume-required errors become
   `SessionResumeRequiredError`, naming the Session and a different Session
-  element as the remedy, before `started`. Prior messages, identity and
-  configuration stand; a refused user attempt and lifecycle changes may be
-  retained locally. A later successful reopen sends only the new request.
+  element as the remedy, before `started`. An ordinary Session's refusal
+  carries the bounded facts of
+  [Ordinary Session resume failure details](#ordinary-session-resume-failure-details)
+  under the `session-ensure` stage; Agent screens them and owns the message.
+  Prior messages, identity and configuration stand. A subscribed Prompt's
+  refused user attempt and lifecycle changes may be retained locally; ordinary
+  Session resolution has no attempted input and leaves the original record and
+  history unchanged. A later successful reopen sends only the new request.
 
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
   owned by the subscriber. Events are normalized to one `started`, `text_delta`
@@ -2118,11 +2192,9 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   availability probe and live runtime. Each embedded Claude or Codex default
   applies only to its matching retained command; another provider or
   deliberate custom command receives no default overlay for either agent. A
-  native-bound operation's observed executable takes precedence: its runtime
-  receives the bound build's environment in place of the ordinary host
-  selection, which is never consulted for it. The inputs never enter durable
-  session records or global process environment. `executableObserver` says how
-  this host observes the build behind an executable; `agentCwd` answers with the
+  native-capable operation selects through this same seam once, and carries
+  that selection into its runtime and native argv. The inputs never enter durable
+  session records or global process environment. `agentCwd` answers with the
   directory an Agent runs in when the contextual one is not a directory an
   agent process could stand in; `mcpServers` and `newSessionOptions` are passed
   to runtime creation and to `ensureSession()` exactly as given;

@@ -120,6 +120,7 @@
     <ReplBench.WaitForText text="[submit]" present={false} />
     <ReplBench.Region name="history">
       <ReplBench.Key key="Tab" />
+      <ReplBench.WaitForText text="Enter closes" />
       <ReplBench.WaitForText text="1 · Entry 1 admitted" as="marker" />
       <ReplBench.Scroll delta={1} at={marker} />
       <ReplBench.WaitForText text="1 · Entry 1 admitted" present={false} />

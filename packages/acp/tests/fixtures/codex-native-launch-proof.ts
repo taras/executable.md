@@ -44,6 +44,8 @@
  * summarized on the way out.
  */
 
+import { runChild } from "./native-proof-child.ts";
+import type { LiveSet } from "./native-proof-child.ts";
 import { ensure, main, race, scoped, sleep, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { exists, rm } from "@effectionx/fs";
@@ -56,7 +58,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { createEmbeddedAdapters, embeddedAdapterIdentities } from "../../src/adapter-snapshots.ts";
-import { ADVERTISED_NATIVE_LAUNCH } from "../../src/native-launch.ts";
+import { ADVERTISED_NATIVE_LAUNCH, bindsBuild, nativeAdapterFor } from "../../src/native-launch.ts";
 import { agentSessionKeyDigest } from "@executablemd/runtime";
 import type { AnswerQuestion, ScreenSnapshot, TerminalReader } from "./terminal-screen.ts";
 import {
@@ -88,20 +90,17 @@ const TARGET = "AGENTS.md#Implementor";
 const ACP_DOCUMENT = fileURLToPath(new URL("./codex-native-to-acp-prompt.md", import.meta.url));
 
 /**
- * The compatibility point these journeys are only meaningful against
- * (`issue-755-codex-materialization-turn-implementor-handoff.md`).
+ * The carried adapter these journeys exercise.
  *
- * Frozen rather than read from the machine, because the proof requires that one
- * exact build was proven. A run against another build is not a weaker pass; it
- * is a different question, and it says so.
+ * The adapter snapshot is part of XMD's own integration, so a change to it is a
+ * change these journeys are meant to catch. The installed Codex release, its
+ * digest and the host platform are recorded as evidence of what ran and never
+ * gate the run: a release absent from earlier evidence is exactly what an
+ * opt-in regression should be able to exercise (#891).
  */
-const REQUIRED_PLATFORM = "darwin";
-const REQUIRED_ARCHITECTURE = "arm64";
-const REQUIRED_CODEX_VERSION = "codex-cli 0.153.2";
-const REQUIRED_CODEX_DIGEST = "195ace4100a634a9df39147f493e730e666b5bd87795f3c9f3251d8542400424";
 const REQUIRED_ADAPTER_PACKAGE = "@agentclientprotocol/codex-acp";
 const REQUIRED_ADAPTER_VERSION = "1.6.2";
-const REQUIRED_ADAPTER_DIGEST = "3ee22bc6b1649d02fcef80b352516f395fe774e63b459193195a41c42930dd8b";
+const REQUIRED_ADAPTER_DIGEST = "a3f699537970127972635b4596aef40ab8a4caa25a9028861d9ee07bf6c4b1a1";
 
 /** The one prompt version a Codex launch may spend a turn on. */
 const PROMPT_VERSION = "codex-materialization.v1";
@@ -338,88 +337,6 @@ function shows(text: string, marker: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-interface ChildOutcome {
-  code: number | null;
-  signal: string | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Every child a mode started, so cleanup can prove none outlived it. */
-type LiveSet = Set<number>;
-
-/** Run one captured child to settlement. Never a TUI. */
-function runChild(
-  command: string,
-  args: string[],
-  options: { cwd: string; input?: string; live: LiveSet; env?: Record<string, string> },
-): Operation<ChildOutcome> {
-  return (function* (): Operation<ChildOutcome> {
-    const settled = withResolvers<ChildOutcome>();
-    const failed = withResolvers<never>();
-    let child: ChildProcess | undefined;
-
-    // Registered before the spawn: a halt between acquiring a process and
-    // registering its cleanup leaks the process.
-    yield* ensure(() => {
-      const running = child;
-      if (!running?.pid) {
-        return;
-      }
-      if (running.exitCode === null && running.signalCode === null) {
-        killed(running.pid);
-      }
-      options.live.delete(running.pid);
-    });
-
-    child = spawnChild(command, args, {
-      cwd: options.cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      ...(options.env === undefined ? {} : { env: options.env }),
-    });
-    if (child.pid) {
-      options.live.add(child.pid);
-    }
-    let stdout = "";
-    let stderr = "";
-    // Every registration is named and removed by this operation's own teardown:
-    // a cancelled wait leaves nothing attached to a child it no longer owns.
-    const onStdout = (chunk: Buffer): void => {
-      stdout += chunk.toString();
-    };
-    const onStderr = (chunk: Buffer): void => {
-      stderr += chunk.toString();
-    };
-    const onError = (error: Error): void => failed.reject(error);
-    const onClose = (code: number | null, signal: string | null): void => {
-      if (child?.pid) {
-        options.live.delete(child.pid);
-      }
-      settled.resolve({ code, signal, stdout, stderr });
-    };
-    const proc = child;
-    const outStream = proc.stdout;
-    const errStream = proc.stderr;
-    yield* ensure(() => {
-      outStream?.off("data", onStdout);
-      errStream?.off("data", onStderr);
-      proc.off("error", onError);
-      proc.off("close", onClose);
-    });
-    outStream?.on("data", onStdout);
-    errStream?.on("data", onStderr);
-    proc.on("error", onError);
-    proc.on("close", onClose);
-
-    if (options.input !== undefined) {
-      child.stdin?.write(options.input);
-    }
-    child.stdin?.end();
-
-    return yield* race([settled.operation, failed.operation]);
-  })();
 }
 
 /**
@@ -915,7 +832,7 @@ interface JourneyVerdict {
   privateStateInspected: boolean;
 }
 
-function blankJourney(mode: Mode): JourneyVerdict {
+export function blankJourney(mode: Mode): JourneyVerdict {
   return {
     mode,
     verdict: "UNDECIDED",
@@ -1649,38 +1566,71 @@ const MATERIALIZATION_PROMPT =
   "task, inspect or modify files, call tools, or take any external action. Reply with a " +
   "brief acknowledgement only.";
 
-/** Resolve the installed Codex, canonically, and hash exactly that file. */
-function* observeCodex(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
-  const located = yield* bounded("resolve-codex", VERSION_MS, () =>
-    runChild("/usr/bin/which", ["codex"], { cwd: journey.root, live: journey.live }),
-  );
-  if (located.code !== 0 || located.stdout.trim().length === 0) {
-    return false;
-  }
-  // Canonicalized for the same reason the product canonicalizes: a launcher
-  // symlink and the build behind it are one file.
-  journey.codex = yield* until(realpath(located.stdout.trim()));
-  verdict.codexDigest = createHash("sha256")
-    .update(yield* until(readFile(journey.codex)))
+function* executableDigest(path: string): Operation<string> {
+  return createHash("sha256")
+    .update(yield* until(readFile(path)))
     .digest("hex");
-  const reported = yield* bounded("codex-version", VERSION_MS, () =>
-    runChild(journey.codex, ["--version"], { cwd: journey.root, live: journey.live }),
-  );
-  verdict.codexVersion = reported.code === 0 ? reported.stdout.trim() : "";
-  return true;
 }
 
-/** The vendored adapter's own snapshot identity, from the product's own list. */
-function recordAdapter(verdict: JourneyVerdict): void {
+function* observeCodex(
+  cwd: string,
+  live: LiveSet,
+  verdict: Pick<JourneyVerdict, "codexVersion" | "codexDigest">,
+  child: typeof runChild,
+  digest: typeof executableDigest,
+): Operation<string | undefined> {
+  const located = yield* bounded("resolve-codex", VERSION_MS, () =>
+    child("/usr/bin/which", ["codex"], { cwd, live }),
+  );
+  if (located.code !== 0 || !located.stdout.trim()) {
+    return undefined;
+  }
+  const codex = yield* until(realpath(located.stdout.trim()));
+  try {
+    verdict.codexDigest = yield* bounded("codex-digest", VERSION_MS, () => digest(codex));
+  } catch {
+    verdict.codexDigest = "";
+  }
+  try {
+    const version = yield* bounded("codex-version", VERSION_MS, () =>
+      child(codex, ["--version"], { cwd, live }),
+    );
+    const adapter = nativeAdapterFor("codex");
+    verdict.codexVersion =
+      version.code === 0 && adapter && bindsBuild(adapter)
+        ? (adapter.binding.version(version.stdout) ?? "")
+        : "";
+  } catch {
+    verdict.codexVersion = "";
+  }
+  return codex;
+}
+
+function recordAdapter(
+  verdict: Pick<
+    JourneyVerdict,
+    "adapterPackage" | "adapterVersion" | "adapterDigest" | "compatibilityTupleFrozen"
+  >,
+): void {
   const snapshot = embeddedAdapterIdentities().find((entry) => entry.provider === "codex");
   verdict.adapterPackage = snapshot?.package ?? "";
   verdict.adapterVersion = snapshot?.version ?? "";
   verdict.adapterDigest = snapshot?.sha256 ?? "";
+  verdict.compatibilityTupleFrozen =
+    verdict.adapterPackage === REQUIRED_ADAPTER_PACKAGE &&
+    verdict.adapterVersion === REQUIRED_ADAPTER_VERSION &&
+    verdict.adapterDigest === REQUIRED_ADAPTER_DIGEST;
 }
 
 /** Everything every journey establishes before it is allowed to launch. */
-function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
-  if (!(yield* observeCodex(journey, verdict))) {
+export function* ready(
+  journey: Pick<Journey, "root" | "live" | "codex">,
+  verdict: JourneyVerdict,
+  child = runChild,
+  digest = executableDigest,
+): Operation<boolean> {
+  const codex = yield* observeCodex(journey.root, journey.live, verdict, child, digest);
+  if (!codex) {
     // Nothing has been launched, so the journey did not run. Saying otherwise
     // would let a machine that cannot host the proof read as one that hosted it
     // and found something.
@@ -1689,19 +1639,12 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
     verdict.detail = "no installed codex executable was found on PATH";
     return false;
   }
+  journey.codex = codex;
   recordAdapter(verdict);
-  verdict.compatibilityTupleFrozen =
-    verdict.platform === REQUIRED_PLATFORM &&
-    verdict.architecture === REQUIRED_ARCHITECTURE &&
-    verdict.codexVersion === REQUIRED_CODEX_VERSION &&
-    verdict.codexDigest === REQUIRED_CODEX_DIGEST &&
-    verdict.adapterPackage === REQUIRED_ADAPTER_PACKAGE &&
-    verdict.adapterVersion === REQUIRED_ADAPTER_VERSION &&
-    verdict.adapterDigest === REQUIRED_ADAPTER_DIGEST;
   if (!verdict.compatibilityTupleFrozen) {
     verdict.ran = false;
     verdict.verdict = "ENVIRONMENT_BLOCKED";
-    verdict.detail = "this journey is only meaningful against the frozen compatibility tuple";
+    verdict.detail = "this journey is only meaningful through the carried adapter it names";
     return false;
   }
   if (!verdict.projectCopyVerified) {
@@ -2184,11 +2127,17 @@ function* unmaterializedIsRefused(
   });
 }
 
-function* runPreflight(): Operation<PreflightVerdict> {
+export function* runPreflight(
+  child = runChild,
+  digest = executableDigest,
+  checkIdentity = unmaterializedIsRefused,
+  authorized = process.env[PROOF_ENV] === "1",
+  binary = XMD_BINARY,
+): Operation<PreflightVerdict> {
   const verdict: PreflightVerdict = {
     mode: "preflight",
     verdict: "HARNESS_FAILED",
-    authorized: process.env[PROOF_ENV] === "1",
+    authorized,
     refusal: "",
     detail: "preflight did not reach a verdict",
     head: "",
@@ -2222,56 +2171,34 @@ function* runPreflight(): Operation<PreflightVerdict> {
   const live: LiveSet = new Set<number>();
   const cwd = REPO_ROOT;
 
-  verdict.head = (yield* runChild("git", ["rev-parse", "HEAD"], { cwd, live })).stdout.trim();
-  verdict.branch = (yield* runChild("git", ["branch", "--show-current"], {
+  verdict.head = (yield* child("git", ["rev-parse", "HEAD"], { cwd, live })).stdout.trim();
+  verdict.branch = (yield* child("git", ["branch", "--show-current"], {
     cwd,
     live,
   })).stdout.trim();
 
-  const located = yield* bounded("resolve-codex", VERSION_MS, () =>
-    runChild("/usr/bin/which", ["codex"], { cwd, live }),
-  );
-  if (located.code !== 0 || located.stdout.trim().length === 0) {
+  const codex = yield* observeCodex(cwd, live, verdict, child, digest);
+  if (!codex) {
     verdict.verdict = "ENVIRONMENT_BLOCKED";
     verdict.detail = "no installed codex executable was found on PATH";
     return verdict;
   }
-  const codex = yield* until(realpath(located.stdout.trim()));
-  verdict.codexDigest = createHash("sha256")
-    .update(yield* until(readFile(codex)))
-    .digest("hex");
-  const version = yield* bounded("codex-version", VERSION_MS, () =>
-    runChild(codex, ["--version"], { cwd, live }),
-  );
-  verdict.codexVersion = version.code === 0 ? version.stdout.trim() : "";
-
-  const snapshot = embeddedAdapterIdentities().find((entry) => entry.provider === "codex");
-  verdict.adapterPackage = snapshot?.package ?? "";
-  verdict.adapterVersion = snapshot?.version ?? "";
-  verdict.adapterDigest = snapshot?.sha256 ?? "";
-  verdict.compatibilityTupleFrozen =
-    verdict.platform === REQUIRED_PLATFORM &&
-    verdict.architecture === REQUIRED_ARCHITECTURE &&
-    verdict.codexVersion === REQUIRED_CODEX_VERSION &&
-    verdict.codexDigest === REQUIRED_CODEX_DIGEST &&
-    verdict.adapterPackage === REQUIRED_ADAPTER_PACKAGE &&
-    verdict.adapterVersion === REQUIRED_ADAPTER_VERSION &&
-    verdict.adapterDigest === REQUIRED_ADAPTER_DIGEST;
+  recordAdapter(verdict);
 
   // Both are asked without a session, so they fail on an argument rather than
   // reaching a model.
   const resume = yield* bounded("codex-resume-help", VERSION_MS, () =>
-    runChild(codex, ["resume", "--help"], { cwd, live }),
+    child(codex, ["resume", "--help"], { cwd, live }),
   );
   verdict.resumeSurface = resume.code === 0 && resume.stdout.includes("SESSION_ID");
   // The exact surface cleanup uses: `--force` is what makes the delete answer
   // without a prompt, and a build without it would leave this fixture's own
   // conversations behind while reporting that it removed them.
   const surface = yield* bounded("codex-delete-help", VERSION_MS, () =>
-    runChild(codex, ["delete", "--help"], { cwd, live }),
+    child(codex, ["delete", "--help"], { cwd, live }),
   );
   const remove = yield* bounded("codex-delete", VERSION_MS, () =>
-    runChild(codex, ["delete", "--force", randomUUID()], { cwd, live, input: "" }),
+    child(codex, ["delete", "--force", randomUUID()], { cwd, live, input: "" }),
   );
   verdict.deleteSurface =
     surface.code === 0 &&
@@ -2279,10 +2206,10 @@ function* runPreflight(): Operation<PreflightVerdict> {
     remove.code !== 0 &&
     shows(`${remove.stdout}${remove.stderr}`, "failed to delete session");
 
-  verdict.binaryBuilt = yield* exists(XMD_BINARY);
+  verdict.binaryBuilt = yield* exists(binary);
 
   if (verdict.compatibilityTupleFrozen) {
-    yield* unmaterializedIsRefused(codex, live, verdict);
+    yield* checkIdentity(codex, live, verdict);
   }
 
   const established =
@@ -2295,8 +2222,8 @@ function* runPreflight(): Operation<PreflightVerdict> {
     verdict.binaryBuilt;
   verdict.verdict = established ? "PASS" : "ENVIRONMENT_BLOCKED";
   verdict.detail = established
-    ? "the frozen compatibility point is established, and no model turn was spent"
-    : "the frozen compatibility point is not established";
+    ? "the surfaces this journey needs are established, and no model turn was spent"
+    : "the surfaces this journey needs are not established";
   return verdict;
 }
 
@@ -2304,7 +2231,7 @@ function render(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-main(function* () {
+function* runProof(): Operation<void> {
   const mode = process.argv[2];
 
   if (mode === "preflight") {
@@ -2331,4 +2258,8 @@ main(function* () {
   }
 
   throw new Error(`codex-native-launch-proof: unknown mode "${mode ?? ""}"`);
-});
+}
+
+if (import.meta.main) {
+  main(runProof);
+}

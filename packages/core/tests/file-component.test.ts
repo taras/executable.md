@@ -12,7 +12,9 @@
  * fixture unlinks its symlinks rather than following them.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { captureTestJournal } from "../../test-support/failure-journal.ts";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
@@ -46,6 +48,8 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+
+const OWNER = "packages/core/tests/file-component.test.ts";
 
 /**
  * A workspace and a directory beside it that is deliberately out of reach.
@@ -489,16 +493,18 @@ const BOUNDARIES: Array<{
 ];
 
 describe("Tier FL — File", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   // FL1: the ordinary round trip, in relative paths against the contextual
   // directory — the position every other test starts from.
   it("FL1: a relative write is readable at the same relative path", function* () {
     const fixture = yield* useFixture();
-
-    const output = yield* run(
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    const output = yield* runWith(
       fixture,
       ['<File path="request.md">Request content</File>', '<File path="request.md" />'].join("\n"),
+      stream,
     );
 
     expect(yield* read(fixture, "request.md")).toBe("Request content");
@@ -509,8 +515,12 @@ describe("Tier FL — File", () => {
   // path, so a document cannot accidentally leak where it wrote.
   it("FL2: the write form renders nothing", function* () {
     const fixture = yield* useFixture();
-
-    const output = yield* run(fixture, '<File path="request.md">Request content</File>');
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    const output = yield* runWith(
+      fixture,
+      '<File path="request.md">Request content</File>',
+      stream,
+    );
 
     expect(text(output).trim()).toBe("");
     expect(yield* read(fixture, "request.md")).toBe("Request content");
@@ -519,8 +529,8 @@ describe("Tier FL — File", () => {
   // FL3: a path names where the file goes, not a directory that must exist.
   it("FL3: a write creates the parent directories its path names", function* () {
     const fixture = yield* useFixture();
-
-    yield* run(fixture, '<File path="fixtures/nested/request.md">nested</File>');
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* runWith(fixture, '<File path="fixtures/nested/request.md">nested</File>', stream);
 
     expect(yield* read(fixture, "fixtures/nested/request.md")).toBe("nested");
   });
@@ -529,14 +539,15 @@ describe("Tier FL — File", () => {
   // same content again leaves the same file rather than appending.
   it("FL4: a second write replaces the content", function* () {
     const fixture = yield* useFixture();
-
-    yield* run(
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* runWith(
       fixture,
       [
         '<File path="notes.md">first</File>',
         '<File path="notes.md">second</File>',
         '<File path="notes.md">second</File>',
       ].join("\n"),
+      stream,
     );
 
     expect(yield* read(fixture, "notes.md")).toBe("second");
@@ -546,8 +557,10 @@ describe("Tier FL — File", () => {
   // after it still runs.
   it("FL5: reading a missing path fails as a printed error", function* () {
     const fixture = yield* useFixture();
-
-    const output = text(yield* run(fixture, ['<File path="absent.md" />', "", "after"].join("\n")));
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    const output = text(
+      yield* runWith(fixture, ['<File path="absent.md" />', "", "after"].join("\n"), stream),
+    );
 
     expect(output).toContain('cannot read "absent.md": no such file.');
     expect(output).toContain("after");
@@ -557,11 +570,12 @@ describe("Tier FL — File", () => {
   // reading one produces on a given platform.
   it("FL6: reading a directory fails naming what it is", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const output = text(
-      yield* run(
+      yield* runWith(
         fixture,
         ['<File path="dir/inner.md">inner</File>', '<File path="dir" />'].join("\n"),
+        stream,
       ),
     );
 
@@ -602,6 +616,7 @@ describe("Tier FL — File", () => {
   // back through either name agree.
   it("FL9: an internal symlink is followed for both reads and writes", function* () {
     const fixture = yield* useFixture();
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     yield* until(mkdir(join(fixture.workspace, "real")));
     yield* writeTextFile(join(fixture.workspace, "real/target.txt"), "original");
     yield* until(
@@ -609,9 +624,10 @@ describe("Tier FL — File", () => {
     );
 
     const output = text(
-      yield* run(
+      yield* runWith(
         fixture,
         ['<File path="link.txt" />', '<File path="link.txt">replaced</File>'].join("\n"),
+        stream,
       ),
     );
 
@@ -657,12 +673,12 @@ describe("Tier FL — File", () => {
   // The invocation fails rather than writing, and carries the reason out.
   it("FL12: a failing child leaves an existing file untouched", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     // `<File>` reports what it did not write, and the checked failure inside it
     // is still the run's: no write, no replacement, and nothing after it (#441).
     let failure = "";
     try {
-      yield* run(
+      yield* runWith(
         fixture,
         [
           '<File path="notes.md">first</File>',
@@ -676,6 +692,7 @@ describe("Tier FL — File", () => {
           `touch ${join(fixture.workspace, "sibling-ran.txt")}`,
           "```",
         ].join("\n"),
+        stream,
       );
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
@@ -761,32 +778,43 @@ describe("Tier FL — File", () => {
   // FL13: the write itself failing is the other half. The replacement is a
   // rename over a temporary, so a directory that refuses new files stops it
   // before the previous content is disturbed.
-  it("FL13: a failed replacement leaves the previous content in place", function* () {
-    // Root ignores directory permissions, so there would be no failure to
-    // observe and the assertion below would measure nothing.
-    if (process.getuid?.() === 0) {
-      return;
-    }
+  {
+    const caseName = "FL13: a failed replacement leaves the previous content in place";
+    it(caseName, function* () {
+      // Root ignores directory permissions, so there would be no failure to
+      // observe and the assertion below would measure nothing.
+      if (process.getuid?.() === 0) {
+        return;
+      }
 
-    const fixture = yield* useFixture();
-    const locked = join(fixture.workspace, "locked");
-    yield* until(mkdir(locked));
-    yield* writeTextFile(join(locked, "notes.md"), "first");
-    yield* until(chmod(locked, 0o555));
-    yield* ensure(() => until(chmod(locked, 0o755)));
+      const fixture = yield* useFixture();
+      yield* captureTestJournal(
+        { owner: OWNER, name: caseName },
+        join(fixture.workspace, "doc.md"),
+        function* (stream) {
+          const locked = join(fixture.workspace, "locked");
+          yield* until(mkdir(locked));
+          yield* writeTextFile(join(locked, "notes.md"), "first");
+          yield* until(chmod(locked, 0o555));
+          yield* ensure(() => until(chmod(locked, 0o755)));
 
-    const output = text(yield* run(fixture, '<File path="locked/notes.md">second</File>'));
+          const output = text(
+            yield* runWith(fixture, '<File path="locked/notes.md">second</File>', stream),
+          );
 
-    expect(output).toContain("Function component File error:");
-    expect(yield* read(fixture, "locked/notes.md")).toBe("first");
-  });
+          expect(output).toContain("Function component File error:");
+          expect(yield* read(fixture, "locked/notes.md")).toBe("first");
+        },
+      );
+    });
+  }
 
   // FL14: the temporary the replacement goes through is an implementation
   // detail, and it must not become a document's problem.
   it("FL14: a successful write leaves no temporary file behind", function* () {
     const fixture = yield* useFixture();
-
-    yield* run(fixture, '<File path="notes.md">content</File>');
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
+    yield* runWith(fixture, '<File path="notes.md">content</File>', stream);
 
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
@@ -871,15 +899,16 @@ describe("Tier FL — File", () => {
   // would refuse an ordinary file whose name happens to start with two dots.
   it("FL17: a name beginning with dots is an ordinary file", function* () {
     const fixture = yield* useFixture();
-
+    const stream = yield* useJournalStream(join(fixture.workspace, "doc.md"));
     const output = text(
-      yield* run(
+      yield* runWith(
         fixture,
         [
           '<File path="..notes.md">dotted</File>',
           '<File path="..config/settings.json">nested</File>',
           '<File path="..notes.md" />',
         ].join("\n"),
+        stream,
       ),
     );
 
@@ -1360,6 +1389,7 @@ function* useFileCalls(calls: string[]): Operation<void> {
 }
 
 describe("Tier FL — the authored form decides the effect", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const LYING: Array<[string, readonly boolean[]]> = [

@@ -1,4 +1,5 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
@@ -10,7 +11,10 @@ import { settledReading } from "./support/mounted-history.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import { todoWakeEligible } from "../src/repl/todo/wake.ts";
 
+const OWNER = "packages/cli/tests/repl-todo-recovery.test.ts";
+
 describe("TODO logical runtime recovery", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("restores only file state and initializes once per open logical runtime", function* () {
     let initialized = 0;
     let cleaned = 0;

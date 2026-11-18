@@ -1,9 +1,10 @@
+import { captureTestJournal, journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import { API } from "@executablemd/runtime";
@@ -29,8 +30,13 @@ import { join } from "node:path";
 import { makeRegistry, makeStore } from "./support/fake-acp.ts";
 import { chmod, mkdtemp, realpath } from "node:fs/promises";
 
+const OWNER = "packages/cli/tests/repl-headless.test.ts";
+
 describe("parent-owned headless REPL", () => {
-  it("H3: disconnect after accepted work reconnects exactly without resubmitting its effect", function* () {
+  beforeEach(journalBeforeEach(OWNER));
+  const creatorCut =
+    "H3: disconnect after accepted work reconnects exactly without resubmitting its effect";
+  it(creatorCut, function* () {
     const held = yield* useHeadlessFixture();
     const source = '<Let as="once" value="single-disconnected-effect" /><Output>{once}</Output>';
     held.host.fake.script({
@@ -176,7 +182,9 @@ describe("parent-owned headless REPL", () => {
     yield* held.task.halt();
     expect(accesses).toBe(0);
   });
-  it("H3: cancellation before readiness joins startup; after registration only the parent closes the child", function* () {
+  const startupCut =
+    "H3: cancellation before readiness joins startup; after registration only the parent closes the child";
+  it(startupCut, function* () {
     for (const cut of ["before-ready", "registered"]) {
       yield* scoped(function* () {
         yield* usePosixSidekickTransport(process.platform);
@@ -221,79 +229,84 @@ describe("parent-owned headless REPL", () => {
           path,
           '<Agent name="xmd"><Session name="worker"><XMD.Session as="child" /></Session></Agent><Block />',
         );
-        const stream = new InMemoryStream();
-        const provider = children.factory({
-          createRuntime: host.fake.create,
-          agentRegistry: makeRegistry({}),
-          sessionStore: makeStore(),
-        });
-        const creator = yield* spawn(function* () {
-          const execution = yield* executeInstalled({ path, stream }, [
-            children.installation,
-            {
-              components: agentIdentityComponents(),
-              *install() {
-                yield* installAgentComponents({
-                  rootProvider: {
-                    factory: provider,
-                    options: { defaultAgent: "xmd", permissionMode: "deny-all" },
-                  },
-                });
-              },
-            },
-            {
-              components: [
+        yield* captureTestJournal(
+          { owner: "packages/cli/tests/repl-headless.test.ts", name: startupCut },
+          path,
+          function* (stream) {
+            const provider = children.factory({
+              createRuntime: host.fake.create,
+              agentRegistry: makeRegistry({}),
+              sessionStore: makeStore(),
+            });
+            const creator = yield* spawn(function* () {
+              const execution = yield* executeInstalled({ path, stream }, [
+                children.installation,
                 {
-                  name: "Block",
-                  origin: "test",
-                  props: { type: "object" },
-                  factory: () =>
-                    function* () {
-                      yield* suspend();
-                      return null;
-                    },
+                  components: agentIdentityComponents(),
+                  *install() {
+                    yield* installAgentComponents({
+                      rootProvider: {
+                        factory: provider,
+                        options: { defaultAgent: "xmd", permissionMode: "deny-all" },
+                      },
+                    });
+                  },
                 },
-              ],
-            },
-          ]);
-          const output = yield* execution.output;
-          let next = yield* output.next();
-          while (!next.done) {
-            next = yield* output.next();
-          }
-          return yield* execution;
-        });
-        yield* reached.operation;
-        const allocation = (yield* stream.readAll()).find(
-          (event) => event.type === "yield" && event.description.type === "xmd_session",
-        );
-        const address = z
-          .object({
-            result: z
-              .object({ value: z.object({ sessionId: z.string().uuid() }).strict() })
-              .passthrough(),
-          })
-          .passthrough()
-          .parse(allocation).result.value;
-        let joined = false;
-        const stopping = yield* spawn(function* () {
-          yield* creator.halt();
-          if (cut === "registered") {
-            expect(
-              (yield* attachmentDescriptor(yield* childAddressPath(address.sessionId))).owner,
-            ).toBe(address.sessionId);
+                {
+                  components: [
+                    {
+                      name: "Block",
+                      origin: "test",
+                      props: { type: "object" },
+                      factory: () =>
+                        function* () {
+                          yield* suspend();
+                          return null;
+                        },
+                    },
+                  ],
+                },
+              ]);
+              const output = yield* execution.output;
+              let next = yield* output.next();
+              while (!next.done) {
+                next = yield* output.next();
+              }
+              return yield* execution;
+            });
+            yield* reached.operation;
+            const allocation = (yield* stream.readAll()).find(
+              (event) => event.type === "yield" && event.description.type === "xmd_session",
+            );
+            const address = z
+              .object({
+                result: z
+                  .object({ value: z.object({ sessionId: z.string().uuid() }).strict() })
+                  .passthrough(),
+              })
+              .passthrough()
+              .parse(allocation).result.value;
+            let joined = false;
+            const stopping = yield* spawn(function* () {
+              yield* creator.halt();
+              if (cut === "registered") {
+                expect(
+                  (yield* attachmentDescriptor(yield* childAddressPath(address.sessionId))).owner,
+                ).toBe(address.sessionId);
+                expect(closed).toBe(false);
+                yield* children.close();
+              }
+              joined = true;
+            });
+            yield* closing.operation;
+            expect(joined).toBe(false);
             expect(closed).toBe(false);
+            release.resolve();
+            yield* stopping;
+            expect(closed).toBe(true);
             yield* children.close();
-          }
-          joined = true;
-        });
-        yield* closing.operation;
-        expect(joined).toBe(false);
-        expect(closed).toBe(false);
-        release.resolve();
-        yield* stopping;
-        expect(closed).toBe(true);
-        yield* children.close();
+          },
+        );
       });
     }
   });
@@ -841,6 +854,7 @@ function* useManagedRecoveryChild(publicationFailure: { armed: boolean }) {
 }
 
 describe("987 — owned reference disposition", () => {
+  beforeEach(journalBeforeEach(OWNER));
   for (const cut of ["publication", "active-unwind"]) {
     it(`keeps authoritative selection and reference lifetime at ${cut}`, function* () {
       const publication = { armed: false };
@@ -918,6 +932,7 @@ describe("987 — owned reference disposition", () => {
 });
 
 describe("987 — original child input ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("keeps an entry question through inspection, UI detach and same-original recovery", function* () {
     const held = yield* useManagedRecoveryChild({ armed: false });
     held.host.fake.script({ reply: "<REPL.Bindings />" });
@@ -999,6 +1014,7 @@ describe("987 — original child input ownership", () => {
 });
 
 describe("REPL Plugin session ownership", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("R2: parent and child initialize once; UI and history reads initialize nothing", function* () {
     const workspaces: string[] = [];
     const stopped: string[] = [];

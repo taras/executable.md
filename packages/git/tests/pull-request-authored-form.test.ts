@@ -402,6 +402,18 @@ describe("PullRequest authored read", () => {
     expect(store.requests).toEqual([]);
   });
 
+  it("accepts the largest safe byte budget and refuses a larger one before HTTP", function* () {
+    const store = githubWith(openPullRequest());
+    const read = `<PullRequest url="${URL_1}" yq=".body"`;
+    const unsafe = yield* refusalOf(store, `${read} maxBytes={9007199254740992} />`);
+    expect(String(unsafe)).toContain("maxBytes");
+    expect(store.requests).toEqual([]);
+
+    const safe = yield* renderPage(store, `${read} maxBytes={9007199254740991} />`);
+    expect(safe).toEqual({ value: DESCRIPTION, next: null, prev: null, last: null });
+    expect(lookups(store, 1)).toBe(1);
+  });
+
   it("refuses an invalid read before any GitHub request", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
