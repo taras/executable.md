@@ -186,9 +186,14 @@ describe("the applicable corpus", () => {
       "LaunchPolicy",
       "Preparation",
       "ProductionRole",
+      "ProductionRoleInstructions",
+      "ProductionRoleResponse",
       "ProductionRoleSonnet",
       "Submission",
       "Workflow",
+      "WorkflowFoundation",
+      "WorkflowRepair",
+      "WorkflowResponse",
     ].map((name) => `examples/adversarial-implementation/tests/${name}.test.md`);
     expect(
       (yield* listTestFiles(ROOT)).filter(
@@ -337,7 +342,14 @@ describe("the one-file Markdown commands", () => {
   });
 
   it("gives the production-role suites their production components", function* () {
-    for (const name of ["Preparation", "ProductionRole", "ProductionRoleSonnet", "Submission"]) {
+    for (const name of [
+      "Preparation",
+      "ProductionRole",
+      "ProductionRoleInstructions",
+      "ProductionRoleResponse",
+      "ProductionRoleSonnet",
+      "Submission",
+    ]) {
       const file = `examples/adversarial-implementation/tests/${name}.test.md`;
       expect(oneFileCommand("bun", file, ROOT).arguments.slice(-4)).toEqual([
         "--include",
@@ -384,7 +396,7 @@ describe("the one-file Markdown commands", () => {
     ).toEqual(previous);
   });
 
-  it("keeps each suite's whole-launch deadline and gives Implementation's groups their own", function* () {
+  it("keeps unrelated whole-launch deadlines and leaves grouped families uncapped", function* () {
     expect(MARKDOWN_DEADLINES).toEqual({
       ArtifactReturn: 120_000,
       ArtifactReturnRecovery: 120_000,
@@ -395,10 +407,7 @@ describe("the one-file Markdown commands", () => {
       Friction: 180_000,
       LaunchPolicy: 120_000,
       Preparation: 420_000,
-      ProductionRole: 120_000,
-      ProductionRoleSonnet: 120_000,
       Submission: 120_000,
-      Workflow: 120_000,
     });
   });
 

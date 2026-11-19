@@ -99,13 +99,15 @@ function cliEntry(runtime: Runtime): string[] {
 const PRODUCTION_SUITES = new Set([
   "Preparation",
   "ProductionRole",
+  "ProductionRoleInstructions",
+  "ProductionRoleResponse",
   "ProductionRoleSonnet",
   "Submission",
 ]);
 
 /**
- * Each suite's whole-launch deadline, in milliseconds. Implementation has none:
- * each of its named groups carries its own.
+ * Each suite's whole-launch deadline, in milliseconds. Implementation and the
+ * grouped ProductionRole and Workflow suites have none.
  */
 export const MARKDOWN_DEADLINES: Record<string, number> = {
   ArtifactReturn: 120_000,
@@ -117,10 +119,7 @@ export const MARKDOWN_DEADLINES: Record<string, number> = {
   Friction: 180_000,
   LaunchPolicy: 120_000,
   Preparation: 420_000,
-  ProductionRole: 120_000,
-  ProductionRoleSonnet: 120_000,
   Submission: 120_000,
-  Workflow: 120_000,
 };
 
 function suiteName(file: string): string {

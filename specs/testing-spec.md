@@ -985,7 +985,8 @@ The adversarial suites append the following arguments to the source entrypoint:
 --include <root>/examples/adversarial-implementation/tests/components --include
 <root>/examples/adversarial-implementation/components`, with the include paths
 absolute so that a nested `<Dir>` cannot change where components are found.
-`Preparation`, `ProductionRole`, `ProductionRoleSonnet` and `Submission` include
+`Preparation`, `ProductionRole`, `ProductionRoleInstructions`,
+`ProductionRoleResponse`, `ProductionRoleSonnet` and `Submission` include
 `tests/production-components` in place of `tests/components`. The child's
 environment also receives `XMD_EXAMPLE_COMMAND` and `XMD_EXAMPLE_TEST_COMMAND`.
 Each is the prepared Deno CLI above followed by `run --allow-absolute` or
@@ -997,10 +998,16 @@ plugin adds `--node-modules-dir=manual --cached-only --frozen` when the Deno
 source host relaunches itself as a TestAgent worker, including workers for
 isolated run-profile children.
 
-Each adversarial suite but `Implementation`, whose named groups carry their
-own deadlines, runs under a whole-launch deadline. `Preparation` has 420
+`ProductionRole` is split into `ProductionRole`, `ProductionRoleResponse` and
+`ProductionRoleInstructions`; `Workflow` is split into `Workflow`,
+`WorkflowFoundation`, `WorkflowResponse` and `WorkflowRepair`. Each file
+retains complete Test blocks and its own setup, while discovery runs every
+file once. The grouped ProductionRole and Workflow families, including
+`ProductionRoleSonnet`, have no whole-launch deadline. Each authored Test
+deadline and the default per-test timeout remains effective. The other
+adversarial suites run under whole-launch deadlines: `Preparation` has 420
 seconds, `Friction` has 180, `DecisionResolution` and `Delivery` have 300, and
-the other adversarial suites have 120. A suite that
+the remaining capped suites have 120. A suite that
 reaches it is stopped and its cleanup joined, its path and deadline are
 reported, and it fails with status 1. The files after it still run.
 `SessionConfiguration` has a 120-second whole-launch deadline under each
