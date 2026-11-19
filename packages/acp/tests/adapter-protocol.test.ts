@@ -1139,12 +1139,6 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
       "claude-fable-4",
       "is no longer offered",
     ],
-    [
-      "unrepresentable unselected",
-      { FAKE_CLAUDE_MODELS: ALIAS_ONLY },
-      undefined,
-      "none of its offered models names exactly",
-    ],
   ] as const) {
     it(`EA17: a marked resume refuses a ${name} observation as an invalid request`, function* () {
       const { adapter, sessionId, cwd } = yield* useResumable("fable", environment);
@@ -1201,6 +1195,29 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
         cwd,
         mcpServers: [],
         _meta: { [HAS_EXPLICIT_MODEL_META]: true, ...savedSelection(selection) },
+      });
+      expect(reportedModel(response)).toBe(reported);
+      expect(yield* modelWrites(adapter)).toEqual([]);
+    }
+  });
+
+  it("EA21: without a saved selection, a marked resume continues the initial one", function* () {
+    const fableFirst = JSON.stringify([...JSON.parse(ALIAS_ONLY)].reverse());
+    // The settings model `fable`, an environment model, or else the first offered.
+    for (const [catalog, environment, reported] of [
+      [ALIAS_ONLY, {}, "fable"],
+      [fableFirst, { ANTHROPIC_MODEL: "default" }, "default"],
+      [ALIAS_ONLY, { ANTHROPIC_MODEL: "no-such-model" }, "default"],
+    ] as const) {
+      const { adapter, sessionId, cwd } = yield* useResumable("fable", {
+        FAKE_CLAUDE_MODELS: catalog,
+        ...environment,
+      });
+      const response = yield* adapter.request("session/resume", {
+        sessionId,
+        cwd,
+        mcpServers: [],
+        _meta: { [HAS_EXPLICIT_MODEL_META]: true },
       });
       expect(reportedModel(response)).toBe(reported);
       expect(yield* modelWrites(adapter)).toEqual([]);

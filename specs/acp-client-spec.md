@@ -509,8 +509,10 @@ stays within the runtime; `session/new` and other adapters carry no marker.
 On such a resume the prepared Claude adapter reasserts no environment or
 settings model, and reports the current model selection as a picker value.
 ACPX sends the conversation's saved selection with each load or resume as
-`_meta.claudeCode.options.model`. The resumed backend reports the concrete
-model it runs, which the picker may name only through an alias or not at all.
+`_meta.claudeCode.options.model`; a conversation whose model was never written
+has none and uses the selection a fresh session starts with instead. The
+resumed backend reports the concrete model it runs, which the picker may name
+only through an alias or not at all.
 From the saved selection, that report and the offered models, the adapter
 chooses:
 

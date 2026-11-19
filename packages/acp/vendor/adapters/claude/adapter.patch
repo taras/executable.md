@@ -1,5 +1,5 @@
 diff --git a/src/acp-agent.ts b/src/acp-agent.ts
-index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa772c2b8f6 100644
+index e32f603e7cb85544a9ebf108489fcf98932d14a2..f72534072e249f15e6416801373e59fa1fd7792b 100644
 --- a/src/acp-agent.ts
 +++ b/src/acp-agent.ts
 @@ -81,7 +81,7 @@ import {
@@ -339,7 +339,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
      };
    }
  
-@@ -6058,572 +6236,751 @@ export class ClaudeAcpAgent {
+@@ -6058,572 +6236,756 @@ export class ClaudeAcpAgent {
      }
    }
  
@@ -478,15 +478,15 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
 -      this.logger,
 -    );
 -    const initialPermissionMode = creationOpts.permissionMode ?? permissionMode;
-+      input = new Pushable<SDKUserMessage>();
- 
+-
 -    // Extract options from _meta if provided
 -    const sessionMeta = params._meta as NewSessionMeta | undefined;
 -    const userProvidedOptions = sessionMeta?.claudeCode?.options;
 -    const forwardSubagentText =
 -      supportsSubagentTranscript(this.clientCapabilities) ||
 -      userProvidedOptions?.forwardSubagentText === true;
--
++      input = new Pushable<SDKUserMessage>();
+ 
 -    // Configure thinking behavior from environment variable
 -    const thinking = resolveThinkingConfig(process.env.MAX_THINKING_TOKENS, this.logger);
 +      settingsManager = new SettingsManager(params.cwd, {
@@ -1185,7 +1185,12 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
 +
 +      const { modelState: models, resumedContextWindow } =
 +        creationOpts.resume !== undefined && continuesExplicitModel(params._meta)
-+          ? await observeResumedModel(q, allowedModels, userProvidedOptions?.model)
++          ? await observeResumedModel(
++              q,
++              allowedModels,
++              userProvidedOptions?.model ??
++                initialModelSelection(allowedModels, settingsManager, this.logger),
++            )
 +          : await getAvailableModels(
 +              q,
 +              allowedModels,
@@ -1620,7 +1625,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
    }
  
    /**
-@@ -7574,6 +7931,79 @@ async function readResumedLiveModel(
+@@ -7574,6 +7936,97 @@ async function readResumedLiveModel(
    }
  }
  
@@ -1648,6 +1653,9 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
 + * not resolve to — a change made outside this client. Otherwise the saved
 + * selection continues, and one no longer offered refuses rather than inventing a
 + * selectable entry. A failed or empty report refuses too, before any prompt.
++ *
++ * A conversation without a saved selection continues the one a fresh session
++ * starts with: nothing was ever written over it.
 + *
 + * Refused as an invalid request so a client does not mistake it for a missing
 + * conversation and create a replacement.
@@ -1680,7 +1688,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
 +    throw RequestError.invalidRequest(
 +      { model: observed },
 +      selection === undefined
-+        ? `the resumed session runs "${observed}", which none of its offered models names exactly`
++        ? `the resumed session runs "${observed}", and no model is offered`
 +        : `the resumed session's saved model selection "${selection}" is no longer offered`,
 +    );
 +  }
@@ -1695,6 +1703,21 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa7
 +    },
 +    resumedContextWindow: usage.rawMaxTokens > 0 ? usage.rawMaxTokens : null,
 +  };
++}
++
++/** The selection a fresh session starts with, as `getAvailableModels` chooses it. */
++function initialModelSelection(
++  models: ModelInfo[],
++  settingsManager: SettingsManager,
++  logger: Logger,
++): string | undefined {
++  const settings = settingsManager.getSettings();
++  const preference = process.env.ANTHROPIC_MODEL
++    ? resolveModelPreference(models, process.env.ANTHROPIC_MODEL)
++    : typeof settings.model === "string"
++      ? resolveSettingsModel(models, settings.model, logger)
++      : null;
++  return (preference ?? models[0])?.value;
 +}
 +
  async function getAvailableModels(

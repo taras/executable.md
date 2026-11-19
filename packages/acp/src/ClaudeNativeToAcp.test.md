@@ -330,7 +330,7 @@ resume invocations. Availability probes and ACP subprocesses have separate argv.
 
 <AssertEquals
   actual={proof.adapterIdentity}
-  expected={"xmd-embedded-adapter:claude:@agentclientprotocol/claude-agent-acp@0.70.0+096aa7ce57669133ccae8875c5c1cc83cd6564d30c44cb33b74536f7cdc31863"}
+  expected={"xmd-embedded-adapter:claude:@agentclientprotocol/claude-agent-acp@0.70.0+23436af3292bc7b06ab5f7426bc83391d078fdeef1f5d641bb6a3884254cd906"}
 />
 
 ## An identity nobody ever had is refused before a turn

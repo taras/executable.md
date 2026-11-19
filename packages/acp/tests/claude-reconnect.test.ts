@@ -429,24 +429,23 @@ describe(
     });
 
     it("CR10: an alias continues when the picker does not name the model it runs", function* () {
+      const aliasOnlyCatalog = JSON.stringify([
+        {
+          value: "default",
+          resolvedModel: "claude-fable-5-1",
+          displayName: "Default",
+          description: "",
+        },
+        {
+          value: "fable",
+          resolvedModel: "claude-fable-5-1",
+          displayName: "Fable",
+          description: "",
+        },
+      ]);
       const aliasOnly = yield* useWorld();
       yield* scoped(function* () {
-        const runtime = runtimeFor(aliasOnly, {
-          FAKE_CLAUDE_MODELS: JSON.stringify([
-            {
-              value: "default",
-              resolvedModel: "claude-fable-5-1",
-              displayName: "Default",
-              description: "",
-            },
-            {
-              value: "fable",
-              resolvedModel: "claude-fable-5-1",
-              displayName: "Fable",
-              description: "",
-            },
-          ]),
-        });
+        const runtime = runtimeFor(aliasOnly, { FAKE_CLAUDE_MODELS: aliasOnlyCatalog });
         yield* ensure(() => until(runtime.shutdown()));
         yield* established(aliasOnly, runtime, "fable");
         const session = observed(yield* logged(aliasOnly)).prompts[0]?.session;
@@ -469,6 +468,36 @@ describe(
         expect(
           entries.filter((entry) => entry.event === "started").map((e) => [e.session, e.resumed]),
         ).toEqual([
+          [session, true],
+          [session, true],
+        ]);
+      });
+
+      const unwritten = yield* useWorld();
+      yield* scoped(function* () {
+        const runtime = runtimeFor(unwritten, { FAKE_CLAUDE_MODELS: aliasOnlyCatalog });
+        yield* ensure(() => until(runtime.shutdown()));
+        // The request is what a fresh session starts with, so no model is ever
+        // written and no selection is saved; reconnects continue that one.
+        for (const text of ["first", "second", "third"]) {
+          expect(yield* ownedTurn(unwritten, runtime, text, "default")).toEqual({
+            status: "completed",
+          });
+        }
+        const entries = yield* logged(unwritten);
+        const session = observed(entries).prompts[0]?.session;
+        expect(observed(entries)).toEqual({
+          modelWrites: [],
+          prompts: [
+            { session, model: "claude-fable-5-1", effort: null },
+            { session, model: "claude-fable-5-1", effort: null },
+            { session, model: "claude-fable-5-1", effort: null },
+          ],
+        });
+        expect(
+          entries.filter((entry) => entry.event === "started").map((e) => [e.session, e.resumed]),
+        ).toEqual([
+          [session, false],
           [session, true],
           [session, true],
         ]);

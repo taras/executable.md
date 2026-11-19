@@ -278,10 +278,12 @@ that names its own model. On that branch only, `createSession` skips
 current model selection is the backend's `getContextUsage` model when that is
 exactly another offered value the saved selection
 (`_meta.claudeCode.options.model`) does not resolve to, and otherwise the saved
-selection while it is offered. A failed or empty report, or a saved selection no
-longer offered, refuses with an invalid-request error before any prompt, so a
-client never reads it as a missing conversation to replace. The marker is never
-passed into SDK options. Fresh, unmarked and effort-only initialization keep the
-existing priority. The recipe
-records the changed patch, `src/acp-agent.ts` postimage, `dist/acp-agent.js`
-runtime and output hashes; source, SDK and compiler pins are unchanged.
+selection while it is offered. Without a saved selection, the selection a fresh
+session starts with stands in for it, chosen as `getAvailableModels` chooses it
+but never written. A failed or empty report, or a saved selection no longer
+offered, refuses with an invalid-request error before any prompt, so a client
+never reads it as a missing conversation to replace. The marker is never passed
+into SDK options. Fresh, unmarked and effort-only initialization keep the
+existing priority. The recipe records the changed patch, `src/acp-agent.ts`
+postimage, `dist/acp-agent.js` runtime and output hashes; source, SDK and
+compiler pins are unchanged.
