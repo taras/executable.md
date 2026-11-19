@@ -835,8 +835,11 @@ health and required CI as merge gates; review acceptance waives neither.
 deno task test examples/adversarial-implementation/tests/*.test.md
 ```
 
-The launcher runs each Markdown suite through `xmd test` and enables absolute
+The launcher runs each discovered Markdown suite through `xmd test` and enables absolute
 host paths for its temporary checkouts and artifacts through a test plugin.
+ProductionRole and Workflow are split into focused files so each group is
+discovered once; their family launchers, including ProductionRoleSonnet, have
+no whole-launch deadline while authored Test deadlines remain in force.
 
 Only the role boundaries are replaced. These journeys use real signed scratch
 Git repositories, committed shell consumers, focused command failures, the
