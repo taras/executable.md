@@ -5346,13 +5346,8 @@ describe("Tier NC — configured native launch", () => {
       // native UI was handed is the one this preparation named.
       expect(harness.ensureCalls.length).toBe(1);
       expect(trace.launches[0]?.command).toContain(prepared.nativeSessionId);
-      // A fresh creation resumes nothing; both writes belong to this use, which
-      // names a model.
-      expect(harness.modelRequests).toEqual([
-        "ensure -",
-        "set model gpt-5.4-mini",
-        "set effort gpt-5.4-mini",
-      ]);
+      // No call names a requested model to the runtime.
+      expect(harness.modelRequests).toEqual(["ensure -", "set model -", "set effort -"]);
     });
   });
 
@@ -5475,13 +5470,8 @@ describe("Tier NC — configured native launch", () => {
         "spawn",
         "exited",
       ]);
-      // The owed turn is spent under the launch's own configured use.
-      expect(harness.modelRequests).toEqual([
-        "ensure -",
-        "set model gpt-5.4-mini",
-        "set effort gpt-5.4-mini",
-        "turn gpt-5.4-mini",
-      ]);
+      // No call names a requested model to the runtime.
+      expect(harness.modelRequests).toEqual(["ensure -", "set model -", "set effort -", "turn -"]);
     });
   });
 
@@ -5594,12 +5584,8 @@ describe("Tier NR — configured incomplete replay", () => {
       expect(harness.ensureCalls[0]?.resumeSessionId).toBe(`agent-session:${SESSION_KEY}`);
       expect(harness.turns.length).toBe(0);
       expect(trace.launches[0]?.command).toContain(`agent-session:${SESSION_KEY}`);
-      // The reacquisition resumes under the retained configuration's requested model.
-      expect(harness.modelRequests).toEqual([
-        "ensure gpt-5.4-mini",
-        "set model gpt-5.4-mini",
-        "set effort gpt-5.4-mini",
-      ]);
+      // The reacquisition names no requested model to the runtime.
+      expect(harness.modelRequests).toEqual(["ensure -", "set model -", "set effort -"]);
     });
   });
 
