@@ -21,6 +21,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   describeShard,
   localDenoTests,
+  MARKDOWN_DEADLINES,
   oneFileCommand,
   parseShardSelection,
   PREPARED_LINK,
@@ -42,6 +43,19 @@ const ONE = "packages/alpha/tests/one.test.ts";
 const TWO = "packages/alpha/tests/two.test.ts";
 const THREE = "packages/beta/tests/three.test.ts";
 const SUITE = "examples/adversarial-implementation/tests/Implementation.test.md";
+const AFFECTED_MARKDOWN_SUITES = [
+  "ProductionRole",
+  "ProductionRoleResponse",
+  "ProductionRoleInstructions",
+  "Workflow",
+  "WorkflowFoundation",
+  "WorkflowResponse",
+  "WorkflowRepair",
+  "ProductionRoleSonnet",
+].map((name) => `examples/adversarial-implementation/tests/${name}.test.md`);
+const AFFECTED_MARKDOWN_NAMES = new Set(
+  AFFECTED_MARKDOWN_SUITES.map((file) => file.split("/").at(-1)),
+);
 
 function line(launch: { command: string; arguments: string[] }): string {
   return `${launch.command} ${launch.arguments.join(" ")}`;
@@ -283,6 +297,54 @@ describe("the whole suite", () => {
     expect(yield* TestRuns.with(statuses(5, 3), () => runSuite("node", ROOT))).toEqual(5);
     expect(yield* TestRuns.with(statuses(0, 3), () => runSuite("node", ROOT))).toEqual(3);
     expect(yield* TestRuns.with(statuses(0, 0), () => runSuite("node", ROOT))).toEqual(0);
+  });
+});
+
+describe("the grouped adversarial Markdown launch boundary", () => {
+  it("runs every affected group through each runtime's exact uncapped launch", function* () {
+    for (const file of AFFECTED_MARKDOWN_SUITES) {
+      expect(
+        MARKDOWN_DEADLINES[file.replace(/^.*\//, "").replace(/\.test\.md$/, "")],
+      ).toBeUndefined();
+    }
+
+    const seen: Array<{
+      command: string;
+      arguments: string[];
+      cwd: string;
+      env?: Record<string, string>;
+    }> = [];
+    const expectedFailure = "examples/adversarial-implementation/tests/WorkflowRepair.test.md";
+    const controlled: RunLaunch = function* (launch) {
+      seen.push(launch);
+      const file = launch.arguments.find((argument) =>
+        AFFECTED_MARKDOWN_NAMES.has(argument.split("/").at(-1)),
+      );
+      return file === expectedFailure ? 7 : 0;
+    };
+
+    for (const runtime of RUNTIMES) {
+      for (const file of AFFECTED_MARKDOWN_SUITES) {
+        const status = yield* TestRuns.with(controlled, () => runOneFile(runtime, file, ROOT));
+        expect(status).toBe(file === expectedFailure ? 7 : 0);
+        const expected = oneFileCommand(runtime, file, ROOT);
+        expect(seen.at(-1)).toEqual({ ...expected, cwd: fileURLToPath(ROOT) });
+        expect(seen.at(-1)?.arguments).toContain("--plugin");
+        expect(seen.at(-1)?.arguments).toContain(
+          file.includes("ProductionRole")
+            ? fileURLToPath(
+                new URL("examples/adversarial-implementation/tests/production-components", ROOT),
+              )
+            : fileURLToPath(new URL("examples/adversarial-implementation/tests/components", ROOT)),
+        );
+        expect(seen.at(-1)?.arguments).toContain(
+          fileURLToPath(new URL("examples/adversarial-implementation/components", ROOT)),
+        );
+        expect(seen.at(-1)?.env?.XMD_EXAMPLE_COMMAND).toContain("packages/cli/src/deno.ts");
+        expect(seen.at(-1)?.env?.XMD_EXAMPLE_TEST_COMMAND).toContain("/packages/cli/src/deno.ts");
+      }
+    }
+    expect(seen).toHaveLength(AFFECTED_MARKDOWN_SUITES.length * RUNTIMES.length);
   });
 });
 
