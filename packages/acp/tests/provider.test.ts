@@ -3055,48 +3055,41 @@ describe("Tier SE — reconfiguring an owned session", () => {
     });
   });
 
-  it("SE3: each reconnecting call carries only its own use's requested model", function* () {
+  it("SE3: no reconnecting call names a requested model to the runtime", function* () {
     const harness = configured(createFakeRuntime());
     const ownership = makeCoordinator();
     yield* scoped(function* () {
       const coordinator = yield* installOwnedProvider(harness, ownership);
-      // A first configured prompt: the ensure, both writes and the turn all
-      // belong to a use that names a model.
+      // A configured prompt: the ensure, both writes and the turn reconnect as
+      // an unconfigured use does, and the configuration is applied afterwards.
       yield* configuredPrompt(coordinator, { model: "gpt-5.4-mini", effort: "high" });
-      expect(harness.modelRequests).toEqual([
-        "ensure gpt-5.4-mini",
-        "set model gpt-5.4-mini",
-        "set effort gpt-5.4-mini",
-        "turn gpt-5.4-mini",
-      ]);
+      expect(harness.modelRequests).toEqual(["ensure -", "set model -", "set effort -", "turn -"]);
 
-      // A later unconfigured resolution and prompt inherit nothing from the
-      // earlier use: the eager reattachment and the prompt's own both omit it.
+      // An unconfigured resolution and prompt.
       harness.modelRequests = [];
       const plain = yield* Agent.operations.session("review");
       yield* collectPrompt("plain", { session: plain });
       expect(harness.modelRequests).toEqual(["ensure -", "ensure -", "turn -"]);
 
-      // Eager existing resolution forwards the setup's presence before its
-      // ensure, then configures through finish; effort-only names no model.
+      // Eager existing resolution, effort-only and then model-only.
       harness.modelRequests = [];
       yield* configuredSession(coordinator, "review", { effort: "low" });
       expect(harness.modelRequests).toEqual(["ensure -", "set effort -"]);
       harness.modelRequests = [];
       yield* configuredSession(coordinator, "review", { model: "gpt-5.4" });
-      expect(harness.modelRequests).toEqual(["ensure gpt-5.4", "set model gpt-5.4"]);
+      expect(harness.modelRequests).toEqual(["ensure -", "set model -"]);
 
-      // A restoring write belongs to the attempt that made it.
+      // A restoring write.
       harness.modelRequests = [];
       harness.writeFailures = { effort: new Error("the agent refused that effort level") };
       yield* refusalOf(() =>
         configuredSession(coordinator, "review", { model: "gpt-5.4-mini", effort: "high" }),
       );
       expect(harness.modelRequests).toEqual([
-        "ensure gpt-5.4-mini",
-        "set model gpt-5.4-mini",
-        "set effort gpt-5.4-mini",
-        "set model gpt-5.4-mini",
+        "ensure -",
+        "set model -",
+        "set effort -",
+        "set model -",
       ]);
     });
   });

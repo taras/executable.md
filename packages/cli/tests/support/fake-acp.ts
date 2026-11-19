@@ -799,10 +799,12 @@ export function createFakeAcp(): FakeAcp {
             request_token_usage: {},
           };
           const sessionOptions = input.sessionOptions;
-          if (sessionOptions !== undefined || input.requestedModel !== undefined) {
+          // A reconnect keeps the selection ACPX saved from an earlier model write.
+          const saved = records.get(input.sessionKey)?.acpx?.session_options?.model;
+          if (sessionOptions !== undefined || saved !== undefined) {
             record.acpx = {
               session_options: {
-                model: input.requestedModel ?? sessionOptions?.model,
+                model: saved ?? sessionOptions?.model,
                 allowed_tools: sessionOptions?.allowedTools,
                 disallowed_tools: sessionOptions?.disallowedTools,
                 max_turns: sessionOptions?.maxTurns,
@@ -1059,6 +1061,15 @@ export function createFakeAcp(): FakeAcp {
           const state = running.get(input.handle.sessionKey) ?? {};
           if (input.key === "model") {
             state.model = input.value;
+            // ACPX saves an accepted model write as the session's selection.
+            const stored = records.get(input.handle.sessionKey);
+            if (stored !== undefined) {
+              stored.acpx = {
+                ...stored.acpx,
+                session_options: { ...stored.acpx?.session_options, model: input.value },
+              };
+              store(options.sessionStore, stored);
+            }
             // The new model's own default level. An agent that kept the old
             // one would be reporting a level the new model may not offer, and
             // the provider reads a current value that is not a choice as a

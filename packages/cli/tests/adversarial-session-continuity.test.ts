@@ -646,7 +646,7 @@ describe("production workflow provider scope", () => {
         }
         const ensured = fake.ensured.at(-1)!;
         expect(ensured.sessionOptions).toEqual(workflowControls);
-        expect(ensured.requestedModel).toBe(selected);
+        expect(ensured.requestedModel).toBeUndefined();
         expect(harness.store.records.get(ensured.sessionKey)?.acpx?.session_options).toEqual({
           model: selected,
           env: workflowControls.env,
@@ -675,7 +675,7 @@ describe("production workflow provider scope", () => {
         throw new Error(ran.text);
       }
       const ensured = fake.ensured.at(-1)!;
-      expect(ensured.requestedModel).toBe("sonnet");
+      expect(ensured.requestedModel).toBeUndefined();
       expect(fake.running(ensured.sessionKey)).toEqual({ model: "sonnet", effort: "high" });
     }
     expect(fake.configCalls.filter((call) => call.startsWith("set "))).toEqual([
