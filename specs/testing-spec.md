@@ -998,7 +998,9 @@ plugin adds `--node-modules-dir=manual --cached-only --frozen` when the Deno
 source host relaunches itself as a TestAgent worker, including workers for
 isolated run-profile children.
 
-`ProductionRole` is split into `ProductionRole`, `ProductionRoleResponse` and
+`Implementation` and the grouped adversarial families have no whole-launch
+deadline. `ProductionRole` is split into `ProductionRole`,
+`ProductionRoleResponse` and
 `ProductionRoleInstructions`; `Workflow` is split into `Workflow`,
 `WorkflowFoundation`, `WorkflowResponse` and `WorkflowRepair`. Each file
 retains complete Test blocks and its own setup, while discovery runs every
