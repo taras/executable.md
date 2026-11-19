@@ -908,6 +908,16 @@ selected agent's advertised choices; and `evaluateGeneratedXmdRoot(request)`,
 which evaluates one complete generated root under this conversation's own
 execution. Stop is scope cancellation rather than a fourth member.
 
+A turn's `configuration` is what that turn asks for, and a model the
+conversation already runs is no change. When `model` equals the model in the
+retained configuration of the conversation's latest started turn that names
+one, the turn is sent without it: the provider names no model, reads and
+writes no model selection, and the turn retains no model. A different model,
+or a conversation with no started turn naming one, is named and applied and
+verified like any configured turn. An unchanged turn therefore does not write
+back a model changed natively while the conversation was released. `effort` is
+named as asked.
+
 A held prompt can carry a host-supplied ordered list of PNG images. The ACPX
 provider sends them as image content blocks with the prompt text. The backend's
 advertised image capability determines whether that turn can start. The Agent package

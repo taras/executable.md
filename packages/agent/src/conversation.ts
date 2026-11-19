@@ -314,6 +314,8 @@ interface Observed {
   native?: string;
   /** Where the provider placed the turn, when its record names a placement. */
   sessionKey?: string;
+  /** The model the turn started under, when its record names one. */
+  model?: string;
 }
 
 /** What a history already holds about the conversation it belongs to. */
@@ -350,6 +352,8 @@ interface ConversationHistory {
    * there that no completed turn asserted yet.
    */
   readonly sessionKey: string | undefined;
+  /** The model the latest started turn that named one ran under, if any. */
+  readonly model: string | undefined;
 }
 
 /**
@@ -759,6 +763,7 @@ function* held(
   let established = history.native;
   let used = history.used;
   let placement = history.sessionKey;
+  let model = history.model;
   // The actual method on this execution's own handle, waited for before the
   // conversation is announced: a handle that reported itself ready and then
   // refused to evaluate would be ready for two of the three things it offers.
@@ -785,7 +790,7 @@ function* held(
       identity,
       established,
       observed,
-      job,
+      unchangedModel(job, model),
       order,
       admitting(active),
       used,
@@ -797,11 +802,31 @@ function* held(
     established ??= observed.native;
     used ||= observed.used === true;
     placement = observed.sessionKey ?? placement;
+    model = observed.model ?? model;
     order += 1;
   }
   // Nothing closes this queue, and an element that returned would let the root
   // complete. The halt that ends this resource is what ends this.
   yield* suspend();
+}
+
+/**
+ * The turn as it asks the provider, with a model the conversation already runs
+ * left unnamed.
+ *
+ * A model asked for again is no change. Naming it would have the provider
+ * verify it against a resumed agent's selector, which can spell the running
+ * model differently from the turn that chose it. A change, or a conversation
+ * whose turns named none yet, still names it.
+ */
+function unchangedModel(job: PromptJob, model: string | undefined): PromptJob {
+  const configuration = job.configuration;
+  if (configuration?.model === undefined || configuration.model !== model) {
+    return job;
+  }
+  const { model: _unchanged, ...rest } = configuration;
+  const { configuration: _asked, ...unconfigured } = job;
+  return rest.effort === undefined ? unconfigured : { ...unconfigured, configuration: rest };
 }
 
 /**
@@ -1224,6 +1249,9 @@ function conversationTurn(
         if (record.sessionKey !== "") {
           observed.sessionKey = record.sessionKey;
         }
+        if (record.configuration?.model !== undefined) {
+          observed.model = record.configuration.model;
+        }
         if (record.agentSessionId !== undefined) {
           if (established !== undefined && record.agentSessionId !== established) {
             job.answer.resolve(
@@ -1473,6 +1501,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Conversa
   let configuration: DurableJson | undefined;
   let used = false;
   let sessionKey: string | undefined;
+  let model: string | undefined;
   for (const event of events) {
     if (event.type !== "yield") {
       continue;
@@ -1532,6 +1561,9 @@ function* openable(request: AgentConversationRequest): Operation<Result<Conversa
     if (record.sessionKey !== "") {
       sessionKey = record.sessionKey;
     }
+    if (record.configuration?.model !== undefined) {
+      model = record.configuration.model;
+    }
   }
   if (asserted.size > 1) {
     // Two different identities among one conversation's own turns. There is no
@@ -1553,6 +1585,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Conversa
       next: highest + 1,
       native,
       sessionKey,
+      model,
       ...(configuration === undefined ? {} : { configuration }),
     }),
   );
