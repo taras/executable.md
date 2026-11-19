@@ -524,17 +524,6 @@ type Prepared =
     };
 
 /** The logical name a routed value carries, when it is one. */
-/**
- * The runtime member a call carries when its use names a model.
- *
- * Omitted for an unconfigured or effort-only use.
- */
-function modelRequest(configuration: SessionConfiguration | undefined): {
-  requestedModel?: string;
-} {
-  return configuration?.model === undefined ? {} : { requestedModel: configuration.model };
-}
-
 function asName(routed: string | Session | undefined): string | undefined {
   return typeof routed === "string" ? routed : undefined;
 }
@@ -1938,11 +1927,6 @@ function* useAcpxProviderState(
      * acceptance rather than after this ensure.
      */
     deferEstablished?: boolean;
-    /**
-     * The model requested by the use this ensure belongs to, for the reconnect
-     * this ensure itself may perform. Never kept on the entry it returns.
-     */
-    requestedModel?: string;
     resumeFailureStage?: "held-session-ensure" | "prompt-ensure" | "session-ensure";
   }
 
@@ -2054,7 +2038,6 @@ function* useAcpxProviderState(
           ...(intent.materialization === true
             ? { materialization: "first-turn-acceptance" as const }
             : {}),
-          ...(intent.requestedModel === undefined ? {} : { requestedModel: intent.requestedModel }),
         },
         (handle, entry) => {
           // The exact value this provider already issued, when it issued one.
@@ -2924,7 +2907,6 @@ function* useAcpxProviderState(
     agentName: string,
     entry: ManagedSession,
     requireWrite: boolean,
-    configuration?: SessionConfiguration,
   ): ConfigurationTarget {
     const runtime = entry.runtime.runtime;
     const readStatus = runtime.getStatus;
@@ -2978,9 +2960,6 @@ function* useAcpxProviderState(
               handle: entry.handle,
               key: optionId,
               value,
-              // The same attempt's requested model for ordinary and restoring
-              // writes alike: either may be the one that reconnects.
-              ...modelRequest(configuration),
             })
             .then(() => undefined);
           try {
@@ -3039,7 +3018,7 @@ function* useAcpxProviderState(
     configuration: SessionConfiguration,
   ): Operation<SessionConfiguration> {
     const selectors = yield* applySessionConfiguration(
-      configurationTarget(agentName, entry, true, configuration),
+      configurationTarget(agentName, entry, true),
       configuration,
     );
     return {
@@ -3230,7 +3209,6 @@ function* useAcpxProviderState(
             ...(construction === undefined ? {} : { build: construction.build }),
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
-            ...modelRequest(desired),
             resumeFailureStage: "prompt-ensure",
             materialization:
               constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
@@ -3288,7 +3266,6 @@ function* useAcpxProviderState(
             mode: "prompt",
             requestId,
             timeoutMs,
-            ...modelRequest(desired),
             ...(callbacks === undefined
               ? {}
               : {
@@ -4040,7 +4017,6 @@ function* useAcpxProviderState(
             ...(bound === undefined ? {} : { build: bound.build }),
             ...(yield* retainedReach(prepared)),
             state: "existing",
-            ...modelRequest(requested),
           });
         } catch (error) {
           if (error instanceof AttachmentRefused) {
@@ -4409,7 +4385,6 @@ function* useAcpxProviderState(
         text: plan.prompt,
         mode: "prompt",
         requestId: plan.requestId,
-        ...modelRequest(retainedConfiguration(prepared)),
       });
       activeTurns.add(turn);
 
@@ -5300,9 +5275,6 @@ function* useAcpxProviderState(
                 state: yield* sessionCreationState(agentName, current),
                 resumeFailureStage:
                   selectedAgent === undefined ? "session-ensure" : "held-session-ensure",
-                ...(setup?.requestedModel === undefined
-                  ? {}
-                  : { requestedModel: setup.requestedModel }),
               });
               // An existing session is reattached here: its route and its
               // identity already exist, so this is a conversation that can be
