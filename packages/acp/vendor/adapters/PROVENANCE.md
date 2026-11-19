@@ -274,11 +274,14 @@ upstream commit carries it. A `session/load` or `session/resume` whose `_meta`
 carries `"executablemd.has-explicit-model/v1": true` belongs to a client use
 that names its own model. On that branch only, `createSession` skips
 `getAvailableModels`' environment/settings reassertion and calls
-`observeResumedModel`: the backend's `getContextUsage` model is the current
-model selection verbatim, with the offered catalog and allowlist unchanged. A
-failed or empty report, or one no offered model names exactly, refuses with an
-invalid-request error before any prompt, so a client never reads it as a missing
-conversation to replace. The marker is never passed into SDK options. Fresh,
-unmarked and effort-only initialization keep the existing priority. The recipe
+`observeResumedModel`, with the offered catalog and allowlist unchanged. The
+current model selection is the backend's `getContextUsage` model when that is
+exactly another offered value the saved selection
+(`_meta.claudeCode.options.model`) does not resolve to, and otherwise the saved
+selection while it is offered. A failed or empty report, or a saved selection no
+longer offered, refuses with an invalid-request error before any prompt, so a
+client never reads it as a missing conversation to replace. The marker is never
+passed into SDK options. Fresh, unmarked and effort-only initialization keep the
+existing priority. The recipe
 records the changed patch, `src/acp-agent.ts` postimage, `dist/acp-agent.js`
 runtime and output hashes; source, SDK and compiler pins are unchanged.

@@ -1057,6 +1057,17 @@ function* useResumable(
   return { adapter, sessionId, cwd: root };
 }
 
+/** A picker that offers the running Fable only through aliases. */
+const ALIAS_ONLY = JSON.stringify([
+  { value: "default", resolvedModel: "claude-fable-5-1", displayName: "D", description: "" },
+  { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
+]);
+
+/** The saved selection ACPX sends with a load/resume, as `claudeCode.options.model`. */
+function savedSelection(model: string | undefined): Record<string, unknown> {
+  return model === undefined ? {} : { claudeCode: { options: { model } } };
+}
+
 /** What a load/resume reports as the current model selection. */
 function reportedModel(response: Record<string, unknown>): unknown {
   const options = response["configOptions"];
@@ -1114,22 +1125,24 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
     expect(reportedModel(response)).toBe("claude-fable-5[1m]");
   });
 
-  for (const [name, environment, refusal] of [
-    ["absent", { FAKE_CLAUDE_CONTEXT_USAGE: "absent" }, "reported no model"],
-    ["failed", { FAKE_CLAUDE_CONTEXT_USAGE: "fail" }, "could not report the model it runs"],
+  for (const [name, environment, selection, refusal] of [
+    ["absent", { FAKE_CLAUDE_CONTEXT_USAGE: "absent" }, "fable", "reported no model"],
     [
-      "unrepresentable",
-      {
-        FAKE_CLAUDE_MODELS: JSON.stringify([
-          {
-            value: "default",
-            resolvedModel: "claude-fable-5-1",
-            displayName: "D",
-            description: "",
-          },
-          { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
-        ]),
-      },
+      "failed",
+      { FAKE_CLAUDE_CONTEXT_USAGE: "fail" },
+      "fable",
+      "could not report the model it runs",
+    ],
+    [
+      "withdrawn selection",
+      { FAKE_CLAUDE_MODELS: ALIAS_ONLY },
+      "claude-fable-4",
+      "is no longer offered",
+    ],
+    [
+      "unrepresentable unselected",
+      { FAKE_CLAUDE_MODELS: ALIAS_ONLY },
+      undefined,
       "none of its offered models names exactly",
     ],
   ] as const) {
@@ -1141,7 +1154,7 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
           sessionId,
           cwd,
           mcpServers: [],
-          _meta: { [HAS_EXPLICIT_MODEL_META]: true },
+          _meta: { [HAS_EXPLICIT_MODEL_META]: true, ...savedSelection(selection) },
         });
       } catch (error) {
         failure = String(error);
@@ -1153,6 +1166,66 @@ describe("Tier EA — the Claude adapter's resumed model under an explicit use (
       expect(yield* readTextFile(adapter.log)).not.toContain('"type":"user"');
     });
   }
+
+  it("EA19: a marked resume reports the saved selection the backend continues", function* () {
+    const staleCatalog = JSON.stringify([
+      { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
+      {
+        value: "claude-fable-5-1",
+        resolvedModel: "claude-fable-5-1",
+        displayName: "F 5.1",
+        description: "",
+      },
+      {
+        value: "claude-sonnet-5-5",
+        resolvedModel: "claude-sonnet-5-5",
+        displayName: "S",
+        description: "",
+      },
+    ]);
+    for (const [running, catalog, selection, reported] of [
+      // The alias's concrete model is not offered.
+      ["claude-fable-5-1", ALIAS_ONLY, "fable", "fable"],
+      // The picker's concrete entry is older than what the alias now runs.
+      ["claude-fable-5-2", staleCatalog, "fable", "fable"],
+      // The alias's own target is offered too, and is not a change.
+      ["claude-fable-5-1", staleCatalog, "fable", "fable"],
+      // Another offered model the selection does not resolve to: changed natively.
+      ["claude-sonnet-5-5", staleCatalog, "fable", "claude-sonnet-5-5"],
+    ] as const) {
+      const { adapter, sessionId, cwd } = yield* useResumable(running, {
+        FAKE_CLAUDE_MODELS: catalog,
+      });
+      const response = yield* adapter.request("session/resume", {
+        sessionId,
+        cwd,
+        mcpServers: [],
+        _meta: { [HAS_EXPLICIT_MODEL_META]: true, ...savedSelection(selection) },
+      });
+      expect(reportedModel(response)).toBe(reported);
+      expect(yield* modelWrites(adapter)).toEqual([]);
+    }
+  });
+
+  it("EA20: a marked resume of a different native identity still refuses", function* () {
+    const { adapter, sessionId, cwd } = yield* useResumable("fable", {
+      FAKE_CLAUDE_CONFIRMATION: "mismatch",
+    });
+    let failure = "";
+    try {
+      yield* adapter.request("session/resume", {
+        sessionId,
+        cwd,
+        mcpServers: [],
+        _meta: { [HAS_EXPLICIT_MODEL_META]: true, ...savedSelection("fable") },
+      });
+    } catch (error) {
+      failure = String(error);
+    }
+    expect(failure).toContain("identity confirmation failed");
+    expect(acceptances(adapter)).toEqual([]);
+    expect(yield* readTextFile(adapter.log)).not.toContain('"type":"user"');
+  });
 
   it("EA18: without the marker, resume and new keep the existing model choice", function* () {
     const { adapter, sessionId, cwd } = yield* useResumable("claude-fable-5");

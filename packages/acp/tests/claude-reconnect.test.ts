@@ -375,34 +375,43 @@ describe(
       });
     });
 
-    it("CR6: an unrepresentable or unreadable resumed model refuses before any prompt", function* () {
+    it("CR6: a withdrawn saved selection or an unreadable resumed model refuses before any prompt", function* () {
       const world = yield* useWorld();
-      const aliasOnly = JSON.stringify([
-        {
-          value: "default",
-          resolvedModel: "claude-fable-5-1",
-          displayName: "Default",
-          description: "",
-        },
+      const withdrawn = JSON.stringify([
         {
           value: "fable",
           resolvedModel: "claude-fable-5-1",
           displayName: "Fable",
           description: "",
         },
+        {
+          value: ANOTHER,
+          resolvedModel: ANOTHER,
+          displayName: "Sonnet 5.5",
+          description: "",
+        },
       ]);
       yield* scoped(function* () {
-        const runtime = runtimeFor(world, { FAKE_CLAUDE_MODELS: aliasOnly });
+        const runtime = runtimeFor(world);
         yield* ensure(() => until(runtime.shutdown()));
-        yield* ownedWrite(world, runtime, "model", "fable", "fable");
-        // The backend reports the concrete model behind the alias. Nothing offered
-        // names it exactly, so a use naming its own model refuses rather than
-        // inventing that row or reading it as the alias.
-        const refused = yield* refusalOfTurn(world, runtime, "flagged", "fable");
-        expect(refused).toContain("claude-fable-5-1");
-        expect(observed(yield* logged(world)).prompts).toEqual([]);
-        // Without the fact, the existing behavior stands.
-        expect(yield* ownedTurn(world, runtime, "unflagged")).toEqual({ status: "completed" });
+        yield* established(world, runtime, EXPLICIT);
+        const session = observed(yield* logged(world)).prompts[0]?.session;
+        // The picker no longer offers the saved selection, and the backend still
+        // runs it, so no offered value states the current model.
+        const narrowed = runtimeFor(world, { FAKE_CLAUDE_MODELS: withdrawn });
+        yield* ensure(() => until(narrowed.shutdown()));
+        const before = (yield* logged(world)).length;
+        const refused = yield* refusalOfTurn(world, narrowed, "flagged", EXPLICIT);
+        expect(refused).toContain("saved model selection");
+        expect(refused).toContain(EXPLICIT);
+        expect(refused).toContain("is no longer offered");
+        const after = (yield* logged(world)).slice(before);
+        expect(observed(after).prompts).toEqual([]);
+        expect(observed(after).modelWrites).toEqual([]);
+        // No replacement conversation was created in its place.
+        expect(
+          after.filter((entry) => entry.event === "started").map((e) => [e.session, e.resumed]),
+        ).toEqual([[session, true]]);
       });
 
       const unreadable = yield* useWorld();
@@ -416,6 +425,102 @@ describe(
         const refused = yield* refusalOfTurn(unreadable, failing, "flagged", EXPLICIT);
         expect(refused).toContain("could not report the model it runs");
         expect(observed(yield* logged(unreadable)).prompts.length).toBe(prompts);
+      });
+    });
+
+    it("CR10: an alias continues when the picker does not name the model it runs", function* () {
+      const aliasOnly = yield* useWorld();
+      yield* scoped(function* () {
+        const runtime = runtimeFor(aliasOnly, {
+          FAKE_CLAUDE_MODELS: JSON.stringify([
+            {
+              value: "default",
+              resolvedModel: "claude-fable-5-1",
+              displayName: "Default",
+              description: "",
+            },
+            {
+              value: "fable",
+              resolvedModel: "claude-fable-5-1",
+              displayName: "Fable",
+              description: "",
+            },
+          ]),
+        });
+        yield* ensure(() => until(runtime.shutdown()));
+        yield* established(aliasOnly, runtime, "fable");
+        const session = observed(yield* logged(aliasOnly)).prompts[0]?.session;
+        const before = (yield* logged(aliasOnly)).length;
+        // The backend reports the concrete model behind the alias, which nothing
+        // offered names; the conversation continues under the alias unchanged.
+        for (const text of ["second", "third"]) {
+          expect(yield* ownedTurn(aliasOnly, runtime, text, "fable")).toEqual({
+            status: "completed",
+          });
+        }
+        const entries = (yield* logged(aliasOnly)).slice(before);
+        expect(observed(entries)).toEqual({
+          modelWrites: [],
+          prompts: [
+            { session, model: "claude-fable-5-1", effort: null },
+            { session, model: "claude-fable-5-1", effort: null },
+          ],
+        });
+        expect(
+          entries.filter((entry) => entry.event === "started").map((e) => [e.session, e.resumed]),
+        ).toEqual([
+          [session, true],
+          [session, true],
+        ]);
+      });
+
+      const stale = yield* useWorld();
+      yield* scoped(function* () {
+        const runtime = runtimeFor(stale, {
+          FAKE_CLAUDE_MODELS: JSON.stringify([
+            {
+              value: "fable",
+              resolvedModel: "claude-fable-5-1",
+              displayName: "Fable",
+              description: "",
+            },
+            {
+              value: "claude-fable-5-1",
+              resolvedModel: "claude-fable-5-1",
+              displayName: "Fable 5.1",
+              description: "",
+            },
+          ]),
+        });
+        yield* ensure(() => until(runtime.shutdown()));
+        yield* established(stale, runtime, "fable");
+        const session = observed(yield* logged(stale)).prompts[0]?.session;
+        const before = (yield* logged(stale)).length;
+        // The alias's own concrete target is offered as well; running it is not
+        // a change made elsewhere.
+        yield* ownedTurn(stale, runtime, "under the target", "fable");
+        // The alias now reaches a newer model than the picker's concrete entry.
+        const conversation = join(stale.state, `${encodeURIComponent(session ?? "")}.json`);
+        const persisted = JSON.parse(yield* readTextFile(conversation));
+        yield* writeTextFile(
+          conversation,
+          JSON.stringify({ ...persisted, model: "claude-fable-5-2" }),
+        );
+        yield* ownedTurn(stale, runtime, "under the newer model", "fable");
+        const entries = (yield* logged(stale)).slice(before);
+        expect(observed(entries)).toEqual({
+          modelWrites: [],
+          prompts: [
+            { session, model: "claude-fable-5-1", effort: null },
+            { session, model: "claude-fable-5-2", effort: null },
+          ],
+        });
+        expect(
+          entries.filter((entry) => entry.event === "started").map((e) => [e.session, e.resumed]),
+        ).toEqual([
+          [session, true],
+          [session, true],
+        ]);
       });
     });
   },
@@ -676,6 +781,20 @@ describe(
         const changed = observed((yield* logged(world)).slice(change));
         expect(changed.modelWrites).toEqual([ANOTHER]);
         expect(changed.prompts).toEqual([{ session, model: ANOTHER, effort: "high" }]);
+
+        // A model the picker does not offer refuses before any write or prompt.
+        const unoffered = (yield* logged(world)).length;
+        let refusal = "";
+        try {
+          yield* configuredPrompt({ model: "claude-unoffered", effort: "high" }, "unoffered");
+        } catch (error) {
+          refusal = error instanceof Error ? error.message : String(error);
+        }
+        expect(refusal).toContain('Unknown model "claude-unoffered"');
+        expect(observed((yield* logged(world)).slice(unoffered))).toEqual({
+          modelWrites: [],
+          prompts: [],
+        });
       });
     });
   },

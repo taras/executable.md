@@ -507,14 +507,26 @@ checks `requestedModel !== undefined` and derives the existing
 stays within the runtime; `session/new` and other adapters carry no marker.
 
 On such a resume the prepared Claude adapter reasserts no environment or
-settings model. It reads the model the resumed backend reports and advertises
-that exact string as the current model selection — no picker alias, default
-row, context-hint reconstruction or requested value substitutes for it. An
-unreadable or empty report, or one no offered model names exactly, refuses the
-load or resume as an invalid request before any prompt; this includes a
-concrete model offered only through an alias, and a context hint the offered
-ids do not spell. Fresh, unconfigured and effort-only sessions keep the
-adapter's existing initialization.
+settings model, and reports the current model selection as a picker value.
+ACPX sends the conversation's saved selection with each load or resume as
+`_meta.claudeCode.options.model`. The resumed backend reports the concrete
+model it runs, which the picker may name only through an alias or not at all.
+From the saved selection, that report and the offered models, the adapter
+chooses:
+
+1. An unreadable or empty report refuses.
+2. A report that is exactly an offered id other than the saved selection, and
+   that the saved selection's offered entry does not resolve to, is a change
+   made outside this client: that id is the current selection.
+3. Otherwise a saved selection the picker offers is the current selection.
+4. Otherwise the load or resume refuses: the saved selection is no longer
+   offered.
+
+A refusal is an invalid request, before any prompt, so a client never reads it
+as a missing conversation to replace. A selection states intent: `fable`
+running `claude-fable-5-2` beside a stale `claude-fable-5-1` entry continues as
+`fable`. Fresh, unconfigured and effort-only sessions keep the adapter's
+existing initialization.
 
 ACPX's reconnect replay of a saved model selection writes nothing when the
 resumed session already reports exactly that saved id. A different reported id

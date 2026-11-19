@@ -1,5 +1,5 @@
 diff --git a/src/acp-agent.ts b/src/acp-agent.ts
-index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804b711d5c4 100644
+index e32f603e7cb85544a9ebf108489fcf98932d14a2..5fedbbbc7cfe1ead8c68f05bd0fc2aa772c2b8f6 100644
 --- a/src/acp-agent.ts
 +++ b/src/acp-agent.ts
 @@ -81,7 +81,7 @@ import {
@@ -1185,7 +1185,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804
 +
 +      const { modelState: models, resumedContextWindow } =
 +        creationOpts.resume !== undefined && continuesExplicitModel(params._meta)
-+          ? await observeResumedModel(q, allowedModels)
++          ? await observeResumedModel(q, allowedModels, userProvidedOptions?.model)
 +          : await getAvailableModels(
 +              q,
 +              allowedModels,
@@ -1620,7 +1620,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804
    }
  
    /**
-@@ -7574,6 +7931,68 @@ async function readResumedLiveModel(
+@@ -7574,6 +7931,79 @@ async function readResumedLiveModel(
    }
  }
  
@@ -1637,15 +1637,17 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804
 +}
 +
 +/**
-+ * The model a resumed session runs, reported exactly, for a use that names its
-+ * own model.
++ * The model selection a resumed session continues, for a use that names its own
++ * model.
 + *
 + * Nothing is reasserted: the client applies its own exact selection next, so an
 + * environment or settings preference written here would only be written back.
-+ * The backend's report is the answer verbatim — no picker matching, alias, hint
-+ * reconstruction or default row stands in for it — and one this session's
-+ * offered models cannot represent refuses rather than inventing a selectable
-+ * entry. A failed or empty report refuses too, before any prompt.
++ * The answer is a picker value. The backend reports a concrete model, which the
++ * picker may name only through an alias or not at all, so the report is the
++ * current value only when it is another offered entry the saved selection does
++ * not resolve to — a change made outside this client. Otherwise the saved
++ * selection continues, and one no longer offered refuses rather than inventing a
++ * selectable entry. A failed or empty report refuses too, before any prompt.
 + *
 + * Refused as an invalid request so a client does not mistake it for a missing
 + * conversation and create a replacement.
@@ -1653,6 +1655,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804
 +async function observeResumedModel(
 +  query: Query,
 +  models: ModelInfo[],
++  selection: string | undefined,
 +): Promise<{ modelState: SessionModelState; resumedContextWindow: number | null }> {
 +  let usage: Awaited<ReturnType<Query["getContextUsage"]>>;
 +  try {
@@ -1667,10 +1670,18 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804
 +  if (typeof observed !== "string" || observed.length === 0) {
 +    throw RequestError.invalidRequest(undefined, "the resumed session reported no model");
 +  }
-+  if (!models.some((model) => model.value === observed)) {
++  const selected = models.find((model) => model.value === selection);
++  const changedOutside =
++    observed !== selection &&
++    models.some((model) => model.value === observed) &&
++    selected?.resolvedModel !== observed;
++  const current = changedOutside ? observed : selected?.value;
++  if (current === undefined) {
 +    throw RequestError.invalidRequest(
 +      { model: observed },
-+      `the resumed session runs "${observed}", which none of its offered models names exactly`,
++      selection === undefined
++        ? `the resumed session runs "${observed}", which none of its offered models names exactly`
++        : `the resumed session's saved model selection "${selection}" is no longer offered`,
 +    );
 +  }
 +  return {
@@ -1680,7 +1691,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804
 +        name: model.displayName,
 +        description: model.description,
 +      })),
-+      currentModelId: observed,
++      currentModelId: current,
 +    },
 +    resumedContextWindow: usage.rawMaxTokens > 0 ? usage.rawMaxTokens : null,
 +  };
