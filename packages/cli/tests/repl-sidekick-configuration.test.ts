@@ -527,6 +527,49 @@ describe("Tier R7 — the configuration a Sidekick conversation runs under", () 
     expect(held.fake.running(conversation!)).toEqual({ model: "fast", effort: "high" });
   });
 
+  it("R7: a model asked for again stays verified when only its effort changes", function* () {
+    const held = yield* useHarness();
+    held.fake.configuration(OFFERED);
+    held.fake.script({ reply: "<Output>One.</Output>\n" });
+    held.fake.script({ reply: "<Output>Two.</Output>\n" });
+    held.fake.script({ reply: "<Output>Three.</Output>\n" });
+    const verified = (conversation: string) =>
+      reading(held.owner).conversations.find((one) => one.id === conversation)?.verified;
+
+    const first = yield* held.owner.configure({ model: "fast", effort: "high" });
+    if (!first.ok) {
+      throw first.error;
+    }
+    const one = yield* held.owner.message("one");
+    if (!one.ok) {
+      throw one.error;
+    }
+    expect(verified(one.value.conversation)).toEqual({ model: "fast", effort: "high" });
+
+    // The model is unchanged, so this turn names only its effort and retains
+    // only the effort it ran under.
+    const second = yield* held.owner.configure({ model: "fast", effort: "low" });
+    if (!second.ok) {
+      throw second.error;
+    }
+    const two = yield* held.owner.message("two");
+    if (!two.ok) {
+      throw two.error;
+    }
+    expect(applied(held.fake)).toEqual(["set model=fast", "set effort=high", "set effort=low"]);
+    expect(verified(two.value.conversation)).toEqual({ model: "fast", effort: "low" });
+
+    const third = yield* held.owner.configure({ model: "thorough", effort: "deep" });
+    if (!third.ok) {
+      throw third.error;
+    }
+    const three = yield* held.owner.message("three");
+    if (!three.ok) {
+      throw three.error;
+    }
+    expect(verified(three.value.conversation)).toEqual({ model: "thorough", effort: "deep" });
+  });
+
   it("R7: a configuration the agent refuses starts no turn and is not quietly dropped", function* () {
     const held = yield* useHarness();
     held.fake.configuration(OFFERED);

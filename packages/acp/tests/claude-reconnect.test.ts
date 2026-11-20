@@ -17,7 +17,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
+import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,6 +40,8 @@ import type {
 } from "@executablemd/agent/api";
 import { openSessionRequest } from "../../agent/src/session-request.ts";
 import { createSessionSetupOwner } from "../../agent/src/session-setup.ts";
+import { installAgentComponents, useAgentConversation } from "@executablemd/agent/host";
+import type { AgentConversation } from "@executablemd/agent/host";
 import { createAcpxProvider } from "../src/provider.ts";
 import { makeCoordinator, makeRegistry, useFlatWorld } from "./helpers.ts";
 
@@ -706,3 +709,267 @@ function* refusalOfTurn(
     }
   });
 }
+
+const WIRE_TEE = fileURLToPath(new URL("./fixtures/acp-wire-tee.cjs", import.meta.url));
+
+/** The one place this host keeps its chat's session. */
+const CHAT_KEY = "chat";
+
+/**
+ * Open the conversation `history` holds through a freshly installed provider,
+ * so every opening reconnects the way a later process does, and hand it to
+ * `body`.
+ */
+function* inConversation(
+  world: World,
+  history: InMemoryStream,
+  env: Record<string, string>,
+  body: (conversation: AgentConversation) => Operation<void>,
+): Operation<void> {
+  const runtimes: Runtime[] = [];
+  yield* scoped(function* () {
+    yield* ensure(function* () {
+      for (const runtime of runtimes) {
+        yield* until(runtime.shutdown());
+      }
+    });
+    const sessionStore = {
+      load: (id: string) => Promise.resolve(structuredClone(world.records.get(id))),
+      save: (record: AcpSessionRecord) => {
+        world.records.set(record.acpxRecordId, structuredClone(record));
+        return Promise.resolve();
+      },
+    };
+    const opened = yield* useAgentConversation({
+      history,
+      id: "chat-1",
+      agent: "claude",
+      installations: [
+        {
+          *install(): Operation<void> {
+            yield* useFlatWorld(world.root);
+            yield* installAgentComponents({
+              defaultAgent: "claude",
+              permissionMode: "deny-all",
+              rootProvider: {
+                factory: createAcpxProvider({
+                  createRuntime: () => {
+                    const runtime = createAcpRuntime({
+                      cwd: world.root,
+                      sessionStore,
+                      agentRegistry: {
+                        resolve: () =>
+                          `node "${WIRE_TEE}" "${world.adapters.executablePath("claude")}"`,
+                        list: () => ["claude"],
+                      },
+                      permissionMode: "approve-all",
+                      nonInteractivePermissions: "deny",
+                      agentProcessEnv: {
+                        CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE,
+                        CLAUDE_CONFIG_DIR: join(world.root, "config"),
+                        FAKE_CLAUDE_LOG: world.log,
+                        FAKE_CLAUDE_STATE_DIR: world.state,
+                        ACP_WIRE_TEE_LOG: join(world.root, "wire.log"),
+                        ANTHROPIC_MODEL: "",
+                        ...env,
+                      },
+                    });
+                    runtimes.push(runtime);
+                    return runtime;
+                  },
+                  sessionStore,
+                  agentRegistry: makeRegistry({ claude: world.adapters.command("claude") }),
+                  advertiseNativeLaunch: ["claude"],
+                  advertiseClientNativeAttachment: [],
+                  nativeAdapters: {
+                    claude: {
+                      launcher: "claude",
+                      identity: "provider-returned",
+                      resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+                    },
+                  },
+                  coordinator: makeCoordinator().coordinator,
+                  mcpServers: [],
+                  newSessionOptions: { allowedTools: [], systemPrompt: "none" },
+                  sessions: {
+                    *requestSession() {
+                      return {
+                        sessionKey: CHAT_KEY,
+                        cwd: world.root,
+                        state: world.records.has(CHAT_KEY) ? "existing" : "new",
+                      };
+                    },
+                    // deno-lint-ignore require-yield
+                    *recordSessionIdentity() {},
+                  },
+                }),
+                options: { defaultAgent: "claude", permissionMode: "deny-all" },
+              },
+            });
+          },
+        },
+      ],
+    });
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    yield* body(opened.value);
+  });
+}
+
+/** One turn's reply, or the refusal standing in its place. */
+function replied(result: Result<string>): string {
+  return result.ok ? result.value : `refused: ${result.error.message}`;
+}
+
+/** Whether each Claude load or resume the adapter received carried the marker. */
+function* markers(world: World): Operation<boolean[]> {
+  let text = "";
+  try {
+    text = yield* readTextFile(join(world.root, "wire.log"));
+  } catch {
+    return [];
+  }
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.method === "session/load" || entry.method === "session/resume")
+    .map((entry) => entry.meta?.["executablemd.has-explicit-model/v1"] === true);
+}
+
+describe(
+  "Tier CR — a held conversation asking again for the model it runs (#1239)",
+  {
+    sanitizeOps: false,
+    sanitizeResources: false,
+  },
+  () => {
+    for (const [name, catalog, newer, writes] of [
+      [
+        "an alias whose running model the picker does not name",
+        [
+          {
+            value: "default",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "D",
+            description: "",
+          },
+          { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
+        ],
+        undefined,
+        // ACPX replays the saved selection over the adapter's `default` answer
+        // on each resume; the conversation names no model.
+        "fable",
+      ],
+      [
+        "a picker whose concrete entry is older than the running model",
+        [
+          { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "F", description: "" },
+          {
+            value: "claude-fable-5-1",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "F 5.1",
+            description: "",
+          },
+        ],
+        "claude-fable-5-2",
+        undefined,
+      ],
+    ] as const) {
+      it(`CR11: ${name} continues the same conversation unasked`, function* () {
+        const world = yield* useWorld();
+        const history = new InMemoryStream();
+        const env = { FAKE_CLAUDE_MODELS: JSON.stringify(catalog) };
+        yield* inConversation(world, history, env, function* (conversation) {
+          expect(replied(yield* conversation.prompt("first", { model: "fable" }))).toBe("answered");
+        });
+        const session = observed(yield* logged(world)).prompts[0]?.session;
+        expect(session).toBeDefined();
+        if (newer !== undefined) {
+          const conversation = join(world.state, `${encodeURIComponent(session ?? "")}.json`);
+          const persisted = JSON.parse(yield* readTextFile(conversation));
+          yield* writeTextFile(conversation, JSON.stringify({ ...persisted, model: newer }));
+        }
+        const before = (yield* logged(world)).length;
+        const resumes = (yield* markers(world)).length;
+        for (const text of ["second", "third"]) {
+          yield* inConversation(world, history, env, function* (conversation) {
+            expect(replied(yield* conversation.prompt(text, { model: "fable" }))).toBe("answered");
+          });
+        }
+        const entries = (yield* logged(world)).slice(before);
+        const starts = entries.filter((entry) => entry.event === "started");
+        // Each opening resumes for its session and again for its prompt.
+        expect(starts.length).toBeGreaterThanOrEqual(2);
+        expect(starts.map((e) => [e.session, e.resumed])).toEqual(
+          starts.map(() => [session, true]),
+        );
+        expect(observed(entries).modelWrites).toEqual(
+          writes === undefined ? [] : starts.map(() => writes),
+        );
+        expect(observed(entries).prompts.map((prompt) => prompt.session)).toEqual([
+          session,
+          session,
+        ]);
+        expect((yield* markers(world)).slice(resumes)).toEqual(starts.map(() => false));
+      });
+    }
+
+    it("CR12: a change, an unoffered model and an effort change still name what they ask", function* () {
+      const world = yield* useWorld();
+      const history = new InMemoryStream();
+      // The first turn of a new conversation applies and verifies its model.
+      yield* inConversation(world, history, {}, function* (conversation) {
+        expect(replied(yield* conversation.prompt("first", { model: EXPLICIT }))).toBe("answered");
+      });
+      expect(observed(yield* logged(world)).modelWrites).toEqual([EXPLICIT]);
+      const session = observed(yield* logged(world)).prompts[0]?.session;
+
+      let before = (yield* logged(world)).length;
+      let resumes = (yield* markers(world)).length;
+      // Unchanged model, changed effort: the effort is written, the model is not named.
+      yield* inConversation(world, history, {}, function* (conversation) {
+        expect(
+          replied(yield* conversation.prompt("effort", { model: EXPLICIT, effort: "high" })),
+        ).toBe("answered");
+      });
+      let entries = (yield* logged(world)).slice(before);
+      expect(observed(entries)).toEqual({
+        modelWrites: [],
+        prompts: [{ session, model: EXPLICIT, effort: "high" }],
+      });
+      expect((yield* markers(world)).slice(resumes)).not.toContain(true);
+
+      // A change is named, written once and verified before its prompt.
+      before = (yield* logged(world)).length;
+      resumes = (yield* markers(world)).length;
+      yield* inConversation(world, history, {}, function* (conversation) {
+        expect(replied(yield* conversation.prompt("changed", { model: ANOTHER }))).toBe("answered");
+      });
+      entries = (yield* logged(world)).slice(before);
+      expect(observed(entries).modelWrites).toEqual([ANOTHER]);
+      expect(observed(entries).prompts).toEqual([{ session, model: ANOTHER, effort: "high" }]);
+      expect((yield* markers(world)).slice(resumes)).not.toContain(false);
+
+      // Asking again for the model just changed to names nothing.
+      before = (yield* logged(world)).length;
+      yield* inConversation(world, history, {}, function* (conversation) {
+        expect(replied(yield* conversation.prompt("again", { model: ANOTHER }))).toBe("answered");
+      });
+      expect(observed((yield* logged(world)).slice(before)).modelWrites).toEqual([]);
+
+      // A model the picker does not offer still refuses before any write or prompt.
+      before = (yield* logged(world)).length;
+      yield* inConversation(world, history, {}, function* (conversation) {
+        expect(
+          replied(yield* conversation.prompt("unoffered", { model: "claude-unoffered" })),
+        ).toContain('Unknown model "claude-unoffered"');
+      });
+      expect(observed((yield* logged(world)).slice(before))).toEqual({
+        modelWrites: [],
+        prompts: [],
+      });
+    });
+  },
+);

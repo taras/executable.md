@@ -125,15 +125,18 @@ export interface SidekickConversation {
    * only what somebody asked for, and from an inspection's selected value,
    * which says what the agent happened to be on while it was being read.
    *
-   * The latest turn that carries one wins. A turn that started and then failed
-   * still ran under exactly these settings, so it qualifies; one that failed
-   * while they were still being applied carries no member and supplies none.
+   * The effort is the latest configured turn's, and the model the latest turn
+   * that names one: a turn asking again for the model it already runs names
+   * none. A turn that started and then failed still ran under exactly these
+   * settings, so it qualifies; one that failed while they were still being
+   * applied carries no member and supplies none.
    */
   readonly verified: SessionConfiguration | undefined;
 }
 
 /**
- * The settings the newest turn that carries any ran under.
+ * The settings the newest turn that carries any ran under, with the model of the
+ * newest turn that names one.
  *
  * By turn rather than by record position: the records of one conversation are
  * written in turn order, but what a reader wants is the last turn that got far
@@ -144,19 +147,24 @@ function lastVerified(
   held: ReadonlyMap<number, SessionConfiguration>,
 ): SessionConfiguration | undefined {
   let latest: number | undefined;
-  for (const turn of held.keys()) {
+  let named: number | undefined;
+  for (const [turn, settings] of held) {
     if (latest === undefined || turn > latest) {
       latest = turn;
+    }
+    if (settings.model !== undefined && (named === undefined || turn > named)) {
+      named = turn;
     }
   }
   if (latest === undefined) {
     return undefined;
   }
   const settings = held.get(latest)!;
+  const model = named === undefined ? undefined : held.get(named)!.model;
   // Copied, because a projection hands out frozen facts and the record it came
   // from is the caller's to read rather than to hold a reference into.
   return Object.freeze({
-    ...(settings.model === undefined ? {} : { model: settings.model }),
+    ...(model === undefined ? {} : { model }),
     ...(settings.effort === undefined ? {} : { effort: settings.effort }),
   });
 }

@@ -3743,7 +3743,9 @@ Nothing falls back to another agent, and making the change sends nothing.
 Which model and effort it runs under is a request this history holds and the
 next turn puts into effect, because a configuration can only be asked of an
 agent on a turn. It is applied model first — effort levels belong to a model —
-and read back, so a turn that happened ran under what was asked for. An agent
+and read back, so a turn that happened ran under what was asked for. A model
+the conversation's latest started turn that named one already ran under is not
+asked again, and Verified keeps showing it. An agent
 that refuses the request leaves the turn unsent and says what it does offer, and
 the request stays recorded: a Sidekick that quietly dropped it would answer as
 something nobody chose. What a person chooses between is the agent's own answer,
