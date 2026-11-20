@@ -1484,14 +1484,12 @@ describe(
             sessionKey: original,
             cwd: record.cwd,
             resumeSessionId: acp,
-            requestedModel: "selected",
           },
           {
             op: "ensure",
             sessionKey: original,
             cwd: record.cwd,
             resumeSessionId: acp,
-            requestedModel: "selected",
           },
         ]);
         const second = boundary.indexOf(ensures[1]!);

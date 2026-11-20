@@ -486,41 +486,21 @@ history. A provider that cannot reconfigure that conversation in place refuses.
 
 A provider that releases its handle after each owned operation reconnects for
 the next one, and a reconnect initializes the resumed conversation before the
-steps above can run. Each attaching call therefore carries its use's explicitly
-requested model as
-`requestedModel` on the ensure, turn and configuration-write inputs of the
-in-process runtime. Eager existing resolution takes the exact string from its
-setup; a prompt or launch from its final authentic configuration; a retained
-launch's reacquisition from its retained configuration. Ordinary and restoring
-writes carry the same request's model. Discovery and unconfigured or effort-only
-uses omit it.
+steps above run. A reconnect whose use names a model resumes exactly as an
+unconfigured one does: the provider hands the in-process runtime no requested
+model, so no Claude `session/load` or `session/resume` carries
+`_meta["executablemd.has-explicit-model/v1"]`, and the prepared adapter keeps
+its existing resume initialization, including the environment or settings
+model it reasserts. The runtime's `requestedModel` input and the marker it
+derives remain in ACPX and the prepared adapter; XMD supplies neither.
 
-The requested value reaches only the client constructions that call itself
-performs. It neither applies configuration nor replaces the resumed model
-observation. It is never saved in creation options, records, routes, journals,
-encoded handles or provider state; a later operation supplies its own value,
-and a retained live client is not reinitialized for a later use. A supplied
-value must be a non-empty string. A shared runtime refuses a supplied model
-before any effect. On Claude `session/load` or `session/resume`, the client
-checks `requestedModel !== undefined` and derives the existing
-`_meta["executablemd.has-explicit-model/v1"]: true` marker. The model string
-stays within the runtime; `session/new` and other adapters carry no marker.
-
-On such a resume the prepared Claude adapter reasserts no environment or
-settings model. It reads the model the resumed backend reports and advertises
-that exact string as the current model selection — no picker alias, default
-row, context-hint reconstruction or requested value substitutes for it. An
-unreadable or empty report, or one no offered model names exactly, refuses the
-load or resume as an invalid request before any prompt; this includes a
-concrete model offered only through an alias, and a context hint the offered
-ids do not spell. Fresh, unconfigured and effort-only sessions keep the
-adapter's existing initialization.
-
-ACPX's reconnect replay of a saved model selection writes nothing when the
-resumed session already reports exactly that saved id. A different reported id
-is written back through the existing replay, and the steps above verify it.
-Repeated operations under an unchanged selection therefore add no model write,
-while a genuine change is written once and verified before the next prompt.
+After the resume, ACPX's reconnect replay writes the conversation's saved model
+selection when the resumed session reports another current value. The steps
+above then write the requested model when the selector still reports another
+value, and verify the readback. An unchanged reconnect can therefore carry a
+model write, and a genuine change is written and verified before the next
+prompt. A requested model the resumed selector does not offer refuses through
+the same membership check as any configured use.
 
 The configured-session carrier is issued by the Agent package after `session()` resolves an
 exact value registered by the installed provider. An Agent-owned
@@ -1990,8 +1970,7 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   durable identity already exist, and `session()` keeps its eager behavior for
   one: it takes ownership where the agent needs it, reconciles the retained
   route, ensures through the bound runtime, validates the exact identity and
-  host mapping, releases the handle, and starts no turn. That ensure carries
-  its setup's `requestedModel` (§A configured conversation that reconnects).
+  host mapping, releases the handle, and starts no turn.
 
   Directory resolution classifies a record still carrying ACPX's own pending
   marker as new, and a record without one — including every record written

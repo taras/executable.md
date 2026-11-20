@@ -89,7 +89,11 @@ function* useWorld(globalModel?: string): Operation<World> {
   return { root, state, log: join(root, "cli.log"), adapters, records: new Map() };
 }
 
-function runtimeFor(world: World, env: Record<string, string> = {}) {
+function runtimeFor(
+  world: World,
+  env: Record<string, string> = {},
+  command = world.adapters.command("claude"),
+) {
   return createAcpRuntime({
     cwd: world.root,
     sessionStore: {
@@ -99,7 +103,7 @@ function runtimeFor(world: World, env: Record<string, string> = {}) {
         return Promise.resolve();
       },
     },
-    agentRegistry: { resolve: () => world.adapters.command("claude"), list: () => ["claude"] },
+    agentRegistry: { resolve: () => command, list: () => ["claude"] },
     permissionMode: "approve-all",
     nonInteractivePermissions: "deny",
     agentProcessEnv: {
@@ -599,6 +603,54 @@ function* configuredPrompt(
   }
 }
 
+/**
+ * The production provider over this world's adapter, behind the wire tee, with
+ * the coordinator core delivers.
+ */
+function* installProvider(
+  world: World,
+  ownership: ReturnType<typeof makeCoordinator>,
+  env: Record<string, string> = {},
+): Operation<void> {
+  yield* useFlatWorld(world.root);
+  const runtimes: Runtime[] = [];
+  yield* ensure(function* () {
+    for (const runtime of runtimes) {
+      yield* until(runtime.shutdown());
+    }
+  });
+  const factory = createAcpxProvider({
+    createRuntime: () => {
+      const runtime = runtimeFor(
+        world,
+        { ACP_WIRE_TEE_LOG: join(world.root, "wire.log"), ...env },
+        `node "${WIRE_TEE}" "${world.adapters.executablePath("claude")}"`,
+      );
+      runtimes.push(runtime);
+      return runtime;
+    },
+    sessionStore: {
+      load: (id) => Promise.resolve(structuredClone(world.records.get(id))),
+      save: (record) => {
+        world.records.set(record.acpxRecordId, structuredClone(record));
+        return Promise.resolve();
+      },
+    },
+    agentRegistry: makeRegistry({ claude: world.adapters.command("claude") }),
+    advertiseNativeLaunch: ["claude"],
+    advertiseClientNativeAttachment: [],
+    nativeAdapters: {
+      claude: {
+        launcher: "claude",
+        identity: "provider-returned",
+        resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+      },
+    },
+    coordinator: ownership.coordinator,
+  });
+  yield* factory({ defaultAgent: "claude", permissionMode: "deny-all" }, deliveredCoordinator());
+}
+
 describe(
   "Tier CR — the production provider journey",
   {
@@ -606,46 +658,11 @@ describe(
     sanitizeResources: false,
   },
   () => {
-    it("CR7: configured Sidekick prompts reconnect under the exact model with no model writes", function* () {
+    it("CR7: configured Sidekick prompts reconnect unmarked under the exact model", function* () {
       const world = yield* useWorld("fable");
       const ownership = makeCoordinator();
       yield* scoped(function* () {
-        yield* useFlatWorld(world.root);
-        const runtimes: Runtime[] = [];
-        yield* ensure(function* () {
-          for (const runtime of runtimes) {
-            yield* until(runtime.shutdown());
-          }
-        });
-        const factory = createAcpxProvider({
-          createRuntime: () => {
-            const runtime = runtimeFor(world);
-            runtimes.push(runtime);
-            return runtime;
-          },
-          sessionStore: {
-            load: (id) => Promise.resolve(structuredClone(world.records.get(id))),
-            save: (record) => {
-              world.records.set(record.acpxRecordId, structuredClone(record));
-              return Promise.resolve();
-            },
-          },
-          agentRegistry: makeRegistry({ claude: world.adapters.command("claude") }),
-          advertiseNativeLaunch: ["claude"],
-          advertiseClientNativeAttachment: [],
-          nativeAdapters: {
-            claude: {
-              launcher: "claude",
-              identity: "provider-returned",
-              resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
-            },
-          },
-          coordinator: ownership.coordinator,
-        });
-        yield* factory(
-          { defaultAgent: "claude", permissionMode: "deny-all" },
-          deliveredCoordinator(),
-        );
+        yield* installProvider(world, ownership);
 
         const selection = { model: EXPLICIT, effort: "high" };
         const first = yield* configuredPrompt(selection, "first");
@@ -656,7 +673,12 @@ describe(
         }
         const repeated = (yield* logged(world)).slice(before);
         const { modelWrites, prompts } = observed(repeated);
-        expect(modelWrites).toEqual([]);
+        // Each unmarked reconnect reasserts the global alias in the adapter, and
+        // ACPX replays the saved selection over it.
+        const reconnects = repeated.filter((entry) => entry.event === "started").length;
+        expect(modelWrites).toEqual(
+          Array.from({ length: reconnects }, () => ["fable", EXPLICIT]).flat(),
+        );
         const session = prompts[0]?.session;
         expect(prompts).toEqual([
           { session, model: EXPLICIT, effort: "high" },
@@ -669,17 +691,83 @@ describe(
         expect(starts).toBeGreaterThanOrEqual(3);
         expect(repeated.filter((entry) => entry.event === "exit").length).toBe(starts);
         expect(ownership.events.filter((event) => event === "released-active")).toEqual([]);
+        // No XMD load or resume carries the explicit-model marker.
+        expect(yield* resumeMarkers(world)).not.toContain(true);
+        expect((yield* resumeMarkers(world)).length).toBeGreaterThanOrEqual(reconnects);
 
-        // A genuine change is written once and is what the next prompt runs.
+        // A genuine change is written by XMD after the replay of the saved
+        // selection, and is what the next prompt runs.
         const change = (yield* logged(world)).length;
         yield* configuredPrompt({ model: ANOTHER, effort: "high" }, "changed");
         const changed = observed((yield* logged(world)).slice(change));
-        expect(changed.modelWrites).toEqual([ANOTHER]);
+        expect(changed.modelWrites).toEqual(["fable", EXPLICIT, ANOTHER]);
         expect(changed.prompts).toEqual([{ session, model: ANOTHER, effort: "high" }]);
+        expect(yield* resumeMarkers(world)).not.toContain(true);
+      });
+    });
+
+    it("CR10: an alias the resumed picker reports as another value still reconnects (#1239)", function* () {
+      const world = yield* useWorld();
+      yield* scoped(function* () {
+        yield* installProvider(world, makeCoordinator(), {
+          FAKE_CLAUDE_MODELS: JSON.stringify([
+            {
+              value: "default",
+              resolvedModel: "claude-fable-5-1",
+              displayName: "Default",
+              description: "",
+            },
+            {
+              value: "fable",
+              resolvedModel: "claude-fable-5-1",
+              displayName: "Fable",
+              description: "",
+            },
+          ]),
+        });
+        const first = yield* configuredPrompt({ model: "fable" }, "first");
+        const before = (yield* logged(world)).length;
+        for (const text of ["second", "third"]) {
+          const use = yield* configuredPrompt({ model: "fable" }, text);
+          expect(sessionOf(use)).toBe(sessionOf(first));
+        }
+        const repeated = (yield* logged(world)).slice(before);
+        const { modelWrites, prompts } = observed(repeated);
+        const session = prompts[0]?.session;
+        expect(prompts).toEqual([
+          { session, model: "claude-fable-5-1", effort: null },
+          { session, model: "claude-fable-5-1", effort: null },
+        ]);
+        const starts = repeated.filter((entry) => entry.event === "started");
+        expect(starts.map((entry) => [entry.session, entry.resumed])).toEqual(
+          starts.map(() => [session, true]),
+        );
+        // The adapter reports the running model as `default`, and ACPX replays
+        // the saved `fable` over it on each reconnect.
+        expect(modelWrites).toEqual(starts.map(() => "fable"));
+        expect(yield* resumeMarkers(world)).not.toContain(true);
       });
     });
   },
 );
+
+const WIRE_TEE = fileURLToPath(new URL("./fixtures/acp-wire-tee.cjs", import.meta.url));
+
+/** Whether each load or resume the adapter received carried the marker. */
+function* resumeMarkers(world: World): Operation<boolean[]> {
+  let text = "";
+  try {
+    text = yield* readTextFile(join(world.root, "wire.log"));
+  } catch {
+    return [];
+  }
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.method === "session/load" || entry.method === "session/resume")
+    .map((entry) => entry.meta?.["executablemd.has-explicit-model/v1"] === true);
+}
 
 /** A flagged turn's refusal, with nothing prompted and the handle released. */
 function* refusalOfTurn(
