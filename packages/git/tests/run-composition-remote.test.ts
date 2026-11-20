@@ -31,6 +31,7 @@ import {
   fakeGitHubAccess,
   gitHubStore,
   issueCreations,
+  mutations,
   patches,
 } from "./support/github.ts";
 import {
@@ -49,6 +50,7 @@ import {
   useManagedRoot,
   useNamedOriginCheckout,
 } from "./support/run-composition.ts";
+import { stored } from "./support/pull-requests.ts";
 import {
   GITHUB_LOCATOR,
   HEAD,
@@ -76,7 +78,7 @@ describe("ORC14 — live Push evidence", () => {
           `<Git.Add paths="published.md" />`,
           `<Git.Commit message="Publish" as="commit" />`,
           `<Git.Push />`,
-          `<PullRequest title="Publish" as="pullRequest" />`,
+          `<PullRequest title="Publish" as="pullRequest"></PullRequest>`,
         ].join("\n"),
         { root, cwd: checkout.root },
       ),
@@ -115,7 +117,7 @@ describe("ORC14 — live Push evidence", () => {
     const counting = countingOrdinaryHost();
     const failure = yield* raised(
       runOrdinaryDocument(
-        [`<Git.Push />`, `<PullRequest title="Equal" as="pullRequest" />`].join("\n"),
+        [`<Git.Push />`, `<PullRequest title="Equal" as="pullRequest"></PullRequest>`].join("\n"),
         { root, cwd: checkout.root, host: counting.host },
       ),
     );
@@ -139,7 +141,7 @@ describe("ORC14 — live Push evidence", () => {
           `<Git.Switch branch="elsewhere" />`,
           `<Git.Push />`,
           `<Git.Switch branch="unpublished" />`,
-          `<PullRequest title="Not this one" as="pullRequest" />`,
+          `<PullRequest title="Not this one" as="pullRequest"></PullRequest>`,
         ].join("\n"),
         { root, cwd: checkout.root },
       ),
@@ -157,7 +159,7 @@ describe("ORC14 — live Push evidence", () => {
           `<Git.Push />`,
           "</Repository>",
           `<Git.Switch branch="managed-branch" />`,
-          `<PullRequest title="Wrong repository" as="pullRequest" />`,
+          `<PullRequest title="Wrong repository" as="pullRequest"></PullRequest>`,
         ].join("\n"),
         { root, cwd: checkout.root },
       ),
@@ -254,7 +256,7 @@ describe("ORC14 — live Push evidence", () => {
           `<File path="three.md">three</File>`,
           `<Git.Add paths="three.md" />`,
           `<Git.Commit message="Three" as="third" />`,
-          `<PullRequest title="Moved on" as="pullRequest" />`,
+          `<PullRequest title="Moved on" as="pullRequest"></PullRequest>`,
         ].join("\n"),
         { root, cwd: checkout.root },
       ),
@@ -283,7 +285,7 @@ describe("ORC14 — live Push evidence", () => {
           `<Git.Add paths="two.md" />`,
           `<Git.Commit message="Two" as="second" />`,
           `<Git.Push />`,
-          `<PullRequest title="Latest" as="pullRequest" />`,
+          `<PullRequest title="Latest" as="pullRequest"></PullRequest>`,
         ].join("\n"),
         { root, cwd: checkout.root },
       ),
@@ -304,7 +306,7 @@ describe("ORC15 — evidence cannot cross runs", () => {
     const checkout = yield* useHostCheckout(remote.locator);
 
     const failure = yield* raised(
-      runFresh(`<PullRequest title="Nothing pushed" as="pr" />`, {
+      runFresh(`<PullRequest title="Nothing pushed" as="pr"></PullRequest>`, {
         root,
         cwd: checkout.root,
       }),
@@ -334,7 +336,7 @@ describe("ORC15 — evidence cannot cross runs", () => {
         `<Git.Add paths="crossing.md" />`,
         `<Git.Commit message="Crossing" as="commit" />`,
         `<Git.Push />`,
-        `<PullRequest title="Crossing" as="pullRequest" />`,
+        `<PullRequest title="Crossing" as="pullRequest"></PullRequest>`,
       ].join("\n"),
       options,
     );
@@ -346,7 +348,7 @@ describe("ORC15 — evidence cannot cross runs", () => {
     // checkout is still on it, and the pull request still exists — and none of
     // that is this execution's evidence.
     const second = yield* raised(
-      runOrdinaryDocument(`<PullRequest title="Crossing" as="pullRequest" />`, options),
+      runOrdinaryDocument(`<PullRequest title="Crossing" as="pullRequest"></PullRequest>`, options),
     );
     expect(String(second)).toContain("holds no successful <Git.Push> result");
 
@@ -406,22 +408,25 @@ describe("ORC15 — evidence cannot cross runs", () => {
     // not evidence.
     let delegated = 0;
     const failure = yield* raised(
-      runOrdinaryDocument([`<Git.Push />`, `<PullRequest title="Copied" as="pr" />`].join("\n"), {
-        root,
-        cwd: checkout.root,
-        around: function* () {
-          yield* Git.around({
-            // deno-lint-ignore require-yield
-            *push([_invocation], _next): Operation<GitPushOutcome> {
-              delegated += 1;
-              if (published === undefined) {
-                throw new Error("the suite captured no publication to hand back");
-              }
-              return published;
-            },
-          });
+      runOrdinaryDocument(
+        [`<Git.Push />`, `<PullRequest title="Copied" as="pr"></PullRequest>`].join("\n"),
+        {
+          root,
+          cwd: checkout.root,
+          around: function* () {
+            yield* Git.around({
+              // deno-lint-ignore require-yield
+              *push([_invocation], _next): Operation<GitPushOutcome> {
+                delegated += 1;
+                if (published === undefined) {
+                  throw new Error("the suite captured no publication to hand back");
+                }
+                return published;
+              },
+            });
+          },
         },
-      }),
+      ),
     );
 
     // The middleware answered, so the component saw a successful Push.
@@ -472,7 +477,7 @@ describe("ORC15 — evidence cannot cross runs", () => {
     // A new execution, handed the exact selection the first one minted and the
     // path it bound, installed as its contextual Repository.
     const failure = yield* raised(
-      runOrdinaryDocument(`<PullRequest title="Carried" as="pullRequest" />`, {
+      runOrdinaryDocument(`<PullRequest title="Carried" as="pullRequest"></PullRequest>`, {
         root,
         cwd: checkout.root,
         contextualRepository: carried,
@@ -615,6 +620,35 @@ describe("ORC17 — live PullRequests", () => {
     expect(String(rendered)).toContain("number 1");
   });
 
+  it("binds a selected details page or renders the same JSON during an ordinary run", function* () {
+    const root = yield* useManagedRoot();
+    const body = "  Ordinary description  \n\n";
+    const pull = stored({ number: 4, body, headSha: HEAD, baseSha: "b".repeat(40) });
+    const store = gitHubStore({ token: TOKEN, pullRequests: [pull] });
+    const options = {
+      root,
+      cwd: root,
+      gitHubPullRequests: {
+        access: gitHubSource(fakeGitHubAccess(store)),
+        configuration: { allowed: [GITHUB_LOCATOR] },
+      },
+    };
+    const read = `<PullRequest url="${GITHUB_LOCATOR}/pull/4" yq=".body"`;
+    const rendered = yield* runOrdinaryDocument(`${read} />`, options);
+    const bound = yield* runOrdinaryDocument(
+      `${read} as="description" />\n\n<Query value={description} yq="." />`,
+      options,
+    );
+    const page = { value: body, next: null, prev: null, last: null };
+    expect(JSON.parse(String(rendered))).toEqual(page);
+    expect(JSON.parse(String(bound))).toEqual(page);
+    expect(store.requests.map(({ method, url }) => [method, new URL(url).pathname])).toEqual([
+      ["GET", "/repos/octo/project/pulls/4"],
+      ["GET", "/repos/octo/project/pulls/4"],
+    ]);
+    expect(mutations(store)).toEqual([]);
+  });
+
   it("reads all three collections, each from its own route", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
@@ -706,7 +740,7 @@ describe("ORC17 — live PullRequests", () => {
     const counting = countingOrdinaryHost(rewritingHost(GITHUB_LOCATOR, remote.locator));
 
     const failure = yield* raised(
-      runOrdinaryDocument(`<PullRequest title="Never published" as="pullRequest" />`, {
+      runOrdinaryDocument(`<PullRequest title="Never published" as="pullRequest"></PullRequest>`, {
         root,
         cwd: checkout.root,
         host: counting.host,
@@ -801,7 +835,7 @@ describe("checkout admission is the whole repository identity", () => {
     for (const [element, written] of [
       ["<Git.Switch>", `<Git.Switch branch="hijacked" />`],
       ["<Git.Push>", `<Git.Push />`],
-      ["<PullRequest>", `<PullRequest title="Hijacked" as="pullRequest" />`],
+      ["<PullRequest>", `<PullRequest title="Hijacked" as="pullRequest"></PullRequest>`],
     ] as const) {
       const counting = countingOrdinaryHost(rewriting());
       // The credential-counting access, so "no credential was read" is a

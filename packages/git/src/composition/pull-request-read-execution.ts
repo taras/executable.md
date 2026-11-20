@@ -28,7 +28,10 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import type { PullRequestReadKind, PullRequestReadResult } from "./pull-request-read-records.ts";
+import type {
+  PullRequestReadRequestKind,
+  PullRequestReadResult,
+} from "./pull-request-read-records.ts";
 
 /** The stable name every loaded copy composes through. */
 export const PULL_REQUEST_READ_EXECUTION =
@@ -38,8 +41,8 @@ export const PULL_REQUEST_READ_EXECUTION =
 export interface AdmittedPullRequestRead {
   /** The canonical pull-request URL the transport admitted. */
   readonly url: string;
-  /** Which of the three collections this read is for. */
-  readonly kind: PullRequestReadKind;
+  /** Which collection this read is for, or the pull request's own record. */
+  readonly kind: PullRequestReadRequestKind;
   /** The explicit discriminator, when the element carried one. */
   readonly provider: string | undefined;
 }

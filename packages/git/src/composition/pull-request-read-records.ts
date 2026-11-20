@@ -20,6 +20,7 @@
 
 import { isJsonObject, JsonParseError, parseJson } from "@executablemd/core";
 import type { Json, JsonObject } from "@executablemd/core";
+import { canonicalPullRequestUrl } from "./pull-request-target.ts";
 
 /** Which collection one read covers. */
 export type PullRequestReadKind = "reviews" | "comments" | "checks";
@@ -29,6 +30,147 @@ export const PULL_REQUEST_READ_KINDS: readonly PullRequestReadKind[] = [
   "comments",
   "checks",
 ];
+
+/**
+ * What one read asks: one evidence collection, or the pull request's own record.
+ *
+ * The record read is not an evidence collection, so it is not a member of
+ * {@link PullRequestReadKind} — the three evidence components keep their own
+ * vocabulary, and only the authored `<PullRequest>` form reads the record.
+ */
+export type PullRequestReadRequestKind = PullRequestReadKind | "details";
+
+export const PULL_REQUEST_READ_REQUEST_KINDS: readonly PullRequestReadRequestKind[] = [
+  ...PULL_REQUEST_READ_KINDS,
+  "details",
+];
+
+/**
+ * The complete record one pull request holds, as the authored read documents it.
+ *
+ * Closed, and built only from what a provider normalizes: the provider's own
+ * opaque identity rather than a transport id, the title and body as written, and
+ * the head and base each as a branch, a commit and a repository. Raw payloads,
+ * credentials and pagination never reach it.
+ */
+export interface PullRequestDetails {
+  /** The provider's stable opaque identity for this pull request. */
+  readonly providerId: string;
+  readonly number: number;
+  readonly url: string;
+  readonly state: "open" | "closed";
+  readonly title: string;
+  /** The description, preserved byte for byte. */
+  readonly body: string;
+  readonly draft: boolean;
+  readonly headBranch: string;
+  readonly headSha: string;
+  readonly headRepository: string;
+  readonly baseBranch: string;
+  readonly baseSha: string;
+  readonly baseRepository: string;
+}
+
+const DETAILS_MEMBERS = [
+  "providerId",
+  "number",
+  "url",
+  "state",
+  "title",
+  "body",
+  "draft",
+  "headBranch",
+  "headSha",
+  "headRepository",
+  "baseBranch",
+  "baseSha",
+  "baseRepository",
+];
+
+/** The record as the JSON a document selects from, with exactly its members. */
+export function pullRequestDetailsJson(details: PullRequestDetails): JsonObject {
+  return {
+    providerId: details.providerId,
+    number: details.number,
+    url: details.url,
+    state: details.state,
+    title: details.title,
+    body: details.body,
+    draft: details.draft,
+    headBranch: details.headBranch,
+    headSha: details.headSha,
+    headRepository: details.headRepository,
+    baseBranch: details.baseBranch,
+    baseSha: details.baseSha,
+    baseRepository: details.baseRepository,
+  };
+}
+
+/** The complete record, read back from its JSON; anything else is `undefined`. */
+export function parsePullRequestDetails(value: Json | undefined): PullRequestDetails | undefined {
+  if (!isJsonObject(value) || !exactMembers(value, DETAILS_MEMBERS)) {
+    return undefined;
+  }
+  const providerId = nonEmptyText(value.providerId);
+  const number = value.number;
+  const url = nonEmptyText(value.url);
+  const title = nonEmptyText(value.title);
+  const body = text(value.body);
+  const headBranch = nonEmptyText(value.headBranch);
+  const headRepository = nonEmptyText(value.headRepository);
+  const baseBranch = nonEmptyText(value.baseBranch);
+  const baseRepository = nonEmptyText(value.baseRepository);
+  const headSha = objectId(value.headSha);
+  const baseSha = objectId(value.baseSha);
+  const state = value.state;
+  if (
+    providerId === undefined ||
+    typeof number !== "number" ||
+    !Number.isSafeInteger(number) ||
+    number < 1 ||
+    url === undefined ||
+    canonicalPullRequestUrl(url) === undefined ||
+    (state !== "open" && state !== "closed") ||
+    title === undefined ||
+    body === undefined ||
+    typeof value.draft !== "boolean" ||
+    headBranch === undefined ||
+    headSha === undefined ||
+    headRepository === undefined ||
+    baseBranch === undefined ||
+    baseSha === undefined ||
+    baseRepository === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    providerId,
+    number,
+    url,
+    state,
+    title,
+    body,
+    draft: value.draft,
+    headBranch,
+    headSha,
+    headRepository,
+    baseBranch,
+    baseSha,
+    baseRepository,
+  };
+}
+
+function nonEmptyText(value: Json | undefined): string | undefined {
+  const parsed = text(value);
+  return parsed === undefined || parsed === "" ? undefined : parsed;
+}
+
+const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function objectId(value: Json | undefined): string | undefined {
+  const parsed = nonEmptyText(value);
+  return parsed !== undefined && OBJECT_ID.test(parsed) ? parsed : undefined;
+}
 
 /** One submitted review, with its body unchanged. */
 export interface ReviewEvidence {
@@ -196,7 +338,7 @@ export interface PullRequestReadRequest {
   readonly url: string;
   /** The explicit discriminator, or `null` when the URL alone selects. */
   readonly provider: string | null;
-  readonly kind: PullRequestReadKind;
+  readonly kind: PullRequestReadRequestKind;
   readonly runId: string;
   readonly expansionId: string;
 }
@@ -204,7 +346,7 @@ export interface PullRequestReadRequest {
 /** The durable request one URL and collection reduce to. */
 export function readRequest(
   url: string,
-  kind: PullRequestReadKind,
+  kind: PullRequestReadRequestKind,
   provider: string | undefined,
   runId: string,
   expansionId: string,
@@ -260,16 +402,25 @@ export type PullRequestReadResult =
       readonly kind: "checks";
       readonly headSha: string;
       readonly items: readonly CheckEvidence[];
-    };
+    }
+  | { readonly kind: "details"; readonly details: PullRequestDetails };
 
-/** The evidence a document binds: the array, and nothing else. */
-/** The binding a document receives: the items, and nothing about the envelope. */
+/**
+ * The binding a document receives: the evidence items, or the complete record,
+ * and nothing about the envelope.
+ */
 export function pullRequestReadResultJson(result: PullRequestReadResult): Json {
+  if (result.kind === "details") {
+    return pullRequestDetailsJson(result.details);
+  }
   return result.items.map((item) => evidenceJson(item));
 }
 
 /** The envelope the journal retains. */
 export function pullRequestReadEnvelopeJson(result: PullRequestReadResult): JsonObject {
+  if (result.kind === "details") {
+    return { kind: "details", details: pullRequestDetailsJson(result.details) };
+  }
   const items = result.items.map((item) => evidenceJson(item));
   return result.kind === "checks"
     ? { kind: "checks", headSha: result.headSha, items }
@@ -289,7 +440,13 @@ export function parsePullRequestReadResult(value: Json): PullRequestReadResult |
   if (!isJsonObject(value)) {
     return undefined;
   }
-  const kind = PULL_REQUEST_READ_KINDS.find((known) => known === value.kind);
+  const kind = PULL_REQUEST_READ_REQUEST_KINDS.find((known) => known === value.kind);
+  if (kind === "details") {
+    const details = parsePullRequestDetails(value.details);
+    return details === undefined || !exactMembers(value, ["kind", "details"])
+      ? undefined
+      : { kind, details };
+  }
   const listed = value.items;
   if (kind === undefined || !Array.isArray(listed)) {
     return undefined;
@@ -334,7 +491,7 @@ export function parsePullRequestReadResult(value: Json): PullRequestReadResult |
  */
 export function parseCompletePullRequestReadResult(
   value: unknown,
-  kind: PullRequestReadKind,
+  kind: PullRequestReadRequestKind,
 ): PullRequestReadResult | undefined {
   let complete: Json;
   try {

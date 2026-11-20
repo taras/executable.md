@@ -1031,7 +1031,7 @@ function collections(
     }
     for (const kind of ["reviews", "comments", "checks"] as const) {
       const parsed = parseCompletePullRequestReadResult(event.result.value, kind);
-      if (parsed !== undefined) {
+      if (parsed !== undefined && parsed.kind !== "details") {
         held.push({ kind, items: parsed.items.length });
       }
     }
@@ -1301,6 +1301,99 @@ describe("one entry's pull request", () => {
     expect(requests(settled)).toHaveLength(1);
     expect(outcomes(settled)).toHaveLength(2);
     expect(reads(settled)).toHaveLength(3);
+  });
+
+  it("A6/A7: details without a managed root restore the original body during continuation", function* () {
+    const fixture = yield* useFixture();
+    const pull = stored({ number: 1, title: TITLE, body: BODY, headRef: BRANCH });
+    fixture.store.pullRequests.push(pull);
+    const counted = counters();
+    const stream = new InMemoryStream();
+    const source = [
+      `<PullRequest url="${LOCATOR}/pull/1" yq=".body" as="description" />`,
+      `<PullRequest url="${LOCATOR}/pull/1" as="pr" />`,
+      "",
+      "description {description.value}",
+      "record {pr.value.body}",
+      "state {pr.value.state} head {pr.value.headBranch}",
+      "",
+    ].join("\n");
+
+    const operations: string[] = [];
+    const ran = yield* run(fixture, source, stream, counted, {
+      root: undefined,
+      refuseNative: true,
+      *between() {
+        yield* PullRequestOperations.around({
+          *read([request], next) {
+            operations.push(request.kind);
+            return yield* next(request);
+          },
+          *upsert([request], next) {
+            operations.push("upsert");
+            return yield* next(request);
+          },
+        });
+      },
+    });
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.output).toContain(`description ${BODY}`);
+    expect(ran.output).toContain(`record ${BODY}`);
+    expect(ran.output).toContain(`state open head ${BRANCH}`);
+    expect(operations).toEqual(["details", "details"]);
+    expect(methodsCalled(counted)).toEqual([]);
+    expect(
+      fixture.store.requests.map(({ method, url }) => [method, new URL(url).pathname]),
+    ).toEqual([
+      ["GET", "/repos/owner/repository/pulls/1"],
+      ["GET", "/repos/owner/repository/pulls/1"],
+    ]);
+    expect(mutations(fixture.store)).toEqual([]);
+
+    pull.body = "Upstream replaced the description";
+    const broker = yield* useBlockingLogin(fixture);
+    const second = counters();
+    const sent = fixture.store.requests.length;
+    const replayed = new InMemoryStream([...ran.events].filter(terminal));
+    expect(closedRoot(yield* replayed.readAll())).toBe(false);
+    const again = yield* race([
+      run(fixture, source, replayed, second, { root: undefined, refuseNative: true }),
+      (function* (): Operation<never> {
+        yield* broker.started;
+        throw new Error("restoring details attempted to acquire a credential");
+      })(),
+    ]);
+    expect(again.refusal).toBe(undefined);
+    expect(again.output).toBe(ran.output);
+    expect(again.output).not.toContain(pull.body);
+    expect(closedRoot(again.events)).toBe(true);
+    expect(reads(again.events)).toHaveLength(2);
+    expect(methodsCalled(second)).toEqual([]);
+    expect(fixture.store.requests.length).toBe(sent);
+  });
+
+  it("A7: a details URL outside the ceiling refuses before authentication or HTTP", function* () {
+    const fixture = yield* useFixture();
+    const broker = yield* useBlockingLogin(fixture);
+    const counted = counters();
+    const source = `<PullRequest url="${LOCATOR}/pull/1" />`;
+    const ran = yield* race([
+      run(fixture, source, new InMemoryStream(), counted, {
+        root: undefined,
+        refuseNative: true,
+        allowed: ["https://github.com/owner/elsewhere"],
+      }),
+      (function* (): Operation<never> {
+        yield* broker.started;
+        throw new Error("a details URL outside the ceiling attempted to acquire a credential");
+      })(),
+    ]);
+    expect(String(ran.refusal)).toContain("has not authorized");
+    expect(ran.output).toBe("");
+    expect(counted.env).toContain(PULL_REQUEST_CONFIGURATION);
+    expect(methodsCalled(counted)).toEqual([]);
+    expect(fixture.store.requests).toEqual([]);
+    expect(reads(ran.events)).toEqual([]);
   });
 
   it("Q2: a superseding publication of the same branch decides the head", function* () {
