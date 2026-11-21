@@ -695,8 +695,8 @@ describe(
         expect(repeated.filter((entry) => entry.event === "exit").length).toBe(starts);
         expect(ownership.events.filter((event) => event === "released-active")).toEqual([]);
         // No XMD load or resume carries the explicit-model marker.
-        expect(yield* resumeMarkers(world)).not.toContain(true);
-        expect((yield* resumeMarkers(world)).length).toBeGreaterThanOrEqual(reconnects);
+        expect(yield* markers(world)).not.toContain(true);
+        expect((yield* markers(world)).length).toBeGreaterThanOrEqual(reconnects);
 
         // A genuine change is written by XMD after the replay of the saved
         // selection, and is what the next prompt runs.
@@ -705,7 +705,7 @@ describe(
         const changed = observed((yield* logged(world)).slice(change));
         expect(changed.modelWrites).toEqual(["fable", EXPLICIT, ANOTHER]);
         expect(changed.prompts).toEqual([{ session, model: ANOTHER, effort: "high" }]);
-        expect(yield* resumeMarkers(world)).not.toContain(true);
+        expect(yield* markers(world)).not.toContain(true);
       });
     });
 
@@ -748,29 +748,11 @@ describe(
         // The adapter reports the running model as `default`, and ACPX replays
         // the saved `fable` over it on each reconnect.
         expect(modelWrites).toEqual(starts.map(() => "fable"));
-        expect(yield* resumeMarkers(world)).not.toContain(true);
+        expect(yield* markers(world)).not.toContain(true);
       });
     });
   },
 );
-
-const WIRE_TEE = fileURLToPath(new URL("./fixtures/acp-wire-tee.cjs", import.meta.url));
-
-/** Whether each load or resume the adapter received carried the marker. */
-function* resumeMarkers(world: World): Operation<boolean[]> {
-  let text = "";
-  try {
-    text = yield* readTextFile(join(world.root, "wire.log"));
-  } catch {
-    return [];
-  }
-  return text
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line))
-    .filter((entry) => entry.method === "session/load" || entry.method === "session/resume")
-    .map((entry) => entry.meta?.["executablemd.has-explicit-model/v1"] === true);
-}
 
 /** A flagged turn's refusal, with nothing prompted and the handle released. */
 function* refusalOfTurn(
@@ -1038,7 +1020,7 @@ describe(
       entries = (yield* logged(world)).slice(before);
       expect(observed(entries).modelWrites).toEqual([ANOTHER]);
       expect(observed(entries).prompts).toEqual([{ session, model: ANOTHER, effort: "high" }]);
-      expect((yield* markers(world)).slice(resumes)).not.toContain(false);
+      expect((yield* markers(world)).slice(resumes)).not.toContain(true);
 
       // Asking again for the model just changed to names nothing.
       before = (yield* logged(world)).length;
