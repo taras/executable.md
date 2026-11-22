@@ -152,9 +152,22 @@ record the baseline again after an intended change.
 - Run a baseline exercise in a process of its own, as `xmd run` does. The call
   counters cover the whole process, so work running beside the exercise is
   counted with it.
-- A REPL journey's total calls are not a stable measure. The number of frames
-  the REPL prepares depends on how input and timers interleave, and its
-  rendering calls move with that number.
+- A REPL driven through a terminal is not a stable measure. The number of frames
+  it prepares depends on how input and timers interleave, and its rendering
+  calls move with that number. Mount the REPL, as the typing exercise does.
+
+[typing.md](baselines/typing.md) counts thirty keystrokes in the Sidekick composer
+against a 2-round and a 52-round history, through a REPL mounted by ReplBench.
+It is a `Test` document, run on its own:
+
+```text
+deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  packages/cli/src/deno.ts test examples/xmd-profile/baselines/typing.md
+```
+
+More than half of its calls are the terminal emulator the mounted page reads the
+screen with, so read the rows for this repository's packages, not the total. The
+typing comparison in ReplBench still supplies milliseconds.
 
 ## Profile a REPL session
 
