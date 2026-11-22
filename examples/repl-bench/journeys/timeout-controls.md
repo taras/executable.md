@@ -38,7 +38,7 @@
         <ReplBench.SidekickPrompt text="Ask the human." />
       </Spawn>
       <Spawn>
-        <ReplBench.WaitForText text="[answer sidekick]" />
+        <ReplBench.WaitForText text="[answer sidekick]" timeout="30s" />
         <ReplBench.WaitForText text="fail-with-a-pending-acp-question" timeout="3s" />
       </Spawn>
     </All>
@@ -75,7 +75,7 @@
         <XMD.Repl.SidekickPrompt text="Ask the human." />
       </Spawn>
       <Spawn>
-        <Terminal.WaitForText text="[answer sidekick]" />
+        <Terminal.WaitForText text="[answer sidekick]" timeout="30s" />
         <Terminal.WaitForText text="fail-with-a-pending-path-question" timeout="3s" />
       </Spawn>
     </All>
