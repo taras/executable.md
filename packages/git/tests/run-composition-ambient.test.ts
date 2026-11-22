@@ -93,7 +93,7 @@ describe("ORC3 — the ambient primary checkout", () => {
       `<Git.Add paths="a.md" />`,
       `<Git.Commit message="m" as="c" />`,
       `<Git.Push />`,
-      `<PullRequest title="t" as="pr" />`,
+      `<PullRequest title="t" as="pr"></PullRequest>`,
     ];
     for (const source of outside) {
       const counting = countingOrdinaryHost();
@@ -178,7 +178,7 @@ describe("ORC5 — origin is not local admission", () => {
 
     // Push and PullRequest each refuse, and each refuses before a credential is
     // read, a session is opened or a byte leaves for a Git host.
-    for (const source of [`<Git.Push />`, `<PullRequest title="t" as="pr" />`]) {
+    for (const source of [`<Git.Push />`, `<PullRequest title="t" as="pr"></PullRequest>`]) {
       const counting = countingOrdinaryHost();
       const github = recordingAccess({});
       const failure = yield* raised(
