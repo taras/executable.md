@@ -135,9 +135,8 @@ export function printedLocation(screen: string): string {
 /** How a process reaches this tracker: the operator's two variables. */
 function configured(server: IssueTrackerServer, token: string): readonly string[] {
   return [
-    `export XMD_WORKFLOW_GITHUB_ISSUES=${shellQuote(
-      JSON.stringify({ ceiling: [TRACKER], endpoint: server.url }),
-    )}`,
+    "unset XMD_WORKFLOW_GITHUB_ISSUES",
+    `export XMD_REPL_GITHUB_BASE_URL=${shellQuote(server.url)}`,
     `export GH_TOKEN=${shellQuote(token)}`,
   ];
 }
@@ -161,7 +160,10 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     const inside = (args: readonly string[], token: string): string =>
       [...configured(server, token), `cd ${shellQuote(home)}`, repl(args)].join("; ");
 
-    const first = yield* allocate(inside(["repl", "--deny-all"], credential()), home);
+    const first = yield* allocate(
+      inside(["repl", "--deny-all", "--github-base-url", "https://unused.invalid"], credential()),
+      home,
+    );
     yield* showing(first, "[exit]", REACH_MS);
 
     // Typed as a person types it: one paste carrying newlines, then Enter.
@@ -245,7 +247,12 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
       },
     });
     const inside = (args: readonly string[]): string =>
-      [...configured(server, credential()), `cd ${shellQuote(home)}`, repl(args)].join("; ");
+      [
+        ...configured(server, credential()),
+        "unset XMD_REPL_GITHUB_BASE_URL",
+        `cd ${shellQuote(home)}`,
+        repl([...args, "--github-base-url", server.url]),
+      ].join("; ");
 
     const first = yield* allocate(inside(["repl", "--deny-all"]), home);
     yield* showing(first, "[exit]", REACH_MS);

@@ -210,7 +210,6 @@ function entryHost(
     seen.owners.push(owner);
     return replIssueInstallation(owner, {
       access: gitHubFixtureSource(fixture.server.url, { credential: "valid" }),
-      configuration: { ceiling: [TRACKER] },
       ...options,
     });
   };
@@ -1184,40 +1183,22 @@ describe("how a REPL entry gets its issues", () => {
 
         const ran = yield* scoped(function* (): Operation<Ran> {
           yield* failingRecording(acquired, managed);
-          return yield* submit(fixture, FILES_ONE, entry, {
-            host: entryHost(fixture, counted()),
-            cwd: fixture.checkout,
-          });
+          return yield* submit(
+            fixture,
+            [FILES_ONE, `<Issue url="${TRACKER}/issues/1" as="found" />`].join("\n"),
+            entry,
+            {
+              host: entryHost(fixture, counted()),
+              cwd: fixture.checkout,
+            },
+          );
         });
 
         expect(ran.outcome?.ok).toBe(true);
-        expect(urls(ran.events)).toEqual([`${TRACKER}/issues/1`]);
+        expect(urls(ran.events)).toEqual([`${TRACKER}/issues/1`, `${TRACKER}/issues/1`]);
+        expect(paths(fixture.server)).toContain("GET /repos/octo/project/issues/1");
         expect(acquired.count).toBe(0);
         expect(yield* exists(managed)).toBe(false);
-      },
-    ));
-
-  it("E5: sends nothing at all to a target this host did not authorize", () =>
-    captureReplEntry(
-      { owner: OWNER, name: "E5: sends nothing at all to a target this host did not authorize" },
-      "execution-1",
-      INLINE_SOURCE_PATH,
-      function* (entry): Operation<void> {
-        const fixture = yield* useFixture();
-        const elsewhere =
-          '<IssueTracker url="https://github.com/other/repo"><Issue title="Filed" as="filed">a described issue</Issue></IssueTracker>';
-
-        const ran = yield* submit(fixture, elsewhere, entry, {
-          host: entryHost(fixture, counted()),
-        });
-
-        expect(ran.outcome?.ok).toBe(false);
-        // No request, so no credential either: the ceiling is asked before a
-        // session is opened and before anything is built.
-        expect(paths(fixture.server)).toEqual([]);
-        // The refusal is retained as this position's failed outcome, and nothing
-        // about it is an acknowledged issue.
-        expect(settledIssueRecords(ran.events).length).toBe(0);
       },
     ));
 

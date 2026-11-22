@@ -12,6 +12,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Ok, scoped, type Operation } from "effection";
 import { API } from "@executablemd/runtime";
+import { denoGitHubSource } from "../src/deno/composition/github-host.ts";
+import { gitHubSource } from "../src/deno/composition/github.ts";
 import { useDenoGitHubIssues } from "../src/deno/issue/github-host.ts";
 import { IssueApi } from "@executablemd/git/api";
 import type { IssueDetails } from "@executablemd/git/api";
@@ -276,6 +278,77 @@ describe("what the published issue transport installs", () => {
     // And the caller's tracker is the one that was asked.
     expect(served.requests.length > 0).toBe(true);
     expect(served.requests.every((asked) => asked.method === "GET")).toBe(true);
+  });
+
+  for (const [environment, cliBaseUrl, expected] of [
+    [undefined, undefined, "https://api.github.com"],
+    [undefined, "https://cli.invalid/api/v3", "https://cli.invalid/api/v3"],
+    [
+      "https://enterprise.invalid/api/v3",
+      "https://cli.invalid/api/v3",
+      "https://enterprise.invalid/api/v3",
+    ],
+  ]) {
+    it(`reads a github.com issue in REPL through ${expected}`, function* () {
+      yield* scoped(function* () {
+        yield* API.Env.around({
+          *env([name]) {
+            expect(name).toBe("XMD_REPL_GITHUB_BASE_URL");
+            return environment;
+          },
+        });
+        yield* useDenoGitHubIssues({
+          mode: "repl",
+          cliBaseUrl,
+          host: (configured) => {
+            const { endpoint } = denoGitHubSource(configured);
+            expect(endpoint).toBe(expected);
+            return gitHubSource({
+              endpoint,
+              *token() {
+                return "fixture-token";
+              },
+              *send(request) {
+                expect(request.url).toBe(`${expected}/repos/octo/project/issues/1`);
+                expect(request.headers["Authorization"]).toBe("Bearer fixture-token");
+                return {
+                  status: 200,
+                  body: JSON.stringify({
+                    ...PAYLOAD,
+                    repository_url: `${expected}/repos/octo/project`,
+                  }),
+                };
+              },
+            });
+          },
+        });
+        const read = yield* IssueApi.operations.read(`${TARGET}/issues/1`, {});
+        expect(read.title).toBe(ISSUE.title);
+        expect(read.url).toBe(`${TARGET}/issues/1`);
+      });
+    });
+  }
+
+  it("delegates an unconfigured workflow issue before opening a source", function* () {
+    yield* scoped(function* () {
+      yield* API.Env.around({
+        *env([name]) {
+          expect(name).toBe("XMD_WORKFLOW_GITHUB_ISSUES");
+          return undefined;
+        },
+      });
+      yield* useDenoGitHubIssues({
+        host: () => {
+          throw new Error("workflow attempted to build a source");
+        },
+      });
+      try {
+        yield* IssueApi.operations.read(`${TARGET}/issues/1`, {});
+        throw new Error("workflow unexpectedly read an issue");
+      } catch (error) {
+        expect(String(error)).toContain("NoIssueProvider");
+      }
+    });
   });
 
   it("refuses a destination outside the ceiling before any source is opened", function* () {

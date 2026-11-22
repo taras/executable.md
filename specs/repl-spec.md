@@ -2842,11 +2842,15 @@ is already there. One issue is filed, not two. A read has no key and reconciles
 nothing — an interrupted one is simply made again, which is what a second
 observation of a live object is.
 
-A refused tracker stays refused. Whether this deployment may reach a target at
-all is the operator's `XMD_WORKFLOW_GITHUB_ISSUES` ceiling, and a target outside
-it sends no request and carries no credential. A conflict, an ambiguity or an
-unavailable service keeps the provider's own vocabulary here exactly as it does
-elsewhere.
+With the Git Plugin active on a host that supplies the GitHub issue provider,
+REPL reads the supplied issue URL and files in the explicitly selected tracker.
+Both work from an empty directory or a Git checkout. REPL uses the caller's
+GitHub authentication and needs no repository allowlist.
+
+The API base URL comes from `XMD_REPL_GITHUB_BASE_URL`, then
+`xmd repl --github-base-url`, then `https://api.github.com`. A GitHub Enterprise
+API base can serve issue URLs written with `github.com`. The ordinary provider
+rules for URL matching, authentication and operation permissions apply.
 
 ## What the head says the execution is doing
 

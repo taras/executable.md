@@ -111,6 +111,7 @@ import type { ReplPlacementRegistration, ReplSelectionEntry } from "./selections
 
 /** What a caller may state about one entry's recording. */
 export interface ReplRecordingOptions {
+  readonly gitHubBaseUrl?: string;
   readonly access?: HostFilesAccess;
   readonly mounts?: WorkspaceMountTable;
   readonly projectCwd?: string;
@@ -302,7 +303,7 @@ export function* replRepositoryInstallation(
     filesystem: filesystem.filesystem,
     components,
     admissions: [...admissions, ...(filesystem.admissions ?? [])],
-    install: () => useEntryIssueTransport({}),
+    install: () => useEntryIssueTransport({ cliBaseUrl: options.gitHubBaseUrl }),
   };
 }
 

@@ -345,6 +345,10 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
+  githubBaseUrl: {
+    description: "GitHub API base URL for REPL issues",
+    ...field(z.string().optional()),
+  },
   allowAbsolute: absoluteField,
   attach: {
     description: "attach one interactive UI to this exact live XMD child",
@@ -726,7 +730,7 @@ export type ReplHostInstaller = () => Operation<void>;
  * reaches no provider, credential, network, repository or terminal — so a
  * command that selects and then refuses has touched nothing.
  */
-export type ReplEntryHostSelector = () => Operation<void>;
+export type ReplEntryHostSelector = (gitHubBaseUrl?: string) => Operation<void>;
 
 /**
  * How a runtime assembles the REPL: what it selects, then what it installs.
@@ -751,7 +755,7 @@ export interface ReplHostAssembly {
  * silence would let them believe they got it.
  */
 /**
- * The six REPL options that carry a value, by the spelling a caller writes.
+ * The REPL options that carry a value, by the spelling a caller writes.
  *
  * Exported because the documentation check reads this command's own examples,
  * and a token after one of these is that option's value rather than a location.
@@ -759,6 +763,7 @@ export interface ReplHostAssembly {
  * command about what it had been handed.
  */
 export const REPL_VALUES: readonly string[] = [
+  "--github-base-url",
   "--mount",
   "--include",
   "--agent-provider",
@@ -3260,7 +3265,7 @@ function* dispatch(
       // nothing but code. It is made before the profile below, because that is
       // what captures it.
       if (replHost.select !== undefined) {
-        yield* replHost.select();
+        yield* replHost.select(command.config.githubBaseUrl);
       }
       yield* useAbsolutePermission(command.config.allowAbsolute);
       const moduleLoader = yield* ComponentModuleLoader.get();
