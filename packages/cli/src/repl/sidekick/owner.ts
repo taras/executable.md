@@ -869,7 +869,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     let recovering = false;
     /** What the last refresh read, kept so a change to `inFlight` needs no reread. */
     let projected: { records: readonly SidekickRecord[]; history: ProjectedHistory } | undefined;
+    const recoveryStatuses = new Map<
+      string,
+      { readonly live: number | undefined; readonly status: string | undefined }
+    >();
     function reckon(): void {
+      // Each refresh replaces the retained snapshot. Relinquishing a live request
+      // keeps that snapshot but can change the recovery decision.
+      recoveryStatuses.clear();
       recovering =
         projected === undefined ||
         recoveryRequired(projected.records, projected.history, inFlight?.at);
@@ -1414,12 +1421,26 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     }
 
     function recoveryStatus(conversation: string): string | undefined {
+      const live = inFlight?.at;
+      const cached = recoveryStatuses.get(conversation);
+      if (cached !== undefined && cached.live === live) {
+        return cached.status;
+      }
+      const status = deriveRecoveryStatus(conversation, live);
+      recoveryStatuses.set(conversation, { live, status });
+      return status;
+    }
+
+    function deriveRecoveryStatus(
+      conversation: string,
+      live: number | undefined,
+    ): string | undefined {
       if (projected === undefined) {
         return undefined;
       }
       const { records, history } = projected;
       const unknown = uncertainRequests(records, history.reading.requests, conversation).some(
-        (at) => at !== inFlight?.at && records[at]?.kind === "feedback",
+        (at) => at !== live && records[at]?.kind === "feedback",
       );
       if (!unknown) {
         return conversation === history.reading.active && recovering
