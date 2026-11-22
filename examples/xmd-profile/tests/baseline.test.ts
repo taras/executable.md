@@ -86,6 +86,10 @@ Deno.test("a measure beyond the tolerance shifts in either direction", () => {
   const baseline = recorded();
   const same = check(baseline, measures(layerValues([{ counts: SMALL }])), "deno 2.9.7");
   assert.equal(same.shifted, false);
+  assert.match(
+    renderCheck("baselines/loop.md", same),
+    /same amount of work as recorded, which does not show that it takes the same time/,
+  );
   for (const effection of [620, 580]) {
     const moved = check(
       baseline,
@@ -115,6 +119,8 @@ Deno.test("a baseline document round-trips through its data block", () => {
   const baseline = recorded();
   const document = renderBaseline(baseline);
   assert.match(document, /\| calls: effection \| 600 \|/);
+  assert.match(document, /^# Call-count baseline: loop of json/);
+  assert.match(document, /a reason to look, not a verdict/);
   assert.deepEqual(parseBaseline(document), baseline);
   assert.throws(() => parseBaseline("# no data here"));
 });
@@ -128,6 +134,7 @@ Deno.test("the rendered check lists only the shifted measures", () => {
   );
   const text = renderCheck("baselines/loop.md", moved);
   assert.match(text, /2 of 4 measures shifted/);
+  assert.match(text, /A count is not a duration, so measure the time/);
   assert.match(text, /\| calls: effection \| 600 \| 620 \| \+3\.33% \|/);
   assert.doesNotMatch(text, /xmd core/);
 });

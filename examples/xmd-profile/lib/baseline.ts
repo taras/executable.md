@@ -204,11 +204,18 @@ export function renderBaseline(baseline: Baseline): string {
       ? "one capture"
       : `two captures, at ${number(small)} and ${number(large)} units`;
   return [
-    `# Performance baseline: ${baseline.title}`,
+    `# Call-count baseline: ${baseline.title}`,
     "",
-    "`Profile.Baseline` wrote this document and checks later runs against it. A measure",
-    "that moves by more than the tolerance fails the check. Run the same journey with",
-    "`XMD_PROFILE_UPDATE=1` to accept an intended change, and review the difference.",
+    "This document records how much work an exercise asks for: the number of function",
+    "calls it makes, by layer. `Profile.Baseline` checks later runs against it.",
+    "",
+    "A shift means the exercise now does more work, or less, than when this was",
+    "recorded. It is a reason to look, not a verdict, because a count is not a",
+    "duration. Measure the time before deciding whether the change matters. Then fix",
+    "it, or run the same exercise with `XMD_PROFILE_UPDATE=1` and review the difference.",
+    "",
+    "A count misses time spent inside one function, garbage collection, WebAssembly and",
+    "other native work. An exercise can get slower without any figure here moving.",
     "",
     `- Runtime: ${baseline.runtime}`,
     `- Measured from: ${captures}`,
@@ -240,10 +247,10 @@ export function renderCheck(path: string, result: CheckResult): string {
   }
   const shifted = result.rows.filter((row) => row.shifted);
   if (shifted.length === 0) {
-    return `Baseline \`${path}\`: ${result.rows.length} measures within tolerance.`;
+    return `Baseline \`${path}\`: ${result.rows.length} measures within tolerance. The exercise asks for the same amount of work as recorded, which does not show that it takes the same time.`;
   }
   return [
-    `Baseline \`${path}\`: ${shifted.length} of ${result.rows.length} measures shifted.`,
+    `Baseline \`${path}\`: ${shifted.length} of ${result.rows.length} measures shifted. The exercise asks for a different amount of work than recorded. A count is not a duration, so measure the time before deciding whether this matters.`,
     "",
     "| Measure | Baseline | Measured | Shift |",
     "| --- | ---: | ---: | ---: |",

@@ -48,6 +48,7 @@ Deno.test("calls are totalled by layer", () => {
 Deno.test("the rendered counts report totals and shares", () => {
   const text = renderCalls("each.calls.json", countCalls(coverage), 2);
   assert.match(text, /20 function calls across 3 functions/);
+  assert.match(text, /A count shows how much work was asked for, not how long it took/);
   assert.match(text, /\| `effection` \| 10 \| 50\.0% \|/);
   assert.match(text, /\| `\(anonymous\) xmd:core\/src\/expand\.ts` \| 7 \| 35\.0% \|/);
   assert.doesNotMatch(text, /expandEach/);
