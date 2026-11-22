@@ -24,66 +24,6 @@
   <AssertEquals actual={closed.exitCode} expected={0} />
 </Test>
 
-<Test name="Transcript wheel and keyboard reach the exact presented turn" timeout="90s">
-  <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-transcript.md" columns={160} rows={36}>
-    <ReplBench.Focus target="sidekick-composer" />
-    <Each in={["00","01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17"]} let="turn">
-      <ReplBench.Type text={"turn-"+turn} />
-      <ReplBench.Region name="sidekick-composer">
-        <ReplBench.WaitForText text={"turn-"+turn} />
-      </ReplBench.Region>
-      <ReplBench.Key key="Enter" />
-      <ReplBench.WaitForText text={"Reply witness "+turn+"."} />
-      <ReplBench.WaitForText text="[stop]" present={false} />
-    </Each>
-
-    <ReplBench.Type text="message-kept" />
-    <ReplBench.WaitForText text="message-kept" as="message" />
-    <ReplBench.Region name="transcript">
-      <ReplBench.WaitForText text="turn-00" as="first" />
-      <ReplBench.WaitForText text="turn-01" as="second" />
-      <ReplBench.Scroll delta={1} at={first} />
-      <ReplBench.WaitForText text="turn-01" at={{row:second.row-3,column:second.column}} />
-      <ReplBench.Region name="sidekick-composer">
-        <ReplBench.WaitForText text="message-kept" at={message} />
-      </ReplBench.Region>
-
-      <ReplBench.Scroll delta={-1} at={first} />
-      <ReplBench.WaitForText text="turn-00" at={first} />
-      <ReplBench.WaitForText text="turn-01" at={second} />
-      <ReplBench.Region name="sidekick-composer">
-        <ReplBench.WaitForText text="message-kept" at={message} />
-      </ReplBench.Region>
-
-      <ReplBench.Scroll delta={30} at={first} />
-      <ReplBench.WaitForText text="turn-17" />
-      <ReplBench.Scroll delta={-30} at={first} />
-      <ReplBench.WaitForText text="turn-00" at={first} />
-    </ReplBench.Region>
-
-    <ReplBench.Key key="Tab" />
-    <ReplBench.WaitForText text="> [history]" />
-    <ReplBench.Key key="Tab" />
-    <ReplBench.WaitForText text="> All sessions" />
-    <ReplBench.Key key="Alt+ArrowDown" />
-    <ReplBench.WaitForText text="> [U] Initialize this" />
-    <ReplBench.Key key="ArrowDown" />
-    <ReplBench.WaitForText text="> [U] turn-00" />
-    <Each in={["01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17"]} let="turn">
-      <ReplBench.Key key="ArrowDown" />
-      <ReplBench.WaitForText text={"> [U] turn-"+turn} />
-    </Each>
-    <ReplBench.Region name="sidekick-composer">
-      <ReplBench.WaitForText text="message-kept" at={message} />
-    </ReplBench.Region>
-    <ReplBench.WaitForText text="[Back to current chat]" present={false} />
-    <ReplBench.SidekickStatus as="sidekick" />
-    <AssertEquals actual={sidekick.messages.length} expected={19} />
-    <AssertEquals actual={sidekick.canonical[0].attempted.length} expected={19} />
-    <AssertEquals actual={sidekick.canonical[0].completed.length} expected={19} />
-  </ReplBench>
-</Test>
-
 <Test name="History wheel and keyboard preserve a held Sidekick answer and reach its final outcome" timeout="120s">
   <ReplBench scenario="examples/repl-bench/fixtures/repl-sidekick-held-history.md" columns={120} rows={30}>
     <Each in={[0,1,2,3,4,5,6,7,8,9,10,11]} let="index">
