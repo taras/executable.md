@@ -552,6 +552,17 @@ to each launch, so a resumed bench supplies the options its new command uses.
 The optional `plugins` array passes each path to the child as `--plugin`. Paths
 resolve from the invocation's contextual cwd.
 
+Set `mounted={true}` to drive a REPL mounted in the test's own process, with no
+child process and no terminal. Input is dispatched and read back inside the
+process, so the frames a journey produces do not depend on how terminal input
+and timers interleave. The mounted REPL starts in a scope of its own and
+inherits nothing from the journey, including its testing session.
+`history={{ rounds, linesPerRound }}` generates a scripted transcript before the
+body runs. A mounted launch answers `Terminal.Focus`, `Terminal.Type`,
+`Terminal.Key`, `Terminal.Resize`, and `Terminal.WaitForText` by text in the
+viewport or the `sidekick-composer` region. Every other component refuses. It
+runs the current build and takes none of the other launch options.
+
 Each Terminal hosts one active launch. The bench owns its driver, REPL
 process, attached Sidekick, and output capture. Its cleanup joins the child
 and drains its output before another bench can use that Terminal. Each launch
