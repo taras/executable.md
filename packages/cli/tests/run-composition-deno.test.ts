@@ -376,7 +376,7 @@ describe("ORC15 — a trace is not evidence", () => {
     // commit — handed that exact file as its journal, and containing only a
     // pull request.
     const failure = yield* raisedValue(
-      runOrdinary(`<PullRequest title="Traced" as="pullRequest" />`, {
+      runOrdinary(`<PullRequest title="Traced" as="pullRequest"></PullRequest>`, {
         root: first.root,
         cwd: first.checkout,
         journal: trace,

@@ -51,7 +51,7 @@ const OPERATIONS: readonly { readonly name: string; readonly source: string }[] 
   { name: "Git.Changes", source: `<Git.Changes compare="unstaged" as="v" />` },
   { name: "Git.Diff", source: `<Git.Diff compare="unstaged" as="v" />` },
   { name: "Git.File", source: `<Git.File commit="HEAD" path="README.md" as="v" />` },
-  { name: "PullRequest", source: `<PullRequest title="t" as="pr" />` },
+  { name: "PullRequest", source: `<PullRequest title="t" as="pr"></PullRequest>` },
   {
     name: "PullRequest.Reviews",
     source: `<PullRequest.Reviews url="https://github.com/o/r/pull/1" as="v" />`,

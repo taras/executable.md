@@ -149,7 +149,7 @@ function payloadOf(store: GitHubStore, pullRequest: StoredPullRequest): Record<s
   return {
     node_id: pullRequest.nodeId,
     number: pullRequest.number,
-    html_url: `https://github.com/owner/repository/pull/${pullRequest.number}`,
+    html_url: `https://github.com/${store.owner}/${store.repository}/pull/${pullRequest.number}`,
     state: pullRequest.state,
     title: pullRequest.title,
     body: pullRequest.body,
@@ -463,7 +463,7 @@ function pullRequestAsIssue(
   return {
     node_id: pullRequest.nodeId,
     number: pullRequest.number,
-    html_url: `https://github.com/owner/repository/pull/${pullRequest.number}`,
+    html_url: `https://github.com/${store.owner}/${store.repository}/pull/${pullRequest.number}`,
     state: pullRequest.state,
     title: pullRequest.title,
     body: pullRequest.body,
