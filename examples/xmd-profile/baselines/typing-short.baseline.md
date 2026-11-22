@@ -17,17 +17,16 @@ other native work. An exercise can get slower without any figure here moving.
 
 | Measure | Value |
 | --- | ---: |
-| calls: total | 26,340,958 |
+| calls: total | 26,330,745 |
 | calls: npm @xterm/headless | 14,066,460 |
-| calls: xmd cli | 8,199,849 |
+| calls: xmd cli | 8,195,426 |
 | calls: npm @termless/xtermjs | 2,064,615 |
-| calls: effection | 1,251,954 |
-| calls: deno runtime | 254,605 |
+| calls: effection | 1,252,472 |
+| calls: deno runtime | 255,044 |
 | calls: xmd core | 199,749 |
-| calls: effectionx | 195,688 |
+| calls: effectionx | 195,738 |
 | calls: npm @secretlint/core | 45,180 |
-| calls: xmd durable-streams | 27,000 |
-| calls: other layers | 35,858 |
+| calls: other layers | 56,061 |
 
 ```json
 {
@@ -39,7 +38,7 @@ other native work. An exercise can get slower without any figure here moving.
   "measures": [
     {
       "name": "calls: total",
-      "value": 26340958
+      "value": 26330745
     },
     {
       "name": "calls: npm @xterm/headless",
@@ -47,7 +46,7 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: xmd cli",
-      "value": 8199849
+      "value": 8195426
     },
     {
       "name": "calls: npm @termless/xtermjs",
@@ -55,11 +54,11 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: effection",
-      "value": 1251954
+      "value": 1252472
     },
     {
       "name": "calls: deno runtime",
-      "value": 254605
+      "value": 255044
     },
     {
       "name": "calls: xmd core",
@@ -67,19 +66,15 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: effectionx",
-      "value": 195688
+      "value": 195738
     },
     {
       "name": "calls: npm @secretlint/core",
       "value": 45180
     },
     {
-      "name": "calls: xmd durable-streams",
-      "value": 27000
-    },
-    {
       "name": "calls: other layers",
-      "value": 35858
+      "value": 56061
     }
   ]
 }
