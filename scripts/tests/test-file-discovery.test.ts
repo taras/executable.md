@@ -23,7 +23,7 @@ import { until } from "effection";
 import { listTestFiles, MARKDOWN_SUITES } from "../lib/test-files.ts";
 
 const ROOT = new URL("../../", import.meta.url);
-const REPL_BENCH_TESTS = "examples/repl-bench/tests/";
+const BENCH_TEST_DIRECTORIES = ["examples/repl-bench/tests/", "examples/xmd-profile/tests/"];
 
 /**
  * What `deno test` discovers with no path arguments: `*.test.*`, `*_test.*`,
@@ -89,8 +89,9 @@ function* repositoryTestFiles(): Operation<string[]> {
 describe("the discovered corpus against the whole repository", () => {
   it("partitions Deno test files between the runtime corpus and the dedicated bench job", function* () {
     const walked = yield* repositoryTestFiles();
-    const bench = walked.filter((file) => file.startsWith(REPL_BENCH_TESTS));
-    const runtime = walked.filter((file) => !file.startsWith(REPL_BENCH_TESTS));
+    const runtime = walked.filter(
+      (file) => !BENCH_TEST_DIRECTORIES.some((directory) => file.startsWith(directory)),
+    );
     const discovered = (yield* listTestFiles(ROOT)).filter((file) => file.endsWith(".ts"));
 
     // A walk that pruned too much would agree with discovery by finding
@@ -99,7 +100,9 @@ describe("the discovered corpus against the whole repository", () => {
     expect(walked.length).toBeGreaterThan(100);
 
     const selected = new Set(discovered);
-    expect(bench.length).toBeGreaterThan(0);
+    for (const directory of BENCH_TEST_DIRECTORIES) {
+      expect(walked.some((file) => file.startsWith(directory))).toBe(true);
+    }
     const stranded = runtime.filter((file) => !selected.has(file));
     // A stranded file runs under no runtime, even when every discovered test passes.
     expect({ strandedFilesOutsideEveryRuntime: stranded }).toEqual({

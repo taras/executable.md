@@ -190,6 +190,12 @@ jobs:
             --ignore=examples/repl-bench/tests/driver-exit.test.ts,examples/repl-bench/tests/teardown.test.ts \
             examples/repl-bench/tests
 
+      - name: Check XMD Profile tools
+        working-directory: repl bench checkout
+        run: |
+          deno test --reporter=dot --allow-all --cached-only --frozen --node-modules-dir=none \
+            examples/xmd-profile/tests
+
       - name: Exercise the REPL through a host terminal
         if: github.event_name == 'push'
         working-directory: repl bench checkout

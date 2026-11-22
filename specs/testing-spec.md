@@ -834,9 +834,11 @@ nothing else. Walking those concrete directories rather than the repository
 root is what keeps nested worktrees, the site, and the deliberately malformed
 fixtures out without naming any of them.
 
-Its TypeScript paths are the same set Deno's own test-file pattern finds in the
-repository. A test file discovery cannot see would run under no runtime at all,
-so the equivalence is a regression rather than a convention.
+The TypeScript paths and the dedicated bench directories
+`examples/repl-bench/tests/` and `examples/xmd-profile/tests/` together cover
+the files Deno's own test-file pattern finds in the repository. A test file
+outside both would run under no runtime at all, so a regression test checks
+that the sharded corpus and the bench directories form a partition.
 
 A Markdown suite is a regular `*.test.md` file directly inside
 `examples/adversarial-implementation/tests/`, or a regular file at one of
@@ -1056,11 +1058,11 @@ out, or unexpectedly skips makes that dependency non-success.
 
 Concurrency inside a shard is not enabled.
 
-The required `repl-bench` job checks the bench tools on Ubuntu for pull
-requests. Pushes to `main` run the tools, the driver exit and teardown tests,
-and the Markdown terminal journeys on macOS and Ubuntu. Those terminal tests
-exercise the host's pseudo-terminal and retain screen and terminal evidence
-on failure. `green` requires the job on both events.
+The required `repl-bench` job runs the ReplBench and XMD Profile tool tests on
+Ubuntu for pull requests. Pushes to `main` run the tools, the driver exit and
+teardown tests, and the ReplBench Markdown terminal journeys on macOS and
+Ubuntu. Those terminal tests exercise the host's pseudo-terminal and retain
+screen and terminal evidence on failure. `green` requires the job on both events.
 
 ### Remeasurement and calibration
 
