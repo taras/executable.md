@@ -14,6 +14,7 @@ import { Session } from "node:inspector";
 import { loadavg } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { baselineProperties, ProfileBaseline } from "./baseline.ts";
 import { CallCounts, callsByLayer, countCalls, Coverage, renderCalls } from "./lib/calls.ts";
 import {
   callers,
@@ -313,6 +314,7 @@ export default Plugin({
         registration("Profile", Profile, capture, ["label"]),
         registration("Profile.Start", Start, capture, ["label"]),
         registration("Profile.Stop", Stop, { label: string }, ["label"]),
+        registration("Profile.Baseline", ProfileBaseline, baselineProperties, ["path", "captures"]),
         registration("Profile.Report", Report, { path: string, top: integer, focus: string }, [
           "path",
         ]),

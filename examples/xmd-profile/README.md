@@ -5,7 +5,7 @@ the work you want measured in `<Profile>`, then read the capture with
 `<Profile.Report>` or set two captures side by side with `<Profile.Compare>`.
 Start from a checkout prepared with `deno task setup`.
 
-[Capture and report](#capture-a-profile-and-read-it) · [Between two points](#capture-between-two-points) · [Calls](#count-function-calls) · [REPL](#profile-a-repl-session) · [Compare](#compare-two-captures) · [Evidence](#read-the-evidence) · [Limits](#what-a-profile-shows-and-what-it-leaves-out) · [Exercises](#write-an-exercise) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
+[Capture and report](#capture-a-profile-and-read-it) · [Between two points](#capture-between-two-points) · [Calls](#count-function-calls) · [Baseline](#keep-a-call-count-baseline) · [REPL](#profile-a-repl-session) · [Compare](#compare-two-captures) · [Evidence](#read-the-evidence) · [Limits](#what-a-profile-shows-and-what-it-leaves-out) · [Exercises](#write-an-exercise) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
 
 ## Capture a profile and read it
 
@@ -101,6 +101,39 @@ Counting slows the work by about a third, so take time and calls as separate
 captures. The runtime keeps one set of call counters, so a second call-count
 capture is refused while one is open. A count carries no duration and no
 stack: a function entered once that loops many times counts once.
+
+## Keep a call-count baseline
+
+A baseline is a Markdown document recording the calls an exercise makes, by
+layer. `<Profile.Baseline>` compares a run with it and fails when a measure
+moves by more than the tolerance, in either direction. A change in cost then
+appears as a difference in that document, to review like any other.
+
+[loop-json.md](baselines/loop-json.md) is the worked example. It counts a loop
+of `Json` components at 50 and 200 iterations and compares the calls per
+iteration with [loop-json.baseline.md](baselines/loop-json.baseline.md).
+
+```text
+deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+  packages/cli/src/deno.ts run --plugin ./examples/xmd-profile/plugin.ts \
+  examples/xmd-profile/baselines/loop-json.md
+```
+
+The check never writes. Set `XMD_PROFILE_UPDATE=1` on the same command to
+record the baseline again after an intended change.
+
+- One capture gives calls by layer. Two captures of the same work at different
+  sizes give calls per unit of work by layer, and the fixed calls.
+- Layers under 0.1% of the total are recorded together as other layers. A check
+  uses the layers its baseline named.
+- The document records the runtime and platform. A run anywhere else is
+  reported as not compared, because the runtime's own functions are counted.
+- Run a baseline exercise in a process of its own, as `xmd run` does. The call
+  counters cover the whole process, so work running beside the exercise is
+  counted with it.
+- A REPL journey's total calls are not a stable measure. The number of frames
+  the REPL prepares depends on how input and timers interleave, and its
+  rendering calls move with that number.
 
 ## Profile a REPL session
 
@@ -207,3 +240,4 @@ The plugin registers its components for `xmd run`, `xmd test` and `xmd repl`.
 | `Profile.Compare` | Reads the profiles at `baseline` and `candidate` and renders the change in active time, by layer and by function. `top` limits the function table, default 12. `as` binds the comparison. |
 | `Profile.Start` | Starts a capture named `label` that stays open after this element. It takes the same `label`, `dir` and `interval` as `Profile`. A label that is already open fails. |
 | `Profile.Stop` | Stops the open capture named `label` and writes its files. `as` binds the receipt. A label with no open capture fails. |
+| `Profile.Baseline` | Compares call counts with the baseline document at `path`. `captures` is one or two objects, each with `calls` naming a call-count capture and, for two, `units` giving the size of the work. `title` and `tolerance`, a percentage that defaults to 1, are recorded when the baseline is written. A measure beyond the tolerance fails; a missing baseline fails and says how to record one. `as` binds the result. |
