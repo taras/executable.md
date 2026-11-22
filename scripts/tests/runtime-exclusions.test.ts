@@ -184,6 +184,7 @@ describe("the applicable corpus", () => {
       "Friction",
       "Implementation",
       "LaunchPolicy",
+      "LaunchPolicyHold",
       "Preparation",
       "ProductionRole",
       "ProductionRoleInstructions",
@@ -406,6 +407,7 @@ describe("the one-file Markdown commands", () => {
       DeliverySummaryRepair: 120_000,
       Friction: 180_000,
       LaunchPolicy: 120_000,
+      LaunchPolicyHold: 120_000,
       Preparation: 420_000,
       Submission: 120_000,
     });

@@ -1011,7 +1011,9 @@ file once. The grouped ProductionRole and Workflow families, including
 deadline and the default per-test timeout remains effective. The other
 adversarial suites run under whole-launch deadlines: `Preparation` has 420
 seconds, `Friction` has 180, `DecisionResolution` and `Delivery` have 300, and
-the remaining capped suites have 120. A suite that
+the remaining capped suites have 120. The launch-policy tests are split between
+`LaunchPolicy` and `LaunchPolicyHold`. Each file has its own setup and a
+120-second whole-launch deadline under Deno, Node and Bun. A suite that
 reaches it is stopped and its cleanup joined, its path and deadline are
 reported, and it fails with status 1. The files after it still run.
 `SessionConfiguration` has a 120-second whole-launch deadline under each
