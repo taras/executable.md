@@ -119,6 +119,7 @@ const bench = size.partial().extend({
   entryBenchFixture: z.boolean().default(false),
   include: z.array(z.string().min(1)).default([]),
   mount: z.array(z.string().min(1)).default([]),
+  plugins: z.array(z.string().min(1)).default([]),
   allowAbsolute: z.boolean().default(false),
 });
 
@@ -166,6 +167,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
       wanted.scenario !== undefined ||
       wanted.include.length > 0 ||
       wanted.mount.length > 0 ||
+      wanted.plugins.length > 0 ||
       wanted.allowAbsolute)
   ) {
     throw new Error("Use scripted REPL fixtures and launch overrides inside <Test>");
@@ -240,6 +242,9 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
   }
   for (const pair of wanted.mount) {
     args.push(`--mount=${pair}`);
+  }
+  for (const path of wanted.plugins) {
+    args.push("--plugin", resolve(directory, path));
   }
   if (wanted.allowAbsolute) {
     args.push("--allow-absolute");
@@ -379,6 +384,7 @@ const replLaunch = {
     entryBenchFixture: boolean,
     include: strings,
     mount: strings,
+    plugins: strings,
     allowAbsolute: boolean,
   }),
   captures: ["resume"],

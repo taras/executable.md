@@ -759,6 +759,15 @@ describe("the dedicated ReplBench job", () => {
     }
   });
 
+  it("runs the XMD Profile unit tests on each event", function* () {
+    const bench = (yield* workflow())["repl-bench"];
+    const profile = bench?.steps.find((step) => step.name === "Check XMD Profile tools");
+
+    expect(profile?.if).toBeUndefined();
+    expect(profile?.run).toContain("deno test ");
+    expect(profile?.run?.trim().endsWith("examples/xmd-profile/tests")).toBe(true);
+  });
+
   it("uploads the failed journeys' journals beside their bench evidence", function* () {
     const bench = (yield* workflow())["repl-bench"];
     const upload = bench?.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
