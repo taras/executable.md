@@ -13,7 +13,7 @@ import {
 import { Plugin } from "@executablemd/core/api";
 import { command as xmdCommand, cwd, parseDuration, realpath } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
-import { createContext, ensure, type Operation, type Yielded } from "effection";
+import { createContext, ensure, until, type Operation, type Yielded } from "effection";
 import { randomUUID } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +120,8 @@ const bench = size.partial().extend({
   include: z.array(z.string().min(1)).default([]),
   mount: z.array(z.string().min(1)).default([]),
   plugins: z.array(z.string().min(1)).default([]),
+  mounted: z.boolean().default(false),
+  history: z.object({ rounds: z.int().positive(), linesPerRound: z.int().positive() }).optional(),
   allowAbsolute: z.boolean().default(false),
 });
 
@@ -149,6 +151,49 @@ const XmdBuild: FunctionComponent = function* (props, invocation) {
   return yield* content();
 };
 
+function* mountedRepl(
+  wanted: z.infer<typeof bench>,
+  enclosing: ReturnType<typeof createTerminal> | undefined,
+  reservation: { dispatch?: Execute } | undefined,
+  waitTimeout: number | undefined,
+) {
+  if (
+    wanted.expectExit ||
+    wanted.scenario !== undefined ||
+    wanted["sidekick-agent"] !== undefined ||
+    wanted.entryPermissionFixture ||
+    wanted.entryBenchFixture ||
+    wanted.include.length > 0 ||
+    wanted.mount.length > 0 ||
+    wanted.plugins.length > 0 ||
+    wanted.allowAbsolute ||
+    (yield* Build.get()) !== undefined
+  ) {
+    throw new Error(
+      "A mounted <XMD.Repl> takes dimensions, waitTimeout and history, and runs the current build.",
+    );
+  }
+  const terminal =
+    enclosing ??
+    createTerminal({
+      columns: wanted.columns ?? defaultSize.columns,
+      rows: wanted.rows ?? defaultSize.rows,
+    });
+  const active = reservation ?? (yield* terminal.claim());
+  const { connectMounted } = yield* until(import("./lib/driver-mounted.ts"));
+  active.dispatch = yield* connectMounted({ ...terminal.dimensions, history: wanted.history });
+  yield* ensure(() => {
+    delete active.dispatch;
+  });
+  yield* Sidekick.set(undefined);
+  yield* TerminalContext.set(terminal);
+  yield* LaunchRevision.set(null);
+  yield* RegionContext.set(undefined);
+  yield* WaitTimeout.set(waitTimeout);
+  const rendered = yield* content();
+  return (yield* hasBinding()) ? closed : rendered;
+}
+
 const XmdRepl: FunctionComponent = function* (props, invocation) {
   if (!invocation.hasContent()) {
     throw new Error("Use a paired <XMD.Repl>");
@@ -168,6 +213,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
       wanted.include.length > 0 ||
       wanted.mount.length > 0 ||
       wanted.plugins.length > 0 ||
+      wanted.mounted ||
       wanted.allowAbsolute)
   ) {
     throw new Error("Use scripted REPL fixtures and launch overrides inside <Test>");
@@ -189,6 +235,9 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     wanted.waitTimeout === undefined
       ? undefined
       : parseDuration(wanted.waitTimeout, "<XMD.Repl waitTimeout>");
+  if (wanted.mounted) {
+    return yield* mountedRepl(wanted, enclosing, reservation, waitTimeout);
+  }
   const captured = (yield* hasCapture("resume")) ? yield* capture("resume") : undefined;
   const allocateTestHome = function* () {
     const resumes = (yield* Resumes.get()) ?? (yield* Resumes.set(new WeakMap()));
@@ -385,6 +434,13 @@ const replLaunch = {
     include: strings,
     mount: strings,
     plugins: strings,
+    mounted: boolean,
+    history: {
+      type: "object",
+      properties: { rounds: integer, linesPerRound: integer },
+      required: ["rounds", "linesPerRound"],
+      additionalProperties: false,
+    },
     allowAbsolute: boolean,
   }),
   captures: ["resume"],
