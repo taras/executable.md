@@ -118,6 +118,7 @@ export const MARKDOWN_DEADLINES: Record<string, number> = {
   DeliverySummaryRepair: 120_000,
   Friction: 180_000,
   LaunchPolicy: 120_000,
+  LaunchPolicyHold: 120_000,
   Preparation: 420_000,
   Submission: 120_000,
 };
