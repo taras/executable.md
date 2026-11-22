@@ -549,6 +549,9 @@ The optional `include` and `mount` arrays pass repeated `--include` and
 syntax. `allowAbsolute={true}` passes `--allow-absolute`. These options belong
 to each launch, so a resumed bench supplies the options its new command uses.
 
+The optional `plugins` array passes each path to the child as `--plugin`. Paths
+resolve from the invocation's contextual cwd.
+
 Each Terminal hosts one active launch. The bench owns its driver, REPL
 process, attached Sidekick, and output capture. Its cleanup joins the child
 and drains its output before another bench can use that Terminal. Each launch
