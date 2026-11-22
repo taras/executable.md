@@ -5,7 +5,7 @@ the work you want measured in `<Profile>`, then read the capture with
 `<Profile.Report>` or set two captures side by side with `<Profile.Compare>`.
 Start from a checkout prepared with `deno task setup`.
 
-[Capture and report](#capture-a-profile-and-read-it) · [Between two points](#capture-between-two-points) · [REPL](#profile-a-repl-session) · [Compare](#compare-two-captures) · [Evidence](#read-the-evidence) · [Limits](#what-a-profile-shows-and-what-it-leaves-out) · [Exercises](#write-an-exercise) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
+[Capture and report](#capture-a-profile-and-read-it) · [Between two points](#capture-between-two-points) · [Calls](#count-function-calls) · [REPL](#profile-a-repl-session) · [Compare](#compare-two-captures) · [Evidence](#read-the-evidence) · [Limits](#what-a-profile-shows-and-what-it-leaves-out) · [Exercises](#write-an-exercise) · [Tests](#run-the-tests) · [Plugin components](#plugin-components)
 
 ## Capture a profile and read it
 
@@ -76,6 +76,32 @@ them.
 <Profile.Report path={capture.profile} />
 ```
 
+## Count function calls
+
+Set `mode="calls"` to count how many times each function runs, in place of
+sampling time. A count does not depend on machine speed or load, so it suits a
+comparison that must not move with the host. A run driven by timers or
+interactive input can still vary, because the work itself varies.
+
+```xmd
+<Let as="items" value={[1, 2, 3, 4, 5, 6, 7, 8]} />
+<Profile label="each-8" mode="calls" as="capture">
+  <Each in={items} let="item">
+    <Json value={item} />
+  </Each>
+</Profile>
+<Profile.Report path={capture.calls} />
+```
+
+The report gives calls by layer and the most-called functions. Anonymous
+functions are totalled per source file, because a position is all that tells
+them apart and positions move between revisions.
+
+Counting slows the work by about a third, so take time and calls as separate
+captures. The runtime keeps one set of call counters, so a second call-count
+capture is refused while one is open. A count carries no duration and no
+stack: a function entered once that loops many times counts once.
+
 ## Profile a REPL session
 
 A REPL launched with the plugin keeps a capture open across entries, so the
@@ -114,6 +140,8 @@ under the contextual working directory.
 
 - `<label>.cpuprofile` is the V8 CPU profile. Chrome DevTools loads it in the
   Performance panel for a flame chart.
+- `<label>.calls.json` takes the profile's place in calls mode: the total, and
+  for each function its name, source, layer and count.
 - `<label>.json` is the receipt: `label`, `profile`, `startedAt`, `durationMs`,
   `intervalUs`, `samples`, `nodes`, `bytes` and `loadAverage`.
 
@@ -174,8 +202,8 @@ The plugin registers its components for `xmd run`, `xmd test` and `xmd repl`.
 
 | Component | Contract |
 | --- | --- |
-| `Profile` | A paired invocation captures a CPU profile of its content. `label` names the files; it starts with a letter or digit and may contain letters, digits, `.`, `_` and `-`, up to 64 characters. `dir` is relative to the contextual working directory. `interval` is the sampling interval in microseconds, at least 50, default 200. Without `as` it renders its content. `as` binds the receipt. Reusing a label replaces that capture. |
-| `Profile.Report` | Reads the profile at `path` and renders the report. `top` limits the function, frame and source tables, default 12. `focus` names a function and adds its callers; a name the profile never ran fails. `as` binds the summary, with times in microseconds. |
+| `Profile` | A paired invocation captures a CPU profile of its content. `label` names the files; it starts with a letter or digit and may contain letters, digits, `.`, `_` and `-`, up to 64 characters. `dir` is relative to the contextual working directory. `interval` is the sampling interval in microseconds, at least 50, default 200. `mode="calls"` counts function calls in place of sampling time. Without `as` it renders its content. `as` binds the receipt. Reusing a label replaces that capture. |
+| `Profile.Report` | Reads the capture at `path` and renders the report; a `.calls.json` capture gives calls by layer and the most-called functions. `top` limits the function, frame and source tables, default 12. `focus` names a function and adds its callers; a name the profile never ran fails. `as` binds the summary, with times in microseconds. |
 | `Profile.Compare` | Reads the profiles at `baseline` and `candidate` and renders the change in active time, by layer and by function. `top` limits the function table, default 12. `as` binds the comparison. |
 | `Profile.Start` | Starts a capture named `label` that stays open after this element. It takes the same `label`, `dir` and `interval` as `Profile`. A label that is already open fails. |
 | `Profile.Stop` | Stops the open capture named `label` and writes its files. `as` binds the receipt. A label with no open capture fails. |
