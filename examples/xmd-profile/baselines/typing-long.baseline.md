@@ -17,17 +17,16 @@ other native work. An exercise can get slower without any figure here moving.
 
 | Measure | Value |
 | --- | ---: |
-| calls: total | 32,288,342 |
+| calls: total | 32,006,715 |
 | calls: npm @xterm/headless | 14,066,460 |
-| calls: xmd cli | 13,177,312 |
+| calls: xmd cli | 13,082,872 |
 | calls: npm @termless/xtermjs | 2,097,375 |
-| calls: effection | 1,270,485 |
+| calls: effection | 1,261,155 |
 | calls: xmd core | 844,930 |
-| calls: deno runtime | 356,437 |
+| calls: deno runtime | 356,420 |
 | calls: effectionx | 195,985 |
-| calls: xmd durable-streams | 175,500 |
 | calls: npm @secretlint/core | 45,180 |
-| calls: other layers | 58,678 |
+| calls: other layers | 56,338 |
 
 ```json
 {
@@ -39,7 +38,7 @@ other native work. An exercise can get slower without any figure here moving.
   "measures": [
     {
       "name": "calls: total",
-      "value": 32288342
+      "value": 32006715
     },
     {
       "name": "calls: npm @xterm/headless",
@@ -47,7 +46,7 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: xmd cli",
-      "value": 13177312
+      "value": 13082872
     },
     {
       "name": "calls: npm @termless/xtermjs",
@@ -55,7 +54,7 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: effection",
-      "value": 1270485
+      "value": 1261155
     },
     {
       "name": "calls: xmd core",
@@ -63,15 +62,11 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: deno runtime",
-      "value": 356437
+      "value": 356420
     },
     {
       "name": "calls: effectionx",
       "value": 195985
-    },
-    {
-      "name": "calls: xmd durable-streams",
-      "value": 175500
     },
     {
       "name": "calls: npm @secretlint/core",
@@ -79,7 +74,7 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: other layers",
-      "value": 58678
+      "value": 56338
     }
   ]
 }
