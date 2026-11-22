@@ -30,7 +30,7 @@ import type { GitHubIssuesConfiguration } from "./github.ts";
 export const GITHUB_ISSUES_ENV = "XMD_WORKFLOW_GITHUB_ISSUES";
 
 export function* replGitHubBaseUrl(cliBaseUrl?: string): Operation<string | undefined> {
-  return (yield* readEnv("XMD_REPL_GITHUB_BASE_URL")) ?? cliBaseUrl;
+  return (yield* readEnv("XMD_REPL_GITHUB_BASE_URL")) || cliBaseUrl;
 }
 
 /** What an operator wrote there, once it is something this host can use. */

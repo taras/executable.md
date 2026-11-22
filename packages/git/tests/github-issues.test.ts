@@ -283,13 +283,15 @@ describe("what the published issue transport installs", () => {
   for (const [environment, cliBaseUrl, expected] of [
     [undefined, undefined, "https://api.github.com"],
     [undefined, "https://cli.invalid/api/v3", "https://cli.invalid/api/v3"],
+    ["", "https://cli.invalid/api/v3", "https://cli.invalid/api/v3"],
     [
       "https://enterprise.invalid/api/v3",
       "https://cli.invalid/api/v3",
       "https://enterprise.invalid/api/v3",
     ],
   ]) {
-    it(`reads a github.com issue in REPL through ${expected}`, function* () {
+    const override = environment === "" ? " with an empty override" : "";
+    it(`reads a github.com issue in REPL through ${expected}${override}`, function* () {
       yield* scoped(function* () {
         yield* API.Env.around({
           *env([name]) {
