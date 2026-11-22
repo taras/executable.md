@@ -352,7 +352,9 @@ export function* submitForSidekick(
     return finishedHead;
   }
   const terminal = finishedHead.value.find((entry) => entry.key === submission.entry)?.terminal;
-  if (options.observed !== undefined) {
+  // A fatal entry failure can join without writing a Close. Its receipt still
+  // answers Submit, but there is no settled output window to send with it.
+  if (options.observed !== undefined && (terminal !== undefined || outcome.ok)) {
     const observed = yield* submission.output();
     if (!observed.ok) {
       throw observed.error;

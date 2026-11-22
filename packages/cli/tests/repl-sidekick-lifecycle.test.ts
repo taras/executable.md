@@ -34,6 +34,7 @@ import type { Operation, Result, Task } from "effection";
 
 import { Execution, registerComponents } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
+import { DurablePersistenceError } from "@executablemd/durable-streams";
 
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
 import type { AdmittingSession } from "../src/repl/sidekick/admission.ts";
@@ -495,6 +496,51 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
         (one) => one.response === successor[0] && one.component === "REPL.EntryInput",
       ),
     ).toEqual([]);
+  });
+
+  it("reports a joined submission failure when the entry cannot retain a Close", function* () {
+    yield* registerComponents([
+      {
+        name: "FailEntryPersistence",
+        origin: "test://fail-entry-persistence",
+        props: { type: "object" },
+        *fn() {
+          throw new DurablePersistenceError("yield", new Error("Entry journal write refused"));
+        },
+      },
+    ]);
+    const held = yield* useHarness();
+    held.fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "````xmd",
+        "<FailEntryPersistence />",
+        "````",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        "<REPL.Submit />",
+        "",
+      ].join("\n"),
+    });
+    held.fake.script({ reply: "<Output>The submission failed.</Output>\n" });
+
+    const answer = yield* held.owner.message("submit the entry");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(held.session.model.entries[0]?.key).toBe("entry-1");
+    expect(held.session.model.entries[0]?.terminal).toBeUndefined();
+    expect(held.session.admits().ok).toBe(false);
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    expect(reading.value.unfinished).toEqual([]);
+    const told = held.fake.prompts[1] ?? "";
+    expect(told).toContain("Entry entry-1 failed");
+    expect(told).toContain("Failed to persist durable yield event");
+    expect(told).toContain("<REPL.Entry.Journal entry={1}");
+    expect(told).not.toContain("## Execution output");
   });
 
   it("Follow: Sidekick Stop leaves its admitted entry alive and late joined completion starts no turn", function* () {
