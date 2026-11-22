@@ -88,7 +88,7 @@ function count(calls: number): string {
 
 export function renderCalls(path: string, counts: CallCounts, top: number): string {
   return [
-    `Calls \`${path}\`: ${count(counts.total)} function calls across ${counts.functions.length} functions.`,
+    `Calls \`${path}\`: ${count(counts.total)} function calls across ${counts.functions.length} functions. A count shows how much work was asked for, not how long it took.`,
     "",
     "### Calls by layer",
     "",

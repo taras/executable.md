@@ -1,8 +1,15 @@
-# Performance baseline: Loop of Json components
+# Call-count baseline: Loop of Json components
 
-`Profile.Baseline` wrote this document and checks later runs against it. A measure
-that moves by more than the tolerance fails the check. Run the same journey with
-`XMD_PROFILE_UPDATE=1` to accept an intended change, and review the difference.
+This document records how much work an exercise asks for: the number of function
+calls it makes, by layer. `Profile.Baseline` checks later runs against it.
+
+A shift means the exercise now does more work, or less, than when this was
+recorded. It is a reason to look, not a verdict, because a count is not a
+duration. Measure the time before deciding whether the change matters. Then fix
+it, or run the same exercise with `XMD_PROFILE_UPDATE=1` and review the difference.
+
+A count misses time spent inside one function, garbage collection, WebAssembly and
+other native work. An exercise can get slower without any figure here moving.
 
 - Runtime: deno 2.9.7 on darwin arm64
 - Measured from: two captures, at 50 and 200 units

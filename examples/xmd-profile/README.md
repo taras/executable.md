@@ -79,9 +79,7 @@ them.
 ## Count function calls
 
 Set `mode="calls"` to count how many times each function runs, in place of
-sampling time. A count does not depend on machine speed or load, so it suits a
-comparison that must not move with the host. A run driven by timers or
-interactive input can still vary, because the work itself varies.
+sampling time. A count shows how much work was asked for, not how long it took.
 
 ```xmd
 <Let as="items" value={[1, 2, 3, 4, 5, 6, 7, 8]} />
@@ -97,17 +95,40 @@ The report gives calls by layer and the most-called functions. Anonymous
 functions are totalled per source file, because a position is all that tells
 them apart and positions move between revisions.
 
-Counting slows the work by about a third, so take time and calls as separate
-captures. The runtime keeps one set of call counters, so a second call-count
-capture is refused while one is open. A count carries no duration and no
-stack: a function entered once that loops many times counts once.
+A count is good evidence for three things:
+
+- **How work scales.** The same calls per item at two sizes means the work is
+  linear. A figure that rises with the size means it is not.
+- **Repeated work.** A large count for a small input points at something done
+  again that could be done once.
+- **That a change altered a path.** The count moves by the same amount on every
+  run and every machine. A run driven by timers or interactive input can still
+  vary, because the work itself varies.
+
+It misses as much as it shows:
+
+- **Cost inside a function.** A function entered once that loops many times
+  counts once.
+- **Work outside JavaScript.** Garbage collection, WebAssembly and file system
+  calls are not counted.
+- **Weight.** A layer made of many small functions looks larger by count than it
+  is by time.
+- **Harmless changes.** Extracting a helper adds calls without adding time.
+
+Use a count to decide when to look, and a time capture to see what it costs.
+Counting slows the work by about a third, so they are separate captures. The
+runtime keeps one set of call counters, so a second call-count capture is
+refused while one is open.
 
 ## Keep a call-count baseline
 
-A baseline is a Markdown document recording the calls an exercise makes, by
-layer. `<Profile.Baseline>` compares a run with it and fails when a measure
-moves by more than the tolerance, in either direction. A change in cost then
-appears as a difference in that document, to review like any other.
+A baseline is a Markdown document recording how much work an exercise asks for:
+its calls, by layer. `<Profile.Baseline>` compares a run with it and fails when a
+measure moves by more than the tolerance, in either direction.
+
+A failure means the amount of work changed. It is a reason to measure the time,
+not proof that the exercise got slower, and a pass is not proof that it did not.
+The change appears as a difference in that document, to review like any other.
 
 [loop-json.md](baselines/loop-json.md) is the worked example. It counts a loop
 of `Json` components at 50 and 200 iterations and compares the calls per
