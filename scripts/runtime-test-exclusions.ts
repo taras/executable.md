@@ -378,6 +378,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/295",
   },
   {
+    path: "packages/git/tests/pull-request-authored-form.test.ts",
+    reason:
+      "drives both authored <PullRequest> forms against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real local bare remote, and takes the run's advisory lock through the Deno runtime; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+    issue: "https://github.com/taras/executable.md/issues/1400",
+  },
+  {
     path: "packages/cli/tests/pull-request-read-fork.test.ts",
     reason:
       "forks a real run through the compiled CLI against a loopback GitHub, reading the node:sqlite run store the Deno host wrote; the workflow commands exist on the Deno entrypoints alone and Bun has no node:sqlite at all",
