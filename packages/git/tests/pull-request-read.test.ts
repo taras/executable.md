@@ -28,6 +28,9 @@ import {
   until,
   withResolvers,
 } from "effection";
+import { API } from "@executablemd/runtime";
+import { denoGitHubSource } from "../src/deno/composition/github-host.ts";
+import { ReplGitHubBaseUrl } from "../src/deno/issue/configuration.ts";
 import { exists } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -35,6 +38,8 @@ import type { Operation } from "effection";
 import type { PullRequestReadResult } from "@executablemd/git/api";
 import { PullRequestAPI } from "@executablemd/git/api";
 import {
+  gitHubPullRequestReadHandler,
+  gitHubPullRequestReadResolver,
   parseGitHubPullRequestUrl,
   recognizesGitHubPullRequestUrl,
 } from "../src/deno/composition/pull-request-reads.ts";
@@ -1070,6 +1075,60 @@ describe("Tier PRR — pull-request evidence", () => {
     );
     expect(String(failure)).toContain("PullRequest.Reviews");
   });
+
+  for (const [environment, cliBase, expected] of [
+    [undefined, undefined, "https://api.github.com"],
+    [undefined, "https://cli.invalid/api/v3", "https://cli.invalid/api/v3"],
+    [
+      "https://enterprise.invalid/api/v3",
+      "https://cli.invalid/api/v3",
+      "https://enterprise.invalid/api/v3",
+    ],
+  ]) {
+    it(`reads across repositories in REPL through ${expected}`, function* () {
+      const otherReviews = "/repos/another/repo/pulls/8/reviews";
+      const host = server({});
+      yield* API.Env.around({
+        *env([name]) {
+          expect(name).toBe("XMD_REPL_GITHUB_BASE_URL");
+          return environment;
+        },
+      });
+      yield* ReplGitHubBaseUrl.set(cliBase);
+      const resolved = gitHubPullRequestReadResolver(
+        {
+          host(configured) {
+            const { endpoint } = denoGitHubSource(configured);
+            return gitHubSource({
+              ...host.access,
+              endpoint,
+              *send(request) {
+                host.requests.push(request);
+                return { status: 200, body: "[]" };
+              },
+            });
+          },
+        },
+        "repl",
+      );
+      yield* PullRequestAPI.around({
+        read: gitHubPullRequestReadHandler(resolved, (_admitted, perform) => perform()),
+      });
+      yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
+      yield* PullRequestAPI.operations.read("https://enterprise.invalid/another/repo/pull/8", {
+        kind: "reviews",
+        provider: "github",
+      });
+      expect(host.requests.map((request) => request.url)).toEqual([
+        `${expected}${REVIEWS}?per_page=100`,
+        `${expected}${otherReviews}?per_page=100`,
+      ]);
+      expect(host.requests.map((request) => request.headers["Authorization"])).toEqual([
+        "Bearer t",
+        "Bearer t",
+      ]);
+    });
+  }
 
   it("PRR19: a canonical URL selects GitHub, and names the repository and number", function* () {
     const host = server({

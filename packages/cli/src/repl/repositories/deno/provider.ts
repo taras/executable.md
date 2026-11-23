@@ -253,10 +253,6 @@ export function* replRepositoryInstallation(
     },
   });
 
-  // This entry's own pull-request transport state, built once and inert: naming
-  // it reads no configuration, opens no session and acquires nothing. Its
-  // configuration is the existing one this deployment already states, which is
-  // why no recording option carries it.
   const pullRequests: DenoPullRequestOperations = denoPullRequestOperations();
   const access = () => (usable ? held.entry : undefined);
 

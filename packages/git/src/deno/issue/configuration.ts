@@ -58,7 +58,7 @@ export const gitPluginWithIssueOptions: Plugin = {
       ...args,
       githubBaseUrl: {
         owner: gitPlugin.name,
-        description: "GitHub API base URL for REPL issues",
+        description: "GitHub API base URL for REPL issues and pull-request reads",
         schema: gitHubBaseUrl,
       },
     });

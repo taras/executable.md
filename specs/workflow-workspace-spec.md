@@ -2181,12 +2181,15 @@ the existing persistence failure carrying the adapter's error as its cause.
 
 **Authentication and reach are the host's.** The credential is the host's own,
 acquired for the request and disposed with the invocation. Which pull requests
-may be read at all is operator configuration — the `allowed` list, checked
+may be read by a workflow or ordinary run is operator configuration — the
+`allowed` list in `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`, checked
 before a session is opened, a credential is read or anything is sent — and a
 document names a URL, never a host or a credential. Absence of that
 configuration authorizes no URL read and disables nothing else: the paired `<PullRequest>`
 upserts on this run's own matching Push evidence, which no configuration grants
-or withdraws. Nothing of the credential, the endpoint, the raw
+or withdraws. The [REPL GitHub adapter](repl-spec.md) selects its API base
+from the Git Plugin's REPL settings and admits reads without this allowlist.
+Nothing of the credential, the endpoint, the raw
 response or the pagination state is retained: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
 secret gate. The retained request is the whole normalized question: the operation, the
@@ -4289,7 +4292,7 @@ unchanged.
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
-| self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
+| self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Workflow and ordinary runs check operator configuration before contacting GitHub |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |

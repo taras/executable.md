@@ -2857,12 +2857,20 @@ REPL reads the supplied issue URL and files in the explicitly selected tracker.
 Both work from an empty directory or a Git checkout. REPL uses the caller's
 GitHub authentication and needs no repository allowlist.
 
-When the host supplies the GitHub issue adapter, the Git Plugin declares
+When the host supplies the GitHub adapter, the Git Plugin declares
 `--github-base-url` and holds its parsed value in the command scope. The API
 base URL comes from a nonempty `XMD_REPL_GITHUB_BASE_URL`, then
 `xmd repl --github-base-url`, then `https://api.github.com`. A GitHub Enterprise
 API base can serve issue URLs written with `github.com`. The ordinary provider
 rules for URL matching, authentication and operation permissions apply.
+
+On Deno and in the compiled binary, the same Git Plugin API base and
+authentication apply to self-closing `<PullRequest />`, `<PullRequest.Reviews>`,
+`<PullRequest.Comments>` and `<PullRequest.Checks>`. These reads accept any
+repository the credential can read through that API. They work without a
+checkout or `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`. An Enterprise PR URL names
+`provider="github"` explicitly. A paired `<PullRequest>` uses the publication
+configuration and requires matching Push evidence from the entry.
 
 ## What the head says the execution is doing
 
