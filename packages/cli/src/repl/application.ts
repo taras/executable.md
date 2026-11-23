@@ -1712,6 +1712,7 @@ export function admitted(state: ReplState, held?: Reservation): ReplState {
   return Object.freeze({
     ...state,
     draft,
+    draftOpen: draft.length === 0 ? false : state.draftOpen,
     route: Object.freeze({ ...state.route, draft: draft.length === 0 ? undefined : draft }),
     refusal: undefined,
   });
@@ -4963,7 +4964,11 @@ function messaging(state: ReplState, message: string): ReplTransition {
 
 /** The state after the Sidekick filled the shared draft with exactly this. */
 export function filled(state: ReplState, source: string): ReplState {
-  return Object.freeze({ ...drafting(state, source, "sidekick").state, draftCaret: undefined });
+  return Object.freeze({
+    ...drafting(state, source, "sidekick").state,
+    draftCaret: undefined,
+    draftOpen: source.length > 0,
+  });
 }
 
 export function acceptedInstruction(state: ReplState, held: Instruction): ReplState {
