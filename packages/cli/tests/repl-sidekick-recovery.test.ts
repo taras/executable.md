@@ -87,6 +87,7 @@ import {
   readSidekickRecords,
   SIDEKICK_FILE,
   serializeSidekickRecord,
+  SidekickWriter,
 } from "../src/repl/sidekick/history.ts";
 import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { designatedResults } from "../src/repl/sidekick/feedback.ts";
@@ -4388,12 +4389,22 @@ function failing(kind: SidekickRecord["kind"], failure: Error, text?: string): O
 function* coldOwner(
   held: Harness,
   administration: AgentSessionOwnershipAdministration | undefined,
+  observeRecords?: (records: readonly SidekickRecord[]) => readonly SidekickRecord[],
 ): Operation<{ owner: SidekickOwner; chat: PairedChatStorage; dispatch: SidekickDispatch }> {
   const reopened = yield* held.repository.open(held.execution.id);
   if (reopened.chat.form !== "paired") {
     throw new Error("Expected paired history.");
   }
-  const chat = reopened.chat;
+  const chat =
+    observeRecords === undefined
+      ? reopened.chat
+      : {
+          ...reopened.chat,
+          writer: new SidekickWriter(
+            reopened.chat.writer.path,
+            observeRecords(reopened.chat.records),
+          ),
+        };
   const owner = yield* useSidekickOwner({
     assembly: { ...held.profile.sidekickAssembly, ownershipAdministration: administration },
     chat,
@@ -4846,6 +4857,80 @@ describe("1183 — the exact live feedback request is the only exception", () =>
       throw first.error;
     }
     return dispatch;
+  }
+
+  it("reads retained feedback once for repeated recovery-status queries", function* () {
+    const { held, chat } = yield* counted();
+    yield* waiting(held, chat);
+    yield* held.fake.streamingTurns(1);
+    let reads = 0;
+    const { owner } = yield* coldOwner(held, administered("clean"), (records) =>
+      records.map((record): SidekickRecord => {
+        if (record.kind !== "feedback") {
+          return record;
+        }
+        return {
+          ...record,
+          get kind(): "feedback" {
+            reads++;
+            return "feedback";
+          },
+        };
+      }),
+    );
+    const reading = owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    const conversation = reading.value.active;
+    if (conversation === undefined) {
+      throw new Error("Expected the retained conversation.");
+    }
+    const status = owner.recoveryStatus(conversation);
+    expect(status).toBe("Entry saved. Feedback receipt unknown.");
+    const first = reads;
+    expect(first).toBeGreaterThan(0);
+    for (let edit = 0; edit < 30; edit++) {
+      expect(owner.recoveryStatus(conversation)).toBe(status);
+    }
+    expect(reads).toBe(first);
+  });
+
+  for (const outcome of ["completed", "failed"]) {
+    it(`keeps the recovery status for ${outcome} feedback live and cold`, function* () {
+      const { held, chat } = yield* counted({
+        held: true,
+        reply: "<Output>Acknowledged.</Output>",
+        ...(outcome === "failed" ? { failure: "The provider failed the feedback." } : {}),
+      });
+      const dispatch = yield* waiting(held, chat);
+      yield* held.fake.holdingTurns(1);
+      const reading = held.owner.reading;
+      if (!reading.ok) {
+        throw reading.error;
+      }
+      const conversation = reading.value.active;
+      if (conversation === undefined) {
+        throw new Error("Expected the retained conversation.");
+      }
+      const unknown = "Entry saved. Feedback receipt unknown.";
+      expect(held.owner.recoveryStatus(conversation)).toBe(undefined);
+      const during = yield* coldOwner(held, administered("clean"));
+      expect(during.owner.recoveryStatus(conversation)).toBe(unknown);
+      expect(during.owner.recoveryStatus("unrelated conversation")).toBe(undefined);
+      expect(during.owner.recoveryStatus(conversation)).toBe(unknown);
+
+      const exchange = dispatch.current;
+      if (exchange === undefined) {
+        throw new Error("Expected the live feedback exchange.");
+      }
+      held.fake.releaseTurn();
+      expect((yield* exchange.completion).ok).toBe(outcome === "completed");
+      const expected = outcome === "failed" ? unknown : undefined;
+      expect(held.owner.recoveryStatus(conversation)).toBe(expected);
+      const after = yield* coldOwner(held, administered("clean"));
+      expect(after.owner.recoveryStatus(conversation)).toBe(expected);
+    });
   }
 
   it("A4: an identical earlier request, a mismatched acknowledgement and no owner keep the guard", function* () {

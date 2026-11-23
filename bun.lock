@@ -81,6 +81,7 @@
         "xmd": "./src/node.ts",
       },
       "dependencies": {
+        "@bomb.sh/router": "0.8.0",
         "@effectionx/stream-helpers": "0.8.3",
         "@executablemd/acp": "workspace:*",
         "@executablemd/agent": "workspace:*",
@@ -93,7 +94,6 @@
         "@executablemd/web": "workspace:*",
         "@executablemd/workflow": "workspace:*",
         "@standard-schema/spec": "^1.0.0",
-        "configliere": "^0.4.0",
         "effection": "4.1.0",
         "zod": "^4.3.6",
       },
@@ -254,6 +254,8 @@
     "@babel/code-frame": ["@babel/code-frame@7.29.0", "", { "dependencies": { "@babel/helper-validator-identifier": "7.28.5", "js-tokens": "4.0.0", "picocolors": "1.1.1" } }, "sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw=="],
 
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.28.5", "", {}, "sha512-qSs4ifwzKJSV39ucNjsvc6WVHs6b7S03sOh2OcHF9UHfVPqWWALUsNUVzhSBiItjRZoLHx7nIarVjqKVusUZ1Q=="],
+
+    "@bomb.sh/router": ["@bomb.sh/router@0.8.0", "", { "dependencies": { "@standard-schema/spec": "^1.1.0" } }, "sha512-9Y0fA76+dlFL8aRf8PVfgXrI0qHr4GQrLLv09E75tGRqCtCI5+E/ZzLnyTGJMo/j4CzYt44c4jdXDLv+m9/g9g=="],
 
     "@clack/core": ["@clack/core@1.4.3", "", { "dependencies": { "fast-wrap-ansi": "^0.2.0", "sisteransi": "^1.0.5" } }, "sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ=="],
 
@@ -698,8 +700,6 @@
     "comma-separated-tokens": ["comma-separated-tokens@2.0.3", "", {}, "sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg=="],
 
     "commander": ["commander@15.0.0", "", {}, "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="],
-
-    "configliere": ["configliere@0.4.0", "", { "dependencies": { "@standard-schema/spec": "^1.0.0" } }, "sha512-4bxK3+L+FHr9Xm/d69Syvvpvkj7lj7a4zz3B+tchuohg5WKeudyBS+4Oob5Zdgoh8I7+n2lj0lfa8I6cUXfcEg=="],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "3.1.1", "shebang-command": "2.0.0", "which": "2.0.2" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
 

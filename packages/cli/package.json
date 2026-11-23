@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
+    "@bomb.sh/router": "0.8.0",
     "@effectionx/stream-helpers": "0.8.3",
     "@executablemd/acp": "workspace:*",
     "@executablemd/agent": "workspace:*",
@@ -28,7 +29,6 @@
     "@executablemd/workflow": "workspace:*",
     "@lezer/markdown": "1.8.1",
     "@standard-schema/spec": "^1.0.0",
-    "configliere": "^0.4.0",
     "effection": "4.1.0",
     "marked": "^17.0.4",
     "semver": "^7.8.5",

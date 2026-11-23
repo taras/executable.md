@@ -47,6 +47,7 @@ import {
   DRAFT_VALUE,
   intoDraft,
   draftText,
+  draftOpen,
   draftShows,
   entrySettles,
   openHistory,
@@ -1487,6 +1488,57 @@ function* answerGo(page: ReplPage): Operation<void> {
   yield* page.press("[submit]");
   yield* entrySettles(page, 1, "ok");
 }
+
+describe("REPL Round editor within one input burst", () => {
+  beforeEach(journalBeforeEach(OWNER));
+  const size = { columns: 120, rows: 30 };
+  const source = '<Let as="history6" value={6} />';
+  const paste = `\x1b[200~${source}\x1b[201~`;
+
+  function* onNewRound(page: ReplPage): Operation<void> {
+    yield* page.key("Ctrl+G");
+    yield* page.until("the focus hints", (one) => one.shows("move focus"));
+    yield* page.type("4");
+    yield* page.until(
+      "+ New Round focused with the hints dismissed",
+      (one) => one.shows("> + New Round") && !one.shows("move focus"),
+    );
+  }
+
+  function holding(reading: ScreenReading, text: string): boolean {
+    return draftOpen(reading) && draftShows(reading, text) && !reading.shows("Executable Markdown");
+  }
+
+  it("opens the editor and takes the paste that arrived with its Enter", function* () {
+    const page = yield* useReplPage({ size });
+    yield* onNewRound(page);
+    yield* page.type(`\r${paste}`);
+    const opened = yield* page.until("the Round editor open", draftOpen);
+    expect(holding(opened, "value={6}")).toBe(true);
+  });
+
+  it("opens the editor and takes the keys typed with its Enter", function* () {
+    const page = yield* useReplPage({ size });
+    yield* onNewRound(page);
+    yield* page.type("\rabc");
+    const opened = yield* page.until("the Round editor open", draftOpen);
+    expect(holding(opened, "abc")).toBe(true);
+  });
+
+  it("closes the editor, reopens it and takes the paste, all in one burst", function* () {
+    const page = yield* useReplPage({ size });
+    yield* onNewRound(page);
+    yield* page.key("Enter");
+    yield* page.until("the Round editor focused", (one) => one.shows("> Round 1 · draft"));
+    yield* page.key("Tab");
+    yield* page.until("Send focused", (one) => one.shows("> Send"));
+    yield* page.key("ArrowRight");
+    yield* page.until("X focused", (one) => one.shows("> X"));
+    yield* page.type(`\r\r${paste}`);
+    const after = yield* page.until("the burst drawn", (one) => !one.shows("> X"));
+    expect(holding(after, "value={6}")).toBe(true);
+  });
+});
 
 describe("REPL original live output and entry lifecycle", () => {
   beforeEach(journalBeforeEach(OWNER));

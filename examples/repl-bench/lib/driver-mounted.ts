@@ -1,0 +1,141 @@
+import { createScope, ensure, Err, Ok, suspend, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
+import { useReplPage } from "../../../packages/cli/tests/support/repl-page.ts";
+import type {
+  PageKey,
+  ReplPage,
+  ScreenReading,
+  ScreenScope,
+} from "../../../packages/cli/tests/support/repl-page.ts";
+import {
+  COMPOSER_VALUE,
+  intoComposer,
+} from "../../../packages/cli/tests/support/screen-journeys.ts";
+import { generateTypingHistory } from "../../../packages/cli/tests/support/typing-history.ts";
+import type { Command, Region, Size } from "./protocol.ts";
+
+export interface MountedOptions extends Size {
+  readonly history?: { readonly rounds: number; readonly linesPerRound: number };
+}
+
+const KEYS = new Map<string, PageKey>([
+  ["Enter", "Enter"],
+  ["Escape", "Escape"],
+  ["Tab", "Tab"],
+  ["BTab", "Backtab"],
+  ["Backtab", "Backtab"],
+  ["Backspace", "Backspace"],
+  ["Up", "ArrowUp"],
+  ["Down", "ArrowDown"],
+  ["Left", "ArrowLeft"],
+  ["Right", "ArrowRight"],
+  ["Home", "Home"],
+  ["End", "End"],
+  ["PageUp", "PageUp"],
+  ["PageDown", "PageDown"],
+]);
+
+function unanswered(what: string): Error {
+  return new Error(`The mounted driver does not answer ${what}.`);
+}
+
+function scopeOf(region: Region | undefined): ScreenScope | undefined {
+  if (region === undefined) {
+    return undefined;
+  }
+  if (region === "sidekick-composer") {
+    return COMPOSER_VALUE;
+  }
+  throw unanswered(`the ${region} region`);
+}
+
+function* wait(page: ReplPage, command: Extract<Command, { action: "wait" }>): Operation<unknown> {
+  if (command.at !== undefined || command.row !== undefined || command.bold !== undefined) {
+    throw unanswered("a wait by cell, row or weight");
+  }
+  const scope = scopeOf(command.region);
+  const holds = (reading: ScreenReading): boolean => {
+    const found = reading.found(command.text, scope);
+    if (command.count !== undefined) {
+      return found === command.count;
+    }
+    return command.present === false ? found === 0 : found > 0;
+  };
+  const reading = yield* page.until(`"${command.text}" on the mounted screen`, holds);
+  if (command.unique !== true) {
+    return null;
+  }
+  if (reading.found(command.text, scope) !== 1) {
+    throw new Error(`Expected one match for "${command.text}" on the mounted screen.`);
+  }
+  const cell = reading.locate(command.text, scope);
+  return { row: cell.row, column: cell.column };
+}
+
+function* answer(page: ReplPage, command: Command): Operation<unknown> {
+  switch (command.action) {
+    case "ready":
+      return null;
+    case "focus":
+      yield* intoComposer(page);
+      return null;
+    case "type":
+      yield* page.type(command.text);
+      return null;
+    case "key": {
+      const key = KEYS.get(command.key);
+      if (key === undefined) {
+        throw unanswered(`the ${command.key} key`);
+      }
+      yield* page.key(key);
+      return null;
+    }
+    case "resize":
+      yield* page.resize({ columns: command.columns, rows: command.rows });
+      return null;
+    case "wait":
+      return yield* wait(page, command);
+    default:
+      throw unanswered(`the ${command.action} action`);
+  }
+}
+
+// The page is mounted in a root scope, which inherits nothing. An entry the
+// mounted REPL runs therefore never passes through the testing session of the
+// document that mounted it, and that session admits one execution.
+export function* connectMounted(
+  options: MountedOptions,
+): Operation<(command: Command) => Operation<unknown>> {
+  const [scope, destroy] = createScope();
+  yield* ensure(() => destroy());
+  const ready = withResolvers<ReplPage>();
+  scope.run(function* () {
+    try {
+      const page = yield* useReplPage({ size: { columns: options.columns, rows: options.rows } });
+      if (options.history !== undefined) {
+        const { rounds, linesPerRound } = options.history;
+        yield* generateTypingHistory(page, rounds, linesPerRound, true);
+      }
+      ready.resolve(page);
+      yield* suspend();
+    } catch (error) {
+      ready.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  const page = yield* ready.operation;
+  // A command that fails is handed back as a result. Thrown inside the scope it
+  // would fail the scope too, and one refused step would end the mounted REPL.
+  return function* (command) {
+    const result: Result<unknown> = yield* scope.run(function* () {
+      try {
+        return Ok(yield* answer(page, command));
+      } catch (error) {
+        return Err(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  };
+}

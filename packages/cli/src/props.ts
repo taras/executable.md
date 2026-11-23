@@ -3,12 +3,9 @@
  * `props` schema to command-line and environment configuration sources
  * (specs/root-document-props-spec.md).
  *
- * Configliere owns precedence, provenance, and diagnostics. This module
- * supplies it with sources.
+ * The CLI retains source names for property diagnostics.
  */
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { createContext, field, object } from "configliere";
-import type { Parser } from "configliere";
 import type { Json } from "@executablemd/durable-streams";
 import { env as readEnv } from "@executablemd/runtime";
 import type { Operation } from "effection";
@@ -359,7 +356,7 @@ function canonical(value: unknown): string {
 
 /**
  * Validate a structural enum by value rather than identity, matching how
- * Ajv compares members, and report a mismatch through Configliere so the
+ * Ajv compares members, and report a mismatch through the property schema so the
  * offending source is still named.
  */
 function structuralEnum(members: unknown[]): StandardSchemaV1<unknown> {
@@ -420,8 +417,7 @@ function decodeText(
 }
 
 /**
- * Validate through Zod but keep the caller's value. Configliere stores
- * whatever a Standard Schema returns, so returning Zod's output would
+ * Validate through Zod but keep the caller's value. Returning Zod's output would
  * hand Ajv a value with nested unknown keys stripped and nested defaults
  * already applied. Only tagged transport text is transformed.
  */
@@ -527,8 +523,7 @@ export interface Extraction {
 
 /**
  * Remove `--props` and `--props-*` tokens from argv, keeping their
- * original text. Configliere's own option matching coerces every value
- * through `Number()`, which would turn `--props-name 007` into `7`.
+ * original text. This keeps `--props-name 007` intact for a string property.
  * Only the generated bindings are recognized, so this stays a source
  * adapter rather than a second argument parser.
  */
@@ -665,53 +660,6 @@ function toJson(value: unknown, source: string): Json {
   throw new PropsError(`${source} supplied a value that is not JSON`);
 }
 
-interface Source {
-  sourceName: string;
-  sourceType: string;
-  issues?: readonly StandardSchemaV1.Issue[];
-}
-
-interface FieldView {
-  sources: Source[];
-  value?: unknown;
-  ok: boolean;
-}
-
-function readSources(value: unknown): Source[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const sources: Source[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-    if (!("sourceName" in entry) || !("sourceType" in entry)) {
-      continue;
-    }
-    const { sourceName, sourceType } = entry;
-    if (typeof sourceName !== "string" || typeof sourceType !== "string") {
-      continue;
-    }
-    const issues = "issues" in entry && Array.isArray(entry.issues) ? entry.issues : undefined;
-    sources.push({ sourceName, sourceType, issues });
-  }
-  return sources;
-}
-
-function readField(info: unknown): FieldView | undefined {
-  if (typeof info !== "object" || info === null || !("result" in info)) {
-    return undefined;
-  }
-  const { result } = info;
-  if (typeof result !== "object" || result === null || !("ok" in result)) {
-    return undefined;
-  }
-  const sources = "sources" in info ? readSources(info.sources) : [];
-  const ok = result.ok === true;
-  return { sources, ok, value: ok && "value" in result ? result.value : undefined };
-}
-
 export interface ResolveOptions {
   propsSchema: unknown;
   bindings: Binding[];
@@ -722,7 +670,7 @@ export interface ResolveOptions {
 }
 
 /**
- * Resolve every declared property through Configliere, then hand the
+ * Resolve every declared property through the property schema, then hand the
  * result to core for authoritative validation.
  *
  * Sources are supplied in ascending priority, one sparse entry per
@@ -736,7 +684,7 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
   const properties = schema.properties ?? {};
   const arrayBindings = new Map(bindings.map((binding) => [binding.property, binding]));
 
-  const attrs: Record<string, Partial<Parser<unknown>>> = {};
+  const attrs: Record<string, StandardSchemaV1<unknown>> = {};
   for (const [property, declaration] of Object.entries(properties)) {
     const members = readSchema(deref(declaration, propsSchema)).enum;
     const native =
@@ -746,10 +694,10 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
     }
     const binding = arrayBindings.get(property);
     const item = binding?.array ? elementOf(native) : undefined;
-    attrs[property] = { ...field(lossless(native, item)) };
+    attrs[property] = lossless(native, item);
   }
 
-  const values: { name: string; value: unknown }[] = [];
+  const values: { name: string; value: Record<string, unknown> }[] = [];
   const aggregates: Record<string, unknown>[] = [];
 
   if (aggregateEnv !== undefined) {
@@ -779,8 +727,6 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
     });
   }
 
-  const parser = object<Record<string, unknown>>(attrs);
-  const info = parser.inspect(createContext({ args: [], values }));
   const props: Record<string, Json> = {};
 
   // Undeclared keys never reach a field, so they are merged first and
@@ -795,27 +741,17 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
   }
 
   for (const property of Object.keys(properties)) {
-    const child = readField(info.attrs[property]);
-    if (!child) {
+    const native = attrs[property];
+    const highest = values.findLast(({ value }) => Object.hasOwn(value, property));
+    if (!native || !highest) {
       continue;
     }
-    const supplied = child.sources.filter(
-      (source) => source.sourceType !== "none" && source.sourceType !== "default",
-    );
-    if (supplied.length === 0) {
-      continue;
+    const validated = validate(native, highest.value[property]);
+    if (validated.issues) {
+      const detail = validated.issues.map((issue) => issue.message).join("; ");
+      throw new PropsError(`${highest.name}: ${detail}`);
     }
-    // Configliere selects the last valid source, so an invalid
-    // higher-priority value would otherwise disappear behind a valid
-    // lower-priority one.
-    const highest = supplied[supplied.length - 1];
-    if (highest.issues) {
-      const detail = highest.issues.map((issue) => issue.message).join("; ");
-      throw new PropsError(`${highest.sourceName}: ${detail}`);
-    }
-    if (child.ok) {
-      props[property] = toJson(child.value, highest.sourceName);
-    }
+    props[property] = toJson(validated.value, highest.name);
   }
 
   return props;
