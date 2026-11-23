@@ -164,6 +164,8 @@ export interface ReplTree<Action> {
   focused(): string | undefined;
   /** Every mounted node id, in canonical order, outermost first. */
   mounted(): readonly string[];
+  /** Every mounted node id and its key, in the same order as mounted(). */
+  mountedKeys(): ReadonlyMap<string, string>;
   /** The key path of one mounted node, for a test that wants to name it. */
   keyOf(id: string): string | undefined;
 }
@@ -713,6 +715,16 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
     },
     mounted(): readonly string[] {
       return walkMounted(root.node, []).map((node) => node.id);
+    },
+    mountedKeys(): ReadonlyMap<string, string> {
+      const keys = new Map<string, string>();
+      for (const node of walkMounted(root.node, [])) {
+        const state = held(node);
+        if (state !== undefined) {
+          keys.set(node.id, state.key);
+        }
+      }
+      return keys;
     },
     keyOf(id: string): string | undefined {
       return held(findMounted(id) ?? root.node)?.key;

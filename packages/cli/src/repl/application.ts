@@ -119,7 +119,7 @@ import { entryReading, NO_READING } from "./source-reading.ts";
 import type { SidekickFeedback } from "./sidekick/model.ts";
 import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandOutput } from "./command-output.ts";
-import type { ReplReading } from "./source-reading.ts";
+import type { ReplReading, ReplSourceInspectionStore } from "./source-reading.ts";
 import { readingRuns, fitPlain, slicedRuns } from "./fitting.ts";
 import { createMarkdownStore, markdownLines } from "./markdown.ts";
 import type { ReplMarkdownLine, ReplMarkdownStore } from "./markdown.ts";
@@ -6577,12 +6577,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   if (inspectable && model.entries.length > 0) {
     if (prepared !== undefined) {
       items.push(
-        ...anchored(
-          shown(readingRows(prepared), context, READING_WINDOW),
-          "reading:anchor",
-          "selected",
-          view.focused,
-        ),
+        ...anchored(readingRows(prepared, context), "reading:anchor", "selected", view.focused),
       );
     }
   }
@@ -7143,8 +7138,15 @@ function shown(
  * against the pane's right inner edge — so what a description says and what the
  * frame measured are one list rather than two that have to agree.
  */
-function readingRows(prepared: ReplPreparedReading): readonly Described[] {
-  return prepared.rows.map((one) => {
+function readingRows(
+  prepared: ReplPreparedReading,
+  context: ReplPresentationContext,
+): readonly Described[] {
+  const window = context.admission.windows.get(READING_WINDOW);
+  if (context.measuring || window === undefined) {
+    return [];
+  }
+  return prepared.rows.slice(window.from, window.from + window.count).map((one) => {
     const runs = readingRuns(prepared, one);
     return line(`reading:${one.key}`, runText(runs), one.style, runs);
   });
@@ -7160,7 +7162,11 @@ function readingRows(prepared: ReplPreparedReading): readonly Described[] {
  *
  * `formatted` is where the caller holds the Output it has already formatted.
  */
-export function readingOf(view: ReplView, formatted?: ReplMarkdownStore): ReplReading {
+export function readingOf(
+  view: ReplView,
+  formatted?: ReplMarkdownStore,
+  sourceInspections?: ReplSourceInspectionStore,
+): ReplReading {
   const key = view.selection.entry?.key;
   const entry =
     key === undefined
@@ -7176,6 +7182,7 @@ export function readingOf(view: ReplView, formatted?: ReplMarkdownStore): ReplRe
     commandOutput: view.live.commandOutput?.find((one) => one.entry === entry.key)?.chunks ?? [],
     inspected: view.state.route.at !== undefined,
     formatted,
+    sourceInspections,
   });
 }
 

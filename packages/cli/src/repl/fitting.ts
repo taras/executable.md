@@ -42,8 +42,8 @@ import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import type { ReplRenderer } from "./renderer.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
-import type { ReplReadingLine } from "./source-reading.ts";
-import { READING_STATUSES } from "./source-reading.ts";
+import type { ReplReadingLine, ReplSourceInspectionStore } from "./source-reading.ts";
+import { createSourceInspectionStore, READING_STATUSES } from "./source-reading.ts";
 import { runText, tokenRuns } from "./description.ts";
 import { createMarkdownStore } from "./markdown.ts";
 import type { ReplMarkdownStore } from "./markdown.ts";
@@ -172,6 +172,7 @@ export interface ReplFitStore {
    * body that has not changed is not read again.
    */
   readonly formatted: ReplMarkdownStore;
+  readonly sourceInspections: ReplSourceInspectionStore;
   /** The geometry retained for these exact inputs, or none. */
   held(
     lines: readonly ReplReadingLine[],
@@ -302,6 +303,7 @@ export function createFitStore(): ReplFitStore {
     held.shape.every((one, at) => one.text === lines[at].text && one.depth === lines[at].depth);
   return {
     formatted: createMarkdownStore(),
+    sourceInspections: createSourceInspectionStore(),
     held(lines, room, size) {
       return same(lines, room, size) ? held?.geometry : undefined;
     },
