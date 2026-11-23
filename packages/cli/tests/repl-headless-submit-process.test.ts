@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { useHeadlessFixture } from "./support/headless-repl.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { platformDataRoot } from "../src/repl-assembly.ts";
+import { ReplHost } from "../src/repl/host.ts";
+import { readTextFile } from "@effectionx/fs";
 import { ReplEntryHost } from "../src/repl-entry-installation.ts";
 import { SubmitRecord } from "../src/sidekick-acp/protocol.ts";
 
@@ -179,64 +181,114 @@ describe("first SIGINT at the submit host boundary", () => {
     expect(next.records.at(-1)).toMatchObject({ kind: "finished", outcome: "completed" });
   });
 
-  it("G: retains the socket through exact Stop and held cleanup, then exits with status 130", function* () {
-    const home = yield* useTemporary("xmd-submit-process-stop-home-");
-    const cleanup = withResolvers<void>();
-    const released = withResolvers<void>();
-    yield* ensure(released.resolve);
-    let armed = false;
-    yield* ReplEntryHost.set(function* () {
-      const hold = armed;
-      return {
-        *install() {
-          if (hold) {
-            yield* ensure(function* () {
-              cleanup.resolve();
-              yield* released.operation;
-            });
-          }
-        },
-      };
+  for (const pendingWrite of [false, true]) {
+    it(`G: joins Stop and exits 130 ${pendingWrite ? "during the entry write" : "after admission"}`, function* () {
+      const home = yield* useTemporary("xmd-submit-process-stop-home-");
+      const cleanup = withResolvers<void>();
+      const released = withResolvers<void>();
+      yield* ensure(released.resolve);
+      let armed = false;
+      yield* ReplEntryHost.set(function* () {
+        const hold = armed;
+        return {
+          *install() {
+            if (hold) {
+              yield* ensure(function* () {
+                cleanup.resolve();
+                yield* released.operation;
+              });
+            }
+          },
+        };
+      });
+      const arrived = withResolvers<void>();
+      const permitted = withResolvers<void>();
+      let journalPath = "";
+      if (pendingWrite) {
+        yield* ReplHost.around(
+          {
+            appendEntryRecord: ([path, record, check], next) => ({
+              *[Symbol.iterator]() {
+                if (armed && JSON.parse(record).description?.name === "Elicit") {
+                  journalPath = path;
+                  yield* arrived.operation;
+                  yield* next(path, record, {
+                    ...check,
+                    permit() {
+                      check.permit();
+                      permitted.resolve();
+                    },
+                  });
+                } else {
+                  yield* next(path, record, check);
+                }
+              },
+            }),
+          },
+          { at: "max" },
+        );
+      }
+      const fixture = yield* useHeadlessFixture(
+        undefined,
+        undefined,
+        platformDataRoot(process.platform, home, {}, sep),
+      );
+      if (pendingWrite) {
+        const session = fixture.children[0]!.session;
+        const stop = session.stopEntry.bind(session);
+        session.stopEntry = function* (key) {
+          arrived.resolve();
+          yield* permitted.operation;
+          return yield* stop(key);
+        };
+      }
+      armed = true;
+      const call = yield* subprocess(fixture.reference.sessionId, home);
+      call.child.stdin?.end(QUESTION);
+      yield* within(call.admitted, () => ({ waiting: "admission", ...call.output() }));
+      call.interrupt();
+      yield* within(cleanup.operation, () => ({ waiting: "entry cleanup", ...call.output() }));
+      expect(call.closed).toBe(false);
+      expect(call.records.some((record) => record.kind === "finished")).toBe(false);
+      released.resolve();
+      const exit = yield* within(call.joined, () => ({ waiting: "joined Stop", ...call.output() }));
+      if (exit.code !== 130 || exit.signal !== null) {
+        throw new Error(JSON.stringify({ ...exit, ...call.output(), records: call.records }));
+      }
+      expect(exit).toEqual({ code: 130, signal: null });
+      const admitted = call.records[0];
+      const final = call.records.at(-1);
+      expect(final).toMatchObject({
+        kind: "finished",
+        outcome: "interrupted",
+        joined: true,
+        journal: "cancelled",
+      });
+      expect(final?.submission).toEqual(admitted?.submission);
+      if (pendingWrite) {
+        const journal = yield* readTextFile(journalPath);
+        const tail = journal
+          .trimEnd()
+          .split("\n")
+          .slice(-2)
+          .map((line) => JSON.parse(line));
+        expect(tail).toMatchObject([
+          { description: { name: "Elicit" } },
+          { type: "close", result: { status: "cancelled" } },
+        ]);
+      }
+      armed = false;
+      const next = yield* subprocess(fixture.reference.sessionId, home);
+      next.child.stdin?.end(HOLD);
+      expect(
+        yield* within(next.joined, () => ({ waiting: "successor exit", ...next.output() })),
+      ).toEqual({ code: 0, signal: null });
+      expect(next.records.at(-1)).toMatchObject({
+        kind: "finished",
+        outcome: "completed",
+        result: { value: { status: "hold" } },
+      });
+      expect(fixture.host.fake.prompts).toHaveLength(0);
     });
-    const fixture = yield* useHeadlessFixture(
-      undefined,
-      undefined,
-      platformDataRoot(process.platform, home, {}, sep),
-    );
-    armed = true;
-    const call = yield* subprocess(fixture.reference.sessionId, home);
-    call.child.stdin?.end(QUESTION);
-    yield* within(call.admitted, () => ({ waiting: "admission", ...call.output() }));
-    call.interrupt();
-    yield* within(cleanup.operation, () => ({ waiting: "entry cleanup", ...call.output() }));
-    expect(call.closed).toBe(false);
-    expect(call.records.some((record) => record.kind === "finished")).toBe(false);
-    released.resolve();
-    const exit = yield* within(call.joined, () => ({ waiting: "joined Stop", ...call.output() }));
-    if (exit.code !== 130 || exit.signal !== null) {
-      console.error(JSON.stringify({ ...exit, ...call.output(), records: call.records }));
-    }
-    expect(exit).toEqual({ code: 130, signal: null });
-    const admitted = call.records[0];
-    const final = call.records.at(-1);
-    expect(final).toMatchObject({
-      kind: "finished",
-      outcome: "interrupted",
-      joined: true,
-      journal: "cancelled",
-    });
-    expect(final?.submission).toEqual(admitted?.submission);
-    armed = false;
-    const next = yield* subprocess(fixture.reference.sessionId, home);
-    next.child.stdin?.end(HOLD);
-    expect(
-      yield* within(next.joined, () => ({ waiting: "successor exit", ...next.output() })),
-    ).toEqual({ code: 0, signal: null });
-    expect(next.records.at(-1)).toMatchObject({
-      kind: "finished",
-      outcome: "completed",
-      result: { value: { status: "hold" } },
-    });
-    expect(fixture.host.fake.prompts).toHaveLength(0);
-  });
+  }
 });
