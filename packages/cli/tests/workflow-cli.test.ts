@@ -209,10 +209,11 @@ describe("Tier WFC — xmd workflow start and resume", () => {
         "start",
         "--id=props-1",
         "flows/release.md",
-        "--props-channel=beta",
+        "--props-channel",
+        "-V",
       ]).join();
       expect(started.code).toBe(0);
-      expect(started.stdout).toContain("Wrote: channel=beta");
+      expect(started.stdout).toContain("Wrote: channel=-V");
 
       const help = yield* xmd(fixture, ["workflow", "start", "flows/release.md", "--help"]).join();
       expect(help.code).toBe(0);
