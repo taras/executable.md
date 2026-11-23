@@ -1,4 +1,4 @@
-# Call-count baseline: Thirty keystrokes in the composer, 52-round history
+# Call-count baseline: Thirty keystrokes in the composer, long entry, 12 rounds of 368 lines
 
 This document records how much work an exercise asks for: the number of function
 calls it makes, by layer. `Profile.Baseline` checks later runs against it.
@@ -17,28 +17,28 @@ other native work. An exercise can get slower without any figure here moving.
 
 | Measure | Value |
 | --- | ---: |
-| calls: total | 32,006,715 |
+| calls: total | 22,264,087 |
 | calls: npm @xterm/headless | 14,066,460 |
-| calls: xmd cli | 13,082,872 |
-| calls: npm @termless/xtermjs | 2,097,375 |
-| calls: effection | 1,261,155 |
-| calls: xmd core | 844,930 |
-| calls: deno runtime | 356,420 |
-| calls: effectionx | 195,985 |
+| calls: xmd cli | 4,110,346 |
+| calls: npm @termless/xtermjs | 2,094,675 |
+| calls: effection | 1,259,468 |
+| calls: deno runtime | 297,877 |
+| calls: effectionx | 195,732 |
+| calls: xmd core | 138,162 |
 | calls: npm @secretlint/core | 45,180 |
-| calls: other layers | 56,338 |
+| calls: other layers | 56,187 |
 
 ```json
 {
   "version": 1,
-  "title": "Thirty keystrokes in the composer, 52-round history",
+  "title": "Thirty keystrokes in the composer, long entry, 12 rounds of 368 lines",
   "runtime": "deno 2.9.7 on darwin arm64",
   "tolerance": 1,
   "units": [],
   "measures": [
     {
       "name": "calls: total",
-      "value": 32006715
+      "value": 22264087
     },
     {
       "name": "calls: npm @xterm/headless",
@@ -46,27 +46,27 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: xmd cli",
-      "value": 13082872
+      "value": 4110346
     },
     {
       "name": "calls: npm @termless/xtermjs",
-      "value": 2097375
+      "value": 2094675
     },
     {
       "name": "calls: effection",
-      "value": 1261155
-    },
-    {
-      "name": "calls: xmd core",
-      "value": 844930
+      "value": 1259468
     },
     {
       "name": "calls: deno runtime",
-      "value": 356420
+      "value": 297877
     },
     {
       "name": "calls: effectionx",
-      "value": 195985
+      "value": 195732
+    },
+    {
+      "name": "calls: xmd core",
+      "value": 138162
     },
     {
       "name": "calls: npm @secretlint/core",
@@ -74,7 +74,7 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: other layers",
-      "value": 56338
+      "value": 56187
     }
   ]
 }
