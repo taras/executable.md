@@ -2502,6 +2502,8 @@ function beforeProperties(args: string[]): string[] {
   return at === -1 ? args : args.slice(0, at);
 }
 
+const RUN_VERBOSE_OPTION = "--verbose";
+
 function startupHostArgs(args: string[]): string[] {
   const host: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -2515,9 +2517,16 @@ function startupHostArgs(args: string[]): string[] {
       continue;
     }
     // A separated value can look like a host option. Until the document
-    // supplies the binding, reserve that token for the property.
+    // supplies the binding, reserve that token for the property. Standalone
+    // verbosity after a generated property is a host option in either parse.
     const next = args[index + 1];
-    if (!arg.includes("=") && next !== undefined && next !== "--" && !isPropertyOption(next)) {
+    if (
+      !arg.includes("=") &&
+      next !== undefined &&
+      next !== "--" &&
+      !isPropertyOption(next) &&
+      !(arg.startsWith("--props-") && next === RUN_VERBOSE_OPTION)
+    ) {
       index += 1;
     }
   }
@@ -2773,7 +2782,7 @@ function* preparePropsPhase(
   try {
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
-    const extraction = extractPropsArgs(fixed, bindings);
+    const extraction = extractPropsArgs(fixed, bindings, RUN_VERBOSE_OPTION);
     const addressable = root.source === undefined && document.targetInfo.length > 0;
     return {
       args: extraction.rest,
