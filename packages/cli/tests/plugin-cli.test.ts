@@ -356,20 +356,22 @@ describe("PC5 — a Plugin reads configuration, never document properties", () =
         const run = (doc: string, ...args: string[]) =>
           runCli(["run", `--plugin=${fixture("configured.mjs")}`, doc, ...args], { cwd: dir });
 
-        const verbose = yield* run("boolean.md", "--props-loud", "--verbose").expect();
-        expect(verbose.stdout).toContain("verbose: true");
-        expect(verbose.stdout).toContain("Loud: true");
-        expect(verbose.stderr).toContain("[yield] import_component:__root__");
+        for (const flag of ["--verbose", "-V"]) {
+          const verbose = yield* run("boolean.md", "--props-loud", flag).expect();
+          expect(verbose.stdout).toContain("verbose: true");
+          expect(verbose.stdout).toContain("Loud: true");
+          expect(verbose.stderr).toContain("[yield] import_component:__root__");
 
-        const literal = yield* run("string.md", "--props-loud=--verbose").expect();
-        expect(literal.stdout).toContain("verbose: false");
-        expect(literal.stdout).toContain("Loud: --verbose");
-        expect(literal.stderr).not.toContain("[yield]");
+          const literal = yield* run("string.md", `--props-loud=${flag}`).expect();
+          expect(literal.stdout).toContain("verbose: false");
+          expect(literal.stdout).toContain(`Loud: ${flag}`);
+          expect(literal.stderr).not.toContain("[yield]");
 
-        const missing = yield* run("string.md", "--props-loud", "--verbose").join();
-        expect(missing.code).toBe(1);
-        expect(missing.stderr).toContain("--props-loud requires a value");
-        expect(missing.stdout).not.toContain("Loud:");
+          const missing = yield* run("string.md", "--props-loud", flag).join();
+          expect(missing.code).toBe(1);
+          expect(missing.stderr).toContain("--props-loud requires a value");
+          expect(missing.stdout).not.toContain("Loud:");
+        }
       },
     );
   });
