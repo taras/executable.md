@@ -2606,6 +2606,17 @@ function* preparePropsPhase(
   evalFlags: EvalFlags,
   readStandardInput: StandardInputReader,
 ): Operation<PropsPhase> {
+  // The REPL route is already selected. Its composed options need no document
+  // inspection and are unavailable to the built-in document argument parser.
+  if (args[0] === "repl") {
+    return evalFlags.values[0] === undefined
+      ? { args, bindings: [] }
+      : {
+          args,
+          bindings: [],
+          error: `unrecognized option for xmd repl: ${EVAL_OPTION} — inline documents are exclusive to xmd run`,
+        };
+  }
   // `xmd plan` declares its own grammar and has no document to inspect: the
   // schema its generated options come from is written by an agent that has not
   // been asked anything yet. Everything below that reads a document, and every

@@ -279,6 +279,26 @@ describe(
       expect(stderr).toContain("exclusive to xmd run");
     });
 
+    it("IE21: a REPL plugin option preserves the inline source refusal", function* () {
+      const root = yield* useWorkspace({});
+      const result = yield* runCli(
+        [
+          "repl",
+          "--attach",
+          "00000000-0000-4000-8000-000000000001",
+          "--github-base-url",
+          "https://ghe.invalid/api/v3",
+          "-e",
+          "value",
+        ],
+        { cwd: root },
+      ).join();
+      expect(result.code).toBe(1);
+      expect(result.stderr.trim()).toBe(
+        "unrecognized option for xmd repl: --eval — inline documents are exclusive to xmd run",
+      );
+    });
+
     /**
      * An inline root is not a selectable document reference — there is no path
      * to write a `#` after — so its help describes what it declares and offers
