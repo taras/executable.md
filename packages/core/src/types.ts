@@ -66,6 +66,12 @@ export interface ComponentElement {
    */
   lineEnd?: true;
   /**
+   * The indentation before a standalone element that is not a block, after
+   * the structural prefix: it precedes a nonempty rendering and is dropped
+   * with an empty one (§2.2).
+   */
+  lineIndent?: string;
+  /**
    * When set, expression props resolve against this env instead of the
    * contextual `env()` binding environment. Used for projected children
    * (substituted via `<Content />`) — they carry the caller's eval env so

@@ -307,6 +307,7 @@ interface ComponentElement {
   children: Segment[];                   // Segments between opening and closing tags
   selfClosing: boolean;
   lineEnd?: true;                        // Stands on its own line and owns that line's newline (§2.2)
+  lineIndent?: string;                   // Indentation after the prefix before a standalone non-block element (§2.2)
 }
 
 interface ExecutableCodeBlock {
@@ -408,12 +409,17 @@ precede its opening tag on its line and only spaces and tabs follow its end —
 holds for self-closing elements and for paired ones, block or inline. A
 standalone element's line is a delimiter line:
 
-- The indentation before the element is not content, nor is the indentation
-  before a block's opening tag or before a closing tag that begins its line.
+- The indentation before a block's opening tag, and before a closing tag that
+  begins its line, is not content.
+- For a standalone element that is not a block — self-closing, or paired with
+  its content inline — the indentation left after the structural prefix
+  belongs to its rendering and is recorded as `lineIndent`. It precedes a
+  nonempty rendering, so text rendered inside a list item stays in that item.
 - The element consumes its line's newline and records it as `lineEnd`. After
   the element expands, the newline is appended when its rendering is nonempty
-  and does not already end in a newline. An empty rendering contributes no
-  line, and newlines the rendering already holds stay as they are.
+  and does not already end in a newline. An empty rendering contributes
+  neither indentation nor a line, and newlines the rendering already holds stay
+  as they are.
 - An element at the end of the source has no newline to supply, so a missing
   final newline is preserved.
 
@@ -421,7 +427,7 @@ A block's body ends with the newline of its last content line, and its closing
 tag's line contributes nothing, so the delimiter lines of a block whose
 opening and closing tags stand alone contribute no lines to the output. An
 element assigned to a named slot (§6.3.1) renders where its slot is projected
-and leaves its line ending behind.
+and leaves its indentation and line ending behind.
 
 Parsing is a runtime operation. It is deterministic from its input text
 and produces no journal entries.
@@ -12694,6 +12700,7 @@ Each row is one of the [formatter examples](formatter-examples.md), run through
 | SIN9 | Content tabs | A tab after the prefix, or in place of it, is written unchanged |
 | SIN10 | Blank lines | Spaces beyond the prefix on a blank line are written |
 | SIN11 | Missing final newline | A standalone read at the end of the source supplies no newline |
+| SIN12 | Standalone element in a list item | In a loose list item, a self-closing read of `"Ada"` or `"Ada\n"` and an inline `<If>` rendering `Ready` keep the two spaces after the prefix (`"  Ada\n"`, `"  Ready\n"`); an empty read and an unselected `<If>` contribute neither indentation nor a line |
 
 ### Tier B — Component import and frontmatter
 

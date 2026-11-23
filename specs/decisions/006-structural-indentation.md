@@ -19,9 +19,12 @@ never safe.
 Structural indentation is part of ordinary XMD syntax. A block's body loses two
 spaces per enclosing block at the start of each line that has them; a line with
 fewer keeps all of its spaces. A standalone element's line is a delimiter line:
-its indentation is not content, and it supplies its newline only to a nonempty
-rendering that lacks one. After the prefix, a line indented four columns past a
-blank line is Markdown indented code. The [language
+it supplies its newline only to a nonempty rendering that lacks one. A block's
+delimiter indentation is not content; the indentation left after the prefix
+before any other standalone element precedes its rendering when that rendering
+is nonempty, so a component inside a list item stays in the item. After the
+prefix, a line indented four columns past a blank line is Markdown indented
+code. The [language
 specification](../executable-mdx-spec.md#structural-indentation-and-standalone-lines)
 owns the rule.
 

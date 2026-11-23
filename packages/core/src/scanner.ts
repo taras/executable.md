@@ -401,11 +401,16 @@ function scanBody(
       const begins = beginsLine(text, lineContent, pos);
       const component = parseComponentTag(walk, pos, body.depth, lineContent, begins);
       if (component) {
-        // A standalone element and a block's opening line are delimiter lines:
-        // their indentation is not content, and a standalone element owns its
-        // line ending.
+        // A standalone element and a block's opening line are delimiter lines,
+        // and a standalone element owns its line ending. A block's indentation
+        // is not content; a standalone element that renders text carries the
+        // indentation left after the prefix, so it is held until the rendering
+        // is known.
         const ending = begins ? lineEndingAfter(text, component.end) : undefined;
         flush(ending !== undefined || component.block ? lineContent : pos);
+        if (ending !== undefined && !component.block && pos > lineContent) {
+          component.segment.lineIndent = text.slice(lineContent, pos);
+        }
         segments.push(component.segment);
         spans?.push({ start: pos, end: component.end });
         pos = ending?.end ?? component.end;

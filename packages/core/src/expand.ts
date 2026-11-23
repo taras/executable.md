@@ -1927,10 +1927,18 @@ function* expandListSegments(
       }
     }
 
-    if (segment.type === "component" && segment.lineEnd === true) {
+    if (
+      segment.type === "component" &&
+      (segment.lineEnd === true || segment.lineIndent !== undefined)
+    ) {
       const rendered = renderSegments(result.slice(produced));
-      if (rendered !== "" && !rendered.endsWith("\n")) {
-        result.push({ type: "text", content: "\n" });
+      if (rendered !== "") {
+        if (segment.lineIndent !== undefined) {
+          result.splice(produced, 0, { type: "text", content: segment.lineIndent });
+        }
+        if (segment.lineEnd === true && !rendered.endsWith("\n")) {
+          result.push({ type: "text", content: "\n" });
+        }
       }
     }
 
@@ -5127,13 +5135,14 @@ export function partitionBySlot(children: Segment[]): SlotMap {
  * Strip the `slot` prop from a segment. Returns a shallow clone with
  * `slot` removed from props. Non-component segments pass through unchanged.
  *
- * The clone also leaves its line ending behind: a slotted element renders
- * where its slot is projected, not on the source line it stood on.
+ * The clone also leaves its line ending and indentation behind: a slotted
+ * element renders where its slot is projected, not on the source line it
+ * stood on.
  */
 export function stripSlotProp(segment: Segment): Segment {
   if (segment.type === "component" && "slot" in segment.props) {
     const { slot: _, ...rest } = segment.props;
-    const { lineEnd: _lineEnd, ...element } = segment;
+    const { lineEnd: _lineEnd, lineIndent: _lineIndent, ...element } = segment;
     return { ...element, props: rest };
   }
   return segment;

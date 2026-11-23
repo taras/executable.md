@@ -87,6 +87,19 @@ function run(source: string, files: Record<string, string> = {}): Operation<Run>
   });
 }
 
+/** An inline `<If>` standing alone in a loose list item. */
+function pairedInListItem(condition: boolean): string {
+  return [
+    "<Output>",
+    "  - First",
+    "",
+    `    <If condition={${condition}}>Ready</If>`,
+    "  - Last",
+    "</Output>",
+    "",
+  ].join("\n");
+}
+
 describe("Tier SIN — structural indentation", () => {
   it("SIN1: a block's body loses one structural prefix per enclosing block", function* () {
     const result = yield* run(
@@ -266,6 +279,30 @@ describe("Tier SIN — structural indentation", () => {
       const result = yield* run(`<File path="blank.txt">\n${line}</File>\n`);
       expect({ line, written: yield* result.read("blank.txt") }).toEqual({ line, written });
     }
+  });
+
+  it("SIN12: a standalone element in a loose list item keeps its content indentation", function* () {
+    const selfClosing = [
+      "<Output>",
+      "  - First",
+      "",
+      '    <File path="name.txt" />',
+      "  - Last",
+      "</Output>",
+      "",
+    ].join("\n");
+    const cases: [string, string][] = [
+      ["Ada", "- First\n\n  Ada\n- Last\n"],
+      ["Ada\n", "- First\n\n  Ada\n- Last\n"],
+      ["", "- First\n\n- Last\n"],
+    ];
+    for (const [contents, expected] of cases) {
+      const result = yield* run(selfClosing, { "name.txt": contents });
+      expect({ contents, output: result.output }).toEqual({ contents, output: expected });
+    }
+
+    expect((yield* run(pairedInListItem(true))).output).toBe("- First\n\n  Ready\n- Last\n");
+    expect((yield* run(pairedInListItem(false))).output).toBe("- First\n\n- Last\n");
   });
 
   it("SIN11: a standalone invocation at the end of the source has no newline to supply", function* () {
