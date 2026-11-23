@@ -43,6 +43,7 @@ export const command = z.discriminatedUnion("action", [
     region: region.optional(),
     at: point.optional(),
   }),
+  z.object({ action: z.literal("pause"), ticks: z.int().positive(), tick: z.int().positive() }),
   z.object({ action: z.literal("wait"), ...waitOptions.shape }),
   z.object({ action: z.literal("resize"), ...size.shape }),
   z.object({

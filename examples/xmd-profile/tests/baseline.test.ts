@@ -138,3 +138,13 @@ Deno.test("the rendered check lists only the shifted measures", () => {
   assert.match(text, /\| calls: effection \| 600 \| 620 \| \+3\.33% \|/);
   assert.doesNotMatch(text, /xmd core/);
 });
+
+Deno.test("other layers remain visible but cannot fail a comparison", () => {
+  const baseline = recorded();
+  const changed = baseline.measures.map((row) =>
+    row.name.endsWith(": other layers") ? { ...row, value: 999 } : row,
+  );
+  const result = check(baseline, changed, "deno 2.9.7");
+  assert.equal(result.shifted, false);
+  assert.equal(result.rows.find((row) => row.name === "calls: other layers")?.measured, 999);
+});

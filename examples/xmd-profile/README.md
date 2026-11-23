@@ -145,7 +145,7 @@ record the baseline again after an intended change.
 
 - One capture gives calls by layer. Two captures of the same work at different
   sizes give calls per unit of work by layer, and the fixed calls.
-- Layers under 0.1% of the total are recorded together as other layers. A check
+- Layers under 0.1% of the total are recorded together as other layers. This row is printed but never fails comparison. A check
   uses the layers its baseline named.
 - The document records the runtime and platform. A run anywhere else is
   reported as not compared, because the runtime's own functions are counted.
@@ -178,6 +178,12 @@ deno run --allow-all --cached-only --frozen --node-modules-dir=none \
 More than half of its calls are the terminal emulator the mounted page reads the
 screen with, so read the rows for this repository's packages, not the total. The
 typing comparison in ReplBench still supplies milliseconds.
+
+[scrolling.md](baselines/scrolling.md) measures entry-reading wheel bursts at sparse,
+full, long-history and long-entry sizes, plus spaced notches at the full size.
+[scrolling-draft.md](baselines/scrolling-draft.md) measures arrow keys with a still
+window, a window moved by warm-up, and a longer draft. The wheel does not move
+the draft; caret keys move its reading window.
 
 ## Profile a REPL session
 

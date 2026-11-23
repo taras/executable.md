@@ -443,6 +443,9 @@ export function useDriver(options: Launch) {
               );
               return null;
             }
+            case "pause":
+              yield* sleep(command.ticks * command.tick);
+              return null;
             case "wait":
               return yield* waitFor(command);
             case "resize":
