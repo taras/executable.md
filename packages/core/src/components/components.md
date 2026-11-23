@@ -193,8 +193,13 @@ with `<File path="notes.md" />`, then submit a paired `<File.Patch>`.
 </File.Patch>
 ````
 
-Success renders nothing. A refusal produces a file error. Read the source again
-before editing a stale patch.
+When the diff touches a Markdown fence, use a longer outer diff fence than
+the fence in the diff's context. For example, use four backticks around a diff
+with a three-backtick fence in its context.
+
+Success renders nothing. Echoed `<File.Patch>` source means the patch did
+not execute. A refusal produces a file error. Read the source again before
+editing a stale patch.
 
 ## File.Copy
 

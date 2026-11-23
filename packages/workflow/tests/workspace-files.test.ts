@@ -710,6 +710,42 @@ describe("WF workflow document filesystem", () => {
     });
   });
 
+  it("records a File.Patch refusal for invalid UTF-8 without changing Workspace bytes", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const before = Uint8Array.of(0xff, 0x0a, 0x6f, 0x6c, 0x64, 0x0a);
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/seed.txt", before);
+      });
+      const source = [
+        '<File.Patch path="seed.txt">',
+        "",
+        "```diff",
+        "@@ -2 +2 @@",
+        "-old",
+        "+new",
+        "```",
+        "",
+        "</File.Patch>",
+      ].join("\n");
+      const run = yield* runDocument(database, source);
+      expect(String(run.output)).toContain(
+        'cannot write "seed.txt": the existing bytes no longer match',
+      );
+      const effects = yield* recordedFileEffects(database);
+      expect(effects.map((effect) => effect.name.split(":")[0])).toEqual(["read", "write"]);
+      expect(effects[1]?.result).toEqual({
+        status: "ok",
+        value: { kind: "refused", phase: "target", reason: "changed-content" },
+      });
+      const bytes = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.readFile("/seed.txt");
+      });
+      expect(bytes).toEqual({ ok: true, value: before });
+    });
+  });
+
   // WF6: the three refusals a document can act on, each decided before any
   // effect exists. Nothing is recorded and nothing outside the run is asked,
   // which is what "lexical" means here.
