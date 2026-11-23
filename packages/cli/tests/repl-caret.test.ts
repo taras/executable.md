@@ -18,6 +18,30 @@ import { fields, readDescription } from "../src/repl/description.ts";
 import { prepareFrame } from "../src/repl/program.ts";
 
 describe("REPL caret editing", () => {
+  it("snaps held offsets to the preceding grapheme boundary", function* () {
+    expect(caretFor("abc", undefined)).toEqual({ value: "abc", offset: 3 });
+    expect(caretFor("abc", { value: "old", offset: 1 })).toEqual({ value: "abc", offset: 3 });
+    for (const [offset, expected] of [
+      [0, 0],
+      [1, 1],
+      [3, 3],
+      [8, 3],
+      [-1, 0],
+      [NaN, 0],
+      [1.5, 1],
+    ]) {
+      const held = { value: "abc", offset, column: 7, backward: true } satisfies Parameters<
+        typeof caretFor
+      >[1];
+      expect(caretFor("abc", held)).toEqual({ ...held, offset: expected });
+    }
+    for (const grapheme of ["\u{1F44D}\u{1F3FD}", "\u{1F1E8}\u{1F1E6}", "e\u0301"]) {
+      const value = `a${grapheme}z`;
+      for (let offset = 1; offset < 1 + grapheme.length; offset++) {
+        expect(caretFor(value, { value, offset })).toEqual({ value, offset: 1 });
+      }
+    }
+  });
   it("retains the destination row at shared fitted wrap boundaries", function* () {
     const size = { columns: 160, rows: 36 };
     const renderer = yield* useReplRenderer(size);
