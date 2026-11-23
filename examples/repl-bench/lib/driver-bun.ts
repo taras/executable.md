@@ -17,7 +17,13 @@ import {
 import process from "node:process";
 import { join } from "node:path";
 import { decodeLocation } from "../../../packages/cli/src/repl/route.ts";
-import type { DriverCommand, Launch, Point, WaitOptions } from "./protocol.ts";
+import {
+  privateDataEnvironment,
+  type DriverCommand,
+  type Launch,
+  type Point,
+  type WaitOptions,
+} from "./protocol.ts";
 import { viewport } from "./screen.ts";
 
 interface Pty {
@@ -29,6 +35,7 @@ interface PtyChild {
   pid: number;
   terminal: Pty;
   exited: Promise<number>;
+  signalCode: string | null;
   kill(signal: number): void;
 }
 // Bun's PTY API is confined to this runtime entry point. Deno typechecks its consumers too.
@@ -102,6 +109,8 @@ export function useDriver(options: Launch) {
         return;
       }
       const owned = child;
+      let joined = false;
+      let providerQuiescent = false;
       yield* scoped(function* () {
         yield* ensure(function* () {
           try {
@@ -112,7 +121,7 @@ export function useDriver(options: Launch) {
           }
           yield* writeTextFile(
             join(directory, "closed.json"),
-            JSON.stringify({ pid: owned?.pid, step }),
+            JSON.stringify({ pid: owned?.pid, step, joined, providerQuiescent }),
           );
         });
         if (owned === undefined) {
@@ -132,7 +141,12 @@ export function useDriver(options: Launch) {
         if (timely === null) {
           owned.kill(9);
           yield* closed;
+        } else {
+          const [code] = timely;
+          // Effection main exits normally with 130 or 143 after joining signal cleanup.
+          providerQuiescent = owned.signalCode === null && [0, 130, 143].includes(code);
         }
+        joined = true;
       });
     }
 
@@ -152,7 +166,7 @@ export function useDriver(options: Launch) {
           HOME: home,
           XMD_SIDEKICK_SCENARIO: options.scenario,
           ...(options.denoDir === undefined ? {} : { DENO_DIR: options.denoDir }),
-          XDG_DATA_HOME: join(home, ".local", "share"),
+          ...privateDataEnvironment(home),
           XDG_CONFIG_HOME: join(home, ".config"),
           XDG_STATE_HOME: join(home, ".local", "state"),
           XDG_CACHE_HOME: join(home, ".cache"),

@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { join } from "node:path";
+
+export function privateDataEnvironment(home: string) {
+  return { XDG_DATA_HOME: join(home, ".local", "share") };
+}
 
 export const size = z.object({ columns: z.int().min(1).max(500), rows: z.int().min(1).max(200) });
 export const point = z.object({ column: z.int().nonnegative(), row: z.int().nonnegative() });

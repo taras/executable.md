@@ -20,8 +20,18 @@
  * document can reach selects them.
  */
 
-import { createQueue, each, ensure, Ok, resource, spawn, useScope } from "effection";
-import type { Operation, Result, Scope } from "effection";
+import {
+  createContext,
+  createQueue,
+  each,
+  ensure,
+  Ok,
+  resource,
+  spawn,
+  until,
+  useScope,
+} from "effection";
+import type { Operation, Result, Scope, Task } from "effection";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { cwd, env } from "@executablemd/runtime";
 import { Component, getExpansion, TestBehavior } from "@executablemd/core";
@@ -31,8 +41,9 @@ import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Test, testing } from "@executablemd/testing";
 import type { FailureJournalHost, TestResult } from "@executablemd/testing";
+import { writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { deliverWhole } from "./stdout-delivery.ts";
 import type { DeliverySink } from "./stdout-delivery.ts";
 
@@ -50,6 +61,29 @@ export interface JournalCase {
   readonly name: string;
   readonly suite?: string;
 }
+
+interface LaunchAttribution {
+  readonly scenario: string;
+  readonly launchId: string;
+}
+
+interface CaptureAttribution extends LaunchAttribution {
+  readonly name?: string;
+  readonly location: string;
+  readonly outcome: "failed" | "cancelled";
+}
+
+interface LaunchSnapshot extends LaunchAttribution {
+  files: readonly SavedJournalFile[];
+  report(error: unknown): void;
+}
+
+interface MarkdownCaseCapture {
+  register(launch: LaunchAttribution): LaunchSnapshot;
+}
+
+const TestRequest = createContext<ComponentExpansionRequest>("xmd.cli.test-diagnostics.request");
+export const MarkdownCapture = createContext<MarkdownCaseCapture>("xmd.cli.test-diagnostics.case");
 
 /** This command's diagnostics, shared by its root documents and their children. */
 export interface TestDiagnostics {
@@ -77,23 +111,24 @@ export interface ExecutionDiagnostics {
    * installed nearer the document would never be reached.
    */
   observe(): Operation<void>;
+  drainCaptures(): Operation<void>;
   /** Saves this execution's journal when `failed` says its outcome failed. */
   journal<T>(failed: (value: T) => boolean): FailureJournalHost<T>;
   /**
-   * Saves journal files a host wrote for this execution, as the UTF-8 text
-   * they held, beneath one directory named like this execution's journal.
+   * Saves journal files as their host wrote them, beneath one directory
+   * named like this execution's journal.
    *
    * `path` is each file's place beneath the storage root, so two files of one
    * root keep the names that tell them apart.
    */
-  saveFiles(files: readonly SavedJournalFile[]): Operation<void>;
+  saveFiles(files: readonly SavedJournalFile[], capture?: CaptureAttribution): Operation<void>;
 }
 
 /** One journal file as its host wrote it. */
-export interface SavedJournalFile {
-  readonly path: string;
-  readonly text: string;
-}
+export type SavedJournalFile = { readonly path: string } & (
+  | { readonly text: string }
+  | { readonly bytes: Uint8Array }
+);
 
 /**
  * The invocation directory this command's failure journals would go to.
@@ -173,7 +208,7 @@ function testDiagnosticsAt(
 
     const counts = { root: 0, child: 0 };
     const results = { pass: 0, fail: 0 };
-    yield* provide({
+    const diagnostics: TestDiagnostics = {
       execution(kind, source, profile) {
         const ordinal = ++counts[kind];
         const stem = join(directory, `${kind}-${ordinal}`);
@@ -181,13 +216,24 @@ function testDiagnosticsAt(
         const displayedSource = shown(source);
         const named = `${kind} ${ordinal} ${displayedSource}${profile === undefined ? "" : ` (${profile})`}`;
         const context = kind === "root" ? "" : `${named}: `;
-        function* identify(files?: readonly string[]): Operation<void> {
+        const observations: Task<void>[] = [];
+        const retained = new Map<ObservedTest, CaptureAttribution["outcome"]>();
+        function reportSaveFailure(error: unknown) {
+          emit(
+            `journal not saved for ${named}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        function* identify(
+          files?: readonly string[],
+          capture?: CaptureAttribution,
+        ): Operation<void> {
           yield* ensureDir(directory);
-          if (attribution !== undefined) {
+          const details = capture ?? attribution;
+          if (details !== undefined) {
             yield* writeTextFile(
               `${stem}.case.json`,
               JSON.stringify({
-                ...attribution,
+                ...details,
                 kind,
                 ordinal,
                 source: displayedSource,
@@ -212,7 +258,38 @@ function testDiagnosticsAt(
                   results[status] += 1;
                 }
               },
+              observations,
+              (test, outcome) => {
+                if (outcome === undefined) {
+                  retained.delete(test);
+                } else {
+                  retained.set(test, outcome);
+                }
+              },
+              (error) =>
+                emit(
+                  `child capture incomplete for ${named}: ${error instanceof Error ? error.message : String(error)}`,
+                ),
             ),
+          *drainCaptures() {
+            for (const observation of observations.splice(0)) {
+              yield* observation;
+            }
+            for (const [test, outcome] of retained) {
+              retained.delete(test);
+              for (const { files, scenario, launchId } of test.launches) {
+                if (files.length !== 0) {
+                  yield* diagnostics.execution("child", displayedSource).saveFiles(files, {
+                    name: test.name,
+                    location: test.shown,
+                    scenario: shown(scenario),
+                    launchId,
+                    outcome,
+                  });
+                }
+              }
+            }
+          },
           journal: <T>(failed: (value: T) => boolean): FailureJournalHost<T> => ({
             failed,
             *save(events: readonly DurableEvent[]) {
@@ -222,15 +299,44 @@ function testDiagnosticsAt(
             },
             // deno-lint-ignore require-yield
             *reportSaveFailure(error: Error) {
-              emit(`journal not saved for ${named}: ${error.message}`);
+              reportSaveFailure(error);
             },
           }),
-          *saveFiles(files: readonly SavedJournalFile[]) {
-            yield* identify(files.map(({ path }) => path));
-            for (const { path, text } of files) {
-              const target = join(stem, path);
-              yield* ensureDir(dirname(target));
-              yield* writeTextFile(target, text);
+          *saveFiles(files, capture) {
+            if (capture === undefined) {
+              yield* identify(files.map(({ path }) => path));
+            }
+            const written: string[] = [];
+            for (const file of files) {
+              const { path } = file;
+              try {
+                if (capture !== undefined && !descendant(path)) {
+                  throw new Error(`Invalid capture path: ${path}`);
+                }
+                const target = join(stem, path);
+                yield* ensureDir(dirname(target));
+                if ("text" in file) {
+                  yield* writeTextFile(target, file.text);
+                } else {
+                  yield* until(writeFile(target, file.bytes));
+                }
+                written.push(path);
+              } catch (error) {
+                if (capture === undefined) {
+                  throw error;
+                }
+                reportSaveFailure(error);
+              }
+            }
+            if (capture !== undefined) {
+              if (written.length === 0) {
+                return;
+              }
+              try {
+                yield* identify(written, capture);
+              } catch (error) {
+                reportSaveFailure(error);
+              }
             }
             emit(`journal saved: ${stem} (${named})`);
           },
@@ -238,8 +344,20 @@ function testDiagnosticsAt(
       },
       delivery: () => delivery,
       results: () => results,
-    });
+    };
+    yield* provide(diagnostics);
   });
+}
+
+function descendant(path: string): boolean {
+  return (
+    path !== "" &&
+    path !== "." &&
+    path !== ".." &&
+    !path.startsWith(`..${sep}`) &&
+    !isAbsolute(path) &&
+    normalize(path) === path
+  );
 }
 
 /** Display in-root absolute paths relative to the command's captured directory. */
@@ -283,6 +401,7 @@ interface ObservedTest {
   shown: string;
   recorded?: boolean;
   interrupted?: string;
+  launches: LaunchSnapshot[];
 }
 
 /**
@@ -297,6 +416,9 @@ function* observe(
   shown: (path: string) => string,
   report: (line: string, failure?: boolean) => void,
   record: (status: TestResult["status"]) => void,
+  observations: Task<void>[],
+  retain: (test: ObservedTest, outcome?: CaptureAttribution["outcome"]) => void,
+  reportCapture: (error: unknown) => void,
 ): Operation<void> {
   const tests = new Map<string, ObservedTest[]>();
   let current: ObservedTest | undefined;
@@ -356,6 +478,12 @@ function* observe(
     const test = index < 0 ? undefined : observed?.splice(index, 1)[0];
     if (test !== undefined) {
       test.recorded = true;
+      if (result.status === "fail" && test.launches.length > 0) {
+        retain(test, "failed");
+      } else {
+        test.launches.length = 0;
+        retain(test);
+      }
     }
     if (observed?.length === 0) {
       tests.delete(result.location);
@@ -383,6 +511,8 @@ function* observe(
           request,
           request.expansion.name === "Execution",
         );
+      } else {
+        return yield* TestRequest.with(request, () => next(request));
       }
       yield* next(request);
     },
@@ -400,10 +530,41 @@ function* observe(
       // The same two answers the behavior reads before it runs anything: a
       // test that is skipped or nested inside another is not a test start.
       if ((yield* testing) && !(yield* Test.operations.inTest)) {
-        const position = (yield* getExpansion()).position;
+        const expansion = yield* getExpansion();
+        const position = expansion.position;
         const location = located(position);
         const name = typeof props.name === "string" ? props.name : undefined;
-        const test: ObservedTest = { name, shown: located(position, shown) };
+        const test: ObservedTest = { name, shown: located(position, shown), launches: [] };
+        const request = yield* TestRequest.get();
+        const capture: MarkdownCaseCapture = {
+          register(launch) {
+            if (test.launches.length === 0 && request?.expansion.id === expansion.id) {
+              observations.push(
+                owner.run(function* () {
+                  for (const phase of yield* each(request.phases)) {
+                    if (phase.phase === "cancelled" && !test.recorded) {
+                      retain(test, "cancelled");
+                    }
+                    yield* each.next();
+                  }
+                }),
+              );
+            }
+            const snapshot: LaunchSnapshot = {
+              ...launch,
+              files: [],
+              report(error) {
+                reportCapture(
+                  new Error(
+                    `${launch.launchId} at ${test.shown}: ${error instanceof Error ? error.message : String(error)}`,
+                  ),
+                );
+              },
+            };
+            test.launches.push(snapshot);
+            return snapshot;
+          },
+        };
         const observed = tests.get(location) ?? [];
         observed.push(test);
         tests.set(location, observed);
@@ -413,7 +574,7 @@ function* observe(
         report(`start ${named} at ${test.shown}`);
         let settled = false;
         try {
-          const value = yield* next(props);
+          const value = yield* MarkdownCapture.with(capture, () => next(props));
           settled = true;
           return value;
         } catch (error) {
