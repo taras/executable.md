@@ -7,7 +7,7 @@
 
 {prohibited}
 
-<WhenPrompt template="{?lead}That request was refused{?rest}" />
+<WhenPrompt template="That request was refused{?rest}" />
 
 <Let
   as="request"
