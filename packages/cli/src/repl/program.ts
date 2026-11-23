@@ -2258,6 +2258,8 @@ function* drive(
       return Object.freeze({ key, message: pending.message, form: pending.form });
     }
 
+    const projectRows = createSidekickRowProjection();
+
     /**
      * What this execution's Sidekick says, for one state's own reading.
      *
@@ -2266,7 +2268,7 @@ function* drive(
      * a route is being validated at has to be the reading that route names.
      */
     function sidekickReading(held: ReplState): ReplSidekickReading {
-      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick);
+      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick, projectRows);
     }
 
     /**
@@ -3904,11 +3906,11 @@ function setupOf(
 /**
  * What the Sidekick says, as detached rows the screen can draw.
  *
- * Read afresh every time a frame is built, and copied out of the owner's
- * projection rather than carried: a snapshot held beside the loop would be one
- * frame behind the chat it is drawing. Only the active conversation's chat, in
- * record order — a reader is in one conversation, and the earlier ones are its
- * history rather than its transcript.
+ * Ask the owner on each frame, because a snapshot carried beside the loop
+ * could be a frame behind the chat it draws. Reuse saved rows only for the
+ * identical reading, and only while there is neither a preview nor a live
+ * turn. Saved rows cover every conversation so a route can select an earlier
+ * chat.
  *
  * Nothing here is a capability. No handle, no response, no operation and no
  * writer: a row carries what it says and the root is the only thing that can
@@ -3927,6 +3929,7 @@ function sidekickReadingOf(
    * names a chat this history actually holds.
    */
   selected: string | undefined,
+  projectRows: ReturnType<typeof createSidekickRowProjection>,
 ): ReplSidekickReading {
   const read = owner.reading;
   if (!read.ok) {
@@ -3957,6 +3960,7 @@ function sidekickReadingOf(
       }),
     });
   }
+  const live = owner.live;
   const active = read.value.active;
   // Which chat these rows are of. The selector pins it; omission follows the
   // current association, which is what a person who has not chosen is reading.
@@ -3972,27 +3976,8 @@ function sidekickReadingOf(
       saved === undefined ? undefined : Object.freeze({ id: saved.id, text: saved.text }),
     recovery: owner.recoveryPending,
     recoveryStatus: reading === undefined ? undefined : owner.recoveryStatus(reading),
-    chat: sidekickChatRows(read.value, owner.previewing),
-    // What the replies of this history actually did to this execution's
-    // entries, as the coordinates their records hold. Detached from the chat
-    // beside it: a row is what a conversation said, and these are what one of
-    // them admitted.
-    submits: Object.freeze(
-      read.value.submits.map((one) =>
-        Object.freeze({
-          conversation: one.conversation,
-          response: one.response,
-          ordinal: one.ordinal,
-          entry: one.entry,
-          source: one.source,
-          settled: one.settled,
-          admitted: one.admitted,
-        }),
-      ),
-    ),
-    turns: sidekickTurnRows(read.value, owner.live),
+    ...projectRows(read.value, owner.previewing, live),
     feedback: read.value.feedback,
-    usageTotal: usageSummary(read.value.turns, "Sidekick total"),
     inspectUsage: selected !== undefined,
     busy: owner.busy,
     // The agent of the chat being read, which is that chat's own: a
@@ -4018,8 +4003,59 @@ function sidekickReadingOf(
     // is current only where it names the actual active association; every
     // other saved chat is a reading of acknowledged history and is read-only.
     current: selected === undefined || selected === active,
-    availability: sidekickAvailability(read.value, owner.observed, owner.live),
+    availability: sidekickAvailability(read.value, owner.observed, live),
   });
+}
+
+function projectSidekickRows(
+  known: SidekickReading,
+  preview: SidekickPreview | undefined,
+  live: SidekickLiveTurn | undefined,
+) {
+  return {
+    chat: sidekickChatRows(known, preview),
+    // What the replies of this history actually did to this execution's
+    // entries, as the coordinates their records hold. Detached from the chat
+    // beside it: a row is what a conversation said, and these are what one of
+    // them admitted.
+    submits: Object.freeze(
+      known.submits.map((one) =>
+        Object.freeze({
+          conversation: one.conversation,
+          response: one.response,
+          ordinal: one.ordinal,
+          entry: one.entry,
+          source: one.source,
+          settled: one.settled,
+          admitted: one.admitted,
+        }),
+      ),
+    ),
+    turns: sidekickTurnRows(known, live),
+    usageTotal: usageSummary(known.turns, "Sidekick total"),
+  };
+}
+
+/**
+ * The rows depend on the owner's retained reading, preview and live turn.
+ * The owner's refresh replaces the reading with a new frozen projection when
+ * it rereads the records. It never edits that reading in place, so its
+ * identity is enough to reuse the rows while both live readings are absent.
+ */
+function createSidekickRowProjection(): typeof projectSidekickRows {
+  let retained:
+    | { known: SidekickReading; rows: ReturnType<typeof projectSidekickRows> }
+    | undefined;
+  return (known, preview, live) => {
+    if (preview !== undefined || live !== undefined) {
+      // Live facts can move without the retained snapshot changing.
+      return projectSidekickRows(known, preview, live);
+    }
+    if (retained?.known !== known) {
+      retained = { known, rows: projectSidekickRows(known, undefined, undefined) };
+    }
+    return retained.rows;
+  };
 }
 
 /**
@@ -5470,13 +5506,11 @@ export function* commitReplFrame(
   // Bind the admitted manifest to the revision just reconciled, and draw its
   // contributed cells. What an element says is the cell its own mounted node
   // produced; a box whose node is not mounted is not drawn at all.
-  const mounted = new Set(tree.mounted());
+  const mountedKeys = tree.mountedKeys();
+  const mounted = new Set(mountedKeys.keys());
   const nodeByKey = new Map<string, string>();
-  for (const node of mounted) {
-    const key = tree.keyOf(node);
-    if (key !== undefined) {
-      nodeByKey.set(key, node);
-    }
+  for (const [node, key] of mountedKeys) {
+    nodeByKey.set(key, node);
   }
   const cells = new Map<string, string>();
   for (const cell of tree.frame().cells) {
@@ -6044,12 +6078,13 @@ export function* prepareFrame(
       : yield* prepareReading(
           renderer,
           view.size,
-          readingLines(readingOf(view, store?.formatted)),
+          readingLines(readingOf(view, store?.formatted, store?.sourceInspections)),
           widths.surfaceBody,
           store,
         );
   // What this frame formatted is all the reading goes on holding.
   store?.formatted.settle();
+  store?.sourceInspections.settle();
   if (!reading.ok) {
     return reading;
   }

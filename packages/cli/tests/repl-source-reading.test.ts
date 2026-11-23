@@ -29,7 +29,12 @@ import type { Operation, Result } from "effection";
 
 import { inertCommandText } from "../src/repl/command-output.ts";
 import { markdownLines } from "../src/repl/markdown.ts";
-import { entryReading, NO_READING, READING_STATUSES } from "../src/repl/source-reading.ts";
+import {
+  createSourceInspectionStore,
+  entryReading,
+  NO_READING,
+  READING_STATUSES,
+} from "../src/repl/source-reading.ts";
 import type { ReplReadingLine } from "../src/repl/source-reading.ts";
 import {
   createFitStore,
@@ -51,6 +56,29 @@ import type { ReplEntry, ReplScope, ReplTerminal } from "../src/repl/model.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { LIFECYCLE, RAIL } from "./fixtures/repl/reference-style.ts";
 import { REPL_PALETTE, runStyleOf } from "../src/repl/presentation-style.ts";
+
+describe("source inspection reuse", () => {
+  it("keys inspection by exact text and source kind, and drops unread bodies", function* () {
+    const store = createSourceInspectionStore();
+    const text = "---\n<Header />\n---\n<Output />";
+    const document = store.inspect(text, "document");
+    store.settle();
+
+    expect(store.inspect(text, "document")).toBe(document);
+    expect(store.inspect(text, "fragment")).toMatchObject({
+      ok: true,
+      value: [{ name: "Header" }, { name: "Output" }],
+    });
+    const changed = store.inspect(text.replace("Output", "Changed"), "document");
+    expect(changed).toMatchObject({ ok: true, value: [{ name: "Changed" }] });
+    expect(document).toMatchObject({ ok: true, value: [{ name: "Output" }] });
+
+    store.settle();
+    store.inspect("<Other />", "document");
+    store.settle();
+    expect(store.inspect(text, "document")).not.toBe(document);
+  });
+});
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 const NARROW_SIZE: ReplTerminalSize = { columns: 72, rows: 20 };

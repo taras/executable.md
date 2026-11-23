@@ -172,6 +172,32 @@ function caption(key: string, section: ReplReadingSection): ReplReadingLine {
   });
 }
 
+/**
+ * The exact source text and its kind (document or fragment) are the whole key:
+ * inspection depends on those two inputs alone. A frame can reuse inspections
+ * it already asked for or ones the previous frame left behind. Settling keeps
+ * only what this frame asked for, and starts the next frame with an empty
+ * set of requests.
+ */
+export function createSourceInspectionStore() {
+  let previous = new Map<string, ReturnType<typeof inspectSource>>();
+  let current = new Map<string, ReturnType<typeof inspectSource>>();
+  return {
+    inspect(text: string, kind: Parameters<typeof inspectSource>[1]) {
+      const key = `${kind}\u0000${text}`;
+      const read = current.get(key) ?? previous.get(key) ?? inspectSource(text, kind);
+      current.set(key, read);
+      return read;
+    },
+    settle() {
+      previous = current;
+      current = new Map();
+    },
+  };
+}
+
+export type ReplSourceInspectionStore = ReturnType<typeof createSourceInspectionStore>;
+
 /** What a reading is being built for. */
 export interface ReplReadingRequest {
   readonly commandOutput?: readonly ReplCommandChunk[];
@@ -184,6 +210,7 @@ export interface ReplReadingRequest {
   readonly inspected: boolean;
   /** Where the owner of this reading holds its formatted Output, if anywhere. */
   readonly formatted?: ReplMarkdownStore;
+  readonly sourceInspections?: ReplSourceInspectionStore;
 }
 
 /**
@@ -401,7 +428,7 @@ class Build {
     depth: number,
     prefix: string,
   ): void {
-    const read = inspectSource(text, kind);
+    const read = this.#request.sourceInspections?.inspect(text, kind) ?? inspectSource(text, kind);
     if (!read.ok) {
       // The scanner refuses this text. Its exact bytes are still the reader's,
       // and the refusal is said rather than drawn as ordinary prose.

@@ -120,6 +120,33 @@ describe("1048 — prepare only admitted chat descriptions", () => {
 
 describe("1048 — selected chat preparation", () => {
   beforeEach(journalBeforeEach(OWNER));
+  it("draws a new streamed and then acknowledged reply after warming the retained rows", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* generateTypingHistory(page, 2, 32);
+    yield* intoComposer(page);
+    yield* typed(page, "one more reply");
+    yield* page.until("the warmed composer frame", (one) => one.shows("one more reply"));
+
+    page.repl.fake.script({
+      deltas: ["<Output>Streaming witness", " complete.</Output>\n"],
+      holdsEachPiece: true,
+    });
+    yield* page.key("Enter");
+    yield* page.repl.fake.streamingTurns(1);
+    yield* page.until("the first preview", (one) => one.shows("(preview): Streaming witness"));
+    page.repl.fake.releaseDeltas();
+    yield* page.until(
+      "the newly acknowledged reply",
+      (one) => one.shows("Streaming witness complete.") && !one.shows("(preview)"),
+    );
+
+    yield* typed(page, "next draft");
+    yield* page.until(
+      "typing beside the newly retained reply",
+      (one) => one.shows("next draft") && one.shows("Streaming witness complete."),
+    );
+  });
+
   it("matches fresh preparation after changed source facts and keeps one geometry", function* () {
     const page = yield* useReplPage({ size: WIDE });
     const read = yield* generateTypingHistory(page, 2, 32);

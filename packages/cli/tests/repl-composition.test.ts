@@ -311,6 +311,23 @@ describe("REPL composition: reconciling a described tree", () => {
     expect(tree.mounted().map((id) => tree.keyOf(id))).toEqual(["two", "one"]);
   });
 
+  it("C1: mounted keys agree with individual lookups in canonical ancestry order", function* () {
+    const tree = yield* useReplTree<Act>();
+    const kind = panel([]);
+    const parent = child(kind, "parent", "a", [child(kind, "nested", "b")]);
+    const sibling = child(kind, "sibling", "c");
+
+    committed(yield* tree.apply([parent, sibling]));
+    const first = tree.mountedKeys();
+    expect([...first.values()]).toEqual(["parent", "nested", "sibling"]);
+
+    committed(yield* tree.apply([sibling, parent]));
+    const reordered = tree.mountedKeys();
+    expect([...reordered]).toEqual(tree.mounted().map((id) => [id, tree.keyOf(id)]));
+    expect([...reordered.values()]).toEqual(["sibling", "parent", "nested"]);
+    expect([...first.values()]).toEqual(["parent", "nested", "sibling"]);
+  });
+
   it("C1: a refused set changes nothing at all", function* () {
     const journal: Journal = [];
     const kind = panel(journal);
@@ -1153,13 +1170,20 @@ describe("REPL composition: cancellation owns an uncommitted offer", () => {
    * retired synchronously, and the tree then waits for the scope to finish
    * unwinding, which is where a cancellation actually lands in production.
    */
-  function blocking(journal: Journal, gate: Promise<void>): ReplComponent<Act> {
+  function blocking(
+    journal: Journal,
+    gate: Promise<void>,
+    detaching?: () => void,
+  ): ReplComponent<Act> {
     return component<Act>({
       name: "blocking",
       attach(node: ReplNode<Act>): () => void {
         journal.push(`mount:${node.key}`);
         node.render(`*${label(node.input)}*`);
-        return () => journal.push(`unmount:${node.key}`);
+        return () => {
+          journal.push(`unmount:${node.key}`);
+          detaching?.();
+        };
       },
       *lifetime(): Operation<void> {
         yield* ensure(() => until(gate));
@@ -1176,10 +1200,18 @@ describe("REPL composition: cancellation owns an uncommitted offer", () => {
     });
     const tree = yield* useReplTree<Act>();
     const handoff = yield* useReplHandoff<Act>((descriptions) => tree.apply(descriptions));
-    const Held = blocking(journal, gate);
+    const atDetach: { readonly keys: ReadonlyMap<string, string>; readonly expected: unknown }[] =
+      [];
+    const Held = blocking(journal, gate, () => {
+      atDetach.push({
+        keys: tree.mountedKeys(),
+        expected: tree.mounted().map((id) => [id, tree.keyOf(id)]),
+      });
+    });
     const Panel = panel(journal);
 
-    committed(yield* tree.apply([child(Held, "held", "a")]));
+    committed(yield* tree.apply([child(Held, "held", "a", [child(Panel, "nested", "n")])]));
+    const departing = tree.mounted();
     yield* sleep(2);
 
     // This commit prepares synchronously and then suspends in its own
@@ -1188,6 +1220,16 @@ describe("REPL composition: cancellation owns an uncommitted offer", () => {
     yield* sleep(2);
     expect(cells(tree)).toEqual(["[b]"]);
     const committedShape = tree.mounted();
+    expect(atDetach.map(({ keys }) => [...keys.values()])).toEqual([["after"]]);
+    for (const { keys, expected } of atDetach) {
+      expect([...keys]).toEqual(expected);
+      for (const id of departing) {
+        expect(keys.has(id)).toBe(false);
+      }
+    }
+    for (const id of departing) {
+      expect(tree.keyOf(id)).toBeUndefined();
+    }
 
     // A second offer reaches the real path and suspends on the outstanding
     // retirement, before it has touched anything. Cancelling it there is the
