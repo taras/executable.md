@@ -2434,15 +2434,40 @@ function readDocumentArguments(head: string[], recover: boolean) {
   return { references, args: [...args, ...head.slice(prefix.length)], parsed: parseCommand(args) };
 }
 
-function beforeProperties(args: string[]): string[] {
-  const at = args.findIndex(
-    (arg) =>
-      arg === "--props" ||
-      arg.startsWith("--props-") ||
-      arg.startsWith("--props=") ||
-      arg.startsWith("--no-props-"),
+function isPropertyOption(arg: string): boolean {
+  return (
+    arg === AGGREGATE_OPTION ||
+    arg.startsWith(`${AGGREGATE_OPTION}=`) ||
+    arg.startsWith("--props-") ||
+    arg.startsWith("--no-props-")
   );
+}
+
+function beforeProperties(args: string[]): string[] {
+  const at = args.findIndex(isPropertyOption);
   return at === -1 ? args : args.slice(0, at);
+}
+
+function startupHostArgs(args: string[]): string[] {
+  const host: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      host.push(...args.slice(index));
+      break;
+    }
+    if (!isPropertyOption(arg)) {
+      host.push(arg);
+      continue;
+    }
+    // A separated value can look like a host option. Until the document
+    // supplies the binding, reserve that token for the property.
+    const next = args[index + 1];
+    if (!arg.includes("=") && next !== undefined && next !== "--" && !isPropertyOption(next)) {
+      index += 1;
+    }
+  }
+  return host;
 }
 
 function valueFlags(route: AnyRoute): Set<string> {
@@ -4138,10 +4163,9 @@ function* runCommand(
   // Help, `--version`, and the commands that execute nothing stay outside a run
   // lifecycle, which is why the timeout options are read only for the two that
   // end in one.
-  const provisional = parseCommand(
-    selection.command === "run" ? beforeProperties(helpRequest.args) : helpRequest.args,
-    selection.command === "repl",
-  );
+  const hostArgs =
+    selection.command === "run" ? startupHostArgs(helpRequest.args) : helpRequest.args;
+  const provisional = parseCommand(hostArgs, selection.command === "repl");
   if (selection.command === "repl" && !provisional.ok && !helpRequest.requested) {
     console.error(replGrammarError(helpRequest.args, undefined) ?? provisional.error.message);
     yield* exit(1);

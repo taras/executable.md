@@ -322,6 +322,30 @@ describe("PC5 — a Plugin reads configuration, never document properties", () =
     });
   });
 
+  it("settles host options on either side of document properties", function* () {
+    const source = "---\nprops:\n  name: { type: string }\n---\n\nHello, {props.name}!\n";
+    yield* useWorkspace({ "doc.md": source }, function* (dir) {
+      const run = (args: string[]) =>
+        runCli(["run", `--plugin=${fixture("configured.mjs")}`, "doc.md", ...args], { cwd: dir });
+
+      for (const args of [
+        ["--verbose", "--timeout", "30s", "--props-name", "Ada"],
+        ["--props-name", "Ada", "--verbose", "--timeout", "30s"],
+      ]) {
+        const result = yield* run(args).expect();
+        expect(result.stdout).toContain("verbose: true");
+        expect(result.stdout).toContain("Hello, Ada!");
+        expect(result.stdout).toContain("timeout: 30000");
+      }
+      for (const value of ["--verbose", "--raw", "-"]) {
+        const literal = yield* run(["--props-name", value]).expect();
+        expect(literal.stdout).toContain("verbose: false");
+        expect(literal.stdout).toContain("timeout: undefined");
+        expect(literal.stdout).toContain(`Hello, ${value}!`);
+      }
+    });
+  });
+
   it("leaves root properties spelled like CLI options out of the configuration", function* () {
     yield* useWorkspace(
       {
