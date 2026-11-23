@@ -376,7 +376,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     yield* writeTextFile(shim.log, "");
     service.requests.length = 0;
 
-    const second = yield* allocate(open(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(open(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     yield* showing(second, "waiting for an answer", ACT_MS);
 

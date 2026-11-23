@@ -11633,6 +11633,23 @@ starting the document. Cancellation joins the scope's teardown. An isolated nest
 `<Execution host="run">` inherits nothing and installs the same Plugin values
 again in its own scope, with command `run`.
 
+#### CLI option contributions
+
+For a REPL execution request, the CLI selects and loads plugins before completing
+argument parsing. On a cold reopen it first restores the project from the
+fixed location slot. Help and version load no plugin module and use the
+built-in grammar.
+
+An optional plugin `command([cmd, args], next)` stage receives the command name
+and a map of option definitions. A passthrough calls `next(cmd, args)`. A stage
+can extend the map or replace a contributed definition. A definition specifies
+an owning plugin name, a value schema and an optional description. The CLI
+resumes the router with these definitions and strictly parses the line before
+calling any plugin's `install()`. Each installation receives only its own
+validated values in `request.options`. Contributions add named value options to
+the existing command. Built-in option spellings and startup selectors are
+reserved. Two definitions with the same final flag spelling are refused.
+
 #### CLI REPL contributions
 
 The CLI extends `PluginInstallation` on `@executablemd/cli/api`; Core's Plugin

@@ -200,7 +200,7 @@ function isJsonSchemaInput(value: unknown): value is JsonSchemaInput {
   return typeof value === "boolean" || readRecord(value) !== undefined;
 }
 
-function isStandardSchema(value: unknown): value is StandardSchemaV1<unknown> {
+export function isStandardSchema(value: unknown): value is StandardSchemaV1<unknown> {
   if (typeof value !== "object" || value === null || !("~standard" in value)) {
     return false;
   }

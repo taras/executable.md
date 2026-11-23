@@ -57,7 +57,10 @@ export function renderCommandHelp(routes: readonly AnyRoute[], name?: string): s
       opts.push([aliases, text]);
     }
   }
-  const usage = [`Usage: xmd ${command.name} [OPTIONS]`, ...args.map(([label]) => label)].join(" ");
+  const positionals = args.map(([label]) => label);
+  const grammar =
+    command.name === "repl" ? [...positionals, "[OPTIONS]"] : ["[OPTIONS]", ...positionals];
+  const usage = [`Usage: xmd ${command.name}`, ...grammar].join(" ");
   return [
     usage,
     ...(args.length > 0 ? [section("Arguments:", args)] : []),

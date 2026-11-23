@@ -243,7 +243,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     );
 
     const own = yield* runCli(["repl", "--help"]).expect();
-    expect(own.stdout).toContain("Usage: xmd repl [OPTIONS] [location]");
+    expect(own.stdout).toContain("Usage: xmd repl [location] [OPTIONS]");
     expect(own.stdout).toContain("a location this REPL printed earlier");
     // Re-anchored for #883: the help used to say an execution admits exactly one
     // entry, which the sequential REPL this command mounts contradicts. The
@@ -338,7 +338,6 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
       ["repl", "--include=../first"],
       ["repl", "--include", "../first", "--include=/absolute/second"],
       ["repl", "xmd://repl/kf39sla2/entries", "--include", "../first"],
-      ["repl", "--include=../first", "xmd://repl/kf39sla2/entries"],
     ]) {
       const ran = yield* runCli(accepted).join();
       expect([accepted, ran.code]).toEqual([accepted, 1]);
@@ -346,6 +345,12 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
         accepted,
         "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
       ]);
+    }
+
+    for (const option of ["--include=../first", "--plugin=./never-loaded.mjs"]) {
+      const lateLocation = yield* runCli(["repl", option, "xmd://repl/kf39sla2/entries"]).join();
+      expect(lateLocation.code).toBe(1);
+      expect(lateLocation.stderr).toContain("write the reopen location immediately after repl");
     }
 
     // Refused, and each before the terminal: the messages are the command

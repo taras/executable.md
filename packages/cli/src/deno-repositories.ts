@@ -74,7 +74,7 @@ export function denoRunRepositories(
     // The bundled name, because this *is* the bundled Plugin: an operator
     // selecting `--plugin git` is naming this value, and two values under one
     // name is the collision `admitPlugins()` refuses.
-    name: gitPlugin.name,
+    ...bundled,
     *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
       // The neutral value's own install, whole: this variant adds to the
       // bundled Plugin rather than reimplementing it, so the vocabulary, the
@@ -128,11 +128,7 @@ export function denoRunRepositories(
  * capability per entry. One factory, because an entry initializes its
  * repository state once; two registrations of it would be two providers.
  */
-export function denoReplEntry(
-  helper: HelperAssembly,
-  root: string,
-  gitHubBaseUrl?: string,
-): ReplEntryInstallation {
+export function denoReplEntry(helper: HelperAssembly, root: string): ReplEntryInstallation {
   // Copied here, at selection, rather than held as the caller's object. What an
   // entry initializes with has to be what this host selected: a caller that
   // kept a reference and changed a field afterwards would be configuring every
@@ -141,7 +137,6 @@ export function denoReplEntry(
   return (owner, placement) =>
     replRepositoryInstallation(owner, {
       helper: configured,
-      gitHubBaseUrl,
       root: placement?.workspace === undefined ? root : join(placement.workspace, "repositories"),
       ...placement,
     });
@@ -158,9 +153,8 @@ export function denoReplEntry(
 export function* selectReplEntryHost(
   helper: HelperAssembly,
   root: string = DEFAULT_REPOSITORY_ROOT,
-  gitHubBaseUrl?: string,
 ): Operation<void> {
-  yield* ReplEntryHost.set(denoReplEntry(helper, root, gitHubBaseUrl));
+  yield* ReplEntryHost.set(denoReplEntry(helper, root));
 }
 
 /**

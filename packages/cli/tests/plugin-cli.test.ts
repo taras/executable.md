@@ -718,3 +718,32 @@ describe("package test plugins", () => {
     );
   });
 });
+
+describe("REPL Plugin options", () => {
+  it("parses only selected definitions and gives their settled values to the owner", function* () {
+    yield* useWorkspace({}, function* (dir) {
+      const attachment = ["--attach", "00000000-0000-4000-8000-000000000001"];
+      const location = "xmd://repl/kf39sla2/entries";
+      const args = ["repl", ...attachment, "--probe-value", location];
+      const absent = yield* runCli(args, { cwd: dir }).join();
+      expect(absent.code).toBe(1);
+      expect(absent.stderr).toContain("unrecognized option for xmd repl: --probe-value");
+
+      const owner = `--plugin=${fixture("repl-option.mjs")}`;
+      const stage = `--plugin=${fixture("repl-option-stage.mjs")}`;
+      const passed = yield* runCli([...args, owner, stage], { cwd: dir }).join();
+      expect(passed.code).toBe(1);
+      expect(passed.stdout.trim()).toBe("probe stage forwarded");
+      expect(passed.stderr.trim()).toBe(`probe = ${location}`);
+
+      const changed = yield* runCli(
+        [...args, owner, `--plugin=${fixture("repl-option-override.mjs")}`],
+        {
+          cwd: dir,
+        },
+      ).join();
+      expect(changed.code).toBe(1);
+      expect(changed.stderr.trim()).toBe(`probe = overridden ${location}`);
+    });
+  });
+});

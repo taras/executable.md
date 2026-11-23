@@ -314,7 +314,6 @@ export interface GitHubIssuesConfiguration {
 export interface GitHubIssuesOptions {
   /** REPL uses the endpoint setting and admits recognized trackers without a ceiling. */
   readonly mode?: "repl";
-  readonly cliBaseUrl?: string;
   /** An injected transport, which outranks any configured endpoint. */
   readonly access?: GitHubSource;
   /**
@@ -361,7 +360,7 @@ export function* useGitHubIssues(options: GitHubIssuesOptions = {}): Operation<v
       configuration:
         options.configuration ??
         (options.mode === "repl"
-          ? { endpoint: yield* replGitHubBaseUrl(options.cliBaseUrl) }
+          ? { endpoint: yield* replGitHubBaseUrl() }
           : yield* gitHubIssuesConfiguration()),
     };
     return settled.configuration;

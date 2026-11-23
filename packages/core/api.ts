@@ -34,7 +34,11 @@
 
 export { Plugin } from "./src/plugin.ts";
 export { ComponentModuleLoader } from "./src/component-module-loader.ts";
-export type { PluginInstallation, PluginInstallRequest } from "./src/plugin.ts";
+export type {
+  PluginCommandOptions,
+  PluginInstallation,
+  PluginInstallRequest,
+} from "./src/plugin.ts";
 
 export {
   ActivePlugins,

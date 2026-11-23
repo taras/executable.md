@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ReplPluginInstallation } from "../api.ts";
 import type { Operation } from "effection";
 import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
@@ -341,6 +342,8 @@ describe("1113: project placement before live recovery", () => {
             held.location,
             "--plugin",
             "./plugin.ts",
+            "--probe-value",
+            "xmd://repl/kf39sla2/entries",
             "--include",
             "./components",
             "--mount",
@@ -362,7 +365,14 @@ describe("1113: project placement before live recovery", () => {
             return {
               default: Plugin({
                 name: "1113-project",
-                *install() {
+                command([cmd, args], next) {
+                  return next(cmd, {
+                    ...args,
+                    probeValue: { owner: "1113-project", schema: z.string() },
+                  });
+                },
+                *install(request) {
+                  expect(request.options).toEqual({ probeValue: "xmd://repl/kf39sla2/entries" });
                   installed += 1;
                   return undefined;
                 },

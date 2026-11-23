@@ -22,6 +22,7 @@
  */
 
 import { env as readEnv } from "@executablemd/runtime";
+import { ReplGitHubBaseUrl } from "../../issue/repl-config.ts";
 import type { Operation } from "effection";
 import { canonicalIssueTarget } from "../../issue/tracker.ts";
 import type { GitHubIssuesConfiguration } from "./github.ts";
@@ -29,8 +30,8 @@ import type { GitHubIssuesConfiguration } from "./github.ts";
 /** The variable that configures GitHub issue handling. */
 export const GITHUB_ISSUES_ENV = "XMD_WORKFLOW_GITHUB_ISSUES";
 
-export function* replGitHubBaseUrl(cliBaseUrl?: string): Operation<string | undefined> {
-  return (yield* readEnv("XMD_REPL_GITHUB_BASE_URL")) || cliBaseUrl;
+export function* replGitHubBaseUrl(): Operation<string | undefined> {
+  return (yield* readEnv("XMD_REPL_GITHUB_BASE_URL")) || (yield* ReplGitHubBaseUrl.get());
 }
 
 /** What an operator wrote there, once it is something this host can use. */

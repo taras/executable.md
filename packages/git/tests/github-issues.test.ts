@@ -1,3 +1,4 @@
+import { ReplGitHubBaseUrl } from "../src/issue/repl-config.ts";
 /**
  * Tier U — what a document cannot construct.
  *
@@ -298,9 +299,9 @@ describe("what the published issue transport installs", () => {
           return environment;
         },
       });
+      yield* ReplGitHubBaseUrl.set(cliBaseUrl);
       yield* useDenoGitHubIssues({
         mode: "repl",
-        cliBaseUrl,
         host: (configured) => {
           const { endpoint } = denoGitHubSource(configured);
           expect(endpoint).toBe(expected);

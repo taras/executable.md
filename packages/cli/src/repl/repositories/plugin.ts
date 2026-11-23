@@ -39,9 +39,9 @@ export function replRepositoryPlugin(bundled: Plugin): Plugin {
   return {
     ...bundled,
     *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
+      const installed = bundled.install === undefined ? undefined : yield* bundled.install(request);
       if (!replRepositoryPluginDeclaresFor(request.command)) {
-        const install = bundled.install;
-        return install === undefined ? undefined : yield* install.call(bundled, request);
+        return installed;
       }
       const contributed = yield* gitCompositionInstallation();
       return {

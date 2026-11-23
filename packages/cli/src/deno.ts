@@ -175,7 +175,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       // checkouts, its local Git, its publications and its issues; Node and Bun
       // supply neither half.
       {
-        select: (baseUrl) => selectReplEntryHost(HELPER, undefined, baseUrl),
+        select: () => selectReplEntryHost(HELPER),
         install: () => useDenoRepl(),
       },
     );
