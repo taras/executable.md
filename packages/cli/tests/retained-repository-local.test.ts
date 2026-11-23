@@ -437,6 +437,59 @@ describe("one entry's local file work", () => {
     }
   });
 
+  it("restores an acknowledged File.Patch after an external edit", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.checkout, "seed.md");
+    const source = [
+      '<File.Patch path="seed.md">',
+      "",
+      "```diff",
+      "--- a/seed.md",
+      "+++ b/seed.md",
+      "@@ -1 +1 @@",
+      "-seed",
+      "+patched",
+      "```",
+      "",
+      "</File.Patch>",
+    ].join("\n");
+    const stream = new InMemoryStream();
+    const live = yield* run(fixture, source, stream, counters());
+    expect(live.refusal).toBe(undefined);
+    expect(yield* readTextFile(target)).toBe("patched\n");
+    const events = [...(yield* stream.readAll())];
+    expect(localRecords(events).map((record) => record.operation)).toEqual([
+      "file-read",
+      "file-write",
+    ]);
+
+    yield* writeTextFile(target, "external\n");
+    const restored = counters();
+    const again = yield* run(fixture, source, new InMemoryStream(events), restored);
+    expect(again.refusal).toBe(undefined);
+    expect(again.output).toBe(live.output);
+    expect(restored.reads).toEqual([]);
+    expect(restored.writes).toEqual([]);
+    expect(yield* readTextFile(target)).toBe("external\n");
+
+    const writeIndex = events.findIndex(
+      (event) =>
+        event.type === "yield" &&
+        event.description.type === REPL_REPOSITORY_LOCAL &&
+        localRecords([event])[0]?.operation === "file-write",
+    );
+    expect(writeIndex).toBeGreaterThan(0);
+    const resumed = yield* run(
+      fixture,
+      source,
+      new InMemoryStream(events.slice(0, writeIndex)),
+      counters(),
+    );
+    expect(resumed.refusal).toBe(undefined);
+    expect(resumed.output).toContain("existing bytes no longer match");
+    expect(yield* readTextFile(target)).toBe("external\n");
+  });
+
   it("975: workspace acknowledgements restore before live I/O and only the suffix runs", function* () {
     const fixture = yield* useFixture();
     const workspace = join(fixture.root, "workspace");

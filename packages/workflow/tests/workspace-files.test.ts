@@ -668,6 +668,48 @@ describe("WF workflow document filesystem", () => {
     });
   });
 
+  it("patches Workspace bytes and restores the acknowledged write", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const source = [
+        '<File path="seed.txt">\uFEFFfirst\r\nold\r\nlast</File>',
+        "",
+        '<File.Patch path="seed.txt">',
+        "",
+        "```diff",
+        "@@ -2 +2 @@",
+        "-old",
+        "+new",
+        "```",
+        "",
+        "</File.Patch>",
+      ].join("\n");
+      const first = yield* runDocument(database, source);
+      expect(String(first.output).trim()).toBe("");
+      const bytes = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.readFile("/seed.txt");
+      });
+      expect(bytes.ok).toBe(true);
+      if (bytes.ok) {
+        expect(bytes.value).toEqual(new TextEncoder().encode("\uFEFFfirst\r\nnew\r\nlast"));
+      }
+      const effects = yield* recordedFileEffects(database);
+      expect(effects.map((effect) => effect.name.split(":")[0])).toEqual([
+        "write",
+        "read",
+        "write",
+      ]);
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/seed.txt", "external");
+      });
+      const replay = yield* replayDocument(database, source);
+      expect(String(replay.output)).toBe(String(first.output));
+      expect(yield* workspaceText(database, "/seed.txt")).toBe("external");
+      expect(yield* recordedFileEffects(database)).toEqual(effects);
+    });
+  });
+
   // WF6: the three refusals a document can act on, each decided before any
   // effect exists. Nothing is recorded and nothing outside the run is asked,
   // which is what "lexical" means here.

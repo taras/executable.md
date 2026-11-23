@@ -28,7 +28,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { API, Files, filesFailure, useHostFiles } from "@executablemd/runtime";
+import { API, Files, filesFailure, Permissions, useHostFiles } from "@executablemd/runtime";
 import type { FilePathInput } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -38,7 +38,7 @@ import { Component, content } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { hasContent } from "../src/content-context.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
-import { mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -566,5 +566,104 @@ describe("Tier FD — File.Delete", () => {
     expect(output).toContain('cannot delete "kept.md": permission denied.');
     expect(output).toContain("after");
     expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
+  });
+});
+
+function patchDocument(path: string, diff: string): string {
+  return ["<File.Patch path=" + JSON.stringify(path) + ">", "", diff, "", "</File.Patch>"].join(
+    "\n",
+  );
+}
+
+const SMALL_PATCH = [
+  "```diff",
+  "--- a/target.txt",
+  "+++ b/target.txt",
+  "@@ -2 +2 @@",
+  "-old",
+  "+new",
+  "```",
+].join("\n");
+
+describe("File.Patch", () => {
+  beforeEach(journalBeforeEach("core:file-patch"));
+
+  it("edits one hunk and preserves the surrounding bytes", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const suffix = "unchanged café\r\n".repeat(200) + "last";
+    yield* writeTextFile(target, "\uFEFFfirst\nold\r\n" + suffix);
+    const output = yield* run(fixture, patchDocument("target.txt", SMALL_PATCH));
+    expect(output.trim()).toBe("");
+    expect(new Uint8Array(yield* until(readFile(target)))).toEqual(
+      new TextEncoder().encode("\uFEFFfirst\nnew\r\n" + suffix),
+    );
+  });
+
+  it("refuses the entire edit for stale, malformed, multiple, active or wrong-target content", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const other = join(fixture.workspace, "other.txt");
+    const before = new TextEncoder().encode("first\nold\r\nlast");
+    yield* until(writeFile(target, before));
+    yield* until(writeFile(other, before));
+    const stale = SMALL_PATCH.replace("\n```", "\n@@ -3 +3 @@\n-missing\n+fresh\n```");
+    for (const [diff, message] of [
+      [stale, "the diff no longer matches"],
+      [SMALL_PATCH.replace("-2 +2", "-2,2 +2"), "exact, single-file unified diff"],
+      [SMALL_PATCH + "\n" + SMALL_PATCH, "exactly one passive fenced"],
+      [SMALL_PATCH.replaceAll("target.txt", "other.txt"), "exact, single-file unified diff"],
+      ['<File path="other.txt">overwrite</File>\n' + SMALL_PATCH, "exactly one passive fenced"],
+    ]) {
+      expect(yield* run(fixture, patchDocument("target.txt", diff))).toContain(message);
+      expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
+      expect(new Uint8Array(yield* until(readFile(other)))).toEqual(before);
+    }
+  });
+
+  it("refuses lossy UTF-8 replacement and honors an explicit final-newline marker", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const invalid = new Uint8Array([0xff, ...new TextEncoder().encode("\nold\n")]);
+    yield* until(writeFile(target, invalid));
+    expect(yield* run(fixture, patchDocument("target.txt", SMALL_PATCH))).toContain(
+      "existing bytes no longer match",
+    );
+    expect(new Uint8Array(yield* until(readFile(target)))).toEqual(invalid);
+
+    yield* writeTextFile(target, "first\r\nold");
+    const marker = "\n\\ No newline at end of file";
+    const patch = SMALL_PATCH.replace("-old\n+new", "-old" + marker + "\n+new" + marker);
+    expect((yield* run(fixture, patchDocument("target.txt", patch))).trim()).toBe("");
+    expect(yield* readTextFile(target)).toBe("first\r\nnew");
+  });
+
+  it("honors File containment and write permission", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const other = join(fixture.outside, "other.txt");
+    const before = "first\nold\nlast";
+    yield* writeTextFile(target, before);
+    yield* writeTextFile(other, before);
+    const outside = "../outside/other.txt";
+    const outsidePatch = SMALL_PATCH.replaceAll("target.txt", outside);
+    expect(yield* run(fixture, patchDocument(outside, outsidePatch))).toContain("outside");
+    expect(
+      yield* run(fixture, patchDocument("target.txt", SMALL_PATCH), function* () {
+        yield* Permissions.around({
+          files: ([operation], next) => (operation === "write" ? false : next(operation)),
+        });
+      }),
+    ).toContain("permission denied");
+    expect(yield* readTextFile(target)).toBe(before);
+    expect(yield* readTextFile(other)).toBe(before);
+  });
+
+  it("describes its paired form through Syntax", function* () {
+    const fixture = yield* useFixture();
+    const output = yield* run(fixture, '<Syntax names={["File.Patch"]} />');
+    expect(output).toContain('<File.Patch path="notes.md">');
+    expect(output).toContain("Exactly one passive fenced unified diff");
+    expect(output).toContain("refused patch");
   });
 });

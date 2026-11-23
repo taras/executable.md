@@ -106,6 +106,7 @@ export interface ReplLocalRequest {
   readonly path: string;
   /** The exact expanded content a write asked for; absent for the other three. */
   readonly content?: string;
+  readonly expectedContent?: string;
   readonly source?: string;
 }
 
@@ -378,7 +379,8 @@ function parseReplLocalRequest(
   }
   const read =
     operation === "file-write"
-      ? members(value, ["cwd", "path", "content"])
+      ? (members(value, ["cwd", "path", "content", "expectedContent"]) ??
+        members(value, ["cwd", "path", "content"]))
       : members(value, ["cwd", "path"]);
   if (read === undefined) {
     return undefined;
@@ -392,7 +394,16 @@ function parseReplLocalRequest(
     return Object.freeze({ cwd, path });
   }
   const content = anyString(read["content"]);
-  return content === undefined ? undefined : Object.freeze({ cwd, path, content });
+  const expectedContent = anyString(read["expectedContent"]);
+  if (content === undefined || ("expectedContent" in read && expectedContent === undefined)) {
+    return undefined;
+  }
+  return Object.freeze({
+    cwd,
+    path,
+    content,
+    ...(expectedContent === undefined ? {} : { expectedContent }),
+  });
 }
 
 /**
@@ -473,7 +484,14 @@ function requestJson(request: ReplLocalRequest): Json {
   }
   return request.content === undefined
     ? { cwd: request.cwd, path: request.path }
-    : { cwd: request.cwd, path: request.path, content: request.content };
+    : {
+        cwd: request.cwd,
+        path: request.path,
+        content: request.content,
+        ...(request.expectedContent === undefined
+          ? {}
+          : { expectedContent: request.expectedContent }),
+      };
 }
 
 /**

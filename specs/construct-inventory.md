@@ -38,6 +38,7 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>Evaluate</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>text?: string; allow?: array</code> | <code>text: string</code> |
 | <code>File</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
 | <code>File.Delete</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
+| <code>File.Patch</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
 | <code>Syntax</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>names?: array</code> | <code>text: string</code> |
 
 ## Ordinary defaults

@@ -2564,9 +2564,9 @@ current sandbox.
 
 ### 8.4 Generated XMD
 
-Authored `File.Copy` is available in Core. The standard generated selection
-does not offer it. Preflight refuses its use in that selection before any
-earlier admitted operation performs an effect.
+Authored `File.Copy` and `File.Patch` are available in Core. The standard
+generated selection omits both, so preflight refuses a fragment that uses
+either before any operation performs an effect.
 
 A Prompt may return an XMD fragment rather than an ad hoc file-operation schema.
 The fragment is untrusted input: it carries data, never authorization. Only the
@@ -3288,6 +3288,12 @@ without attempting creation again. Once committed, creation is not owned by the
 cwd scope: later content failure or cancellation restores the enclosing cwd but
 does not remove the directory. `<Dir>` neither reads nor changes the Repository
 selection in scope.
+
+**Document patching** uses an ordinary Workspace text read and, after all hunks
+match, one ordinary Workspace write. The write compares the retained read
+text with the current file inside its effect transaction before replacement.
+The provider preserves the UTF-8 byte order mark when its text read omits that
+mark. An acknowledged write restores its recorded outcome.
 
 **Document copy** uses one `workspace_file` effect whose name binds the
 expansion, the copy operation, and the ordered pair of resolved logical paths.

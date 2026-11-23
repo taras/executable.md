@@ -4661,18 +4661,19 @@ function* expandFunctionComponent(
             // Ended in the same breath the body is: an issuance a wrapper kept
             // from a finished element authorizes nothing when it is routed here.
             try {
-              const fixed =
-                filesystem === undefined ? undefined : fixedFilesystemByFunction(dispatcher);
+              const fixed = fixedFilesystemByFunction(dispatcher);
               const direct =
-                fixed === undefined || filesystem === undefined
+                fixed === undefined
                   ? undefined
                   : invokeFixedFilesystem(fixed, validatedProps, issued.invocation, {
                       filesystem,
+                      children,
                       occurrence: expansion.id,
                       project: function* (frame) {
                         const projected = createProjectionHandle({
                           ...projectionState,
-                          filesystem: { ...filesystem, frame },
+                          filesystem:
+                            filesystem === undefined ? undefined : { ...filesystem, frame },
                         });
                         return yield* projectSlot(projected, siteErrorMode);
                       },

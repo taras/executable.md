@@ -2994,7 +2994,7 @@ A component name is resolved in tiers, and the first tier that answers wins:
    named after one never stands in for it. A structural name written where its
    construct gives it no meaning is a printed error, not a missing component.
 2. **a component canonical core protects** — `Syntax`, `Evaluate`, `File`,
-   `File.Delete` and `Dir`. The table is the resolver's own and is consulted
+   `File.Delete`, `File.Patch` and `Dir`. The table is the resolver's own and is consulted
    unconditionally before every host or author tier. Protection fixes the
    implementation and grants no permission; the filesystem components still use
    contextual `API.Files` and effective `Permissions`. See
@@ -3729,11 +3729,11 @@ component called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it
 would be ahead of any other package's registration. A default claims no name a
 document cannot take back.
 
-Five are not defaults. `<Syntax />` (§5.3.1), `<Evaluate>` (§5.3.2), `<File>`,
-`<File.Delete>` and `<Dir>` are names **canonical core owns**: no registration,
+The protected components are `<Syntax />` (§5.3.1), `<Evaluate>` (§5.3.2),
+`<File>`, `<File.Delete>`, `<File.Patch>` and `<Dir>` are names **canonical core owns**: no registration,
 repository file, bundle member, declared Markdown component, import-handler
 answer or second loaded copy replaces one, and claiming the name is refused
-where the claim is made. The three filesystem components are owned because they
+where the claim is made. The filesystem components are owned because they
 name effects on the author's own filesystem, and a repository `File.md`
 answering for `<File>` would choose what a document writes under the name every
 author reads as core's.
@@ -4739,7 +4739,7 @@ nobody published is refused, as is an answer with no implementation to invoke.
 Selecting `<Glob>`, `<Fetch>` or `<Elicit>` therefore resolves the *actual* host
 answer, and a replacement whose declaration offers no generated use of the
 selected spelling refuses setup rather than falling back to core's default.
-`File`, `File.Delete` and `Dir` are canonically protected, so nothing can answer
+`File`, `File.Delete`, `File.Patch` and `Dir` are canonically protected, so nothing can answer
 for them but core.
 
 What a selected name runs as is the owning declaration's: the absolute
@@ -9899,7 +9899,7 @@ A relative `path` is read against the directory already in effect, so one
 before resolution, creation, cwd binding or child content. `xmd run
 --allow-absolute` and `xmd repl --allow-absolute` enable it only within effective
 absolute and write restrictions. The absolute operand keeps its ordinary
-meaning and is never rebased. File, File.Delete and Glob keep their relative
+meaning and is never rebased. File, File.Delete, File.Patch and Glob keep their relative
 grammar even with this opt-in. Dir
 selects no repository, which is what lets the self-closing `<Worktree as="…">`
 spelling compose with it: the Repository a later Git element acts on is still
@@ -9991,6 +9991,36 @@ restores an acknowledged result within covered storage.
 
 Named `xmd syntax File.Copy` shows the invocation and required props.
 Generated XMD requires a separate trusted offer for the name and form.
+
+### 6.13.4 Patching an existing file with `<File.Patch>`
+
+The protected paired component takes one required relative `path` and exactly
+one passive backtick or tilde fence containing a single unified diff. Optional
+fence info is `diff` or `patch`. The engine reads the authored body without
+expanding children. Surrounding whitespace is allowed.
+
+The diff has one or more ordered hunks with exact old and new ranges. Context
+and removed rows must match at those coordinates, including whether a row has
+a newline. The optional opening `---` and `+++` headers must both name the
+authored path, with an optional `a/` on the old path and `b/` on the new path.
+Tab-separated header timestamps are accepted. Only the `path` attribute
+selects the file. File creation, deletion, rename and multi-file patch records
+are outside this grammar.
+
+The component uses File's contextual read and write operations. The target must
+exist and be valid UTF-8. Both read and write permission apply. The complete
+diff must match before the component asks to replace the target. Untouched
+lines keep their bytes. Added lines use the corresponding removed line's
+terminator when available, otherwise the first terminator in the source or LF
+for a source without one. The unified-diff no-newline marker denotes an
+unterminated last line.
+
+The replacement carries the read text as a precondition. A live provider
+checks it against the existing bytes before replacement. The host applies the
+same filesystem stability boundary as a File write. A refusal renders through
+File's error boundary. Success renders the empty string. Retaining hosts
+restore the acknowledged read and write through the same records as File.
+`File.Patch` is available in authored XMD.
 
 ### 6.14 Finding files: `<Glob>`
 
@@ -13768,7 +13798,7 @@ keeps the test command's own path behavior.
 
 ### Tier FX — The filesystem components canonical core owns
 
-`<File>`, `<File.Delete>` and `<Dir>` are in the same tier `<Syntax />` and
+`<File>`, `<File.Delete>`, `<File.Patch>` and `<Dir>` are in the same tier `<Syntax />` and
 `<Evaluate>` are, for a different reason: they name effects on the author's own
 filesystem. Their own surfaces — forms, printed errors, containment, replay —
 are Tiers FL, FD and HF; this tier is the ownership boundary and the provider

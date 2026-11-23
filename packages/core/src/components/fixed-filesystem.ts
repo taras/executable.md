@@ -1,15 +1,16 @@
 import { cwd } from "@executablemd/runtime";
 import { runSelectedForm } from "../invocation-identity.ts";
 import { authoredOperation } from "../filesystem-placement.ts";
+import { form as filePatchForm, patchBody } from "./FilePatch.ts";
 import { readBody } from "./File.ts";
 import { dirBody } from "./Dir.ts";
 /**
- * The three filesystem components canonical core reserves the names of (spec
- * §§6.13, 6.13.1, 6.13.2).
+ * The filesystem components canonical core reserves the names of (spec
+ * §6.13).
  *
- * `<File>`, `<File.Delete>` and `<Dir>` read, write, remove and enter paths. A
+ * `<File>`, `<File.Delete>`, `<File.Patch>` and `<Dir>` read, write, remove and enter paths. A
  * document that names one has named an effect on the author's own filesystem,
- * so what those three names mean cannot be something a repository, a host or a
+ * so what those names mean cannot be something a repository, a host or a
  * bundle decides: a `File.md` beside the document would otherwise choose what
  * `<File>` writes, under a name every author already reads as core's.
  *
@@ -32,7 +33,7 @@ import { dirBody } from "./Dir.ts";
  * execution's protected table answers with this object rather than a rebuilt
  * one.
  *
- * One source for all three, because there are two consumers who must agree: the
+ * One source for these definitions, because there are two consumers who must agree: the
  * protected tier the engine resolves them through, and the generated-XMD write
  * table that pins `<File>`'s two spellings and `<File.Delete>`'s one
  * (`generated-xmd.ts`). A second copy of a definition would be a second
@@ -86,7 +87,7 @@ function fixed(
 ): FunctionComponentDefinition {
   const forms = Object.freeze(declaredForms(declaration));
   // Core's own table, read through the same validator a host's declaration is:
-  // these three definitions are shared by every execution in the process, so
+  // these definitions are shared by every execution in the process, so
   // what they offer is checked and frozen where it is declared.
   const admitted = admitGeneratedForms(generated, forms);
   if (!admitted.ok) {
@@ -166,6 +167,18 @@ const DEFINITIONS: readonly FunctionComponentDefinition[] = Object.freeze([
     },
   ),
   fixed(
+    "File.Patch",
+    filePatchForm,
+    parseJsonObject(fileProps),
+    {
+      description:
+        'Apply an exact unified diff to an existing file. Read its current source with `<File path="notes.md" />` before writing `<File.Patch path="notes.md">…</File.Patch>`. A refused patch prints a file error.',
+      as: "Optional. Captures the empty string on success.",
+      context: "Exactly one passive fenced unified diff for the relative path.",
+    },
+    {},
+  ),
+  fixed(
     "Dir",
     dirForm,
     parseJsonObject(dirProps),
@@ -193,8 +206,8 @@ export const FIXED_FILESYSTEM_DEFINITIONS = DEFINITIONS;
 export const FIXED_FILESYSTEM_ORIGIN = CORE_ORIGIN;
 
 /**
- * The one definition this name resolves to, or nothing when it is not one of
- * the three.
+ * The one definition this name resolves to, or nothing when it is outside
+ * this table.
  *
  * The generated-XMD write table asks for this rather than reaching into a
  * registry: a pinned identity has to name the exact object the engine invokes,
@@ -209,7 +222,8 @@ export function invokeFixedFilesystem(
   props: Record<string, import("../types.ts").Json>,
   invocation: import("../invocation-identity.ts").ComponentInvocation,
   site: {
-    filesystem: import("../filesystem-placement.ts").FilesystemExpansion;
+    filesystem: import("../filesystem-placement.ts").FilesystemExpansion | undefined;
+    children: readonly import("../types.ts").Segment[] | undefined;
     occurrence: string;
     project(
       frame: import("../filesystem-host.ts").DirectoryFrame,
@@ -219,29 +233,33 @@ export function invokeFixedFilesystem(
   if (!DEFINITIONS.includes(definition) || typeof definition.fn !== "function") {
     return undefined;
   }
+  if (definition.name === "File.Patch") {
+    return runSelectedForm(definition.fn, filePatchForm, props, invocation, () =>
+      patchBody(props, site.children),
+    );
+  }
+  const filesystem = site.filesystem;
+  if (filesystem === undefined) {
+    return undefined;
+  }
   const declaration =
     definition.name === "Dir" ? dirForm : definition.name === "File" ? fileForm : fileDeleteForm;
   return runSelectedForm(definition.fn, declaration, props, invocation, function* (form, selected) {
     const directory = yield* cwd();
-    if (directory !== site.filesystem.frame.actualDirectory || typeof props.path !== "string") {
+    if (directory !== filesystem.frame.actualDirectory || typeof props.path !== "string") {
       return yield* selected(props, invocation);
     }
     const operation = definition.name === "Dir" ? "dir-ensure" : "file-read";
-    const authored = authoredOperation(
-      operation,
-      site.occurrence,
-      props.path,
-      site.filesystem.frame,
-    );
+    const authored = authoredOperation(operation, site.occurrence, props.path, filesystem.frame);
     if (definition.name === "File" && form === "self-closing") {
       return yield* readBody(props, (request) =>
-        site.filesystem.host.read(authored, Object.freeze({ ...request })),
+        filesystem.host.read(authored, Object.freeze({ ...request })),
       );
     }
     if (definition.name === "Dir") {
       return yield* dirBody(props, {
-        prepare: () => site.filesystem.host.prepareDirectory(authored, site.filesystem.frame),
-        ensure: (request) => site.filesystem.host.ensure(authored, Object.freeze({ ...request })),
+        prepare: () => filesystem.host.prepareDirectory(authored, filesystem.frame),
+        ensure: (request) => filesystem.host.ensure(authored, Object.freeze({ ...request })),
         project: site.project,
       });
     }

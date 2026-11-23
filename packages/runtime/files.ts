@@ -112,6 +112,7 @@ export type FilesReason =
   | "too-many-open-files"
   | "directory-not-empty"
   | "invalid-pattern"
+  | "changed-content"
   | "operation-failed";
 
 const REASONS: readonly FilesReason[] = [
@@ -135,6 +136,7 @@ const REASONS: readonly FilesReason[] = [
   "too-many-open-files",
   "directory-not-empty",
   "invalid-pattern",
+  "changed-content",
   "operation-failed",
 ];
 
@@ -255,6 +257,8 @@ export interface FileCopyInput {
 
 export interface FileWriteInput extends FilePathInput {
   readonly content: string;
+  /** Require the existing bytes to match this UTF-8 text before replacement. */
+  readonly expectedContent?: string;
 }
 
 export interface GlobInput {
