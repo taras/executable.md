@@ -157,7 +157,17 @@ record the baseline again after an intended change.
   calls move with that number. Mount the REPL, as the typing exercise does.
 
 [typing.md](baselines/typing.md) counts thirty keystrokes in the Sidekick composer
-against a 2-round and a 52-round history, through a REPL mounted by ReplBench.
+through a REPL mounted by ReplBench. It has four cells, each with a baseline
+document of its own, and each changes one thing:
+
+- A sparse screen, 2 rounds of 32 lines, is the floor.
+- A full screen, 12 rounds of 32 lines, adds what every keystroke costs once the
+  screen is full.
+- A long history, 52 rounds of 32 lines, adds what grows with the length of the
+  conversation.
+- A long entry, 12 rounds of 368 lines, adds what grows with the length of the
+  selected entry.
+
 It is a `Test` document, run on its own:
 
 ```text
