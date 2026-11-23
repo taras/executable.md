@@ -484,7 +484,7 @@ retained session again to verify that the current viewport supplies the size.
 | `Terminal.Screenshot` | Saves the full visible viewport with its terminal colors and styling to `<name>.svg` in the active launch's evidence directory. Set `format="png"` to render a PNG with `rsvg-convert` and bind its path instead. `as` binds the absolute path. The name starts with a letter or digit and may contain letters, digits, hyphens, and underscores, up to 64 characters. Reusing a name replaces that image. |
 | `Terminal.Region` | The paired `name="sidekick-composer"`, `name="transcript"`, or `name="history"` selects a visible region for its body. Nested regions override the selection for their body. Focus and pane selection stay where they were. |
 | `Terminal.WaitForText` | Waits for `text` in the nearest region or viewport. Optional `row` limits the match to a zero-based viewport row. Optional `at={{ row, column }}` matches its starting cell using zero-based coordinates. Optional `bold` matches the starting cell’s rendered bold attribute. `as` binds the unique positive match. Use `count` to wait for an exact number of matches. It cannot be combined with `as` or `present`. Zero matches or `present={false}` require the selected region to be visible. A `timeout` duration overrides the enclosing bench's wait duration. |
-| `Terminal.Scroll` | `delta` is the signed number of wheel steps over the nearest region. Zero does nothing. Nonzero steps require a visible scroll target. Optional `at={{ row, column }}` targets a cell inside the selected region or viewport. |
+| `Terminal.Scroll` | Supply `delta` or `pattern`. In a pattern, `d` and `u` are wheel notches and `.` waits one tick (default 16 ms, configurable with `tick`). A run of the same mark is one step. The first wait after a key or wheel burst also waits for its frame. Optional `at={{ row, column }}` targets a cell. |
 | `Repl.Sidekick.Activate` | Clicks the visible Sidekick tab and waits for the composer to gain focus. Start with focus elsewhere to exercise tab activation. |
 | `Repl.Sidekick.OpenAnswer` | Clicks the visible Sidekick answer control and waits for focus in the answer editor. |
 
@@ -557,6 +557,7 @@ child process and no terminal. Input is dispatched and read back inside the
 process, so the frames a journey produces do not depend on how terminal input
 and timers interleave. The mounted REPL starts in a scope of its own and
 inherits nothing from the journey, including its testing session.
+`draft={{ lines }}` leaves a long draft open and focused after history generation.
 `history={{ rounds, linesPerRound }}` generates a scripted transcript before the
 body runs. A mounted launch answers `Terminal.Focus`, `Terminal.Type`,
 `Terminal.Key`, `Terminal.Resize`, and `Terminal.WaitForText` by text in the

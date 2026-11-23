@@ -16,7 +16,13 @@ import type { ReplTerminalSize } from "../../src/repl/terminal.ts";
 import { settledReading } from "./mounted-history.ts";
 import type { MountedHistory } from "./mounted-history.ts";
 import type { ReplPage } from "./repl-page.ts";
-import { intoComposer, composerHolds, sidekickIdle } from "./screen-journeys.ts";
+import {
+  intoComposer,
+  intoDraft,
+  draftShows,
+  composerHolds,
+  sidekickIdle,
+} from "./screen-journeys.ts";
 
 export function typingPayload(round: number, rounds: number, lines: number): string {
   return Array.from({ length: lines }, (_, at) => {
@@ -31,6 +37,34 @@ export function typingPayload(round: number, rounds: number, lines: number): str
             : "LINE";
     return `${name}-${sentinel}-${String(at).padStart(3, "0")} verified words `.padEnd(63, ".");
   }).join("\n");
+}
+
+/** Leaves a long entry draft visible in the open Round editor. */
+export function* generateTypingDraft(page: ReplPage, lines: number): Operation<void> {
+  const payload = typingPayload(0, 1, lines).replaceAll("TAIL-", "DRAFT-");
+  const code = `<Output>${payload}</Output>`;
+  page.repl.fake.script({
+    reply: `<Let as="code" select="code">\n\`\`\`xmd\n${code}\n\`\`\`\n</Let><REPL.EntryInput>{code}</REPL.EntryInput>`,
+  });
+  page.repl.fake.script({ reply: "<Output>Draft ready.</Output>" });
+  const prompts = page.repl.fake.prompts.length;
+  yield* intoComposer(page);
+  const before = page.screen().index;
+  yield* page.type("Prepare draft");
+  yield* page.until(
+    "the draft request in Message",
+    (one) => one.index > before && composerHolds(one, "Prepare draft"),
+  );
+  yield* page.key("Enter");
+  yield* page.until(
+    "the ready draft",
+    (one) =>
+      page.repl.fake.prompts.length === prompts + 2 &&
+      one.shows("Draft ready.") &&
+      sidekickIdle(one),
+  );
+  yield* intoDraft(page);
+  yield* page.until("the open draft editor", (one) => draftShows(one, "DRAFT-"));
 }
 
 export function* generateTypingHistory(

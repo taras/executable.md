@@ -32,6 +32,7 @@ import {
   type Region,
   type Size,
 } from "./lib/protocol.ts";
+import { wheelSteps } from "./lib/wheel-pattern.ts";
 import { assertPinnedWorktree, prepareRun, root, type PreparedBuild } from "./lib/run.ts";
 import { attachSidekick } from "./lib/sidekick.ts";
 import { connectDriver } from "./lib/driver-client.ts";
@@ -123,6 +124,7 @@ const bench = size.partial().extend({
   mount: z.array(z.string().min(1)).default([]),
   plugins: z.array(z.string().min(1)).default([]),
   mounted: z.boolean().default(false),
+  draft: z.object({ lines: z.int().positive() }).optional(),
   history: z.object({ rounds: z.int().positive(), linesPerRound: z.int().positive() }).optional(),
   allowAbsolute: z.boolean().default(false),
 });
@@ -172,7 +174,7 @@ function* mountedRepl(
     (yield* Build.get()) !== undefined
   ) {
     throw new Error(
-      "A mounted <XMD.Repl> takes dimensions, waitTimeout and history, and runs the current build.",
+      "A mounted <XMD.Repl> takes dimensions, waitTimeout, history and draft, and runs the current build.",
     );
   }
   const terminal =
@@ -183,7 +185,11 @@ function* mountedRepl(
     });
   const active = reservation ?? (yield* terminal.claim());
   const { connectMounted } = yield* until(import("./lib/driver-mounted.ts"));
-  active.dispatch = yield* connectMounted({ ...terminal.dimensions, history: wanted.history });
+  active.dispatch = yield* connectMounted({
+    ...terminal.dimensions,
+    history: wanted.history,
+    draft: wanted.draft,
+  });
   yield* ensure(() => {
     delete active.dispatch;
   });
@@ -456,6 +462,12 @@ const replLaunch = {
     mount: strings,
     plugins: strings,
     mounted: boolean,
+    draft: {
+      type: "object",
+      properties: { lines: integer },
+      required: ["lines"],
+      additionalProperties: false,
+    },
     history: {
       type: "object",
       properties: { rounds: integer, linesPerRound: integer },
@@ -585,15 +597,29 @@ const terminalActions = [
   registration(
     "Terminal.Scroll",
     function* (props) {
-      yield* action({
-        action: "scroll",
-        at: point.optional().parse(props.at),
-        region: yield* RegionContext.get(),
-        delta: z.int().parse(props.delta),
-      });
+      const at = point.optional().parse(props.at);
+      const region = yield* RegionContext.get();
+      if (props.pattern === undefined && props.delta === undefined) {
+        throw new Error("Terminal.Scroll requires delta or pattern");
+      }
+      if (props.pattern === undefined) {
+        yield* action({ action: "scroll", at, region, delta: z.int().parse(props.delta) });
+        return;
+      }
+      if (props.delta !== undefined) {
+        throw new Error("Terminal.Scroll takes delta or pattern, not both");
+      }
+      const tick = z.int().positive().default(16).parse(props.tick);
+      for (const step of wheelSteps(z.string().parse(props.pattern))) {
+        yield* action(
+          step.kind === "pause"
+            ? { action: "pause", ticks: step.ticks, tick }
+            : { action: "scroll", at, region, delta: step.delta },
+        );
+      }
     },
-    { delta: integer, at: cell },
-    ["delta"],
+    { delta: integer, pattern: string, tick: integer, at: cell },
+    [],
   ),
   registration(
     "Terminal.WaitForText",

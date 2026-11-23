@@ -165,7 +165,7 @@ export function check(
         baseline: was ?? null,
         measured: now ?? null,
         shiftPercent: null,
-        shifted: true,
+        shifted: !name.endsWith(`: ${OTHER}`),
       });
     } else if (was === 0) {
       rows.push({
@@ -173,7 +173,7 @@ export function check(
         baseline: was,
         measured: now,
         shiftPercent: now === 0 ? 0 : null,
-        shifted: now !== 0,
+        shifted: !name.endsWith(`: ${OTHER}`) && now !== 0,
       });
     } else {
       const shiftPercent = ((now - was) / was) * 100;
@@ -182,7 +182,7 @@ export function check(
         baseline: was,
         measured: now,
         shiftPercent,
-        shifted: Math.abs(shiftPercent) > baseline.tolerance,
+        shifted: !name.endsWith(`: ${OTHER}`) && Math.abs(shiftPercent) > baseline.tolerance,
       });
     }
   }
@@ -216,6 +216,7 @@ export function renderBaseline(baseline: Baseline): string {
     "",
     "A count misses time spent inside one function, garbage collection, WebAssembly and",
     "other native work. An exercise can get slower without any figure here moving.",
+    "The other layers row is recorded for context and never fails the comparison.",
     "",
     `- Runtime: ${baseline.runtime}`,
     `- Measured from: ${captures}`,
