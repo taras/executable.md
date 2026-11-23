@@ -30,9 +30,16 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
+import type { Operation } from "effection";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { useStubFs } from "@executablemd/runtime/test";
 
 import { previewGeneratedXmdRoot } from "../host.ts";
 import type { GeneratedXmdRootPreview } from "../host.ts";
+import { execute } from "../src/execute.ts";
+import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 
 /** The projection, or a failure naming what was refused instead. */
 function preview(source: string): GeneratedXmdRootPreview {
@@ -41,6 +48,14 @@ function preview(source: string): GeneratedXmdRootPreview {
     throw new Error(`the prefix was refused: ${result.error.message}`);
   }
   return result.value;
+}
+
+/** What the finished root renders when it runs. */
+function executed(source: string): Operation<string> {
+  return scoped(function* () {
+    yield* useStubFs({ "doc.md": source });
+    return asText(yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() })));
+  });
 }
 
 /** Why the prefix was refused, or a failure naming what it projected instead. */
@@ -180,6 +195,32 @@ describe("Tier GP — Output rescans retain authored line context", () => {
       output: "Hello\n\n  indented\n",
       incomplete: false,
     });
+  });
+});
+
+describe("Tier GP — a standalone nested region is placed as execution places it", () => {
+  it("GP22c: a nested region keeps its indentation and line ending, and an empty one leaves no line", function* () {
+    const cases: [string, string][] = [
+      [
+        "<Output>\n  Before\n  <Output>inner</Output>\n  After\n</Output>\n",
+        "Before\ninner\nAfter\n",
+      ],
+      [
+        "<Output>\n  - First\n\n    <Output>inner</Output>\n  - Last\n</Output>\n",
+        "- First\n\n  inner\n- Last\n",
+      ],
+      ["<Output>\n  Before\n  <Output></Output>\n  After\n</Output>\n", "Before\nAfter\n"],
+    ];
+    for (const [source, expected] of cases) {
+      expect({ source, preview: preview(source) }).toEqual({
+        source,
+        preview: { output: expected, incomplete: false },
+      });
+      expect({ source, executed: yield* executed(source) }).toEqual({
+        source,
+        executed: expected,
+      });
+    }
   });
 });
 

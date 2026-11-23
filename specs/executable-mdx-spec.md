@@ -8545,7 +8545,8 @@ fragment still refuses independent Output at every depth (§5.3.3).
 
 Preview is a pure reading of disclosed source, not an execution. It projects
 only settled literal text in unconditional Output. Output directly nested in
-such a region is transparent and contributes once; passive fenced examples stay
+such a region is transparent and contributes once, placed by the standalone-line
+rule (§2.2) exactly as execution places it; passive fenced examples stay
 literal. Interpolations and component results wait for evaluation.
 
 Text beneath If/Else, iteration, scoped components, projection, All/Spawn or
@@ -12684,8 +12685,11 @@ visible warning blocks, gather into a separate error report).
 
 ### Tier SIN — Structural indentation and standalone lines (§2.2)
 
-Each row is one of the [formatter examples](formatter-examples.md), run through
-`execute()` with the host Files provider and asserted as exact bytes.
+SIN1–SIN11 are the [formatter examples](formatter-examples.md). SIN12 covers a
+standalone element whose indentation remains after the prefix, GP22c holds the
+generated-root preview to the same placement, and NS-H3b covers a slotted
+element. Each asserts exact bytes; the SIN rows run through `execute()` with the
+host Files provider.
 
 | # | Test | Verify |
 |---|------|--------|
@@ -12701,6 +12705,8 @@ Each row is one of the [formatter examples](formatter-examples.md), run through
 | SIN10 | Blank lines | Spaces beyond the prefix on a blank line are written |
 | SIN11 | Missing final newline | A standalone read at the end of the source supplies no newline |
 | SIN12 | Standalone element in a list item | In a loose list item, a self-closing read of `"Ada"` or `"Ada\n"` and an inline `<If>` rendering `Ready` keep the two spaces after the prefix (`"  Ada\n"`, `"  Ready\n"`); an empty read and an unselected `<If>` contribute neither indentation nor a line |
+| GP22c | Preview of a nested region | A standalone `<Output>` nested in a root `<Output>` previews exactly what execution renders: `inner` between two lines gains its newline, inside a loose list item it keeps its two spaces, and an empty one leaves no line |
+| NS-H3b | Slotted standalone element | An indented `<Header slot="header" />` on its own line projects into `ECHO(<Content slot="header" />)` as `ECHO(HEADER-TEXT)`, with neither its indentation nor its newline |
 
 ### Tier B — Component import and frontmatter
 

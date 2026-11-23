@@ -261,7 +261,7 @@ function literal(segments: readonly Segment[], unfinished = false): string {
   let text = "";
   for (const segment of segments) {
     if (segment.type === "component" && segment.name === "Output") {
-      text += literal(segment.children);
+      text += standalone(segment, literal(segment.children));
     } else if (segment.type === "text") {
       const pendingBinding =
         unfinished &&
@@ -277,4 +277,18 @@ function literal(segments: readonly Segment[], unfinished = false): string {
     }
   }
   return text;
+}
+
+/**
+ * A nested region's text, placed the way expansion places a standalone
+ * element's rendering (§2.2): its indentation before nonempty text, its newline
+ * when that text does not already end in one, and nothing at all when it is
+ * empty.
+ */
+function standalone(element: ComponentElement, rendered: string): string {
+  if (rendered === "") {
+    return "";
+  }
+  const ending = element.lineEnd === true && !rendered.endsWith("\n") ? "\n" : "";
+  return (element.lineIndent ?? "") + rendered + ending;
 }

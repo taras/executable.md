@@ -1,10 +1,11 @@
 /**
  * Tier SIN — Structural indentation and standalone lines (spec §2.2).
  *
- * Each case is one of the accepted formatter examples, run through `execute()`
- * against the host Files provider in a scratch workspace. Where whitespace is
- * the subject, the assertion is the exact file bytes, rendered text or shell
- * output.
+ * SIN1–SIN11 are the accepted formatter examples; SIN12 covers a standalone
+ * element whose indentation remains after the prefix. Each runs through
+ * `execute()` against the host Files provider in a scratch workspace. Where
+ * whitespace is the subject, the assertion is the exact file bytes, rendered
+ * text or shell output.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
