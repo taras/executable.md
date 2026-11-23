@@ -60,19 +60,19 @@ git symbolic-ref --short HEAD
 <File path="interrupt-input.json"><Json value={{phase:"interrupt-child",fixture,revision}} /></File>
 <Let as="childArguments" value={[props.root + "/examples/adversarial-implementation/tests/FallbackCase.md","--props-record",fixture.repository + "/interrupt-input.json","--include",props.root + "/examples/adversarial-implementation/tests/components","--include",props.root + "/examples/adversarial-implementation/components","--raw"].map(value => "'" + value.replaceAll("'",quote) + "'").join(" ")} />
 <Let as="quotedRecord" value={"'" + record.replaceAll("'",quote) + "'"} />
-```bash exec as="interrupted"
-{props.runner} {childArguments} > interrupt.out 2> interrupt.err &
-child=$!
-for attempt in $(seq 1 900); do
-  if test -e {quotedRecord}; then break; fi
-  sleep 0.1
-done
-test -e {quotedRecord}
-reached=$?
-kill -TERM "$child"
-wait "$child"
-printf '%s' "$reached"
-```
+  ```bash exec as="interrupted"
+  {props.runner} {childArguments} > interrupt.out 2> interrupt.err &
+  child=$!
+  for attempt in $(seq 1 900); do
+    if test -e {quotedRecord}; then break; fi
+    sleep 0.1
+  done
+  test -e {quotedRecord}
+  reached=$?
+  kill -TERM "$child"
+  wait "$child"
+  printf '%s' "$reached"
+  ```
 <AssertEquals actual={interrupted.stdout} expected="0" />
 <Else>
 <If condition={scenario !== "reserved"}>
@@ -154,20 +154,20 @@ printf '%s' "$reached"
 Status, closeout and explicit reconciliation of a hold read evidence only.
 
 <Let as="probeReview" value={expected.next === "report_review_hold" ? "yes" : "no"} />
-```bash exec as="heldEntries"
-set +e
-{props.runner} {entry} --props-action status > status.out 2> status.err
-printf '%s ' "$?"
-{props.runner} {entry} --props-action closeout > closeout.out 2> closeout.err
-printf '%s ' "$?"
-{props.runner} {entry} --props-action reconcile > reconcile.out 2> reconcile.err
-printf '%s ' "$?"
-if test {probeReview} = yes; then
-  {props.runner} {entry} --props-action review > review.out 2> review.err
+  ```bash exec as="heldEntries"
+  set +e
+  {props.runner} {entry} --props-action status > status.out 2> status.err
   printf '%s ' "$?"
-  cat review.err
-fi
-```
+  {props.runner} {entry} --props-action closeout > closeout.out 2> closeout.err
+  printf '%s ' "$?"
+  {props.runner} {entry} --props-action reconcile > reconcile.out 2> reconcile.err
+  printf '%s ' "$?"
+  if test {probeReview} = yes; then
+    {props.runner} {entry} --props-action review > review.out 2> review.err
+    printf '%s ' "$?"
+    cat review.err
+  fi
+  ```
 <AssertStringIncludes actual={heldEntries.stdout} expected={expected.next === "report_review_hold" ? "0 0 1 1 " : "0 0 1 "} />
 <If condition={expected.next === "report_review_hold"}><AssertStringIncludes actual={heldEntries.stdout} expected="The next action is report_review_hold; do not start another review." /></If>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="readOnly" />

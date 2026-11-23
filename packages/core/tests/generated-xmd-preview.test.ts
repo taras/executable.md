@@ -64,7 +64,7 @@ function prefixes(source: string): string[] {
 describe("Tier GP — a whole prefix projects what it says", () => {
   it("GP1: a complete region is the projection, and the prefix is whole", function* () {
     expect(preview("<Output>\nHello there.\n</Output>\n")).toEqual({
-      output: "\nHello there.\n",
+      output: "Hello there.\n",
       incomplete: false,
     });
   });
@@ -161,7 +161,9 @@ describe("Tier GP — Output rescans retain authored line context", () => {
     for (const leading of ["", "\n"]) {
       for (const child of ["", "<Probe>"]) {
         const source = "<Output>" + leading + fence + child;
-        const output = leading === "" ? "" : leading + fence;
+        // A fence after the tag on its own line is an inline span and waits;
+        // after a standalone opening line it is a passive fence.
+        const output = leading === "" ? "" : fence;
         expect(preview(source)).toEqual({ output, incomplete: true });
         expect(preview(source + (child === "" ? "" : "</Probe>") + "</Output>")).toEqual({
           output,
@@ -169,6 +171,15 @@ describe("Tier GP — Output rescans retain authored line context", () => {
         });
       }
     }
+  });
+
+  it("GP22b: an unfinished block removes the structural prefix its finished form removes", function* () {
+    const source = "<Output>\n  Hello\n\n    indented\n";
+    expect(preview(source)).toEqual({ output: "Hello\n\n  indented\n", incomplete: true });
+    expect(preview(source + "</Output>\n")).toEqual({
+      output: "Hello\n\n  indented\n",
+      incomplete: false,
+    });
   });
 });
 
@@ -216,13 +227,13 @@ describe("Tier GP — only settled meaning projects", () => {
 
   it("GP21: a passive example projects all its literal references", function* () {
     const body =
-      "\n```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n</If>\n```\n";
-    expect(preview("<Output>" + body + "</Output>")).toEqual({ output: body, incomplete: false });
+      "```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n</If>\n```\n";
+    expect(preview("<Output>\n" + body + "</Output>")).toEqual({ output: body, incomplete: false });
   });
 
   it("GP21b: a longer fence quotes executable fences and Output tags", function* () {
-    const body = "\n````xmd\n```sh exec\necho {source}\n```\n<Output>{props.name}</Output>\n````\n";
-    expect(preview("<Output>" + body + "</Output>")).toEqual({ output: body, incomplete: false });
+    const body = "````xmd\n```sh exec\necho {source}\n```\n<Output>{props.name}</Output>\n````\n";
+    expect(preview("<Output>\n" + body + "</Output>")).toEqual({ output: body, incomplete: false });
   });
 
   it("GP21c: mixed text withholds interpolated prose and projects settled fences", function* () {
@@ -347,7 +358,7 @@ describe("Tier GP — nothing runs", () => {
       "```bash exec\nprintf ran\n```\n\n" +
       "<Output>\nthe reply\n</Output>\n";
 
-    expect(preview(source)).toEqual({ output: "\nthe reply\n", incomplete: false });
+    expect(preview(source)).toEqual({ output: "the reply\n", incomplete: false });
   });
 
   it("GP32: the same prefix projects the same answer with nothing installed, twice over", function* () {

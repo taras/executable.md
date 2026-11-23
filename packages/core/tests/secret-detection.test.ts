@@ -888,11 +888,10 @@ describe("default-on secret detection", () => {
       const run = yield* settledRendering("Token loopback-credential");
 
       expect(run.result.ok).toBe(true);
-      expect(run.chunks).toEqual([
-        "# Probe\n\n",
-        "\n\nThe header was Token loopback-credential.\n",
-      ]);
-      expect(run.close).toBe("# Probe\n\n\n\nThe header was Token loopback-credential.\n");
+      // The capturing invocation stands on its own line and renders nothing,
+      // so its line contributes nothing to the rendering.
+      expect(run.chunks).toEqual(["# Probe\n\n", "\nThe header was Token loopback-credential.\n"]);
+      expect(run.close).toBe("# Probe\n\n\nThe header was Token loopback-credential.\n");
       expect(run.events.map(label)).toEqual([
         "yield(import_component)",
         "yield(import_component)",

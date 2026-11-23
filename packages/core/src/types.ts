@@ -60,6 +60,12 @@ export interface ComponentElement {
   children: Segment[];
   selfClosing: boolean;
   /**
+   * Set when the element stands on its own line and the scanner consumed that
+   * line's newline: a nonempty result that does not end in one receives it
+   * (§2.2).
+   */
+  lineEnd?: true;
+  /**
    * When set, expression props resolve against this env instead of the
    * contextual `env()` binding environment. Used for projected children
    * (substituted via `<Content />`) — they carry the caller's eval env so

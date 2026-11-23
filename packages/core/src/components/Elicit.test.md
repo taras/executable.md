@@ -13,14 +13,14 @@ an `<Answers>` region is.
 
 <Test name="A structured schema binds the answer">
 
-```ts persist eval
-const decisionSchema = {
-  type: "object",
-  properties: { decision: { type: "string", enum: ["approve", "reject"] } },
-  required: ["decision"],
-  additionalProperties: false,
-};
-```
+  ```ts persist eval
+  const decisionSchema = {
+    type: "object",
+    properties: { decision: { type: "string", enum: ["approve", "reject"] } },
+    required: ["decision"],
+    additionalProperties: false,
+  };
+  ```
 
 <Answers>
 <Answer template="Approve the plan?" value={{ decision: "approve" }} />
@@ -37,13 +37,13 @@ and get identical behavior.
 
 <Test name="A schema as captured JSON text binds the same way">
 
-```ts persist eval
-const decisionText = JSON.stringify({
-  type: "object",
-  properties: { decision: { type: "string", enum: ["approve", "reject"] } },
-  required: ["decision"],
-});
-```
+  ```ts persist eval
+  const decisionText = JSON.stringify({
+    type: "object",
+    properties: { decision: { type: "string", enum: ["approve", "reject"] } },
+    required: ["decision"],
+  });
+  ```
 
 <Answers>
 <Answer template="Approve the plan?" value={{ decision: "reject" }} />
@@ -66,17 +66,17 @@ reaches it.
 
 <Test name="The invocation content becomes the request">
 
-```ts persist eval
-const asked = [];
-yield* Elicitation.around({
-  *elicit([request]) {
-    asked.push(request.message);
-    return { acknowledged: true };
-  },
-}, { at: "min" });
-const ackSchema = { type: "object", properties: { acknowledged: { type: "boolean" } } };
-const plan = "ship it";
-```
+  ```ts persist eval
+  const asked = [];
+  yield* Elicitation.around({
+    *elicit([request]) {
+      asked.push(request.message);
+      return { acknowledged: true };
+    },
+  }, { at: "min" });
+  const ackSchema = { type: "object", properties: { acknowledged: { type: "boolean" } } };
+  const plan = "ship it";
+  ```
 
 <Elicit schema={ackSchema} as="ack">Please review: {plan}</Elicit>
 <AssertEquals actual={ack.acknowledged} expected={true} />

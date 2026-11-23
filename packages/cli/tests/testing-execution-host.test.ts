@@ -75,7 +75,7 @@ const GUIDE = doc("# First", "", "first body", "", "# Second", "", "second body"
 
 /** The one request the Plan workflow sends, answered with a complete program. */
 const PLAN_BEHAVIOR = doc(
-  '<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />',
+  '<WhenPrompt template="Create one complete XMD Plan from this Prompt:{?rest}" />',
   "",
   "<Let",
   '  as="program"',
@@ -101,7 +101,7 @@ const PLAN_BEHAVIOR = doc(
  * and the run ends instead.
  */
 const PARTIAL_THEN_FAILS = doc(
-  '<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />',
+  '<WhenPrompt template="Create one complete XMD Plan from this Prompt:{?rest}" />',
   "",
   "# Half a program",
   "",

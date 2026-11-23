@@ -14,51 +14,51 @@ Show the Markdown fixture.
 </WhenPrompt>
 
 <Let as="submission" select="code">
-``````xmd
-<Output>
-# Sidekick fixture heading
+  ``````xmd
+  <Output>
+  # Sidekick fixture heading
 
-**sidekick strong** plain
-*sidekick slant* plain
-`sidekick code` plain
-[sidekick fixture label](https://example.test/sidekick-target) plain
+  **sidekick strong** plain
+  *sidekick slant* plain
+  `sidekick code` plain
+  [sidekick fixture label](https://example.test/sidekick-target) plain
 
-- sidekick first item
-- sidekick second item
-- [ ] sidekick task item
+  - sidekick first item
+  - sidekick second item
+  - [ ] sidekick task item
 
-```text
-  sidekick fence indent
+  ```text
+    sidekick fence indent
 
-# sidekick fence *literal*
-```
-Sidekick fixture end.
-</Output>
-<Let as="entry" select="code">
-`````xmd
-# Entry fixture heading
+  # sidekick fence *literal*
+  ```
+  Sidekick fixture end.
+  </Output>
+  <Let as="entry" select="code">
+  `````xmd
+  # Entry fixture heading
 
-**entry strong** plain
-*entry slant* plain
-`entry code` plain
-[entry fixture label](https://example.test/entry-target) plain
-Entry prose keeps going long enough to wrap inside the wide centre pane, so its **entry wrapped strong** run lands after a measured break.
+  **entry strong** plain
+  *entry slant* plain
+  `entry code` plain
+  [entry fixture label](https://example.test/entry-target) plain
+  Entry prose keeps going long enough to wrap inside the wide centre pane, so its **entry wrapped strong** run lands after a measured break.
 
-1. entry first step
-2. entry second step
-3. [x] entry task step
+  1. entry first step
+  2. entry second step
+  3. [x] entry task step
 
-```text
-  entry fence indent
+  ```text
+    entry fence indent
 
-# entry fence *literal*
-```
-Entry fixture end.
-`````
-</Let>
-<REPL.EntryInput>{entry}</REPL.EntryInput>
-<REPL.Submit />
-``````
+  # entry fence *literal*
+  ```
+  Entry fixture end.
+  `````
+  </Let>
+  <REPL.EntryInput>{entry}</REPL.EntryInput>
+  <REPL.Submit />
+  ``````
 </Let>
 {submission}
 

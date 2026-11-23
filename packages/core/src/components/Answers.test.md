@@ -9,13 +9,13 @@ for as long as its body lasts.
 
 <Test name="A matcher answers the elicitation inside it">
 
-```ts persist eval
-const decisionSchema = {
-  type: "object",
-  properties: { decision: { type: "string", enum: ["approve", "reject"] } },
-  required: ["decision"],
-};
-```
+  ```ts persist eval
+  const decisionSchema = {
+    type: "object",
+    properties: { decision: { type: "string", enum: ["approve", "reject"] } },
+    required: ["decision"],
+  };
+  ```
 
 <Answers>
 <Answer template="Approve {?what}?" value={{ decision: "approve" }} />
@@ -32,13 +32,13 @@ it still has to match.
 
 <Test name="A wildcard hole constrains without binding">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer template="Deploy {?service} to production?" value={{ step: "deployed" }} />
@@ -54,13 +54,13 @@ what a multiline question needs.
 
 <Test name="A template can be written as children">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer value={{ step: "multiline" }}>
@@ -77,13 +77,13 @@ A matcher with no template at all matches anything.
 
 <Test name="A templateless matcher answers anything">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer value={{ step: "catch-all" }} />
@@ -100,13 +100,13 @@ broad template written above a narrow one shadows it permanently.
 
 <Test name="The first declared match wins, and matchers are reusable">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer template="Step {?n}?" value={{ step: "matched" }} />
@@ -124,13 +124,13 @@ an inner region is closer to the elicitation than an outer one.
 
 <Test name="The nearest region answers">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer template="Which region?" value={{ step: "outer" }} />
@@ -152,13 +152,13 @@ region or to whatever the host installed.
 
 <Test name="delegate passes unmatched elicitations outward">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer template="Outer question?" value={{ step: "from-outer" }} />
@@ -182,13 +182,13 @@ a branch you were right to describe.
 
 <Test name="A matcher that never fires is fine">
 
-```ts persist eval
-const stepSchema = {
-  type: "object",
-  properties: { step: { type: "string" } },
-  required: ["step"],
-};
-```
+  ```ts persist eval
+  const stepSchema = {
+    type: "object",
+    properties: { step: { type: "string" } },
+    required: ["step"],
+  };
+  ```
 
 <Answers>
 <Answer template="Asked" value={{ step: "used" }} />

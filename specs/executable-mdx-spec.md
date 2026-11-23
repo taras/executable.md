@@ -306,6 +306,7 @@ interface ComponentElement {
   expressions: Record<string, string>;   // Eval expression props — raw text, resolved at expansion time
   children: Segment[];                   // Segments between opening and closing tags
   selfClosing: boolean;
+  lineEnd?: true;                        // Stands on its own line and owns that line's newline (§2.2)
 }
 
 interface ExecutableCodeBlock {
@@ -361,6 +362,66 @@ children.
 contains `exec` or `eval` after the language identifier is executable.
 Everything else in the document — paragraphs, headings, lists, links,
 images, standard code fences — is passive text.
+
+#### Structural indentation and standalone lines
+
+XMD source is indented by its structure, two spaces for each enclosing block,
+and that indentation is not content. The [formatter
+examples](formatter-examples.md) show each rule below with its exact result;
+[decision record 006](decisions/006-structural-indentation.md) records the
+trade-offs.
+
+**Blocks and levels.** A paired element is a **block** when its opening tag is
+on lines of its own: only spaces and tabs precede the `<` on its line, and only
+spaces and tabs follow the final `>` before a newline. The opening tag may span
+several lines; its attributes are part of the delimiter. A block's body starts
+on the line after the opening tag, one level deeper than the block. Every other
+paired element is **inline**: its content starts right after the opening tag,
+at the level of the text around it. The document body, and any text scanned on
+its own, is level zero.
+
+**The structural prefix.** A body at level *n* has a structural prefix of 2*n*
+spaces. At the start of every line in that body, the scanner removes the prefix
+when the line begins with all of it, and removes nothing when it does not: a
+line with fewer leading spaces keeps every one of them as content. The prefix is
+spaces only, so a leading tab is always content. The rule applies to every line
+— prose, blank lines, the lines of executable and passive fences, and the lines
+of an inline element's content — but not to lines inside a tag, whose text is
+the delimiter's. A blank line therefore keeps the spaces beyond its prefix.
+
+Lines are recognized after their prefix is removed. A fence opens and closes
+under the ordinary rule of at most three spaces of indentation, so a fence moves
+with its enclosing block and its contents keep their own indentation: a heredoc
+whose delimiter is at the fence's column reaches the shell at column one.
+
+**Markdown indented code.** After the prefix is removed, a line indented by four
+or more columns, counting a tab to the next multiple of four, is Markdown
+indented code when it follows a blank line of the same body or continues such a
+line, blank lines included. XMD recognizes no element, fence or code span on
+such a line; it is passive text. A line that does not follow a blank line
+continues a paragraph or list and is scanned as usual, and a line beginning
+with the body's own closing tag is never indented code.
+
+**Standalone lines.** An element is **standalone** when only spaces and tabs
+precede its opening tag on its line and only spaces and tabs follow its end —
+`/>`, or the closing tag — before a newline or the end of the source. This
+holds for self-closing elements and for paired ones, block or inline. A
+standalone element's line is a delimiter line:
+
+- The indentation before the element is not content, nor is the indentation
+  before a block's opening tag or before a closing tag that begins its line.
+- The element consumes its line's newline and records it as `lineEnd`. After
+  the element expands, the newline is appended when its rendering is nonempty
+  and does not already end in a newline. An empty rendering contributes no
+  line, and newlines the rendering already holds stay as they are.
+- An element at the end of the source has no newline to supply, so a missing
+  final newline is preserved.
+
+A block's body ends with the newline of its last content line, and its closing
+tag's line contributes nothing, so the delimiter lines of a block whose
+opening and closing tags stand alone contribute no lines to the output. An
+element assigned to a named slot (§6.3.1) renders where its slot is projected
+and leaves its line ending behind.
 
 Parsing is a runtime operation. It is deterministic from its input text
 and produces no journal entries.
@@ -9234,18 +9295,19 @@ come from. Content on the same line as the tags is the whole file:
 <File path="a.txt">one line</File>
 ```
 
-writes `one line`, with no trailing newline. Content on its own line is
-surrounded by line breaks that are themselves inside the element:
+writes `one line`, with no trailing newline. Written as a block, the body is
+its lines with the structural prefix removed, and the delimiter lines
+contribute nothing (§2.2):
 
 ```md
 <File path="a.txt">
-one line
+  one line
 </File>
 ```
 
-writes `\none line\n`. That is the exact-content contract: a document that
+writes `one line\n`. That is the exact-content contract: a document that
 needs a file to start or end a particular way says so by where it puts the
-tags, and the component never guesses.
+tags and its blank lines, and the component never guesses.
 
 #### A failed child writes nothing
 
@@ -12613,6 +12675,25 @@ visible warning blocks, gather into a separate error report).
 | A14e | Exec code block inside component children | `<Section>` wrapping `` ```bash exec `` → children include ExecutableCodeBlock |
 | A14f | Non-exec code block inside component children | `<Section>` wrapping `` ```yaml `` → children: TextSegment (passthrough) |
 | A14g | Inline code span protects component syntax in children | `<Section>` with `` `<Content />` `` in children → no component parsed |
+
+### Tier SIN — Structural indentation and standalone lines (§2.2)
+
+Each row is one of the [formatter examples](formatter-examples.md), run through
+`execute()` with the host Files provider and asserted as exact bytes.
+
+| # | Test | Verify |
+|---|------|--------|
+| SIN1 | Whole-body indentation | Two enclosing blocks remove four spaces; the two beyond them and the blank line are written |
+| SIN2 | Mixed indentation | A line with less than the full prefix keeps all of its spaces; the formatted source writes the same bytes |
+| SIN3 | Inline element | `Status: <If …>ready</If> now.` adds no level and keeps both spaces |
+| SIN4 | Standalone invocation | A read of `""`, `"Ada"`, `"Ada\n"` and `"Ada\n\n"` renders no line, `Ada\n`, `Ada\n` and `Ada\n\n` between `Before` and `After` |
+| SIN5 | Split opening tag | An opening tag over three lines is one delimiter |
+| SIN6 | Markdown indentation | List nesting beyond the prefix reaches Markdown, including inside a block in a list item |
+| SIN7 | Fence in a block | The fence's content reaches the shell dedented; the heredoc delimiter is at column one |
+| SIN8 | Indented code | A tag four columns past its prefix after a blank line is passive Markdown code |
+| SIN9 | Content tabs | A tab after the prefix, or in place of it, is written unchanged |
+| SIN10 | Blank lines | Spaces beyond the prefix on a blank line are written |
+| SIN11 | Missing final newline | A standalone read at the end of the source supplies no newline |
 
 ### Tier B — Component import and frontmatter
 

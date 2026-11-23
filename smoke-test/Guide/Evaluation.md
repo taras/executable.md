@@ -34,21 +34,21 @@ const message = `${greeting} with ${numbers.length} numbers`;
 </Test>
 
 <Test name="Persist keeps spawned tasks alive across blocks">
-```js persist eval
-const status = { ready: false };
-yield *
-  spawn(function* () {
-    yield* sleep(10);
-    status.ready = true;
-  });
-```
-```js eval
-yield *
-  when(function* () {
-    if (!status.ready) throw new Error("not ready");
-  });
-const serverReady = status.ready;
-```
+  ```js persist eval
+  const status = { ready: false };
+  yield *
+    spawn(function* () {
+      yield* sleep(10);
+      status.ready = true;
+    });
+  ```
+  ```js eval
+  yield *
+    when(function* () {
+      if (!status.ready) throw new Error("not ready");
+    });
+  const serverReady = status.ready;
+  ```
 <AssertStrictEquals actual={serverReady} expected={true} />
 </Test>
 

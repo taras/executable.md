@@ -752,8 +752,8 @@ describe("Tier SL — native session launch", () => {
     expect(record.instructionChannel).toBe("stub.systemPrompt");
     // The body is retained exactly as it rendered, and the digest is of that
     // exact text — not of a tidied version of it.
-    expect(record.instructions).toBe("\nYou are the implementor.\n");
-    expect(record.instructionsDigest).toBe(digest("\nYou are the implementor.\n"));
+    expect(record.instructions).toBe("You are the implementor.\n");
+    expect(record.instructionsDigest).toBe(digest("You are the implementor.\n"));
     expect(record.additionalDirectories).toEqual([]);
     expect(record.permissionMode).toBe("deny-all");
 

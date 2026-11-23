@@ -1225,6 +1225,7 @@ function* expandListSegments(
     if (checkedFailures?.failure !== undefined) {
       break;
     }
+    const produced = result.length;
     switch (segment.type) {
       case "text": {
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
@@ -1923,6 +1924,13 @@ function* expandListSegments(
         } else {
           result.push(segment);
         }
+      }
+    }
+
+    if (segment.type === "component" && segment.lineEnd === true) {
+      const rendered = renderSegments(result.slice(produced));
+      if (rendered !== "" && !rendered.endsWith("\n")) {
+        result.push({ type: "text", content: "\n" });
       }
     }
 
@@ -5118,11 +5126,15 @@ export function partitionBySlot(children: Segment[]): SlotMap {
 /**
  * Strip the `slot` prop from a segment. Returns a shallow clone with
  * `slot` removed from props. Non-component segments pass through unchanged.
+ *
+ * The clone also leaves its line ending behind: a slotted element renders
+ * where its slot is projected, not on the source line it stood on.
  */
 export function stripSlotProp(segment: Segment): Segment {
   if (segment.type === "component" && "slot" in segment.props) {
     const { slot: _, ...rest } = segment.props;
-    return { ...segment, props: rest };
+    const { lineEnd: _lineEnd, ...element } = segment;
+    return { ...element, props: rest };
   }
   return segment;
 }

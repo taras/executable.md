@@ -1,4 +1,4 @@
-<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />
+<WhenPrompt template="Create one complete XMD Plan from this Prompt:{?rest}" />
 
 <Let
   as="program"

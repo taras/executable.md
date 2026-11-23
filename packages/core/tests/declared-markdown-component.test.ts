@@ -320,7 +320,7 @@ describe("Tier DM — retained text context", () => {
       "~~~",
     ].join("\n");
     const output = yield* run("<Policy />", [declared(source)]);
-    expect(output).toBe("\n```xmd\nCURRENT_1050\n```\n\n~~~xmd\n{source}\n~~~");
+    expect(output).toBe("```xmd\nCURRENT_1050\n```\n\n~~~xmd\n{source}\n~~~");
   });
 });
 

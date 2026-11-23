@@ -86,19 +86,19 @@ supplied schema resolve; external file and HTTP(S) references do not yet.
 
 <Test name="A local fragment reference resolves">
 <Let as="refSchema" select="code[lang=json]">
-```json
-{
-  "definitions": {
-    "finding": {
-      "type": "object",
-      "properties": { "file": { "type": "string" } },
-      "required": ["file"]
+    ```json
+    {
+      "definitions": {
+        "finding": {
+          "type": "object",
+          "properties": { "file": { "type": "string" } },
+          "required": ["file"]
+        }
+      },
+      "type": "array",
+      "items": { "$ref": "#/definitions/finding" }
     }
-  },
-  "type": "array",
-  "items": { "$ref": "#/definitions/finding" }
-}
-```
+    ```
 </Let>
 <Parse schema={refSchema} as="findings">
 [{ "file": "a.ts" }, { "file": "b.ts" }]

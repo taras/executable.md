@@ -173,6 +173,7 @@ function unfinishedRegion(
     undefined,
     unfinished,
     pending.contentStart,
+    pending.contentDepth,
   );
   const first = earliest(unfinished);
   const tail = unfinishedRegion(content, first);
@@ -188,6 +189,7 @@ function unfinishedRegion(
               undefined,
               undefined,
               pending.contentStart,
+              pending.contentDepth,
             ),
         true,
       ) + (tail?.output ?? ""),
