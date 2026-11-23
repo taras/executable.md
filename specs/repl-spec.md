@@ -2335,7 +2335,11 @@ under the ordinary physical records. The prospective mapped class above uses its
 closed association record. The physical records keep a self-closing `<File path="…" as="…" />` text read; a paired
 `<File path="…">…</File>` write, after its content has expanded; a self-closing
 `<File.Delete path="…" />`; a self-closing `<File.Copy from="…" to="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
-ensures, before its content is entered. The reads, writes and deletions an
+ensures, before its content is entered. `<File.Patch>` uses the same read and
+write records. Its write request includes the expected source from the read.
+An acknowledged write restores its outcome even if the file has since changed.
+If only the read was acknowledged, the live write checks its expected source
+against the current target before replacing it. The reads, writes and deletions an
 admitted `<Evaluate>` fragment performs are kept on the same terms, because a
 fragment's operations go to the same document filesystem an authored one does.
 

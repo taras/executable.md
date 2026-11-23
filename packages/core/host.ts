@@ -424,3 +424,6 @@ export { projectInputValue } from "./src/secrets/inputs.ts";
 export type { SecretInputOwner } from "./src/secrets/inputs.ts";
 
 export { useSecretInputs } from "./src/secrets/input-host.ts";
+
+export { applyUnifiedDiff, sourceLines, UnifiedDiffError } from "./src/unified-diff.ts";
+export type { SourceLine } from "./src/unified-diff.ts";

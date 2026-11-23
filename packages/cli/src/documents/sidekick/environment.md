@@ -20,7 +20,7 @@ answer.
 - Use relative paths for ordinary file and command work. Host absolute Dir
   selection requires the person to invoke `xmd repl --allow-absolute` and the
   effective filesystem policy to permit both absolute and write. A mount grants
-  neither: new mapped absolute ensures need that opt-in too. File, File.Delete
+  neither: new mapped absolute ensures need that opt-in too. File, File.Delete, File.Patch
   and Glob operands remain relative even when absolute directory access is allowed.
   When you intentionally need an external non-repository file, request approval
   to import it with `<REPL.ImportAsset />`, then use its returned relative path.
@@ -33,6 +33,26 @@ answer.
   Repository and cwd selection grant no additional file authority. Shell and
   trusted native code have their own permissions; these XMD limits are not an
   operating-system sandbox.
+- For a small edit to an existing file, submit a read entry such as
+  `<File path="notes.md" />` and inspect its output. Submit the matching patch
+  in a second entry. Check the entry feedback for a file error. A successful
+  patch emits no text. After a stale-patch error, read the source again before
+  preparing a fresh diff.
+
+  ````xmd
+  <File.Patch path="notes.md">
+
+  ```diff
+  --- a/notes.md
+  +++ b/notes.md
+  @@ -1 +1 @@
+  -Draft
+  +Ready
+  ```
+
+  </File.Patch>
+  ````
+
 - Use `<REPL.ComponentDir>…</REPL.ComponentDir>` to publish or edit session
   component source, tests and contained fixtures. Paths inside are relative to
   `SESSION/components`; outside they are ordinary project paths. Publishing a

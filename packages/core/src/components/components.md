@@ -174,6 +174,28 @@ read rather than re-reading a file that has since changed.
 A read of a path that does not exist fails. The write form creates the file and
 the directories above it as needed.
 
+## File.Patch
+
+Applies a unified diff to one existing UTF-8 file. Inspect the current source
+with `<File path="notes.md" />`, then submit a paired `<File.Patch>`.
+
+````mdx
+<File.Patch path="notes.md">
+
+```diff
+--- a/notes.md
++++ b/notes.md
+@@ -1 +1 @@
+-Draft
++Ready
+```
+
+</File.Patch>
+````
+
+Success renders nothing. A refusal produces a file error. Read the source again
+before editing a stale patch.
+
 ## File.Copy
 
 Copy a file into an existing directory.

@@ -58,11 +58,16 @@
  * the document's own children under either.
  */
 
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 import { printErrors } from "../component-failures.ts";
 import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
-import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@executablemd/runtime";
+import type {
+  FilePathInput,
+  FilesFailureData,
+  FileWriteFailureData,
+  FilesReason,
+} from "@executablemd/runtime";
 import { content } from "../component-api.ts";
 import type { FormDeclaration } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
@@ -90,16 +95,19 @@ export class FileAccessError extends Error {
 /** The self-closing body: it reads, and there is no path from here to a write. */
 export function* readBody(
   props: Record<string, Json>,
-  owned?: (
-    input: import("@executablemd/runtime").FilePathInput,
-  ) => Operation<import("effection").Result<string>>,
+  owned?: (input: FilePathInput) => Operation<Result<string>>,
 ): Operation<string> {
-  const requested = String(props.path);
-  const directory = yield* cwd();
-  const input = { cwd: directory, path: requested };
-  const text = yield* readFileText(input, owned?.(input));
+  const input = { cwd: yield* cwd(), path: String(props.path) };
+  return yield* readRequestedText(input, owned?.(input));
+}
+
+export function* readRequestedText(
+  input: FilePathInput,
+  owned?: Operation<Result<string>>,
+): Operation<string> {
+  const text = yield* readFileText(input, owned);
   if (!text.ok) {
-    throw new FileAccessError(refusal(requested, "read", parseFilesFailure(text.error)));
+    throw new FileAccessError(refusal(input.path, "read", parseFilesFailure(text.error)));
   }
   return text.value;
 }
@@ -301,7 +309,7 @@ const LEFTOVER = "A temporary file beside it may remain.";
  * the directory now holds. The outcome sentence follows them, and the leftover
  * warning follows that.
  */
-function report(requested: string, data: FileWriteFailureData): string {
+export function report(requested: string, data: FileWriteFailureData): string {
   const parts: string[] = [];
   if (data.reason !== undefined) {
     parts.push(refusal(requested, "write", data));

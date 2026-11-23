@@ -439,14 +439,33 @@ function* ensureOutcome(
 function* writeOutcome(
   filesystem: DenoWorkspaceFilesystem,
   path: string,
-  content: string,
+  input: FileWriteInput,
 ): Operation<FileEffectOutcome<FileWritePhase>> {
-  if (!(yield* Permissions.operations.files("write"))) {
+  if (
+    !(yield* Permissions.operations.files("write")) ||
+    (input.expectedContent !== undefined && !(yield* Permissions.operations.files("read")))
+  ) {
     return refused("resolution", "permission-denied");
   }
   const existing = yield* classifyWriteTarget(filesystem, path);
   if (existing !== undefined) {
     return existing;
+  }
+
+  let content = input.content;
+  if (input.expectedContent !== undefined) {
+    try {
+      const bytes = yield* filesystem.readFile(path);
+      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      // The Workspace's text read removes one UTF-8 BOM.
+      const prefix = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+      if (text.slice(prefix.length) !== input.expectedContent) {
+        return refused("target", "changed-content");
+      }
+      content = prefix + content;
+    } catch (error) {
+      return refused("target", refusalReason(asRefusal(error)));
+    }
   }
 
   try {
@@ -733,7 +752,7 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
         database,
         yield* describeFileEffect("write", path, { path: input.path, cwd: input.cwd }),
         parseFileWritePhase,
-        (filesystem) => writeOutcome(filesystem, path, input.content),
+        (filesystem) => writeOutcome(filesystem, path, input),
       );
       if (outcome.kind === "refused") {
         return Err(fileWriteFailure({ phase: outcome.phase, reason: outcome.reason }));

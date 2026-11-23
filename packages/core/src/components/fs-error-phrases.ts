@@ -40,6 +40,7 @@ const PHRASES: ReadonlyMap<string, string> = new Map<FilesReason, string>([
   ["no-space", "no space left on the device"],
   ["quota-exhausted", "the disk quota is exhausted"],
   ["cross-device", "the destination is on a different filesystem"],
+  ["changed-content", "the existing bytes no longer match the patch source"],
   ["busy", "the file is in use"],
   ["too-many-open-files", "too many open files"],
 ]);

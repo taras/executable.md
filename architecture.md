@@ -188,7 +188,7 @@ The [Language specification](specs/executable-mdx-spec.md) owns execution reques
 
 A Plugin is explicitly selected trusted code installed before root import. It contributes through existing execution boundaries; selecting it does not create a sandbox or a separate execution owner.
 
-Engine structural syntax is recognized before component imports. The canonical protected tier fixes `Syntax`, `Evaluate`, `File`, `File.Delete`, and `Dir` ahead of host and author selections.
+Engine structural syntax is recognized before component imports. The canonical protected tier fixes `Syntax`, `Evaluate`, `File`, `File.Delete`, `File.Patch`, and `Dir` ahead of host and author selections.
 
 Host reservations precede workflow bundles and ordinary component selection. Conflicting reservations fail admission; installation order does not choose between them. Open component names retain their ordinary substitution behavior: a
 repository component of a default's name wins over the installed default, and

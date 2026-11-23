@@ -92,7 +92,7 @@ import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { constants, copyFile as nativeCopyFile, realpath, rmdir } from "node:fs/promises";
+import { constants, copyFile as nativeCopyFile, readFile, realpath, rmdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
@@ -545,7 +545,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return writeFailure({ phase: "lexical", reason: lexical });
     }
 
-    if (!(yield* Permissions.operations.files("write"))) {
+    if (
+      !(yield* Permissions.operations.files("write")) ||
+      (input.expectedContent !== undefined && !(yield* Permissions.operations.files("read")))
+    ) {
       return writeFailure({ phase: "resolution", reason: "permission-denied" });
     }
 
@@ -569,6 +572,24 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       }
     } catch (error) {
       return writeFailure({ phase: "target", reason: reasonOf(error) });
+    }
+
+    if (input.expectedContent !== undefined) {
+      try {
+        const current = yield* API.Fs.operations.readTextFile(target.path);
+        if (current !== input.expectedContent) {
+          return writeFailure({ phase: "target", reason: "changed-content" });
+        }
+        // A decoded replacement character may stand for invalid UTF-8 bytes.
+        if (current.includes("\uFFFD")) {
+          const bytes = yield* until(readFile(target.path));
+          if (!bytes.equals(new TextEncoder().encode(current))) {
+            return writeFailure({ phase: "target", reason: "changed-content" });
+          }
+        }
+      } catch (error) {
+        return writeFailure({ phase: "target", reason: reasonOf(error) });
+      }
     }
 
     notify(observe, { operation: "write", phase: "parents" });
