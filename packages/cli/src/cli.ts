@@ -40,6 +40,7 @@ import {
   Err,
   Ok,
   exit,
+  ensure,
   spawn,
   each,
   createSignal,
@@ -2210,13 +2211,16 @@ function* runTestDocument(
       return yield* runScopedDocument(document, mode, installService);
     });
   try {
-    if (config.journal !== undefined) {
-      return yield* run(config);
-    }
-    return yield* withFailureJournal(
-      root.journal((result: Result<void>) => !result.ok),
-      (stream) => run({ ...config, stream }),
-    );
+    return yield* scoped(function* () {
+      yield* ensure(() => root.drainCaptures());
+      if (config.journal !== undefined) {
+        return yield* run(config);
+      }
+      return yield* withFailureJournal(
+        root.journal((result: Result<void>) => !result.ok),
+        (stream) => run({ ...config, stream }),
+      );
+    });
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }

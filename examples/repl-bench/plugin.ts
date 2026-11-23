@@ -15,9 +15,11 @@ import { command as xmdCommand, cwd, parseDuration, realpath } from "@executable
 import { Test } from "@executablemd/testing";
 import { createContext, ensure, until, type Operation, type Yielded } from "effection";
 import { randomUUID } from "node:crypto";
-import { extname, join, resolve, sep } from "node:path";
+import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { MarkdownCapture } from "../../packages/cli/src/test-diagnostics.ts";
+import { snapshotChild } from "./lib/child-capture.ts";
 import { useTempDirectory } from "../../scripts/lib/temp-directory.ts";
 import {
   defaultSize,
@@ -340,6 +342,25 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     },
     { at: "min" },
   );
+  if (
+    scenario !== undefined &&
+    allocation?.value.home === launch.home &&
+    !wanted.entryBenchFixture &&
+    !wanted.entryPermissionFixture &&
+    wanted.plugins.length === 0
+  ) {
+    const capture = yield* MarkdownCapture.get();
+    if (capture !== undefined) {
+      const snapshot = capture.register({ scenario, launchId: basename(launch.directory) });
+      yield* ensure(function* () {
+        try {
+          snapshot.files = yield* snapshotChild(launch, snapshot.report);
+        } catch (error) {
+          snapshot.report(error);
+        }
+      });
+    }
+  }
   const { dispatch, close } = yield* connectDriver(launch);
   yield* dispatch({ action: "ready" });
   let sidekick: Yielded<ReturnType<typeof attachSidekick>> | undefined;
