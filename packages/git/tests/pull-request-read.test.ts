@@ -29,6 +29,7 @@ import {
   withResolvers,
 } from "effection";
 import { API } from "@executablemd/runtime";
+import { replGitHubPullRequestReadResolver } from "../src/deno/composition/pull-request-host.ts";
 import { denoGitHubSource } from "../src/deno/composition/github-host.ts";
 import { ReplGitHubBaseUrl } from "../src/deno/issue/configuration.ts";
 import { exists } from "@effectionx/fs";
@@ -39,7 +40,6 @@ import type { PullRequestReadResult } from "@executablemd/git/api";
 import { PullRequestAPI } from "@executablemd/git/api";
 import {
   gitHubPullRequestReadHandler,
-  gitHubPullRequestReadResolver,
   parseGitHubPullRequestUrl,
   recognizesGitHubPullRequestUrl,
 } from "../src/deno/composition/pull-request-reads.ts";
@@ -1095,22 +1095,17 @@ describe("Tier PRR — pull-request evidence", () => {
         },
       });
       yield* ReplGitHubBaseUrl.set(cliBase);
-      const resolved = gitHubPullRequestReadResolver(
-        {
-          host(configured) {
-            const { endpoint } = denoGitHubSource(configured);
-            return gitHubSource({
-              ...host.access,
-              endpoint,
-              *send(request) {
-                host.requests.push(request);
-                return { status: 200, body: "[]" };
-              },
-            });
+      const resolved = replGitHubPullRequestReadResolver((configured) => {
+        const { endpoint } = denoGitHubSource(configured);
+        return gitHubSource({
+          ...host.access,
+          endpoint,
+          *send(request) {
+            host.requests.push(request);
+            return { status: 200, body: "[]" };
           },
-        },
-        "repl",
-      );
+        });
+      });
       yield* PullRequestAPI.around({
         read: gitHubPullRequestReadHandler(resolved, (_admitted, perform) => perform()),
       });

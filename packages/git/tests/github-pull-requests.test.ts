@@ -14,7 +14,6 @@ import process from "node:process";
 import { scoped } from "effection";
 import { API } from "@executablemd/runtime";
 import { denoPullRequestOperations } from "../src/deno/composition/pull-request-host.ts";
-import { GITHUB_PULL_REQUESTS_ENV } from "../src/deno/composition/pull-request-configuration.ts";
 import type { Operation } from "effection";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import {
@@ -785,25 +784,12 @@ describe("what the published pull-request facade is, and what it keeps", () => {
   it("gives each read its own retention callback rather than keeping one", function* () {
     const operations = denoPullRequestOperations();
     const reached: string[] = [];
-    // Admitted, so the read is this adapter's own and reaches a callback at
-    // all. Stated through the configuration seam rather than written into the
-    // process this case is running in.
-    const stated = JSON.stringify({ allowed: ["https://github.com/owner/repository"] });
     // Two reads through one facade, each with a callback of its own. A facade
     // that stored the first would hand the second read the first caller's
     // retention, which is how an entry would retain another entry's evidence.
     const refusing = function* (): Operation<never> {
       throw new Error("this control reaches no transport");
     };
-    yield* API.Env.around(
-      {
-        // deno-lint-ignore require-yield
-        *env([name]: [string]): Operation<string | undefined> {
-          return name === GITHUB_PULL_REQUESTS_ENV ? stated : undefined;
-        },
-      },
-      { at: "min" },
-    );
     for (const name of ["first", "second"]) {
       try {
         yield* operations.read(

@@ -27,10 +27,13 @@
 
 import type { Operation } from "effection";
 import {
+  gitHubPullRequestAccess,
   gitHubPullRequestReadHandler,
   gitHubPullRequestReadResolver,
 } from "./pull-request-reads.ts";
 import type { AdmittedReadExecution } from "./pull-request-reads.ts";
+import type { GitHubSource } from "./github.ts";
+import { replGitHubBaseUrl } from "../issue/configuration.ts";
 import { denoGitHubSource } from "./github-host.ts";
 import { pullRequestProvider } from "./github-pull-request.ts";
 import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
@@ -49,6 +52,14 @@ export interface DenoPullRequestOperations {
   provider(origin: string, inputs: PullRequestInputs): Operation<GitHostProvider>;
 }
 
+export function replGitHubPullRequestReadResolver(
+  host: (endpoint?: string) => GitHubSource = denoGitHubSource,
+) {
+  return gitHubPullRequestReadResolver({ host }, function* () {
+    return { endpoint: yield* replGitHubBaseUrl() };
+  });
+}
+
 /**
  * One inert handle per installation.
  *
@@ -57,8 +68,8 @@ export interface DenoPullRequestOperations {
  * caller.
  */
 export function denoPullRequestOperations(): DenoPullRequestOperations {
-  const reads = gitHubPullRequestReadResolver({ host: denoGitHubSource }, "repl");
-  const publication = gitHubPullRequestReadResolver({ host: denoGitHubSource });
+  const reads = replGitHubPullRequestReadResolver();
+  const publication = gitHubPullRequestAccess({ host: denoGitHubSource });
 
   return {
     read(
@@ -75,7 +86,7 @@ export function denoPullRequestOperations(): DenoPullRequestOperations {
     *provider(origin: string, inputs: PullRequestInputs): Operation<GitHostProvider> {
       // Opened inside the attempt that asked, so the session ends with it. Publication
       // uses the workflow GitHub endpoint setting.
-      const access = yield* (yield* publication.access()).open();
+      const access = yield* (yield* publication()).open();
       return pullRequestProvider(access, origin, inputs);
     },
   };
