@@ -382,16 +382,27 @@ export function appendCheckedRecord(
       ) {
         throw new JournalChangedError();
       }
-      check.permit();
-      yield* complete(handle.writeFile(record, "utf8"));
-      const written = versionOf(yield* complete(handle.stat({ bigint: true })));
-      if (
-        written.size !== before.size + BigInt(Buffer.byteLength(record)) ||
-        !sameJournal(written, yield* journalVersion(path))
-      ) {
-        throw new JournalChangedError();
-      }
-      check.acknowledged(written);
+      // Once issued, the write and its acknowledgement must finish together,
+      // even when Stop halts the caller while the write is pending.
+      yield* scoped(function* () {
+        let issued: Promise<void> | undefined;
+        yield* ensure(function* () {
+          if (issued === undefined) {
+            return;
+          }
+          yield* until(issued);
+          const written = versionOf(yield* until(handle.stat({ bigint: true })));
+          if (
+            written.size !== before.size + BigInt(Buffer.byteLength(record)) ||
+            !sameJournal(written, yield* journalVersion(path))
+          ) {
+            throw new JournalChangedError();
+          }
+          check.acknowledged(written);
+        });
+        check.permit();
+        issued = handle.writeFile(record, "utf8");
+      });
     } catch (cause) {
       if (cause instanceof JournalChangedError) {
         throw cause;
