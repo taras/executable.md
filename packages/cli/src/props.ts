@@ -530,7 +530,7 @@ export interface Extraction {
 export function extractPropsArgs(
   args: string[],
   bindings: Binding[],
-  reservedOption?: string,
+  reservedOptions: readonly string[] = [],
 ): Extraction {
   const byOption = new Map(bindings.map((binding) => [binding.option, binding]));
   const collected = new Map<string, string[]>();
@@ -606,7 +606,7 @@ export function extractPropsArgs(
       continue;
     }
     const next = args[index + 1];
-    if (next === undefined || next === reservedOption) {
+    if (next === undefined || reservedOptions.includes(next)) {
       throw new PropsError(`${binding.option} requires a value`);
     }
     record(binding, next);

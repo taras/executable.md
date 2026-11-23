@@ -790,6 +790,10 @@ const commandRoutes = xmd.phases.flatMap((phase) => phase.routes);
 const COMMAND_NAMES = commandRoutes.map((route) => route.name);
 const shorthand = command(cliName("xmd"), cliVersion(XMD_VERSION), runGrammar, checkpoint());
 
+const VERBOSE_OPTION = "--verbose";
+const VERBOSE_ALIAS = "-V";
+const RUN_VERBOSE_OPTIONS: readonly string[] = [VERBOSE_OPTION, VERBOSE_ALIAS];
+
 interface ParsedCommand {
   version: string | undefined;
   config: ReturnType<typeof commandModel> | ReplSelection | undefined;
@@ -818,8 +822,11 @@ function parseCommand(
       // A bare dash selects the default test target. Only run reads stdin.
       return ".";
     }
-    if (arg === "-V" && (!named || first === "run" || first === "test" || first === "workflow")) {
-      return "--verbose";
+    if (
+      arg === VERBOSE_ALIAS &&
+      (!named || first === "run" || first === "test" || first === "workflow")
+    ) {
+      return VERBOSE_OPTION;
     }
     return arg;
   });
@@ -2502,8 +2509,6 @@ function beforeProperties(args: string[]): string[] {
   return at === -1 ? args : args.slice(0, at);
 }
 
-const RUN_VERBOSE_OPTION = "--verbose";
-
 function startupHostArgs(args: string[]): string[] {
   const host: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -2525,7 +2530,7 @@ function startupHostArgs(args: string[]): string[] {
       next !== undefined &&
       next !== "--" &&
       !isPropertyOption(next) &&
-      !(arg.startsWith("--props-") && next === RUN_VERBOSE_OPTION)
+      !(arg.startsWith("--props-") && RUN_VERBOSE_OPTIONS.includes(next))
     ) {
       index += 1;
     }
@@ -2782,7 +2787,7 @@ function* preparePropsPhase(
   try {
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
-    const extraction = extractPropsArgs(fixed, bindings, RUN_VERBOSE_OPTION);
+    const extraction = extractPropsArgs(fixed, bindings, RUN_VERBOSE_OPTIONS);
     const addressable = root.source === undefined && document.targetInfo.length > 0;
     return {
       args: extraction.rest,

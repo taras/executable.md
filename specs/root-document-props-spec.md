@@ -89,11 +89,11 @@ xmd run hello.md --props-loud=false
 
 There is no generated `--no-props-loud` option.
 
-In `xmd run`, a standalone `--verbose` immediately after a generated property
-option belongs to the host. For a boolean, `--props-loud --verbose` sets the
-property to true and enables host verbosity. For a string, the same spelling
-reports that `--props-loud` requires a value. To pass the literal string
-`--verbose`, write `--props-loud=--verbose`.
+In `xmd run`, a standalone `--verbose` or `-V` immediately after a generated
+property option belongs to the host. For a boolean, `--props-loud --verbose`
+and `--props-loud -V` set the property to true and enable host verbosity.
+For a string, either form reports that `--props-loud` requires a value.
+To pass either literal string, write `--props-loud=--verbose` or `--props-loud=-V`.
 
 An array of scalar values uses a repeated command-line option:
 
