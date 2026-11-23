@@ -54,7 +54,6 @@ import {
   readPullRequestEvidence as readEvidence,
 } from "./pull-request-evidence.ts";
 import { upsertPullRequest } from "./pull-request.ts";
-import { replGitHubBaseUrl } from "../issue/configuration.ts";
 import { gitHubPullRequestsConfiguration } from "./pull-request-configuration.ts";
 import type { RepositoryHost } from "./host.ts";
 import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
@@ -154,10 +153,9 @@ export interface GitHubPullRequestsConfiguration {
   /**
    * The canonical containers whose pull requests this host may read.
    *
-   * Absent authorizes no URL read at all — and disables only reads. An upsert
-   * names a branch this run published rather than a URL a document wrote, and
-   * carries its own Repository, Push evidence and reconciliation admission, so
-   * it is unaffected by what is or is not allowed here.
+   * Workflow and ordinary reads require a nonempty list. A host that admits
+   * reads without a repository list supplies an endpoint-only configuration.
+   * Upsert admission depends on the run's publication evidence.
    */
   readonly allowed?: readonly string[];
   /** The API base every request is built against, when not the default. */
@@ -248,17 +246,11 @@ export function gitHubPullRequestAccess(
 }
 
 function resolver(
-  options: GitHubPullRequestsOptions,
-  mode: "repl" | undefined,
+  resolve: () => Operation<GitHubPullRequestsConfiguration | undefined>,
 ): () => Operation<GitHubPullRequestsConfiguration | undefined> {
   let settled: { readonly configuration: GitHubPullRequestsConfiguration | undefined } | undefined;
-  return function* (): Operation<GitHubPullRequestsConfiguration | undefined> {
-    settled ??= {
-      configuration:
-        mode === "repl"
-          ? { endpoint: yield* replGitHubBaseUrl() }
-          : (options.configuration ?? (yield* gitHubPullRequestsConfiguration())),
-    };
+  return function* () {
+    settled ??= { configuration: yield* resolve() };
     return settled.configuration;
   };
 }
@@ -303,28 +295,34 @@ export type AdmittedReadExecution = (
 /**
  * This adapter's lazily memoized configuration and transport, resolved once.
  *
- * Built once per installation — or, for an entry, once per entry — and inert
- * until something actually needs a session. Naming it reads no configuration
- * and opens nothing.
+ * The default read policy requires the configured repository list. A host can
+ * supply its own read configuration resolver. Returning undefined delegates the
+ * read without opening a session.
  */
 export function gitHubPullRequestReadResolver(
   options: GitHubPullRequestsOptions = {},
-  mode?: "repl",
+  resolveReadConfiguration?: () => Operation<GitHubPullRequestsConfiguration | undefined>,
 ): {
-  readonly mode?: "repl";
   readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
   readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
-  /** The two above in the order a caller that just wants a session needs them. */
   readonly access: () => Operation<GitHubSource>;
 } {
-  const authorized = resolver(options, mode);
+  const configuration = resolver(function* () {
+    return options.configuration ?? (yield* gitHubPullRequestsConfiguration());
+  });
+  const authorized = resolver(
+    resolveReadConfiguration ??
+      function* () {
+        const configured = yield* configuration();
+        return configured?.allowed?.length ? configured : undefined;
+      },
+  );
   const transport = transports(options);
   return {
-    mode,
     authorized,
     transport,
     *access(): Operation<GitHubSource> {
-      return transport((yield* authorized()) ?? {});
+      return transport((yield* configuration()) ?? {});
     },
   };
 }
@@ -332,12 +330,11 @@ export function gitHubPullRequestReadResolver(
 /**
  * The one admitted-read handler, over whichever execution the host supplies.
  *
- * The adapter matches, admits and parses targets before opening a session. The host selects the
- * read mode and supplies the execution policy for admitted reads.
+ * The adapter matches, admits and parses targets before opening a session. The
+ * host supplies the read configuration and the execution policy for admitted reads.
  */
 export function gitHubPullRequestReadHandler(
   resolved: {
-    readonly mode?: "repl";
     readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
     readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
   },
@@ -358,13 +355,8 @@ export function gitHubPullRequestReadHandler(
       return yield* next(url, read);
     }
 
-    // Resolve only matched requests. Ordinary and workflow reads require an
-    // operator allowlist. REPL reads use the command's GitHub API base.
     const configuration = yield* authorized();
-    if (
-      configuration === undefined ||
-      (resolved.mode !== "repl" && !configuration.allowed?.length)
-    ) {
+    if (configuration === undefined) {
       return yield* next(url, read);
     }
 

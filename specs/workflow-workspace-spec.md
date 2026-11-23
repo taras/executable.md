@@ -249,10 +249,9 @@ acknowledged publication of that branch, from that checkout, at that commit
 admits the upsert. A self-closing `<PullRequest />` details read and the three
 collection reads need neither a Repository nor a working directory. Each
 retains the provider's complete result. Restoration passes through live
-composition and the host's current URL admission, so withdrawing a target
-also prevents its retained result from binding. `<Issue>` is available on
-the same terms as publication, and lives at a service rather than in a
-Workspace.
+composition and validates the GitHub PR URL. The workflow allowlist does
+not govern REPL reads or their restoration. `<Issue>` is available on the
+same terms as publication, and lives at a service rather than in a Workspace.
 
 ## 3. Workflow lifecycle
 

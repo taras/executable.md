@@ -11220,11 +11220,11 @@ synthetic handler answer and a failed or pending publication each authorize
 nothing, and each refuses before a request, a credential or contact exists. The
 upsert takes the selected placement's managed slot and no mutation lease.
 
-Its self-closing record read and three evidence reads retain the provider's complete normalized answer and nothing above it.
-Each needs no Repository and no working directory, so an entry with no managed
-root reads a GitHub PR URL through the configured REPL API base and still refuses an upsert for want of local
-capability. Restoration passes the host's current URL admission and the live
-composition around it, and a read authored after a question is a new occurrence
+Its self-closing record read and three evidence reads retain the provider's
+complete normalized answer. Each works without a Repository, working directory
+or managed root. The read uses the configured REPL GitHub API base. Upsert
+requires local capability. Restoration validates the GitHub PR URL and passes
+through live composition. A read authored after a question is a new occurrence
 that reaches the service. Each dispatches through both ordinary chains — the
 semantic one and the transport one beneath it — ending in a default private to
 that one invocation, so a handler that answers without delegating opens no

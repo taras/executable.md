@@ -100,6 +100,7 @@ import type { GitHubStore } from "../../git/tests/support/github.ts";
  * configuration contract, and a fixture that reached the adapter's own private
  * constant to spell it would be asserting the adapter against itself.
  */
+const REPL_GITHUB_BASE = "XMD_REPL_GITHUB_BASE_URL";
 const PULL_REQUEST_CONFIGURATION = "XMD_WORKFLOW_GITHUB_PULL_REQUESTS";
 
 /** One request this suite's modeled GitHub receives, as its transport sees it. */
@@ -783,9 +784,9 @@ interface RunOptions {
   readonly owner?: string;
   /** The answer a question in this entry receives, when a row supplies one. */
   readonly answer?: Json;
-  /** The containers this deployment allows pull-request reads in. */
+  /** The repository list in the workflow configuration. */
   readonly allowed?: readonly string[];
-  /** Whether this deployment states any pull-request configuration at all. */
+  /** Whether this deployment supplies workflow and publication configuration. */
   readonly configured?: boolean;
 }
 
@@ -817,6 +818,9 @@ function run(
         // deno-lint-ignore require-yield
         *env([name]: [string]): Operation<string | undefined> {
           counted.env.push(name);
+          if (name === REPL_GITHUB_BASE) {
+            return fixture.endpoint;
+          }
           return name === PULL_REQUEST_CONFIGURATION ? stated : undefined;
         },
       },
@@ -1372,28 +1376,28 @@ describe("one entry's pull request", () => {
     expect(fixture.store.requests.length).toBe(sent);
   });
 
-  it("A7: a details URL outside the ceiling refuses before authentication or HTTP", function* () {
+  it("A7: reads details without a checkout or workflow configuration", function* () {
     const fixture = yield* useFixture();
-    const broker = yield* useBlockingLogin(fixture);
+    fixture.store.pullRequests.push(
+      stored({ number: 1, title: TITLE, body: BODY, headRef: BRANCH }),
+    );
     const counted = counters();
-    const source = `<PullRequest url="${LOCATOR}/pull/1" />`;
-    const ran = yield* race([
-      run(fixture, source, new InMemoryStream(), counted, {
-        root: undefined,
-        refuseNative: true,
-        allowed: ["https://github.com/owner/elsewhere"],
-      }),
-      (function* (): Operation<never> {
-        yield* broker.started;
-        throw new Error("a details URL outside the ceiling attempted to acquire a credential");
-      })(),
-    ]);
-    expect(String(ran.refusal)).toContain("has not authorized");
-    expect(ran.output).toBe("");
-    expect(counted.env).toContain(PULL_REQUEST_CONFIGURATION);
+    const ran = yield* run(
+      fixture,
+      `<PullRequest url="${LOCATOR}/pull/1" yq=".title" as="pr" />\n\nTitle {pr.value}`,
+      new InMemoryStream(),
+      counted,
+      { cwd: fixture.root, root: undefined, refuseNative: true, configured: false },
+    );
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.output).toContain(`Title ${TITLE}`);
+    expect(counted.env).toContain(REPL_GITHUB_BASE);
+    expect(counted.env).not.toContain(PULL_REQUEST_CONFIGURATION);
     expect(methodsCalled(counted)).toEqual([]);
-    expect(fixture.store.requests).toEqual([]);
-    expect(reads(ran.events)).toEqual([]);
+    expect(
+      fixture.store.requests.map(({ method, url }) => [method, new URL(url).pathname]),
+    ).toEqual([["GET", "/repos/owner/repository/pulls/1"]]);
+    expect(reads(ran.events)).toHaveLength(1);
   });
 
   it("Q2: a superseding publication of the same branch decides the head", function* () {
@@ -1642,12 +1646,11 @@ describe("what a bound pull-request body does first", () => {
     expect(mutations(fixture.store)).toEqual(["create"]);
   });
 
-  it("Q27: a child that refuses leaves the parent with no request and nothing contacted", function* () {
+  it("Q27: a failed child read leaves the parent without a publication request", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     const stream = new InMemoryStream();
-    // The same body, with one child reading a container this deployment never
-    // allowed. The parent never resolves, so it asks for nothing.
+    fixture.evidence.refuses = 403;
     const source = [
       `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
       `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
@@ -1656,7 +1659,7 @@ describe("what a bound pull-request body does first", () => {
       `  <Git.Commit message="Prepare the release" as="commit" />`,
       `  <PullRequest title=${JSON.stringify(TITLE)} as="pullRequest">`,
       `<Git.Push />`,
-      `<PullRequest.Reviews url="https://github.com/owner/elsewhere/pull/4" as="inner" />`,
+      `<PullRequest.Reviews url=${JSON.stringify(FIRST_URL)} as="inner" />`,
       BODY,
       `  </PullRequest>`,
       "",
@@ -1668,13 +1671,18 @@ describe("what a bound pull-request body does first", () => {
 
     const ran = yield* run(fixture, source, stream, counted);
     expect(ran.refusal).not.toBe(undefined);
-    expect(String(ran.refusal)).toContain("has not authorized");
+    expect(String(ran.refusal)).toContain("did not answer with the complete collection");
     const held = yield* stream.readAll();
     // The publication child did run and is history; the parent's own request
     // was never written and the Git host was never asked to open anything.
     expect(publications(held)).toHaveLength(1);
     expect(requests(held)).toEqual([]);
-    expect(reads(held)).toEqual([]);
+    const retained = reads(held);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.type === "yield" ? retained[0].result.status : "ok").not.toBe("ok");
+    expect(
+      fixture.store.requests.map(({ method, url }) => [method, new URL(url).pathname]),
+    ).toContainEqual(["GET", "/repos/owner/repository/pulls/1/reviews"]);
     expect(mutations(fixture.store)).toEqual([]);
     expect(ran.output).not.toContain("opened 1");
   });
@@ -2196,7 +2204,7 @@ describe("evidence reads inside one entry", () => {
     expect(counted.env).toEqual([]);
   });
 
-  it("Q16: a URL this deployment no longer allows refuses before the snapshot", function* () {
+  it("Q16: a restrictive workflow allowlist leaves the REPL read and replay available", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
@@ -2207,21 +2215,25 @@ describe("evidence reads inside one entry", () => {
       "",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, { root: undefined });
+    const options = {
+      root: undefined,
+      allowed: ["https://github.com/owner/elsewhere"],
+    };
+    const ran = yield* run(fixture, source, new InMemoryStream(), counted, options);
     expect(ran.refusal).toBe(undefined);
     const sent = fixture.store.requests.length;
 
-    // The operator withdrew permission for that container while the entry was
-    // away. A snapshot this entry already holds is not permission to bind it.
+    expect(ran.output).toContain("reviews 1");
+    expect(counted.env).not.toContain(PULL_REQUEST_CONFIGURATION);
+    expect(sent).toBe(1);
+
+    fixture.evidence.reviews = [];
     const resumed = counters();
     const replayed = new InMemoryStream([...ran.events].filter(terminal));
-    const again = yield* run(fixture, source, replayed, resumed, {
-      root: undefined,
-      allowed: ["https://github.com/owner/elsewhere"],
-    });
-    expect(again.refusal).not.toBe(undefined);
-    expect(String(again.refusal)).toContain("has not authorized");
-    expect(again.output).not.toContain("reviews 1");
+    const again = yield* run(fixture, source, replayed, resumed, options);
+    expect(again.refusal).toBe(undefined);
+    expect(again.output).toBe(ran.output);
+    expect(resumed.env).not.toContain(PULL_REQUEST_CONFIGURATION);
     expect(fixture.store.requests.length).toBe(sent);
     expect(reads(yield* replayed.readAll())).toHaveLength(1);
   });
