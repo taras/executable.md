@@ -1472,6 +1472,7 @@ function* drive(
   // not a key typed into the composer, and one store for both would evict the
   // other's lines on every keystroke.
   const draftFits = createPlainFitStore();
+  const draftWindow: ReplDraftWindow = {};
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const liveScreen = options.headless?.view;
@@ -2408,6 +2409,7 @@ function* drive(
         guidanceFits,
         draftFits,
         queueFits,
+        draftWindow,
       );
     }
 
@@ -2681,6 +2683,7 @@ function* drive(
           guidanceFits,
           draftFits,
           queueFits,
+          draftWindow,
         );
         if (!ready.ok) {
           throw ready.error;
@@ -3307,6 +3310,7 @@ function* drive(
         guidanceFits,
         draftFits,
         queueFits,
+        draftWindow,
       );
     }
     const draw = () => {
@@ -5239,6 +5243,7 @@ function* paint(
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
   queue?: ReplPlainFitStore,
+  draftWindow?: ReplDraftWindow,
 ): Operation<ReplPainted> {
   while (true) {
     const painted = yield* prepared(
@@ -5253,6 +5258,7 @@ function* paint(
       guidance,
       draft,
       queue,
+      draftWindow,
     );
     if (painted !== undefined) {
       return painted;
@@ -5282,6 +5288,7 @@ function* prepared(
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
   queue?: ReplPlainFitStore,
+  draftWindow?: ReplDraftWindow,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -5316,6 +5323,7 @@ function* prepared(
         guidance,
         draft,
         queue,
+        draftWindow,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -5450,6 +5458,7 @@ export function* commitReplFrame(
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
   queue?: ReplPlainFitStore,
+  draftWindow?: ReplDraftWindow,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
@@ -5463,6 +5472,7 @@ export function* commitReplFrame(
     guidance,
     draft,
     queue,
+    draftWindow,
   );
   if (!prepared.ok) {
     return prepared;
@@ -5733,6 +5743,7 @@ export function* prepareFrame(
    */
   draftStore?: ReplPlainFitStore,
   queueStore?: ReplPlainFitStore,
+  draftWindow?: ReplDraftWindow,
 ): Operation<Result<ReplPrepared>> {
   view = {
     ...view,
@@ -6293,9 +6304,19 @@ export function* prepareFrame(
   if (drafted.value !== undefined) {
     editors.set("footer:input", drafted.value);
     const count = Math.max(1, capacityOf(editorBounds));
-    const from = Math.max(0, Math.min(drafted.value.active, drafted.value.display.length - count));
+    const from = draftWindowFrom(
+      count,
+      drafted.value.display.length,
+      drafted.value.active,
+      draftWindow?.from,
+    );
+    if (draftWindow !== undefined) {
+      draftWindow.from = from;
+    }
     const shown = drafted.value.display.slice(from, from + count).map((one) => one.text);
     draftRows = [...shown, ...Array.from({ length: count - shown.length }, () => "")];
+  } else if (draftWindow !== undefined) {
+    delete draftWindow.from;
   }
   // The drawer's own notices, fitted to the interior this frame measured. Here
   // rather than in the builder that draws them: the engine is what knows how
@@ -6554,4 +6575,26 @@ function widthOf(measured: ReplMeasured, id: string | undefined): number {
 /** The Entries viewport's structural id, or one nothing measures. */
 function entriesViewportOf(manifest: ReplLayoutManifest): string {
   return manifest.viewports.find((slot) => slot.window === ENTRIES_WINDOW)?.id ?? "";
+}
+
+/** Keeps the caret inside the remembered window, clamped to the available rows. */
+export function draftWindowFrom(
+  count: number,
+  length: number,
+  active: number,
+  remembered?: number,
+): number {
+  const last = Math.max(0, length - count);
+  let from = remembered ?? Math.min(active, last);
+  if (active < from) {
+    from = active;
+  } else if (active >= from + count) {
+    from = active - count + 1;
+  }
+  return Math.max(0, Math.min(from, last));
+}
+
+/** Retains the visible draft rows between frames so caret movement need not slide the text. */
+export interface ReplDraftWindow {
+  from?: number;
 }
