@@ -22,9 +22,9 @@ export function caretFor(value: string, held: ReplCaret | undefined): ReplCaret 
     return { value, offset: value.length };
   }
   const offset =
-    boundaries(value)
-      .filter((at) => at <= held.offset)
-      .at(-1) ?? 0;
+    held.offset >= value.length
+      ? value.length
+      : (GRAPHEMES.segment(value).containing(held.offset)?.index ?? 0);
   return { ...held, offset };
 }
 
