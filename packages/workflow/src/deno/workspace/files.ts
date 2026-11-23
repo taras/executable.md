@@ -454,18 +454,28 @@ function* writeOutcome(
 
   let content = input.content;
   if (input.expectedContent !== undefined) {
+    let bytes: Uint8Array;
     try {
-      const bytes = yield* filesystem.readFile(path);
-      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-      // The Workspace's text read removes one UTF-8 BOM.
-      const prefix = text.startsWith("\uFEFF") ? "\uFEFF" : "";
-      if (text.slice(prefix.length) !== input.expectedContent) {
-        return refused("target", "changed-content");
-      }
-      content = prefix + content;
+      bytes = yield* filesystem.readFile(path);
     } catch (error) {
       return refused("target", refusalReason(asRefusal(error)));
     }
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    let text: string;
+    try {
+      text = decoder.decode(bytes);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        return refused("target", "changed-content");
+      }
+      throw error;
+    }
+    // The Workspace's text read removes one UTF-8 BOM.
+    const prefix = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+    if (text.slice(prefix.length) !== input.expectedContent) {
+      return refused("target", "changed-content");
+    }
+    content = prefix + content;
   }
 
   try {

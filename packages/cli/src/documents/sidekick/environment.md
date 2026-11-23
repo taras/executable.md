@@ -36,8 +36,11 @@ answer.
 - For a small edit to an existing file, submit a read entry such as
   `<File path="notes.md" />` and inspect its output. Submit the matching patch
   in a second entry. Check the entry feedback for a file error. A successful
-  patch emits no text. After a stale-patch error, read the source again before
-  preparing a fresh diff.
+  patch emits no text. Echoed `<File.Patch>` source means the patch did not
+  execute. When a diff touches a Markdown fence, make the outer diff fence
+  longer than the fence in the diff's context, for example four backticks
+  around a diff with three backticks in its context. After a stale-patch
+  error, read the source again before preparing a fresh diff.
 
   ````xmd
   <File.Patch path="notes.md">
