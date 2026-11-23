@@ -18,10 +18,9 @@
  * would make it decide admission too, and would put the credential in its
  * hands to do it with.
  *
- * ## One handle, one memoization, no stored callback
+ * ## Independent read and publication settings
  *
- * The configuration and the transport resolve once per handle and stay inert
- * until something needs a session, which is the existing behavior. Neither the
+ * Each operation resolves its own configuration and transport on first use. Neither the
  * callback nor the continuation a call supplies is kept on the handle: they
  * belong to that one call, so two concurrent reads cannot reach each other's.
  */
@@ -58,7 +57,8 @@ export interface DenoPullRequestOperations {
  * caller.
  */
 export function denoPullRequestOperations(): DenoPullRequestOperations {
-  const resolved = gitHubPullRequestReadResolver({ host: denoGitHubSource });
+  const reads = gitHubPullRequestReadResolver({ host: denoGitHubSource }, "repl");
+  const publication = gitHubPullRequestReadResolver({ host: denoGitHubSource });
 
   return {
     read(
@@ -69,13 +69,13 @@ export function denoPullRequestOperations(): DenoPullRequestOperations {
     ): Operation<PullRequestReadResult> {
       // Built for this call, so what is admitted reaches this caller's own
       // callback and nothing on the shared handle holds it.
-      return gitHubPullRequestReadHandler(resolved, execute)([url, options], next);
+      return gitHubPullRequestReadHandler(reads, execute)([url, options], next);
     },
 
     *provider(origin: string, inputs: PullRequestInputs): Operation<GitHostProvider> {
-      // Opened inside the attempt that asked, so the session ends with it. The
-      // recipe is the adapter's own — one memoization, shared with the read.
-      const access = yield* (yield* resolved.access()).open();
+      // Opened inside the attempt that asked, so the session ends with it. Publication
+      // uses the workflow GitHub endpoint setting.
+      const access = yield* (yield* publication.access()).open();
       return pullRequestProvider(access, origin, inputs);
     },
   };

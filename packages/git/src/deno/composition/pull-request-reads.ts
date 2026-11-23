@@ -54,6 +54,7 @@ import {
   readPullRequestEvidence as readEvidence,
 } from "./pull-request-evidence.ts";
 import { upsertPullRequest } from "./pull-request.ts";
+import { replGitHubBaseUrl } from "../issue/configuration.ts";
 import { gitHubPullRequestsConfiguration } from "./pull-request-configuration.ts";
 import type { RepositoryHost } from "./host.ts";
 import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
@@ -248,11 +249,15 @@ export function gitHubPullRequestAccess(
 
 function resolver(
   options: GitHubPullRequestsOptions,
+  mode: "repl" | undefined,
 ): () => Operation<GitHubPullRequestsConfiguration | undefined> {
   let settled: { readonly configuration: GitHubPullRequestsConfiguration | undefined } | undefined;
   return function* (): Operation<GitHubPullRequestsConfiguration | undefined> {
     settled ??= {
-      configuration: options.configuration ?? (yield* gitHubPullRequestsConfiguration()),
+      configuration:
+        mode === "repl"
+          ? { endpoint: yield* replGitHubBaseUrl() }
+          : (options.configuration ?? (yield* gitHubPullRequestsConfiguration())),
     };
     return settled.configuration;
   };
@@ -302,15 +307,20 @@ export type AdmittedReadExecution = (
  * until something actually needs a session. Naming it reads no configuration
  * and opens nothing.
  */
-export function gitHubPullRequestReadResolver(options: GitHubPullRequestsOptions = {}): {
+export function gitHubPullRequestReadResolver(
+  options: GitHubPullRequestsOptions = {},
+  mode?: "repl",
+): {
+  readonly mode?: "repl";
   readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
   readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
   /** The two above in the order a caller that just wants a session needs them. */
   readonly access: () => Operation<GitHubSource>;
 } {
-  const authorized = resolver(options);
+  const authorized = resolver(options, mode);
   const transport = transports(options);
   return {
+    mode,
     authorized,
     transport,
     *access(): Operation<GitHubSource> {
@@ -322,13 +332,12 @@ export function gitHubPullRequestReadResolver(options: GitHubPullRequestsOptions
 /**
  * The one admitted-read handler, over whichever execution the host supplies.
  *
- * Matching, the host ceiling and target parsing are this adapter's own and stay
- * exactly where they were — before a session, a credential or a request exists,
- * so a refusal leaves no trace. What happens to an admitted read is the
- * profile's, and that is the only thing this is parameterized by.
+ * The adapter matches, admits and parses targets before opening a session. The host selects the
+ * read mode and supplies the execution policy for admitted reads.
  */
 export function gitHubPullRequestReadHandler(
   resolved: {
+    readonly mode?: "repl";
     readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
     readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
   },
@@ -349,23 +358,19 @@ export function gitHubPullRequestReadHandler(
       return yield* next(url, read);
     }
 
-    // The URL is this adapter's, so now — and only now — what this deployment
-    // authorized is read. With nothing allowed there is no URL read this host
-    // performs, so the request passes to whatever else is installed and,
-    // finding nothing, reaches the surface's own base error. Upsert is
-    // untouched by this: it is handled below whether or not any URL is
-    // allowed.
+    // Resolve only matched requests. Ordinary and workflow reads require an
+    // operator allowlist. REPL reads use the command's GitHub API base.
     const configuration = yield* authorized();
-    if (configuration?.allowed === undefined || configuration.allowed.length === 0) {
+    if (
+      configuration === undefined ||
+      (resolved.mode !== "repl" && !configuration.allowed?.length)
+    ) {
       return yield* next(url, read);
     }
 
     const element = ELEMENT[read.kind];
     const kind = read.kind;
-    // From here this middleware owns the answer, and what is allowed is asked
-    // before anything is built: a URL a document wrote is not a place this
-    // host authorized until the configuration says so.
-    if (!pullRequestAllowed(configuration.allowed, url)) {
+    if (configuration.allowed !== undefined && !pullRequestAllowed(configuration.allowed, url)) {
       throw new PullRequestReadError(
         "unavailable",
         element,

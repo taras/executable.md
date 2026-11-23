@@ -579,10 +579,17 @@ function* bareHead(origin: string, branch: string): Operation<string | undefined
   return undefined;
 }
 
-/** The two variables an operator sets to point this host at that service. */
+/** The REPL read and publication settings point to the same test service. */
 function configured(service: PullRequestServer): string {
-  const stated = JSON.stringify({ allowed: [LOCATOR], endpoint: service.url });
-  return `GH_TOKEN=${shellQuote(TOKEN)} XMD_WORKFLOW_GITHUB_PULL_REQUESTS=${shellQuote(stated)}`;
+  const stated = JSON.stringify({
+    allowed: ["https://github.com/octo/unrelated"],
+    endpoint: service.url,
+  });
+  return [
+    `GH_TOKEN=${shellQuote(TOKEN)}`,
+    `XMD_REPL_GITHUB_BASE_URL=${shellQuote(service.url)}`,
+    `XMD_WORKFLOW_GITHUB_PULL_REQUESTS=${shellQuote(stated)}`,
+  ].join(" ");
 }
 
 /** How many pull requests this service was asked to open. */
