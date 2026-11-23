@@ -26,6 +26,9 @@ import { unsupportedWorkflowHost } from "../src/workflow.ts";
 import type { UpgradeAssembly } from "../src/upgrade.ts";
 import { refusedStandardInput } from "./support/standard-input.ts";
 import { refusedPluginModules } from "./support/plugin-modules.ts";
+import type { PluginModuleLoader } from "../src/plugin-loader.ts";
+import { z } from "zod";
+import { Plugin } from "@executablemd/core/api";
 
 import { replGrammarError, REPL_VALUES } from "../src/cli.ts";
 import { readQuestionForm } from "../src/repl/elicitation.ts";
@@ -783,7 +786,10 @@ interface Invocation {
  * no history file, no terminal mode. An installer that is never entered is the
  * only way to see that from outside.
  */
-function* invoke(args: readonly string[]): Operation<Invocation> {
+function* invoke(
+  args: readonly string[],
+  loadPlugin: PluginModuleLoader = refusedPluginModules,
+): Operation<Invocation> {
   let status = 0;
   const diagnostics: string[] = [];
   let installed = 0;
@@ -807,7 +813,7 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
         function* () {},
         UPGRADE,
         refusedStandardInput,
-        refusedPluginModules,
+        loadPlugin,
         unsupportedWorkflowHost,
         undefined,
         {
@@ -903,16 +909,27 @@ describe("REPL command: what runs before the host is reached", () => {
   });
 
   it("refuses inline source with a contributed option before attaching", function* () {
+    const load: PluginModuleLoader = function* () {
+      return {
+        default: Plugin({
+          name: "probe",
+          command([cmd, args], next) {
+            return next(cmd, { ...args, probe: { owner: this.name, schema: z.string() } });
+          },
+        }),
+      };
+    };
     const args = [
       "repl",
       "--attach",
       "00000000-0000-4000-8000-000000000001",
-      "--github-base-url",
-      "https://ghe.invalid/api/v3",
+      "--plugin=./probe.mjs",
+      "--probe",
+      "present",
     ];
-    expect((yield* invoke(args)).installed).toBe(1);
+    expect((yield* invoke(args, load)).installed).toBe(1);
 
-    const refused = yield* invoke([...args, "-e", "value"]);
+    const refused = yield* invoke([...args, "-e", "value"], load);
     expect(refused).toEqual({
       status: 1,
       diagnostics: [

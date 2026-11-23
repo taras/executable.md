@@ -70,6 +70,7 @@ export {
   restoredGitRefusal,
   worktreeRefusal,
 } from "./src/deno/composition/refusals.ts";
+export { gitPluginWithIssueOptions } from "./src/deno/issue/configuration.ts";
 export { useDenoGitHubIssues } from "./src/deno/issue/github-host.ts";
 export { useDenoRepositoryOperations } from "./src/deno/repository-operations.ts";
 export type { DenoRepositoryOperations } from "./src/deno/repository-operations.ts";

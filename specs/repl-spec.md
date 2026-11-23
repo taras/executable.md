@@ -2857,8 +2857,9 @@ REPL reads the supplied issue URL and files in the explicitly selected tracker.
 Both work from an empty directory or a Git checkout. REPL uses the caller's
 GitHub authentication and needs no repository allowlist.
 
-The Git plugin declares `--github-base-url` and holds its parsed value in the
-command scope. The API base URL comes from a nonempty `XMD_REPL_GITHUB_BASE_URL`, then
+When the host supplies the GitHub issue adapter, the Git Plugin declares
+`--github-base-url` and holds its parsed value in the command scope. The API
+base URL comes from a nonempty `XMD_REPL_GITHUB_BASE_URL`, then
 `xmd repl --github-base-url`, then `https://api.github.com`. A GitHub Enterprise
 API base can serve issue URLs written with `github.com`. The ordinary provider
 rules for URL matching, authentication and operation permissions apply.

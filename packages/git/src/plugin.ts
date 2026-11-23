@@ -27,7 +27,6 @@
  */
 
 import type { Operation } from "effection";
-import { ReplGitHubBaseUrl } from "./issue/repl-config.ts";
 import { Plugin } from "@executablemd/core/api";
 import type {
   JournalAdmission,
@@ -208,43 +207,9 @@ export function* gitCompositionInstallation(): Operation<PluginInstallation> {
   return { admissions: [gitHostIdentityAdmission(), issueIdentityAdmission()] };
 }
 
-const GIT_PLUGIN_NAME = "@executablemd/git";
-const gitHubBaseUrl = {
-  "~standard": {
-    version: 1,
-    vendor: "@executablemd/git",
-    validate(value: unknown) {
-      return value === undefined || (typeof value === "string" && value.length > 0)
-        ? { value }
-        : { issues: [{ message: "expected a nonempty GitHub API base URL" }] };
-    },
-  },
-};
-
 export const gitPlugin: Plugin = Plugin({
-  name: GIT_PLUGIN_NAME,
-  command([command, args], next) {
-    if (command !== "repl") {
-      return next(command, args);
-    }
-    return next(command, {
-      ...args,
-      githubBaseUrl: {
-        owner: GIT_PLUGIN_NAME,
-        description: "GitHub API base URL for REPL issues",
-        schema: gitHubBaseUrl,
-      },
-    });
-  },
+  name: "@executablemd/git",
   *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
-    if (request.command === "repl") {
-      const baseUrl = request.options?.["githubBaseUrl"];
-      if (baseUrl !== undefined && (typeof baseUrl !== "string" || baseUrl.length === 0)) {
-        throw new Error("expected a nonempty GitHub API base URL");
-      }
-      yield* ReplGitHubBaseUrl.set(baseUrl);
-      return undefined;
-    }
     if (!declaresFor(request)) {
       return undefined;
     }

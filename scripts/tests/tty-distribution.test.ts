@@ -167,7 +167,7 @@ describe("the prepared terminal runtime in the canonical host binary", () => {
     const repl = (args: readonly string[]): string =>
       [
         `cd ${shellQuote(home)}`,
-        [binary, "repl", "--deny-all", ...args].map(shellQuote).join(" "),
+        [binary, "repl", ...args, "--deny-all"].map(shellQuote).join(" "),
       ].join("; ");
     const first = yield* allocate(repl([]), home);
     yield* showing(first, "[exit]", 180_000);

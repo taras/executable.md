@@ -1,4 +1,4 @@
-import { ReplGitHubBaseUrl } from "../src/issue/repl-config.ts";
+import { ReplGitHubBaseUrl } from "../src/deno/issue/configuration.ts";
 /**
  * Tier U — what a document cannot construct.
  *
