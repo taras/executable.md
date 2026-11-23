@@ -7,6 +7,7 @@ export default Plugin({
     return next(cmd, { ...args, probeValue: { owner: this.name, schema: z.string() } });
   },
   *install(request) {
-    throw new Error(`probe = ${request.options.probeValue}`);
+    const keys = Object.getOwnPropertyNames(request.options).join(",");
+    throw new Error(`probe = ${request.options.probeValue} (keys: ${keys})`);
   },
 });

@@ -719,31 +719,95 @@ describe("package test plugins", () => {
   });
 });
 
+function optionPluginSource(name: string, keys: readonly string[]): string {
+  return `
+    const schema = { "~standard": {
+      version: 1,
+      vendor: "fixture",
+      validate: (value) => ({ value }),
+    } };
+    export default {
+      name: ${JSON.stringify(name)},
+      command([cmd, args], next) {
+        const definitions = Object.fromEntries(
+          ${JSON.stringify(keys)}.map((key) => [key, { owner: this.name, schema }]),
+        );
+        return next(cmd, { ...args, ...definitions });
+      },
+      *install({ options }) {
+        console.log(JSON.stringify({ keys: Object.getOwnPropertyNames(options), options }));
+      },
+    };
+  `;
+}
+
 describe("REPL Plugin options", () => {
   it("parses only selected definitions and gives their settled values to the owner", function* () {
-    yield* useWorkspace({}, function* (dir) {
-      const attachment = ["--attach", "00000000-0000-4000-8000-000000000001"];
-      const location = "xmd://repl/kf39sla2/entries";
-      const args = ["repl", ...attachment, "--probe-value", location];
-      const absent = yield* runCli(args, { cwd: dir }).join();
-      expect(absent.code).toBe(1);
-      expect(absent.stderr).toContain("unrecognized option for xmd repl: --probe-value");
+    yield* useWorkspace(
+      {
+        "other.mjs": optionPluginSource("other-owner", ["otherValue", "optionalValue"]),
+      },
+      function* (dir) {
+        const attachment = ["--attach", "00000000-0000-4000-8000-000000000001"];
+        const location = "xmd://repl/kf39sla2/entries";
+        const args = ["repl", ...attachment, "--probe-value", location];
+        const absent = yield* runCli(args, { cwd: dir }).join();
+        expect(absent.code).toBe(1);
+        expect(absent.stderr).toContain("unrecognized option for xmd repl: --probe-value");
 
-      const owner = `--plugin=${fixture("repl-option.mjs")}`;
-      const stage = `--plugin=${fixture("repl-option-stage.mjs")}`;
-      const passed = yield* runCli([...args, owner, stage], { cwd: dir }).join();
-      expect(passed.code).toBe(1);
-      expect(passed.stdout.trim()).toBe("probe stage forwarded");
-      expect(passed.stderr.trim()).toBe(`probe = ${location}`);
+        const owner = `--plugin=${fixture("repl-option.mjs")}`;
+        const stage = `--plugin=${fixture("repl-option-stage.mjs")}`;
+        const passed = yield* runCli(
+          [...args, "--other-value", "second", "--plugin=./other.mjs", owner, stage],
+          { cwd: dir },
+        ).join();
+        expect(passed.code).toBe(1);
+        expect(passed.stdout.trim().split("\n")).toEqual([
+          "probe stage forwarded",
+          JSON.stringify({
+            keys: ["otherValue", "optionalValue"],
+            options: { otherValue: "second" },
+          }),
+        ]);
+        expect(passed.stderr.trim()).toBe(`probe = ${location} (keys: probeValue)`);
 
-      const changed = yield* runCli(
-        [...args, owner, `--plugin=${fixture("repl-option-override.mjs")}`],
-        {
-          cwd: dir,
-        },
-      ).join();
-      expect(changed.code).toBe(1);
-      expect(changed.stderr.trim()).toBe(`probe = overridden ${location}`);
-    });
+        const changed = yield* runCli(
+          [...args, owner, `--plugin=${fixture("repl-option-override.mjs")}`],
+          {
+            cwd: dir,
+          },
+        ).join();
+        expect(changed.code).toBe(1);
+        expect(changed.stderr.trim()).toBe(`probe = overridden ${location} (keys: probeValue)`);
+      },
+    );
+  });
+
+  it("refuses reserved and duplicate flag spellings before installing plugins", function* () {
+    yield* useWorkspace(
+      {
+        "reserved.mjs": optionPluginSource("reserved", ["eval"]),
+        "duplicate.mjs": optionPluginSource("duplicate", ["probeValue", "probe_value"]),
+      },
+      function* (dir) {
+        for (const [plugin, error] of [
+          ["reserved", "xmd repl: conflicting plugin option definition --eval"],
+          ["duplicate", "xmd repl: conflicting plugin option definition"],
+        ]) {
+          const refused = yield* runCli(
+            [
+              "repl",
+              `--plugin=./${plugin}.mjs`,
+              "--attach",
+              "00000000-0000-4000-8000-000000000001",
+            ],
+            { cwd: dir },
+          ).join();
+          expect(refused.code).toBe(1);
+          expect(refused.stderr.trim()).toBe(error);
+          expect(refused.stdout).toBe("");
+        }
+      },
+    );
   });
 });

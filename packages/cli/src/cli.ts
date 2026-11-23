@@ -2538,7 +2538,15 @@ function replPluginFlags(options: PluginCommandOptions): Set<string> {
   const builtIn = replConfig.phases.flatMap((phase) => Object.keys(phase.model.params));
   const collision = Object.keys(options).find((name) => builtIn.includes(name));
   const reserved = [...flags].find((flag) =>
-    [...REPL_VALUES, ...REPL_SWITCHES, "--plugin", "--help", "--version"].includes(flag),
+    [
+      ...REPL_VALUES,
+      ...REPL_SWITCHES,
+      "--plugin",
+      "--help",
+      "--version",
+      EVAL_OPTION,
+      EVAL_ALIAS,
+    ].includes(flag),
   );
   if (
     collision !== undefined ||
@@ -4275,7 +4283,7 @@ function* runCommand(
   if (coldLocation !== undefined) {
     const decoded = decodeLocation(coldLocation);
     if (!decoded.ok) {
-      console.error(replGrammarError(helpRequest.args, coldLocation) ?? decoded.error.message);
+      console.error(`xmd repl: ${decoded.error.message}`);
       yield* exit(1);
       return;
     }
