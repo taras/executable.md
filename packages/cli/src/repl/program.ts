@@ -3160,11 +3160,16 @@ function* drive(
       ) {
         state = { ...state, sidekickNotice: { ...state.sidekickNotice, decision: "retried" } };
       }
-      if (performed.remounted === true) {
+      if (
+        performed.remounted === true ||
+        (state.draftOpen === true) !== (before.draftOpen === true)
+      ) {
         // Before this call returns, so the next event of the burst is dispatched
         // against the controls that are now offered rather than the ones that
         // were. Waiting for the end-of-batch paint is too late: the key that
         // reaches for the new control has already been taken out of the queue.
+        // Opening or closing the Round editor changes the offer in the
+        // reduction alone, with nothing performed to report it.
         yield* remount();
       } else if (wheeled !== undefined && geometry !== NOTHING_ADMITTED) {
         // Read after `perform`, so anything it changed is a miss.
