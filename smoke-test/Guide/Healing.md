@@ -12,5 +12,5 @@ cannot bleed into component output.
 <Let as="healed">The text below opens **bold before the component
 <Badge />
 and continues after.</Let>
-<AssertEquals actual={healed} expected={"The text below opens **bold before the component\n**\n*✓ verified*\n\nand continues after."} />
+<AssertEquals actual={healed} expected={"The text below opens **bold before the component\n**\n*✓ verified*\nand continues after."} />
 </Test>

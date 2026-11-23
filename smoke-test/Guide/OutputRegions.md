@@ -10,6 +10,6 @@ inside `<Output>` that depends on it.
 
 <Test name="Output regions render only the selected region">
 <Let as="outputDemo"><OutputDemo /></Let>
-<AssertEquals actual={outputDemo} expected={"\n\n\n\nOUTPUTDEMO_SELECTED"} />
+<AssertEquals actual={outputDemo} expected={"\n\nOUTPUTDEMO_SELECTED"} />
 <AssertNotMatch actual={outputDemo} expected={/OUTPUTDEMO_DOC_LEAK/} />
 </Test>

@@ -16,5 +16,5 @@ replay outcomes are identical with zero appended journal events.
 echo "Run at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 </Let>
-<AssertMatch actual={runStamp} expected={/^\nRun at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/} />
+<AssertMatch actual={runStamp} expected={/^Run at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/} />
 </Test>

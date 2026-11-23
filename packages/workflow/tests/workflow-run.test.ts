@@ -355,12 +355,15 @@ describe("Tier WR — workflow runs", () => {
   it("WR4: a completed journal restores the run without consulting Git", function* () {
     const stream = new InMemoryStream();
     const live: WorkflowRun[] = [];
+    // The probe renders nothing and stands on its own line, so the prose after
+    // it is the output a replay hands the middleware below.
+    const REPLAYED = "<Probe />\nreplayed\n";
 
     yield* scoped(function* () {
       yield* useProbe(live);
       const workflow = runInstallation();
       yield* collect(
-        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
+        yield* executeInstalled({ ...inlineSource(REPLAYED), stream }, [workflow]),
       );
     });
 
@@ -377,7 +380,7 @@ describe("Tier WR — workflow runs", () => {
         },
       });
       yield* collect(
-        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
+        yield* executeInstalled({ ...inlineSource(REPLAYED), stream }, [workflow]),
       );
     });
 

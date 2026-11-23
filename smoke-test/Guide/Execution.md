@@ -22,7 +22,7 @@ are passed through as regular markdown.
 echo "Hello from a durable workflow"
 ```
 </Let>
-<AssertEquals actual={visibleExec} expected={"\nHello from a durable workflow"} />
+<AssertEquals actual={visibleExec} expected={"Hello from a durable workflow"} />
 </Test>
 
 <Test name="silent exec suppresses rendered output">
@@ -43,5 +43,5 @@ echo "This output is journaled but not shown in the document"
         type: string
     ```
 </Let>
-<AssertEquals actual={yamlBlock} expected={"\n```yaml\n# This is just a code block — not executed\nprops:\n  name:\n    type: string\n```"} />
+<AssertEquals actual={yamlBlock} expected={"```yaml\n# This is just a code block — not executed\nprops:\n  name:\n    type: string\n```"} />
 </Test>

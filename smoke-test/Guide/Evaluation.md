@@ -68,7 +68,7 @@ const label = "configured";
 echo "Service is {label}"
 ```
 </Let>
-<AssertEquals actual={portEcho} expected={"\nService is configured"} />
+<AssertEquals actual={portEcho} expected={"Service is configured"} />
 </Test>
 
 <Test name="Ephemeral eval reconstructs live bindings without rendering">
