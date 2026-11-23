@@ -9,7 +9,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";
@@ -178,6 +178,24 @@ describe(
     sanitizeResources: false,
   },
   () => {
+    it("rejects an unconsumed option after resolving a document property", function* () {
+      const source = SECTIONED + '\n<File path="ran.txt">executed</File>\n';
+      yield* useFixture({ "hello.md": source }, function* (fixture) {
+        const args = ["run", "hello.md", "--props-name", "-", "--raw"];
+        const refused = yield* runCli([...args, "--bogus"], { cwd: fixture.dir }).join();
+        expect(refused.code).toBe(1);
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).toContain("--bogus");
+        expect(refused.stderr).not.toContain("--props-name");
+        const effect = path.join(fixture.dir, "ran.txt");
+        expect(yield* exists(effect)).toBe(false);
+
+        const valid = yield* runCli(args, { cwd: fixture.dir }).expect();
+        expect(valid.stdout).toContain("Hello, -!");
+        expect(yield* exists(effect)).toBe(true);
+      });
+    });
+
     it("PC1: individual command-line options supply properties", function* () {
       const { stdout } = yield* useFixture({ "hello.md": HELLO }, function* (fixture) {
         return yield* runCli(

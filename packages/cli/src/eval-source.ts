@@ -1,14 +1,9 @@
 /**
  * `--eval, -e` — the inline root document, read from argv.
  *
- * Read here rather than from the resolved configuration, for the same reason
- * `--props` is: configliere coerces every separated option value through
- * `Number()` and falls back to the field default when the coerced value fails
- * validation, so `-e '42'` — a perfectly good document — would become the
- * number `42` and then disappear. The tokens are lifted out of argv entirely,
- * which also keeps the document's text away from every other scanner: argv
- * tokens are whole strings, so a one-token document reading `-h` or `--props`
- * would otherwise be taken for the option it resembles.
+ * The inline document is lifted out of argv so its text can supply the root
+ * and cannot participate in command or option selection. A document consisting
+ * of one token such as `-h` or `--props` is still document text.
  *
  * The value is whatever token follows, verbatim. A markdown document routinely
  * begins with `-` — a bullet list, a thematic break — so the leading-dash rule

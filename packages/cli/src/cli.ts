@@ -62,7 +62,24 @@ import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { inspect } from "node:util";
 import process from "node:process";
-import { program, object, field, cli, commands } from "configliere";
+import {
+  argument,
+  checkpoint,
+  cli,
+  command,
+  description as cliDescription,
+  extend,
+  multiple,
+  name as cliName,
+  option,
+  parse,
+  printErrors,
+  schema,
+  toggle,
+  version as cliVersion,
+  type AnyRoute,
+} from "@bomb.sh/router";
+import { renderCommandHelp } from "./cli-help.ts";
 import { z } from "zod";
 import {
   Config,
@@ -177,7 +194,6 @@ import {
   runWorkflow,
   UNSUPPORTED_WORKFLOW_HOST,
   unsupportedWorkflowHost,
-  workflowConfig,
 } from "./workflow.ts";
 import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workflow.ts";
 import { runWorkflowManagement } from "./workflow-management.ts";
@@ -193,24 +209,14 @@ const NEGATED_SECRET_DETECTION = "--no-secret-detection";
 const SECRET_DETECTION_WARNING =
   "WARNING: secret detection is disabled; credentials may be persisted.";
 
-/**
- * `--no-secret-detection` — the host's opt-out, on both commands.
- *
- * Declared as an ordinary boolean switch because that is what configliere
- * negates: a `secretDetection` field makes `--no-secret-detection` resolve to
- * `false` with no argv reading of our own. It takes no aliases — adding
- * `--no-secret-detection` as one makes the parser read it as the positive
- * switch, and the opt-out silently stops working.
- *
- * Help lists the positive spelling only, so the description carries the one a
- * caller actually writes.
- */
-const SECRET_DETECTION_FIELD = {
-  description:
+const SECRET_DETECTION_FIELD = toggle(
+  cliName("secretDetection"),
+  cliDescription(
     "scan durable events for credentials before they persist; " +
-    `disable with ${NEGATED_SECRET_DETECTION}`,
-  ...field(z.boolean(), field.default(true)),
-};
+      `disable with ${NEGATED_SECRET_DETECTION}`,
+  ),
+  schema(z.boolean().default(true)),
+);
 
 /**
  * Everything a document execution configures.
@@ -233,33 +239,39 @@ const SECRET_DETECTION_FIELD = {
  * `xmd test` refuses all five, because its agents are the deterministic
  * `<TestAgent>` stack, and `xmd plan` accepts only the two that say who writes.
  */
-const agentFields = {
-  agentProvider: {
-    description: "agent provider for agent components",
-    ...field(z.string(), field.default("acpx")),
-  },
-  defaultAgent: {
-    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
-    ...field(z.string().optional()),
-  },
-  approveAll: {
-    description: "approve every agent permission request",
-    ...field(z.boolean(), field.default(false)),
-  },
-  approveReads: {
-    description: "approve read and search agent permissions, ask for the rest (default)",
-    ...field(z.boolean(), field.default(false)),
-  },
-  denyAll: {
-    description: "deny every agent permission request",
-    ...field(z.boolean(), field.default(false)),
-  },
-};
+const agentFields = extend(
+  option(
+    cliName("agentProvider"),
+    cliDescription("agent provider for agent components"),
+    schema(z.string().default("acpx")),
+  ),
+  option(
+    cliName("defaultAgent"),
+    cliDescription("default agent name (overrides DEFAULT_AGENT_NAME)"),
+    schema(z.string().optional()),
+  ),
+  toggle(
+    cliName("approveAll"),
+    cliDescription("approve every agent permission request"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("approveReads"),
+    cliDescription("approve read and search agent permissions, ask for the rest (default)"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("denyAll"),
+    cliDescription("deny every agent permission request"),
+    schema(z.boolean().default(false)),
+  ),
+);
 
-const absoluteField = {
-  description: "allow absolute host Dir paths within existing filesystem restrictions",
-  ...field(z.boolean(), field.default(false)),
-};
+const absoluteField = toggle(
+  cliName("allowAbsolute"),
+  cliDescription("allow absolute host Dir paths within existing filesystem restrictions"),
+  schema(z.boolean().default(false)),
+);
 
 function useAbsolutePermission(allowed: boolean): Operation<void> {
   return Permissions.around(
@@ -268,59 +280,70 @@ function useAbsolutePermission(allowed: boolean): Operation<void> {
   );
 }
 
-const executionFields = {
-  allowAbsolute: absoluteField,
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  verbose: {
-    description: "log journal entries to stderr",
-    aliases: ["-V"],
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "write a diagnostic JSONL trace (path must not exist)",
-    aliases: ["-j"],
-    ...field(z.string().optional()),
-  },
-  raw: {
-    description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), field.default(false)),
-  },
-  ...agentFields,
-  timeout: {
-    description: "deadline for the whole run, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-  timeoutExec: {
-    description: "default timeout for each exec block, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-  timeoutFetch: {
-    description: "default timeout for each fetch, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-  secretDetection: SECRET_DETECTION_FIELD,
-};
+const includeOption = option(
+  cliName("include"),
+  cliDescription("component search directory"),
+  schema(z.array(z.string()).default(["components", "."])),
+  multiple(),
+);
 
-const runConfig = object({
-  path: {
-    description:
+const executionFields = extend(
+  absoluteField,
+  includeOption,
+  toggle(
+    cliName("verbose"),
+    cliDescription("log journal entries to stderr"),
+    schema(z.boolean().default(false)),
+  ),
+  option(
+    cliName("journal"),
+    cliDescription("write a diagnostic JSONL trace (path must not exist)"),
+    schema(z.string().optional()),
+    cli(["-j", "--journal"]),
+  ),
+  toggle(
+    cliName("raw"),
+    cliDescription("output raw markdown without normalization or terminal formatting"),
+    schema(z.boolean().default(false)),
+  ),
+  agentFields,
+  option(
+    cliName("timeout"),
+    cliDescription("deadline for the whole run, as a duration (500ms, 30s, 5min)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("timeoutExec"),
+    cliDescription("default timeout for each exec block, as a duration (500ms, 30s, 5min)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("timeoutFetch"),
+    cliDescription("default timeout for each fetch, as a duration (500ms, 30s, 5min)"),
+    schema(z.string().optional()),
+  ),
+  SECRET_DETECTION_FIELD,
+);
+
+const runGrammar = extend(
+  argument(
+    cliName("path"),
+    cliDescription(
       "markdown document to execute, optionally `#` and one target selector; " +
-      "`xmd run -` reads the document from standard input instead",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  // Declared so `xmd run --help` lists it with every other option. The value is
-  // lifted out of argv by readEvalFlags before parsing — see eval-source.ts —
-  // so this field is never the source of the document.
-  eval: {
-    description: "inline markdown document to execute, in place of a path",
-    aliases: ["-e"],
-    ...field(z.string().optional()),
-  },
-  ...executionFields,
-});
+        "`xmd run -` reads the document from standard input instead",
+    ),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("eval"),
+    cliDescription("inline markdown document to execute, in place of a path"),
+    schema(z.string().optional()),
+    cli(["-e", "--eval"]),
+  ),
+  executionFields,
+);
+
+const runConfig = command(cliName("run"), runGrammar, checkpoint());
 
 /** What `xmd --help` says the repl command is for. */
 const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive terminal.";
@@ -344,33 +367,45 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * `<Session>` an entry writes means by default, and who a person talks to about
  * their entries is not the same choice as who their entries talk to.
  */
-const replConfig = object({
-  allowAbsolute: absoluteField,
-  attach: {
-    description: "attach one interactive UI to this exact live XMD child",
-    ...field(z.string().optional()),
-  },
-  sidekickAcp: {
-    description: "absolute private attachment file; initializes Sidekick when needed (POSIX only)",
-    ...field(z.string().optional()),
-  },
-  mount: {
-    description: "external SOURCE:TARGET directory; repeat for each explicit TARGET",
-    ...field(z.array(z.string()), field.default([]), field.array()),
-  },
-  location: {
-    description:
+const replConfig = command(
+  cliName("repl"),
+  cliDescription(REPL_DESCRIPTION),
+  absoluteField,
+  option(
+    cliName("attach"),
+    cliDescription("attach one interactive UI to this exact live XMD child"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("sidekickAcp"),
+    cliDescription(
+      "absolute private attachment file; initializes Sidekick when needed (POSIX only)",
+    ),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("mount"),
+    cliDescription("external SOURCE:TARGET directory; repeat for each explicit TARGET"),
+    schema(z.array(z.string()).default([])),
+    multiple(),
+  ),
+  argument(
+    cliName("location"),
+    cliDescription(
       "a location this REPL printed earlier — `xmd://repl/<execution>/<surface>...` — to reopen " +
-      "that retained history and the exact view it names",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  include: executionFields.include,
-  ...agentFields,
-  sidekickAgent: {
-    description: "agent name or explicit path to a Markdown TestAgent for the Sidekick",
-    ...field(z.string().optional()),
-  },
-});
+        "that retained history and the exact view it names",
+    ),
+    schema(z.string().optional()),
+  ),
+  includeOption,
+  agentFields,
+  option(
+    cliName("sidekickAgent"),
+    cliDescription("agent name or explicit path to a Markdown TestAgent for the Sidekick"),
+    schema(z.string().optional()),
+  ),
+  checkpoint(),
+);
 
 /** What `xmd --help` says the plan command is for. */
 const PLAN_DESCRIPTION =
@@ -391,81 +426,94 @@ const PLAN_DESCRIPTION =
  * why they are spelled in full: `-V` and `-j` are `xmd run`'s aliases for
  * options about a program's run.
  */
-const planConfig = object({
-  request: {
-    description: "the request the coding agent should turn into an XMD Plan",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  output: {
-    description: "write the approved source here instead of to stdout (path must not exist)",
-    ...field(z.string().optional()),
-  },
-  session: {
-    description: "logical name for the assistant session (default: unique to this invocation)",
-    ...field(z.string().optional()),
-  },
-  verbose: {
-    description: "show generated drafts and XMD check diagnostics on stderr",
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "record the planning process as diagnostic JSONL (path must not exist)",
-    ...field(z.string().optional()),
-  },
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  agentProvider: {
-    description: "agent provider for Plan authorship",
-    ...field(z.string(), field.default("acpx")),
-  },
-  defaultAgent: {
-    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
-    ...field(z.string().optional()),
-  },
-  timeout: {
-    description: "deadline for the whole planning invocation, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-});
+const planConfig = command(
+  cliName("plan"),
+  cliDescription(PLAN_DESCRIPTION),
+  argument(
+    cliName("request"),
+    cliDescription("the request the coding agent should turn into an XMD Plan"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("output"),
+    cliDescription("write the approved source here instead of to stdout (path must not exist)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("session"),
+    cliDescription("logical name for the assistant session (default: unique to this invocation)"),
+    schema(z.string().optional()),
+  ),
+  toggle(
+    cliName("verbose"),
+    cliDescription("show generated drafts and XMD check diagnostics on stderr"),
+    schema(z.boolean().default(false)),
+  ),
+  option(
+    cliName("journal"),
+    cliDescription("record the planning process as diagnostic JSONL (path must not exist)"),
+    schema(z.string().optional()),
+  ),
+  includeOption,
+  option(
+    cliName("agentProvider"),
+    cliDescription("agent provider for Plan authorship"),
+    schema(z.string().default("acpx")),
+  ),
+  option(
+    cliName("defaultAgent"),
+    cliDescription("default agent name (overrides DEFAULT_AGENT_NAME)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("timeout"),
+    cliDescription("deadline for the whole planning invocation, as a duration (500ms, 30s, 5min)"),
+    schema(z.string().optional()),
+  ),
+  checkpoint(),
+);
 
 const TEST_REPORTER_OPTION = "--reporter";
 const testReporter = z.enum(["pretty", "failures"]);
 
-const testConfig = object({
-  path: {
-    description: "markdown document or directory to test (defaults to the current directory)",
-    ...field(z.string().default("."), cli.argument(), field.default(".")),
-  },
-  pattern: {
-    description: "glob for test documents, relative to a directory target (repeatable)",
-    ...field(z.array(z.string()), field.default(["**/*.test.md"]), field.array()),
-  },
-  reporter: {
-    description: "test output: pretty (default) or failures",
-    ...field(testReporter, field.default("pretty")),
-  },
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  verbose: {
-    description: "log journal entries to stderr",
-    aliases: ["-V"],
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "write a diagnostic JSONL trace (path must not exist)",
-    aliases: ["-j"],
-    ...field(z.string().optional()),
-  },
-  raw: {
-    description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), field.default(false)),
-  },
-  secretDetection: SECRET_DETECTION_FIELD,
-});
+const testConfig = command(
+  cliName("test"),
+  argument(
+    cliName("path"),
+    cliDescription("markdown document or directory to test (defaults to the current directory)"),
+    schema(z.string().default(".")),
+  ),
+  option(
+    cliName("pattern"),
+    cliDescription("glob for test documents, relative to a directory target (repeatable)"),
+    schema(z.array(z.string()).default(["**/*.test.md"])),
+    multiple(),
+  ),
+  option(
+    cliName("reporter"),
+    cliDescription("test output: pretty (default) or failures"),
+    schema(testReporter.default("pretty")),
+  ),
+  includeOption,
+  toggle(
+    cliName("verbose"),
+    cliDescription("log journal entries to stderr"),
+    schema(z.boolean().default(false)),
+  ),
+  option(
+    cliName("journal"),
+    cliDescription("write a diagnostic JSONL trace (path must not exist)"),
+    schema(z.string().optional()),
+    cli(["-j", "--journal"]),
+  ),
+  toggle(
+    cliName("raw"),
+    cliDescription("output raw markdown without normalization or terminal formatting"),
+    schema(z.boolean().default(false)),
+  ),
+  SECRET_DETECTION_FIELD,
+  checkpoint(),
+);
 
 /**
  * `xmd syntax` — inspection only, so its grammar is only what selection needs.
@@ -475,22 +523,24 @@ const testConfig = object({
  * any of them to configure. `--include` is the same ordered, repeatable field
  * `run` and `test` declare, and explicit values replace the defaults.
  */
-const syntaxConfig = object({
-  component: {
-    description:
+const syntaxConfig = command(
+  cliName("syntax"),
+  argument(
+    cliName("component"),
+    cliDescription(
       "component or structural name to describe in full — `xmd syntax If` renders its owner reference " +
-      "instead of the default catalog",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  json: {
-    description: "write the symbols as version-1 JSON instead of markdown",
-    ...field(z.boolean(), field.default(false)),
-  },
-});
+        "instead of the default catalog",
+    ),
+    schema(z.string().optional()),
+  ),
+  includeOption,
+  toggle(
+    cliName("json"),
+    cliDescription("write the symbols as version-1 JSON instead of markdown"),
+    schema(z.boolean().default(false)),
+  ),
+  checkpoint(),
+);
 
 /**
  * `xmd agent` — one action, one optional agent, two options.
@@ -499,34 +549,43 @@ const syntaxConfig = object({
  * settled by {@link scanAgentArgs}, because an option this parser does not
  * recognize would otherwise reach a command that starts an agent.
  */
-const agentConfig = object({
-  action: {
-    description: "the one action: `options`",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  agent: {
-    description: "agent to ask (default: the agent `xmd run` would use)",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  model: {
-    description: "read effort choices for this exact model id instead of the current one",
-    ...field(z.string().optional()),
-  },
-  json: {
-    description: "write the choices as version-1 JSON instead of text",
-    ...field(z.boolean(), field.default(false)),
-  },
-});
-
-const testAgentConfig = object({
-  connect: {
-    description: "opaque controller route (controller-launched workers only)",
-    ...field(z.string()),
-  },
-});
-
-/** What `xmd --help` says the agent command is for. */
 const AGENT_DESCRIPTION = "Report the model and effort choices an agent advertises.";
+
+const agentConfig = command(
+  cliName("agent"),
+  cliDescription(AGENT_DESCRIPTION),
+  argument(
+    cliName("action"),
+    cliDescription("the one action: `options`"),
+    schema(z.string().optional()),
+  ),
+  argument(
+    cliName("agent"),
+    cliDescription("agent to ask (default: the agent `xmd run` would use)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("model"),
+    cliDescription("read effort choices for this exact model id instead of the current one"),
+    schema(z.string().optional()),
+  ),
+  toggle(
+    cliName("json"),
+    cliDescription("write the choices as version-1 JSON instead of text"),
+    schema(z.boolean().default(false)),
+  ),
+  checkpoint(),
+);
+
+const testAgentConfig = command(
+  cliName("test-agent"),
+  option(
+    cliName("connect"),
+    cliDescription("opaque controller route (controller-launched workers only)"),
+    schema(z.string()),
+  ),
+  checkpoint(),
+);
 
 /**
  * What `xmd agent options --help` says beyond its option list.
@@ -552,10 +611,6 @@ const AGENT_OPTIONS_HELP = [
   '  <Session name="architect" model="gpt-5.4" effort="high">',
 ].join("\n");
 
-/** What `xmd --help` says the upgrade command is for. */
-const UPGRADE_DESCRIPTION =
-  "Upgrade the standalone xmd binary to the latest stable or a specified release.";
-
 /**
  * `xmd upgrade` — one optional tag and three switches, and nothing else.
  *
@@ -566,65 +621,243 @@ const UPGRADE_DESCRIPTION =
  * {@link scanUpgradeArgs} rather than from this parse; what is declared here is
  * what `xmd upgrade --help` lists.
  */
-const upgradeConfig = object({
-  tag: {
-    description: "exact release tag to install, such as v1.2.3 (default: the latest stable)",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  status: {
-    description: "report how the selected release compares, and change nothing",
-    ...field(z.boolean(), field.default(false)),
-  },
-  allowDowngrade: {
-    description: "consent to installing a release older than the installed one",
-    ...field(z.boolean(), field.default(false)),
-  },
-  allowPrerelease: {
-    description: "consent to installing the exact prerelease tag named",
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "write a diagnostic JSONL trace (path must not exist)",
-    aliases: ["-j"],
-    ...field(z.string().optional()),
-  },
-});
+const upgradeConfig = command(
+  cliName("upgrade"),
+  cliDescription("Upgrade the standalone xmd binary to the latest stable or a specified release."),
+  argument(
+    cliName("tag"),
+    cliDescription("exact release tag to install, such as v1.2.3 (default: the latest stable)"),
+    schema(z.string().optional()),
+  ),
+  toggle(
+    cliName("status"),
+    cliDescription("report how the selected release compares, and change nothing"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("allowDowngrade"),
+    cliDescription("consent to installing a release older than the installed one"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("allowPrerelease"),
+    cliDescription("consent to installing the exact prerelease tag named"),
+    schema(z.boolean().default(false)),
+  ),
+  option(
+    cliName("journal"),
+    cliDescription("write a diagnostic JSONL trace (path must not exist)"),
+    schema(z.string().optional()),
+    cli(["-j", "--journal"]),
+  ),
+  checkpoint(),
+);
 
 /** The version this build reports, from the manifest it was built with. */
 export const XMD_VERSION: string = denoJson.version;
 
-/** Every command an invocation offers whether or not retained workflows are enabled. */
-const ORDINARY_COMMANDS = {
-  run: runConfig,
-  plan: { ...planConfig, description: PLAN_DESCRIPTION },
-  test: testConfig,
-  syntax: syntaxConfig,
-  agent: { ...agentConfig, description: AGENT_DESCRIPTION },
-  upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
-  repl: { ...replConfig, description: REPL_DESCRIPTION },
-  session: { description: "Inspect or explicitly reclaim session ownership.", ...object({}) },
-  sidekick: { description: "Attach to or passively read one live Sidekick.", ...object({}) },
-  "test-agent": testAgentConfig,
-};
+const sessionConfig = command(
+  cliName("session"),
+  cliDescription("Inspect or explicitly reclaim session ownership."),
+  checkpoint(),
+);
+const sidekickConfig = command(
+  cliName("sidekick"),
+  cliDescription("Attach to or passively read one live Sidekick."),
+  checkpoint(),
+);
+const workflowConfig = command(
+  cliName("workflow"),
+  cliDescription("start, resume, fork, answer, status, list, history, cancel, delete or export"),
+  argument(
+    cliName("action"),
+    cliDescription("start, resume, fork, answer, status, list, history, cancel, delete or export"),
+    schema(z.string().optional()),
+  ),
+  argument(
+    cliName("target"),
+    cliDescription(
+      "markdown definition to start, the run a fork continues, or the run id every other " +
+        "action addresses",
+    ),
+    schema(z.string().optional()),
+  ),
+  argument(
+    cliName("argument"),
+    cliDescription("the definition a fork runs, or the wait an answer is delivered to"),
+    schema(z.string().optional()),
+  ),
+  argument(
+    cliName("value"),
+    cliDescription("the answer itself, as one JSON value (answer only)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("id"),
+    cliDescription("run id to create or address (start and fork only; generated when absent)"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("at"),
+    cliDescription("the retained event a fork continues from (fork only)"),
+    schema(z.string().optional()),
+  ),
+  toggle(
+    cliName("verbose"),
+    cliDescription("log journal entries to stderr"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("raw"),
+    cliDescription("output raw markdown without normalization or terminal formatting"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("secretDetection"),
+    cliDescription(
+      "scan durable events for credentials before they persist; " +
+        "disable with --no-secret-detection",
+    ),
+    schema(z.boolean().default(true)),
+  ),
+  toggle(
+    cliName("json"),
+    cliDescription("write the inspection result as JSON (status, list and history only)"),
+    schema(z.boolean().default(false)),
+  ),
+  toggle(
+    cliName("forkable"),
+    cliDescription("add each event's forkability to the history (history only)"),
+    schema(z.boolean().default(false)),
+  ),
+  option(
+    cliName("status"),
+    cliDescription("list only runs retaining this status"),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("artifact"),
+    cliDescription(
+      "inspect this sealed .xmd artifact instead of a retained run (status and history only)",
+    ),
+    schema(z.string().optional()),
+  ),
+  option(
+    cliName("output"),
+    cliDescription(
+      "the .xmd file to write the artifact to (export only); the artifact contains this " +
+        "run's complete retained Workspace, which may include source, generated files and " +
+        "secrets — treat it as confidential",
+    ),
+    schema(z.string().optional()),
+  ),
+  checkpoint(),
+);
 
-const xmd = program({
-  name: "xmd",
-  version: XMD_VERSION,
-  config: commands({ ...ORDINARY_COMMANDS, workflow: workflowConfig }, { default: "run" }),
-});
+const xmd = command(
+  cliName("xmd"),
+  cliVersion(XMD_VERSION),
+  runConfig,
+  planConfig,
+  testConfig,
+  syntaxConfig,
+  agentConfig,
+  upgradeConfig,
+  replConfig,
+  sessionConfig,
+  sidekickConfig,
+  testAgentConfig,
+  workflowConfig,
+);
+const commandRoutes = xmd.phases.flatMap((phase) => phase.routes);
+const COMMAND_NAMES = commandRoutes.map((route) => route.name);
+const shorthand = command(cliName("xmd"), cliVersion(XMD_VERSION), runGrammar, checkpoint());
 
-/**
- * Program help for an invocation that has not enabled retained workflows.
- *
- * Only help reads it. Execution keeps parsing with `xmd`, because removing the
- * `workflow` entry makes the parser select the default `run` for a first token
- * of `workflow`; a disabled `xmd workflow` is refused before any parse instead.
- */
-const ordinaryXmd = program({
-  name: "xmd",
-  version: XMD_VERSION,
-  config: commands(ORDINARY_COMMANDS, { default: "run" }),
-});
+interface ParsedCommand {
+  version: string | undefined;
+  config: ReturnType<typeof commandModel> | undefined;
+  error: string | undefined;
+}
+
+function parseCommand(args: string[], strict = false): Result<ParsedCommand> {
+  const [first] = args;
+  if (first === "--version" || first === "-v") {
+    return Ok({ version: XMD_VERSION, config: undefined, error: undefined });
+  }
+  const fence = args.indexOf("--");
+  const named = COMMAND_NAMES.some((name) => name === first);
+  const argv = args.map((arg, index) => {
+    if (fence !== -1 && index > fence) {
+      return arg;
+    }
+    if (arg === "--version" || arg === "-v") {
+      return "--version=";
+    }
+    if (first === "test" && arg === "-" && !TEST_VALUE_FLAGS.has(args[index - 1])) {
+      // A bare dash selects the default test target. Only run reads stdin.
+      return ".";
+    }
+    if (arg === "-V" && (!named || first === "run" || first === "test" || first === "workflow")) {
+      return "--verbose";
+    }
+    return arg;
+  });
+  const intent = named ? parse(xmd, { argv }) : parse(shorthand, { argv });
+  if (!intent.ok) {
+    return Err(new Error(printErrors(intent)));
+  }
+  if (!("resume" in intent)) {
+    return Err(new Error("xmd expected an execution request"));
+  }
+  const config = commandModel(intent);
+  const checked = strict ? intent.resume([]) : undefined;
+  const error =
+    checked && !checked.ok
+      ? printErrors(checked)
+      : checked?.ok && "literals" in checked && config.name === "run"
+        ? Array.from(checked.literals, ({ text }) => `unexpected: \`${text}\``).join("\n") ||
+          undefined
+        : undefined;
+  return Ok({ version: undefined, config, error });
+}
+
+type CommandIncrement = Extract<
+  ReturnType<typeof parse<typeof xmd>> | ReturnType<typeof parse<typeof shorthand>>,
+  { resume: unknown }
+>;
+
+function commandModel(intent: CommandIncrement) {
+  function selected<const N extends string, C>(name: N, config: C) {
+    return { name, config };
+  }
+
+  switch (intent.route) {
+    case "/run":
+      return selected("run", intent.model);
+    case "/plan":
+      return selected("plan", intent.model);
+    case "/test":
+      return selected("test", intent.model);
+    case "/syntax":
+      return selected("syntax", intent.model);
+    case "/agent":
+      return selected("agent", intent.model);
+    case "/upgrade":
+      return selected("upgrade", intent.model);
+    case "/repl":
+      return selected("repl", intent.model);
+    case "/session":
+      return selected("session", intent.model);
+    case "/sidekick":
+      return selected("sidekick", intent.model);
+    case "/test-agent":
+      return selected("test-agent", intent.model);
+    case "/workflow":
+      return selected("workflow", intent.model);
+    case "/":
+      return selected("run", intent.model);
+  }
+}
 
 /** The operator variable whose exact value `1` enables `xmd workflow`. */
 const WORKFLOW_ACTIVATION_VARIABLE = "XMD_EXPERIMENTAL_WORKFLOW";
@@ -1052,8 +1285,7 @@ function* createJournalFile(filePath: string): Operation<void> {
 /**
  * Refuse `--secret-detection=<value>` and `--no-secret-detection=<value>`.
  *
- * Both spellings are switches, and configliere resolves an `=` form on either
- * of them to the default — so `--secret-detection=false` reads as *enabled*,
+ * Both spellings are switches. An `=` form on either of them to the default — so `--secret-detection=false` reads as *enabled*,
  * and `--no-secret-detection=true` does too. Silence is the wrong answer for a
  * safety option: a caller who wrote one of these is telling us what they want
  * detection to do, and would otherwise be told nothing while it did the
@@ -1141,8 +1373,8 @@ function belongsTo(flag: string): string {
  * a Plugin installed before the document reads the answer the command settled
  * — the same one `installDocumentComponents` seeds the execution with.
  */
-function commandVerbosity(selected: { help?: boolean; config?: unknown } | undefined): boolean {
-  if (selected === undefined || selected.help === true) {
+function commandVerbosity(selected: { config: unknown } | undefined): boolean {
+  if (selected === undefined) {
     return false;
   }
   const config = selected.config;
@@ -1768,6 +2000,25 @@ function targetFailureReport(root: RootDocumentSource, error: unknown): string |
   return [outcome, heading, ...references].join("\n");
 }
 
+function testArgumentError(args: string[]): string | undefined {
+  const reporterFlags = readTestOption(args, TEST_REPORTER_OPTION);
+  const reporter = testReporter.safeParse(reporterFlags.values[0] ?? "pretty");
+  if (reporterFlags.missingValue || reporterFlags.values.length > 1 || !reporter.success) {
+    return "--reporter accepts one value: pretty or failures";
+  }
+  const patterns = readTestOption(args, PATTERN_OPTION);
+  if (patterns.missingValue) {
+    return (
+      `${PATTERN_OPTION} requires a value — write \`${PATTERN_OPTION} <glob>\`, or ` +
+      `\`${PATTERN_OPTION}=<glob>\` for a glob that begins with "-"`
+    );
+  }
+  if (patterns.values.some((value) => value.length === 0)) {
+    return `${PATTERN_OPTION} requires a glob — an empty pattern matches nothing`;
+  }
+  return undefined;
+}
+
 interface TestConfig extends Omit<DocumentConfig, "root"> {
   /**
    * Optional because `field` types a schema by what it accepts, and
@@ -1790,30 +2041,22 @@ function* test(
   args: string[],
   installService: HostServiceInstaller,
   testPlugins: TestPlugins,
+  strictError?: string,
 ): Operation<void> {
-  const reporterFlags = readTestOption(args, TEST_REPORTER_OPTION);
-  const reporter = testReporter.safeParse(reporterFlags.values[0] ?? "pretty");
-  if (reporterFlags.missingValue || reporterFlags.values.length > 1 || !reporter.success) {
-    console.error("--reporter accepts one value: pretty or failures");
+  const grammarError = testArgumentError(args);
+  if (grammarError !== undefined) {
+    console.error(grammarError);
     yield* exit(1);
     return;
   }
-  const failuresOnly = reporter.data === "failures";
+  const failuresOnly = readTestOption(args, TEST_REPORTER_OPTION).values[0] === "failures";
   const patterns = readTestOption(args, PATTERN_OPTION);
-  if (patterns.missingValue) {
-    console.error(
-      `${PATTERN_OPTION} requires a value — write \`${PATTERN_OPTION} <glob>\`, or ` +
-        `\`${PATTERN_OPTION}=<glob>\` for a glob that begins with "-"`,
-    );
-    yield* exit(1);
-    return;
-  }
-  if (patterns.values.some((value) => value.length === 0)) {
-    console.error(`${PATTERN_OPTION} requires a glob — an empty pattern matches nothing`);
-    yield* exit(1);
-    return;
-  }
 
+  if (strictError) {
+    console.error(strictError);
+    yield* exit(1);
+    return;
+  }
   const path = config.path ?? ".";
   const target = yield* resolveTestTarget(path, config.pattern);
 
@@ -2152,86 +2395,72 @@ function namesRun(args: string[]): boolean {
   return args[0] === "run";
 }
 
-interface DocumentArgument {
-  /** The reference the caller wrote, as they wrote it. */
-  reference: string;
-  /** argv with that token, and the separator protecting it, removed. */
-  rest: string[];
-}
-
-/** A reference's path half: everything before its first raw `#`. */
 function referencePath(reference: string): string {
   const fragment = reference.indexOf("#");
   return fragment === -1 ? reference : reference.slice(0, fragment);
 }
 
-/**
- * The document argument a run named that the parser could not take.
- *
- * Configliere refuses every positional beginning with `-` and defines no
- * end-of-options separator, so `-` is the one filename its option grammar
- * leaves unwritable — and a reference selecting a section of that file is
- * written the same way. Both are read out of the parser's own remainder, the
- * tokens it did not consume, rather than out of raw argv, where a `-` another
- * option took as its value (`--journal -`) looks identical.
- *
- * Nothing else beginning with `-` is one. A mistyped option stays an option the
- * parser does not define, so a run written with one still refuses for want of a
- * root rather than going looking for a file named after the flag.
- *
- * Removing the token is what lets everything written around it — before it or
- * after it — parse as it would around an ordinary path.
- */
-function takeDocumentArgument(args: string[], remainder: string[]): DocumentArgument | undefined {
-  const separated = remainder[0] === "--";
-  const [reference] = separated ? remainder.slice(1, 2) : remainder;
-  if (reference === undefined || referencePath(reference) !== STANDARD_INPUT_ARGUMENT) {
-    return undefined;
+function readDocumentArguments(head: string[], recover: boolean) {
+  const [first] = head;
+  if (!recover || (COMMAND_NAMES.some((name) => name === first) && first !== "run")) {
+    return { args: head, references: [], parsed: parseCommand(beforeProperties(head)) };
   }
-  const at = args.length - remainder.length;
-  if (args[at] !== remainder[0]) {
-    return undefined;
-  }
-  return { reference, rest: [...args.slice(0, at), ...remainder.slice(separated ? 2 : 1)] };
-}
 
-interface RunGrammar {
-  /** Every reference the parser could not take, in the order written. */
-  references: string[];
-  /** argv with all of them removed. */
-  args: string[];
-  /** The parse of that argv. */
-  parsed: ReturnType<typeof xmd.parse>;
-}
-
-/**
- * Read every document argument a run named, not just the first.
- *
- * The parser stops at the first token it does not define, so one pass sees one
- * of them. A run that named two roots — a path and a `-`, two `-`s, a reference
- * and a path — has to refuse whichever order they were written in, and it can
- * only do that once all of them are known. Each pass removes one token, so this
- * terminates; what comes back is what the run actually wrote.
- */
-function readDocumentArguments(head: string[], recover: boolean): RunGrammar {
-  let args = head;
-  let parsed = xmd.parse({ args });
+  // Generated property values may themselves be a dash. Only the static
+  // prefix can supply the sentinel that selects stdin.
+  const prefix = beforeProperties(head);
   const references: string[] = [];
-  while (recover) {
-    const config = parsed.ok && !parsed.value.config.help ? parsed.value.config : undefined;
-    if (config?.name !== "run") {
+  const args: string[] = [];
+  let takesValue = false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const arg = prefix[index];
+    if (arg === "--") {
+      const literal = prefix[index + 1];
+      if (literal !== undefined && referencePath(literal) === STANDARD_INPUT_ARGUMENT) {
+        references.push(literal);
+        index += 1;
+        continue;
+      }
+      args.push(...prefix.slice(index));
       break;
     }
-    const taken = takeDocumentArgument(args, parsed.remainder.args ?? []);
-    if (taken === undefined) {
-      break;
+    if (!takesValue && referencePath(arg) === STANDARD_INPUT_ARGUMENT) {
+      references.push(arg);
+    } else {
+      args.push(arg);
     }
-    references.push(taken.reference);
-    args = taken.rest;
-    parsed = xmd.parse({ args });
+    takesValue = RUN_VALUE_FLAGS.has(arg);
   }
-  return { references, args, parsed };
+  return { references, args: [...args, ...head.slice(prefix.length)], parsed: parseCommand(args) };
 }
+
+function beforeProperties(args: string[]): string[] {
+  const at = args.findIndex(
+    (arg) =>
+      arg === "--props" ||
+      arg.startsWith("--props-") ||
+      arg.startsWith("--props=") ||
+      arg.startsWith("--no-props-"),
+  );
+  return at === -1 ? args : args.slice(0, at);
+}
+
+function valueFlags(route: AnyRoute): Set<string> {
+  return new Set(
+    route.phases.flatMap((phase) =>
+      Object.values(phase.model.params).flatMap((param) => {
+        const syntax = param.cli.syntax;
+        return syntax?.type === "option" && syntax.label.endsWith(" <VALUE>")
+          ? syntax.label.slice(0, -" <VALUE>".length).split(", ")
+          : [];
+      }),
+    ),
+  );
+}
+
+const RUN_VALUE_FLAGS = valueFlags(runConfig);
+const TEST_VALUE_FLAGS = valueFlags(testConfig);
+const WORKFLOW_VALUE_FLAGS = valueFlags(workflowConfig);
 
 /**
  * Every root document this command line named, in the order it was written.
@@ -2314,9 +2543,8 @@ function* preparePropsPhase(
   // `program` short-circuits on `--version` and leaves no configuration
   // behind, so there is nothing to inspect.
   const selected = provisional.ok ? provisional.value.config : undefined;
-  const command = selected && !selected.help ? selected.name : undefined;
-  const parsedPath =
-    selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
+  const command = selected?.name;
+  const parsedPath = selected?.name === "run" ? selected.config.path : undefined;
   const roots = writtenRoots(head, recovered.references, parsedPath);
   // The sentinel is one exact argument on one command form. Only the form the
   // caller wrote separates `xmd run -` from the shorthand `xmd -`, which
@@ -2326,7 +2554,7 @@ function* preparePropsPhase(
     standardInput && root === STANDARD_INPUT_ARGUMENT ? "standard input" : root;
   const [supplied] = evalFlags.values;
 
-  if (selected && !selected.help && selected.name === "workflow") {
+  if (selected?.name === "workflow") {
     return yield* prepareWorkflowProps(
       args,
       parsed,
@@ -2498,26 +2726,24 @@ function* prepareWorkflowProps(
     };
   }
 
-  // Read before anything is stripped: `--` ends option parsing, so a token
-  // after it is positional however it is spelled, and the count has to be taken
-  // while the separator is still there to say where options stopped.
-  const extra = extraWorkflowArgument(rawArgs, config.action);
-  if (extra !== undefined) {
-    return {
-      args: rawArgs,
-      bindings: [],
-      workflow,
-      error:
-        `unrecognized argument for xmd workflow: ${extra} — start names one definition, ` +
-        "resume names one run, and answer names a run, a wait and one JSON value",
-    };
-  }
-
   const stray = findPropsFlag(args);
   // Only the two actions that name a definition declare properties. A fork
   // names its own, as its third argument: it is a run of that document, so the
   // generated arguments are that document's rather than the source run's.
   const definitionPath = workflowDefinitionPath(config);
+  if (definitionPath === undefined || definitionPath === "") {
+    const extra = extraWorkflowArgument(rawArgs, config.action);
+    if (extra !== undefined) {
+      return {
+        args,
+        bindings: [],
+        workflow,
+        error:
+          `unrecognized argument for xmd workflow: ${extra} — start names one definition, ` +
+          "resume names one run, and answer names a run, a wait and one JSON value",
+      };
+    }
+  }
   if (definitionPath === undefined) {
     if (stray) {
       const action = config.action ?? "resume";
@@ -2550,6 +2776,18 @@ function* prepareWorkflowProps(
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
     const extraction = extractPropsArgs(args, bindings);
+    const checkedArgs = [...extraction.rest, ...rawArgs.slice(args.length)];
+    const extra = extraWorkflowArgument(checkedArgs, config.action);
+    if (extra !== undefined) {
+      return {
+        args,
+        bindings: [],
+        workflow,
+        error:
+          `unrecognized argument for xmd workflow: ${extra} — start names one definition, ` +
+          "resume names one run, and answer names a run, a wait and one JSON value",
+      };
+    }
     return {
       args: extraction.rest,
       workflow,
@@ -2607,8 +2845,7 @@ function namesWorkflow(args: string[]): boolean {
  * exists to prevent, since a document never selects a run.
  *
  * Read from the argv the props phase already stripped, so a generated property
- * value is not mistaken for an argument. `--id` and `--at` are the options that
- * take a separated value, and `--` ends option parsing: every token after it is
+ * value is not mistaken for an argument. `--` ends option parsing: every token after it is
  * positional, including one that begins with `-`.
  */
 function extraWorkflowArgument(args: string[], action?: string): string | undefined {
@@ -2638,7 +2875,7 @@ function extraWorkflowArgument(args: string[], action?: string): string | undefi
       continue;
     }
     if (parsingOptions && arg.startsWith("-")) {
-      skip = arg === "--id" || arg === "--at";
+      skip = WORKFLOW_VALUE_FLAGS.has(arg);
       continue;
     }
     positionals += 1;
@@ -2741,20 +2978,6 @@ const UPGRADE_HELP = [
   "this command with one atomic rename. Anything that fails before that rename",
   "leaves the installed xmd exactly as it was.",
 ].join("\n");
-
-const COMMAND_NAMES = [
-  "run",
-  "plan",
-  "test",
-  "syntax",
-  "upgrade",
-  "agent",
-  "repl",
-  "sidekick",
-  "session",
-  "test-agent",
-  "workflow",
-];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -2859,16 +3082,15 @@ const PLUGIN_HELP = [
  */
 function renderHelp(phase: PropsPhase, workflowEnabled: boolean): string {
   const [first] = phase.args;
-  const command = COMMAND_NAMES.includes(first) ? first : phase.root ? "run" : undefined;
-  const offered = workflowEnabled ? xmd : ordinaryXmd;
-
-  if (!command) {
-    return `${offered.help({ args: phase.args })}\n\n${PLUGIN_HELP}`;
-  }
-
-  const help = xmd.parse({ args: [command, "--help"] });
-  const parsed =
-    help.ok && help.value.config.help ? help.value.config.text : offered.help({ args: [] });
+  const command = COMMAND_NAMES.some((name) => name === first)
+    ? first
+    : phase.root
+      ? "run"
+      : undefined;
+  const offered = workflowEnabled
+    ? commandRoutes
+    : commandRoutes.filter((route) => route.name !== "workflow");
+  const parsed = renderCommandHelp(offered, command);
   const base = `${parsed}\n\n${PLUGIN_HELP}`;
   const epilogue =
     command === "run"
@@ -3009,30 +3231,13 @@ function* dispatch(
     return;
   }
 
-  const parsed = xmd.parse({ args: propsPhase.args });
+  const first = propsPhase.args[0];
+  // These commands own their full grammar, including their diagnostics.
+  const grammar = first === "agent" || first === "upgrade" ? [first] : propsPhase.args;
+  const parsed = parseCommand(grammar, true);
 
   if (helpRequest.requested) {
     console.log(renderHelp(propsPhase, workflowEnabled));
-    yield* exit(0);
-    return;
-  }
-
-  if (!parsed.ok) {
-    console.error(parsed.error.message);
-    yield* exit(1);
-    return;
-  }
-
-  const { version, config: command } = parsed.value;
-
-  if (version) {
-    console.log(version);
-    yield* exit(0);
-    return;
-  }
-
-  if (command.help) {
-    console.log(command.text);
     yield* exit(0);
     return;
   }
@@ -3047,9 +3252,35 @@ function* dispatch(
     return;
   }
 
+  if (!parsed.ok) {
+    console.error(
+      (first === "test" ? testArgumentError(evalFlags.rest) : undefined) ?? parsed.error.message,
+    );
+    yield* exit(1);
+    return;
+  }
+
+  const { version, config: command } = parsed.value;
+
+  if (command === undefined) {
+    console.log(version);
+    yield* exit(0);
+    return;
+  }
+
   const secretDetectionError = secretDetectionGrammarError(evalFlags.rest);
   if (secretDetectionError) {
     console.error(secretDetectionError);
+    yield* exit(1);
+    return;
+  }
+
+  const strictError = parsed.value.error;
+  if (
+    strictError &&
+    !["test", "workflow", "agent", "plan", "upgrade", "session", "sidekick"].includes(command.name)
+  ) {
+    console.error(strictError);
     yield* exit(1);
     return;
   }
@@ -3064,6 +3295,13 @@ function* dispatch(
         console.error(
           "xmd run requires a root document — `xmd run <document.md>`, `xmd run -`, or " +
             `\`xmd run ${EVAL_OPTION} '<markdown>'\``,
+        );
+        yield* exit(1);
+        break;
+      }
+      if (propsPhase.root.source !== undefined && config.path !== undefined) {
+        console.error(
+          `unrecognized argument for xmd run: ${config.path} — a run takes exactly one root document`,
         );
         yield* exit(1);
         break;
@@ -3472,6 +3710,7 @@ function* dispatch(
         evalFlags.rest,
         installService,
         testPlugins,
+        strictError,
       );
       break;
     }
@@ -3610,6 +3849,11 @@ function* dispatch(
       const invocation = parseWorkflowRequest(config, evalFlags.rest);
       if (!invocation.ok) {
         console.error(invocation.error.message);
+        yield* exit(1);
+        break;
+      }
+      if (strictError) {
+        console.error(strictError);
         yield* exit(1);
         break;
       }
@@ -3894,9 +4138,12 @@ function* runCommand(
   // Help, `--version`, and the commands that execute nothing stay outside a run
   // lifecycle, which is why the timeout options are read only for the two that
   // end in one.
-  const provisional = xmd.parse({ args: helpRequest.args });
+  const provisional = parseCommand(
+    selection.command === "run" ? beforeProperties(helpRequest.args) : helpRequest.args,
+    selection.command === "repl",
+  );
   if (selection.command === "repl" && !provisional.ok && !helpRequest.requested) {
-    console.error(provisional.error.message);
+    console.error(replGrammarError(helpRequest.args, undefined) ?? provisional.error.message);
     yield* exit(1);
     return;
   }
@@ -3905,12 +4152,9 @@ function* runCommand(
   // something different from a run's — the symbols, the assistant session,
   // every repair, the human review, provider teardown, final validation and the
   // artifact — and covers no later program, because it starts none.
-  const planning = selected !== undefined && !selected.help && selected.name === "plan";
+  const planning = selected?.name === "plan";
   const bounded =
-    !helpRequest.requested &&
-    selected !== undefined &&
-    !selected.help &&
-    (selected.name === "run" || planning);
+    !helpRequest.requested && selected !== undefined && (selected.name === "run" || planning);
 
   // What this invocation installs Plugins for, decided from the same selection
   // that read them out of argv. Help, the version and the internal worker mode
@@ -3920,7 +4164,7 @@ function* runCommand(
   const selectedPlugins = selection.loads && selection.command !== "test" ? selection : undefined;
 
   let coldLocation: string | undefined;
-  if (selected?.name === "repl" && !helpRequest.requested && !selected.help) {
+  if (selected?.name === "repl" && !helpRequest.requested) {
     if (
       selected.config.sidekickAcp !== undefined &&
       !(yield* SidekickTransport.get())?.supported()
@@ -3929,19 +4173,14 @@ function* runCommand(
       yield* exit(1);
       return;
     }
-    if (
-      selected.config.attach !== undefined &&
-      (selected.config.location !== undefined || selected.config.sidekickAcp !== undefined)
-    ) {
-      console.error(
-        "--attach selects a live child and accepts no cold location or --sidekick-acp.",
-      );
-      yield* exit(1);
-      return;
-    }
     const stray = replGrammarError(helpRequest.args, selected.config.location);
     if (stray !== undefined) {
       console.error(stray);
+      yield* exit(1);
+      return;
+    }
+    if (provisional.ok && provisional.value.error !== undefined) {
+      console.error(provisional.value.error);
       yield* exit(1);
       return;
     }
