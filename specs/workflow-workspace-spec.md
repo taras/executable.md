@@ -3550,7 +3550,7 @@ A request every provider delegated reaches the operation's own base error,
 the document's own words and the thing an author has to fix, and it distinguishes
 a URL nobody recognized from a name nobody answers to.
 
-**The ceiling.** The trusted host installs an adapter-private target ceiling
+**The workflow ceiling.** The trusted host installs an adapter-private target ceiling
 beside provider credentials. A provider that has matched a request admits its
 canonical URL and discriminator against that ceiling *before* it opens a
 connection. A tracker and any nearer middleware select and narrow within it and
@@ -3669,14 +3669,20 @@ decision stays journal evidence. Provider state and later edits are separate
 reads.
 
 **The adapter.** The GitHub Issue middleware lives in `@executablemd/git` and is
-installed with the rest of the Plugin. It reads its configuration when an
-invoked issue operation turns out to be its own; a deployment that authorized
-no tracker handles no destination, and `<Issue>` reaches `IssueApi`'s own base
-error exactly as it did when absence installed no middleware at all. Configuration names the ceiling and
-optionally an endpoint; it is refused rather than narrowed when it cannot be
-used. With no configuration there is no Issue provider, so every request reaches
-`NoIssueProvider` — absence of configuration is fail-closed, never an open
-default.
+installed with the rest of the Plugin. The host supplies the execution mode.
+The middleware reads configuration when an invoked issue operation matches it.
+
+Workflow and ordinary run use `XMD_WORKFLOW_GITHUB_ISSUES`, which specifies a
+repository ceiling and an optional API endpoint. Invalid configuration fails.
+With no configuration, the request reaches `NoIssueProvider`. A target outside
+the ceiling fails before the adapter opens a credential or sends a request.
+
+REPL admits recognized targets without a repository ceiling. It selects the API
+base from `XMD_REPL_GITHUB_BASE_URL`, then the CLI setting
+`--github-base-url`, then `https://api.github.com`. URL matching and validation
+apply independently of the API base. A `github.com` issue URL can therefore
+address a GitHub Enterprise API endpoint. All modes use the same authentication
+and operation permissions.
 
 ### 10.4 Worker Shell
 

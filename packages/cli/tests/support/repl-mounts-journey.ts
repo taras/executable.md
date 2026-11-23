@@ -37,7 +37,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
           ? []
           : ["--mount", `${source}:${target}`, `--mount=${fixtures}:${fixtureTarget}`];
       const line = (flags: readonly string[]) =>
-        `cd ${shellQuote(project)} && ${repl(["repl", "--deny-all", ...flags])}`;
+        `cd ${shellQuote(project)} && ${repl(["repl", ...flags, "--deny-all"])}`;
       const first = yield* allocate(line(["--allow-absolute", ...args(old)]), home);
       yield* showing(first, "Ready for Entry 1", 180_000);
       const source = [

@@ -23,8 +23,13 @@ An unknown/ended reference and a second UI refuse without replacement or takeove
 The normal interactive command retains terminal-before-history preflight; child
 hosting is a separate terminal-free path.
 
-`xmd repl` takes one optional location and the five Agent options `xmd run`
-takes, with the same spellings, the same descriptions and the same defaults:
+`xmd repl LOCATION [options]` opens retained history. Supply the location
+immediately after `repl`, before the options. Without a location in that slot,
+the command starts a fresh execution. A location-shaped option value belongs
+to its option.
+
+The command takes the five Agent options `xmd run` takes, with the same
+spellings, descriptions and defaults:
 `--agent-provider` (default `acpx`), `--default-agent` (falling back to
 `DEFAULT_AGENT_NAME`), and the mutually exclusive `--approve-all`,
 `--approve-reads` and `--deny-all`. An unstated permission line means
@@ -124,24 +129,29 @@ before an effective request or child frame exists. Plain `.` and `..` remain
 document navigation, and the captured host drive root supplies an unmapped
 document root. Native SOURCE spelling remains native.
 
-Everything that can be refused is refused in this order, and each step happens
-before anything the next one would touch:
+Fresh interactive startup checks the command line before entering the terminal.
+Cold startup validates the location and checks for an interactive terminal, then
+restores the project before loading relative plugins and checking the composed
+line. Plugin installation follows strict parsing in either case.
+
+The following checks apply before opening the live profile:
 
 1. **The line.** A token that is not the location or one of its declared options,
    a switch given a value, a value option given none or an empty one, and a
-   second location are each refused here — before a per-user directory is
-   formed, a history file is created or the terminal's modes are touched.
+   second location are each refused here. Locations after options also refuse.
 2. **The Agent configuration.** Two permission switches together and an unknown
    `--agent-provider` are refused next, before any adapter exists.
 3. **The command assembly.** Invocation cwd, configured absolute directories,
    selected Plugins, Agent stack, provider dependencies and permission mode are
    captured once in the command scope. The mount table is admitted at this boundary
-   before any terminal, history or provider adapter exists. After storage supplies the execution id,
+   before the live profile opens. On cold reopen, the restored project is
+   established before composing plugin option definitions. After storage supplies the execution id,
    one immutable execution profile adds session/components and constructs the
    includes-dependent Plan declaration and vocabulary. No Plugin or Agent stack
    is installed again, and every entry uses the same finalized search list.
-4. **The terminal.** Only then is a terminal asked for. Over a pipe the command
-   refuses, having left nothing behind.
+4. **The live terminal.** Fresh interactive startup checks for a terminal after
+   validating its options. Cold startup uses the terminal that presented the
+   restore. Over a pipe the command refuses without opening a live session.
 
 Nothing here starts an agent. An entry that asks for none materializes no
 adapter at all; the provider validates availability the first time a turn wants
@@ -2842,11 +2852,17 @@ is already there. One issue is filed, not two. A read has no key and reconciles
 nothing — an interrupted one is simply made again, which is what a second
 observation of a live object is.
 
-A refused tracker stays refused. Whether this deployment may reach a target at
-all is the operator's `XMD_WORKFLOW_GITHUB_ISSUES` ceiling, and a target outside
-it sends no request and carries no credential. A conflict, an ambiguity or an
-unavailable service keeps the provider's own vocabulary here exactly as it does
-elsewhere.
+With the Git Plugin active on a host that supplies the GitHub issue provider,
+REPL reads the supplied issue URL and files in the explicitly selected tracker.
+Both work from an empty directory or a Git checkout. REPL uses the caller's
+GitHub authentication and needs no repository allowlist.
+
+When the host supplies the GitHub issue adapter, the Git Plugin declares
+`--github-base-url` and holds its parsed value in the command scope. The API
+base URL comes from a nonempty `XMD_REPL_GITHUB_BASE_URL`, then
+`xmd repl --github-base-url`, then `https://api.github.com`. A GitHub Enterprise
+API base can serve issue URLs written with `github.com`. The ordinary provider
+rules for URL matching, authentication and operation permissions apply.
 
 ## What the head says the execution is doing
 

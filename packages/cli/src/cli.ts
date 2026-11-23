@@ -1,3 +1,4 @@
+import type { Plugin, PluginCommandOptions } from "@executablemd/core/api";
 import type { ReplProgramOptions, ReplStartup } from "./repl/program.ts";
 import { useSecretInputs } from "@executablemd/core/host";
 import { runSessionOwnership } from "./session-ownership.ts";
@@ -69,6 +70,7 @@ import {
   cli,
   command,
   description as cliDescription,
+  dynamic,
   extend,
   multiple,
   name as cliName,
@@ -150,6 +152,7 @@ import {
   describeError,
   extractPropsArgs,
   formatProperties,
+  isStandardSchema,
   resolvePropsFromSources,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
@@ -176,7 +179,7 @@ import {
 } from "./syntax.ts";
 import { assembleRunProfile, BundledRunPlugin } from "./run-profile.ts";
 import type { PluginModuleLoader } from "./plugin-loader.ts";
-import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
+import { commandOptions, installPlugins, NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
 import { selectPlugins } from "./plugin-selection.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
@@ -349,6 +352,19 @@ const runConfig = command(cliName("run"), runGrammar, checkpoint());
 /** What `xmd --help` says the repl command is for. */
 const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive terminal.";
 
+function routerOptions(options: PluginCommandOptions) {
+  return Object.entries(options).map(([name, definition]) => {
+    if (!isStandardSchema(definition.schema)) {
+      throw new Error(`xmd repl: plugin option ${name} requires a Standard Schema`);
+    }
+    return option(
+      cliName(name),
+      cliDescription(definition.description ?? ""),
+      schema(definition.schema),
+    );
+  });
+}
+
 /**
  * `xmd repl` — a sequence of entries, one terminal, one retained history.
  *
@@ -371,6 +387,7 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
 const replConfig = command(
   cliName("repl"),
   cliDescription(REPL_DESCRIPTION),
+  dynamic(z.custom<PluginCommandOptions>(), (options) => extend(...routerOptions(options))),
   absoluteField,
   option(
     cliName("attach"),
@@ -405,7 +422,6 @@ const replConfig = command(
     cliDescription("agent name or explicit path to a Markdown TestAgent for the Sidekick"),
     schema(z.string().optional()),
   ),
-  checkpoint(),
 );
 
 /** What `xmd --help` says the plan command is for. */
@@ -776,11 +792,15 @@ const shorthand = command(cliName("xmd"), cliVersion(XMD_VERSION), runGrammar, c
 
 interface ParsedCommand {
   version: string | undefined;
-  config: ReturnType<typeof commandModel> | undefined;
+  config: ReturnType<typeof commandModel> | ReplSelection | undefined;
   error: string | undefined;
 }
 
-function parseCommand(args: string[], strict = false): Result<ParsedCommand> {
+function parseCommand(
+  args: string[],
+  strict = false,
+  options: PluginCommandOptions = {},
+): Result<ParsedCommand> {
   const [first] = args;
   if (first === "--version" || first === "-v") {
     return Ok({ version: XMD_VERSION, config: undefined, error: undefined });
@@ -810,6 +830,20 @@ function parseCommand(args: string[], strict = false): Result<ParsedCommand> {
   if (!("resume" in intent)) {
     return Err(new Error("xmd expected an execution request"));
   }
+  if (intent.route === "/repl") {
+    const settled = intent.resume(options);
+    if (!settled.ok) {
+      return Err(new Error(printErrors(settled)));
+    }
+    if (!("model" in settled)) {
+      return Err(new Error("xmd expected a REPL execution request"));
+    }
+    return Ok({
+      version: undefined,
+      config: { name: "repl", config: settled.model },
+      error: undefined,
+    });
+  }
   const config = commandModel(intent);
   const checked = strict ? intent.resume([]) : undefined;
   const error =
@@ -822,9 +856,21 @@ function parseCommand(args: string[], strict = false): Result<ParsedCommand> {
   return Ok({ version: undefined, config, error });
 }
 
-type CommandIncrement = Extract<
-  ReturnType<typeof parse<typeof xmd>> | ReturnType<typeof parse<typeof shorthand>>,
-  { resume: unknown }
+type ReplIncrement = Extract<
+  ReturnType<typeof parse<typeof xmd>>,
+  { route: "/repl"; resume: unknown }
+>;
+type ReplSelection = {
+  name: "repl";
+  config: Extract<ReturnType<ReplIncrement["resume"]>, { model: unknown }>["model"];
+};
+
+type CommandIncrement = Exclude<
+  Extract<
+    ReturnType<typeof parse<typeof xmd>> | ReturnType<typeof parse<typeof shorthand>>,
+    { resume: unknown }
+  >,
+  ReplIncrement
 >;
 
 function commandModel(intent: CommandIncrement) {
@@ -845,8 +891,6 @@ function commandModel(intent: CommandIncrement) {
       return selected("agent", intent.model);
     case "/upgrade":
       return selected("upgrade", intent.model);
-    case "/repl":
-      return selected("repl", intent.model);
     case "/session":
       return selected("session", intent.model);
     case "/sidekick":
@@ -976,16 +1020,7 @@ export interface ReplHostAssembly {
 }
 
 /**
- * What fixed grammar refuses about one `xmd repl` command line.
- *
- * Pure over argv: it reads nothing, so a malformed line is answered before this
- * command has taken a directory, a file or a terminal. Everything this command
- * defines is listed here, which is why anything else option-shaped is refused
- * rather than ignored — a caller who wrote `--json` asked for something, and
- * silence would let them believe they got it.
- */
-/**
- * The six REPL options that carry a value, by the spelling a caller writes.
+ * The REPL options that carry a value, by the spelling a caller writes.
  *
  * Exported because the documentation check reads this command's own examples,
  * and a token after one of these is that option's value rather than a location.
@@ -1010,9 +1045,13 @@ const REPL_SWITCHES: readonly string[] = [
   "--allow-absolute",
 ];
 
+const REPL_LOCATION_SLOT =
+  "xmd repl: write the reopen location immediately after repl, before options.";
+
 export function replGrammarError(
   args: readonly string[],
   location: string | undefined,
+  pluginFlags: ReadonlySet<string> = new Set(),
 ): string | undefined {
   // The command's own name is the first token, as it is for every command that
   // reads its line directly.
@@ -1060,6 +1099,14 @@ export function replGrammarError(
         return "xmd repl: --sidekick-acp requires an absolute path";
       }
     }
+    // The router validates plugin options. Skip their value when reporting
+    // diagnostics for built-in selectors and the location slot.
+    if (pluginFlags.has(name)) {
+      if (written === undefined) {
+        at += 1;
+      }
+      continue;
+    }
     if (REPL_VALUES.includes(name)) {
       if (written !== undefined) {
         if (written.length === 0) {
@@ -1094,6 +1141,9 @@ export function replGrammarError(
   }
   if (childAttachment && (positional.length > 0 || attachmentPath)) {
     return "xmd repl: --attach selects a live child and accepts no cold location or --sidekick-acp.";
+  }
+  if (positional.length === 1 && positional[0] !== rest[0]) {
+    return REPL_LOCATION_SLOT;
   }
   if (location !== undefined) {
     const decoded = decodeLocation(location);
@@ -2487,6 +2537,33 @@ function valueFlags(route: AnyRoute): Set<string> {
   );
 }
 
+function replPluginFlags(options: PluginCommandOptions): Set<string> {
+  const flags = valueFlags(command(cliName("repl"), ...routerOptions(options)));
+  const builtIn = replConfig.phases.flatMap((phase) => Object.keys(phase.model.params));
+  const collision = Object.keys(options).find((name) => builtIn.includes(name));
+  const reserved = [...flags].find((flag) =>
+    [
+      ...REPL_VALUES,
+      ...REPL_SWITCHES,
+      "--plugin",
+      "--help",
+      "--version",
+      EVAL_OPTION,
+      EVAL_ALIAS,
+    ].includes(flag),
+  );
+  if (
+    collision !== undefined ||
+    reserved !== undefined ||
+    flags.size !== Object.keys(options).length
+  ) {
+    throw new Error(
+      `xmd repl: conflicting plugin option definition ${reserved ?? collision ?? ""}`.trim(),
+    );
+  }
+  return flags;
+}
+
 const RUN_VALUE_FLAGS = valueFlags(runConfig);
 const TEST_VALUE_FLAGS = valueFlags(testConfig);
 const WORKFLOW_VALUE_FLAGS = valueFlags(workflowConfig);
@@ -2533,6 +2610,17 @@ function* preparePropsPhase(
   evalFlags: EvalFlags,
   readStandardInput: StandardInputReader,
 ): Operation<PropsPhase> {
+  // The REPL route is already selected. Its composed options need no document
+  // inspection and are unavailable to the built-in document argument parser.
+  if (args[0] === "repl") {
+    return evalFlags.values[0] === undefined
+      ? { args, bindings: [] }
+      : {
+          args,
+          bindings: [],
+          error: `unrecognized option for xmd repl: ${EVAL_OPTION} — inline documents are exclusive to xmd run`,
+        };
+  }
   // `xmd plan` declares its own grammar and has no document to inspect: the
   // schema its generated options come from is written by an agent that has not
   // been asked anything yet. Everything below that reads a document, and every
@@ -3237,6 +3325,7 @@ function* dispatch(
   plugins: CommandPlugins,
   testPlugins: TestPlugins,
   cold?: ColdReplCommand,
+  parsedRepl?: ReplSelection,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
   // is lifted out of argv early enough that a command's own grammar never sees
@@ -3263,7 +3352,10 @@ function* dispatch(
   const first = propsPhase.args[0];
   // These commands own their full grammar, including their diagnostics.
   const grammar = first === "agent" || first === "upgrade" ? [first] : propsPhase.args;
-  const parsed = parseCommand(grammar, true);
+  const parsed =
+    parsedRepl === undefined
+      ? parseCommand(grammar, true)
+      : Ok({ version: undefined, config: parsedRepl, error: undefined });
 
   if (helpRequest.requested) {
     console.log(renderHelp(propsPhase, workflowEnabled));
@@ -4077,6 +4169,9 @@ function* withPlugins(
   loadPluginModule: PluginModuleLoader,
   body: (plugins: CommandPlugins) => Operation<void>,
   beforeRefusal?: () => Operation<void>,
+  prepare?: (
+    plugins: readonly Plugin[],
+  ) => Operation<ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined>,
 ): Operation<void> {
   yield* scoped(function* () {
     if (selection === undefined) {
@@ -4085,10 +4180,19 @@ function* withPlugins(
     let plugins: CommandPlugins;
     try {
       const loaded = yield* assembleRunProfile(selection, loadPluginModule);
-      plugins = yield* installPlugins(loaded, {
-        command: selection.command,
-        args: selection.args,
-      });
+      const options = prepare === undefined ? undefined : yield* prepare(loaded);
+      if (prepare !== undefined && options === undefined) {
+        yield* exit(1);
+        return;
+      }
+      plugins = yield* installPlugins(
+        loaded,
+        {
+          command: selection.command,
+          args: selection.args,
+        },
+        options,
+      );
     } catch (error) {
       if (beforeRefusal !== undefined) {
         yield* beforeRefusal();
@@ -4101,13 +4205,20 @@ function* withPlugins(
   });
 }
 
-/**
- * One command line, after the Plugins it selected have been installed.
- *
- * Everything from here down reads the argv the selection left behind, so no
- * scanner sees a `--plugin` token and none of them has to know the option
- * exists.
- */
+function* prepareReplTerminal(replHost: ReplHostAssembly | undefined): Operation<boolean> {
+  if (replHost === undefined) {
+    console.error("This host provides no interactive REPL.");
+    return false;
+  }
+  yield* replHost.install();
+  if (!(yield* ReplTerminal.operations.interactive())) {
+    console.error("xmd repl: the REPL runs where a terminal is: it is not available over a pipe.");
+    return false;
+  }
+  return true;
+}
+
+/** Run the command after extracting plugin selectors from argv. */
 function* runCommand(
   args: string[],
   selection: PluginSelection,
@@ -4169,85 +4280,48 @@ function* runCommand(
   // end in one.
   const hostArgs =
     selection.command === "run" ? startupHostArgs(helpRequest.args) : helpRequest.args;
-  const provisional = parseCommand(hostArgs, selection.command === "repl");
-  if (selection.command === "repl" && !provisional.ok && !helpRequest.requested) {
-    console.error(replGrammarError(helpRequest.args, undefined) ?? provisional.error.message);
-    yield* exit(1);
-    return;
-  }
-  const selected = provisional.ok ? provisional.value.config : undefined;
-  // The two commands a `--timeout` bounds. `xmd plan`'s deadline encloses
-  // something different from a run's — the symbols, the assistant session,
-  // every repair, the human review, provider teardown, final validation and the
-  // artifact — and covers no later program, because it starts none.
+  const provisional = selection.command === "repl" ? undefined : parseCommand(hostArgs);
+  const selected = provisional?.ok ? provisional.value.config : undefined;
   const planning = selected?.name === "plan";
   const bounded =
     !helpRequest.requested && selected !== undefined && (selected.name === "run" || planning);
-
-  // What this invocation installs Plugins for, decided from the same selection
-  // that read them out of argv. Help, the version and the internal worker mode
-  // describe or serve a grammar rather than running a document, so none of them
-  // loads a module or installs anything: a Plugin's top-level code is trusted
-  // code, and describing a command line is not a reason to run any.
   const selectedPlugins = selection.loads && selection.command !== "test" ? selection : undefined;
-
-  let coldLocation: string | undefined;
-  if (selected?.name === "repl" && !helpRequest.requested) {
+  const repl = selectedPlugins?.command === "repl" && !helpRequest.requested;
+  const slot = selection.args[(selection.commandIndex ?? 0) + 1];
+  const coldLocation = repl && slot !== undefined && !slot.startsWith("-") ? slot : undefined;
+  if (repl && coldLocation === undefined && helpRequest.args[1]?.startsWith("xmd://repl/")) {
+    console.error(REPL_LOCATION_SLOT);
+    yield* exit(1);
+    return;
+  }
+  let parsedRepl: ReplSelection | undefined;
+  if (coldLocation !== undefined) {
+    const decoded = decodeLocation(coldLocation);
+    if (!decoded.ok) {
+      console.error(`xmd repl: ${decoded.error.message}`);
+      yield* exit(1);
+      return;
+    }
+    if (helpRequest.args.some((arg) => arg === "--attach" || arg.startsWith("--attach="))) {
+      console.error(
+        "xmd repl: --attach selects a live child and accepts no cold location or --sidekick-acp.",
+      );
+      yield* exit(1);
+      return;
+    }
     if (
-      selected.config.sidekickAcp !== undefined &&
+      helpRequest.args.some(
+        (arg) => arg === "--sidekick-acp" || arg.startsWith("--sidekick-acp="),
+      ) &&
       !(yield* SidekickTransport.get())?.supported()
     ) {
       console.error("xmd repl: Sidekick ACP requires a same-user POSIX Unix socket.");
       yield* exit(1);
       return;
     }
-    const stray = replGrammarError(helpRequest.args, selected.config.location);
-    if (stray !== undefined) {
-      console.error(stray);
+    if (!(yield* prepareReplTerminal(replHost))) {
       yield* exit(1);
       return;
-    }
-    if (provisional.ok && provisional.value.error !== undefined) {
-      console.error(provisional.value.error);
-      yield* exit(1);
-      return;
-    }
-    const syntax = parseWorkspaceMounts(selected.config.mount, "/", {
-      resolve: (_base, path) => path,
-    });
-    if (!syntax.ok) {
-      console.error(syntax.error.message);
-      yield* exit(1);
-      return;
-    }
-    const stack = yield* settleAgentStack(
-      {
-        agentProvider: selected.config.agentProvider,
-        defaultAgent: selected.config.defaultAgent,
-        approveAll: selected.config.approveAll,
-        approveReads: selected.config.approveReads,
-        denyAll: selected.config.denyAll,
-      },
-      sessions,
-    );
-    if (stack === undefined) {
-      return;
-    }
-    if (selected.config.attach === undefined) {
-      if (replHost === undefined) {
-        console.error("This host provides no interactive REPL.");
-        yield* exit(1);
-        return;
-      }
-      yield* replHost.install();
-      if (!(yield* ReplTerminal.operations.interactive())) {
-        console.error(
-          "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
-        );
-        yield* exit(1);
-        return;
-      }
-      coldLocation = selected.config.location;
     }
   }
 
@@ -4265,6 +4339,7 @@ function* runCommand(
       plugins,
       (document) => installTestPlugins(document, selection, loadPluginModule),
       cold,
+      parsedRepl,
     );
 
   // The typed configuration this command line settled, then the Plugins — so a
@@ -4287,6 +4362,67 @@ function* runCommand(
       loadPluginModule,
       (plugins) => run(plugins, cold),
       cold?.terminal.close,
+      repl
+        ? function* (plugins) {
+            const options = yield* commandOptions(plugins, "repl");
+            const pluginFlags = replPluginFlags(options);
+            const parsed = parseCommand(helpRequest.args, true, options);
+            const grammar = replGrammarError(
+              helpRequest.args,
+              parsed.ok && parsed.value.config?.name === "repl"
+                ? parsed.value.config.config.location
+                : undefined,
+              pluginFlags,
+            );
+            if (grammar !== undefined) {
+              throw new Error(grammar);
+            }
+            if (!parsed.ok) {
+              throw parsed.error;
+            }
+            if (parsed.value.config?.name !== "repl") {
+              throw new Error("xmd expected a REPL execution request");
+            }
+            if (parsed.value.config.config.location !== coldLocation) {
+              throw new Error(REPL_LOCATION_SLOT);
+            }
+            parsedRepl = parsed.value.config;
+            const config = parsedRepl.config;
+            if (
+              config.sidekickAcp !== undefined &&
+              !(yield* SidekickTransport.get())?.supported()
+            ) {
+              throw new Error("xmd repl: Sidekick ACP requires a same-user POSIX Unix socket.");
+            }
+            const syntax = parseWorkspaceMounts(config.mount, "/", {
+              resolve: (_base, path) => path,
+            });
+            if (!syntax.ok) {
+              throw syntax.error;
+            }
+            const stack = yield* resolveAgentStack(config, sessions);
+            if (!stack.ok) {
+              throw stack.error;
+            }
+            if (
+              cold === undefined &&
+              config.attach === undefined &&
+              !(yield* prepareReplTerminal(replHost))
+            ) {
+              return undefined;
+            }
+            const byOwner = new Map<string, Record<string, unknown>>();
+            for (const [name, { owner }] of Object.entries(options)) {
+              const values = byOwner.get(owner) ?? {};
+              Object.defineProperty(values, name, {
+                value: Reflect.get(config, name),
+                enumerable: true,
+              });
+              byOwner.set(owner, values);
+            }
+            return byOwner;
+          }
+        : undefined,
     );
   };
 

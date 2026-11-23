@@ -52,6 +52,7 @@ export interface PluginSelection {
   readonly args: readonly string[];
   /** The normalized public command; the shorthand document form is `run`. */
   readonly command: string;
+  readonly commandIndex?: number;
   /**
    * Whether this invocation installs Plugins at all.
    *
@@ -121,6 +122,7 @@ export function selectPlugins(args: readonly string[]): PluginSelection {
   const specifiers: string[] = [];
   const rest: string[] = [];
   let error: string | undefined;
+  let commandIndex: number | undefined;
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -154,6 +156,7 @@ export function selectPlugins(args: readonly string[]): PluginSelection {
       specifiers.push(value);
       continue;
     }
+    commandIndex ??= index;
     rest.push(arg);
   }
 
@@ -163,6 +166,7 @@ export function selectPlugins(args: readonly string[]): PluginSelection {
     rest,
     args: original,
     command,
+    commandIndex,
     loads: !describes(original) && command !== WORKER_COMMAND,
     ...(error === undefined ? {} : { error }),
   };

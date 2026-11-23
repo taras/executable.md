@@ -108,7 +108,7 @@ export function replIssueInstallation(
  * caller overrode, and overrides nothing itself.
  */
 export function useEntryIssueTransport(options: GitHubIssuesOptions): Operation<void> {
-  return useDenoGitHubIssues(options);
+  return useDenoGitHubIssues({ ...options, mode: "repl" });
 }
 
 /**

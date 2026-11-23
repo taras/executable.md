@@ -217,7 +217,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* writeTextFile(join(checkout, "drafts", "obsolete.md"), "back again");
 
     // Reopened at the live head, in the same data root.
-    const second = yield* allocate(inside(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(inside(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     // The question is offered again, which is what says the unfinished entry
     // started once rather than being replayed into a settled state.
@@ -262,7 +262,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     // a question they reach the transcript instead. That is the pre-existing
     // focus defect the enum above is clicked for, and typing through it is not
     // what this journey is about.
-    const third = yield* allocate(inside(["repl", "--deny-all", location]), home);
+    const third = yield* allocate(inside(["repl", location, "--deny-all"]), home);
     yield* showing(third, "[exit]", REACH_MS);
     yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(LIVE_READ);
@@ -471,7 +471,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* writeTextFile(join(working, "note.md"), "second");
     yield* writeTextFile(join(working, "obsolete.md"), "back again");
 
-    const second = yield* allocate(outside(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(outside(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     yield* showing(second, "waiting for an answer", ACT_MS);
 
@@ -504,8 +504,8 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     const third = yield* allocate(
       outside([
         "repl",
-        "--deny-all",
         location,
+        "--deny-all",
         ...(through === "worktree" ? ["--allow-absolute"] : []),
       ]),
       home,
@@ -845,7 +845,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     // Forgotten here, so what the log holds afterwards is what *reopening* ran.
     yield* writeTextFile(shim.log, "");
 
-    const second = yield* allocate(open(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(open(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     yield* showing(second, "waiting for an answer", ACT_MS);
 
@@ -877,8 +877,8 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     const third = yield* allocate(
       open([
         "repl",
-        "--deny-all",
         location,
+        "--deny-all",
         ...(through === "worktree" ? ["--allow-absolute"] : []),
       ]),
       home,

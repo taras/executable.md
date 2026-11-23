@@ -11571,14 +11571,27 @@ changes nothing.
 A Plugin is a plain structural value:
 
 ```ts
+interface PluginCommandOption {
+  readonly owner: string;
+  readonly description?: string;
+  readonly schema: unknown;
+}
+
+type PluginCommandOptions = Readonly<Record<string, PluginCommandOption>>;
+
 interface Plugin {
   readonly name: string;
+  command?(
+    request: [command: string, options: PluginCommandOptions],
+    next: (command: string, options: PluginCommandOptions) => Operation<PluginCommandOptions>,
+  ): Operation<PluginCommandOptions>;
   install?(request: PluginInstallRequest): Operation<PluginInstallation | undefined>;
 }
 
 interface PluginInstallRequest {
   readonly command: string;
   readonly args: readonly string[];
+  readonly options?: Readonly<Record<string, unknown>>;
 }
 
 interface PluginInstallation {
@@ -11604,7 +11617,7 @@ they already had. Returning `undefined` contributes no declarative installation
 for that command.
 
 **Refusals happen before the root.** A module exporting no usable default, a
-default carrying no non-empty string `name`, an `install` that is not callable,
+default carrying no non-empty string `name`, a non-callable `command` or `install`,
 a remote specifier, a missing module, and two selections claiming one Plugin
 name are each refused before any `install()` runs and before the root document
 is read. Module top-level code has already executed by then — loading a selected
@@ -11632,6 +11645,28 @@ install failure unwinds the Plugins already installed for that root without
 starting the document. Cancellation joins the scope's teardown. An isolated nested
 `<Execution host="run">` inherits nothing and installs the same Plugin values
 again in its own scope, with command `run`.
+
+#### CLI option contributions
+
+For a REPL execution request, the CLI selects and loads plugins before completing
+argument parsing. On a cold reopen it first restores the project from the
+fixed location slot. Help and version load no plugin module and use the
+built-in grammar.
+
+An optional plugin `command([cmd, args], next)` stage receives the command name
+and a map of option definitions. A passthrough calls `next(cmd, args)`. A stage
+can extend the map or replace a contributed definition. A definition specifies
+an owning plugin name, a Standard Schema v1 value schema and an optional
+description. The CLI resumes the router with these definitions and strictly
+parses the line before calling any plugin's `install()`. Each installation
+receives its own validated values in `request.options`, with an own key for each
+final definition it owns, even when the value is `undefined`. The field is
+absent when the plugin owns no definitions.
+
+Contributions add named value options to the existing command. Built-in option
+spellings and startup selectors are reserved, including the inline-source
+selector `--eval` with short alias `-e`. Two definitions with the same final flag
+spelling are refused.
 
 #### CLI REPL contributions
 
@@ -15364,7 +15399,7 @@ Plugin is the run it always was.
 | # | Test | Verify |
 |---|------|--------|
 | PL1 | The value | `Plugin(input)` returns the value it was given and adds no identity, version or capability; a Plugin with no `install` installs nothing |
-| PL2 | Module admission | An object with a non-empty `name` and an absent or callable `install` is admitted; a non-object, a missing, empty or non-string name, and a non-callable `install` each refuse naming the specifier and the member that failed |
+| PL2 | Module admission | An object with a non-empty string `name` is admitted when `command` and `install` are each absent or callable; a non-object, a missing, empty or non-string name, or a non-callable `command` or `install` is refused with the specifier and the member that failed |
 | PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
 | PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
 | PL4 | The command a Plugin is told | Each public command reports its own name — `repl` included — and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |

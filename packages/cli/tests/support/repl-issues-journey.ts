@@ -23,7 +23,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { cliRuntime, shellQuote } from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { scoped, sleep, withResolvers } from "effection";
-import { exists, readTextFile } from "@effectionx/fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import type { Operation } from "effection";
 import { useIssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
@@ -135,9 +135,8 @@ export function printedLocation(screen: string): string {
 /** How a process reaches this tracker: the operator's two variables. */
 function configured(server: IssueTrackerServer, token: string): readonly string[] {
   return [
-    `export XMD_WORKFLOW_GITHUB_ISSUES=${shellQuote(
-      JSON.stringify({ ceiling: [TRACKER], endpoint: server.url }),
-    )}`,
+    "unset XMD_WORKFLOW_GITHUB_ISSUES",
+    `export XMD_REPL_GITHUB_BASE_URL=${shellQuote(server.url)}`,
     `export GH_TOKEN=${shellQuote(token)}`,
   ];
 }
@@ -161,7 +160,10 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     const inside = (args: readonly string[], token: string): string =>
       [...configured(server, token), `cd ${shellQuote(home)}`, repl(args)].join("; ");
 
-    const first = yield* allocate(inside(["repl", "--deny-all"], credential()), home);
+    const first = yield* allocate(
+      inside(["repl", "--deny-all", "--github-base-url", "https://unused.invalid"], credential()),
+      home,
+    );
     yield* showing(first, "[exit]", REACH_MS);
 
     // Typed as a person types it: one paste carrying newlines, then Enter.
@@ -186,10 +188,45 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
 
+    const probe = "xmd://repl/kf39sla2/entries";
+    yield* writeTextFile(
+      join(home, "probe.mjs"),
+      `
+      export default {
+        name: "reopen-probe",
+        command([cmd, args], next) {
+          return next(cmd, {
+            ...args,
+            probeValue: {
+              owner: this.name,
+              schema: {
+                "~standard": {
+                  version: 1,
+                  vendor: "fixture",
+                  validate: (value) => value === ${JSON.stringify(probe)}
+                    ? { value }
+                    : { issues: [{ message: "missing probe value" }] },
+                },
+              },
+            },
+          });
+        },
+        *install({ options }) {
+          if (options.probeValue !== ${JSON.stringify(probe)}) {
+            throw new Error("missing parsed probe configuration");
+          }
+        },
+      };
+    `,
+    );
+
     // Reopened with a credential this tracker refuses. A replayed upsert or
     // read would reach it and fail; what the entry holds is already retained.
     const second = yield* allocate(
-      inside(["repl", "--deny-all", location], "a-credential-this-tracker-does-not-accept"),
+      inside(
+        ["repl", location, "--deny-all", "--plugin", "./probe.mjs", "--probe-value", probe],
+        "a-credential-this-tracker-does-not-accept",
+      ),
       home,
     );
     yield* showing(second, "[exit]", REACH_MS);
@@ -245,7 +282,12 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
       },
     });
     const inside = (args: readonly string[]): string =>
-      [...configured(server, credential()), `cd ${shellQuote(home)}`, repl(args)].join("; ");
+      [
+        ...configured(server, credential()),
+        "unset XMD_REPL_GITHUB_BASE_URL",
+        `cd ${shellQuote(home)}`,
+        repl([...args, "--github-base-url", server.url]),
+      ].join("; ");
 
     const first = yield* allocate(inside(["repl", "--deny-all"]), home);
     yield* showing(first, "[exit]", REACH_MS);
@@ -267,7 +309,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
     const location = printedLocation((yield* first.shows()).join("\n"));
     release.resolve();
 
-    const second = yield* allocate(inside(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(inside(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     // The same owner and the same site, so the same key: the adapter finds its
     // own mark on the issue that is already there and adopts it.

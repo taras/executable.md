@@ -243,7 +243,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     );
 
     const own = yield* runCli(["repl", "--help"]).expect();
-    expect(own.stdout).toContain("Usage: xmd repl [OPTIONS] [location]");
+    expect(own.stdout).toContain("Usage: xmd repl [location] [OPTIONS]");
     expect(own.stdout).toContain("a location this REPL printed earlier");
     // Re-anchored for #883: the help used to say an execution admits exactly one
     // entry, which the sequential REPL this command mounts contradicts. The
@@ -267,7 +267,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     // Each of these is refused by fixed grammar, which reads nothing — so the
     // refusal arrives before a per-user directory is formed, a history file is
     // created or the terminal's modes are touched.
-    const second = yield* runCli(["repl", "one", "two"]).join();
+    const second = yield* runCli(["repl", "--deny-all", "one", "two"]).join();
     expect(second.code).toBe(1);
     expect(second.stderr).toContain("xmd repl takes at most one location");
 
@@ -275,10 +275,17 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(unknown.code).toBe(1);
     expect(unknown.stderr).toContain("unrecognized option for xmd repl: --json");
 
-    const malformed = yield* runCli(["repl", "xmd://nope"]).join();
-    expect(malformed.code).toBe(1);
-    expect(malformed.stderr).toContain("xmd repl:");
-    expect(malformed.stderr).toContain("xmd://repl/");
+    for (const extra of [[], ["--plugin=./never-loaded.mjs"]]) {
+      const malformed = yield* runCli([
+        "repl",
+        "xmd://nope",
+        "--github-base-url",
+        "https://ghe.invalid/api/v3",
+        ...extra,
+      ]).join();
+      expect(malformed.code).toBe(1);
+      expect(malformed.stderr.trim()).toBe("xmd repl: a REPL location begins with xmd://repl/");
+    }
   });
 
   it("CH13: live attachment grammar refuses missing, repeated and cold targets before resources", function* () {
@@ -338,7 +345,6 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
       ["repl", "--include=../first"],
       ["repl", "--include", "../first", "--include=/absolute/second"],
       ["repl", "xmd://repl/kf39sla2/entries", "--include", "../first"],
-      ["repl", "--include=../first", "xmd://repl/kf39sla2/entries"],
     ]) {
       const ran = yield* runCli(accepted).join();
       expect([accepted, ran.code]).toEqual([accepted, 1]);
@@ -346,6 +352,12 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
         accepted,
         "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
       ]);
+    }
+
+    for (const option of ["--include=../first", "--plugin=./never-loaded.mjs"]) {
+      const lateLocation = yield* runCli(["repl", option, "xmd://repl/kf39sla2/entries"]).join();
+      expect(lateLocation.code).toBe(1);
+      expect(lateLocation.stderr).toContain("write the reopen location immediately after repl");
     }
 
     // Refused, and each before the terminal: the messages are the command

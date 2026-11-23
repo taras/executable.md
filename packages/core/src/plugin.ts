@@ -30,6 +30,15 @@ import type { MarkdownComponent } from "./components/declared-markdown.ts";
 import type { ExpansionRequest, Structural } from "./execution-declarations.ts";
 import type { JournalAdmission } from "./execute.ts";
 
+export interface PluginCommandOption {
+  readonly owner: string;
+  readonly description?: string;
+  /** A Standard Schema v1 value schema. */
+  readonly schema: unknown;
+}
+
+export type PluginCommandOptions = Readonly<Record<string, PluginCommandOption>>;
+
 /**
  * What one command tells a Plugin about the invocation installing it.
  *
@@ -46,6 +55,8 @@ import type { JournalAdmission } from "./execute.ts";
 export interface PluginInstallRequest {
   readonly command: string;
   readonly args: readonly string[];
+  /** Values validated by the CLI for this Plugin’s contributed options. */
+  readonly options?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -77,6 +88,11 @@ export interface PluginInstallation {
  */
 export interface Plugin {
   readonly name: string;
+  /** Compose the option definitions before CLI parsing and installation. */
+  command?(
+    request: [command: string, options: PluginCommandOptions],
+    next: (command: string, options: PluginCommandOptions) => Operation<PluginCommandOptions>,
+  ): Operation<PluginCommandOptions>;
   install?(request: PluginInstallRequest): Operation<PluginInstallation | undefined>;
 }
 
@@ -93,7 +109,7 @@ export function Plugin(input: Plugin): Plugin {
   return input;
 }
 
-/** The optional half of a Plugin, named so the guard below can state it. */
+/** The shape of a Plugin installation callback. */
 type PluginInstall = (request: PluginInstallRequest) => Operation<PluginInstallation | undefined>;
 
 /** The shape `install` has, read the way a function component's default is. */
@@ -106,7 +122,7 @@ function isInstall(value: unknown): value is PluginInstall {
  *
  * The one decision, so admission and the sentence explaining a refusal cannot
  * come to disagree about what a Plugin is: an object with a non-empty string
- * `name`, and either no `install` member or a callable one.
+ * `name`, and callable optional stages and installation callbacks.
  */
 function isPlugin(value: unknown): value is Plugin {
   if (typeof value !== "object" || value === null) {
@@ -117,7 +133,11 @@ function isPlugin(value: unknown): value is Plugin {
     return false;
   }
   const install = "install" in value ? value.install : undefined;
-  return install === undefined || isInstall(install);
+  const command = "command" in value ? value.command : undefined;
+  return (
+    (install === undefined || isInstall(install)) &&
+    (command === undefined || typeof command === "function")
+  );
 }
 
 /**
@@ -139,6 +159,10 @@ function describe(value: unknown): string {
   const name = "name" in value ? value.name : undefined;
   if (typeof name !== "string" || name.length === 0) {
     return "carries a non-empty string `name`";
+  }
+  const command = "command" in value ? value.command : undefined;
+  if (command !== undefined && typeof command !== "function") {
+    return `carries a callable \`command\`, and ${name} carries ${typeof command}`;
   }
   const install = "install" in value ? value.install : undefined;
   return `carries a callable \`install\`, and ${name} carries ${typeof install}`;
