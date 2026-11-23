@@ -533,14 +533,13 @@ describe(
         expect(`${other.stdout}${other.stderr}`).not.toContain("both supply a root document");
         expect(other.stdout).not.toContain("STDIN_MARKER");
 
-        // An option nothing defines is still an option: the run refuses for
-        // want of a root rather than looking for a file named after the flag.
+        // A mistyped option stays an option and is refused before execution.
         const typo = yield* runCli(["run", "--raww", "ordinary.md"], {
           cwd: dir,
           stdin: STDIN_EFFECT,
         }).join();
         expect(typo.code).toBe(1);
-        expect(typo.stderr).toContain("requires a root document");
+        expect(typo.stderr).toContain("--raww");
 
         expect(yield* exists(path.join(dir, "stdin-ran.txt"))).toBe(false);
       });

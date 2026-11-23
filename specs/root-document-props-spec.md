@@ -234,6 +234,11 @@ ordering.
 
 ## Validation and Execution
 
+After resolving the command grammar and the options declared by the document,
+`xmd run` and the workflow commands that accept document properties reject
+unconsumed arguments before executing the document. Supplying a valid
+`--props-*` option does not make an unrelated option valid.
+
 Normal execution resolves all sources, then validates the complete props object
 against the root schema before any document body content runs. Validation
 applies schema defaults recursively and enforces required properties, unions,
