@@ -334,6 +334,19 @@ export {
   pullRequestDeclaration,
 } from "./src/composition/components/PullRequest.ts";
 export { pullRequestReadDeclaration } from "./src/composition/components/PullRequestReads.ts";
+export type { PullRequestReadOperations } from "./src/composition/components/PullRequestReads.ts";
+export {
+  checkWatchResultJson,
+  checkWatchState,
+  parseCheckWatchResult,
+  pinCheckHead,
+  settleChecks,
+} from "./src/composition/pull-request-checks-watch.ts";
+export type {
+  CheckWatchProgress,
+  CheckWatchReads,
+  CheckWatchState,
+} from "./src/composition/pull-request-checks-watch.ts";
 export {
   GitObservationError,
   GitOperationAdmissionError,

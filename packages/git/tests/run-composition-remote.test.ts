@@ -732,6 +732,29 @@ describe("ORC17 — live PullRequests", () => {
     expect(recording.requests).toHaveLength(sent);
   });
 
+  it("refuses a checks watch before a credential or a request", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const checkout = yield* useHostCheckout(remote.locator);
+    const endpoint = "https://api.github.test";
+    const recording = recordingAccess(evidenceRoutes(endpoint), endpoint);
+    const failure = yield* raised(
+      runOrdinaryDocument(
+        `<PullRequest.Checks url="${GITHUB_LOCATOR}/pull/4" watch timeoutSeconds={60} as="checks" />`,
+        {
+          root,
+          cwd: checkout.root,
+          gitHubPullRequests: {
+            access: gitHubSource(recording.access),
+            configuration: { allowed: [GITHUB_LOCATOR] },
+          },
+        },
+      ),
+    );
+    expect(String(failure)).toContain("this host does not watch checks");
+    expect(recording.requests).toEqual([]);
+  });
+
   it("refuses an unpublished head before a credential or a request", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const store = gitHubStore({ token: TOKEN });

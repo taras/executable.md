@@ -2789,6 +2789,32 @@ credential, rather than the document's. A URL outside what this host authorized
 refuses — including on reopening, so permission withdrawn while you were away is
 withdrawn for the continuation too.
 
+### Watching a pull request's checks
+
+Wait for CI in the same entry that needs the answer:
+
+```xmd
+<PullRequest.Checks url={pullRequest.url} watch timeoutSeconds={600} as="checkResult" />
+<Json value={checkResult} />
+```
+
+The entry waits until every check reported for the pull request's head has
+settled, or until the budget ends, and binds `{ outcome, reason?, headSha,
+checks }` as [the watch contract](workflow-workspace-spec.md#771-watching-checks)
+describes. While it waits, **Output · live** shows the short head and how many
+checks passed, failed and are pending, and says when a read is being retried.
+Those lines are live only: the entry's output is what the document renders once
+the watch settles.
+
+Draft **Stop** interrupts the entry: the request in flight is aborted, its
+session closes, and no result is bound. Sidekick **Stop** ends the Send and
+leaves an admitted entry watching; a Send that submitted it waits for its
+receipt. Reopening an unfinished entry continues the watch with the
+head it pinned and the deadline it started with, so the remaining budget is
+what is left of the original one. Reopening a completed one restores its result
+without asking GitHub anything. The Sidekick reads this as `<Guide.CI />`, which
+also shows how to verify a specific workflow attempt after merge with `gh`.
+
 ### The issue an entry filed, and the one it read
 
 An entry files and reads issues wherever you started the REPL, inside a checkout

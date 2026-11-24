@@ -184,7 +184,7 @@ function replPullRequestOperations(
 ): BindOperations<PullRequestOperationsApi> {
   const upsert = replPullRequestPolicy(owner, access, pullRequests);
   const read = replPullRequestReadPolicy(owner, pullRequests);
-  return (site: string) => ({ read: read(site), upsert: upsert(site) });
+  return (site: string) => ({ read: read(site).read, upsert: upsert(site) });
 }
 
 export function useReplRepositoryRecording(options: ReplRecordingOptions = {}): Operation<void> {

@@ -1,7 +1,7 @@
 /**
  * The teaching this CLI ships, and the index that tells a reply it is there.
  *
- * Seven chapters and one bootstrap, as real Markdown beside this feature. They
+ * Eight chapters and one bootstrap, as real Markdown beside this feature. They
  * are assets rather than string constants for the same reason `xmd plan`'s
  * document is: the reviewable file is the deployed artifact, and a generated
  * TypeScript mirror would make the thing shipped something other than the thing
@@ -57,6 +57,7 @@ const CHAPTERS: Readonly<Record<GuideChapter, string>> = {
   Recovery: "recovery.md",
   Environment: "environment.md",
   Children: "children.md",
+  CI: "ci.md",
 };
 
 /**

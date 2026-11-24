@@ -105,7 +105,7 @@ const SYNTAX_NAMES_PROPS = {
   additionalProperties: false,
 } as const;
 
-/** The six guide chapters, which are the whole of the teaching a reply can read. */
+/** The guide chapters, which are the whole of the teaching a reply can read. */
 export const GUIDE_CHAPTERS = [
   "Entries",
   "Bindings",
@@ -114,6 +114,7 @@ export const GUIDE_CHAPTERS = [
   "Recovery",
   "Environment",
   "Children",
+  "CI",
 ] as const;
 
 export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];

@@ -10,6 +10,10 @@
  *
  * Each collection has its own durable effect, replay and failure, so a partial
  * answer cannot masquerade as all three collections.
+ *
+ * `<PullRequest.Checks watch timeoutSeconds={60} as="result" />` waits for the
+ * checks instead and binds one watch result (§7.7.1). Omitting `watch` keeps
+ * the snapshot array exactly as it was.
  */
 
 import { documented, formDispatcher } from "@executablemd/core";
@@ -36,6 +40,12 @@ import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-reques
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import { PullRequestOperations } from "../pull-request-operations.ts";
 import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
+import {
+  parseCheckWatchResult,
+  checkWatchResultJson,
+  PullRequestChecksWatch,
+} from "../pull-request-checks-watch.ts";
+import type { PullRequestChecksWatchApi } from "../pull-request-checks-watch.ts";
 import { boundComponent } from "../invocation-binding.ts";
 import type { BindOperations, ComponentBody } from "../invocation-binding.ts";
 
@@ -52,6 +62,25 @@ export const props: PropsSchema = {
   required: ["url"],
   additionalProperties: false,
 };
+
+/** The snapshot props, and the two that turn a checks read into a watch. */
+const checksProps: PropsSchema = {
+  type: "object",
+  properties: {
+    url: { type: "string", minLength: 1 },
+    provider: { type: "string", minLength: 1 },
+    watch: { type: "boolean" },
+    timeoutSeconds: { type: "integer", minimum: 1 },
+  },
+  required: ["url"],
+  additionalProperties: false,
+};
+
+/** What a body reads through: the collection read, and the checks watch. */
+export interface PullRequestReadOperations {
+  readonly read: PullRequestOperationsApi["read"];
+  readonly watch: PullRequestChecksWatchApi["watch"];
+}
 
 const AUTHOR: JsonObject = { type: ["string", "null"] };
 const NULLABLE_TEXT: JsonObject = { type: ["string", "null"] };
@@ -126,7 +155,7 @@ export const commentsReturns: ReturnsSchema = array({
   ],
 });
 
-export const checksReturns: ReturnsSchema = array({
+const checkRecord: JsonObject = {
   oneOf: [
     closed({
       kind: { const: "check-run" },
@@ -167,15 +196,42 @@ export const checksReturns: ReturnsSchema = array({
       updatedAt: { type: "string" },
     }),
   ],
-});
+};
+
+const checksSnapshot: ReturnsSchema = array(checkRecord);
+
+/**
+ * A watch result. Settled outcomes carry no reason, and an incomplete one names
+ * why the watch could not settle.
+ */
+const checkWatchResult: JsonObject = {
+  oneOf: [
+    closed({
+      outcome: { enum: ["success", "failure"] },
+      headSha: { type: "string" },
+      checks: array(checkRecord),
+    }),
+    closed({
+      outcome: { const: "incomplete" },
+      reason: { enum: ["timeout", "head-changed", "read-error"] },
+      headSha: NULLABLE_TEXT,
+      checks: array(checkRecord),
+    }),
+  ],
+};
+
+/** The snapshot array, or one watch result when `watch` is written. */
+export const checksReturns: ReturnsSchema = { oneOf: [checksSnapshot, checkWatchResult] };
+
 function read(
   kind: PullRequestReadKind,
   element: string,
-): ComponentBody<PullRequestOperationsApi["read"]> {
+): ComponentBody<PullRequestReadOperations> {
   return function* PullRequestRead(
     props: Record<string, Json>,
-    performRead: PullRequestOperationsApi["read"],
+    operations: PullRequestReadOperations,
   ): Operation<Json> {
+    const watching = kind === "checks" ? watchBudget(props, element) : undefined;
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
     const url = canonicalPullRequestUrl(props.url);
@@ -197,7 +253,11 @@ function read(
       );
     }
 
-    const result = yield* performRead({ url, kind, provider });
+    if (watching !== undefined) {
+      return yield* watched(operations, { url, provider, timeoutSeconds: watching }, element);
+    }
+
+    const result = yield* operations.read({ url, kind, provider });
     if (result.kind !== kind) {
       throw new PullRequestReadError(
         "protocol",
@@ -222,6 +282,51 @@ function read(
     }
     return pullRequestReadResultJson(evidence);
   };
+}
+
+/**
+ * The budget a checks read watches for, or `undefined` for a snapshot.
+ *
+ * Decided before the URL is read, so an incomplete watch is refused before any
+ * provider, credential or request is involved.
+ */
+function watchBudget(written: Record<string, Json>, element: string): number | undefined {
+  const budget = written.timeoutSeconds;
+  if (written.watch !== true) {
+    if (budget !== undefined) {
+      throw new PullRequestReadError(
+        "invalid-watch",
+        element,
+        "`timeoutSeconds` bounds a watch, so it is written with `watch`.",
+      );
+    }
+    return undefined;
+  }
+  if (typeof budget !== "number" || !Number.isSafeInteger(budget) || budget < 1) {
+    throw new PullRequestReadError(
+      "invalid-watch",
+      element,
+      "a watch needs `timeoutSeconds`, a positive whole number of seconds to wait.",
+    );
+  }
+  return budget;
+}
+
+/** One watch, with its final answer read whole before it binds. */
+function* watched(
+  operations: PullRequestReadOperations,
+  invocation: { url: string; provider: string | undefined; timeoutSeconds: number },
+  element: string,
+): Operation<Json> {
+  const result = parseCheckWatchResult(yield* operations.watch(invocation));
+  if (result === undefined) {
+    throw new PullRequestReadError(
+      "protocol",
+      element,
+      "what this watch was finally answered with is not the result a watch produces.",
+    );
+  }
+  return checkWatchResultJson(result);
 }
 
 /**
@@ -267,8 +372,11 @@ const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentatio
     checks: {
       description:
         `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` ` +
-        `reads check runs and commit statuses for its head.`,
-      as: "Required. Each check's kind, name, head commit and outcome.",
+        `reads check runs and commit statuses for its head. In a REPL entry, add ` +
+        `\`watch timeoutSeconds={600}\` to wait until every reported check settles.`,
+      as:
+        "Required. Each check's kind, name, head commit and outcome; with `watch`, one " +
+        "result with the outcome, reason, pinned head and those checks.",
       context: null,
     },
   },
@@ -296,7 +404,7 @@ function metadata(kind: PullRequestReadKind) {
   return {
     name: NAMES[kind],
     origin: COMPOSITION_ORIGIN,
-    props,
+    props: kind === "checks" ? checksProps : props,
     returns: RETURNS[kind],
     forms: ["self-closing"] as const,
     ...documented(DOCUMENTATION[kind]),
@@ -310,7 +418,14 @@ export function pullRequestReadRegistration(kind: PullRequestReadKind): Componen
   return {
     ...metadata(kind),
     fn: formDispatcher(
-      declare((props) => body(props, PullRequestOperations.operations.read), element),
+      declare(
+        (props) =>
+          body(props, {
+            read: PullRequestOperations.operations.read,
+            watch: PullRequestChecksWatch.operations.watch,
+          }),
+        element,
+      ),
     ),
   };
 }
@@ -325,7 +440,7 @@ export function pullRequestReadRegistration(kind: PullRequestReadKind): Componen
  */
 export function pullRequestReadDeclaration(
   kind: PullRequestReadKind,
-  bind: BindOperations<PullRequestOperationsApi["read"]>,
+  bind: BindOperations<PullRequestReadOperations>,
 ): IdentityComponent {
   const element = ELEMENTS[kind];
   const body = read(kind, element);

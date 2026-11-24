@@ -63,6 +63,19 @@ export {
   retainPullRequestRead,
 } from "./src/deno/composition/pull-request-read-retention.ts";
 export {
+  checksWatchConfiguration,
+  checksWatchRequest,
+  parseChecksWatchDeadline,
+  parseChecksWatchHead,
+  parseChecksWatchRequest,
+  PULL_REQUEST_CHECKS_WATCH_DEADLINE,
+  PULL_REQUEST_CHECKS_WATCH_EFFECTS,
+  PULL_REQUEST_CHECKS_WATCH_HEAD,
+  PULL_REQUEST_CHECKS_WATCH_RESULT,
+  retainPullRequestChecksWatch,
+} from "./src/deno/composition/pull-request-checks-watch-retention.ts";
+export type { PullRequestChecksWatchRequest } from "./src/deno/composition/pull-request-checks-watch-retention.ts";
+export {
   CompositionRefusal,
   gitRefusal,
   refusalReason,

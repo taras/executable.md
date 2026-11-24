@@ -920,3 +920,37 @@ authorization are unchanged.
 `CommonDirectoryLeaseError` and its sidecar path are removed. A sidecar an older
 `xmd` still holds is never opened. Two entries changing one checkout can now
 interleave their edits and their Git commands, as two shells can.
+
+## DEC-019: A checks watch waits for every reported check
+
+**Status:** Decided
+
+**Date:** 2026-11-23
+
+### Context
+
+`<PullRequest.Checks watch>` (#1459) needed a rule for which checks decide that
+CI has finished. The candidates were every reported check, an explicit
+required set, or GitHub's effective required checks from branch protection and
+rulesets. The snapshot already exposes the reported checks; an explicit list
+would need syntax for names that have not registered yet, and automatic
+discovery would need an authoritative effective set and a policy for when it is
+unavailable.
+
+### Decision
+
+A watch observes every check run and commit status reported for the pinned
+head and waits until every one has settled, including after one has already
+failed. Successful, skipped and neutral results pass; terminal failures,
+errors, cancellation, timeout and action-required results fail. An empty
+collection keeps waiting. The caller's budget expiring returns `incomplete`
+with the latest accepted collection. Omitting `watch` keeps the snapshot array
+contract. Post-merge verification of a specific workflow attempt stays with
+`gh`. The contract is
+[workflow-workspace-spec.md §7.7.1](workflow-workspace-spec.md#771-watching-checks).
+
+### Consequences
+
+An optional check that fails makes the outcome `failure`. A check that has not
+registered by the time every reported check has settled is not waited for. No required-check syntax
+exists; adding one is a separate decision.

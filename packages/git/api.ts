@@ -148,6 +148,22 @@ export type {
 } from "./src/composition/pull-request-read-records.ts";
 export type { PullRequestResult } from "./src/composition/pull-request-records.ts";
 
+// Watching a pull request's checks, and the clock a watch reads time through.
+export {
+  PULL_REQUEST_CHECKS_WATCH,
+  PULL_REQUEST_WATCH_CLOCK,
+  PullRequestChecksWatch,
+  PullRequestWatchClock,
+} from "./src/composition/pull-request-checks-watch.ts";
+export type {
+  CheckWatchInvocation,
+  CheckWatchOutcome,
+  CheckWatchReason,
+  CheckWatchResult,
+  PullRequestChecksWatchApi,
+  PullRequestWatchClockApi,
+} from "./src/composition/pull-request-checks-watch.ts";
+
 // Issues, on the same terms: middleware matches its own targets, and a request
 // everyone delegated reaches `NoIssueProvider` unchanged.
 export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";

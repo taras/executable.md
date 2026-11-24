@@ -202,7 +202,7 @@ function validated(
  * this execution, so it keeps the existing fail-stop state and its first cause
  * rather than being serialized as a refusal the provider never gave.
  */
-const joinedReadCoordinator: LiveDurableOperationCoordinator = {
+export const joinedReadCoordinator: LiveDurableOperationCoordinator = {
   *run<T extends DurableJson>(
     execute: () => Operation<T>,
     publish: (result: DurableResult) => Operation<void>,

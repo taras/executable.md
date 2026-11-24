@@ -297,6 +297,18 @@ Reads the check results on a pull request.
 proceed once CI is green — read the checks, then decide, rather than merging and
 hoping.
 
+```mdx
+<PullRequest.Checks url={pullRequest.url} watch timeoutSeconds={600} as="checkResult" />
+```
+
+In a REPL entry, `watch` waits instead of reading once: it pins the head it first
+sees and polls until every reported check has settled or `timeoutSeconds` runs
+out, showing progress live. It binds `{ outcome, reason?, headSha, checks }`.
+`outcome` is `success` or `failure` once every check has settled — skipped and
+neutral pass, and one failure fails — or `incomplete` with a `reason` of
+`timeout`, `head-changed` or `read-error`. Branch on `outcome` before filtering
+`checks`: an empty list of failures can mean CI is still running.
+
 ## IssueTracker
 
 Selects the issue tracker its content works with.

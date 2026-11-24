@@ -2020,6 +2020,30 @@ describe("Tier PRR — pull-request evidence", () => {
     }
   });
 
+  it("PRR35: a workflow run refuses a checks watch before a credential or a request", function* () {
+    const host = server({});
+    let credentials = 0;
+    const counted = {
+      ...host.access,
+      token(): Operation<string | undefined> {
+        credentials += 1;
+        return host.access.token();
+      },
+    };
+    const stream = new InMemoryStream();
+    const refused = yield* raised(
+      retainedRead(
+        stream,
+        `<PullRequest.Checks url="${SUBJECT_URL}" watch timeoutSeconds={60} as="checks" />\n`,
+        gitHubSource(counted),
+      ),
+    );
+    expect(String(refused)).toContain("this host does not watch checks");
+    expect(host.requests).toEqual([]);
+    expect(credentials).toBe(0);
+    expect(readYields(stream.snapshot())).toEqual([]);
+  });
+
   it("PRR34: a retained envelope that is not this evidence appends no replacement", function* () {
     const host = server({
       [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
