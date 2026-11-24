@@ -28,7 +28,8 @@ import { Permissions } from "@executablemd/runtime";
  * therefore resolved nothing and selected nothing.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
@@ -532,8 +533,11 @@ function* admitted(events: readonly DurableEvent[]): Operation<string | undefine
 
 /** The question an entry is left at, never answered. */
 const QUESTION = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
+const OWNER = "packages/cli/tests/retained-repository-git.test.ts";
 
 describe("one entry's local Add, Switch and Commit", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("E2: replays acknowledged Switch, Add and Commit with no Git work", function* () {
     const fixture = yield* useFixture();
     const live = counters();
@@ -667,7 +671,7 @@ describe("one entry's local Add, Switch and Commit", () => {
     const performed = yield* run(
       fixture,
       '<Git.Switch branch="ready" base="nothing-resolves-this" />',
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       counted,
     );
 
@@ -694,7 +698,7 @@ describe("one entry's local Add, Switch and Commit", () => {
     const performed = yield* run(
       fixture,
       '<Git.Switch branch="fresh" />',
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       counted,
     );
 
@@ -770,7 +774,7 @@ describe("one entry's local Add, Switch and Commit", () => {
     const performed = yield* run(
       fixture,
       ['<Git.Commit message="Record the index" as="commit" />', "Commit: {commit}"].join("\n"),
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       counted,
     );
 
@@ -1228,9 +1232,19 @@ describe("one entry's local Add, Switch and Commit", () => {
     const source = '<Git.Add paths="note.md" />';
 
     const first = counters();
-    const one = yield* run(fixture, source, new InMemoryStream(), first);
+    const one = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      first,
+    );
     const second = counters();
-    const two = yield* run(fixture, source, new InMemoryStream(), second);
+    const two = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      second,
+    );
 
     expect(one.refusal).toBe(undefined);
     expect(two.refusal).toBe(undefined);

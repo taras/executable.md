@@ -18,7 +18,7 @@
  */
 
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
-import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   allSettled,
@@ -59,6 +59,7 @@ import {
   collect,
   Elicitation,
   inlineSource,
+  INLINE_SOURCE_PATH,
   registerComponents,
   useNormalizedOutput,
 } from "@executablemd/core";
@@ -348,6 +349,8 @@ function localRecords(events: readonly DurableEvent[]) {
 }
 
 describe("one entry's local file work", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("1075: live absolute refusal precedes routing, ownership, target I/O and a new file record", function* () {
     const fixture = yield* useFixture();
     for (const admitted of [false, true]) {
@@ -402,7 +405,7 @@ describe("one entry's local file work", () => {
           [],
           fixture.checkout,
         );
-        const stream = new InMemoryStream();
+        const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
         const source = `<PrintErrors><Dir path=${JSON.stringify(fixture.checkout)}><File path="seed.md" /></Dir></PrintErrors><PrintErrors><Dir path=${JSON.stringify(join(fixture.root, "missing"))}>made</Dir></PrintErrors>`;
         const output = String(
           yield* collect(
@@ -1447,6 +1450,8 @@ describe("975 — workspace recording crosses the process boundary", () => {
 });
 
 describe("marked workspace mount initialization", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("seeds the frame from entry cwd while project discovery stays captured", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
@@ -1504,7 +1509,7 @@ describe("marked workspace mount initialization", () => {
           {
             ...inlineSource('<Dir path="/reference"><File path="one.md" /></Dir>'),
             includes: [],
-            stream: new InMemoryStream(),
+            stream: yield* useJournalStream(INLINE_SOURCE_PATH),
           },
           [installation],
         ),
