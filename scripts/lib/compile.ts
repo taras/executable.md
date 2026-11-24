@@ -77,7 +77,10 @@ export const PACKAGED_DOCUMENTATION = [
  * The notices of prepared runtimes the binary's graph imports. The modules
  * themselves are embedded as graph code; their notice is no module.
  */
-export const PREPARED_NOTICES = ["packages/cli/generated/tty/NOTICE.txt"];
+export const PREPARED_NOTICES = [
+  "packages/cli/generated/tty/NOTICE.txt",
+  "packages/core/markdown-boundary-NOTICE.txt",
+];
 
 /** Everything a compile embeds, in the order the argv names it. */
 export const EMBEDDED_ASSETS = [

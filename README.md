@@ -68,7 +68,9 @@ Locate the package that owns the behavior you are about to change:
   and the checks CI runs.
 - `specs/` — the specification each package is held to.
 
-On a fresh clone, start here:
+On a fresh clone, install the Rustup launcher alongside the JavaScript tooling,
+then run setup. Setup selects and installs the pinned Rust toolchain and WASM
+target.
 
 ```bash exec
 deno task setup
@@ -142,7 +144,8 @@ Select it after changing a dependency, or whenever you want the checkout
 restored on its own without building or testing. It executes `deno task setup`,
 the preamble block above and the only thing in this repository that installs.
 Setup owns both dependency layouts — `node_modules/` and Deno's global cache —
-and prepares them in the order their union resolves in: Deno's frozen install
+and prepares them in the order their union resolves in: the pinned Markdown
+boundary module, Deno's frozen install
 and cached module graphs first, then pnpm's store beside it, then the browser
 bundle.
 

@@ -157,7 +157,7 @@ export function stored(overrides: Partial<StoredPullRequest> = {}): StoredPullRe
     number: 1,
     state: "open",
     title: TITLE,
-    body: `\n${BODY}\n`,
+    body: `${BODY}\n`,
     draft: false,
     headRef: BRANCH,
     // Empty: the fixture reads the branch when the payload is built, because a

@@ -26,6 +26,8 @@ export type Segment =
 export interface TextSegment {
   type: "text";
   content: string;
+  /** Passive fence ranges in content, after removing structural prefixes. */
+  passiveFences?: { start: number; end: number }[];
 }
 
 export interface ComponentElement {
@@ -59,6 +61,18 @@ export interface ComponentElement {
   authoredExpressions?: Record<string, string>;
   children: Segment[];
   selfClosing: boolean;
+  /**
+   * Set when the element stands on its own line and the scanner consumed that
+   * line's newline: a nonempty result that does not end in one receives it
+   * (§2.2).
+   */
+  lineEnd?: true;
+  /**
+   * The indentation before a standalone element that is not a block, after
+   * the structural prefix: it precedes a nonempty rendering and is dropped
+   * with an empty one (§2.2).
+   */
+  lineIndent?: string;
   /**
    * When set, expression props resolve against this env instead of the
    * contextual `env()` binding environment. Used for projected children

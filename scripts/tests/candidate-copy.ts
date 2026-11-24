@@ -5,6 +5,7 @@ import type { Operation } from "effection";
 import { symlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MARKDOWN_BOUNDARY_OUTPUT } from "../lib/prepared.ts";
 
 /** Copy candidate source and prepared assets while keeping build output private. */
 export function* copyPreparedCandidate(destination: string): Operation<void> {
@@ -20,6 +21,7 @@ export function* copyPreparedCandidate(destination: string): Operation<void> {
   const runtime = (yield* exists(new URL(tty, repo))) ? yield* readdir(new URL(tty, repo)) : [];
   for (const path of [
     ...listed.stdout.split("\0").filter(Boolean),
+    MARKDOWN_BOUNDARY_OUTPUT,
     "packages/web/generated/client-bundle.ts",
     "packages/acp/generated/claude-snapshot.ts",
     ...runtime.map((name) => `${tty}/${name}`),

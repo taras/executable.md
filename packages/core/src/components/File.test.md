@@ -64,36 +64,38 @@ and that is the whole file:
 </TempDir>
 </Test>
 
-Put it on its own line and the line breaks around it are content too, because
-they are inside the element. The file starts with a newline and ends with one.
+Written as a block, the content is its lines without the structural
+indentation, and the tag lines contribute nothing. The file ends with the
+newline of its last line.
 
-<Test name="Content on its own line keeps the newlines around it">
-<TempDir>
-<File path="spread.txt">
-one line
-</File>
-<File path="spread.txt" as="spread" />
-<AssertEquals actual={spread} expected={"\none line\n"} />
-</TempDir>
+<Test name="A block writes its lines">
+  <TempDir>
+    <File path="spread.txt">
+      one line
+    </File>
+    <File path="spread.txt" as="spread" />
+    <AssertEquals actual={spread} expected={"one line\n"} />
+  </TempDir>
 </Test>
 
-Indentation survives for the same reason, and so does a blank line.
+Indentation beyond the structure survives, and so does a blank line.
 
-<Test name="Whitespace inside the element is preserved exactly">
-<TempDir>
-<File path="indented.txt">
-    indented
-</File>
-<File path="indented.txt" as="indented" />
-<AssertEquals actual={indented} expected={"\n    indented\n"} />
+<Test name="Whitespace beyond the structural indentation is preserved exactly">
+  <TempDir>
+    <File path="indented.txt">
+          indented
+    </File>
+    <File path="indented.txt" as="indented" />
+    <AssertEquals actual={indented} expected={"    indented\n"} />
 
-<File path="blank.txt">
-one line
+    <File path="blank.txt">
 
-</File>
-<File path="blank.txt" as="blank" />
-<AssertEquals actual={blank} expected={"\none line\n\n"} />
-</TempDir>
+      one line
+
+    </File>
+    <File path="blank.txt" as="blank" />
+    <AssertEquals actual={blank} expected={"\none line\n\n"} />
+  </TempDir>
 </Test>
 
 A name that merely begins with two dots is an ordinary file, not an escape.

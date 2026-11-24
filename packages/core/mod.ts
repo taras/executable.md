@@ -69,8 +69,15 @@ export {
   handleFailure,
 } from "./src/component-api.ts";
 
-export { inspectSource } from "./src/source-inspection.ts";
-export type { SourceElement, SourceRange } from "./src/source-inspection.ts";
+export { inspectSource, inspectSourceDraft } from "./src/source-inspection.ts";
+export type {
+  ScanDiagnostic,
+  SourceDraftInspection,
+  SourceElement,
+  SourceFence,
+  SourceRange,
+  UnfinishedConstruct,
+} from "./src/source-inspection.ts";
 export { renderSegments } from "./src/render.ts";
 
 export { createReplayStream } from "./src/replay-stream.ts";

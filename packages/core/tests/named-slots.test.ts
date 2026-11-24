@@ -1009,6 +1009,15 @@ describe("Tier NS-H — Nested projection points", () => {
     expect(output.indexOf("ECHO(HEADER-TEXT)")).toBeLessThan(output.indexOf("default text"));
   });
 
+  it("NS-H3b: a slotted standalone element leaves its indentation and line ending behind", function* () {
+    const echo = makeComponent("Echo", "ECHO(<Content />)");
+    const host = makeComponent("Host", '<Echo><Content slot="header" /></Echo>');
+    const headerComp = makeComponent("Header", "HEADER-TEXT");
+    const segments = scanSegments('<Host>\n    <Header slot="header" />\n  default text\n</Host>');
+    const expanded = yield* expandAll(segments, { Echo: echo, Host: host, Header: headerComp });
+    expect(renderSegments(expanded)).toBe("ECHO(HEADER-TEXT)");
+  });
+
   it("NS-H4: two projections at different depths receive the same content", function* () {
     const echo = makeComponent("Echo", "ECHO(<Content />)");
     const host = makeComponent("Host", "top: <Content />\n\n<Echo><Content /></Echo>");

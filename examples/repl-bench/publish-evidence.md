@@ -19,16 +19,16 @@ receipt format and recovery steps.
 
 <If condition={evidence.kind === "dry-run"}>
   <Return value={evidence} />
-<Else>
-  <If condition={evidence.target.kind === "create"}>
-    <Git.Push />
-    <PullRequest title={evidence.target.title} base={evidence.pins.baseBranch} draft={true} as="draft">{evidence.target.body}</PullRequest>
-    <Evidence.Publish receipt={evidence.receipt} identity={evidence.identity} receiptSha256={evidence.receiptSha256} number={draft.number} as="created" />
-    <Return value={created} />
   <Else>
-    <Evidence.Publish receipt={evidence.receipt} identity={evidence.identity} receiptSha256={evidence.receiptSha256} number={evidence.target.number} as="updated" />
-    <Return value={updated} />
+    <If condition={evidence.target.kind === "create"}>
+      <Git.Push />
+      <PullRequest title={evidence.target.title} base={evidence.pins.baseBranch} draft={true} as="draft">{evidence.target.body}</PullRequest>
+      <Evidence.Publish receipt={evidence.receipt} identity={evidence.identity} receiptSha256={evidence.receiptSha256} number={draft.number} as="created" />
+      <Return value={created} />
+      <Else>
+        <Evidence.Publish receipt={evidence.receipt} identity={evidence.identity} receiptSha256={evidence.receiptSha256} number={evidence.target.number} as="updated" />
+        <Return value={updated} />
+      </Else>
+    </If>
   </Else>
-  </If>
-</Else>
 </If>

@@ -5304,20 +5304,24 @@ describe("1342 — written Markdown in the chat and in entry Output", () => {
     "```",
     "Chatend marker.",
   ].join("\n");
+  // Generated XMD indents each block's body, so the fence keeps its bytes.
+  const indent = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => (line === "" ? line : `  ${line}`))
+      .join("\n");
   const SUBMISSION = [
     '<Let as="code" select="code">',
-    "````xmd",
-    ENTRY_MARKDOWN,
-    "````",
+    indent(["````xmd", ENTRY_MARKDOWN, "````"].join("\n")),
     "</Let>",
     "<REPL.EntryInput>{code}</REPL.EntryInput>",
     "<REPL.Submit />",
     "",
   ].join("\n");
-  const REPLY = `<Output>\n${CHAT_MARKDOWN}\n</Output>\n${SUBMISSION}`;
+  const REPLY = `<Output>\n${indent(CHAT_MARKDOWN)}\n</Output>\n${SUBMISSION}`;
   // Held after an unclosed strong delimiter, and again inside an open fence.
   const BOLD_OPEN = REPLY.indexOf("plain");
-  const FENCE_OPEN = REPLY.indexOf("\n# chatfence");
+  const FENCE_OPEN = REPLY.indexOf("\n  # chatfence");
   const PIECES = [
     REPLY.slice(0, BOLD_OPEN - 3),
     REPLY.slice(BOLD_OPEN - 3, FENCE_OPEN),

@@ -41,7 +41,7 @@ The publish step failed **twice** in a row.
 <AssertEquals actual={sent.methods} expected={["GET", "POST"]} />
 <AssertEquals
   actual={sent.descriptions}
-  expected={["", "\nThe publish step failed **twice** in a row.\n"]}
+  expected={["", "The publish step failed **twice** in a row.\n"]}
 />
 </Test>
 

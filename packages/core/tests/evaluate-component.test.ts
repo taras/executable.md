@@ -638,12 +638,11 @@ describe("Tier FE — the paired form produces its own program", () => {
       typeof value === "object" && value !== null && !Array.isArray(value)
         ? value.source
         : undefined;
-    // The content region is `\n<Producer />\n` — the newlines the document put
-    // around the element are part of what `<Evaluate>` was given to render, so
-    // the admitted source is those bytes with the producer's own in place of
-    // the element. Byte-exact in both directions: nothing was trimmed, and
+    // The element stands on its own line in a block body, so the content
+    // region renders exactly the producer's bytes: the producer's text already
+    // ends its line. Byte-exact in both directions: nothing was trimmed, and
     // nothing the document did not write was added.
-    expect(source).toBe(`\n${PROGRAM}\n`);
+    expect(source).toBe(PROGRAM);
     expect(files.performed).toEqual(["read notes.md", "read other.md"]);
   });
 
@@ -1683,7 +1682,9 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
       stream,
     );
 
-    expect(String(output)).toBeTruthy();
+    // Every line of the fragment is a delimiter or a write, so it renders
+    // nothing at all.
+    expect(String(output)).toBe("");
     // Exactly the selected write, whose own path check precedes it. The
     // untaken read never ran, and the write did not fail a form check by
     // taking the read's plan.

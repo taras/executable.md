@@ -27,5 +27,8 @@
     "@secretlint/profiler": "npm:@secretlint/profiler@13.0.4",
     "yq.rs": "npm:yq.rs@0.1.4",
     "@babel/standalone": "npm:@babel/standalone@8.0.7"
+  },
+  "publish": {
+    "exclude": ["!generated/markdown-boundary.ts", "vendor/markdown-boundary/**"]
   }
 }

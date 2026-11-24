@@ -836,3 +836,28 @@ Repository source carries the recipe (`packages/cli/vendor/tty/recipe.json`), th
 CLI modules import the prepared module by relative path, so no distribution declares an external tty dependency. JSR selects `generated/tty/**` and excludes `vendor/tty/**`. The npm builder emits the modules through the CLI's graph, restores the supplied declarations and copies the notice. Canonical compilation embeds the modules through the graph and the notice as an include, without producer trees or archives.
 
 Two fresh preparations reproduce the recipe's runtime. Distribution checks inspect the JSR selection and run its selected runtime, execute and typecheck the emitted npm runtime, and reopen a settled REPL entry through the host binary. `verify:clean` prepares a clone and proves the subsequent builds stay offline and leave dependency state and locks unchanged.
+
+## 13. Prepared Markdown boundary module
+
+Core uses the Rust Markdown boundary crate from
+`packages/core/vendor/markdown-boundary/`. Its recipe pins the Rust release,
+compiler commit, `wasm32-unknown-unknown` target, and the hashes of the stripped
+WASM and its generated module. Cargo's committed lock pins and verifies the crate
+inputs. The Rustup launcher is a setup prerequisite.
+
+`deno task deps`, also used by `deno task setup`, prepares the module before the
+workspace install can follow Core's import. It installs the pinned Rust toolchain
+and target when missing and fetches the locked crates. It builds offline in
+invocation-private target storage and remaps source and registry paths so panic
+locations do not depend on the checkout or Cargo cache. It atomically stages
+the verified output at
+`packages/core/generated/markdown-boundary.ts`. A pinned input change or an altered
+output invalidates the prepared state. Normal builds and checks consume the module
+without invoking Rustup or Cargo. The runtime-only filesystem contract job installs
+its own test graph and needs no Core artifact.
+
+Core includes the module in JSR and npm publication. The same module enters the
+standalone binary through its import graph. The WASM target is independent of
+the binary release triple, so `deps:target` only prepares the Deno dependency
+graph of the requested release target. The release compile embeds the module
+already prepared by `deps`.

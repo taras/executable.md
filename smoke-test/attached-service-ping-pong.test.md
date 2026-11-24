@@ -5,6 +5,6 @@
 <Let as="pingPongResponse">
 <Sample prompt="complete ping-pong" />
 </Let>
-<AssertEquals actual={pingPongResponse} expected={"\n\nping→pong→ping"} />
+<AssertEquals actual={pingPongResponse} expected={"\nping→pong→ping"} />
 </AttachedPingPongProvider>
 </Test>

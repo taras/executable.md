@@ -10,15 +10,15 @@
 <WhenPrompt template={"{?context}The person says:\n\nShow the formatting fixture."} />
 
 <Let as="reply" select="code">
-```xmd
-<Output>
+  ```xmd
+  <Output>
 
 
-Reading cart.md.
+  Reading cart.md.
 
-    items.reduce((sum, item) => sum + item.price)
-</Output>
-```
+      items.reduce((sum, item) => sum + item.price)
+  </Output>
+  ```
 </Let>
 {reply}
 

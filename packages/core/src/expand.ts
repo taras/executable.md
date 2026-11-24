@@ -1225,23 +1225,26 @@ function* expandListSegments(
     if (checkedFailures?.failure !== undefined) {
       break;
     }
+    const produced = result.length;
     switch (segment.type) {
       case "text": {
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
         // Runs synchronously — no yield, no journal entry
-        const healed = healSegment(segment.content);
         const textEvalEnv = yield* env;
         const textProps =
           textEvalEnv !== undefined && "props" in textEvalEnv.values
             ? textEvalEnv.values.props
             : parentProps;
         const textInputs = yield* inputValues();
-        const final = splitTextFences(segment, healed)
+        const final = splitTextFences(segment)
           .map(({ content, passive }) => {
             if (passive) {
               return content;
             }
-            const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
+            const protectedEscapes = healSegment(content).replaceAll(
+              "\\{",
+              ESCAPED_BRACE_PLACEHOLDER,
+            );
             const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
             const bound = textEvalEnv
               ? interpolateEvalBindings(interpolated, textEvalEnv.values, textInputs)
@@ -1922,6 +1925,21 @@ function* expandListSegments(
           result.push(yield* raise(segment));
         } else {
           result.push(segment);
+        }
+      }
+    }
+
+    if (
+      segment.type === "component" &&
+      (segment.lineEnd === true || segment.lineIndent !== undefined)
+    ) {
+      const rendered = renderSegments(result.slice(produced));
+      if (rendered !== "") {
+        if (segment.lineIndent !== undefined) {
+          result.splice(produced, 0, { type: "text", content: segment.lineIndent });
+        }
+        if (segment.lineEnd === true && !rendered.endsWith("\n")) {
+          result.push({ type: "text", content: "\n" });
         }
       }
     }
@@ -5118,11 +5136,16 @@ export function partitionBySlot(children: Segment[]): SlotMap {
 /**
  * Strip the `slot` prop from a segment. Returns a shallow clone with
  * `slot` removed from props. Non-component segments pass through unchanged.
+ *
+ * The clone also leaves its line ending and indentation behind: a slotted
+ * element renders where its slot is projected, not on the source line it
+ * stood on.
  */
 export function stripSlotProp(segment: Segment): Segment {
   if (segment.type === "component" && "slot" in segment.props) {
     const { slot: _, ...rest } = segment.props;
-    return { ...segment, props: rest };
+    const { lineEnd: _lineEnd, lineIndent: _lineIndent, ...element } = segment;
+    return { ...element, props: rest };
   }
   return segment;
 }

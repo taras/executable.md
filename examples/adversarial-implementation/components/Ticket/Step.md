@@ -42,14 +42,14 @@ mkdir -- {recordDirectory}
 <Else>
 <Let as="call" value={{...prepared.call,inputs:prepared.inputs.map(input => record.documents[input.path]),preparation:prepared.receipt}} />
 <Ticket.SaveMetadata name="call" repository={call.assignment.repository} path={call.record + "/call.json"} as="callReceipt" />
-<Ticket.Capture as="execution">
-  <Dir path={call.assignment.repository}>
-    <Phase.Run phase={call.assignment.phase} role={call.role} session={call.session}
-      assignment={call.assignment} attempt={call.attempt} initialize={call.initialize}
-      inputs={prepared.inputs} plannerProvider={call.provider} implementationProvider={call.provider} implementationModel={record.manifest.roles.implementor.model} maxResponseCorrections={record.manifest.maxResponseCorrections} successor={call.assignment.continuation.phase}
-      nextRole={call.assignment.continuation.role} responseProfile={{kind:"ticket",knownDocuments:Object.keys(record.documents)}} as="result" />
-  </Dir>
-</Ticket.Capture>
+      <Ticket.Capture as="execution">
+        <Dir path={call.assignment.repository}>
+          <Phase.Run phase={call.assignment.phase} role={call.role} session={call.session}
+            assignment={call.assignment} attempt={call.attempt} initialize={call.initialize}
+            inputs={prepared.inputs} plannerProvider={call.provider} implementationProvider={call.provider} implementationModel={record.manifest.roles.implementor.model} maxResponseCorrections={record.manifest.maxResponseCorrections} successor={call.assignment.continuation.phase}
+            nextRole={call.assignment.continuation.role} responseProfile={{kind:"ticket",knownDocuments:Object.keys(record.documents)}} as="result" />
+        </Dir>
+      </Ticket.Capture>
 <Ticket.SaveMetadata name="execution" repository={call.assignment.repository} path={call.record + "/execution.json"} as="executionReceipt" />
 <Ticket.Capture as="canonical">
   <Ticket.Read path={call.attempt + "/result.json"} as="resultText" />

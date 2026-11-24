@@ -360,15 +360,16 @@ describe("workflow Git.Commit message", () => {
         ),
       );
 
-      // The line break after the opening element is part of the text that
-      // content is, and only the end of the composed message is trimmed.
+      // The opening element is a line of its own and contributes none, so the
+      // content is its one line, and only the end of the composed message is
+      // trimmed.
       const object = yield* headCommit(database, yield* checkout(database));
-      expect(object.message).toBe("\nwritten as content\n");
+      expect(object.message).toBe("written as content\n");
 
       const [, outcome] = yield* gitOutcomes(database);
       const retained = parseGitCommitResult(
         outcome?.record,
-        yield* expectation(database, "\nwritten as content\n", "children"),
+        yield* expectation(database, "written as content\n", "children"),
       );
       expect(retained?.messageSource).toBe("children");
     });
@@ -396,10 +397,11 @@ describe("workflow Git.Commit message", () => {
       );
 
       // One blank line separates the prop from the content, and the blank
-      // lines the content itself begins with follow it unchanged.
+      // line the content itself begins with follows it unchanged. The
+      // standalone `<Git.Add />` renders nothing, so its line contributes none.
       const object = yield* headCommit(database, yield* checkout(database));
       expect(object.message).toBe(
-        "prepare the release\n\n\n\n\nGenerated from validated release metadata.\n",
+        "prepare the release\n\n\nGenerated from validated release metadata.\n",
       );
 
       const [, outcome] = yield* gitOutcomes(database);

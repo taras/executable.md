@@ -82,17 +82,17 @@ git rev-parse HEAD
       <If condition={scenario.accepted}>
         <Parse schema={{type:"object"}} as="result">{child.stdout}</Parse>
         <AssertEquals actual={result.revision} expected={assignment.revision} />
-      <Else>
-        <Ticket.Text path={attempt + "/response-rejection-0000.json"} as="rejection" />
-        <Parse schema={{type:"object"}} as="rejected">{rejection}</Parse>
-        <AssertEquals actual={rejected.code} expected="schema" />
-        <Ticket.Text path={attempt + "/response-disposition.json"} as="dispositionText" />
-        <Parse schema={{type:"object"}} as="disposition">{dispositionText}</Parse>
-        <AssertEquals actual={disposition.code} expected={scenario.limit === 0 ? "response_correction_disabled" : "response_correction_exhausted"} />
-        <AssertEquals actual={disposition.consumed} expected={scenario.corrections} />
-        <AssertEquals actual={disposition.limit} expected={scenario.limit ?? 3} />
-        <AssertEquals actual={disposition.dispatchable} expected={false} />
-      </Else>
+        <Else>
+          <Ticket.Text path={attempt + "/response-rejection-0000.json"} as="rejection" />
+          <Parse schema={{type:"object"}} as="rejected">{rejection}</Parse>
+          <AssertEquals actual={rejected.code} expected="schema" />
+          <Ticket.Text path={attempt + "/response-disposition.json"} as="dispositionText" />
+          <Parse schema={{type:"object"}} as="disposition">{dispositionText}</Parse>
+          <AssertEquals actual={disposition.code} expected={scenario.limit === 0 ? "response_correction_disabled" : "response_correction_exhausted"} />
+          <AssertEquals actual={disposition.consumed} expected={scenario.corrections} />
+          <AssertEquals actual={disposition.limit} expected={scenario.limit ?? 3} />
+          <AssertEquals actual={disposition.dispatchable} expected={false} />
+        </Else>
       </If>
     </TempDir>
   </Each>

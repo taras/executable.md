@@ -288,9 +288,18 @@ describe("prepared tty preflight", () => {
         yield* copyFile(new URL(input, REPO), new URL(relative, root));
       }
     }
+    const { MARKDOWN_BOUNDARY_OUTPUT, MARKDOWN_BOUNDARY_SOURCE } = yield* until(
+      import("../lib/prepared.ts"),
+    );
+    const boundary = new URL(MARKDOWN_BOUNDARY_OUTPUT, root);
+    yield* ensureDir(new URL("./", boundary));
     const claude = "packages/acp/generated/claude-snapshot.ts";
     yield* ensureDir(fileURLToPath(new URL("packages/acp/generated/", root)));
     yield* copyFile(new URL(claude, REPO), new URL(claude, root));
+    expect(unprepared(root)).toBe(`${MARKDOWN_BOUNDARY_OUTPUT} is missing`);
+    yield* writeTextFile(boundary, "altered");
+    expect(unprepared(root)).toBe(`${MARKDOWN_BOUNDARY_OUTPUT} does not match the prepared recipe`);
+    yield* copyFile(new URL(MARKDOWN_BOUNDARY_OUTPUT, REPO), boundary);
     expect(unprepared(root)).toBe(`${TTY_OUTPUT} is missing`);
     expect(() => assertPrepared(root)).toThrow("deno task setup");
 
@@ -314,6 +323,12 @@ describe("prepared tty preflight", () => {
     expect(unprepared(root)).toBe(`${TTY_OUTPUT}/extra.js does not match the prepared recipe`);
     yield* rm(join(output, "extra.js"));
     expect(unprepared(root)).toBeUndefined();
+
+    const rust = new URL(MARKDOWN_BOUNDARY_SOURCE + "src/lib.rs", root);
+    const originalRust = yield* readTextFile(rust);
+    yield* writeTextFile(rust, originalRust + "\n");
+    expect(unprepared(root)).toContain("src/lib.rs changed since dependencies were installed");
+    yield* writeTextFile(rust, originalRust);
 
     const patch = new URL("packages/cli/vendor/tty/clay-text-cache.patch", root);
     yield* writeTextFile(patch, (yield* readTextFile(patch)) + "\n");

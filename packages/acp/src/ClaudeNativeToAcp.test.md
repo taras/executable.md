@@ -66,165 +66,165 @@ would fail this document.
 
 <Let as="verdictSchema" select="code[lang=json]">
 
-```json
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "mode", "verdict", "authorized", "ran", "refusal", "detail",
-    "claudeVersion", "platform", "architecture",
-    "target", "projectCopyVerified", "implementorMarkerRendered", "siblingMarkersRendered",
-    "nativeSessionId", "identityProvenance", "identityAllocations",
-    "substitutedIdentity", "routeConverted", "freshFallback",
-    "firstCommand", "firstInvocationChildren", "firstXmdExitCode",
-    "acpXmdExitCode", "acpDocument", "acpDocumentCarriesMarker", "acpInvocationChildren",
-    "instructionChannel", "privateFileMode", "privateFileRegular",
-    "preparedTextInArgv", "preparedTextInEnvironment",
-    "modelTurns", "conversationInputByteCount",
-    "consentInputBytes", "consentSurfaces", "exitControlBytes",
-    "adapterIdentity", "inheritedAgentMarkersRemoved",
-    "markerStored", "markerRecovered", "markerInReportedEvidence",
-    "answerSurface", "outcome",
-    "route", "journal", "arrangement", "observed", "absent",
-    "cleanup", "privateStateInspected"
-  ],
-  "properties": {
-    "mode": { "type": "string" },
-    "verdict": { "enum": ["PASS", "REFUSED", "ENVIRONMENT_BLOCKED", "PRODUCT_FAILED", "HARNESS_FAILED"] },
-    "authorized": { "type": "boolean" },
-    "ran": { "type": "boolean" },
-    "refusal": { "type": "string" },
-    "detail": { "type": "string" },
-    "claudeVersion": { "type": "string" },
-    "platform": { "type": "string" },
-    "architecture": { "type": "string" },
-    "target": { "type": "string" },
-    "projectCopyVerified": { "type": "boolean" },
-    "implementorMarkerRendered": { "type": "boolean" },
-    "siblingMarkersRendered": { "type": "integer" },
-    "nativeSessionId": { "type": "string" },
-    "identityProvenance": { "type": "string" },
-    "identityAllocations": { "type": "integer" },
-    "substitutedIdentity": { "type": "boolean" },
-    "routeConverted": { "type": "boolean" },
-    "freshFallback": { "type": "boolean" },
-    "firstCommand": { "type": "array", "items": { "type": "string" } },
-    "firstInvocationChildren": { "type": "integer" },
-    "firstXmdExitCode": { "type": "integer" },
-    "acpXmdExitCode": { "type": "integer" },
-    "acpDocument": { "type": "string" },
-    "acpDocumentCarriesMarker": { "type": "boolean" },
-    "acpInvocationChildren": { "type": "integer" },
-    "instructionChannel": { "type": "string" },
-    "privateFileMode": { "type": "string" },
-    "privateFileRegular": { "type": "boolean" },
-    "preparedTextInArgv": { "type": "boolean" },
-    "preparedTextInEnvironment": { "type": "boolean" },
-    "modelTurns": { "type": "integer" },
-    "conversationInputByteCount": { "type": "integer" },
-    "consentInputBytes": { "type": "string" },
-    "consentSurfaces": { "type": "array", "items": { "type": "string" } },
-    "exitControlBytes": { "type": "string" },
-    "adapterIdentity": { "type": "string" },
-    "inheritedAgentMarkersRemoved": { "type": "integer" },
-    "markerStored": { "type": "boolean" },
-    "markerRecovered": { "type": "boolean" },
-    "markerInReportedEvidence": { "type": "boolean" },
-    "answerSurface": { "type": "string" },
-    "outcome": { "type": "string" },
-    "route": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema", "kind", "provenance", "launcher", "nativeSessionId",
-        "instructionsDigestPresent", "buildVersion", "buildDigestPresent"
-      ],
-      "properties": {
-        "schema": { "type": "string" },
-        "kind": { "type": "string" },
-        "provenance": { "type": "string" },
-        "launcher": { "type": "string" },
-        "nativeSessionId": { "type": "string" },
-        "instructionsDigestPresent": { "type": "boolean" },
-        "buildVersion": { "type": "string" },
-        "buildDigestPresent": { "type": "boolean" }
-      }
-    },
-    "journal": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "provider", "agent", "launcher", "provenance", "nativeSessionId",
-        "sessionState", "instructionsDigestPresent", "buildVersion",
-        "firstPhases", "failureClasses"
-      ],
-      "properties": {
-        "provider": { "type": "string" },
-        "agent": { "type": "string" },
-        "launcher": { "type": "string" },
-        "provenance": { "type": "string" },
-        "nativeSessionId": { "type": "string" },
-        "sessionState": { "type": "array", "items": { "type": "string" } },
-        "instructionsDigestPresent": { "type": "boolean" },
-        "buildVersion": { "type": "string" },
-        "firstPhases": { "type": "array", "items": { "type": "string" } },
-        "failureClasses": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "arrangement": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["present", "agentSessionId"],
-      "properties": {
-        "present": { "type": "boolean" },
-        "agentSessionId": { "type": "string" }
-      }
-    },
-    "observed": {
-      "type": "object",
-      "additionalProperties": false,
-            "required": ["version", "digestPresent"],
-      "properties": {
-        "version": { "type": "string" },
-        "digestPresent": { "type": "boolean" }
-      }
-    },
-    "absent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["ran", "xmdExitCode", "failureClass", "modelTurns", "nativeChildren", "answered"],
-      "properties": {
-        "ran": { "type": "boolean" },
-        "xmdExitCode": { "type": "integer" },
-        "failureClass": { "type": "string" },
-        "modelTurns": { "type": "integer" },
-        "nativeChildren": { "type": "integer" },
-        "answered": { "type": "boolean" }
-      }
-    },
-    "cleanup": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "liveChildren", "privateFileRemoved", "privateDirectoryRemoved",
-        "journalsRemoved", "routeRecordsRemoved", "providerArrangementRemoved",
-        "projectPurgeOutcome", "temporaryRootRemoved"
-      ],
-      "properties": {
-        "liveChildren": { "type": "integer" },
-        "privateFileRemoved": { "type": "boolean" },
-        "privateDirectoryRemoved": { "type": "boolean" },
-        "journalsRemoved": { "type": "boolean" },
-        "routeRecordsRemoved": { "type": "boolean" },
-        "providerArrangementRemoved": { "type": "boolean" },
-        "projectPurgeOutcome": { "enum": ["purged", "nothing-to-purge", "failed"] },
-        "temporaryRootRemoved": { "type": "boolean" }
-      }
-    },
-    "privateStateInspected": { "type": "boolean" }
+  ```json
+  {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "mode", "verdict", "authorized", "ran", "refusal", "detail",
+      "claudeVersion", "platform", "architecture",
+      "target", "projectCopyVerified", "implementorMarkerRendered", "siblingMarkersRendered",
+      "nativeSessionId", "identityProvenance", "identityAllocations",
+      "substitutedIdentity", "routeConverted", "freshFallback",
+      "firstCommand", "firstInvocationChildren", "firstXmdExitCode",
+      "acpXmdExitCode", "acpDocument", "acpDocumentCarriesMarker", "acpInvocationChildren",
+      "instructionChannel", "privateFileMode", "privateFileRegular",
+      "preparedTextInArgv", "preparedTextInEnvironment",
+      "modelTurns", "conversationInputByteCount",
+      "consentInputBytes", "consentSurfaces", "exitControlBytes",
+      "adapterIdentity", "inheritedAgentMarkersRemoved",
+      "markerStored", "markerRecovered", "markerInReportedEvidence",
+      "answerSurface", "outcome",
+      "route", "journal", "arrangement", "observed", "absent",
+      "cleanup", "privateStateInspected"
+    ],
+    "properties": {
+      "mode": { "type": "string" },
+      "verdict": { "enum": ["PASS", "REFUSED", "ENVIRONMENT_BLOCKED", "PRODUCT_FAILED", "HARNESS_FAILED"] },
+      "authorized": { "type": "boolean" },
+      "ran": { "type": "boolean" },
+      "refusal": { "type": "string" },
+      "detail": { "type": "string" },
+      "claudeVersion": { "type": "string" },
+      "platform": { "type": "string" },
+      "architecture": { "type": "string" },
+      "target": { "type": "string" },
+      "projectCopyVerified": { "type": "boolean" },
+      "implementorMarkerRendered": { "type": "boolean" },
+      "siblingMarkersRendered": { "type": "integer" },
+      "nativeSessionId": { "type": "string" },
+      "identityProvenance": { "type": "string" },
+      "identityAllocations": { "type": "integer" },
+      "substitutedIdentity": { "type": "boolean" },
+      "routeConverted": { "type": "boolean" },
+      "freshFallback": { "type": "boolean" },
+      "firstCommand": { "type": "array", "items": { "type": "string" } },
+      "firstInvocationChildren": { "type": "integer" },
+      "firstXmdExitCode": { "type": "integer" },
+      "acpXmdExitCode": { "type": "integer" },
+      "acpDocument": { "type": "string" },
+      "acpDocumentCarriesMarker": { "type": "boolean" },
+      "acpInvocationChildren": { "type": "integer" },
+      "instructionChannel": { "type": "string" },
+      "privateFileMode": { "type": "string" },
+      "privateFileRegular": { "type": "boolean" },
+      "preparedTextInArgv": { "type": "boolean" },
+      "preparedTextInEnvironment": { "type": "boolean" },
+      "modelTurns": { "type": "integer" },
+      "conversationInputByteCount": { "type": "integer" },
+      "consentInputBytes": { "type": "string" },
+      "consentSurfaces": { "type": "array", "items": { "type": "string" } },
+      "exitControlBytes": { "type": "string" },
+      "adapterIdentity": { "type": "string" },
+      "inheritedAgentMarkersRemoved": { "type": "integer" },
+      "markerStored": { "type": "boolean" },
+      "markerRecovered": { "type": "boolean" },
+      "markerInReportedEvidence": { "type": "boolean" },
+      "answerSurface": { "type": "string" },
+      "outcome": { "type": "string" },
+      "route": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema", "kind", "provenance", "launcher", "nativeSessionId",
+          "instructionsDigestPresent", "buildVersion", "buildDigestPresent"
+        ],
+        "properties": {
+          "schema": { "type": "string" },
+          "kind": { "type": "string" },
+          "provenance": { "type": "string" },
+          "launcher": { "type": "string" },
+          "nativeSessionId": { "type": "string" },
+          "instructionsDigestPresent": { "type": "boolean" },
+          "buildVersion": { "type": "string" },
+          "buildDigestPresent": { "type": "boolean" }
+        }
+      },
+      "journal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider", "agent", "launcher", "provenance", "nativeSessionId",
+          "sessionState", "instructionsDigestPresent", "buildVersion",
+          "firstPhases", "failureClasses"
+        ],
+        "properties": {
+          "provider": { "type": "string" },
+          "agent": { "type": "string" },
+          "launcher": { "type": "string" },
+          "provenance": { "type": "string" },
+          "nativeSessionId": { "type": "string" },
+          "sessionState": { "type": "array", "items": { "type": "string" } },
+          "instructionsDigestPresent": { "type": "boolean" },
+          "buildVersion": { "type": "string" },
+          "firstPhases": { "type": "array", "items": { "type": "string" } },
+          "failureClasses": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "arrangement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["present", "agentSessionId"],
+        "properties": {
+          "present": { "type": "boolean" },
+          "agentSessionId": { "type": "string" }
+        }
+      },
+      "observed": {
+        "type": "object",
+        "additionalProperties": false,
+              "required": ["version", "digestPresent"],
+        "properties": {
+          "version": { "type": "string" },
+          "digestPresent": { "type": "boolean" }
+        }
+      },
+      "absent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ran", "xmdExitCode", "failureClass", "modelTurns", "nativeChildren", "answered"],
+        "properties": {
+          "ran": { "type": "boolean" },
+          "xmdExitCode": { "type": "integer" },
+          "failureClass": { "type": "string" },
+          "modelTurns": { "type": "integer" },
+          "nativeChildren": { "type": "integer" },
+          "answered": { "type": "boolean" }
+        }
+      },
+      "cleanup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "liveChildren", "privateFileRemoved", "privateDirectoryRemoved",
+          "journalsRemoved", "routeRecordsRemoved", "providerArrangementRemoved",
+          "projectPurgeOutcome", "temporaryRootRemoved"
+        ],
+        "properties": {
+          "liveChildren": { "type": "integer" },
+          "privateFileRemoved": { "type": "boolean" },
+          "privateDirectoryRemoved": { "type": "boolean" },
+          "journalsRemoved": { "type": "boolean" },
+          "routeRecordsRemoved": { "type": "boolean" },
+          "providerArrangementRemoved": { "type": "boolean" },
+          "projectPurgeOutcome": { "enum": ["purged", "nothing-to-purge", "failed"] },
+          "temporaryRootRemoved": { "type": "boolean" }
+        }
+      },
+      "privateStateInspected": { "type": "boolean" }
+    }
   }
-}
-```
+  ```
 
 </Let>
 <Test name="An ACP prompt continues the conversation a native launch constructed" timeout="45min">

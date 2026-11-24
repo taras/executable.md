@@ -225,7 +225,9 @@ describe("J1 — the Story, from one entry to one README", () => {
         entryDrawerShows(frame, "Name the project"),
       );
       const admitted = admission(yield* journal(hostRoot));
-      expect(admitted.source).toBe(`\n  ${REVISED}\n`);
+      // The entry is structurally indented and `<Plan>` stands on its own
+      // lines, so the admitted source is the approved program exactly.
+      expect(admitted.source).toBe(REVISED);
       expect(admitted.named).toEqual([
         { name: "Elicit", form: "paired" },
         { name: "Json", form: "self-closing" },
@@ -730,7 +732,8 @@ describe("A2–A5 — the selected REPL component environment", () => {
     expect(
       model.value.entries[0]?.bindings.find((binding) => binding.name === "draft")?.value,
     ).toBe(approved);
-    expect(model.value.terminal?.output).toBe(`\n\n${approved}`);
+    // The capturing `<Plan>` stands on its own line and renders nothing.
+    expect(model.value.terminal?.output).toBe(`\n${approved}`);
     expect(model.value.terminal?.output).not.toContain("First greeting rendered.");
     expect(fake.prompts).toHaveLength(2);
   });
@@ -792,10 +795,10 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* chooseCatalogRow(page, "generated generated");
       const fragment = yield* page.until(
         "the fragment's retained questions",
-        (frame) => frame.occurrences("answered 4:1") > 0 && frame.occurrences("answered 12:1") > 0,
+        (frame) => frame.occurrences("answered 3:1") > 0 && frame.occurrences("answered 11:1") > 0,
       );
-      expect(fragment.occurrences("answered 4:1")).toBe(1);
-      expect(fragment.occurrences("answered 12:1")).toBe(1);
+      expect(fragment.occurrences("answered 3:1")).toBe(1);
+      expect(fragment.occurrences("answered 11:1")).toBe(1);
       expect(fragment.occurrences(STOPPED)).toBe(1);
 
       yield* openHistory(page);

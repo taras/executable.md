@@ -18,6 +18,7 @@ conformance belong to [the language specification](executable-mdx-spec.md).
 | Host-installed Codex CLI for the carried adapter | [Decision record 004](decisions/004-host-installed-codex-cli.md); [ACP Availability](acp-client-spec.md#availability), [Adapter snapshots](acp-client-spec.md#adapter-snapshots) and [the maintained Codex adapter](release-process-spec.md#maintained-codex-adapter) own current behavior. |
 | Session continuation across agent CLI releases | [Decision record 005](decisions/005-current-executable-session-continuation.md); [ACP client sessions](acp-client-spec.md#sessions-ownership-routes-and-attachment) and [native launch executable binding](native-agent-session-launch-spec.md#executable-build-binding) own current behavior. |
 | REPL checkout concurrency | [DEC-018](#dec-018-repl-entries-take-no-shared-git-directory-lock); [the REPL specification](repl-spec.md#the-repositories-and-worktrees-an-entry-selected) owns current behavior. |
+| Structural indentation and standalone lines | [Decision record 006](decisions/006-structural-indentation.md); [the language specification](executable-mdx-spec.md#structural-indentation-and-standalone-lines) owns current behavior. |
 
 ---
 

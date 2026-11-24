@@ -1,4 +1,4 @@
-<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />
+<WhenPrompt template="Create one complete XMD Plan from this Prompt:{?rest}" />
 
 <Let
   as="prohibited"
@@ -7,7 +7,7 @@
 
 {prohibited}
 
-<WhenPrompt template="{?lead}That request was refused{?rest}" />
+<WhenPrompt template="That request was refused{?rest}" />
 
 <Let
   as="request"

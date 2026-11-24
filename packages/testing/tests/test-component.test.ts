@@ -485,7 +485,8 @@ describe("<Test> as a function component", () => {
     const withTest = ["before", "", '<Test name="skipped">inside</Test>', "", "after", ""].join(
       "\n",
     );
-    const withoutTest = ["before", "", "", "", "after", ""].join("\n");
+    // The skipped element stands on its own line, so its line goes with it.
+    const withoutTest = ["before", "", "", "after", ""].join("\n");
 
     const skipped = yield* runDoc({ "README.md": withTest }, { testing: false });
     yield* withFreshDocument(OWNER, skippedCase, function* (runPlain) {

@@ -62,19 +62,19 @@ npm --version
 
 <Let as="manifestSchema" select="code[lang=json]">
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "name": {
-      "type": "string",
-      "pattern": "^@executablemd/[a-z0-9][a-z0-9._-]*$"
+  ```json
+  {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "pattern": "^@executablemd/[a-z0-9][a-z0-9._-]*$"
+      },
+      "description": { "type": "string" }
     },
-    "description": { "type": "string" }
-  },
-  "required": ["name"]
-}
-```
+    "required": ["name"]
+  }
+  ```
 
 </Let>
 
@@ -385,9 +385,9 @@ file, where you can see it.
 
 <Let as="artifactManifest"><Json value={artifactPackage} /></Let>
 
-```ts eval
-const artifactDisplay = artifactManifest.split("\n").map((line) => `  ${line}`).join("\n");
-```
+  ```ts eval
+  const artifactDisplay = artifactManifest.split("\n").map((line) => `  ${line}`).join("\n");
+  ```
 
 <File path="package.json">{artifactManifest}
 </File>
@@ -407,28 +407,28 @@ npm pack --dry-run --json
 
 </Let>
 
-```ts eval
-const packDisplay = (() => {
-  let packed = null;
-  try {
-    packed = JSON.parse(packOutput.trim());
-  } catch (error) {
-    packed = null;
-  }
-  const entry = Array.isArray(packed) ? packed[0] : packed;
-  const files = entry && Array.isArray(entry.files) ? entry.files : [];
-  if (files.length === 0) {
-    return "  npm reported no files";
-  }
-  const width = Math.max(...files.map((file) => String(file.path).length));
-  const listed = files
-    .map((file) => `  ${String(file.path).padEnd(width)}   ${file.size} B`)
-    .join("\n");
-  return `${listed}\n  ${files.length} files, ${entry.unpackedSize} B unpacked`;
-})();
-```
+  ```ts eval
+  const packDisplay = (() => {
+    let packed = null;
+    try {
+      packed = JSON.parse(packOutput.trim());
+    } catch (error) {
+      packed = null;
+    }
+    const entry = Array.isArray(packed) ? packed[0] : packed;
+    const files = entry && Array.isArray(entry.files) ? entry.files : [];
+    if (files.length === 0) {
+      return "  npm reported no files";
+    }
+    const width = Math.max(...files.map((file) => String(file.path).length));
+    const listed = files
+      .map((file) => `  ${String(file.path).padEnd(width)}   ${file.size} B`)
+      .join("\n");
+    return `${listed}\n  ${files.length} files, ${entry.unpackedSize} B unpacked`;
+  })();
+  ```
 
-  {packageName}@{bootstrapVersion}
+    {packageName}@{bootstrapVersion}
 
 {artifactDisplay}
 
@@ -448,20 +448,20 @@ rest.
 
 <Let as="otpSchema" select="code[lang=json]">
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "code": {
-      "type": "string",
-      "writeOnly": true,
-      "pattern": "^\\d{6}$"
+    ```json
+    {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "writeOnly": true,
+          "pattern": "^\\d{6}$"
+        }
+      },
+      "required": ["code"],
+      "additionalProperties": false
     }
-  },
-  "required": ["code"],
-  "additionalProperties": false
-}
-```
+    ```
 
 </Let>
 
@@ -479,18 +479,18 @@ one in this document's table means the package has been set up by someone else �
 and that stops the run here, before the placeholder is published. A refusal
 leaves npm exactly as it was.
 
-```bash exec as="trustList"
+  ```bash exec as="trustList"
 npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
-```
+  ```
 
-```ts eval
-const trust = classifyTrust(
-  trustList,
-  expectedTrust,
-  reservation.state === "absent",
-);
-const trustDetail = indent(trust.detail);
-```
+  ```ts eval
+  const trust = classifyTrust(
+    trustList,
+    expectedTrust,
+    reservation.state === "absent",
+  );
+  const trustDetail = indent(trust.detail);
+  ```
 
 <If condition={trust.state === "conflicting"}>
 
@@ -542,21 +542,21 @@ The registry is read once more, but only to refuse: you have been away with your
 authenticator, and a package that gained real versions in the meantime is not
 one to publish a placeholder into.
 
-```bash exec as="versionsAfter"
-npm view {packageName} versions --json --registry {registry}
-```
+  ```bash exec as="versionsAfter"
+  npm view {packageName} versions --json --registry {registry}
+  ```
 
-```bash exec as="distTagsAfter"
-npm view {packageName} dist-tags --json --registry {registry}
-```
+  ```bash exec as="distTagsAfter"
+  npm view {packageName} dist-tags --json --registry {registry}
+  ```
 
-```ts eval
-const reservationNow = classifyReservation(
-  versionsAfter,
-  distTagsAfter,
-  bootstrapVersion,
-);
-```
+  ```ts eval
+  const reservationNow = classifyReservation(
+    versionsAfter,
+    distTagsAfter,
+    bootstrapVersion,
+  );
+  ```
 
 <If condition={reservationNow.state === "conflicting" || reservationNow.state === "unreadable"}>
 
@@ -581,14 +581,14 @@ would have given, from the party that decides it.
 `exec as="…"` keeps a successful publish quiet without discarding what npm said,
 so each of the three answers is reported in npm's own terms.
 
-```bash exec as="publishResult"
+  ```bash exec as="publishResult"
 npm_config_otp={otp.code} npm publish --access public --tag bootstrap --registry {registry}
-```
+  ```
 
-```ts eval
-const publication = classifyPublish(publishResult, bootstrapVersion);
-const publishDetail = indent(publication.detail);
-```
+  ```ts eval
+  const publication = classifyPublish(publishResult, bootstrapVersion);
+  const publishDetail = indent(publication.detail);
+  ```
 
 <If condition={publication.state === "failed"}>
 
@@ -675,14 +675,14 @@ So what is read back is the trusted publisher, which is not served from that
 cache and answered truthfully throughout: it carries the id that revokes this
 configuration, which is worth printing while you are here.
 
-```bash exec as="finalTrustList"
+  ```bash exec as="finalTrustList"
 npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
-```
+  ```
 
-```ts eval
-const finalTrust = classifyTrust(finalTrustList, expectedTrust, false);
-const finalTrustDetail = indent(finalTrust.detail);
-```
+  ```ts eval
+  const finalTrust = classifyTrust(finalTrustList, expectedTrust, false);
+  const finalTrustDetail = indent(finalTrust.detail);
+  ```
 
 <If condition={finalTrust.state !== "expected"}>
 
@@ -690,24 +690,24 @@ npm does not report the trusted publisher this run left behind:
 
 {finalTrustDetail}
 
-```ts eval
-throw new Error(
-  `${packageName} does not carry the expected trusted publisher: ${
-    finalTrust.detail || finalTrust.state
-  }`,
-);
-```
+    ```ts eval
+    throw new Error(
+      `${packageName} does not carry the expected trusted publisher: ${
+        finalTrust.detail || finalTrust.state
+      }`,
+    );
+    ```
 
 </If>
 
-  {bootstrapVersion} is reserved under the bootstrap dist-tag
-  {finalTrust.summary}
+    {bootstrapVersion} is reserved under the bootstrap dist-tag
+    {finalTrust.summary}
 
 If you ever need to undo the trust configuration — the workflow moves, the
 environment is renamed, the package changes hands — revoke it by id and run this
 document again:
 
-  npm trust revoke {packageName} --id {finalTrust.id}
+    npm trust revoke {packageName} --id {finalTrust.id}
 
 </TempDir>
 

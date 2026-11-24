@@ -11,7 +11,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import matter from "gray-matter";
-import { envelopeBody, inspectSource } from "../src/source-inspection.ts";
+import { envelopeBody, inspectSource, inspectSourceDraft } from "../src/source-inspection.ts";
 import type { SourceElement } from "../src/source-inspection.ts";
 import { scanSegments } from "../src/scanner.ts";
 
@@ -237,5 +237,60 @@ describe("Tier SI — what a source text says it is made of", () => {
     expect(Object.isFrozen(element)).toBe(true);
     expect(Object.isFrozen(element.opening)).toBe(true);
     expect(Object.isFrozen(element.closing)).toBe(true);
+  });
+});
+
+describe("Markdown boundary inspection", () => {
+  it("retains exact authored ranges, diagnostics and partial fence facts together", function* () {
+    const header = "\ufeff---\nignored: 😀\n---\n";
+    const accepted = '<File path="😀.txt" />';
+    const refused = "😀 <If\n  condition={true}\n>rejected</If>\n";
+    const fence = `> ~~~bash exec\r\n> <Ignored />\r\n> ~~~\r\n`;
+    const incomplete = "> ~~~\n> <StillLiteral />\n";
+    const text = header + fence + accepted + "\n" + refused + accepted + "\n" + incomplete;
+    const draft = inspectSourceDraft(text, "document");
+    expect(draft.elements.map(({ opening }) => text.slice(opening.start, opening.end))).toEqual([
+      accepted,
+      accepted,
+    ]);
+    expect(draft.diagnostics.map(({ position }) => position)).toEqual([
+      { path: undefined, offset: text.indexOf("<If"), line: 8, column: 4 },
+    ]);
+    expect(
+      draft.fences.map(({ range, marker, executable, end }) => [
+        text.slice(range.start, range.end),
+        text.slice(marker, marker + 3),
+        executable,
+        end,
+      ]),
+    ).toEqual([
+      [fence, "~~~", false, "marker"],
+      [incomplete, "~~~", false, "unfinished"],
+    ]);
+    expect(draft.unfinished).toEqual([{ start: text.lastIndexOf("> ~~~") }]);
+    expect(inspectSource(text, "document").ok).toBe(false);
+  });
+
+  it("exposes implicit list exits and never guesses a tag inside an open fence", function* () {
+    const passive = '  ~~~\n  <File path="absent.txt" />\n';
+    const prefix = "- item\n\n" + passive;
+    for (let end = prefix.indexOf("~~~") + 3; end <= prefix.length; end++) {
+      const draft = inspectSourceDraft(prefix.slice(0, end), "fragment");
+      expect(draft.elements).toEqual([]);
+      expect(draft.fences[0]?.end).toBe("unfinished");
+      expect(draft.diagnostics).toEqual([]);
+    }
+    const source = prefix + "<Json value={42} />\n";
+    const draft = inspectSourceDraft(source, "fragment");
+    expect(cut(source, draft.elements)).toEqual(["Json <Json value={42} />"]);
+    expect(draft.fences).toEqual([
+      {
+        range: { start: "- item\n\n".length, end: prefix.length },
+        marker: prefix.indexOf("~~~"),
+        executable: false,
+        end: "container",
+      },
+    ]);
+    expect(draft.unfinished).toEqual([]);
   });
 });

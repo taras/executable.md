@@ -30,9 +30,16 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
+import type { Operation } from "effection";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { useStubFs } from "@executablemd/runtime/test";
 
 import { previewGeneratedXmdRoot } from "../host.ts";
 import type { GeneratedXmdRootPreview } from "../host.ts";
+import { execute } from "../src/execute.ts";
+import { collect } from "../src/collect.ts";
+import { asText } from "./helpers.ts";
 
 /** The projection, or a failure naming what was refused instead. */
 function preview(source: string): GeneratedXmdRootPreview {
@@ -41,6 +48,14 @@ function preview(source: string): GeneratedXmdRootPreview {
     throw new Error(`the prefix was refused: ${result.error.message}`);
   }
   return result.value;
+}
+
+/** What the finished root renders when it runs. */
+function executed(source: string): Operation<string> {
+  return scoped(function* () {
+    yield* useStubFs({ "doc.md": source });
+    return asText(yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() })));
+  });
 }
 
 /** Why the prefix was refused, or a failure naming what it projected instead. */
@@ -64,7 +79,7 @@ function prefixes(source: string): string[] {
 describe("Tier GP — a whole prefix projects what it says", () => {
   it("GP1: a complete region is the projection, and the prefix is whole", function* () {
     expect(preview("<Output>\nHello there.\n</Output>\n")).toEqual({
-      output: "\nHello there.\n",
+      output: "Hello there.\n",
       incomplete: false,
     });
   });
@@ -161,13 +176,50 @@ describe("Tier GP — Output rescans retain authored line context", () => {
     for (const leading of ["", "\n"]) {
       for (const child of ["", "<Probe>"]) {
         const source = "<Output>" + leading + fence + child;
-        const output = leading === "" ? "" : leading + fence;
+        // A fence after the tag on its own line is an inline span and waits;
+        // after a standalone opening line it is a passive fence.
+        const output = leading === "" ? "" : fence;
         expect(preview(source)).toEqual({ output, incomplete: true });
         expect(preview(source + (child === "" ? "" : "</Probe>") + "</Output>")).toEqual({
           output,
           incomplete: false,
         });
       }
+    }
+  });
+
+  it("GP22b: an unfinished block removes the structural prefix its finished form removes", function* () {
+    const source = "<Output>\n  Hello\n\n    indented\n";
+    expect(preview(source)).toEqual({ output: "Hello\n\n  indented\n", incomplete: true });
+    expect(preview(source + "</Output>\n")).toEqual({
+      output: "Hello\n\n  indented\n",
+      incomplete: false,
+    });
+  });
+});
+
+describe("Tier GP — a standalone nested region is placed as execution places it", () => {
+  it("GP22c: a nested region keeps its indentation and line ending, and an empty one leaves no line", function* () {
+    const cases: [string, string][] = [
+      [
+        "<Output>\n  Before\n  <Output>inner</Output>\n  After\n</Output>\n",
+        "Before\ninner\nAfter\n",
+      ],
+      [
+        "<Output>\n  - First\n\n    <Output>inner</Output>\n  - Last\n</Output>\n",
+        "- First\n\n  inner\n- Last\n",
+      ],
+      ["<Output>\n  Before\n  <Output></Output>\n  After\n</Output>\n", "Before\nAfter\n"],
+    ];
+    for (const [source, expected] of cases) {
+      expect({ source, preview: preview(source) }).toEqual({
+        source,
+        preview: { output: expected, incomplete: false },
+      });
+      expect({ source, executed: yield* executed(source) }).toEqual({
+        source,
+        executed: expected,
+      });
     }
   });
 });
@@ -216,13 +268,13 @@ describe("Tier GP — only settled meaning projects", () => {
 
   it("GP21: a passive example projects all its literal references", function* () {
     const body =
-      "\n```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n</If>\n```\n";
-    expect(preview("<Output>" + body + "</Output>")).toEqual({ output: body, incomplete: false });
+      "```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n</If>\n```\n";
+    expect(preview("<Output>\n" + body + "</Output>")).toEqual({ output: body, incomplete: false });
   });
 
   it("GP21b: a longer fence quotes executable fences and Output tags", function* () {
-    const body = "\n````xmd\n```sh exec\necho {source}\n```\n<Output>{props.name}</Output>\n````\n";
-    expect(preview("<Output>" + body + "</Output>")).toEqual({ output: body, incomplete: false });
+    const body = "````xmd\n```sh exec\necho {source}\n```\n<Output>{props.name}</Output>\n````\n";
+    expect(preview("<Output>\n" + body + "</Output>")).toEqual({ output: body, incomplete: false });
   });
 
   it("GP21c: mixed text withholds interpolated prose and projects settled fences", function* () {
@@ -347,7 +399,7 @@ describe("Tier GP — nothing runs", () => {
       "```bash exec\nprintf ran\n```\n\n" +
       "<Output>\nthe reply\n</Output>\n";
 
-    expect(preview(source)).toEqual({ output: "\nthe reply\n", incomplete: false });
+    expect(preview(source)).toEqual({ output: "the reply\n", incomplete: false });
   });
 
   it("GP32: the same prefix projects the same answer with nothing installed, twice over", function* () {
@@ -366,5 +418,26 @@ describe("Try preview", () => {
         "<Try><Output>body</Output><Catch><Output>fallback</Output></Catch><Finally><Output>completion</Output></Finally></Try>",
       ),
     ).toEqual({ output: "", incomplete: false });
+  });
+});
+
+describe("Markdown boundary preview", () => {
+  it("projects container fence bytes and resumes output after a list exit", function* () {
+    const body =
+      "  > ~~~bash exec\n  > <Output>literal</Output>  \n  > ~~~\n\n  - item\n\n    ~~~\n    <Output>still literal</Output>\n  <Output>real</Output>\n";
+    const source = "<Output>\n" + body + "</Output>\n";
+    for (const prefix of prefixes(source)) {
+      previewGeneratedXmdRoot(prefix);
+    }
+    expect(preview(source)).toEqual({
+      output:
+        "> ~~~bash exec\n> <Output>literal</Output>  \n> ~~~\n\n- item\n\n  ~~~\n  <Output>still literal</Output>\nreal\n",
+      incomplete: false,
+    });
+  });
+
+  it("returns a refusal for a complete malformed multiline header", function* () {
+    const text = "Before <If\n  condition={true}\n>Ready</If>\n";
+    expect(refused(text)).toContain("starts after prose");
   });
 });

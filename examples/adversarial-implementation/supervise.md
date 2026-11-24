@@ -33,14 +33,14 @@ returns:
 <Let as="progressCommand" value={[...step.progress,String(step.entry)].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
 
 <Let as="followedText">
-```bash exec
-set -o pipefail
-{followCommand} | {progressCommand}
-follow_status=$?
-if [ "$follow_status" -ne 0 ]; then
-  printf '{"followExitCode":%s}\n' "$follow_status"
-fi
-```
+  ```bash exec
+  set -o pipefail
+  {followCommand} | {progressCommand}
+  follow_status=$?
+  if [ "$follow_status" -ne 0 ]; then
+    printf '{"followExitCode":%s}\n' "$follow_status"
+  fi
+  ```
 </Let>
 
 <Let as="lastLine" value={followedText.trim().split("\n").at(-1) ?? ""} />
@@ -84,9 +84,9 @@ exec {resultCommand}
                 <SafeParse schema={step.resultSchema ?? {type:"object"}} as="canonical">{resultRead.stdout}</SafeParse>
                 <If condition={canonical.ok}>
                   <Let as="report" value={{...report,status:page.status,resultStatus:"readable",diagnostic:page.failure,result:canonical.value}} />
-                <Else>
-                  <Let as="report" value={{...report,resultStatus:"invalid",diagnostic:"The selected canonical result did not validate. Preserve its attempt and reconcile the original work.",validationErrors:canonical.errors}} />
-                </Else>
+                  <Else>
+                    <Let as="report" value={{...report,resultStatus:"invalid",diagnostic:"The selected canonical result did not validate. Preserve its attempt and reconcile the original work.",validationErrors:canonical.errors}} />
+                  </Else>
                 </If>
               </If>
             </If>

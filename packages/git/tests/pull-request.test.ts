@@ -103,7 +103,7 @@ describe("workflow PullRequest", () => {
       expect(created?.draft).toBe(false);
       // The rendered body, verbatim: the newline the element opens with is
       // part of what was written, and nothing here trims or reflows it.
-      expect(created?.body).toBe(`\n${BODY}\n`);
+      expect(created?.body).toBe(`${BODY}\n`);
       expect(creations(run.store)).toBe(1);
 
       // The binding is evidence of what the effect settled on.
@@ -711,7 +711,7 @@ describe("workflow PullRequest upsert", () => {
 
       const updated = run.store.pullRequests[0];
       expect(updated?.title).toBe(TITLE);
-      expect(updated?.body).toBe(`\n${BODY}\n`);
+      expect(updated?.body).toBe(`${BODY}\n`);
       expect(updated?.baseRef).toBe("main");
       expect(creations(run.store)).toBe(0);
       expect(mutations(run.store)).toEqual(["patch"]);
@@ -949,7 +949,7 @@ describe("workflow PullRequest across a loop", () => {
       expect(run.store.pullRequests).toHaveLength(1);
       const [settled] = run.store.pullRequests;
       expect(settled?.title).toBe(`${TITLE} (revised)`);
-      expect(settled?.body).toBe("\nRevised notes.\n");
+      expect(settled?.body).toBe("Revised notes.\n");
       expect(rendered).toContain(`settled on ${settled?.number}`);
 
       // The first request carries the normalized absence, and asks for a pull

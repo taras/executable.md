@@ -106,7 +106,7 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
 }
 
 /** Package-relative notices of prepared runtimes a package's module graph imports. */
-const PREPARED_NOTICES = ["generated/tty/NOTICE.txt"];
+const PREPARED_NOTICES = ["generated/tty/NOTICE.txt", "markdown-boundary-NOTICE.txt"];
 
 const ExportsSchema = z.union([z.string(), z.record(z.string(), z.string())]);
 

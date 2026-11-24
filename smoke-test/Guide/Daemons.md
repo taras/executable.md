@@ -17,7 +17,7 @@ node -e "setInterval(() => {}, 1000)"
 echo daemon-ok
 ```
 </Let>
-<AssertEquals actual={daemonResponse} expected={"\ndaemon-ok"} />
+<AssertEquals actual={daemonResponse} expected={"daemon-ok"} />
 </Test>
 
 <Test name="An attached service publishes a scoped live endpoint">
@@ -27,7 +27,7 @@ echo daemon-ok
 </Let>
 <AssertEquals
   actual={attachedServiceResponse}
-  expected={"\n\nattached:127.0.0.1:true"}
+  expected={"\nattached:127.0.0.1:true"}
 />
 </AttachedServiceProvider>
 </Test>

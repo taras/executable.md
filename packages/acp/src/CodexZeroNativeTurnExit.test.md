@@ -74,152 +74,152 @@ document.
 
 <Let as="verdictSchema" select="code[lang=json]">
 
-```json
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "mode", "verdict", "authorized", "turnsAuthorized", "authorizedTurnBudget",
-    "ran", "refusal", "detail",
-    "codexVersion", "codexDigest", "platform", "architecture",
-    "adapterPackage", "adapterVersion", "adapterDigest", "compatibilityTupleFrozen",
-    "target", "projectCopyVerified", "implementorMarkerRendered", "siblingMarkersRendered",
-    "nativeSessionId", "identityProvenance", "reentryNativeSessionId",
-    "substitutedIdentity", "routeConverted",
-    "firstXmdExitCode", "secondXmdExitCode", "instructionChannel",
-    "modelTurns", "materializationTurns", "nativeUserTurns", "acpReattachTurns",
-    "answerObserverInvocations", "conversationInputByteCount",
-    "consentInputBytes", "consentSurfaces", "exitControlBytes",
-    "reentryConsentInputBytes", "reentryConsentSurfaces", "reentryExitControlBytes",
-    "inheritedAgentMarkersRemoved",
-    "noticedBeforeSpending", "noticedAfterSpending",
-    "openingSentenceExact", "markerRecovered", "acpDocumentCarriesMarker",
-    "answerSurface", "outcome",
-    "materialization", "route", "journal", "cleanup", "privateStateInspected"
-  ],
-  "properties": {
-    "mode": { "type": "string" },
-    "verdict": { "enum": ["PASS", "REFUSED", "ENVIRONMENT_BLOCKED", "PRODUCT_FAILED", "HARNESS_FAILED"] },
-    "authorized": { "type": "boolean" },
-    "turnsAuthorized": { "type": "boolean" },
-    "authorizedTurnBudget": { "type": "integer" },
-    "ran": { "type": "boolean" },
-    "refusal": { "type": "string" },
-    "detail": { "type": "string" },
-    "codexVersion": { "type": "string" },
-    "codexDigest": { "type": "string" },
-    "platform": { "type": "string" },
-    "architecture": { "type": "string" },
-    "adapterPackage": { "type": "string" },
-    "adapterVersion": { "type": "string" },
-    "adapterDigest": { "type": "string" },
-    "compatibilityTupleFrozen": { "type": "boolean" },
-    "target": { "type": "string" },
-    "projectCopyVerified": { "type": "boolean" },
-    "implementorMarkerRendered": { "type": "boolean" },
-    "siblingMarkersRendered": { "type": "integer" },
-    "nativeSessionId": { "type": "string" },
-    "identityProvenance": { "type": "string" },
-    "reentryNativeSessionId": { "type": "string" },
-    "substitutedIdentity": { "type": "boolean" },
-    "routeConverted": { "type": "boolean" },
-    "firstXmdExitCode": { "type": "integer" },
-    "secondXmdExitCode": { "type": "integer" },
-    "instructionChannel": { "type": "string" },
-    "modelTurns": { "type": "integer" },
-    "materializationTurns": { "type": "integer" },
-    "nativeUserTurns": { "type": "integer" },
-    "acpReattachTurns": { "type": "integer" },
-    "answerObserverInvocations": { "type": "integer" },
-    "conversationInputByteCount": { "type": "integer" },
-    "consentInputBytes": { "type": "string" },
-    "consentSurfaces": { "type": "array", "items": { "type": "string" } },
-    "exitControlBytes": { "type": "string" },
-    "reentryConsentInputBytes": { "type": "string" },
-    "reentryConsentSurfaces": { "type": "array", "items": { "type": "string" } },
-    "reentryExitControlBytes": { "type": "string" },
-    "inheritedAgentMarkersRemoved": { "type": "integer" },
-    "noticedBeforeSpending": { "type": "boolean" },
-    "noticedAfterSpending": { "type": "boolean" },
-    "openingSentenceExact": { "type": "boolean" },
-    "markerRecovered": { "type": "boolean" },
-    "acpDocumentCarriesMarker": { "type": "boolean" },
-    "answerSurface": { "type": "string" },
-    "outcome": { "enum": ["same-identity", "no-session", "unresolved"] },
-    "privateStateInspected": { "type": "boolean" },
-    "materialization": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "promptVersion", "requestIdStable", "promptExact", "turnNamed", "turnProvider",
-        "durationReported", "responsePresent", "stopReason",
-        "reportedUsageFields", "unreportedUsageFields", "failureClasses"
-      ],
-      "properties": {
-        "promptVersion": { "type": "string" },
-        "requestIdStable": { "type": "boolean" },
-        "promptExact": { "type": "boolean" },
-        "turnNamed": { "type": "boolean" },
-        "turnProvider": { "type": "string" },
-        "durationReported": { "type": "boolean" },
-        "responsePresent": { "type": "boolean" },
-        "stopReason": { "type": "string" },
-        "reportedUsageFields": { "type": "array", "items": { "type": "string" } },
-        "unreportedUsageFields": { "type": "array", "items": { "type": "string" } },
-        "failureClasses": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "route": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "provider", "buildVersion", "buildDigest"],
-      "properties": {
-        "kind": { "type": "string" },
-        "provider": { "type": "string" },
-        "buildVersion": { "type": "string" },
-        "buildDigest": { "type": "string" }
-      }
-    },
-    "journal": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "provider", "agent", "launcher", "provenance", "nativeSessionId", "cwdIsProject",
-        "sessionState", "instructionsDigestPresent",
-        "firstPhases", "secondPhases", "failureClasses"
-      ],
-      "properties": {
-        "provider": { "type": "string" },
-        "agent": { "type": "string" },
-        "launcher": { "type": "string" },
-        "provenance": { "type": "string" },
-        "nativeSessionId": { "type": "string" },
-        "cwdIsProject": { "type": "boolean" },
-        "sessionState": { "type": "array", "items": { "type": "string" } },
-        "instructionsDigestPresent": { "type": "boolean" },
-        "firstPhases": { "type": "array", "items": { "type": "string" } },
-        "secondPhases": { "type": "array", "items": { "type": "string" } },
-        "failureClasses": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "cleanup": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "liveChildren", "journalsRemoved", "routeRecordsRemoved",
-        "sessionDeleteOutcome", "temporaryRootRemoved"
-      ],
-      "properties": {
-        "liveChildren": { "type": "integer" },
-        "journalsRemoved": { "type": "boolean" },
-        "routeRecordsRemoved": { "type": "boolean" },
-        "sessionDeleteOutcome": { "enum": ["deleted", "nothing-to-delete", "failed"] },
-        "temporaryRootRemoved": { "type": "boolean" }
+  ```json
+  {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "mode", "verdict", "authorized", "turnsAuthorized", "authorizedTurnBudget",
+      "ran", "refusal", "detail",
+      "codexVersion", "codexDigest", "platform", "architecture",
+      "adapterPackage", "adapterVersion", "adapterDigest", "compatibilityTupleFrozen",
+      "target", "projectCopyVerified", "implementorMarkerRendered", "siblingMarkersRendered",
+      "nativeSessionId", "identityProvenance", "reentryNativeSessionId",
+      "substitutedIdentity", "routeConverted",
+      "firstXmdExitCode", "secondXmdExitCode", "instructionChannel",
+      "modelTurns", "materializationTurns", "nativeUserTurns", "acpReattachTurns",
+      "answerObserverInvocations", "conversationInputByteCount",
+      "consentInputBytes", "consentSurfaces", "exitControlBytes",
+      "reentryConsentInputBytes", "reentryConsentSurfaces", "reentryExitControlBytes",
+      "inheritedAgentMarkersRemoved",
+      "noticedBeforeSpending", "noticedAfterSpending",
+      "openingSentenceExact", "markerRecovered", "acpDocumentCarriesMarker",
+      "answerSurface", "outcome",
+      "materialization", "route", "journal", "cleanup", "privateStateInspected"
+    ],
+    "properties": {
+      "mode": { "type": "string" },
+      "verdict": { "enum": ["PASS", "REFUSED", "ENVIRONMENT_BLOCKED", "PRODUCT_FAILED", "HARNESS_FAILED"] },
+      "authorized": { "type": "boolean" },
+      "turnsAuthorized": { "type": "boolean" },
+      "authorizedTurnBudget": { "type": "integer" },
+      "ran": { "type": "boolean" },
+      "refusal": { "type": "string" },
+      "detail": { "type": "string" },
+      "codexVersion": { "type": "string" },
+      "codexDigest": { "type": "string" },
+      "platform": { "type": "string" },
+      "architecture": { "type": "string" },
+      "adapterPackage": { "type": "string" },
+      "adapterVersion": { "type": "string" },
+      "adapterDigest": { "type": "string" },
+      "compatibilityTupleFrozen": { "type": "boolean" },
+      "target": { "type": "string" },
+      "projectCopyVerified": { "type": "boolean" },
+      "implementorMarkerRendered": { "type": "boolean" },
+      "siblingMarkersRendered": { "type": "integer" },
+      "nativeSessionId": { "type": "string" },
+      "identityProvenance": { "type": "string" },
+      "reentryNativeSessionId": { "type": "string" },
+      "substitutedIdentity": { "type": "boolean" },
+      "routeConverted": { "type": "boolean" },
+      "firstXmdExitCode": { "type": "integer" },
+      "secondXmdExitCode": { "type": "integer" },
+      "instructionChannel": { "type": "string" },
+      "modelTurns": { "type": "integer" },
+      "materializationTurns": { "type": "integer" },
+      "nativeUserTurns": { "type": "integer" },
+      "acpReattachTurns": { "type": "integer" },
+      "answerObserverInvocations": { "type": "integer" },
+      "conversationInputByteCount": { "type": "integer" },
+      "consentInputBytes": { "type": "string" },
+      "consentSurfaces": { "type": "array", "items": { "type": "string" } },
+      "exitControlBytes": { "type": "string" },
+      "reentryConsentInputBytes": { "type": "string" },
+      "reentryConsentSurfaces": { "type": "array", "items": { "type": "string" } },
+      "reentryExitControlBytes": { "type": "string" },
+      "inheritedAgentMarkersRemoved": { "type": "integer" },
+      "noticedBeforeSpending": { "type": "boolean" },
+      "noticedAfterSpending": { "type": "boolean" },
+      "openingSentenceExact": { "type": "boolean" },
+      "markerRecovered": { "type": "boolean" },
+      "acpDocumentCarriesMarker": { "type": "boolean" },
+      "answerSurface": { "type": "string" },
+      "outcome": { "enum": ["same-identity", "no-session", "unresolved"] },
+      "privateStateInspected": { "type": "boolean" },
+      "materialization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "promptVersion", "requestIdStable", "promptExact", "turnNamed", "turnProvider",
+          "durationReported", "responsePresent", "stopReason",
+          "reportedUsageFields", "unreportedUsageFields", "failureClasses"
+        ],
+        "properties": {
+          "promptVersion": { "type": "string" },
+          "requestIdStable": { "type": "boolean" },
+          "promptExact": { "type": "boolean" },
+          "turnNamed": { "type": "boolean" },
+          "turnProvider": { "type": "string" },
+          "durationReported": { "type": "boolean" },
+          "responsePresent": { "type": "boolean" },
+          "stopReason": { "type": "string" },
+          "reportedUsageFields": { "type": "array", "items": { "type": "string" } },
+          "unreportedUsageFields": { "type": "array", "items": { "type": "string" } },
+          "failureClasses": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "route": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "provider", "buildVersion", "buildDigest"],
+        "properties": {
+          "kind": { "type": "string" },
+          "provider": { "type": "string" },
+          "buildVersion": { "type": "string" },
+          "buildDigest": { "type": "string" }
+        }
+      },
+      "journal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider", "agent", "launcher", "provenance", "nativeSessionId", "cwdIsProject",
+          "sessionState", "instructionsDigestPresent",
+          "firstPhases", "secondPhases", "failureClasses"
+        ],
+        "properties": {
+          "provider": { "type": "string" },
+          "agent": { "type": "string" },
+          "launcher": { "type": "string" },
+          "provenance": { "type": "string" },
+          "nativeSessionId": { "type": "string" },
+          "cwdIsProject": { "type": "boolean" },
+          "sessionState": { "type": "array", "items": { "type": "string" } },
+          "instructionsDigestPresent": { "type": "boolean" },
+          "firstPhases": { "type": "array", "items": { "type": "string" } },
+          "secondPhases": { "type": "array", "items": { "type": "string" } },
+          "failureClasses": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "cleanup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "liveChildren", "journalsRemoved", "routeRecordsRemoved",
+          "sessionDeleteOutcome", "temporaryRootRemoved"
+        ],
+        "properties": {
+          "liveChildren": { "type": "integer" },
+          "journalsRemoved": { "type": "boolean" },
+          "routeRecordsRemoved": { "type": "boolean" },
+          "sessionDeleteOutcome": { "enum": ["deleted", "nothing-to-delete", "failed"] },
+          "temporaryRootRemoved": { "type": "boolean" }
+        }
       }
     }
   }
-}
-```
+  ```
 
 </Let>
 <Test name="One materialization turn makes a Codex session openable, and re-entry buys no second one" timeout="45min">
