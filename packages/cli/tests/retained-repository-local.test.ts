@@ -485,9 +485,17 @@ describe("one entry's local file work", () => {
       new InMemoryStream(events.slice(0, writeIndex)),
       counters(),
     );
-    expect(resumed.refusal).toBe(undefined);
-    expect(resumed.output).toContain("existing bytes no longer match");
+    expect(resumed.refusal).toContain("existing bytes no longer match");
+    expect(localRecords(resumed.events).at(-1)?.outcome.ok).toBe(false);
     expect(yield* readTextFile(target)).toBe("external\n");
+
+    yield* writeTextFile(target, "seed\n");
+    const refusedReplay = counters();
+    const refusedAgain = yield* run(fixture, source, unfinished(resumed.events), refusedReplay);
+    expect(refusedAgain.refusal).toBe(resumed.refusal);
+    expect(refusedReplay.reads).toEqual([]);
+    expect(refusedReplay.writes).toEqual([]);
+    expect(yield* readTextFile(target)).toBe("seed\n");
   });
 
   it("975: workspace acknowledgements restore before live I/O and only the suffix runs", function* () {

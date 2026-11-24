@@ -577,6 +577,12 @@ function patchDocument(path: string, diff: string): string {
   ].join("\n");
 }
 
+function printPatchRefusal(patch: string): string {
+  return ["<PrintErrors>", ...patch.split("\n").map((line) => "  " + line), "</PrintErrors>"].join(
+    "\n",
+  );
+}
+
 const SMALL_PATCH = [
   "```diff",
   "--- a/target.txt",
@@ -722,6 +728,30 @@ describe("File.Patch", () => {
     }
   });
 
+  it("stops later effects on refusal unless PrintErrors encloses the patch", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const later = join(fixture.workspace, "later.txt");
+    const before = new TextEncoder().encode("first\nchanged\r\nlast");
+    yield* until(writeFile(target, before));
+    const patch = patchDocument("target.txt", SMALL_PATCH);
+    const following = '\n<File path="later.txt">continued</File>';
+    let refusal = "";
+    try {
+      yield* run(fixture, patch + following);
+    } catch (error) {
+      refusal = String(error);
+    }
+    expect(refusal).toContain("the diff no longer matches");
+    expect(yield* exists(later)).toBe(false);
+    expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
+
+    const output = yield* run(fixture, printPatchRefusal(patch + following));
+    expect(output).toContain("the diff no longer matches");
+    expect(yield* readTextFile(later)).toBe("continued");
+    expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
+  });
+
   it("refuses the entire edit for stale, malformed or wrong-target diffs", function* () {
     const fixture = yield* useFixture();
     const target = join(fixture.workspace, "target.txt");
@@ -735,7 +765,9 @@ describe("File.Patch", () => {
       [SMALL_PATCH.replace("-2 +2", "-2,2 +2"), "exact, single-file unified diff"],
       [SMALL_PATCH.replaceAll("target.txt", "other.txt"), "exact, single-file unified diff"],
     ]) {
-      expect(yield* run(fixture, patchDocument("target.txt", diff))).toContain(message);
+      expect(yield* run(fixture, printPatchRefusal(patchDocument("target.txt", diff)))).toContain(
+        message,
+      );
       expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
       expect(new Uint8Array(yield* until(readFile(other)))).toEqual(before);
     }
@@ -847,9 +879,9 @@ describe("File.Patch", () => {
     const target = join(fixture.workspace, "target.txt");
     const invalid = new Uint8Array([0xff, ...new TextEncoder().encode("\nold\n")]);
     yield* until(writeFile(target, invalid));
-    expect(yield* run(fixture, patchDocument("target.txt", SMALL_PATCH))).toContain(
-      "existing bytes no longer match",
-    );
+    expect(
+      yield* run(fixture, printPatchRefusal(patchDocument("target.txt", SMALL_PATCH))),
+    ).toContain("existing bytes no longer match");
     expect(new Uint8Array(yield* until(readFile(target)))).toEqual(invalid);
 
     yield* writeTextFile(target, "first\r\nold");
@@ -868,13 +900,19 @@ describe("File.Patch", () => {
     yield* writeTextFile(other, before);
     const outside = "../outside/other.txt";
     const outsidePatch = SMALL_PATCH.replaceAll("target.txt", outside);
-    expect(yield* run(fixture, patchDocument(outside, outsidePatch))).toContain("outside");
+    expect(yield* run(fixture, printPatchRefusal(patchDocument(outside, outsidePatch)))).toContain(
+      "outside",
+    );
     expect(
-      yield* run(fixture, patchDocument("target.txt", SMALL_PATCH), function* () {
-        yield* Permissions.around({
-          files: ([operation], next) => (operation === "write" ? false : next(operation)),
-        });
-      }),
+      yield* run(
+        fixture,
+        printPatchRefusal(patchDocument("target.txt", SMALL_PATCH)),
+        function* () {
+          yield* Permissions.around({
+            files: ([operation], next) => (operation === "write" ? false : next(operation)),
+          });
+        },
+      ),
     ).toContain("permission denied");
     expect(yield* readTextFile(target)).toBe(before);
     expect(yield* readTextFile(other)).toBe(before);
@@ -885,6 +923,7 @@ describe("File.Patch", () => {
     const output = yield* run(fixture, '<Syntax names={["File.Patch"]} />');
     expect(output).toContain('<File.Patch path="notes.md">');
     expect(output).toContain("Exactly one passive fenced unified diff");
-    expect(output).toContain("refused patch");
+    expect(output).toContain("Apply a unified diff to a file.");
+    expect(output).toContain("A refusal throws by default.");
   });
 });
