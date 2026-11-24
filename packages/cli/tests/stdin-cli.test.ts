@@ -995,6 +995,44 @@ describe("xmd fmt", { sanitizeOps: false, sanitizeResources: false }, () => {
     });
   });
 
+  it("visits valid and malformed files in the same directory run", function* () {
+    const prose = "# Notes\n\nA lone backtick ` at the end.\n";
+    const malformed = "<Output>\n";
+    yield* useFixture(
+      {
+        "00-notes.md": prose,
+        "10-bad.md": malformed,
+        "20-good.md": input,
+        "30-unclosed-fence.md": "```bash exec\necho untouched\n",
+        "40-good.md": input,
+      },
+      function* (cwd) {
+        const errors =
+          "xmd fmt: 10-bad.md: Incomplete XMD element <Output> at 1:1\n" +
+          "xmd fmt: 30-unclosed-fence.md: Incomplete executable fence at 1:1\n";
+        const check = yield* runCli(["fmt", "--check"], { cwd }).join();
+        expect([check.code, check.stdout, check.stderr]).toEqual([
+          2,
+          "20-good.md\n40-good.md\n",
+          errors,
+        ]);
+        for (const file of ["20-good.md", "40-good.md"]) {
+          expect(yield* readTextFile(path.join(cwd, file))).toBe(input);
+        }
+        const write = yield* runCli(["fmt", "."], { cwd }).join();
+        expect([write.code, write.stdout, write.stderr]).toEqual([2, "", errors]);
+        expect(yield* readTextFile(path.join(cwd, "00-notes.md"))).toBe(prose);
+        expect(yield* readTextFile(path.join(cwd, "10-bad.md"))).toBe(malformed);
+        expect(yield* readTextFile(path.join(cwd, "30-unclosed-fence.md"))).toBe(
+          "```bash exec\necho untouched\n",
+        );
+        for (const file of ["20-good.md", "40-good.md"]) {
+          expect(yield* readTextFile(path.join(cwd, file))).toBe(formatted);
+        }
+      },
+    );
+  });
+
   it("shows usage and refuses malformed input and unsupported arguments", function* () {
     const malformed = "---\ntitle: Sample\n---\n<Output>\n";
     yield* useFixture({ "bad.md": malformed }, function* (cwd) {

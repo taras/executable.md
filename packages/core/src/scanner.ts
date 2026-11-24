@@ -248,19 +248,26 @@ export function scanSegments(
   fences?: SourceFence[],
 ): Segment[] {
   const found: ScanDiagnostic[] = [];
+  const lineStarts = computeLineStarts(text);
   const walk: Walk = {
     text,
-    index: { origin, lineStarts: computeLineStarts(text) },
+    index: { origin, lineStarts },
     elements,
     unfinished,
     diagnostics: found,
     fences,
+    failedBodies: new Set(),
+    proseTail: trailingInlineProse(text, lineStarts),
+    unfinishedKeys: new Set(),
+    diagnosticKeys: new Set(),
   };
   const segments: Segment[] = [];
   const lineContent = start === 0 ? 0 : text.lastIndexOf("\n", start - 1) + 1;
   scanBody(walk, { pos: start, depth, lineContent }, undefined, segments, spans);
   if (diagnostics !== undefined) {
-    diagnostics.push(...found);
+    for (const diagnostic of found) {
+      diagnostics.push(diagnostic);
+    }
   } else if (found.length > 0) {
     const { message, position } = found[0];
     throw Object.assign(new Error(message), { position });
@@ -280,6 +287,10 @@ interface Walk {
   readonly unfinished?: UnfinishedConstruct[];
   readonly diagnostics?: ScanDiagnostic[];
   readonly fences?: SourceFence[];
+  readonly failedBodies?: Set<string>;
+  readonly proseTail?: number;
+  readonly unfinishedKeys?: Set<string>;
+  readonly diagnosticKeys?: Set<string>;
 }
 
 /** Where a body begins. */
@@ -290,6 +301,37 @@ interface BodyStart {
   readonly delimiterIndent?: string;
   /** Where the content of the line holding `pos` begins, after its prefix. */
   readonly lineContent: number;
+}
+
+// A tail of unindented prose and bare inline openings has no closers, code,
+// multiline headers or container markers. Starting a fresh child tracker
+// there can only rediscover the same unfinished openings as its parent.
+function trailingInlineProse(text: string, starts: number[]): number {
+  const prose = /^(?:[ \t]*|[A-Za-z][^<`\r\n]*(?:<[A-Z][A-Za-z0-9._]*>[^<`\r\n]*)*)\r?$/;
+  let from = text.length;
+  for (let line = starts.length - 1; line >= 0; line--) {
+    const start = starts[line]!;
+    if (start === text.length) {
+      continue;
+    }
+    const end = starts[line + 1] === undefined ? text.length : starts[line + 1]! - 1;
+    if (!prose.test(text.slice(start, end))) {
+      break;
+    }
+    from = start;
+  }
+  return from;
+}
+
+function recordUnfinished(walk: Walk, fact: UnfinishedConstruct): void {
+  if (walk.unfinished === undefined) {
+    return;
+  }
+  const key = `${fact.start}:${fact.name}:${fact.contentStart}:${fact.contentDepth}:${fact.attributed}`;
+  if (!walk.unfinishedKeys?.has(key)) {
+    walk.unfinishedKeys?.add(key);
+    walk.unfinished.push(fact);
+  }
 }
 
 /**
@@ -340,6 +382,7 @@ function scanTrackedBody(
   // Inside an inline code span until here: nothing in it is syntax, but its
   // later lines still carry the structural prefix.
   let codeSpanEnd = -1;
+  const unfinishedTail: UnfinishedConstruct[] = [];
 
   const flush = (end: number): void => {
     if (end > textStart) {
@@ -401,7 +444,7 @@ function scanTrackedBody(
           contentEnd = fenceEnd;
         }
         if (end === "unfinished") {
-          walk.unfinished?.push({ start: pos });
+          recordUnfinished(walk, { start: pos });
         }
         const opening = text.slice(pos, facts.opensAt);
         const info = text.slice(facts.opensAt, lineEnd).replace(/^(?:`+|~+)/, "");
@@ -466,7 +509,7 @@ function scanTrackedBody(
       }
       // A span that never closes is a span this text has not finished
       // delivering, not prose that happens to contain a backtick.
-      walk.unfinished?.push({ start: pos });
+      recordUnfinished(walk, { start: pos });
     }
 
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
@@ -485,10 +528,14 @@ function scanTrackedBody(
             : undefined;
         if (reason !== undefined) {
           const position = positionAt(walk.index, pos);
-          walk.diagnostics?.push({
-            message: `Multiline XMD opening tag ${reason} at ${position.line}:${position.column}`,
-            position,
-          });
+          const key = `${pos}:${reason}`;
+          if (!walk.diagnosticKeys?.has(key)) {
+            walk.diagnosticKeys?.add(key);
+            walk.diagnostics?.push({
+              message: `Multiline XMD opening tag ${reason} at ${position.line}:${position.column}`,
+              position,
+            });
+          }
           if (!begins) {
             markdown.lines(pos, headerEnd);
           }
@@ -496,7 +543,14 @@ function scanTrackedBody(
           continue;
         }
       }
-      const component = parseComponentTag(walk, pos, body.depth, lineContent, begins);
+      const component = parseComponentTag(
+        walk,
+        pos,
+        body.depth,
+        lineContent,
+        begins,
+        !begins && pos >= (walk.proseTail ?? text.length) ? unfinishedTail : undefined,
+      );
       if (component) {
         // A standalone element and a block's opening line are delimiter lines,
         // and a standalone element owns its line ending. A block's indentation
@@ -531,6 +585,10 @@ function scanTrackedBody(
   }
 
   sendPendingLine();
+  // An unfinished body normally reports its children while unwinding.
+  for (let at = unfinishedTail.length - 1; at >= 0; at--) {
+    recordUnfinished(walk, unfinishedTail[at]!);
+  }
   if (closingTag !== undefined) {
     return -1;
   }
@@ -717,8 +775,9 @@ function parseComponentTag(
   lineContent: number,
   /** Whether only indentation precedes `start` on its line. */
   begins: boolean,
+  unfinishedTail?: UnfinishedConstruct[],
 ): ParsedComponent | null {
-  const { text, index, elements, unfinished } = walk;
+  const { text, index, elements } = walk;
   let pos = start + 1;
 
   // Parse tag name — must start with uppercase, can contain dots
@@ -737,7 +796,7 @@ function parseComponentTag(
   // A name that reached the end of the text is a tag still arriving: there is
   // no `/>` or `>` yet because there is no more text yet.
   if (pos >= text.length) {
-    unfinished?.push({ start, name });
+    recordUnfinished(walk, { start, name });
     return null;
   }
 
@@ -750,7 +809,7 @@ function parseComponentTag(
   } = parseAttributes(text, pos, name);
   if (attrEnd === -1) {
     if (exhausted) {
-      unfinished?.push({ start, name });
+      recordUnfinished(walk, { start, name });
     }
     return null;
   }
@@ -765,7 +824,7 @@ function parseComponentTag(
   if (pos < text.length && text[pos] === "/") {
     pos++;
     if (pos >= text.length) {
-      unfinished?.push({ start, name, attributed });
+      recordUnfinished(walk, { start, name, attributed });
       return null;
     }
     if (text[pos] !== ">") {
@@ -792,7 +851,7 @@ function parseComponentTag(
 
   // Opening tag: must end with '>'
   if (pos >= text.length) {
-    unfinished?.push({ start, name, attributed });
+    recordUnfinished(walk, { start, name, attributed });
     return null;
   }
   if (text[pos] !== ">") {
@@ -824,6 +883,25 @@ function parseComponentTag(
   // next line, one structural level deeper.
   const opening = begins ? lineEndingAfter(text, openingEnd) : undefined;
   const block = opening?.newline === true;
+  if (unfinishedTail !== undefined) {
+    if (walk.unfinished !== undefined) {
+      unfinishedTail.push({
+        start,
+        name,
+        attributed,
+        contentStart: openingEnd,
+        contentDepth: depth,
+      });
+    }
+    return null;
+  }
+  // A failed child starts a fresh tracker. Its opening offset determines its
+  // delimiter and indent, while depth and the inline line start determine
+  // which bytes the child can see. Its reported facts already belong to this scan.
+  const failureKey = `${start}:${depth}:${block ? "block" : lineContent}`;
+  if (walk.failedBodies?.has(failureKey)) {
+    return null;
+  }
   const children: Segment[] = [];
   const nestedFences: SourceFence[] | undefined = walk.fences === undefined ? undefined : [];
   const childEnd = scanBody(
@@ -844,7 +922,9 @@ function parseComponentTag(
     // already delivered holds content belonging to a known element. Reported
     // with where that content starts, because a reader projecting a region it
     // has not finished receiving needs exactly that.
-    unfinished?.push(
+    walk.failedBodies?.add(failureKey);
+    recordUnfinished(
+      walk,
       block
         ? { start, name, attributed, contentStart: opening.end, contentDepth: depth + 1 }
         : { start, name, attributed, contentStart: openingEnd, contentDepth: depth },
