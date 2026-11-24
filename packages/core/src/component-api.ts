@@ -552,6 +552,7 @@ export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operat
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
+export const bindResult: Operations<ComponentApi>["bindResult"] = Component.operations.bindResult;
 export const hasBinding: Operations<ComponentApi>["hasBinding"] = Component.operations.hasBinding;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;

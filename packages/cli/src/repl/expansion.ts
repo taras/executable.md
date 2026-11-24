@@ -83,7 +83,8 @@ export interface BoundaryPartition {
  * for a hold to be standing in. `hasCapture`, `hasContent` and `hasBinding`
  * answer a question about an invocation the walk has already reached; holding
  * one would stop the same walk the gate before it already stops, one question
- * later.
+ * later. `bindResult` reserves a name on an invocation the walk has already
+ * reached. The engine publishes the value after teardown.
  *
  * `expand` surrounds an element's whole expansion, which makes it a step in
  * the walk that reached it and not a walk of its own. Treating it as one would
@@ -114,6 +115,7 @@ export const COMPONENT_BOUNDARIES: BoundaryPartition = {
     "hasCapture",
     "hasContent",
     "hasBinding",
+    "bindResult",
   ],
 };
 

@@ -1,4 +1,5 @@
-import { Component, documented, formDispatcher, isJsonObject } from "@executablemd/core";
+import { documented, formDispatcher, isJsonObject } from "@executablemd/core";
+import { bindResult } from "@executablemd/core/api";
 import type { ComponentRegistration, Json, JsonObject } from "@executablemd/core";
 import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
@@ -81,8 +82,7 @@ function* search(props: Record<string, Json>): Operation<JsonObject> {
   if (order !== undefined && sort === undefined) {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "order requires sort.");
   }
-  const publishNext =
-    typeof nextAs === "string" ? yield* Component.operations.bindResult(nextAs) : undefined;
+  const publishNext = typeof nextAs === "string" ? yield* bindResult(nextAs) : undefined;
   const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "select a Repository before searching.");
