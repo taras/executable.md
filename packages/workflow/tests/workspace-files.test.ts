@@ -728,8 +728,11 @@ describe("WF workflow document filesystem", () => {
         "  ```",
         "",
         "</File.Patch>",
-      ].join("\n");
-      const run = yield* runDocument(database, source);
+      ];
+      const run = yield* runDocument(
+        database,
+        ["<PrintErrors>", ...source.map((line) => "  " + line), "</PrintErrors>"].join("\n"),
+      );
       expect(String(run.output)).toContain(
         'cannot write "seed.txt": the existing bytes no longer match',
       );

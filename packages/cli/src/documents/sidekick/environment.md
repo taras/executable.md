@@ -39,7 +39,9 @@ answer.
   before each diff row. Keep the row's diff marker and original spaces.
   A missing, misindented, or premature delimiter produces a source diagnostic
   before the entry runs. Use a longer outer fence when the diff contains a
-  fence of the same length. Success emits no text. Read the source again
+  fence of the same length. Success emits no text. A refusal throws and stops
+  later work by default. Use `<PrintErrors>` around an invocation when the
+  entry should print the diagnostic and continue. Read the source again
   after a stale-patch error.
 
   ````xmd

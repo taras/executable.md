@@ -10030,8 +10030,11 @@ unterminated last line.
 
 The replacement carries the read text as a precondition. A live provider
 checks it against the existing bytes before replacement. The host applies the
-same filesystem stability boundary as a File write. A refusal renders through
-File's error boundary. Success renders the empty string. Retaining hosts
+same filesystem stability boundary as a File write. An invocation refusal
+throws by default and stops later document effects. In a text root, an
+explicit `<PrintErrors>` region renders the refusal and continues under §6.9.
+Source diagnostics still stop the document before expansion. Success renders
+the empty string. Retaining hosts
 restore the acknowledged read and write through the same records as File.
 `File.Patch` is available in authored XMD.
 

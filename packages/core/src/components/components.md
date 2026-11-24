@@ -176,7 +176,7 @@ the directories above it as needed.
 
 ## File.Patch
 
-Applies a unified diff to one existing UTF-8 file. Inspect the current source
+Apply a unified diff to a file. Inspect the current source
 with `<File path="notes.md" />`, then submit a paired `<File.Patch>`.
 
 ````mdx
@@ -213,9 +213,9 @@ spaces from the original line. Use a longer outer fence when a diff row
 contains a fence of the same length. A missing, misindented, or premature
 delimiter reports a source diagnostic before the document runs.
 
-Success renders nothing. Echoed `<File.Patch>` source means the patch did
-not execute. A stale or malformed diff inside valid delimiters produces a
-file error. Read the source again before editing a stale patch.
+Success renders nothing. A refused patch throws and stops later work by
+default. Wrap the invocation in `<PrintErrors>` to render the diagnostic and
+continue in a text document. Read the source again before retrying a stale patch.
 
 ## File.Copy
 

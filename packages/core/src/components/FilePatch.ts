@@ -1,6 +1,5 @@
 import { cwd } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { printErrors } from "../component-failures.ts";
 import { writeFileText } from "../files.ts";
 import type { FormDeclaration } from "../invocation-identity.ts";
 import type { Json, Segment } from "../types.ts";
@@ -43,8 +42,8 @@ export function* patchBody(
 
 export const form: FormDeclaration = {
   forms: "paired",
-  fn: printErrors(() => {
+  fn: () => {
     throw new FileAccessError(FENCE);
-  }),
+  },
   refuse: () => new FileAccessError(FENCE),
 };
