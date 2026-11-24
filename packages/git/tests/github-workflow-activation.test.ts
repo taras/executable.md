@@ -232,6 +232,27 @@ function searchProvider(
 describe("GitHub repository search", () => {
   beforeEach(journalBeforeEach(OWNER));
 
+  it("runs the search and Query example with the original page as its input", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const page = { ...FIRST_PAGE, total_count: 1 };
+    const provider = searchProvider([REPOSITORY], () => ({
+      status: 200,
+      body: JSON.stringify(page),
+    }));
+    const output = yield* runOrdinaryDocument(
+      [
+        '<GitHub.Search query="is:pr is:open label:bug" sort="created" perPage={20} as="page" />',
+        '<Query value={page} yq="[.items[].html_url]" as="pullRequestUrls" />',
+        "<Json value={{ page, pullRequestUrls }} />",
+      ].join("\n"),
+      { cwd: checkout.root, root, gitHubPullRequests: provider.options },
+    );
+    expect(JSON.parse(String(output))).toEqual({ page, pullRequestUrls: [ITEM.html_url] });
+    expect(provider.requests).toHaveLength(1);
+  });
+
   it("binds original pages, projects URLs and exposes only reusable continuation arguments", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
@@ -239,13 +260,13 @@ describe("GitHub repository search", () => {
     const provider = searchProvider();
     const output = yield* runOrdinaryDocument(
       [
-        `<GitHub.Search query={${JSON.stringify(QUERY)}} sort="created" perPage={1} as="first" />`,
-        '<Query value={first.value} yq="[.items[].html_url]" as="urls" />',
+        `<GitHub.Search query={${JSON.stringify(QUERY)}} sort="created" perPage={1} as="first" nextAs="next" />`,
+        '<Query value={first} yq="[.items[].html_url]" as="urls" />',
         '<PullRequest.Reviews url={urls[0]} as="reviews" />',
-        '<GitHub.Search query={first.next.query} sort={first.next.sort} order={first.next.order} page={first.next.page} perPage={first.next.perPage} as="second" />',
-        '<GitHub.Search query="is:issue" page={10} perPage={100} as="ceiling" />',
+        '<GitHub.Search query={next.query} sort={next.sort} order={next.order} page={next.page} perPage={next.perPage} as="second" nextAs="after" />',
+        '<GitHub.Search query="is:issue" page={10} perPage={100} as="ceiling" nextAs="beyond" />',
         "",
-        "<Json value={{ first, second, ceiling, urls, reviews }} />",
+        "<Json value={{ first, next, second, after, ceiling, beyond, urls, reviews }} />",
       ].join("\n"),
       {
         cwd: checkout.root,
@@ -254,12 +275,12 @@ describe("GitHub repository search", () => {
       },
     );
     expect(JSON.parse(String(output))).toEqual({
-      first: {
-        value: FIRST_PAGE,
-        next: { query: QUERY, sort: "created", order: "desc", page: 2, perPage: 1 },
-      },
-      second: { value: { total_count: 2, incomplete_results: true, items: [] }, next: null },
-      ceiling: { value: { total_count: 1500, incomplete_results: true, items: [] }, next: null },
+      first: FIRST_PAGE,
+      next: { query: QUERY, sort: "created", order: "desc", page: 2, perPage: 1 },
+      second: { total_count: 2, incomplete_results: true, items: [] },
+      after: null,
+      ceiling: { total_count: 1500, incomplete_results: true, items: [] },
+      beyond: null,
       urls: [ITEM.html_url],
       reviews: [],
     });
@@ -294,6 +315,8 @@ describe("GitHub repository search", () => {
       [checkout.root, 'query="is:issue is:pr"', "exactly one kind"],
       [checkout.root, 'query="is:open"', "exactly one kind"],
       [checkout.root, 'query="is:pr" page={11} perPage={100}', "first 1,000"],
+      [checkout.root, 'query="is:pr" nextAs="page"', "Duplicate result binding"],
+      [checkout.root, 'query="is:pr" nextAs="class"', "valid JavaScript binding name"],
       [checkout.root, 'query="is:pr"', "has not authorized"],
       [local.root, 'query="is:pr"', "does not name a GitHub repository"],
       [outside, 'query="is:pr"', "repository"],
@@ -390,9 +413,9 @@ describe("GitHub repository search", () => {
     const provider = searchProvider();
     const source = [
       `<Repository name="search" url="${REPOSITORY}">`,
-      '<GitHub.Search query="is:pr" perPage={1} as="page" />',
+      '<GitHub.Search query="is:pr" perPage={1} as="page" nextAs="next" />',
       "",
-      "<Json value={page.value} />",
+      "<Json value={{ page, next }} />",
       "</Repository>",
     ].join("\n");
     yield* withStorage(root, function* () {

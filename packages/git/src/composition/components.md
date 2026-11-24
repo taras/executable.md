@@ -317,24 +317,30 @@ The host supplies the repository scope and authorizes the read.
 
 ```mdx
 <GitHub.Search query="is:pr is:open label:bug" sort="created" perPage={20} as="page" />
-<Query value={page.value} yq="[.items[].html_url]" as="pullRequestUrls" />
+<Query value={page} yq="[.items[].html_url]" as="pullRequestUrls" />
 ```
 
-`page.value` holds the original GitHub response, including `incomplete_results`.
+`page` holds the original GitHub response, including `incomplete_results`.
 The `Query` projects URLs from that page. Pass a selected URL to
 `PullRequest.Reviews`, `PullRequest.Comments` or `PullRequest.Checks` to read
-its evidence. When `page.next` is present, pass its fields to another search
-within the same repository. It is `null` after the last accessible page.
+its evidence.
+
+Request a separate continuation binding with `nextAs`. It contains the
+complete next search arguments or `null` after the last accessible page.
 
 ```mdx
+<GitHub.Search query="is:pr is:open" sort="created" as="page" nextAs="next" />
+
+<If condition={next !== null}>
 <GitHub.Search
-  query={page.next.query}
-  sort={page.next.sort}
-  order={page.next.order}
-  page={page.next.page}
-  perPage={page.next.perPage}
+  query={next.query}
+  sort={next.sort}
+  order={next.order}
+  page={next.page}
+  perPage={next.perPage}
   as="nextPage"
 />
+</If>
 ```
 
 ## IssueTracker

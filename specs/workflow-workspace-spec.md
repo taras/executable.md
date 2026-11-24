@@ -2361,11 +2361,12 @@ Each invocation fetches one page. `page` defaults to 1 and `perPage` defaults
 to 20. Page size is an integer from 1 through 100. A page whose first result
 would be beyond GitHub's 1,000 accessible results is refused before transport.
 
-The binding has two members. `value` is the GitHub search response JSON
-unchanged, including `total_count`, `incomplete_results`, nullable fields and
-unfamiliar members. `next` is the complete search arguments for the next page,
-with the same query, ordering and page size, or `null` when the pagination
-header offers no next page within the accessible results. The transport
+The name supplied by `as` binds the original GitHub search response JSON,
+including `total_count`, `incomplete_results`, nullable fields and unfamiliar
+members. Optional `nextAs` names a separate binding in the same scope. It
+receives the complete search arguments for the next page, with the same query,
+ordering and page size, or `null` when the pagination header offers no next
+page within the accessible results. The two binding names must differ. The transport
 headers and credentials stay with the adapter. An authentication or transport
 failure, a malformed response, or an item from a different repository refuses
 the read. A valid incomplete response
@@ -2373,8 +2374,8 @@ binds its original page and incompleteness indicator.
 
 An ordinary run reads afresh. A workflow retains the admitted repository, full
 request and result as one `github_search` read. Replay restores the retained
-answer without opening a GitHub session. `Query` can project fields from
-`value` within the fetched page.
+answer without opening a GitHub session. `Query` can project fields directly from the
+bound page.
 
 ### 7.8 Local repository reads
 
