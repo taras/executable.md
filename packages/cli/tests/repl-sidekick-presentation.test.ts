@@ -1190,11 +1190,7 @@ describe("PV3/PV4: question and Configure editing", () => {
     yield* sleep(30);
     yield* page.key("Enter");
     yield* page.until("the held Configure restored", (one) => one.shows("[refresh]"));
-    // Explicit restoration is the History opener; ordinary Content entry is Agent.
-    yield* page.key("Backtab");
-    yield* sleep(30);
-    yield* page.key("Backtab");
-    yield* sleep(30);
+    yield* page.until("Configure owns focus again", (one) => one.shows(">> Agent:"));
     yield* page.type("!");
     yield* page.until("the Agent caret survived History", (one) => one.shows("Agent: s!cribe"));
     expect(draftShows(page.screen(), "draft-kept")).toBe(true);
@@ -1331,7 +1327,18 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* chooseOffered(page, "Fast");
     yield* openHistory(page);
     yield* page.key("Escape");
-    yield* page.until("History closing over Configure", (one) => one.shows("[refresh]"));
+    yield* page.until(
+      "History closing over Configure",
+      (one) => one.shows("[refresh]") && one.shows(">> Agent: scribe"),
+    );
+    yield* page.key("End");
+    yield* page.type("X");
+    yield* page.until("restored Configure input is usable", (one) => one.shows("Agent: scribeX"));
+    yield* page.key("Backspace");
+    yield* page.until(
+      "restored Configure input is unchanged",
+      (one) => one.shows("Agent: scribe") && !one.shows("scribeX"),
+    );
     expect(page.repl.outcome()).toBeUndefined();
     expect(page.screen().shows("(x) Fast")).toBe(true);
     yield* page.key("Escape");

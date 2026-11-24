@@ -1863,7 +1863,9 @@ Its allocation never exceeds the terminal width left after those controls,
 including when measuring an overflowing map reports a wider row. The History
 launcher remains visible and operable at supported widths. It is the only
 History launcher and Tab stop in the footer; click and Enter open its drawer,
-and dismissing the drawer restores focus to it. No trailing History link is
+and ordinary dismissal restores focus to it. When History covers another
+active modal surface, dismissal returns focus to a usable control in that
+surface. No trailing History link is
 shown.
 
 The contextual controls sit at the right of the History row, side by side, each

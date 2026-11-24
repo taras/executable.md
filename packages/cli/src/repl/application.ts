@@ -2721,6 +2721,21 @@ export function reduceRepl(
         { ...state.route, drawers: remaining },
         live,
       );
+      if (
+        closing.kind === "history" &&
+        (state.configuring.open || state.asking?.open === true || remaining.length > 0)
+      ) {
+        return {
+          ...closed,
+          state: Object.freeze({
+            ...closed.state,
+            restore:
+              state.configuring.open && remaining.length === 0
+                ? Object.freeze({ kind: "reveal", key: "drawer:configure:agent" })
+                : undefined,
+          }),
+        };
+      }
       if (closing.kind === "history") {
         return {
           ...closed,
@@ -9209,7 +9224,11 @@ function configureContent(
       held.agent,
       "configure-agent",
       styleOf("field-value"),
-      { here: focused, caret: held.caret },
+      {
+        here: focused,
+        caret: held.caret,
+        ...(focusClaim(view) === "drawer:configure:agent" ? { focus: true } : {}),
+      },
     ),
   });
   // Exactly what was asked for, and exactly what was verified. The second is

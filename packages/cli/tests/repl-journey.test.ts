@@ -842,6 +842,10 @@ describe("REPL original retained readings and navigation", () => {
     const before = yield* journalRecords(page);
     yield* openHistory(page);
     expect(page.screen().occurrences("[close]")).toBe(1);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     yield* page.press("Entry 1 admitted");
     yield* page.until("the navigation refusal", (one) => one.shows("!"));
     expect(page.screen().shows("History")).toBe(true);
@@ -1303,6 +1307,10 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* page.press("Send", { onRow: "✎ draft" });
     yield* gate.reached;
     yield* openHistory(page);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     yield* page.press("Entry 1 admitted");
     yield* page.until("the earlier position", (one) => one.shows("[live]"));
     gate.release();
@@ -1576,6 +1584,10 @@ describe("REPL original live output and entry lifecycle", () => {
     yield* draftText(page, "Three.");
     yield* selectCatalog(page, "entry-2");
     yield* openHistory(page);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     yield* page.press("Entry 1 admitted");
     yield* page.until("the prefix before entry two", (one) => one.shows("[live]"));
     yield* closeDrawer(page);
@@ -1751,6 +1763,10 @@ describe("REPL original first-use paths and question ownership", () => {
         yield* closeDrawer(page);
         yield* draftText(page, "entry two");
         yield* openHistory(page);
+        for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+          yield* page.key("ArrowDown");
+          yield* sleep(10);
+        }
         yield* page.press("Entry 1 admitted");
         yield* page.until("the frozen drawer", (one) => one.shows("[live]"));
         expect(directions(page.screen())).toContain("Esc closes");
@@ -1807,6 +1823,10 @@ describe("REPL original first-use paths and question ownership", () => {
     yield* page.until("the live question", (one) => one.shows("[answer]"));
     const before = yield* journalRecords(page);
     yield* openHistory(page);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     yield* page.press("Entry 1 admitted");
     yield* page.until(
       "the frozen question absent",
@@ -2046,16 +2066,18 @@ function expectedPositions(
   model: ReturnType<typeof projectRepl> extends Result<infer T> ? T : never,
 ): string[] {
   let entries = 0;
-  return model.checkpoints.map((one, index) => {
-    if (one.kind === "entry") {
-      entries += 1;
-    }
-    const words = POSITION_WORDS[one.kind];
-    if (words === undefined) {
-      throw new Error(`no category for ${one.kind}`);
-    }
-    return `${index + 1} · ${words.replace("%E", String(entries))}`;
-  });
+  return model.checkpoints
+    .map((one, index) => {
+      if (one.kind === "entry") {
+        entries += 1;
+      }
+      const words = POSITION_WORDS[one.kind];
+      if (words === undefined) {
+        throw new Error(`no category for ${one.kind}`);
+      }
+      return `${index + 1} · ${words.replace("%E", String(entries))}`;
+    })
+    .reverse();
 }
 function positionLabels(one: ScreenReading): string[] {
   return one.rows.flatMap(
@@ -2069,6 +2091,10 @@ function* allPositions(
   page: ReplPage,
   expected: readonly string[],
 ): Operation<{ first: string[]; reached: string[] }> {
+  for (let step = 0; step < expected.length; step++) {
+    yield* page.key("ArrowUp");
+  }
+  yield* sleep(30);
   const first = positionLabels(page.screen());
   const seen = new Set(first);
   for (let press = 0; press < expected.length * 2 && seen.size < expected.length; press += 1) {
@@ -2084,7 +2110,7 @@ function* allPositions(
   }
   return {
     first,
-    reached: [...seen].sort((a, b) => Number(a.split(" ")[0]) - Number(b.split(" ")[0])),
+    reached: [...seen].sort((a, b) => Number(b.split(" ")[0]) - Number(a.split(" ")[0])),
   };
 }
 function historyBand(one: ScreenReading): string {
@@ -2117,7 +2143,11 @@ describe("REPL original complete History and cold catalog", () => {
     yield* draftText(page, "my next entry");
     yield* openHistory(page);
     expect((yield* allPositions(page, expected)).reached).toEqual(expected);
-    yield* page.press(expected.at(-1) ?? "");
+    for (let step = 0; step < expected.length; step++) {
+      yield* page.key("ArrowUp");
+    }
+    yield* page.until("newest History position visible", (one) => one.shows(expected[0] ?? ""));
+    yield* page.press(expected[0] ?? "");
     yield* page.until("the last recorded position selected", (one) => one.shows("[live]"));
     yield* closeDrawer(page);
     yield* selectCatalog(page, "entry-1");
@@ -2155,6 +2185,10 @@ describe("REPL original complete History and cold catalog", () => {
       const expected = expectedPositions(yield* retainedModel(page));
       yield* draftText(page, "my next entry");
       yield* openHistory(page);
+      for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+        yield* page.key("ArrowDown");
+        yield* sleep(10);
+      }
       yield* page.press("Entry 1 admitted");
       yield* page.until("the first prefix", (one) => one.shows("[live]"));
       yield* closeDrawer(page);
@@ -2482,6 +2516,10 @@ describe("REPL original held reading and canonical startup", () => {
     expect(page.screen().rows).toEqual(reading.rows);
     expect(page.screen().shows("[answer]")).toBe(false);
     yield* openHistory(page);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     yield* page.press("Entry 1 admitted");
     yield* page.until("the recorded prefix", (one) => one.shows("[live]"));
     expect(page.screen().shows("[pause]")).toBe(false);
@@ -2658,7 +2696,7 @@ describe("REPL original retained schema and generated evidence", () => {
       yield* openHistory(page);
       const labels = positionLabels(page.screen());
       expect(labels.length).toBeGreaterThan(4);
-      yield* page.press(labels.at(-1) ?? "");
+      yield* page.press(labels[0] ?? "");
       yield* page.until("the recorded terminal prefix", (one) => one.shows("[live]"));
       yield* closeDrawer(page);
       yield* page.press("answered ");

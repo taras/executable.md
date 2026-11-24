@@ -3073,6 +3073,10 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     // transcript, which already shows an entry's text before the drawer ever
     // opens and proves nothing about the drawer's own content.
     yield* openHistory(page);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     expect(historyMarkers(page.screen()).some((row) => row.includes("Entry 1 admitted"))).toBe(
       true,
     );
