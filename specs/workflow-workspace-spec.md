@@ -2349,34 +2349,34 @@ selection. The provider authenticates that selection and checks its GitHub
 repository against the `allowed` list in `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`
 before opening a GitHub session. Configuration is read on invocation.
 
-The authored query uses GitHub search syntax and contains exactly one positive
-`is:issue` or `is:pr` qualifier. Repository, organization and user scope
-qualifiers are refused. The adapter sends the exact authored query with the
-selected repository's `repo:` qualifier. Optional `sort` and `order` use
-GitHub REST values. Order requires sort and defaults to `desc` when sorting.
-With neither,
-GitHub uses best match. The adapter preserves GitHub's item order.
+The query uses GitHub REST issue search syntax and includes exactly one
+standalone positive `is:issue` or `is:pr` qualifier. Additional result-kind
+qualifiers, including aliases, are refused. Repository, organization, user and
+owner qualifiers are refused before authentication or transport. Parentheses
+belong in quoted terms, and Boolean operators apply to search terms.
+The adapter sends the exact authored query with the selected repository's
+`repo:` qualifier. Optional `sort` and `order` use GitHub REST values. Order
+requires sort and defaults to `desc` when sorting. Omitting both uses best
+match. The adapter preserves GitHub's item order.
 
 Each invocation fetches one page. `page` defaults to 1 and `perPage` defaults
 to 20. Page size is an integer from 1 through 100. A page whose first result
 would be beyond GitHub's 1,000 accessible results is refused before transport.
+An in-range page can contain up to `perPage` items, including the final page
+when its first result is inside the window. Authors request another page by
+setting `page` explicitly and keeping the same query, ordering and page size.
 
 The name supplied by `as` binds the original GitHub search response JSON,
 including `total_count`, `incomplete_results`, nullable fields and unfamiliar
-members. Optional `nextAs` names a separate binding in the same scope. It
-receives the complete search arguments for the next page, with the same query,
-ordering and page size, or `null` when the pagination header offers no next
-page within the accessible results. Expansion validates the resolved `nextAs`
-as a binding name distinct from `as`. The transport
-headers and credentials stay with the adapter. An authentication or transport
-failure, a malformed response, or an item from a different repository refuses
-the read. A valid incomplete response
-binds its original page and incompleteness indicator.
+members. Transport headers and credentials stay with the adapter.
+Authentication and transport failures, malformed responses, and items from
+a different repository or of a different kind refuse the read. A valid
+incomplete response binds its original page and incompleteness indicator.
 
 An ordinary run reads afresh. A workflow retains the admitted repository, full
-request and result as one `github_search` read. Replay restores the retained
-answer without opening a GitHub session. `Query` can project fields directly from the
-bound page.
+request and original response as one `github_search` read. Replay validates
+the retained page against the admitted request and restores it without opening
+a GitHub session. `Query` can project fields directly from the bound page.
 
 ### 7.8 Local repository reads
 

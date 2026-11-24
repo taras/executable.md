@@ -305,26 +305,6 @@ describe("Tier OBS — construct error observation", () => {
     expect(fn.output).toContain(broke());
   });
 
-  it("publishes additional result bindings only with an accepted primary result", function* () {
-    const component: FunctionComponentDefinition = {
-      kind: "function",
-      name: "Page",
-      props: OPEN_SCHEMA,
-      returns: { type: "object" },
-      *fn(props) {
-        const bind = yield* Component.operations.bindResult("next");
-        bind({ page: 2 });
-        return props.invalid ? "invalid" : { items: [] };
-      },
-    };
-    const options = { functions: { Page: component } };
-    const accepted = yield* runProbe('<Page as="page" />', options);
-    expect(accepted.values).toEqual({ page: { items: [] }, next: { page: 2 } });
-    const refused = yield* runProbe('<Page as="page" invalid />', options);
-    expect(refused.values).toEqual({});
-    expect(refused.observed).toHaveLength(1);
-  });
-
   it("OBS16: an ambient throw error mode aborts at the first error on every path", function* () {
     const cases: Array<[string, ProbeOptions]> = [
       ["<Broken /><Broken />", {}],

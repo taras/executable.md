@@ -3,7 +3,6 @@ import type { JsonObject } from "@executablemd/core";
 import type { Operation } from "effection";
 import {
   GitHubSearch,
-  SEARCH_CEILING,
   SEARCH_ELEMENT,
   type SearchRequest,
 } from "../../composition/components/GitHubSearch.ts";
@@ -14,7 +13,6 @@ import {
   authorizedHeaders,
   GITHUB_API,
   type GitHubSource,
-  nextPage,
   parseGitHubRepository,
   readJson,
 } from "./github.ts";
@@ -54,8 +52,18 @@ export function useGitHubSearch(
       if (!configuration?.allowed || !pullRequestAllowed(configuration.allowed, url)) {
         throw unavailable("this host has not authorized search in the selected Repository.");
       }
-      return yield* PullRequestReadExecution.operations.search(url, request, () =>
-        readSearchPage(() => resolved.transport(configuration), name, request),
+      const validate = (value: unknown) =>
+        validateSearchPage(
+          value,
+          request,
+          name,
+          options.access?.endpoint ?? configuration.endpoint ?? GITHUB_API,
+        );
+      return yield* PullRequestReadExecution.operations.search(
+        url,
+        request,
+        () => readSearchPage(() => resolved.transport(configuration), name, request, validate),
+        validate,
       );
     },
   });
@@ -65,6 +73,7 @@ function* readSearchPage(
   source: () => GitHubSource,
   repository: string,
   request: SearchRequest,
+  validate: (value: unknown) => JsonObject,
 ): Operation<JsonObject> {
   const endpoint = "/search/issues";
   const parameters = new URLSearchParams({
@@ -78,10 +87,8 @@ function* readSearchPage(
   }
 
   let response;
-  let apiBase;
   try {
     const access = yield* source().open();
-    apiBase = access.endpoint;
     const headers = yield* authorizedHeaders(access, false);
     if (headers !== undefined) {
       response = yield* access.send({
@@ -99,9 +106,18 @@ function* readSearchPage(
   if (response.status !== 200) {
     throw unavailable("GitHub did not return a search page.");
   }
+  return validate(readJson(response.body));
+}
+
+function validateSearchPage(
+  received: unknown,
+  request: SearchRequest,
+  repository: string,
+  apiBase: string,
+): JsonObject {
   let value;
   try {
-    value = parseJson(readJson(response.body));
+    value = parseJson(received);
   } catch {
     throw invalid();
   }
@@ -110,43 +126,30 @@ function* readSearchPage(
   }
   const { total_count: total, incomplete_results: incomplete, items } = value;
   const start = (request.page - 1) * request.perPage;
-  const capacity = Math.min(request.perPage, SEARCH_CEILING - start);
+  const expectedRepository = `${apiBase}/repos/${repository}`.toLowerCase();
+  const publicRepository = `${GITHUB_API}/repos/${repository}`.toLowerCase();
   if (
     typeof total !== "number" ||
     !Number.isSafeInteger(total) ||
     total < 0 ||
     typeof incomplete !== "boolean" ||
     !Array.isArray(items) ||
-    !items.every((item) => isJsonObject(item) && belongsToRepository(item, repository, apiBase)) ||
-    items.length > capacity ||
-    (!incomplete && items.length !== Math.max(0, Math.min(capacity, total - start)))
+    items.length > request.perPage ||
+    (!incomplete && items.length !== Math.max(0, Math.min(request.perPage, total - start))) ||
+    !items.every((item) => {
+      if (!isJsonObject(item) || typeof item.repository_url !== "string") {
+        return false;
+      }
+      const url = item.repository_url.toLowerCase();
+      return (
+        (url === expectedRepository || url === publicRepository) &&
+        (request.kind === "pr"
+          ? isJsonObject(item.pull_request)
+          : !Object.hasOwn(item, "pull_request"))
+      );
+    })
   ) {
     throw invalid();
   }
-
-  const next = nextPage(response.link, apiBase);
-  const page = request.page + 1;
-  if (next.kind === "complete" || (page - 1) * request.perPage >= SEARCH_CEILING) {
-    return { value, next: null };
-  }
-  if (next.kind === "unfollowable") {
-    throw invalid();
-  }
-  const target = new URL(next.url);
-  if (
-    target.pathname !== new URL(`${apiBase}${endpoint}`).pathname ||
-    target.searchParams.get("page") !== String(page)
-  ) {
-    throw invalid();
-  }
-  return { value, next: { ...request, page } };
-}
-
-function belongsToRepository(item: JsonObject, repository: string, apiBase: string): boolean {
-  const url = item.repository_url;
-  return (
-    typeof url === "string" &&
-    (url.toLowerCase() === `${apiBase}/repos/${repository}`.toLowerCase() ||
-      url.toLowerCase() === `${GITHUB_API}/repos/${repository}`.toLowerCase())
-  );
+  return value;
 }

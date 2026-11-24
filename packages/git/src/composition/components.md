@@ -325,22 +325,11 @@ The `Query` projects URLs from that page. Pass a selected URL to
 `PullRequest.Reviews`, `PullRequest.Comments` or `PullRequest.Checks` to read
 its evidence.
 
-Request a separate continuation binding with `nextAs`. It contains the
-complete next search arguments or `null` after the last accessible page.
+To read another page, repeat the search with an explicit `page` and the same
+`perPage`, query, and ordering.
 
 ```mdx
-<GitHub.Search query="is:pr is:open" sort="created" as="page" nextAs="next" />
-
-<If condition={next !== null}>
-<GitHub.Search
-  query={next.query}
-  sort={next.sort}
-  order={next.order}
-  page={next.page}
-  perPage={next.perPage}
-  as="nextPage"
-/>
-</If>
+<GitHub.Search query="is:pr is:open label:bug" sort="created" page={2} perPage={20} as="pageTwo" />
 ```
 
 ## IssueTracker

@@ -1,5 +1,4 @@
-import { documented, formDispatcher, isJsonObject } from "@executablemd/core";
-import { bindResult } from "@executablemd/core/api";
+import { documented, formDispatcher } from "@executablemd/core";
 import type { ComponentRegistration, Json, JsonObject } from "@executablemd/core";
 import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
@@ -13,6 +12,7 @@ export const SEARCH_CEILING = 1000;
 
 export type SearchRequest = JsonObject & {
   query: string;
+  kind: "issue" | "pr";
   sort?: string;
   order?: string;
   page: number;
@@ -46,33 +46,64 @@ const sorts = [
   "updated",
 ];
 
-function admitQuery(query: string): void {
-  // Keep quoted search terms intact while inspecting qualifier names and values.
-  const tokens = query.match(/(?:[^\s"()]|"(?:\\.|[^"\\])*")+/gu) ?? [];
-  const kinds = tokens.filter((token) => /^[+-]?(?:is|type):"?(?:issue|pr)"?$/i.test(token));
-  if (
-    tokens.some((token) => /^[+-]?(?:repo|org|user):/i.test(token)) ||
-    query.replace(/"(?:\\.|[^"\\])*"/gu, "").includes('"')
-  ) {
+function admitQuery(query: string): SearchRequest["kind"] {
+  const quoted = /"(?:\\.|[^"\\])*"/gu;
+  const unquoted = query.replace(quoted, " ");
+  if (/(?:^|[\s()])[+-]*(?:repo|org|user|owner):/iu.test(unquoted)) {
     throw new GitOperationAdmissionError(
       SEARCH_ELEMENT,
-      "use a GitHub query without repository, organization or user scope qualifiers and with balanced quotes.",
+      "omit repository, organization, user and owner scope qualifiers.",
     );
   }
-  if (kinds.length !== 1 || !/^is:/i.test(kinds[0] ?? "")) {
+  if (/["()]/u.test(unquoted)) {
+    throw new GitOperationAdmissionError(
+      SEARCH_ELEMENT,
+      "balance quotes and place parentheses inside quoted text.",
+    );
+  }
+  const matches = [...query.matchAll(/(?:[+-]*[\w-]+:)?"(?:\\.|[^"\\])*"|[^\s"]+/gu)];
+  const kinds = matches.filter(([token]) =>
+    /^[+-]*(?:is|type):(?:"(?:issue|pr|pull-request)"|(?:issue|pr|pull-request))$/i.test(token),
+  );
+  const kind = kinds[0];
+  const token = kind?.[0] ?? "";
+  const selected =
+    kind !== undefined &&
+    (kind.index === 0 || /\s/u.test(query[kind.index - 1] ?? "")) &&
+    (kind.index + token.length === query.length ||
+      /\s/u.test(query[kind.index + token.length] ?? ""))
+      ? token.toLowerCase()
+      : undefined;
+  if (kinds.length !== 1 || (selected !== "is:issue" && selected !== "is:pr")) {
     throw new GitOperationAdmissionError(
       SEARCH_ELEMENT,
       "select exactly one kind with is:issue or is:pr.",
     );
   }
+  const operators = matches.map(([token]) => token);
+  if (
+    operators.some(
+      (token, index) =>
+        /^(?:AND|OR|NOT)$/u.test(token) &&
+        [operators[index - 1], operators[index + 1]].some((operand) =>
+          /^[+-]*[\w-]+:/u.test(operand ?? ""),
+        ),
+    )
+  ) {
+    throw new GitOperationAdmissionError(
+      SEARCH_ELEMENT,
+      "use Boolean operators with search terms instead of qualifiers.",
+    );
+  }
+  return selected === "is:issue" ? "issue" : "pr";
 }
 
 function* search(props: Record<string, Json>): Operation<JsonObject> {
-  const { query, sort, order, page = 1, perPage = 20, nextAs } = props;
+  const { query, sort, order, page = 1, perPage = 20 } = props;
   if (typeof query !== "string" || typeof page !== "number" || typeof perPage !== "number") {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "the search arguments are invalid.");
   }
-  admitQuery(query);
+  const kind = admitQuery(query);
   if ((page - 1) * perPage >= SEARCH_CEILING) {
     throw new GitOperationAdmissionError(
       SEARCH_ELEMENT,
@@ -82,27 +113,19 @@ function* search(props: Record<string, Json>): Operation<JsonObject> {
   if (order !== undefined && sort === undefined) {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "order requires sort.");
   }
-  const publishNext = typeof nextAs === "string" ? yield* bindResult(nextAs) : undefined;
   const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "select a Repository before searching.");
   }
-  const result = yield* GitHubSearch.operations.search(repository, {
+  return yield* GitHubSearch.operations.search(repository, {
     query,
+    kind,
     page,
     perPage,
     ...(typeof sort === "string"
       ? { sort, order: typeof order === "string" ? order : "desc" }
       : {}),
   });
-  if (!isJsonObject(result.value) || (result.next !== null && !isJsonObject(result.next))) {
-    throw new GitOperationAdmissionError(
-      SEARCH_ELEMENT,
-      "the search provider returned an invalid page.",
-    );
-  }
-  publishNext?.(result.next);
-  return result.value;
 }
 
 export const githubSearchRegistration: ComponentRegistration = {
@@ -114,11 +137,6 @@ export const githubSearchRegistration: ComponentRegistration = {
       query: { type: "string", minLength: 1 },
       sort: { enum: sorts },
       order: { enum: ["asc", "desc"] },
-      nextAs: {
-        type: "string",
-        minLength: 1,
-        description: "Bind the next request arguments or null to this name.",
-      },
       page: { type: "integer", minimum: 1, maximum: SEARCH_CEILING },
       perPage: { type: "integer", minimum: 1, maximum: 100 },
     },
