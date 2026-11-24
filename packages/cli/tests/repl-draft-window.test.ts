@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { useReplPage } from "./support/repl-page.ts";
 import { generateTypingDraft } from "./support/typing-history.ts";
 
-import { draftWindowFrom } from "../src/repl/program.ts";
+import { draftWindowFrom, followDraftWindow } from "../src/repl/program.ts";
 
 describe("draft window", () => {
   it("keeps the caret visible while retaining the window", function* () {
@@ -18,6 +18,38 @@ describe("draft window", () => {
     ]) {
       expect(draftWindowFrom(count!, length!, active!, remembered)).toBe(expected);
     }
+  });
+  it("scrolls the focused draft without moving its caret", function* () {
+    const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
+    yield* generateTypingDraft(page, 120);
+    const prior = page.screen().index;
+    yield* page.key("ArrowLeft");
+    yield* page.until("left caret frame", (one) => one.index > prior);
+    const first = () =>
+      Number(
+        page
+          .screen()
+          .rows.find((row) => row.includes("DRAFT-"))
+          ?.match(/DRAFT-[A-Z]+-(\d+)/)?.[1],
+      );
+    const before = first();
+    yield* page.wheel("up", { row: 10, column: 60 });
+    yield* page.until("three earlier draft rows", () => first() === before - 3);
+    yield* page.wheel("up", { row: 10, column: 60 });
+    yield* page.until("six earlier draft rows", () => first() === before - 6);
+    yield* page.resize({ columns: 200, rows: 52 });
+    expect(first()).toBe(before - 6);
+    yield* page.key("ArrowRight");
+    yield* page.until("the caret row returns", (one) => one.shows("DRAFT-END-119"));
+  });
+  it("retains a manually scrolled window until following resumes", function* () {
+    expect(
+      followDraftWindow(10, 120, 119, { from: 90, draft: "held", caret: 119 }, "held", 119),
+    ).toBe(90);
+    expect(
+      followDraftWindow(10, 120, 119, { from: 90, draft: "held", caret: 118 }, "held", 119),
+    ).toBe(110);
+    expect(followDraftWindow(10, 5, 4, { from: 90, draft: "short", caret: 4 }, "short", 4)).toBe(0);
   });
   it("keeps the first visible line when the caret moves down inside it", function* () {
     const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });

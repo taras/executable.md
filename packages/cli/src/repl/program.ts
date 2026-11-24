@@ -100,6 +100,7 @@ import {
   SIDEKICK_BODY,
   SESSIONS_WINDOW,
   SIDEKICK_WINDOW,
+  DRAFT_WINDOW,
   wheelDestination,
   createChatPreparationStore,
   ROUND_EDITOR_BODY,
@@ -2631,6 +2632,19 @@ function* drive(
         dispatched.ok && dispatched.value.outcome === "action"
           ? dispatched.value.action
           : undefined;
+      if (action?.kind === "viewport-wheel" && action.window === DRAFT_WINDOW) {
+        if (draftWindow.count !== undefined && draftWindow.length !== undefined) {
+          draftWindow.from = Math.max(
+            0,
+            Math.min(
+              (draftWindow.from ?? 0) + (action.direction === "up" ? -3 : 3),
+              Math.max(0, draftWindow.length - draftWindow.count),
+            ),
+          );
+          yield* draw();
+        }
+        return false;
+      }
       const wheeled =
         action?.kind === "viewport-wheel" &&
         (action.window === SESSIONS_WINDOW || action.window === SIDEKICK_WINDOW)
@@ -6304,19 +6318,29 @@ export function* prepareFrame(
   if (drafted.value !== undefined) {
     editors.set("footer:input", drafted.value);
     const count = Math.max(1, capacityOf(editorBounds));
-    const from = draftWindowFrom(
+    const from = followDraftWindow(
       count,
       drafted.value.display.length,
       drafted.value.active,
-      draftWindow?.from,
+      draftWindow,
+      view.state.draft,
+      view.state.draftCaret?.offset ?? view.state.draft.length,
     );
     if (draftWindow !== undefined) {
-      draftWindow.from = from;
+      Object.assign(draftWindow, {
+        from,
+        count,
+        length: drafted.value.display.length,
+        draft: view.state.draft,
+        caret: view.state.draftCaret?.offset ?? view.state.draft.length,
+      });
     }
     const shown = drafted.value.display.slice(from, from + count).map((one) => one.text);
     draftRows = [...shown, ...Array.from({ length: count - shown.length }, () => "")];
   } else if (draftWindow !== undefined) {
-    delete draftWindow.from;
+    for (const key of Object.keys(draftWindow)) {
+      Reflect.deleteProperty(draftWindow, key);
+    }
   }
   // The drawer's own notices, fitted to the interior this frame measured. Here
   // rather than in the builder that draws them: the engine is what knows how
@@ -6594,7 +6618,36 @@ export function draftWindowFrom(
   return Math.max(0, Math.min(from, last));
 }
 
-/** Retains the visible draft rows between frames so caret movement need not slide the text. */
+/**
+ * Keeps the remembered row while the caret and draft are unchanged, so a wheel
+ * move survives repaints; otherwise applies draftWindowFrom.
+ */
+export function followDraftWindow(
+  count: number,
+  length: number,
+  active: number,
+  held: ReplDraftWindow | undefined,
+  draft: string,
+  caret: number,
+): number {
+  return held?.draft === draft && held.caret === caret
+    ? Math.max(0, Math.min(held.from ?? 0, Math.max(0, length - count)))
+    : draftWindowFrom(count, length, active, held?.from);
+}
+
+/**
+ * Process-local memory of the draft editor's visible window, kept outside
+ * ReplState and cleared when the editor closes.
+ */
 export interface ReplDraftWindow {
+  /** First visible row. */
   from?: number;
+  /** Visible row count of the last frame, used to clamp wheel movement. */
+  count?: number;
+  /** Total draft rows of the last frame, used to clamp wheel movement. */
+  length?: number;
+  /** Draft text the window last followed. */
+  draft?: string;
+  /** Caret offset the window last followed. */
+  caret?: number;
 }

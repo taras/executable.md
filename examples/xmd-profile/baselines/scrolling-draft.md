@@ -58,3 +58,17 @@
     title="Thirty arrow keys in the draft, window moved by warm-up, 368 lines"
     captures={[{calls: capture2.calls}]} />
 </Test>
+
+<Test name="draft-wheel" timeout="1800s">
+  <Terminal columns={200} rows={52}>
+    <XMD.Repl mounted={true} history={{rounds: 12, linesPerRound: 32}} draft={{lines: 120}}>
+      <Terminal.Scroll at={{row: 10, column: 60}} pattern="u." />
+      <Terminal.WaitForText text="DRAFT-LINE-072" />
+      <Profile label="draft-wheel" mode="calls" as="draftWheel">
+        <Terminal.Scroll at={{row: 10, column: 60}} pattern="uuu.ddd.uuu.ddd.uuu.ddd.uuu.ddd.uuu.ddd." />
+      </Profile>
+    </XMD.Repl>
+  </Terminal>
+  <Profile.Baseline path="examples/xmd-profile/baselines/scrolling-draft-wheel.baseline.md"
+    title="Draft wheel bursts, 120 lines" captures={[{calls: draftWheel.calls}]} />
+</Test>
