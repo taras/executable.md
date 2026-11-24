@@ -44,6 +44,7 @@ describe("History round controls", () => {
             if (destination === "Output") {
               yield* page.key("ArrowRight");
               yield* page.until("Output focus", (one) => one.shows("> [Output]"));
+              yield* page.key("ArrowUp");
             }
             yield* page.key("Enter");
           }
@@ -62,6 +63,33 @@ describe("History round controls", () => {
       }
     });
   }
+  it("keeps single-round Input and Output at their vertical edges", function* () {
+    const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
+    yield* generateTypingHistory(page, 1, 1);
+    for (const destination of ["Input", "Output"]) {
+      yield* page.press("[History]");
+      yield* page.until("single Input focused", (one) =>
+        one.rows.some((row) => row.includes("Round 1:") && row.includes("> [Input]")),
+      );
+      if (destination === "Output") {
+        yield* page.key("ArrowRight");
+        yield* page.until("single Output focused", (one) => one.shows("> [Output]"));
+        yield* page.key("ArrowUp");
+      } else {
+        yield* page.key("ArrowDown");
+      }
+      yield* page.key("Enter");
+      yield* page.until(
+        "single edge selects intended position",
+        (one) =>
+          one.shows("[live]") && one.shows(destination === "Input" ? "UNFINISHED" : "COMPLETED"),
+      );
+      yield* page.key("Escape");
+      yield* page.until("single edge launcher", (one) => one.shows("> [History]"));
+      yield* page.press("[live]");
+      yield* page.until("single edge live", (one) => !one.shows("[live]"));
+    }
+  });
   it("switches Positions and Rounds through the fixed Actions keyboard group", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
     yield* generateTypingHistory(page, 2, 1);
@@ -118,6 +146,9 @@ describe("History round controls", () => {
       yield* page.until("oldest round focused", (one) =>
         one.rows.some((row) => row.includes("Round 1:") && row.includes("> [Input]")),
       );
+      if (destination === "Input") {
+        yield* page.key("ArrowDown");
+      }
       if (destination === "Output") {
         yield* page.key("ArrowRight");
         yield* page.until("oldest Output focused", (one) =>
@@ -185,6 +216,17 @@ describe("History round controls", () => {
     yield* page.until("pending round row", (one) => one.shows("Round 3:"));
     expect(page.screen().found("[Output]", { onRow: "Round 3:" })).toBe(0);
     expect(page.screen().found("[Output]", { onRow: "Round 2:" })).toBe(1);
+    yield* page.until("pending Input focus", (one) =>
+      one.rows.some((row) => row.includes("Round 3:") && row.includes("> [Input]")),
+    );
+    yield* page.key("Alt+ArrowDown");
+    yield* page.until("pending Output skipped", (one) =>
+      one.rows.some((row) => row.includes("Round 2:") && row.includes("> [Input]")),
+    );
+    yield* page.key("Alt+ArrowUp");
+    yield* page.until("pending Input restored", (one) =>
+      one.rows.some((row) => row.includes("Round 3:") && row.includes("> [Input]")),
+    );
     yield* page.press("[Positions]");
     yield* page.until(
       "intermediate positions",
