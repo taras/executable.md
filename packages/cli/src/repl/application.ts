@@ -10209,6 +10209,7 @@ export const SESSIONS_WINDOW = "sessions";
  * offset meaning either would move whichever the reducer guessed.
  */
 export const SIDEKICK_WINDOW = "sidekick";
+export const DRAFT_WINDOW = "draft";
 /** The Entries catalog's window. */
 export const ENTRIES_WINDOW = "entries";
 /** The open drawer's content window, whichever reading it is showing. */
@@ -11149,6 +11150,18 @@ export function presentationFor(
   let todoMounted = false;
   let queueMounted = false;
   for (const item of screen.items) {
+    if (item.key === "footer:input") {
+      composed.push(
+        describeNode<ReplAction>({
+          key: "viewport:draft",
+          component: VIEWPORT,
+          input: { window: DRAFT_WINDOW },
+          children: [editorDescription(item.description, context)],
+        }),
+      );
+      continue;
+    }
+
     if (chat && slotOf(item.key) === "todo") {
       if (!todoMounted) {
         todoMounted = true;
@@ -14422,6 +14435,14 @@ function workspacePresentation(input: {
   const workColumn = (region: ReplRegion, body: string, inside?: number): readonly ReplBox[] => {
     const draft = of("draft");
     const editing = draft.length > 0;
+    if (editing) {
+      viewports.push({
+        id: ROUND_EDITOR_BODY,
+        region,
+        window: DRAFT_WINDOW,
+        owner: "viewport:draft",
+      });
+    }
     const room = context.widths?.surfaceBody;
     const focused = (focusClaim(view) ?? view.focused) === "footer:input";
     const showHeading = !outlet || (focusClaim(view) ?? view.focused) !== "draft:send";
