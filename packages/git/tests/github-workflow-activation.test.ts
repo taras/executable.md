@@ -21,12 +21,16 @@ import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { resource, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { API, Permissions, useHostFiles } from "@executablemd/runtime";
 import { useRunComposition } from "../src/deno/run-composition/provider.ts";
 import { gitPlugin } from "../src/plugin.ts";
 import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { InMemoryStream } from "@executablemd/durable-streams";
+import { createHash } from "node:crypto";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { join } from "node:path";
+import { readWorkflowWorkspace } from "@executablemd/workflow/deno";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   gitHubSource,
@@ -781,6 +785,345 @@ describe("GitHub repository search", () => {
       expect(String(refused)).toContain("invalid search page");
       expect(provider.credentials).toEqual(["token"]);
       expect(provider.requests).toHaveLength(1);
+    });
+  });
+});
+
+const LOG_ENDPOINT = "https://api.github.test";
+const LOG_REPOSITORY = "octo/project";
+const PR_URL = `https://github.com/${LOG_REPOSITORY}/pull/4`;
+const HEAD = "a".repeat(40);
+const LOG_URL = "https://storage.github.test/signed-log?signature=private";
+const LOG = "first line\nnext: ☃\n";
+const DIGEST = createHash("sha256").update(LOG).digest("hex");
+const TARGET = "evidence/run-88-attempt-2-job-43.log";
+const BATCH = `<PullRequest.Checks url="${PR_URL}" logs="evidence" as="result" />\n\n`;
+const DOWNLOAD = BATCH + "<Json value={result} />\n";
+const LARGE = "never-journal-log-bytes".repeat(50_000);
+
+function transport(
+  mode:
+    | "complete"
+    | "interrupted"
+    | "wrong-attempt"
+    | "oversize"
+    | "invalid-utf8"
+    | "large"
+    | "selection",
+) {
+  const requests: GitHubHttpRequest[] = [];
+  const bases = `${LOG_ENDPOINT}/repos/${LOG_REPOSITORY}`;
+  const responses = new Map<string, () => Response>([
+    [
+      `${bases}/pulls/4`,
+      () =>
+        Response.json({
+          number: 4,
+          base: { repo: { full_name: LOG_REPOSITORY } },
+          head: { sha: HEAD },
+        }),
+    ],
+    [
+      `${bases}/check-runs/42`,
+      () =>
+        Response.json({
+          id: 42,
+          head_sha: HEAD,
+          app: { slug: "github-actions" },
+          status: "completed",
+          conclusion: "failure",
+          details_url: `https://github.com/${LOG_REPOSITORY}/actions/runs/88/job/43`,
+        }),
+    ],
+    [
+      `${bases}/check-runs/47`,
+      () => Response.json({ id: 47, head_sha: HEAD, app: { slug: "third-party" } }),
+    ],
+    [`${bases}/check-runs/49`, () => new Response("not found", { status: 404 })],
+    [
+      `${bases}/actions/jobs/43`,
+      () =>
+        Response.json({
+          id: 43,
+          run_id: 88,
+          run_attempt: 2,
+          head_sha: HEAD,
+          status: "completed",
+          conclusion: "failure",
+          check_run_url: `${bases}/check-runs/42`,
+        }),
+    ],
+    [
+      `${bases}/actions/runs/88/attempts/2`,
+      () =>
+        Response.json({
+          id: 88,
+          run_attempt: mode === "wrong-attempt" ? 1 : 2,
+          head_sha: HEAD,
+          repository: { full_name: LOG_REPOSITORY },
+        }),
+    ],
+    [
+      `${bases}/actions/jobs/43/logs`,
+      () => new Response(null, { status: 302, headers: { location: LOG_URL } }),
+    ],
+    [
+      LOG_URL,
+      () => {
+        let first = true;
+        const bytes = new TextEncoder().encode(mode === "large" ? LARGE : LOG);
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (mode === "oversize") {
+                controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+                controller.close();
+              } else if (mode === "invalid-utf8") {
+                controller.enqueue(Uint8Array.of(0xff));
+                controller.close();
+              } else if (first) {
+                first = false;
+                controller.enqueue(bytes.subarray(0, 19));
+              } else if (mode === "interrupted") {
+                controller.error(new Error("connection interrupted after receiving bytes"));
+              } else {
+                controller.enqueue(bytes.subarray(19));
+                controller.close();
+              }
+            },
+          }),
+        );
+      },
+    ],
+  ]);
+  return {
+    requests,
+    options: {
+      configuration: { allowed: [`https://github.com/${LOG_REPOSITORY}`] },
+      access: gitHubSource({
+        endpoint: LOG_ENDPOINT,
+        *token() {
+          return "test-token";
+        },
+        // deno-lint-ignore require-yield
+        *send(request) {
+          requests.push(request);
+          const path = new URL(request.url).pathname;
+          switch (path) {
+            case `/repos/${LOG_REPOSITORY}/pulls/4`:
+              return {
+                status: 200,
+                body: JSON.stringify({
+                  number: 4,
+                  base: { repo: { full_name: LOG_REPOSITORY } },
+                  head: { sha: HEAD },
+                }),
+              };
+            case `/repos/${LOG_REPOSITORY}/commits/${HEAD}/check-runs`:
+              return {
+                status: 200,
+                body: JSON.stringify({
+                  total_count: mode === "selection" ? 7 : 1,
+                  check_runs: [
+                    ...(mode === "selection"
+                      ? [
+                          {
+                            id: 49,
+                            name: "unavailable",
+                            head_sha: HEAD,
+                            status: "completed",
+                            conclusion: "failure",
+                          },
+                        ]
+                      : []),
+                    {
+                      id: 42,
+                      name: "test",
+                      head_sha: HEAD,
+                      status: "completed",
+                      conclusion: "failure",
+                    },
+                    ...(mode === "selection"
+                      ? [
+                          {
+                            id: 44,
+                            name: "success",
+                            head_sha: HEAD,
+                            status: "completed",
+                            conclusion: "success",
+                          },
+                          { id: 45, name: "pending", head_sha: HEAD, status: "in_progress" },
+                          {
+                            id: 46,
+                            name: "skipped",
+                            head_sha: HEAD,
+                            status: "completed",
+                            conclusion: "skipped",
+                          },
+                          {
+                            id: 47,
+                            name: "other app",
+                            head_sha: HEAD,
+                            status: "completed",
+                            conclusion: "failure",
+                          },
+                          {
+                            id: 48,
+                            name: "cancelled",
+                            head_sha: HEAD,
+                            status: "completed",
+                            conclusion: "cancelled",
+                          },
+                        ]
+                      : []),
+                  ],
+                }),
+              };
+            case `/repos/${LOG_REPOSITORY}/commits/${HEAD}/status`:
+              return {
+                status: 200,
+                body: JSON.stringify({
+                  sha: HEAD,
+                  statuses:
+                    mode === "selection"
+                      ? [
+                          {
+                            id: 50,
+                            context: "status",
+                            state: "failure",
+                            created_at: "now",
+                            updated_at: "now",
+                          },
+                        ]
+                      : [],
+                }),
+              };
+            default:
+              throw new Error("the log must opt out of automatic redirects");
+          }
+        },
+        *openResponse(request) {
+          requests.push(request);
+          const response = responses.get(request.url);
+          if (response === undefined) {
+            throw new Error("unexpected GitHub request");
+          }
+          return response();
+        },
+      }),
+    },
+  };
+}
+
+describe("PullRequest.Checks logs", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
+  function* ordinary(
+    root: string,
+    double: ReturnType<typeof transport>,
+    source = DOWNLOAD,
+  ): Operation<unknown> {
+    return yield* scoped(function* () {
+      yield* useHostFiles();
+      yield* useRunComposition({ root, cwd: root, gitHubPullRequests: double.options });
+      return yield* document(undefined, source);
+    });
+  }
+
+  it("saves only failed Actions jobs, with the check conclusion and credential-free storage", function* () {
+    const root = yield* useTempDirectory("xmd-check-log");
+    const destination = join(root, TARGET);
+    yield* ensureDir(join(root, "evidence"));
+    yield* writeTextFile(destination, "earlier evidence");
+    const double = transport("selection");
+
+    const result = JSON.parse(String(yield* ordinary(root, double)));
+    expect(result.checks).toHaveLength(8);
+    expect(result.checks[0].conclusion).toBe("failure");
+    expect(result.logs).toMatchObject([
+      { checkId: "49", status: "error" },
+      { checkId: "42", status: "saved", path: TARGET, sha256: DIGEST },
+    ]);
+    expect(yield* readTextFile(destination)).toBe(LOG);
+    expect(double.requests).toHaveLength(13);
+    expect(
+      double.requests
+        .filter((request) => request.url !== LOG_URL)
+        .map((request) => request.headers.Authorization),
+    ).toEqual(Array(12).fill("Bearer test-token"));
+    expect(double.requests.find((request) => request.url === LOG_URL)?.headers).toEqual({});
+  });
+
+  it("reports interrupted downloads while preserving the CI conclusion and earlier evidence", function* () {
+    const root = yield* useTempDirectory("xmd-check-log");
+    const destination = join(root, TARGET);
+    expect(String(yield* ordinary(root, transport("interrupted")))).toContain(
+      "could not be read completely",
+    );
+    expect(yield* exists(destination)).toBe(false);
+
+    yield* ensureDir(join(root, "evidence"));
+    yield* writeTextFile(destination, "earlier evidence");
+    expect(String(yield* ordinary(root, transport("interrupted")))).toContain("failure");
+    expect(yield* readTextFile(destination)).toBe("earlier evidence");
+  });
+
+  it("refuses a wrong attempt, oversized body or invalid UTF-8 before publishing", function* () {
+    const root = yield* useTempDirectory("xmd-check-log");
+    const wrong = transport("wrong-attempt");
+    expect(String(yield* ordinary(root, wrong))).toContain("returned a different");
+    expect(wrong.requests).toHaveLength(7);
+    expect(String(yield* ordinary(root, transport("oversize")))).toContain("16 MiB");
+    expect(String(yield* ordinary(root, transport("invalid-utf8")))).toContain("UTF-8");
+    expect(yield* exists(join(root, TARGET))).toBe(false);
+  });
+
+  it("refuses write denial before requesting job metadata or logs and reports a directory publication failure", function* () {
+    const root = yield* useTempDirectory("xmd-check-log");
+    const denied = transport("complete");
+    yield* scoped(function* () {
+      yield* Permissions.around({
+        files: ([operation], next) => operation !== "write" && next(operation),
+      });
+      expect(String(yield* ordinary(root, denied))).toContain("destination is not writable");
+    });
+    expect(denied.requests).toHaveLength(5);
+
+    yield* ensureDir(join(root, TARGET));
+    expect(String(yield* ordinary(root, transport("complete")))).toContain("directory, unchanged");
+  });
+
+  it("partially replays a managed workflow offline without recording its megabyte of log bytes", function* () {
+    const root = yield* useStorageRoot();
+    const double = transport("large");
+    yield* withRunHost(root, function* (transitions) {
+      const creation = yield* sourceBundleCreation();
+      yield* withExecutorRun(
+        transitions,
+        { runId: "job-log", action: "start", creation },
+        function* (begun) {
+          const options = { gitHubPullRequests: double.options };
+          const saved = yield* runWorkflowDocument(begun.database, DOWNLOAD, options);
+          expect(String(saved)).toContain(TARGET);
+          const journal = JSON.stringify(yield* begun.database.journal.readAll());
+          expect(journal.length).toBeLessThan(32_768);
+          expect(journal).not.toContain("never-journal-log-bytes");
+          const file = yield* readWorkflowWorkspace(begun.database, {}, (snapshot) =>
+            snapshot.filesystem.readTextFile("/" + TARGET),
+          );
+          expect(file.ok && file.value).toBe(LARGE);
+          expect(double.requests).toHaveLength(9);
+          dropRootClose(runPath(root, "job-log"));
+          const offline = {
+            gitHubPullRequests: {
+              configuration: double.options.configuration,
+              host: forbidden,
+            },
+          };
+          expect(yield* runWorkflowDocument(begun.database, DOWNLOAD, offline)).toEqual(saved);
+          expect(double.requests).toHaveLength(9);
+        },
+      );
     });
   });
 });

@@ -82,6 +82,7 @@ export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
  * capture and publication, the journal enlistment and the rollback are this
  * package's and are not projected through it.
  */
+export { writeWorkspaceTextFile } from "./src/deno/workspace/files.ts";
 export { createWorkflowWorkspaceEffect } from "./src/deno/workspace/effect.ts";
 export type {
   WorkflowWorkspaceMutation,
